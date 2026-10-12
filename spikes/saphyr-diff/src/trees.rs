@@ -4,113 +4,15 @@
 //!
 //! `serde_norway::Value` is what `template/front_matter.rs` walks today. The candidates are
 //! `serde_json::Value` as this workspace builds it (no `preserve_order`, so a `BTreeMap`),
-//! [`Ordered`] — `serde_json::Value`'s own reading with `preserve_order`'s insertion order,
-//! which is what that feature would give — read through `serde-saphyr`, and `saphyr`'s node
-//! tree.
-
-use std::fmt;
-
-use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
+//! read through `serde-saphyr`, and `saphyr`'s node tree. `serde_json::Value` with
+//! `preserve_order` is read by `spikes/saphyr-ordered`, a separate build, whose answer comes
+//! back already in this projection (its `walk` is `walk_json` verbatim).
 
 /// One node of a projection.
 pub type Line = String;
 
 fn line(path: &str, key: &str, value: &str) -> Line {
     format!("{path} key:{key} = {value}")
-}
-
-/// A `serde_json::Value` read with `preserve_order`: the same visitor shapes — a map key
-/// read through `deserialize_str`, as serde_json's `KeyClassifier` reads it — kept in
-/// document order.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Ordered {
-    Null,
-    Bool(bool),
-    Number(serde_json::Number),
-    String(String),
-    Array(Vec<Ordered>),
-    Object(Vec<(String, Ordered)>),
-}
-
-struct Key(String);
-
-impl<'de> Deserialize<'de> for Key {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        struct V;
-        impl Visitor<'_> for V {
-            type Value = Key;
-            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.write_str("a string key")
-            }
-            fn visit_str<E: de::Error>(self, v: &str) -> Result<Key, E> {
-                Ok(Key(v.to_owned()))
-            }
-            fn visit_string<E: de::Error>(self, v: String) -> Result<Key, E> {
-                Ok(Key(v))
-            }
-        }
-        d.deserialize_str(V)
-    }
-}
-
-impl<'de> Deserialize<'de> for Ordered {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        struct V;
-        impl<'de> Visitor<'de> for V {
-            type Value = Ordered;
-            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.write_str("any value")
-            }
-            fn visit_bool<E>(self, v: bool) -> Result<Ordered, E> {
-                Ok(Ordered::Bool(v))
-            }
-            fn visit_i64<E>(self, v: i64) -> Result<Ordered, E> {
-                Ok(Ordered::Number(v.into()))
-            }
-            fn visit_u64<E>(self, v: u64) -> Result<Ordered, E> {
-                Ok(Ordered::Number(v.into()))
-            }
-            fn visit_f64<E>(self, v: f64) -> Result<Ordered, E> {
-                Ok(serde_json::Number::from_f64(v).map_or(Ordered::Null, Ordered::Number))
-            }
-            fn visit_str<E>(self, v: &str) -> Result<Ordered, E> {
-                Ok(Ordered::String(v.to_owned()))
-            }
-            fn visit_string<E>(self, v: String) -> Result<Ordered, E> {
-                Ok(Ordered::String(v))
-            }
-            fn visit_none<E>(self) -> Result<Ordered, E> {
-                Ok(Ordered::Null)
-            }
-            fn visit_unit<E>(self) -> Result<Ordered, E> {
-                Ok(Ordered::Null)
-            }
-            fn visit_some<D2: Deserializer<'de>>(self, d: D2) -> Result<Ordered, D2::Error> {
-                Ordered::deserialize(d)
-            }
-            fn visit_seq<A: SeqAccess<'de>>(self, mut a: A) -> Result<Ordered, A::Error> {
-                let mut items = Vec::new();
-                while let Some(item) = a.next_element()? {
-                    items.push(item);
-                }
-                Ok(Ordered::Array(items))
-            }
-            fn visit_map<A: MapAccess<'de>>(self, mut a: A) -> Result<Ordered, A::Error> {
-                let mut entries: Vec<(String, Ordered)> = Vec::new();
-                while let Some(Key(key)) = a.next_key()? {
-                    let value = a.next_value()?;
-                    // serde_json's `Map::insert`: a repeated key replaces in place.
-                    if let Some(slot) = entries.iter_mut().find(|(k, _)| *k == key) {
-                        slot.1 = value;
-                    } else {
-                        entries.push((key, value));
-                    }
-                }
-                Ok(Ordered::Object(entries))
-            }
-        }
-        d.deserialize_any(V)
-    }
 }
 
 fn json_scalar(value: &serde_json::Value) -> String {
@@ -143,39 +45,6 @@ fn walk_json(value: &serde_json::Value, path: &str, key: &str, out: &mut Vec<Lin
         serde_json::Value::Object(map) => {
             for (k, v) in map {
                 walk_json(v, &format!("{path}.{k}"), "str", out);
-            }
-        }
-        _ => {}
-    }
-}
-
-/// [`Ordered`].
-pub fn project_ordered(value: &Ordered) -> Vec<Line> {
-    let mut out = Vec::new();
-    walk_ordered(value, "$", "-", &mut out);
-    out
-}
-
-fn walk_ordered(value: &Ordered, path: &str, key: &str, out: &mut Vec<Line>) {
-    let scalar = match value {
-        Ordered::Null => "null".to_owned(),
-        Ordered::Bool(b) => format!("bool({b})"),
-        Ordered::Number(n) if n.is_f64() => format!("float({n})"),
-        Ordered::Number(n) => format!("int({n})"),
-        Ordered::String(s) => format!("str({s:?})"),
-        Ordered::Array(_) => "seq".to_owned(),
-        Ordered::Object(_) => "map".to_owned(),
-    };
-    out.push(line(path, key, &scalar));
-    match value {
-        Ordered::Array(items) => {
-            for (i, item) in items.iter().enumerate() {
-                walk_ordered(item, &format!("{path}[{i}]"), "-", out);
-            }
-        }
-        Ordered::Object(map) => {
-            for (k, v) in map {
-                walk_ordered(v, &format!("{path}.{k}"), "str", out);
             }
         }
         _ => {}

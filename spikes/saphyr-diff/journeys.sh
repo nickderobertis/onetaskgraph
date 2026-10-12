@@ -15,7 +15,7 @@ here="$(cd "$(dirname "$0")" && pwd)"
 repo="$(cd "$here/../.." && pwd)"
 out="${1:?usage: journeys.sh <out-dir>}"
 mkdir -p "$out"
-cd "$repo"
+cd "$repo" || exit 1
 
 suites=(
   "onetaskgraph-e2e|--test e2e|rendered:: priority:: delivery:: update:: copy::"

@@ -1,0 +1,14 @@
+# SPIKE (serde-yaml-replacement, not for landing): serde-saphyr into a real `serde_json::Value`
+# built with `preserve_order`. A workspace of its own, excluded from the root's, so that
+# feature cannot unify into the baseline build: the root workspace's serde_json stays sorted.
+[package]
+name = "saphyr-ordered"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+serde-saphyr = "=1.3.0"
+serde_json = { version = "=1.0.151", features = ["preserve_order"] }

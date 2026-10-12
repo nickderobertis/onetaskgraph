@@ -1,0 +1,14 @@
+# SPIKE (serde-yaml-replacement, not for landing): the two candidates and nothing else, so
+# cargo-deny judges serde-saphyr and saphyr in this workspace's graph without the harness's
+# banned edge to the engine (deny.sh excludes `saphyr-diff`, not this).
+[package]
+name = "saphyr-deps"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+saphyr.workspace = true
+serde-saphyr.workspace = true

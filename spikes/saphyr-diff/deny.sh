@@ -15,7 +15,7 @@ here="$(cd "$(dirname "$0")" && pwd)"
 repo="$(cd "$here/../.." && pwd)"
 out="${1:?usage: deny.sh <out-dir>}"
 mkdir -p "$out"
-cd "$repo"
+cd "$repo" || exit 1
 
 echo "deny: crates added to Cargo.lock against main:"
 git diff "$(git merge-base HEAD main)" -- Cargo.lock | grep -A1 '^+name = ' | grep -E '^\+(name|version)' \
@@ -37,11 +37,23 @@ echo "  findings naming a crate either candidate brings:"
 grep -nE 'serde-saphyr|saphyr|granit-parser|annotate-snippets|encoding_rs_io|zmij|nohash-hasher|ordered-float|hashlink|arraydeque|anstyle|unicode-width' "$out/deny.log" \
   | grep -E 'error|warning|├|└|─' | head -40 | sed 's/^/  /'
 
-# The banned edge above, if any, is the harness's own (it depends on the engine, which
-# deny.toml permits only named wrappers). Without it in the graph, serde-saphyr is still
-# there through core's and local-md's `yaml-spike`; saphyr is not.
-echo "deny: cargo deny check with the harness crate excluded:"
-cargo deny --all-features --exclude saphyr-diff check bans licenses sources advisories >"$out/deny-excluded.log" 2>&1
+# The banned edge above is the harness's own (it depends on the engine, which deny.toml
+# permits only named wrappers). Excluding it leaves both candidates in the graph through
+# `saphyr-deps`, which depends on serde-saphyr and saphyr and nothing else — so this verdict
+# is about them. `cargo deny list` over the same graph shows they are in it.
+judged="--all-features --exclude saphyr-diff"
+echo "deny: the graph judged without the harness (${judged}) holds:"
+# shellcheck disable=SC2086 # $judged is a list of flags.
+cargo deny $judged list -f tsv >"$out/deny-list.tsv" 2>"$out/deny-list.err"
+for crate in serde-saphyr saphyr saphyr-parser granit-parser saphyr-deps; do
+  if grep -q "^${crate}@" "$out/deny-list.tsv"; then
+    printf '  %s: yes\n' "$crate"
+  else
+    printf '  %s: NO — next: see %s\n' "$crate" "$out/deny-list.tsv"
+  fi
+done
+echo "deny: cargo deny check over that graph:"
+# shellcheck disable=SC2086 # $judged is a list of flags.
+cargo deny $judged check bans licenses sources advisories >"$out/deny-excluded.log" 2>&1
 echo "  exit $? — full output in $out/deny-excluded.log; its error headlines:"
 grep -E '^error\[' "$out/deny-excluded.log" | sort | uniq -c | sed 's/^/  /'
-grep -q 'serde-saphyr' "$out/deny-excluded.log" && echo "  (the log names serde-saphyr)" || true

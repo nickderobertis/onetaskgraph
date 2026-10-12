@@ -106,6 +106,10 @@ struct Args {
     templates: Vec<PathBuf>,
     answers: Vec<PathBuf>,
     out: PathBuf,
+    /// The separately built `saphyr-ordered` binary (`serde_json` with `preserve_order`).
+    ordered: PathBuf,
+    /// Run only these kinds (`--only front-matter`); every kind when absent.
+    only: Option<String>,
 }
 
 fn list(path: &str) -> Vec<PathBuf> {
@@ -142,6 +146,8 @@ fn args() -> Args {
         templates: list(&get("templates")),
         answers: list(&get("answers")),
         out: get("out").into(),
+        ordered: get("ordered").into(),
+        only: found.get("only").cloned(),
     }
 }
 
@@ -273,7 +279,7 @@ fn front_matter(args: &Args) -> Kind {
     );
     kind.notes.push(
         "candidates: `serde_json::Value` via serde-saphyr as this workspace builds it (sorted keys), \
-         `serde_json::Value` with preserve_order's ordering (the harness's `Ordered`), and saphyr 0.2's node tree"
+         `serde_json::Value` with `preserve_order` from the separately built `saphyr-ordered` binary, and saphyr 0.2's node tree"
             .to_owned(),
     );
     let mut cases: Vec<(String, String, &str)> = Vec::new();
@@ -286,6 +292,7 @@ fn front_matter(args: &Args) -> Kind {
     for (name, text) in synthetic::front_matters() {
         cases.push((format!("synthetic: {name}"), text, "synthetic"));
     }
+    let ordered = ordered_reads(args, &cases);
     for (case, matter, class) in &cases {
         kind.count(class);
         let today = serde_norway::from_str::<serde_norway::Value>(matter)
@@ -300,9 +307,7 @@ fn front_matter(args: &Args) -> Kind {
             ),
             (
                 "serde_json::Value + preserve_order",
-                serde_saphyr::from_str_with_options::<trees::Ordered>(matter, options())
-                    .map(|v| trees::project_ordered(&v))
-                    .map_err(|e| e.to_string()),
+                ordered.get(case).cloned().expect("saphyr-ordered answered every case"),
             ),
             (
                 "saphyr::Yaml node tree",
@@ -349,6 +354,53 @@ fn front_matter(args: &Args) -> Kind {
         }
     }
     kind
+}
+
+/// Every case read by `saphyr-ordered`, a build of its own whose `serde_json` has
+/// `preserve_order`. Each answer is held to this build's own reading of the same text under the
+/// same profile: the same nodes, in whatever order, or the same refusal — so the probe's copy
+/// of the compat options cannot drift from `compat_de` unnoticed.
+fn ordered_reads(args: &Args, cases: &[(String, String, &str)]) -> BTreeMap<String, Result<Vec<String>, String>> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let request = serde_json::json!({
+        "profile": match args.profile { Profile::Default => "default", Profile::Compat => "compat" },
+        "cases": cases.iter().map(|(c, m, _)| [c.clone(), m.clone()]).collect::<Vec<_>>(),
+    });
+    let mut child = Command::new(&args.ordered)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|e| panic!("{}: {e}", args.ordered.display()));
+    child.stdin.take().expect("stdin").write_all(request.to_string().as_bytes()).expect("request");
+    let output = child.wait_with_output().expect("saphyr-ordered ran");
+    assert!(output.status.success(), "saphyr-ordered failed: {output:?}");
+    let answer: Value = serde_json::from_slice(&output.stdout).expect("saphyr-ordered answers JSON");
+    assert_eq!(answer["preserve_order"], true, "saphyr-ordered was built without preserve_order");
+    let mut out = BTreeMap::new();
+    for ((case, matter, _), r) in cases.iter().zip(answer["results"].as_array().expect("results")) {
+        assert_eq!(r["case"].as_str(), Some(case.as_str()), "saphyr-ordered answered out of order");
+        let read: Result<Vec<String>, String> = match r.get("ok") {
+            Some(lines) => Ok(lines.as_array().expect("lines").iter().map(|l| l.as_str().expect("line").to_owned()).collect()),
+            None => Err(r["err"].as_str().expect("err").to_owned()),
+        };
+        let here = serde_saphyr::from_str_with_options::<Value>(matter, saphyr_options(args.profile))
+            .map(|v| trees::project_json(&v))
+            .map_err(|e| e.to_string());
+        let same = match (&read, &here) {
+            (Ok(a), Ok(b)) => {
+                let (mut a, mut b) = (a.clone(), b.clone());
+                a.sort_unstable();
+                b.sort_unstable();
+                a == b
+            }
+            (Err(a), Err(b)) => a == b,
+            _ => false,
+        };
+        assert!(same, "{case}: saphyr-ordered read different nodes from this build: {read:?} vs {here:?}");
+        out.insert(case.clone(), read);
+    }
+    out
 }
 
 /// Why two projections differ: order alone, key type, or a value.
@@ -1054,6 +1106,12 @@ async fn main() {
     apply(args.profile);
     fs::create_dir_all(&args.scratch).expect("scratch");
     fs::create_dir_all(&args.out).expect("out");
+    // One kind alone, for re-measuring it without the store.
+    if args.only.as_deref() == Some("front-matter") {
+        let kinds = vec![front_matter(&args)];
+        write_report(&args, &kinds, String::new());
+        return;
+    }
     // The store is read through a copy: nothing the plugin does touches the real one.
     let base = args.scratch.join("read-copy");
     copy_tree(&args.store, &base);
@@ -1074,7 +1132,13 @@ async fn main() {
     kinds.push(answers_writes(&reads));
     kinds.push(metadata(&args, &reads).await);
     kinds.push(errors(&args).await);
+    let mut extra = probe::run();
+    extra.push_str(&timing(&args));
+    write_report(&args, &kinds, extra);
+}
 
+/// The header, every kind, then `extra`; printed and written as `report.txt` and `diffs.json`.
+fn write_report(args: &Args, kinds: &[Kind], extra: String) {
     let mut out = String::new();
     out.push_str(&format!(
         "saphyr-diff: serde_norway {} vs serde-saphyr {} (saphyr {} for the node tree), profile {:?}{}\n",
@@ -1087,16 +1151,15 @@ async fn main() {
             Profile::Compat => " — Options { strict_booleans: true, merge_keys: AsOrdinary, duplicate_keys: LastWins, with_snippet: false }, SerializerOptions { folded_wrap_chars: usize::MAX }".to_owned(),
         }
     ));
-    for kind in &kinds {
+    for kind in kinds {
         out.push_str(&kind.render());
     }
-    out.push_str(&probe::run());
-    out.push_str(&timing(&args));
+    out.push_str(&extra);
     print!("{out}");
     fs::write(args.out.join("report.txt"), &out).expect("write report");
     fs::write(
         args.out.join("diffs.json"),
-        serde_json::to_string_pretty(&kinds).expect("json"),
+        serde_json::to_string_pretty(kinds).expect("json"),
     )
     .expect("write json");
 }

@@ -1837,6 +1837,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "saphyr-deps"
+version = "0.0.0"
+dependencies = [
+ "saphyr",
+ "serde-saphyr",
+]
+
+[[package]]
 name = "saphyr-diff"
 version = "0.0.0"
 dependencies = [

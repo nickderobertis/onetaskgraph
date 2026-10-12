@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "spikes/*"]
+# SPIKE: its own workspace, so its serde_json `preserve_order` cannot unify into this build.
+exclude = ["spikes/saphyr-ordered"]
 
 [workspace.package]
 version = "0.5.0"
