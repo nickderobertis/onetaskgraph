@@ -24,7 +24,7 @@
 
 mod source;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -368,6 +368,9 @@ pub struct SourceCache {
     remote: String,
     coverage: VersionCoverage,
     command: Mutex<Command>,
+    /// Files this process could neither replace nor take out of service, which it never reads
+    /// again until a write of its own lands there.
+    withheld: Mutex<HashSet<PathBuf>>,
 }
 
 /// Distinguishes the staging files one process writes.
@@ -384,6 +387,7 @@ impl SourceCache {
             remote: location.remote,
             coverage,
             command: Mutex::new(Command::default()),
+            withheld: Mutex::new(HashSet::new()),
         })
     }
 
@@ -479,7 +483,7 @@ impl SourceCache {
 
     /// The entry for `id`, or `None` when there is none this build can read.
     pub(crate) fn read(&self, id: &NativeId) -> Option<Entry> {
-        let bytes = std::fs::read(self.task_path(id)).ok()?;
+        let bytes = self.read_file(&self.task_path(id))?;
         let value: Value = serde_json::from_slice(&bytes).ok()?;
         if value.get("schema").and_then(Value::as_u64) != Some(u64::from(ENTRY_SCHEMA)) {
             return None;
@@ -490,19 +494,24 @@ impl SourceCache {
 
     /// Write `entry`, whole, in place of whatever was there.
     ///
-    /// A cache that cannot be written is a cache that is not used: the read that produced the
-    /// entry has its answer either way, so a failure here is swallowed rather than failing it.
+    /// A cache that cannot be written is a cache that is not used: the read or write that
+    /// produced the entry has its answer either way, so a failure here does not fail it. It
+    /// does take the entry already there out of service, because that entry is no longer
+    /// what the task was last seen holding.
     pub(crate) fn write(&self, entry: &Entry) {
-        let Ok(bytes) = serde_json::to_vec(entry) else {
-            return;
-        };
-        let _ = self.write_atomically(&self.task_path(&entry.task.id), &bytes);
+        let path = self.task_path(&entry.task.id);
+        let written = serde_json::to_vec(entry)
+            .map_err(std::io::Error::from)
+            .and_then(|bytes| self.write_atomically(&path, &bytes));
+        if written.is_err() {
+            self.retire(&path);
+        }
     }
 
     /// Make the entry for `id` unserveable: a write whose response could not vouch for what
     /// the task now holds.
     pub(crate) fn invalidate(&self, id: &NativeId) {
-        let _ = std::fs::remove_file(self.task_path(id));
+        self.retire(&self.task_path(id));
         let mut command = self.command();
         command.served.remove(id);
         command.read.remove(id);
@@ -510,7 +519,7 @@ impl SourceCache {
 
     /// The board context, when one is kept.
     pub(crate) fn board(&self) -> Option<Value> {
-        let bytes = std::fs::read(self.board_path()).ok()?;
+        let bytes = self.read_file(&self.board_path())?;
         let entry: BoardEntry = serde_json::from_slice(&bytes).ok()?;
         (entry.schema == ENTRY_SCHEMA && entry.remote == self.remote).then_some(entry.context)
     }
@@ -522,14 +531,52 @@ impl SourceCache {
             remote: self.remote.clone(),
             context,
         };
-        if let Ok(bytes) = serde_json::to_vec(&entry) {
-            let _ = self.write_atomically(&self.board_path(), &bytes);
+        let path = self.board_path();
+        let written = serde_json::to_vec(&entry)
+            .map_err(std::io::Error::from)
+            .and_then(|bytes| self.write_atomically(&path, &bytes));
+        if written.is_err() {
+            self.retire(&path);
         }
     }
 
     /// Drop the board context, so the next write needing it reads it.
     pub(crate) fn drop_board(&self) {
-        let _ = std::fs::remove_file(self.board_path());
+        self.retire(&self.board_path());
+    }
+
+    fn withheld(&self) -> MutexGuard<'_, HashSet<PathBuf>> {
+        self.withheld
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// The bytes at `path`, unless this process took them out of service and could not
+    /// remove them.
+    fn read_file(&self, path: &Path) -> Option<Vec<u8>> {
+        if self.withheld().contains(path) {
+            return None;
+        }
+        std::fs::read(path).ok()
+    }
+
+    /// Take the file at `path` out of service, however much of that the filesystem allows.
+    ///
+    /// Removed, it is a miss for every process. When the removal is refused it is emptied in
+    /// place — an empty file parses as nothing, so that too is a miss for every process — and,
+    /// on a host where only its mode stood in the way, made writable first. When even that is
+    /// refused — a file this user can neither write nor re-mode — this process withholds it from
+    /// itself until a write of its own replaces it. Another process on the host can still read
+    /// that file, which nothing left to this one can prevent.
+    fn retire(&self, path: &Path) {
+        let retired = match std::fs::remove_file(path) {
+            Ok(()) => true,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+            Err(_) => empty_in_place(path).is_ok(),
+        };
+        if !retired {
+            self.withheld().insert(path.to_path_buf());
+        }
     }
 
     /// Stage `bytes` beside `path` and rename them into place, so no reader ever opens part of
@@ -549,8 +596,13 @@ impl SourceCache {
             file.sync_all()?;
             std::fs::rename(&staged, path)
         })();
-        if written.is_err() {
-            let _ = std::fs::remove_file(&staged);
+        match written {
+            Ok(()) => {
+                self.withheld().remove(path);
+            }
+            Err(_) => {
+                let _ = std::fs::remove_file(&staged);
+            }
         }
         written
     }
@@ -605,6 +657,33 @@ impl SourceCache {
         }
         Ok(entries)
     }
+}
+
+/// Truncate the file at `path` to nothing, making it writable first where its mode is all
+/// that refuses.
+// Windows has no mode bits to open up, only the read-only attribute, so clearing it there makes
+// the file writable by its owner alone rather than by everybody, which is what the lint warns of.
+#[cfg_attr(not(unix), allow(clippy::permissions_set_readonly_false))]
+fn empty_in_place(path: &Path) -> std::io::Result<()> {
+    let open = || std::fs::OpenOptions::new().write(true).open(path);
+    let file = match open() {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            let mut permissions = std::fs::metadata(path)?.permissions();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                permissions.set_mode(permissions.mode() | 0o200);
+            }
+            #[cfg(not(unix))]
+            permissions.set_readonly(false);
+            std::fs::set_permissions(path, permissions)?;
+            open()?
+        }
+        Err(error) => return Err(error),
+    };
+    file.set_len(0)?;
+    file.sync_all()
 }
 
 /// The JSON Schema of every entry this build writes under [`ENTRY_SCHEMA`]: a task's and the

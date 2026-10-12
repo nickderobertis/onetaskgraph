@@ -1311,4 +1311,167 @@ mod tests {
             Some("v2".to_owned())
         );
     }
+
+    /// The entry the tests below start from: `T-1` at `v1`, served.
+    fn held_at_v1(cache: &SourceCache) {
+        cache.write(&Entry {
+            schema: ENTRY_SCHEMA,
+            remote: "remote".to_owned(),
+            task: task("T-1", "v1"),
+            comments: Some(Vec::new()),
+            assets: None,
+            edges: None,
+            context: None,
+        });
+        assert!(cache.read(&id("T-1")).is_some(), "the entry starts served");
+    }
+
+    /// Another process's view of the same cache directory.
+    fn another_process(dir: &std::path::Path) -> Arc<SourceCache> {
+        SourceCache::new(
+            CacheLocation {
+                dir: dir.to_path_buf(),
+                remote: "remote".to_owned(),
+            },
+            VersionCoverage::whole(),
+        )
+    }
+
+    /// Sets a path's mode for as long as it lives, and gives the old one back.
+    #[cfg(unix)]
+    struct Mode {
+        path: std::path::PathBuf,
+        was: u32,
+    }
+
+    #[cfg(unix)]
+    impl Mode {
+        fn set(path: &std::path::Path, mode: u32) -> Self {
+            use std::os::unix::fs::PermissionsExt as _;
+            let was = std::fs::metadata(path)
+                .expect("the path")
+                .permissions()
+                .mode();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+                .expect("the mode");
+            Self {
+                path: path.to_path_buf(),
+                was,
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for Mode {
+        fn drop(&mut self) {
+            use std::os::unix::fs::PermissionsExt as _;
+            let _ = std::fs::set_permissions(&self.path, std::fs::Permissions::from_mode(self.was));
+        }
+    }
+
+    /// Make the entries' directory refuse every removal, rename and new file, answering `None`
+    /// on a host where that does not take — a superuser's — after saying so.
+    #[cfg(unix)]
+    fn refusing(dir: &std::path::Path) -> Option<Mode> {
+        let tasks = dir.join("tasks");
+        let mode = Mode::set(&tasks, 0o555);
+        if std::fs::File::create(tasks.join("probe")).is_ok() {
+            eprintln!(
+                "skipped: this host lets a read-only directory be written, so no removal can be \
+                 made to fail here"
+            );
+            return None;
+        }
+        Some(mode)
+    }
+
+    fn entry_file(dir: &std::path::Path) -> std::path::PathBuf {
+        dir.join("tasks")
+            .join(format!("{}.json", super::super::digest("T-1")))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_invalidation_the_filesystem_will_not_remove_still_serves_the_old_entry_to_no_one() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let (source, cache) = cached(dir.path(), task("T-1", "v1"));
+        held_at_v1(&cache);
+        let Some(_refusing) = refusing(dir.path()) else {
+            return;
+        };
+        // A response showing another task cannot vouch for this one, so it invalidates.
+        source.settle(
+            &id("T-1"),
+            Some(&journal(task("T-2", "v2"))),
+            String::new(),
+            None,
+            None,
+        );
+        assert!(
+            entry_file(dir.path()).exists(),
+            "the removal was refused, so the file is still there"
+        );
+        assert!(cache.read(&id("T-1")).is_none(), "this process serves it");
+        assert!(
+            another_process(dir.path()).read(&id("T-1")).is_none(),
+            "another process serves it"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_write_the_filesystem_will_not_take_leaves_the_old_entry_served_to_no_one() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let (source, cache) = cached(dir.path(), task("T-1", "v1"));
+        held_at_v1(&cache);
+        let refused = refusing(dir.path());
+        if refused.is_none() {
+            return;
+        }
+        // A response showing the task whole at `v2`, whose entry cannot be written.
+        source.settle(
+            &id("T-1"),
+            Some(&journal(task("T-1", "v2"))),
+            String::new(),
+            None,
+            None,
+        );
+        assert!(cache.read(&id("T-1")).is_none(), "this process serves `v1`");
+        assert!(
+            another_process(dir.path()).read(&id("T-1")).is_none(),
+            "another process serves `v1`"
+        );
+        // Once the directory takes writes again, the next one lands and is served.
+        drop(refused);
+        source.settle(
+            &id("T-1"),
+            Some(&journal(task("T-1", "v3"))),
+            String::new(),
+            None,
+            None,
+        );
+        assert_eq!(
+            another_process(dir.path())
+                .read(&id("T-1"))
+                .and_then(|entry| entry.task.version),
+            Some("v3".to_owned())
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_entry_whose_own_mode_refuses_writes_is_still_taken_out_of_service() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let (_, cache) = cached(dir.path(), task("T-1", "v1"));
+        held_at_v1(&cache);
+        let _read_only = Mode::set(&entry_file(dir.path()), 0o444);
+        let Some(_refusing) = refusing(dir.path()) else {
+            return;
+        };
+        cache.invalidate(&id("T-1"));
+        assert!(
+            another_process(dir.path()).read(&id("T-1")).is_none(),
+            "another process serves it"
+        );
+    }
 }
