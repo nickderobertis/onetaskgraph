@@ -1491,8 +1491,11 @@ mod tests {
             return;
         }
         let path = entry_file(dir.path());
-        // Removal is refused by the directory, and emptying by a filesystem that will not
-        // write the file at all.
+        // The removal is refused for real, by the directory. The emptying is stood in for,
+        // because no real refusal of it is reachable here: the cache retries a mode refusal
+        // after re-moding the file, which its owner may always do, so what refuses both is a
+        // read-only mount or another owner's file — a superuser's to arrange, and a test run as
+        // one cannot make the directory refuse the removal in the first place.
         cache.retire_with(&path, |_| {
             Err(std::io::Error::from(std::io::ErrorKind::ReadOnlyFilesystem))
         });
