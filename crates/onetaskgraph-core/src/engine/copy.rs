@@ -42,6 +42,7 @@ mod comments;
 mod query;
 mod record;
 mod snapshot;
+pub(super) use snapshot::single as single_detail;
 
 use query::{Slot, failed};
 

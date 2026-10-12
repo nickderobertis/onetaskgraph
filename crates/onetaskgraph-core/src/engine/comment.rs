@@ -664,44 +664,24 @@ async fn walk_detail(
         cursor: None,
         limit,
     };
-    let mut read = source
+    let read = source
         .source()
         .get_task_details(std::slice::from_ref(task), Some(&request))
         .await;
-    // One answer, about this task, or none of it is this task's: another number of answers, or
-    // one about another task, would put some other read's comments under it.
-    if read.len() != 1 {
-        return Err(SourceError::Malformed {
-            message: format!(
-                "the source answered {} details for one read of task {task}",
-                read.len()
-            ),
-        });
-    }
-    if let Some(Ok(Some(detail))) = read.first()
-        && detail.task.id != *task
-    {
-        return Err(SourceError::Malformed {
-            message: format!(
-                "the source answered a read of task {task} with task {}",
-                detail.task.id
-            ),
-        });
-    }
-    match read.pop() {
-        Some(Ok(Some(TaskDetailRead {
+    // One answer, about this task, held to the very check a copy's detail read of one task
+    // is: another number of answers, or one about another task, would put some other read's
+    // comments under it.
+    let read = super::copy::single_detail(task, read)?;
+    match read {
+        Some(TaskDetailRead {
             comments: Some(first),
             ..
-        }))) => match first? {
+        }) => match first? {
             Some(first) => walk_from(source, task, first, limit).await,
             None => Ok(None),
         },
-        Some(Ok(Some(_))) => walk(source, task).await,
-        Some(Ok(None)) => Ok(None),
-        Some(Err(error)) => Err(error),
-        None => Err(SourceError::Malformed {
-            message: format!("the source answered no detail for task {task}"),
-        }),
+        Some(_) => walk(source, task).await,
+        None => Ok(None),
     }
 }
 

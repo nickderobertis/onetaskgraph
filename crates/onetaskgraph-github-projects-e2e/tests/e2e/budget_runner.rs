@@ -470,11 +470,22 @@ fn read_cache_points(budget: &str) -> Result<(f64, String), String> {
     let mut largest = i64::MIN;
     for sequence in SEQUENCES {
         let measured = &value["sequences"][sequence];
-        let points = |mode: &str| measured[mode]["points"].as_i64();
-        let (Some(on), Some(off)) = (points("on"), points("off")) else {
-            return Err(format!("sequence {sequence} is not measured in both modes"));
+        // A point count is a whole number of points spent, never negative, and small enough
+        // that the difference of two cannot overflow.
+        let points = |mode: &str| {
+            measured[mode]["points"]
+                .as_u64()
+                .and_then(|points| i64::try_from(points).ok())
         };
-        largest = largest.max(on - off);
+        let (Some(on), Some(off)) = (points("on"), points("off")) else {
+            return Err(format!(
+                "sequence {sequence} is not measured in both modes as whole point counts"
+            ));
+        };
+        let difference = on
+            .checked_sub(off)
+            .ok_or("a sequence's point counts are out of range")?;
+        largest = largest.max(difference);
     }
     if largest != figure {
         return Err("the figure is not the largest difference the sequences record".into());

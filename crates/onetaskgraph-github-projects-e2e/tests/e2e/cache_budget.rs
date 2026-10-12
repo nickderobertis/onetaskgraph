@@ -192,8 +192,6 @@ fn sequences(cache: bool) -> Vec<Value> {
     costs
 }
 
-/// The stale-option fallback, with the cache on and off: a priority write after the option it
-/// names was re-minted.
 /// The refresh read a written task costs when its write's response cannot vouch for a version,
 /// as against GitHub itself, where a response is stamped in the second of the change it made:
 /// an expected write answered before its task settles, then a read pinned to the version the
@@ -222,6 +220,8 @@ fn refresh_after_unsettled_write() -> Value {
     refresh
 }
 
+/// The stale-option fallback, with the cache on and off: a priority write after the option it
+/// names was re-minted.
 fn stale_option(cache: bool) -> Value {
     let cached = Cached::with(&json!({"enabled": cache}));
     let (first, _) = cached.ok(&["task", "show", "board:T-3", "--json"]);

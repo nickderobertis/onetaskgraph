@@ -76,7 +76,7 @@ pub(super) async fn first(
 /// The one answer a detail read of `id` alone owes: refused as malformed when the source gave
 /// any other number of them, or answered about another task — either would put some other
 /// read's content under `id`.
-fn single(
+pub(crate) fn single(
     id: &NativeId,
     mut answers: Vec<Result<Option<TaskDetailRead>, SourceError>>,
 ) -> Result<Option<TaskDetailRead>, SourceError> {
