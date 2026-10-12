@@ -75,6 +75,10 @@ pub(super) struct Held {
     learnt: Mutex<BTreeMap<NativeId, BTreeMap<NativeId, String>>>,
     /// The comments a primed context says each issue holds, `None` where it read none.
     primed: Mutex<BTreeMap<NativeId, Option<BTreeMap<NativeId, String>>>>,
+    /// Issues an expected write was primed for and then let go of — to read afresh after a
+    /// stale id — which still send only what differs from what they read, so a part that
+    /// already landed is not sent again. Dropped with the command.
+    narrowed: Mutex<std::collections::BTreeSet<NativeId>>,
 }
 
 /// A lock an earlier panic poisoned is read as it stands: what these hold is an
@@ -132,7 +136,12 @@ impl Held {
     /// Whether a write of `id` was primed from the store's cache: a write expecting a version,
     /// which sends only what differs from it.
     pub(super) fn is_primed(&self, id: &NativeId) -> bool {
-        held(&self.primed).contains_key(id)
+        held(&self.primed).contains_key(id) || held(&self.narrowed).contains(id)
+    }
+
+    /// Forget every issue an expected write let go of: a new command writes as it always did.
+    pub(super) fn end_command(&self) {
+        held(&self.narrowed).clear();
     }
 
     /// The body comment `comment` holds on `issue`, by a primed context: `Some(Some(body))`
@@ -316,10 +325,11 @@ impl GitHubProjectsSource {
         if let Ok(mut cache) = self.resolved_cache() {
             cache.remove(id);
         }
-        if held(&self.expected.primed).remove(id).is_some()
-            && let Ok(mut fields) = self.fields_cache()
-        {
-            *fields = None;
+        if held(&self.expected.primed).remove(id).is_some() {
+            held(&self.expected.narrowed).insert(id.clone());
+            if let Ok(mut fields) = self.fields_cache() {
+                *fields = None;
+            }
         }
     }
 
@@ -425,12 +435,7 @@ impl GitHubProjectsSource {
                 path: None,
             })
             .collect();
-        Some(WholeTask {
-            task,
-            comments: page.items,
-            assets,
-            edges: None,
-        })
+        WholeTask::new(task, page.items, assets, None)
     }
 }
 

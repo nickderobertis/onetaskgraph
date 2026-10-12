@@ -1150,6 +1150,8 @@ struct GitHubBoard {
     /// Operations whose next request is applied and then answered with nothing at all: the
     /// connection is closed with no response, as a lost answer leaves a caller.
     dropping: Vec<&'static str>,
+    /// Operations whose next request is refused as naming a node id that does not resolve.
+    refusing_stale: Vec<&'static str>,
 }
 
 /// Whether one request — its document and its variables — is one a [`BoardHook`] counts.
@@ -1409,6 +1411,13 @@ impl GitHubBoardFields {
 
     /// Apply the next request carrying `operation`, and close its connection without an
     /// answer — once.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board, which lives here for the reason `GitHubBoard` records: what it changes is the board's private state, read by its own request loop, so it can only be a method of this handle, beside `refuse_once` and `rename_option`, and a suite of one plugin could not add it from outside.
+    /// Refuse the next request carrying `operation` as GitHub refuses one naming a node id that
+    /// no longer resolves — an id a cache kept going stale — once, writing nothing.
+    pub fn refuse_as_stale_once(&self, operation: &'static str) {
+        self.board.lock().unwrap().refusing_stale.push(operation);
+    }
+
     // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board, which lives here for the reason `GitHubBoard` records: what it changes is the board's private state, read by its own request loop, so it can only be a method of this handle, beside `refuse_once` and `rename_option`, and a suite of one plugin could not add it from outside.
     pub fn drop_response_once(&self, operation: &'static str) {
         self.board.lock().unwrap().dropping.push(operation);
@@ -2600,6 +2609,7 @@ fn github_projects_board_at(
         search_page_rows: None,
         partial_writes: false,
         dropping: Vec::new(),
+        refusing_stale: Vec::new(),
     }));
     let mut owed_failures: Vec<&'static str> = fail_first.to_vec();
     let watched = Arc::clone(&board);
@@ -2694,7 +2704,19 @@ fn github_projects_board_at(
                     .position(|operation| query.contains(operation))
                     .map(|at| owed_failures.remove(at))
             });
-            let body = if let Some(operation) = owed {
+            let stale = {
+                let mut held = board.lock().unwrap();
+                held.refusing_stale
+                    .iter()
+                    .position(|operation| query.contains(operation))
+                    .map(|at| held.refusing_stale.remove(at))
+            };
+            let body = if let Some(operation) = stale {
+                json!({"data":Value::Null,
+                       "errors":[{"message":format!(
+                           "Could not resolve to a node with the global id of '{operation}'")}]})
+                .to_string()
+            } else if let Some(operation) = owed {
                 // The operation is named in the message so a journey can tell *which*
                 // failure reached the caller — a copy whose write failed and whose tidy-up
                 // then failed too has two, and which one it reports is the behaviour.

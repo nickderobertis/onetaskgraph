@@ -447,14 +447,14 @@ impl CachedSource {
         let last = journal.mutations().last();
         let landed_last = last.filter(|entry| entry.outcome == PartOutcome::Landed);
         match landed_last.and_then(|entry| entry.shown.whole()) {
-            Some(whole) if whole.task.version.is_some() => {
+            Some(whole) => {
                 self.cache.write(&Entry {
                     schema: ENTRY_SCHEMA,
                     remote: self.cache.remote.clone(),
-                    task: whole.task.clone(),
-                    comments: Some(whole.comments.clone()),
-                    assets: Some(whole.assets.clone()),
-                    edges: whole.edges.clone(),
+                    task: whole.task().clone(),
+                    comments: Some(whole.comments().to_vec()),
+                    assets: Some(whole.assets().to_vec()),
+                    edges: whole.edges().map(<[DependencyEdge]>::to_vec),
                     context: self.inner.write_context(id),
                 });
                 let mut command = self.cache.command();

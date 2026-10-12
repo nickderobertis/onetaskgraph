@@ -11003,6 +11003,7 @@ impl TaskSource for GitHubProjectsSource {
         clear(&self.resolved_cache);
         clear(&self.children_cache);
         clear(&self.fields_cache);
+        self.expected.end_command();
         Ok(())
     }
 }

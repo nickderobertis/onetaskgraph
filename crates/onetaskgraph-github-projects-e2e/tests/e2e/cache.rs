@@ -2433,3 +2433,42 @@ fn the_python_sdk_pins_expects_and_clears_through_the_binary() {
         .collect();
     assert_eq!(sent, [graphql::UPDATE_FIELD_WHOLE]);
 }
+
+#[test]
+fn a_stale_id_refused_after_an_earlier_part_landed_retries_that_part_alone() {
+    let cached = Cached::new();
+    let (_, version) = bound(&cached, "title: Bound\nstatus: Todo\npriority: high");
+    retitle(&cached, "Bound, retitled", "low");
+    // The fields land, then the issue part is refused for an id that no longer resolves.
+    cached
+        .board
+        .refuse_as_stale_once("updateIssue(input:$input)");
+    let (copied, sent) = cached.ok(&[
+        "task",
+        "copy",
+        "plans:B-1",
+        "--to",
+        "board",
+        "--expect",
+        &version,
+        "--json",
+    ]);
+    let item = &copied["items"][0];
+    let reported = parts(item);
+    assert_eq!(reported[0], landed("fields"), "{item}");
+    assert_eq!(reported[1].1, "rejected", "{item}");
+    assert_eq!(item["result"]["parts"][1]["stale"], true);
+    assert_eq!(reported[2], landed("issue"), "{item}");
+    let count = |document: &str| sent.iter().filter(|sent| *sent == document).count();
+    assert_eq!(count(graphql::ISSUE), 1, "one read: {sent:?}");
+    assert_eq!(
+        count(graphql::UPDATE_FIELDS) + count(graphql::UPDATE_FIELD_WHOLE),
+        1,
+        "the landed fields are never sent again: {sent:?}"
+    );
+    assert_eq!(
+        count(graphql::UPDATE_ISSUE_WHOLE),
+        2,
+        "the refused part, once more: {sent:?}"
+    );
+}

@@ -121,17 +121,86 @@ pub enum RequestKind {
 
 /// One task as a write's own response showed it whole: everything an entry of the cache
 /// holds, at the version that response determines.
+///
+/// Built only by [`WholeTask::new`], and read back through the same check, so a whole task
+/// always carries a version: one without is not a task a cache can key.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(try_from = "WholeTaskShape")]
 pub struct WholeTask {
-    /// The task, its [`Task::version`] the version the response determines.
-    pub task: Task,
-    /// Every comment it holds, oldest first.
-    pub comments: Vec<Comment>,
-    /// The image assets it holds.
-    pub assets: Vec<Asset>,
-    /// Its forward dependency edges, when the response carried them whole.
+    task: Task,
+    comments: Vec<Comment>,
+    assets: Vec<Asset>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub edges: Option<Vec<DependencyEdge>>,
+    edges: Option<Vec<DependencyEdge>>,
+}
+
+/// [`WholeTask`] as it is spelled, before its version is checked.
+#[derive(Deserialize, JsonSchema)]
+struct WholeTaskShape {
+    task: Task,
+    comments: Vec<Comment>,
+    assets: Vec<Asset>,
+    #[serde(default)]
+    edges: Option<Vec<DependencyEdge>>,
+}
+
+impl TryFrom<WholeTaskShape> for WholeTask {
+    type Error = String;
+
+    fn try_from(shape: WholeTaskShape) -> Result<Self, Self::Error> {
+        Self::new(shape.task, shape.comments, shape.assets, shape.edges)
+            .ok_or_else(|| "a whole task carries the version it is at".to_owned())
+    }
+}
+
+impl WholeTask {
+    /// The task whole — its comments, its assets and, when known, its forward edges — or
+    /// `None` for a task without a [`Task::version`].
+    #[must_use]
+    pub fn new(
+        task: Task,
+        comments: Vec<Comment>,
+        assets: Vec<Asset>,
+        edges: Option<Vec<DependencyEdge>>,
+    ) -> Option<Self> {
+        task.version.as_ref()?;
+        Some(Self {
+            task,
+            comments,
+            assets,
+            edges,
+        })
+    }
+
+    /// The task, its [`Task::version`] the version the response determines.
+    #[must_use]
+    pub fn task(&self) -> &Task {
+        &self.task
+    }
+
+    /// The version it is at.
+    #[must_use]
+    pub fn version(&self) -> &str {
+        self.task.version.as_deref().unwrap_or_default()
+    }
+
+    /// Every comment it holds, oldest first.
+    #[must_use]
+    pub fn comments(&self) -> &[Comment] {
+        &self.comments
+    }
+
+    /// The image assets it holds.
+    #[must_use]
+    pub fn assets(&self) -> &[Asset] {
+        &self.assets
+    }
+
+    /// Its forward dependency edges, when the response carried them whole.
+    #[must_use]
+    pub fn edges(&self) -> Option<&[DependencyEdge]> {
+        self.edges.as_deref()
+    }
 }
 
 /// One request a source sent while a journal was open.
@@ -183,7 +252,7 @@ impl Shown {
         match self {
             Self::Nothing => None,
             Self::Version { version } => Some(version),
-            Self::Whole { task } => task.task.version.as_deref(),
+            Self::Whole { task } => Some(task.version()),
         }
     }
 
