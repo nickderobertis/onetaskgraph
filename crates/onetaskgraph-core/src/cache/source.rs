@@ -1373,9 +1373,14 @@ mod tests {
     /// on a host where that does not take — a superuser's — after saying so.
     #[cfg(unix)]
     fn refusing(dir: &std::path::Path) -> Option<Mode> {
-        let tasks = dir.join("tasks");
-        let mode = Mode::set(&tasks, 0o555);
-        if std::fs::File::create(tasks.join("probe")).is_ok() {
+        refusing_in(&dir.join("tasks"))
+    }
+
+    /// Make `directory` refuse every removal, rename and new file, as [`refusing`] does.
+    #[cfg(unix)]
+    fn refusing_in(directory: &std::path::Path) -> Option<Mode> {
+        let mode = Mode::set(directory, 0o555);
+        if std::fs::File::create(directory.join("probe")).is_ok() {
             eprintln!(
                 "skipped: this host lets a read-only directory be written, so no removal can be \
                  made to fail here"
@@ -1468,6 +1473,100 @@ mod tests {
         let Some(_refusing) = refusing(dir.path()) else {
             return;
         };
+        cache.invalidate(&id("T-1"));
+        assert!(
+            another_process(dir.path()).read(&id("T-1")).is_none(),
+            "another process serves it"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_entry_nothing_can_remove_or_empty_is_withheld_from_this_process_until_rewritten() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let (_, cache) = cached(dir.path(), task("T-1", "v1"));
+        held_at_v1(&cache);
+        let refused = refusing(dir.path());
+        if refused.is_none() {
+            return;
+        }
+        let path = entry_file(dir.path());
+        // Removal is refused by the directory, and emptying by a filesystem that will not
+        // write the file at all.
+        cache.retire_with(&path, |_| {
+            Err(std::io::Error::from(std::io::ErrorKind::ReadOnlyFilesystem))
+        });
+        assert!(path.exists(), "the file is as it was");
+        assert!(
+            cache.read(&id("T-1")).is_none(),
+            "this process withholds it from itself"
+        );
+        // A write of its own landing there gives it back.
+        drop(refused);
+        cache.write(&Entry {
+            schema: ENTRY_SCHEMA,
+            remote: "remote".to_owned(),
+            task: task("T-1", "v2"),
+            comments: Some(Vec::new()),
+            assets: None,
+            edges: None,
+            context: None,
+        });
+        assert_eq!(
+            cache.read(&id("T-1")).and_then(|entry| entry.task.version),
+            Some("v2".to_owned()),
+            "the withholding process serves what it wrote"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_board_context_the_filesystem_will_not_replace_or_drop_is_served_to_no_one() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let (_, cache) = cached(dir.path(), task("T-1", "v1"));
+        cache.write_board(serde_json::json!({"option": "stale"}));
+        assert!(cache.board().is_some(), "the board starts served");
+        {
+            let Some(_refusing) = refusing_in(dir.path()) else {
+                return;
+            };
+            cache.write_board(serde_json::json!({"option": "fresh"}));
+            assert!(
+                dir.path().join("board.json").exists(),
+                "the file is still there"
+            );
+            assert!(
+                cache.board().is_none(),
+                "the replaced context is not served"
+            );
+            assert!(
+                another_process(dir.path()).board().is_none(),
+                "nor to another process"
+            );
+        }
+        cache.write_board(serde_json::json!({"option": "stale"}));
+        let Some(_refusing) = refusing_in(dir.path()) else {
+            return;
+        };
+        cache.drop_board();
+        assert!(cache.board().is_none(), "the dropped context is not served");
+        assert!(
+            another_process(dir.path()).board().is_none(),
+            "nor to another process"
+        );
+    }
+
+    /// Runs on every host; on Windows, where a file's read-only attribute refuses its removal,
+    /// it is what drives clearing that attribute before the file is emptied.
+    #[test]
+    fn an_entry_marked_read_only_is_still_taken_out_of_service() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let (_, cache) = cached(dir.path(), task("T-1", "v1"));
+        held_at_v1(&cache);
+        let path = entry_file(dir.path());
+        let mut permissions = std::fs::metadata(&path).expect("the entry").permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(&path, permissions).expect("read-only");
         cache.invalidate(&id("T-1"));
         assert!(
             another_process(dir.path()).read(&id("T-1")).is_none(),

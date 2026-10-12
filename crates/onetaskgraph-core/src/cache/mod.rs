@@ -569,10 +569,15 @@ impl SourceCache {
     /// itself until a write of its own replaces it. Another process on the host can still read
     /// that file, which nothing left to this one can prevent.
     fn retire(&self, path: &Path) {
+        self.retire_with(path, empty_in_place);
+    }
+
+    /// [`Self::retire`], emptying a file whose removal was refused with `empty`.
+    fn retire_with(&self, path: &Path, empty: fn(&Path) -> std::io::Result<()>) {
         let retired = match std::fs::remove_file(path) {
             Ok(()) => true,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
-            Err(_) => empty_in_place(path).is_ok(),
+            Err(_) => empty(path).is_ok(),
         };
         if !retired {
             self.withheld().insert(path.to_path_buf());
