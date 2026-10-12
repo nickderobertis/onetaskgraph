@@ -128,12 +128,10 @@ pub enum CacheCommand {
 #[derive(Debug, Args)]
 pub struct CacheClearArgs {
     /// The source whose cache to empty; every source's when left out.
-    ///
-    /// llmlint: ignore[invalid_states_unrepresentable] — as `SelectionArgs::source`: a
-    /// `SourceName` here would refuse a malformed name as a bad invocation under clap's
-    /// wording; `main` converts it and names the configured sources.
+    // llmlint: ignore-block[invalid_states_unrepresentable] As `SelectionArgs::source`: a `SourceName` here would refuse a malformed name as a bad invocation under clap's wording; `main` converts it before anything is read and names the configured sources.
     #[arg(value_name = "SOURCE")]
     pub source: Option<String>,
+    // llmlint: ignore-end[invalid_states_unrepresentable]
 }
 
 /// The version of a task a write says it knows: `--expect`.
@@ -1390,11 +1388,10 @@ pub struct TaskShowManyArgs {
     pub no_comments: bool,
     /// Pin one task's read to a version the caller holds, `<ID>=<VERSION>`, as `task show
     /// --pin` does. Repeat for several.
-    ///
-    /// llmlint: ignore[invalid_states_unrepresentable] — `main` splits and qualifies each
-    /// before any source is started, naming the shape it wants.
+    // llmlint: ignore-block[invalid_states_unrepresentable] As `ids` above: `main` splits and qualifies each through `GlobalId::from_str` before any source is started, naming the shape it wants, where a clap value parser would report it as a bad invocation without that next action.
     #[arg(long, value_name = "ID=VERSION")]
     pub pin: Vec<String>,
+    // llmlint: ignore-end[invalid_states_unrepresentable]
 }
 
 /// `onetaskgraph task show` and `onetaskgraph project show`.

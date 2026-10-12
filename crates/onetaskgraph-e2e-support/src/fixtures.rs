@@ -1409,15 +1409,15 @@ impl GitHubBoardFields {
         self.board.lock().unwrap().partial_writes = partially;
     }
 
-    /// Apply the next request carrying `operation`, and close its connection without an
-    /// answer — once.
-    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board, which lives here for the reason `GitHubBoard` records: what it changes is the board's private state, read by its own request loop, so it can only be a method of this handle, beside `refuse_once` and `rename_option`, and a suite of one plugin could not add it from outside.
     /// Refuse the next request carrying `operation` as GitHub refuses one naming a node id that
     /// no longer resolves — an id a cache kept going stale — once, writing nothing.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board, which lives here for the reason `GitHubBoard` records: what it changes is the board's private state, read by its own request loop, so it can only be a method of this handle, beside `refuse_once` and `rename_option`, and a suite of one plugin could not add it from outside.
     pub fn refuse_as_stale_once(&self, operation: &'static str) {
         self.board.lock().unwrap().refusing_stale.push(operation);
     }
 
+    /// Apply the next request carrying `operation`, and close its connection without an
+    /// answer — once.
     // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board, which lives here for the reason `GitHubBoard` records: what it changes is the board's private state, read by its own request loop, so it can only be a method of this handle, beside `refuse_once` and `rename_option`, and a suite of one plugin could not add it from outside.
     pub fn drop_response_once(&self, operation: &'static str) {
         self.board.lock().unwrap().dropping.push(operation);

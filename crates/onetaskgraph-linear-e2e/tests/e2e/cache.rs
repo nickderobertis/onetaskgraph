@@ -58,3 +58,65 @@ fn a_linear_source_with_its_cache_on_reads_linear_every_time_and_says_why() {
         .sum();
     assert!(written >= 1, "the cache is written, and never served");
 }
+
+#[test]
+fn an_expected_write_to_a_linear_source_writes_as_it_always_does_and_reports_no_parts() {
+    let sandbox = Sandbox::new();
+    let (config, workspace) = linear_workspace(
+        &sandbox,
+        held(
+            vec![issue("L-1", "Todo", json!({}))],
+            Vec::new(),
+            Vec::new(),
+        ),
+    );
+    let mut source = linear(&config, json!({"status_mapping": eng_mapping()}));
+    source["cache"] = json!({"enabled": true});
+    sandbox.project_document(&document(&json!({ "linear": source })));
+    let cache_home = sandbox.subdirectory("cache-home");
+    let output = sandbox
+        .command()
+        .env("XDG_CACHE_HOME", &cache_home)
+        .args([
+            "task",
+            "status",
+            "set",
+            "linear:L-1",
+            "in-progress",
+            "--expect",
+            "any",
+            "--json",
+        ])
+        .assert()
+        .get_output()
+        .clone();
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let written: Value = serde_json::from_str(&stdout(&output)).expect("JSON");
+    assert_eq!(written["status"]["category"], "in-progress");
+    // Linear records no journal: the write is the one it always was, and its answer says
+    // nothing of parts it cannot report.
+    assert!(written.get("result").is_none(), "{written}");
+    assert!(written.get("fallback").is_none(), "{written}");
+    assert!(
+        workspace
+            .served()
+            .iter()
+            .any(|(query, _)| query.trim_start().starts_with("mutation")),
+        "the status was written"
+    );
+    // And the entry it wrote over is never served.
+    let shown = sandbox
+        .command()
+        .env("XDG_CACHE_HOME", &cache_home)
+        .args(["task", "show", "linear:L-1", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let shown: Value = serde_json::from_str(&stdout(&shown)).expect("JSON");
+    assert_eq!(shown["cache"]["served"], "remote");
+    assert_eq!(
+        shown["items"][0]["item"]["status"]["category"],
+        "in-progress"
+    );
+}

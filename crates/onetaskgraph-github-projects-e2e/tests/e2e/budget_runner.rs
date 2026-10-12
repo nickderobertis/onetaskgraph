@@ -143,6 +143,7 @@ fn report_visibility_reads() {
     let (value, detail) = read_visibility(&budget).unwrap_or_else(|error| refuse(&error));
     hand_over(value, &detail);
 }
+// llmlint: ignore-block[budget_commands_measure_directly] Every budget of this crate selects its own report-only entry here, the harness-runner convention it landed with (report_visibility_reads, report_metadata_fields), and the task registering this one names that pattern. It reads only the telemetry the journeys recorded, refuses a recording of another workload, and hands the figure to onebudgetspec, which alone judges it.
 #[test]
 fn report_cache_points() {
     let Some(budget) = selected() else {
@@ -151,6 +152,7 @@ fn report_cache_points() {
     let (value, detail) = read_cache_points(&budget).unwrap_or_else(|error| refuse(&error));
     hand_over(value, &detail);
 }
+// llmlint: ignore-end[budget_commands_measure_directly]
 #[test]
 fn report_metadata_fields() {
     let Some(budget) = selected() else {

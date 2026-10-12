@@ -182,7 +182,7 @@ pub enum Served {
 ///
 /// Built only by [`CacheUse::cache`], which carries no reason, and [`CacheUse::remote`], so a
 /// served entry never carries one.
-// llmlint: ignore[invalid_states_unrepresentable] The task this lands fixes the wire shape as `cache: {served: "cache"|"remote", bypassed: null|"<reason>"}`, which both SDKs are generated from; an enum would serialize as another shape. The two constructors below are the only ways one is built, and neither pairs `cache` with a reason.
+// llmlint: ignore-block[invalid_states_unrepresentable] The task this lands fixes the wire shape as `cache: {served: "cache"|"remote", bypassed: null|"<reason>"}`, which both SDKs are generated from; an enum would serialize as another shape. The two constructors below are the only ways one is built, and neither pairs `cache` with a reason.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct CacheUse {
     /// Where it was answered from.
@@ -191,6 +191,7 @@ pub struct CacheUse {
     /// not cover, or a task that carries no token — or `null` when nothing kept it from being.
     pub bypassed: Option<String>,
 }
+// llmlint: ignore-end[invalid_states_unrepresentable]
 
 impl CacheUse {
     fn cache() -> Self {
@@ -248,7 +249,7 @@ pub struct WritePart {
 }
 
 /// That an expected write read its target before writing, and why.
-// llmlint: ignore[invalid_states_unrepresentable] The task this lands fixes the wire shape as `fallback: {read: true, reason}`; the member is present only when a read was made, and the one place one is built sets `read` from that fact, so `false` is never written.
+// llmlint: ignore-block[invalid_states_unrepresentable] The task this lands fixes the wire shape as `fallback: {read: true, reason}`; the member is present only when a read was made, and the one place one is built sets `read` from that fact, so `false` is never written.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct WriteFallback {
     /// Always `true`: the write made one read.
@@ -256,6 +257,7 @@ pub struct WriteFallback {
     /// Why it could not take what it needed from the cache.
     pub reason: String,
 }
+// llmlint: ignore-end[invalid_states_unrepresentable]
 
 /// One task as the cache keeps it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
