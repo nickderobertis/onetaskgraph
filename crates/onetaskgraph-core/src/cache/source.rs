@@ -1644,6 +1644,51 @@ mod tests {
         );
     }
 
+    /// Windows refuses to delete, or open for writing, a file another handle holds open without
+    /// sharing those: a real refusal, needing no privilege, of everything retirement can try
+    /// there.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn an_entry_held_open_against_deletion_is_withheld_its_write_refused_and_then_recovers() {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        /// `FILE_SHARE_READ`: others may read the file, and neither write nor delete it.
+        const SHARE_READ_ONLY: u32 = 0x1;
+        let dir = tempfile::tempdir().expect("a directory");
+        let (source, cache, probe) = counting(dir.path(), task("T-1", "v1"));
+        held_at_v1(&cache);
+        let path = dir
+            .path()
+            .join("tasks")
+            .join(format!("{}.json", super::super::digest("T-1")));
+        let holding = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(SHARE_READ_ONLY)
+            .open(&path)
+            .expect("the entry held open");
+
+        cache.invalidate(&id("T-1"));
+        assert!(path.exists(), "the removal was refused");
+        assert!(cache.read(&id("T-1")).is_none(), "the entry is withheld");
+        assert!(another_process(dir.path()).read(&id("T-1")).is_some());
+        let refused = source
+            .set_task_priority(&id("T-1"), Priority::High)
+            .await
+            .expect_err("the write is refused");
+        assert!(refused.to_string().contains("was not sent"), "{refused}");
+        assert!(
+            probe.lock().expect("the probe").writes.is_empty(),
+            "nothing was sent"
+        );
+
+        drop(holding);
+        source
+            .set_task_priority(&id("T-1"), Priority::High)
+            .await
+            .expect("the write is sent");
+        assert_eq!(probe.lock().expect("the probe").writes, [(false, false)]);
+        assert!(!path.exists(), "the entry was retired before it was sent");
+    }
+
     /// Set in the child [`a_cache_directory_mounted_read_only_withholds_refuses_and_recovers`]
     /// runs itself as, naming the directory mounted read-only over it.
     #[cfg(target_os = "linux")]
