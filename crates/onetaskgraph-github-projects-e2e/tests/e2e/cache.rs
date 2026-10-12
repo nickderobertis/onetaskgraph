@@ -1721,3 +1721,37 @@ fn with_caching_on_the_cache_directory_is_the_only_place_a_file_changes() {
         "files changed outside the cache directory: {outside:?}"
     );
 }
+
+#[test]
+fn every_verb_the_cache_does_not_serve_answers_and_costs_exactly_what_it_does_without_it() {
+    let verbs: [&[&str]; 9] = [
+        &["project", "list", "--source", "board", "--json"],
+        &["project", "show", "board:P-1", "--json"],
+        &["project", "deps", "board:P-1", "--json"],
+        &["document", "list", "--source", "board", "--json"],
+        &["label", "list", "--source", "board", "--json"],
+        &["task", "deps", "board:T-1", "--json"],
+        &[
+            "task",
+            "deps",
+            "board:T-2",
+            "--direction",
+            "depended-on-by",
+            "--json",
+        ],
+        &["search", "alpha", "--source", "board", "--json"],
+        &["task", "show", "board:T-3", "--no-comments", "--json"],
+    ];
+    let off = Cached::with(&json!({"enabled": false}));
+    let on = Cached::new();
+    for verb in verbs {
+        let (without, sent_without) = off.ok(verb);
+        let (with, sent_with) = on.ok(verb);
+        assert_eq!(sent_with.len(), sent_without.len(), "`{}`", verb.join(" "));
+        let mut with = with;
+        if let Some(members) = with.as_object_mut() {
+            members.remove("cache");
+        }
+        assert_eq!(with, without, "`{}`", verb.join(" "));
+    }
+}
