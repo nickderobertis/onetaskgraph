@@ -28,7 +28,7 @@ use super::{
 /// be read and landed.
 pub(super) enum Slot {
     /// Decided without reading it from its source.
-    Done(CopyOutcome),
+    Done(Box<CopyOutcome>),
     /// To be read and landed.
     Read(GlobalId),
 }
@@ -60,7 +60,7 @@ impl Engine {
                 .in_hand(request, &listed, query.commented_since, running)
                 .await?
             {
-                slots.push(Slot::Done(outcome));
+                slots.push(Slot::Done(Box::new(outcome)));
             } else {
                 slots.push(Slot::Read(listed.id));
             }

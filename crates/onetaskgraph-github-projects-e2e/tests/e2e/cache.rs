@@ -1417,3 +1417,307 @@ fn a_bound_copy_with_expect_reports_each_part_landed_rejected_or_unknown_and_ret
         );
     }
 }
+
+/// Run one SDK script — Python's or TypeScript's — against the sandbox, with the cache home and
+/// the task named, answering what it printed.
+fn sdk(cached: &Cached, typescript: bool, script: &str, task: &str, pin: Option<&str>) -> Value {
+    let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut command = if typescript {
+        let mut command = std::process::Command::new("bun");
+        command.args([
+            "-e",
+            &format!(
+                "import {{ OnetaskgraphClient }} from {}; delete process.env.HOME; \
+                 const client = new OnetaskgraphClient({{binaryPath: process.env.CACHED_BINARY, \
+                 cwd: process.cwd()}}); const id = process.env.CACHED_TASK; \
+                 const pin = process.env.CACHED_PIN; {script}",
+                serde_json::to_string(&workspace.join("sdks/typescript/src/client.ts")).unwrap()
+            ),
+        ]);
+        command
+    } else {
+        let mut command = std::process::Command::new("uv");
+        command
+            .args(["run", "--frozen", "--project"])
+            .arg(workspace.join("sdks/python"))
+            .args([
+                "python",
+                "-c",
+                &format!(
+                    "import asyncio,os\nfrom onetaskgraph_sdk import Client\nasync def run():\n \
+                     os.environ.pop('HOME',None)\n c=Client(os.environ['CACHED_BINARY'],cwd=os.getcwd())\n \
+                     task=os.environ['CACHED_TASK']\n pin=os.environ.get('CACHED_PIN')\n {script}\n\
+                     asyncio.run(run())"
+                ),
+            ]);
+        command
+    };
+    // `uv` and `bun` keep HOME to find their runtimes; each script drops it before its SDK
+    // spawns the binary.
+    for (key, _) in std::env::vars() {
+        if key.starts_with("ONETASKGRAPH_") {
+            command.env_remove(key);
+        }
+    }
+    command
+        .current_dir(cached.sandbox.project())
+        .env("XDG_CONFIG_HOME", cached.sandbox.config_home())
+        .env("XDG_CACHE_HOME", &cached.cache_home)
+        .env("CACHED_BINARY", onetaskgraph_e2e_support::binary())
+        .env("CACHED_TASK", task);
+    if let Some(pin) = pin {
+        command.env("CACHED_PIN", pin);
+    }
+    let output = command.output().expect("the SDK runs");
+    assert!(output.status.success(), "{}", stderr(&output));
+    serde_json::from_str(&stdout(&output)).expect("the SDK printed JSON")
+}
+
+const PYTHON_SHOW: &str =
+    "result=await c.task_show(id=task,pin=pin)\n print(result.model_dump_json(exclude_none=True))";
+const TYPESCRIPT_SHOW: &str =
+    "console.log(JSON.stringify(await client.taskShow(id, pin === undefined ? {} : {pin})));";
+
+/// One read through a Rust caller of the engine, built from the configuration the binary reads
+/// — pinned to `pin` when given — and how it used the cache.
+fn engine_read(
+    cached: &Cached,
+    task: &str,
+    pin: Option<&str>,
+) -> (Value, Option<onetaskgraph_core::CacheUse>) {
+    let environment = onetaskgraph_core::Environment::from_pairs([
+        (
+            "XDG_CONFIG_HOME",
+            cached.sandbox.config_home().to_string_lossy().into_owned(),
+        ),
+        (
+            "XDG_CACHE_HOME",
+            cached.cache_home.to_string_lossy().into_owned(),
+        ),
+    ]);
+    let loaded = onetaskgraph_core::config::load(
+        &cached.sandbox.project(),
+        &environment,
+        &onetaskgraph_core::config::Layer::default(),
+    )
+    .expect("the configuration loads");
+    let engine = onetaskgraph_core::Engine::build(&loaded.config, &loaded.secrets);
+    let id: onetaskgraph_core::GlobalId = task.parse().expect("a qualified id");
+    let runtime = tokio::runtime::Runtime::new().expect("a runtime");
+    let detail = runtime
+        .block_on(engine.task_detail_pinned(&id, pin))
+        .expect("the read");
+    let used = engine.cache_use(&id);
+    (serde_json::to_value(&detail).expect("JSON"), used)
+}
+
+#[test]
+fn one_sources_cache_is_shared_by_the_command_line_both_sdks_and_a_rust_caller() {
+    let cached = Cached::new();
+    // Written by the command line, served to every other caller with nothing sent.
+    let (first, _) = cached.ok(&["task", "show", "board:T-3", "--json"]);
+    let v = version_of(&first);
+    for typescript in [false, true] {
+        let before = cached.board.served().len();
+        let script = if typescript {
+            TYPESCRIPT_SHOW
+        } else {
+            PYTHON_SHOW
+        };
+        let shown = sdk(&cached, typescript, script, "board:T-3", Some(&v));
+        assert_eq!(
+            cached.board.served().len(),
+            before,
+            "typescript={typescript}"
+        );
+        // The Python SDK leaves a null member out of what it prints, so the two are compared
+        // by what a caller acts on: where the read was answered from, and what it answered.
+        assert_eq!(shown["cache"]["served"], "cache", "typescript={typescript}");
+        assert_eq!(shown["items"][0]["id"], first["items"][0]["id"]);
+        assert_eq!(version_of(&shown), v);
+    }
+    let before = cached.board.served().len();
+    let (shown, used) = engine_read(&cached, "board:T-3", Some(&v));
+    assert_eq!(
+        cached.board.served().len(),
+        before,
+        "a Rust caller sends nothing"
+    );
+    assert_eq!(
+        used.map(|used| used.served),
+        Some(onetaskgraph_core::Served::Cache)
+    );
+    assert_eq!(shown["items"], first["items"]);
+
+    // Written by each other caller, served to a pinned read of the command line.
+    for (writer, task) in [
+        ("python", "board:T-1"),
+        ("typescript", "board:T-2"),
+        ("rust", "board:T-4"),
+    ] {
+        let written = match writer {
+            "python" => sdk(&cached, false, PYTHON_SHOW, task, None),
+            "typescript" => sdk(&cached, true, TYPESCRIPT_SHOW, task, None),
+            _ => engine_read(&cached, task, None).0,
+        };
+        assert_eq!(written["cache"]["served"], "remote", "{writer}");
+        let version = version_of(&written);
+        let (pinned, sent) = cached.ok(&["task", "show", task, "--pin", &version, "--json"]);
+        assert_eq!(
+            sent,
+            Vec::<String>::new(),
+            "an entry {writer} wrote serves the command line"
+        );
+        assert_eq!(served_by(&pinned), from_cache());
+    }
+}
+
+#[test]
+fn a_rust_callers_listing_pins_the_reads_that_follow_it_in_the_same_engine() {
+    let cached = Cached::new();
+    let ids = ["board:T-1", "board:T-3"];
+    let mut arguments = vec!["task", "show-many"];
+    arguments.extend(ids);
+    arguments.push("--json");
+    cached.ok(&arguments);
+    cached
+        .board
+        .edit_title("T-3", "changed since it was cached");
+
+    let environment = onetaskgraph_core::Environment::from_pairs([
+        (
+            "XDG_CONFIG_HOME",
+            cached.sandbox.config_home().to_string_lossy().into_owned(),
+        ),
+        (
+            "XDG_CACHE_HOME",
+            cached.cache_home.to_string_lossy().into_owned(),
+        ),
+    ]);
+    let loaded = onetaskgraph_core::config::load(
+        &cached.sandbox.project(),
+        &environment,
+        &onetaskgraph_core::config::Layer::default(),
+    )
+    .expect("the configuration loads");
+    let engine = onetaskgraph_core::Engine::build(&loaded.config, &loaded.secrets);
+    let runtime = tokio::runtime::Runtime::new().expect("a runtime");
+    let request = onetaskgraph_core::TaskRequest {
+        sources: vec![onetaskgraph_plugin_api::SourceName::new("board".to_owned()).unwrap()],
+        filters: onetaskgraph_core::Filters::default(),
+        project: onetaskgraph_core::ProjectSelector::Any,
+        priorities: Vec::new(),
+        commented_since: None,
+        metadata: Vec::new(),
+        origin: None,
+        include_members: false,
+        paging: onetaskgraph_core::Paging {
+            limit: std::num::NonZeroU32::new(50).unwrap(),
+            token: None,
+        },
+    };
+    runtime
+        .block_on(engine.tasks(&request))
+        .expect("the listing");
+    let before = cached.board.served().len();
+    let qualified: Vec<onetaskgraph_core::GlobalId> =
+        ids.iter().map(|id| id.parse().unwrap()).collect();
+    let details = runtime.block_on(engine.task_details(&qualified, true));
+    let sent: Vec<String> = cached.board.served()[before..]
+        .iter()
+        .map(|(document, _)| document.clone())
+        .collect();
+    assert_eq!(
+        sent,
+        [ONE_READ],
+        "the listing pinned T-1 to what is cached; T-3 changed"
+    );
+    let used: Vec<_> = details
+        .details
+        .iter()
+        .map(|detail| detail.cache.as_ref().map(|used| used.served))
+        .collect();
+    assert_eq!(
+        used,
+        [
+            Some(onetaskgraph_core::Served::Cache),
+            Some(onetaskgraph_core::Served::Remote)
+        ]
+    );
+    assert_eq!(
+        details.details[1].response.items[0].item.title,
+        "changed since it was cached"
+    );
+}
+
+/// Every file under `root`, with its bytes.
+fn tree(root: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
+    let mut files = std::collections::BTreeMap::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        for entry in std::fs::read_dir(&directory)
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push(path);
+            } else {
+                files.insert(path.clone(), std::fs::read(&path).unwrap_or_default());
+            }
+        }
+    }
+    files
+}
+
+#[test]
+fn with_caching_on_the_cache_directory_is_the_only_place_a_file_changes() {
+    let cached = Cached::new();
+    let root = cached
+        .sandbox
+        .project()
+        .parent()
+        .expect("the sandbox")
+        .to_path_buf();
+    let before = tree(&root);
+    let (first, _) = cached.ok(&["task", "show", "board:T-3", "--json"]);
+    let v = version_of(&first);
+    cached.ok(&["task", "show-many", "board:T-1", "board:T-2", "--json"]);
+    cached.ok(&[
+        "task",
+        "comment",
+        "list",
+        "board:T-3",
+        "--pin",
+        &v,
+        "--json",
+    ]);
+    cached.ok(&[
+        "task",
+        "priority",
+        "set",
+        "board:T-3",
+        "high",
+        "--expect",
+        &v,
+        "--json",
+    ]);
+    let after = tree(&root);
+    let cache = cached.cache_home.join("onetaskgraph");
+    let changed: Vec<&PathBuf> = after
+        .iter()
+        .filter(|(path, bytes)| before.get(*path) != Some(*bytes))
+        .map(|(path, _)| path)
+        .chain(before.keys().filter(|path| !after.contains_key(*path)))
+        .collect();
+    assert!(!changed.is_empty(), "the cache was written");
+    let outside: Vec<&&PathBuf> = changed
+        .iter()
+        .filter(|path| !path.starts_with(&cache))
+        .collect();
+    assert!(
+        outside.is_empty(),
+        "files changed outside the cache directory: {outside:?}"
+    );
+}

@@ -1644,7 +1644,7 @@ impl Engine {
                 for slot in slots {
                     let id = match slot {
                         Slot::Done(outcome) => {
-                            placed.push(Some(outcome));
+                            placed.push(Some(*outcome));
                             continue;
                         }
                         Slot::Read(id) => id,

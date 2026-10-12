@@ -98,6 +98,7 @@ pub enum PartOutcome {
         /// item's node id, a field's or an option's — no longer resolves. Such a part is
         /// sent again once, after one read.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        #[schemars(!skip_serializing_if)]
         stale: bool,
     },
     /// The request left and no answer came back, so whether it was applied cannot be known.

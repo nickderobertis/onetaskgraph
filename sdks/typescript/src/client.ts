@@ -100,9 +100,7 @@ export type CopyQueryOptions = {
 };
 // `create` asserts the destination holds no counterpart of any task named, so each is created
 // without the correspondence lookup. Only `task copy` takes it, and the query narrowing.
-export type TaskCopyOptions = CopyOptions &
-  CopyQueryOptions &
-  ExpectOptions & { create?: boolean };
+export type TaskCopyOptions = CopyOptions & CopyQueryOptions & ExpectOptions & { create?: boolean };
 // A comment's body, given as text the client writes to the binary's standard input or as a
 // file the binary reads byte for byte — never as a word of the command line.
 export type CommentBodyOptions = ({ body: string } | { bodyFile: string }) &
@@ -162,16 +160,16 @@ export type ProjectCreateOptions = CreateOptions & { status?: StatusCategory };
 // cleared — and one left out is not named.
 export type TaskUpdateOptions = WriteOptions &
   ExpectOptions & {
-  title?: string;
-  bodyFile?: string;
-  status?: StatusCategory;
-  statusName?: string;
-  priority?: Priority;
-  metadata?: Record<string, JsonValue>;
-  removeMetadata?: string[];
-  delivers?: string[];
-  dependsOn?: string[];
-};
+    title?: string;
+    bodyFile?: string;
+    status?: StatusCategory;
+    statusName?: string;
+    priority?: Priority;
+    metadata?: Record<string, JsonValue>;
+    removeMetadata?: string[];
+    delivers?: string[];
+    dependsOn?: string[];
+  };
 // A regenerate: the template to use in place of the recorded one, answers laid over the stored
 // base, `unset` names whose answer is dropped, and `dryRun` to write nothing.
 export type RenderOptions = TemplateSourceOptions &

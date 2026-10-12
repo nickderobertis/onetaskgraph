@@ -9,8 +9,9 @@ from typing import Literal
 from pydantic import JsonValue, TypeAdapter
 
 from .models import (
-    Comment,
+    CacheCleared,
     CommentList,
+    CommentWritten,
     CopyReport,
     DeletedComment,
     DocumentDetail,
@@ -46,6 +47,7 @@ from .models import (
 )
 
 POSITIONALS: dict[tuple[str, ...], tuple[str, ...]] = {
+    ("cache", "clear"): ("source",),
     ("document", "answers"): ("id",),
     ("document", "copy"): ("ids",),
     ("document", "create"): ("source",),
@@ -201,6 +203,24 @@ class GeneratedClient:
         **options: object,
     ) -> T:
         raise NotImplementedError
+
+    async def cache_clear(
+        self,
+        source: SourceName | str | None = None,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> CacheCleared:
+        """Run ``onetaskgraph cache clear``."""
+        return await self._invoke(
+            ["cache", "clear"],
+            CacheCleared,
+            source=source,
+            default_sources=default_sources,
+            page_size=page_size,
+            set=set,
+        )
 
     async def config_show(
         self,
@@ -366,6 +386,7 @@ class GeneratedClient:
         value: str,
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
+        expect: str | None = None,
         page_size: int | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
@@ -378,6 +399,7 @@ class GeneratedClient:
             key=key,
             value=value,
             default_sources=default_sources,
+            expect=expect,
             page_size=page_size,
             set=set,
             term_scope=_strings("document_metadata_set", "term_scope", term_scope),
@@ -683,6 +705,7 @@ class GeneratedClient:
         value: str,
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
+        expect: str | None = None,
         page_size: int | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
@@ -695,6 +718,7 @@ class GeneratedClient:
             key=key,
             value=value,
             default_sources=default_sources,
+            expect=expect,
             page_size=page_size,
             set=set,
             term_scope=_strings("project_metadata_set", "term_scope", term_scope),
@@ -892,19 +916,21 @@ class GeneratedClient:
         author: str | None = None,
         body_file: str | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
+        expect: str | None = None,
         page_size: int | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
         body: str | None = None,
-    ) -> Comment:
+    ) -> CommentWritten:
         """Run ``onetaskgraph task comment add``."""
         return await self._invoke(
             ["task", "comment", "add"],
-            Comment,
+            CommentWritten,
             id=id,
             author=author,
             body_file=body_file,
             default_sources=default_sources,
+            expect=expect,
             page_size=page_size,
             set=set,
             term_scope=_strings("task_comment_add", "term_scope", term_scope),
@@ -917,6 +943,7 @@ class GeneratedClient:
         comment_id: str,
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
+        expect: str | None = None,
         page_size: int | None = None,
         set: list[str] | tuple[str, ...] | None = None,
     ) -> DeletedComment:
@@ -927,6 +954,7 @@ class GeneratedClient:
             id=id,
             comment_id=comment_id,
             default_sources=default_sources,
+            expect=expect,
             page_size=page_size,
             set=set,
         )
@@ -938,19 +966,21 @@ class GeneratedClient:
         *,
         body_file: str | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
+        expect: str | None = None,
         page_size: int | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
         body: str | None = None,
-    ) -> Comment:
+    ) -> CommentWritten:
         """Run ``onetaskgraph task comment edit``."""
         return await self._invoke(
             ["task", "comment", "edit"],
-            Comment,
+            CommentWritten,
             id=id,
             comment_id=comment_id,
             body_file=body_file,
             default_sources=default_sources,
+            expect=expect,
             page_size=page_size,
             set=set,
             term_scope=_strings("task_comment_edit", "term_scope", term_scope),
@@ -963,6 +993,7 @@ class GeneratedClient:
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
         page_size: int | None = None,
+        pin: str | None = None,
         set: list[str] | tuple[str, ...] | None = None,
     ) -> CommentList:
         """Run ``onetaskgraph task comment list``."""
@@ -972,6 +1003,7 @@ class GeneratedClient:
             id=id,
             default_sources=default_sources,
             page_size=page_size,
+            pin=pin,
             set=set,
         )
 
@@ -981,6 +1013,7 @@ class GeneratedClient:
         file: str,
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
+        expect: str | None = None,
         page_size: int | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
@@ -992,6 +1025,7 @@ class GeneratedClient:
             id=id,
             file=file,
             default_sources=default_sources,
+            expect=expect,
             page_size=page_size,
             set=set,
             term_scope=_strings("task_content_set", "term_scope", term_scope),
@@ -1006,6 +1040,7 @@ class GeneratedClient:
         create: bool | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
         dry_run: bool | None = None,
+        expect: str | None = None,
         match_by: str | None = None,
         metadata: list[str] | tuple[str, ...] | None = None,
         no_link: bool | None = None,
@@ -1026,6 +1061,7 @@ class GeneratedClient:
             create=create,
             default_sources=default_sources,
             dry_run=dry_run,
+            expect=expect,
             match_by=match_by,
             metadata=_strings("task_copy", "metadata", metadata),
             no_link=no_link,
@@ -1197,6 +1233,7 @@ class GeneratedClient:
         value: str,
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
+        expect: str | None = None,
         page_size: int | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
@@ -1209,6 +1246,7 @@ class GeneratedClient:
             key=key,
             value=value,
             default_sources=default_sources,
+            expect=expect,
             page_size=page_size,
             set=set,
             term_scope=_strings("task_metadata_set", "term_scope", term_scope),
@@ -1220,6 +1258,7 @@ class GeneratedClient:
         priority: Priority | str,
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
+        expect: str | None = None,
         page_size: int | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
@@ -1231,6 +1270,7 @@ class GeneratedClient:
             id=id,
             priority=priority,
             default_sources=default_sources,
+            expect=expect,
             page_size=page_size,
             set=set,
             term_scope=_strings("task_priority_set", "term_scope", term_scope),
@@ -1282,6 +1322,7 @@ class GeneratedClient:
         explain: bool | None = None,
         no_comments: bool | None = None,
         page_size: int | None = None,
+        pin: str | None = None,
         set: list[str] | tuple[str, ...] | None = None,
     ) -> TaskDetail:
         """Run ``onetaskgraph task show``."""
@@ -1294,6 +1335,7 @@ class GeneratedClient:
             explain=explain,
             no_comments=no_comments,
             page_size=page_size,
+            pin=pin,
             set=set,
         )
 
@@ -1304,6 +1346,7 @@ class GeneratedClient:
         default_sources: list[str] | tuple[str, ...] | None = None,
         no_comments: bool | None = None,
         page_size: int | None = None,
+        pin: list[str] | tuple[str, ...] | None = None,
         set: list[str] | tuple[str, ...] | None = None,
     ) -> TaskDetails:
         """Run ``onetaskgraph task show-many``."""
@@ -1314,6 +1357,7 @@ class GeneratedClient:
             default_sources=default_sources,
             no_comments=no_comments,
             page_size=page_size,
+            pin=pin,
             set=set,
         )
 
@@ -1323,6 +1367,7 @@ class GeneratedClient:
         category: StatusCategory | str,
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
+        expect: str | None = None,
         page_size: int | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
@@ -1334,6 +1379,7 @@ class GeneratedClient:
             id=id,
             category=category,
             default_sources=default_sources,
+            expect=expect,
             page_size=page_size,
             set=set,
             term_scope=_strings("task_status_set", "term_scope", term_scope),
@@ -1347,6 +1393,7 @@ class GeneratedClient:
         default_sources: list[str] | tuple[str, ...] | None = None,
         delivers: list[GlobalId | str] | tuple[GlobalId | str, ...] | None = None,
         depends_on: list[GlobalId | str] | tuple[GlobalId | str, ...] | None = None,
+        expect: str | None = None,
         metadata: list[str] | tuple[str, ...] | None = None,
         no_delivers: bool | None = None,
         no_depends_on: bool | None = None,
@@ -1371,6 +1418,7 @@ class GeneratedClient:
             default_sources=default_sources,
             delivers=delivers,
             depends_on=depends_on,
+            expect=expect,
             metadata=_strings("task_update", "metadata", metadata),
             no_delivers=no_delivers,
             no_depends_on=no_depends_on,

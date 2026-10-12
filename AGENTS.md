@@ -1053,6 +1053,16 @@ them do; this is the inventory of what is owed, not a status board.
     and a stdio peer predating `comment_copies` and `task_details` is sent each copy as a marked
     comment, never the methods it did not declare, and reads back every origin.
 
+99. With a source's `cache.enabled` on a loopback GitHub board, a pinned `task show`, `task
+    comment list` and `task show-many` of a task cached at that version or a later one sends
+    nothing, and one cached older, incomparably or not at all, or unpinned, makes the one read;
+    a write advances the entry only to what its own response shows whole, and an `--expect`
+    write sends only its mutations, falling back to one read — and, for a re-minted option,
+    the one named extra request — reporting each part `landed`, `rejected` or `unknown`; the
+    settings take every layer, `cache clear` empties what it names, an entry another release
+    wrote or a racing writer left behind is a miss, the command line, both SDKs and a Rust
+    caller share one cache, and a Linear source's reads are bypassed, saying why.
+
 ## The public boundary
 
 Classification, a source's declared `visibility`, classification routes and `write_policy`

@@ -143,7 +143,7 @@ onetaskgraph template variables <FILE> [--search-path DIR]... | --template-loade
 onetaskgraph template render <FILE> [--search-path DIR]... | --template-loader FILE
                              [--answers FILE] [--var NAME=VALUE]...
 
-onetaskgraph cache clear [<SOURCE>]              # empty one source's local cache, or all
+onetaskgraph cache clear [SOURCE]                # empty one source's local cache, or all
 onetaskgraph config show                         # every setting and the layer it came from
 onetaskgraph schema                              # the JSON Schema bundle both SDKs use
 ```
@@ -1052,6 +1052,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         dry_run: false,
         comments: false,
         no_link: false,
+        expect: None,
     }).await?;
 
     let outcome = &report.items[0];

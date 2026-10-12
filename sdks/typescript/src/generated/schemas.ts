@@ -342,6 +342,95 @@ export const runtimeSchemas = {
     "title": "AssetsWritten",
     "type": "object"
   },
+  "CacheCleared": {
+    "$defs": {
+      "ClearedCache": {
+        "description": "One cache `cache clear` emptied.",
+        "properties": {
+          "dir": {
+            "description": "The directory it lives in.",
+            "type": "string"
+          },
+          "entries": {
+            "description": "How many task entries it held.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "source": {
+            "$ref": "#/$defs/SourceName",
+            "description": "The source whose cache it is."
+          }
+        },
+        "required": [
+          "source",
+          "dir",
+          "entries"
+        ],
+        "type": "object"
+      },
+      "SourceName": {
+        "description": "The name a configuration document gives one configured source.",
+        "pattern": "^[a-z0-9][a-z0-9-]*$",
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "What `cache clear` emptied: one entry per cache it reached.",
+    "properties": {
+      "cleared": {
+        "description": "The caches emptied, by source, in name order.",
+        "items": {
+          "$ref": "#/$defs/ClearedCache"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "cleared"
+    ],
+    "title": "CacheCleared",
+    "type": "object"
+  },
+  "CacheUse": {
+    "$defs": {
+      "Served": {
+        "description": "Where one read of a caching source's task was answered from.",
+        "oneOf": [
+          {
+            "const": "cache",
+            "description": "From the cache, with no request.",
+            "type": "string"
+          },
+          {
+            "const": "remote",
+            "description": "From the source.",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "How one read of a caching source's task used the cache: the `cache` member of its JSON.",
+    "properties": {
+      "bypassed": {
+        "description": "Why the cache could not be used at all for it — a part the source's change token does\nnot cover, or a task that carries no token — or `null` when nothing kept it from being.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "served": {
+        "$ref": "#/$defs/Served",
+        "description": "Where it was answered from."
+      }
+    },
+    "required": [
+      "served"
+    ],
+    "title": "CacheUse",
+    "type": "object"
+  },
   "Capabilities": {
     "$defs": {
       "DependencySupport": {
@@ -605,6 +694,26 @@ export const runtimeSchemas = {
   },
   "CommentList": {
     "$defs": {
+      "CacheUse": {
+        "description": "How one read of a caching source's task used the cache: the `cache` member of its JSON.",
+        "properties": {
+          "bypassed": {
+            "description": "Why the cache could not be used at all for it — a part the source's change token does\nnot cover, or a task that carries no token — or `null` when nothing kept it from being.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "served": {
+            "$ref": "#/$defs/Served",
+            "description": "Where it was answered from."
+          }
+        },
+        "required": [
+          "served"
+        ],
+        "type": "object"
+      },
       "Comment": {
         "description": "One comment on a task, as its source holds it.\n\n`id` and `body` are always there; every other member is `None` when the source did not\ngive it, which is not the same as the source saying it is empty.",
         "properties": {
@@ -715,11 +824,37 @@ export const runtimeSchemas = {
       "NativeId": {
         "description": "A source's own opaque identifier for one item.\n\nDeliberately unvalidated: a native id is whatever the upstream system says it\nis, colons included. The engine parses a qualified id by splitting on the\n*first* colon precisely so this stays true.",
         "type": "string"
+      },
+      "Served": {
+        "description": "Where one read of a caching source's task was answered from.",
+        "oneOf": [
+          {
+            "const": "cache",
+            "description": "From the cache, with no request.",
+            "type": "string"
+          },
+          {
+            "const": "remote",
+            "description": "From the source.",
+            "type": "string"
+          }
+        ]
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "description": "Every comment on one task, oldest first: what `task comment list` answers with.\n\nAn object rather than a bare list, so a later member — a total, say — is an addition a\nreader already written against this shape can ignore.",
     "properties": {
+      "cache": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/CacheUse"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "How the read used its source's local cache — absent for a source keeping none."
+      },
       "comments": {
         "description": "The task's comments in the order they were written. Empty when it has none.",
         "items": {
@@ -732,6 +867,323 @@ export const runtimeSchemas = {
       "comments"
     ],
     "title": "CommentList",
+    "type": "object"
+  },
+  "CommentWritten": {
+    "$defs": {
+      "BudgetSpent": {
+        "description": "What one command spent against one budget.",
+        "properties": {
+          "amount": {
+            "description": "How much was spent against it, in that unit.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "budget": {
+            "description": "The budget, as the source names it — `graphql`, `rest`.",
+            "type": "string"
+          },
+          "lower_bound": {
+            "description": "Whether any part of `amount` was modelled by a source rather than reported by its\nbackend or counted, which makes `amount` a lower bound on what the backend charged\nrather than a measurement of it.",
+            "type": "boolean"
+          },
+          "unit": {
+            "description": "What it is metered in — `points`, `requests`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "budget",
+          "unit",
+          "amount",
+          "lower_bound"
+        ],
+        "type": "object"
+      },
+      "CommentOrigin": {
+        "description": "Where a copied comment came from: the comment as its origin holds it.",
+        "properties": {
+          "author": {
+            "description": "Who wrote it there, in that source's spelling of a person.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "description": "When the origin says it was written.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "$ref": "#/$defs/NativeId",
+            "description": "The comment's own id at its origin."
+          },
+          "task": {
+            "description": "The task the comment is on at its origin, qualified: `<source>:<native task id>`.",
+            "type": "string"
+          },
+          "updated_at": {
+            "description": "When the origin says it last changed.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "url": {
+            "description": "Where a person can open it at its origin.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "task",
+          "id"
+        ],
+        "type": "object"
+      },
+      "NativeId": {
+        "description": "A source's own opaque identifier for one item.\n\nDeliberately unvalidated: a native id is whatever the upstream system says it\nis, colons included. The engine parses a qualified id by splitting on the\n*first* colon precisely so this stays true.",
+        "type": "string"
+      },
+      "Spent": {
+        "description": "What one command spent, summed over the sources in it that meter their own requests.\n\n**Source-owned.** Every figure is what a source said it sent and spent while the command\nran, read through [`TaskSource::metering`](onetaskgraph_plugin_api::TaskSource::metering)\nbefore the command and again after it. The engine adds the differences up by name and\ninterprets none of them, which is why the budget and unit names are open vocabulary.",
+        "properties": {
+          "budgets": {
+            "description": "What those requests spent, one entry per budget and unit, ordered by budget name.",
+            "items": {
+              "$ref": "#/$defs/BudgetSpent"
+            },
+            "type": "array"
+          },
+          "requests": {
+            "description": "How many HTTP requests those sources sent for this command.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "requests",
+          "budgets"
+        ],
+        "type": "object"
+      },
+      "WriteFallback": {
+        "description": "That an expected write read its target before writing, and why.",
+        "properties": {
+          "read": {
+            "description": "Always `true`: the write made one read.",
+            "type": "boolean"
+          },
+          "reason": {
+            "description": "Why it could not take what it needed from the cache.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "read",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "WritePart": {
+        "description": "One mutation of an expected write.",
+        "oneOf": [
+          {
+            "description": "The backend answered that it was applied.",
+            "properties": {
+              "outcome": {
+                "const": "landed",
+                "type": "string"
+              }
+            },
+            "required": [
+              "outcome"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The backend answered that it was refused.",
+            "properties": {
+              "error": {
+                "description": "What the backend said.",
+                "type": "string"
+              },
+              "outcome": {
+                "const": "rejected",
+                "type": "string"
+              },
+              "stale": {
+                "default": false,
+                "description": "Whether it was refused because an id the write took from a primed context — an\nitem's node id, a field's or an option's — no longer resolves. Such a part is\nsent again once, after one read.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "outcome",
+              "error"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The request left and no answer came back, so whether it was applied cannot be known.\nNever sent again: doing so could apply it twice.",
+            "properties": {
+              "error": {
+                "description": "What went wrong.",
+                "type": "string"
+              },
+              "outcome": {
+                "const": "unknown",
+                "type": "string"
+              }
+            },
+            "required": [
+              "outcome",
+              "error"
+            ],
+            "type": "object"
+          }
+        ],
+        "properties": {
+          "fields": {
+            "additionalProperties": true,
+            "description": "Each field it set, with the value the response shows.",
+            "type": "object"
+          },
+          "part": {
+            "description": "Which part it was, in the source's words: `fields`, `issue`, `comment`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "part",
+          "fields"
+        ],
+        "type": "object"
+      },
+      "WriteResult": {
+        "description": "What each mutation of an expected write came to, built from the mutations' own responses.",
+        "properties": {
+          "parts": {
+            "description": "One per mutation sent, in the order sent.",
+            "items": {
+              "$ref": "#/$defs/WritePart"
+            },
+            "type": "array"
+          },
+          "version": {
+            "description": "The task's version after the write, where the last response determines it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "parts"
+        ],
+        "type": "object"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "What `task comment add` and `task comment edit` answer with: the comment as its source now\nholds it — its id and its address among it, so a caller never needs a lookup for either —\nand what an expected write came to.",
+    "properties": {
+      "author": {
+        "description": "Who wrote it, in the source's own spelling of a person.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "body": {
+        "description": "What it says, byte for byte as it was written — a trailing newline included.",
+        "type": "string"
+      },
+      "created_at": {
+        "description": "When the source says it was written.",
+        "format": "date-time",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "fallback": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/WriteFallback"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "That an expected write read its target first, and why — absent when it sent only its\nmutations, and for a write made without `--expect`."
+      },
+      "id": {
+        "$ref": "#/$defs/NativeId",
+        "description": "The comment's own id, exactly as its source issued it.\n\nOpaque, as every [`NativeId`] is, and never qualified: a comment is addressed through\nthe qualified id of the task it is on, so its own id needs no source of its own."
+      },
+      "origin": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/CommentOrigin"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "The comment this one is a copy of, at its origin — present only on a comment a copy\nwrote, and absent on every comment a person wrote where it is.\n\nOn the second hop of a chained copy it still names the *first* origin, never the\nsource the copy read it from. Left out of the wire when absent, so a reader written\nbefore it existed reads exactly what it read before."
+      },
+      "result": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/WriteResult"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "What each mutation an expected write sent came to — present when the write was made\nwith `--expect` on a source that reports its writes' parts."
+      },
+      "spent": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Spent"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "What an expected write spent at the sources that meter their own requests, its\nfallback read included — absent for a write made without `--expect`."
+      },
+      "updated_at": {
+        "description": "When the source says it last changed.",
+        "format": "date-time",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "url": {
+        "description": "Where a person can open it.",
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "required": [
+      "id",
+      "body"
+    ],
+    "title": "CommentWritten",
     "type": "object"
   },
   "CopyAction": {
@@ -1119,6 +1571,36 @@ export const runtimeSchemas = {
   },
   "CopyOutcome": {
     "$defs": {
+      "BudgetSpent": {
+        "description": "What one command spent against one budget.",
+        "properties": {
+          "amount": {
+            "description": "How much was spent against it, in that unit.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "budget": {
+            "description": "The budget, as the source names it — `graphql`, `rest`.",
+            "type": "string"
+          },
+          "lower_bound": {
+            "description": "Whether any part of `amount` was modelled by a source rather than reported by its\nbackend or counted, which makes `amount` a lower bound on what the backend charged\nrather than a measurement of it.",
+            "type": "boolean"
+          },
+          "unit": {
+            "description": "What it is metered in — `points`, `requests`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "budget",
+          "unit",
+          "amount",
+          "lower_bound"
+        ],
+        "type": "object"
+      },
       "CommentCounts": {
         "description": "What a `--comments` copy did to one task's comments at the destination.\n\nEvery figure counts comments of the *source*: one added is a source comment the\ndestination held no copy of, one edited is a copy brought back in step with its origin\ncomment, one deleted is a copy whose origin comment the source no longer holds, and one\nunchanged is a copy that already read as its origin. A comment native to the destination\nis never counted, because a copy never touches it, and neither is a source comment that is\na copy of one of the destination's own, because it is never sent back.",
         "properties": {
@@ -1305,6 +1787,145 @@ export const runtimeSchemas = {
         "description": "The name a configuration document gives one configured source.",
         "pattern": "^[a-z0-9][a-z0-9-]*$",
         "type": "string"
+      },
+      "Spent": {
+        "description": "What one command spent, summed over the sources in it that meter their own requests.\n\n**Source-owned.** Every figure is what a source said it sent and spent while the command\nran, read through [`TaskSource::metering`](onetaskgraph_plugin_api::TaskSource::metering)\nbefore the command and again after it. The engine adds the differences up by name and\ninterprets none of them, which is why the budget and unit names are open vocabulary.",
+        "properties": {
+          "budgets": {
+            "description": "What those requests spent, one entry per budget and unit, ordered by budget name.",
+            "items": {
+              "$ref": "#/$defs/BudgetSpent"
+            },
+            "type": "array"
+          },
+          "requests": {
+            "description": "How many HTTP requests those sources sent for this command.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "requests",
+          "budgets"
+        ],
+        "type": "object"
+      },
+      "WriteFallback": {
+        "description": "That an expected write read its target before writing, and why.",
+        "properties": {
+          "read": {
+            "description": "Always `true`: the write made one read.",
+            "type": "boolean"
+          },
+          "reason": {
+            "description": "Why it could not take what it needed from the cache.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "read",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "WritePart": {
+        "description": "One mutation of an expected write.",
+        "oneOf": [
+          {
+            "description": "The backend answered that it was applied.",
+            "properties": {
+              "outcome": {
+                "const": "landed",
+                "type": "string"
+              }
+            },
+            "required": [
+              "outcome"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The backend answered that it was refused.",
+            "properties": {
+              "error": {
+                "description": "What the backend said.",
+                "type": "string"
+              },
+              "outcome": {
+                "const": "rejected",
+                "type": "string"
+              },
+              "stale": {
+                "default": false,
+                "description": "Whether it was refused because an id the write took from a primed context — an\nitem's node id, a field's or an option's — no longer resolves. Such a part is\nsent again once, after one read.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "outcome",
+              "error"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The request left and no answer came back, so whether it was applied cannot be known.\nNever sent again: doing so could apply it twice.",
+            "properties": {
+              "error": {
+                "description": "What went wrong.",
+                "type": "string"
+              },
+              "outcome": {
+                "const": "unknown",
+                "type": "string"
+              }
+            },
+            "required": [
+              "outcome",
+              "error"
+            ],
+            "type": "object"
+          }
+        ],
+        "properties": {
+          "fields": {
+            "additionalProperties": true,
+            "description": "Each field it set, with the value the response shows.",
+            "type": "object"
+          },
+          "part": {
+            "description": "Which part it was, in the source's words: `fields`, `issue`, `comment`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "part",
+          "fields"
+        ],
+        "type": "object"
+      },
+      "WriteResult": {
+        "description": "What each mutation of an expected write came to, built from the mutations' own responses.",
+        "properties": {
+          "parts": {
+            "description": "One per mutation sent, in the order sent.",
+            "items": {
+              "$ref": "#/$defs/WritePart"
+            },
+            "type": "array"
+          },
+          "version": {
+            "description": "The task's version after the write, where the last response determines it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "parts"
+        ],
+        "type": "object"
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -1494,6 +2115,17 @@ export const runtimeSchemas = {
       }
     ],
     "properties": {
+      "fallback": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/WriteFallback"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "That the write had to read its target first, and why — absent when it sent only its\nmutations."
+      },
       "placed": {
         "anyOf": [
           {
@@ -1505,9 +2137,31 @@ export const runtimeSchemas = {
         ],
         "description": "Which source a routed copy placed it in, and the index of the route entry that\nmatched — `null` there when none did.\n\nPresent for every item a copy into a source declaring `routes` landed, a dry run's\nincluded, so a would-be create still says where it would go; absent for a copy into\na source with none, whose output is what it always was, and for an orphan, which was\nnot placed at all."
       },
+      "result": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/WriteResult"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "What each mutation the write sent came to, and the version it left the task at — for a\nsource that reports its writes' parts."
+      },
       "source": {
         "$ref": "#/$defs/GlobalId",
         "description": "The qualified id the item was read from."
+      },
+      "spent": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Spent"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "What the write spent at the sources that meter their own requests — the fallback's\nread included."
       }
     },
     "required": [
@@ -1796,6 +2450,17 @@ export const runtimeSchemas = {
           }
         ],
         "properties": {
+          "fallback": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/WriteFallback"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "That the write had to read its target first, and why — absent when it sent only its\nmutations."
+          },
           "placed": {
             "anyOf": [
               {
@@ -1807,9 +2472,31 @@ export const runtimeSchemas = {
             ],
             "description": "Which source a routed copy placed it in, and the index of the route entry that\nmatched — `null` there when none did.\n\nPresent for every item a copy into a source declaring `routes` landed, a dry run's\nincluded, so a would-be create still says where it would go; absent for a copy into\na source with none, whose output is what it always was, and for an orphan, which was\nnot placed at all."
           },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/WriteResult"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What each mutation the write sent came to, and the version it left the task at — for a\nsource that reports its writes' parts."
+          },
           "source": {
             "$ref": "#/$defs/GlobalId",
             "description": "The qualified id the item was read from."
+          },
+          "spent": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Spent"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the write spent at the sources that meter their own requests — the fallback's\nread included."
           }
         },
         "required": [
@@ -2126,6 +2813,122 @@ export const runtimeSchemas = {
             "type": "string"
           }
         ]
+      },
+      "WriteFallback": {
+        "description": "That an expected write read its target before writing, and why.",
+        "properties": {
+          "read": {
+            "description": "Always `true`: the write made one read.",
+            "type": "boolean"
+          },
+          "reason": {
+            "description": "Why it could not take what it needed from the cache.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "read",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "WritePart": {
+        "description": "One mutation of an expected write.",
+        "oneOf": [
+          {
+            "description": "The backend answered that it was applied.",
+            "properties": {
+              "outcome": {
+                "const": "landed",
+                "type": "string"
+              }
+            },
+            "required": [
+              "outcome"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The backend answered that it was refused.",
+            "properties": {
+              "error": {
+                "description": "What the backend said.",
+                "type": "string"
+              },
+              "outcome": {
+                "const": "rejected",
+                "type": "string"
+              },
+              "stale": {
+                "default": false,
+                "description": "Whether it was refused because an id the write took from a primed context — an\nitem's node id, a field's or an option's — no longer resolves. Such a part is\nsent again once, after one read.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "outcome",
+              "error"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The request left and no answer came back, so whether it was applied cannot be known.\nNever sent again: doing so could apply it twice.",
+            "properties": {
+              "error": {
+                "description": "What went wrong.",
+                "type": "string"
+              },
+              "outcome": {
+                "const": "unknown",
+                "type": "string"
+              }
+            },
+            "required": [
+              "outcome",
+              "error"
+            ],
+            "type": "object"
+          }
+        ],
+        "properties": {
+          "fields": {
+            "additionalProperties": true,
+            "description": "Each field it set, with the value the response shows.",
+            "type": "object"
+          },
+          "part": {
+            "description": "Which part it was, in the source's words: `fields`, `issue`, `comment`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "part",
+          "fields"
+        ],
+        "type": "object"
+      },
+      "WriteResult": {
+        "description": "What each mutation of an expected write came to, built from the mutations' own responses.",
+        "properties": {
+          "parts": {
+            "description": "One per mutation sent, in the order sent.",
+            "items": {
+              "$ref": "#/$defs/WritePart"
+            },
+            "type": "array"
+          },
+          "version": {
+            "description": "The task's version after the write, where the last response determines it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "parts"
+        ],
+        "type": "object"
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -2238,9 +3041,178 @@ export const runtimeSchemas = {
   },
   "DeletedComment": {
     "$defs": {
+      "BudgetSpent": {
+        "description": "What one command spent against one budget.",
+        "properties": {
+          "amount": {
+            "description": "How much was spent against it, in that unit.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "budget": {
+            "description": "The budget, as the source names it — `graphql`, `rest`.",
+            "type": "string"
+          },
+          "lower_bound": {
+            "description": "Whether any part of `amount` was modelled by a source rather than reported by its\nbackend or counted, which makes `amount` a lower bound on what the backend charged\nrather than a measurement of it.",
+            "type": "boolean"
+          },
+          "unit": {
+            "description": "What it is metered in — `points`, `requests`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "budget",
+          "unit",
+          "amount",
+          "lower_bound"
+        ],
+        "type": "object"
+      },
       "NativeId": {
         "description": "A source's own opaque identifier for one item.\n\nDeliberately unvalidated: a native id is whatever the upstream system says it\nis, colons included. The engine parses a qualified id by splitting on the\n*first* colon precisely so this stays true.",
         "type": "string"
+      },
+      "Spent": {
+        "description": "What one command spent, summed over the sources in it that meter their own requests.\n\n**Source-owned.** Every figure is what a source said it sent and spent while the command\nran, read through [`TaskSource::metering`](onetaskgraph_plugin_api::TaskSource::metering)\nbefore the command and again after it. The engine adds the differences up by name and\ninterprets none of them, which is why the budget and unit names are open vocabulary.",
+        "properties": {
+          "budgets": {
+            "description": "What those requests spent, one entry per budget and unit, ordered by budget name.",
+            "items": {
+              "$ref": "#/$defs/BudgetSpent"
+            },
+            "type": "array"
+          },
+          "requests": {
+            "description": "How many HTTP requests those sources sent for this command.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "requests",
+          "budgets"
+        ],
+        "type": "object"
+      },
+      "WriteFallback": {
+        "description": "That an expected write read its target before writing, and why.",
+        "properties": {
+          "read": {
+            "description": "Always `true`: the write made one read.",
+            "type": "boolean"
+          },
+          "reason": {
+            "description": "Why it could not take what it needed from the cache.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "read",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "WritePart": {
+        "description": "One mutation of an expected write.",
+        "oneOf": [
+          {
+            "description": "The backend answered that it was applied.",
+            "properties": {
+              "outcome": {
+                "const": "landed",
+                "type": "string"
+              }
+            },
+            "required": [
+              "outcome"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The backend answered that it was refused.",
+            "properties": {
+              "error": {
+                "description": "What the backend said.",
+                "type": "string"
+              },
+              "outcome": {
+                "const": "rejected",
+                "type": "string"
+              },
+              "stale": {
+                "default": false,
+                "description": "Whether it was refused because an id the write took from a primed context — an\nitem's node id, a field's or an option's — no longer resolves. Such a part is\nsent again once, after one read.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "outcome",
+              "error"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The request left and no answer came back, so whether it was applied cannot be known.\nNever sent again: doing so could apply it twice.",
+            "properties": {
+              "error": {
+                "description": "What went wrong.",
+                "type": "string"
+              },
+              "outcome": {
+                "const": "unknown",
+                "type": "string"
+              }
+            },
+            "required": [
+              "outcome",
+              "error"
+            ],
+            "type": "object"
+          }
+        ],
+        "properties": {
+          "fields": {
+            "additionalProperties": true,
+            "description": "Each field it set, with the value the response shows.",
+            "type": "object"
+          },
+          "part": {
+            "description": "Which part it was, in the source's words: `fields`, `issue`, `comment`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "part",
+          "fields"
+        ],
+        "type": "object"
+      },
+      "WriteResult": {
+        "description": "What each mutation of an expected write came to, built from the mutations' own responses.",
+        "properties": {
+          "parts": {
+            "description": "One per mutation sent, in the order sent.",
+            "items": {
+              "$ref": "#/$defs/WritePart"
+            },
+            "type": "array"
+          },
+          "version": {
+            "description": "The task's version after the write, where the last response determines it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "parts"
+        ],
+        "type": "object"
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -2249,6 +3221,39 @@ export const runtimeSchemas = {
       "deleted": {
         "$ref": "#/$defs/NativeId",
         "description": "The id the comment was removed under, exactly as `list` reported it."
+      },
+      "fallback": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/WriteFallback"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "That an expected write read its target first, and why — absent when it sent only its\nmutations, and for a write made without `--expect`."
+      },
+      "result": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/WriteResult"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "What each mutation an expected write sent came to — present when the write was made\nwith `--expect` on a source that reports its writes' parts."
+      },
+      "spent": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Spent"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "What an expected write spent at the sources that meter their own requests, its\nfallback read included — absent for a write made without `--expect`."
       }
     },
     "required": [
@@ -3951,6 +4956,218 @@ export const runtimeSchemas = {
     "title": "EffectiveConfig",
     "type": "object"
   },
+  "ExpectedWrite": {
+    "$defs": {
+      "BudgetSpent": {
+        "description": "What one command spent against one budget.",
+        "properties": {
+          "amount": {
+            "description": "How much was spent against it, in that unit.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "budget": {
+            "description": "The budget, as the source names it — `graphql`, `rest`.",
+            "type": "string"
+          },
+          "lower_bound": {
+            "description": "Whether any part of `amount` was modelled by a source rather than reported by its\nbackend or counted, which makes `amount` a lower bound on what the backend charged\nrather than a measurement of it.",
+            "type": "boolean"
+          },
+          "unit": {
+            "description": "What it is metered in — `points`, `requests`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "budget",
+          "unit",
+          "amount",
+          "lower_bound"
+        ],
+        "type": "object"
+      },
+      "Spent": {
+        "description": "What one command spent, summed over the sources in it that meter their own requests.\n\n**Source-owned.** Every figure is what a source said it sent and spent while the command\nran, read through [`TaskSource::metering`](onetaskgraph_plugin_api::TaskSource::metering)\nbefore the command and again after it. The engine adds the differences up by name and\ninterprets none of them, which is why the budget and unit names are open vocabulary.",
+        "properties": {
+          "budgets": {
+            "description": "What those requests spent, one entry per budget and unit, ordered by budget name.",
+            "items": {
+              "$ref": "#/$defs/BudgetSpent"
+            },
+            "type": "array"
+          },
+          "requests": {
+            "description": "How many HTTP requests those sources sent for this command.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "requests",
+          "budgets"
+        ],
+        "type": "object"
+      },
+      "WriteFallback": {
+        "description": "That an expected write read its target before writing, and why.",
+        "properties": {
+          "read": {
+            "description": "Always `true`: the write made one read.",
+            "type": "boolean"
+          },
+          "reason": {
+            "description": "Why it could not take what it needed from the cache.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "read",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "WritePart": {
+        "description": "One mutation of an expected write.",
+        "oneOf": [
+          {
+            "description": "The backend answered that it was applied.",
+            "properties": {
+              "outcome": {
+                "const": "landed",
+                "type": "string"
+              }
+            },
+            "required": [
+              "outcome"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The backend answered that it was refused.",
+            "properties": {
+              "error": {
+                "description": "What the backend said.",
+                "type": "string"
+              },
+              "outcome": {
+                "const": "rejected",
+                "type": "string"
+              },
+              "stale": {
+                "default": false,
+                "description": "Whether it was refused because an id the write took from a primed context — an\nitem's node id, a field's or an option's — no longer resolves. Such a part is\nsent again once, after one read.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "outcome",
+              "error"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The request left and no answer came back, so whether it was applied cannot be known.\nNever sent again: doing so could apply it twice.",
+            "properties": {
+              "error": {
+                "description": "What went wrong.",
+                "type": "string"
+              },
+              "outcome": {
+                "const": "unknown",
+                "type": "string"
+              }
+            },
+            "required": [
+              "outcome",
+              "error"
+            ],
+            "type": "object"
+          }
+        ],
+        "properties": {
+          "fields": {
+            "additionalProperties": true,
+            "description": "Each field it set, with the value the response shows.",
+            "type": "object"
+          },
+          "part": {
+            "description": "Which part it was, in the source's words: `fields`, `issue`, `comment`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "part",
+          "fields"
+        ],
+        "type": "object"
+      },
+      "WriteResult": {
+        "description": "What each mutation of an expected write came to, built from the mutations' own responses.",
+        "properties": {
+          "parts": {
+            "description": "One per mutation sent, in the order sent.",
+            "items": {
+              "$ref": "#/$defs/WritePart"
+            },
+            "type": "array"
+          },
+          "version": {
+            "description": "The task's version after the write, where the last response determines it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "parts"
+        ],
+        "type": "object"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "What a write that expected a version of its task came to: the `result`, `fallback` and\n`spent` members of its JSON.",
+    "properties": {
+      "fallback": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/WriteFallback"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "That the write had to read its target first, and why — absent when it sent only its\nmutations."
+      },
+      "result": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/WriteResult"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "What each mutation the write sent came to, and the version it left the task at — for a\nsource that reports its writes' parts."
+      },
+      "spent": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Spent"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "What the write spent at the sources that meter their own requests — the fallback's\nread included."
+      }
+    },
+    "title": "ExpectedWrite",
+    "type": "object"
+  },
   "Failure": {
     "$defs": {
       "FailureClass": {
@@ -4039,6 +5256,36 @@ export const runtimeSchemas = {
   },
   "FailureDocument": {
     "$defs": {
+      "BudgetSpent": {
+        "description": "What one command spent against one budget.",
+        "properties": {
+          "amount": {
+            "description": "How much was spent against it, in that unit.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "budget": {
+            "description": "The budget, as the source names it — `graphql`, `rest`.",
+            "type": "string"
+          },
+          "lower_bound": {
+            "description": "Whether any part of `amount` was modelled by a source rather than reported by its\nbackend or counted, which makes `amount` a lower bound on what the backend charged\nrather than a measurement of it.",
+            "type": "boolean"
+          },
+          "unit": {
+            "description": "What it is metered in — `points`, `requests`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "budget",
+          "unit",
+          "amount",
+          "lower_bound"
+        ],
+        "type": "object"
+      },
       "Failure": {
         "description": "Why one command failed.\n\nEvery member is always written, `source` and `retry_after_seconds` as `null` when they\nhave nothing to say, so a caller reads a fixed shape.",
         "properties": {
@@ -4103,6 +5350,145 @@ export const runtimeSchemas = {
         "description": "The name a configuration document gives one configured source.",
         "pattern": "^[a-z0-9][a-z0-9-]*$",
         "type": "string"
+      },
+      "Spent": {
+        "description": "What one command spent, summed over the sources in it that meter their own requests.\n\n**Source-owned.** Every figure is what a source said it sent and spent while the command\nran, read through [`TaskSource::metering`](onetaskgraph_plugin_api::TaskSource::metering)\nbefore the command and again after it. The engine adds the differences up by name and\ninterprets none of them, which is why the budget and unit names are open vocabulary.",
+        "properties": {
+          "budgets": {
+            "description": "What those requests spent, one entry per budget and unit, ordered by budget name.",
+            "items": {
+              "$ref": "#/$defs/BudgetSpent"
+            },
+            "type": "array"
+          },
+          "requests": {
+            "description": "How many HTTP requests those sources sent for this command.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "requests",
+          "budgets"
+        ],
+        "type": "object"
+      },
+      "WriteFallback": {
+        "description": "That an expected write read its target before writing, and why.",
+        "properties": {
+          "read": {
+            "description": "Always `true`: the write made one read.",
+            "type": "boolean"
+          },
+          "reason": {
+            "description": "Why it could not take what it needed from the cache.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "read",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "WritePart": {
+        "description": "One mutation of an expected write.",
+        "oneOf": [
+          {
+            "description": "The backend answered that it was applied.",
+            "properties": {
+              "outcome": {
+                "const": "landed",
+                "type": "string"
+              }
+            },
+            "required": [
+              "outcome"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The backend answered that it was refused.",
+            "properties": {
+              "error": {
+                "description": "What the backend said.",
+                "type": "string"
+              },
+              "outcome": {
+                "const": "rejected",
+                "type": "string"
+              },
+              "stale": {
+                "default": false,
+                "description": "Whether it was refused because an id the write took from a primed context — an\nitem's node id, a field's or an option's — no longer resolves. Such a part is\nsent again once, after one read.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "outcome",
+              "error"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The request left and no answer came back, so whether it was applied cannot be known.\nNever sent again: doing so could apply it twice.",
+            "properties": {
+              "error": {
+                "description": "What went wrong.",
+                "type": "string"
+              },
+              "outcome": {
+                "const": "unknown",
+                "type": "string"
+              }
+            },
+            "required": [
+              "outcome",
+              "error"
+            ],
+            "type": "object"
+          }
+        ],
+        "properties": {
+          "fields": {
+            "additionalProperties": true,
+            "description": "Each field it set, with the value the response shows.",
+            "type": "object"
+          },
+          "part": {
+            "description": "Which part it was, in the source's words: `fields`, `issue`, `comment`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "part",
+          "fields"
+        ],
+        "type": "object"
+      },
+      "WriteResult": {
+        "description": "What each mutation of an expected write came to, built from the mutations' own responses.",
+        "properties": {
+          "parts": {
+            "description": "One per mutation sent, in the order sent.",
+            "items": {
+              "$ref": "#/$defs/WritePart"
+            },
+            "type": "array"
+          },
+          "version": {
+            "description": "The task's version after the write, where the last response determines it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "parts"
+        ],
+        "type": "object"
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -4111,6 +5497,39 @@ export const runtimeSchemas = {
       "failure": {
         "$ref": "#/$defs/Failure",
         "description": "Why the command failed."
+      },
+      "fallback": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/WriteFallback"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "That the write had to read its target first, and why — absent when it sent only its\nmutations."
+      },
+      "result": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/WriteResult"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "What each mutation the write sent came to, and the version it left the task at — for a\nsource that reports its writes' parts."
+      },
+      "spent": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Spent"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "What the write spent at the sources that meter their own requests — the fallback's\nread included."
       }
     },
     "required": [
@@ -4721,6 +6140,36 @@ export const runtimeSchemas = {
   },
   "MetadataSet": {
     "$defs": {
+      "BudgetSpent": {
+        "description": "What one command spent against one budget.",
+        "properties": {
+          "amount": {
+            "description": "How much was spent against it, in that unit.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "budget": {
+            "description": "The budget, as the source names it — `graphql`, `rest`.",
+            "type": "string"
+          },
+          "lower_bound": {
+            "description": "Whether any part of `amount` was modelled by a source rather than reported by its\nbackend or counted, which makes `amount` a lower bound on what the backend charged\nrather than a measurement of it.",
+            "type": "boolean"
+          },
+          "unit": {
+            "description": "What it is metered in — `points`, `requests`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "budget",
+          "unit",
+          "amount",
+          "lower_bound"
+        ],
+        "type": "object"
+      },
       "GlobalId": {
         "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
         "type": "string"
@@ -4759,11 +6208,161 @@ export const runtimeSchemas = {
       "MetadataKey": {
         "description": "One caller-owned metadata key: `<namespace>.<name>`, at least two non-empty segments\nseparated by dots, whose first segment is not [`MetadataKey::RESERVED_NAMESPACE`].\n\nValidated wherever one is built, deserialized included, so a plugin handed one never has\nto ask whether it names a key this product owns.",
         "type": "string"
+      },
+      "Spent": {
+        "description": "What one command spent, summed over the sources in it that meter their own requests.\n\n**Source-owned.** Every figure is what a source said it sent and spent while the command\nran, read through [`TaskSource::metering`](onetaskgraph_plugin_api::TaskSource::metering)\nbefore the command and again after it. The engine adds the differences up by name and\ninterprets none of them, which is why the budget and unit names are open vocabulary.",
+        "properties": {
+          "budgets": {
+            "description": "What those requests spent, one entry per budget and unit, ordered by budget name.",
+            "items": {
+              "$ref": "#/$defs/BudgetSpent"
+            },
+            "type": "array"
+          },
+          "requests": {
+            "description": "How many HTTP requests those sources sent for this command.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "requests",
+          "budgets"
+        ],
+        "type": "object"
+      },
+      "WriteFallback": {
+        "description": "That an expected write read its target before writing, and why.",
+        "properties": {
+          "read": {
+            "description": "Always `true`: the write made one read.",
+            "type": "boolean"
+          },
+          "reason": {
+            "description": "Why it could not take what it needed from the cache.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "read",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "WritePart": {
+        "description": "One mutation of an expected write.",
+        "oneOf": [
+          {
+            "description": "The backend answered that it was applied.",
+            "properties": {
+              "outcome": {
+                "const": "landed",
+                "type": "string"
+              }
+            },
+            "required": [
+              "outcome"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The backend answered that it was refused.",
+            "properties": {
+              "error": {
+                "description": "What the backend said.",
+                "type": "string"
+              },
+              "outcome": {
+                "const": "rejected",
+                "type": "string"
+              },
+              "stale": {
+                "default": false,
+                "description": "Whether it was refused because an id the write took from a primed context — an\nitem's node id, a field's or an option's — no longer resolves. Such a part is\nsent again once, after one read.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "outcome",
+              "error"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The request left and no answer came back, so whether it was applied cannot be known.\nNever sent again: doing so could apply it twice.",
+            "properties": {
+              "error": {
+                "description": "What went wrong.",
+                "type": "string"
+              },
+              "outcome": {
+                "const": "unknown",
+                "type": "string"
+              }
+            },
+            "required": [
+              "outcome",
+              "error"
+            ],
+            "type": "object"
+          }
+        ],
+        "properties": {
+          "fields": {
+            "additionalProperties": true,
+            "description": "Each field it set, with the value the response shows.",
+            "type": "object"
+          },
+          "part": {
+            "description": "Which part it was, in the source's words: `fields`, `issue`, `comment`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "part",
+          "fields"
+        ],
+        "type": "object"
+      },
+      "WriteResult": {
+        "description": "What each mutation of an expected write came to, built from the mutations' own responses.",
+        "properties": {
+          "parts": {
+            "description": "One per mutation sent, in the order sent.",
+            "items": {
+              "$ref": "#/$defs/WritePart"
+            },
+            "type": "array"
+          },
+          "version": {
+            "description": "The task's version after the write, where the last response determines it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "parts"
+        ],
+        "type": "object"
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "description": "What `task`, `project` and `document metadata set` answer with.",
     "properties": {
+      "fallback": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/WriteFallback"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "That an expected write read its target first, and why — absent when it sent only its\nmutations, and for a write made without `--expect`."
+      },
       "id": {
         "$ref": "#/$defs/GlobalId",
         "description": "The record whose metadata key was set."
@@ -4782,6 +6381,28 @@ export const runtimeSchemas = {
           }
         ],
         "description": "Where the source reports the record to be, left out when it does not say."
+      },
+      "result": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/WriteResult"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "What each mutation an expected write sent came to — present when the write was made\nwith `--expect` on a source that reports its writes' parts."
+      },
+      "spent": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Spent"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "What an expected write spent at the sources that meter their own requests, its\nfallback read included — absent for a write made without `--expect`."
       },
       "value": {
         "description": "The value the source holds under `key` as it reads the record back after the write —\nwhich is not always the value it was handed."
@@ -12244,6 +13865,27 @@ export const runtimeSchemas = {
     "title": "Setting",
     "type": "object"
   },
+  "SourceCacheConfig": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "description": "Whether the store keeps a local cache of one source's tasks, and where: `cache` beside\n`plugin` and `config` in its entry.\n\nThe cache is per host and shared by every process configuring the same remote — the\ncommand line, both SDKs and a Rust caller of the engine — and it is keyed on the change\ntoken a source gives each task, so it is served only at the version a caller holds or a\nlater one. `README.md`, under \"A local cache of a remote source\", states its rules.",
+    "properties": {
+      "dir": {
+        "description": "The directory the cache lives in. By default\n`${XDG_CACHE_HOME:-$HOME/.cache}/onetaskgraph/<digest of the source's remote>`; a\nrelative path a configuration document supplies is measured from that document's\ndirectory. Ignored by a source with no remote.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "enabled": {
+        "default": false,
+        "description": "Whether the cache is on. Off unless set.",
+        "type": "boolean"
+      }
+    },
+    "title": "SourceCacheConfig",
+    "type": "object"
+  },
   "SourceError": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "description": "Why a source could not answer.\n\nEvery variant carries owned data only, so an error survives the JSON-over-stdio\nboundary a subprocess-hosted plugin crosses without losing anything.",
@@ -14252,17 +15894,219 @@ export const runtimeSchemas = {
   },
   "TaskContentSet": {
     "$defs": {
+      "BudgetSpent": {
+        "description": "What one command spent against one budget.",
+        "properties": {
+          "amount": {
+            "description": "How much was spent against it, in that unit.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "budget": {
+            "description": "The budget, as the source names it — `graphql`, `rest`.",
+            "type": "string"
+          },
+          "lower_bound": {
+            "description": "Whether any part of `amount` was modelled by a source rather than reported by its\nbackend or counted, which makes `amount` a lower bound on what the backend charged\nrather than a measurement of it.",
+            "type": "boolean"
+          },
+          "unit": {
+            "description": "What it is metered in — `points`, `requests`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "budget",
+          "unit",
+          "amount",
+          "lower_bound"
+        ],
+        "type": "object"
+      },
       "GlobalId": {
         "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
         "type": "string"
+      },
+      "Spent": {
+        "description": "What one command spent, summed over the sources in it that meter their own requests.\n\n**Source-owned.** Every figure is what a source said it sent and spent while the command\nran, read through [`TaskSource::metering`](onetaskgraph_plugin_api::TaskSource::metering)\nbefore the command and again after it. The engine adds the differences up by name and\ninterprets none of them, which is why the budget and unit names are open vocabulary.",
+        "properties": {
+          "budgets": {
+            "description": "What those requests spent, one entry per budget and unit, ordered by budget name.",
+            "items": {
+              "$ref": "#/$defs/BudgetSpent"
+            },
+            "type": "array"
+          },
+          "requests": {
+            "description": "How many HTTP requests those sources sent for this command.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "requests",
+          "budgets"
+        ],
+        "type": "object"
+      },
+      "WriteFallback": {
+        "description": "That an expected write read its target before writing, and why.",
+        "properties": {
+          "read": {
+            "description": "Always `true`: the write made one read.",
+            "type": "boolean"
+          },
+          "reason": {
+            "description": "Why it could not take what it needed from the cache.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "read",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "WritePart": {
+        "description": "One mutation of an expected write.",
+        "oneOf": [
+          {
+            "description": "The backend answered that it was applied.",
+            "properties": {
+              "outcome": {
+                "const": "landed",
+                "type": "string"
+              }
+            },
+            "required": [
+              "outcome"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The backend answered that it was refused.",
+            "properties": {
+              "error": {
+                "description": "What the backend said.",
+                "type": "string"
+              },
+              "outcome": {
+                "const": "rejected",
+                "type": "string"
+              },
+              "stale": {
+                "default": false,
+                "description": "Whether it was refused because an id the write took from a primed context — an\nitem's node id, a field's or an option's — no longer resolves. Such a part is\nsent again once, after one read.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "outcome",
+              "error"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The request left and no answer came back, so whether it was applied cannot be known.\nNever sent again: doing so could apply it twice.",
+            "properties": {
+              "error": {
+                "description": "What went wrong.",
+                "type": "string"
+              },
+              "outcome": {
+                "const": "unknown",
+                "type": "string"
+              }
+            },
+            "required": [
+              "outcome",
+              "error"
+            ],
+            "type": "object"
+          }
+        ],
+        "properties": {
+          "fields": {
+            "additionalProperties": true,
+            "description": "Each field it set, with the value the response shows.",
+            "type": "object"
+          },
+          "part": {
+            "description": "Which part it was, in the source's words: `fields`, `issue`, `comment`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "part",
+          "fields"
+        ],
+        "type": "object"
+      },
+      "WriteResult": {
+        "description": "What each mutation of an expected write came to, built from the mutations' own responses.",
+        "properties": {
+          "parts": {
+            "description": "One per mutation sent, in the order sent.",
+            "items": {
+              "$ref": "#/$defs/WritePart"
+            },
+            "type": "array"
+          },
+          "version": {
+            "description": "The task's version after the write, where the last response determines it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "parts"
+        ],
+        "type": "object"
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "description": "What `task content set` answers with.",
     "properties": {
+      "fallback": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/WriteFallback"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "That an expected write read its target first, and why — absent when it sent only its\nmutations, and for a write made without `--expect`."
+      },
       "id": {
         "$ref": "#/$defs/GlobalId",
         "description": "The task whose content was replaced."
+      },
+      "result": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/WriteResult"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "What each mutation an expected write sent came to — present when the write was made\nwith `--expect` on a source that reports its writes' parts."
+      },
+      "spent": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Spent"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "What an expected write spent at the sources that meter their own requests, its\nfallback read included — absent for a write made without `--expect`."
       }
     },
     "required": [
@@ -14331,6 +16175,26 @@ export const runtimeSchemas = {
       "AssetName": {
         "description": "One asset's name: a bare file name ending in an accepted image extension.\n\nValidated wherever one is built, deserialized included: non-empty, no `/`, no `\\`, no\n`..`, no whitespace, control character or parenthesis — none of which a bare Markdown link\ntarget can hold — and ending, case-insensitively, in `.png`, `.jpg`, `.jpeg`, `.gif` or\n`.webp` after a non-empty stem. The name is kept exactly as written, case included: it is\nthe text a reference names and the file name a source stores the bytes under.",
         "type": "string"
+      },
+      "CacheUse": {
+        "description": "How one read of a caching source's task used the cache: the `cache` member of its JSON.",
+        "properties": {
+          "bypassed": {
+            "description": "Why the cache could not be used at all for it — a part the source's change token does\nnot cover, or a task that carries no token — or `null` when nothing kept it from being.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "served": {
+            "$ref": "#/$defs/Served",
+            "description": "Where it was answered from."
+          }
+        },
+        "required": [
+          "served"
+        ],
+        "type": "object"
       },
       "Classification": {
         "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository or a\nprivate project — a classification only ever tightens.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
@@ -14664,6 +16528,21 @@ export const runtimeSchemas = {
       "Repository": {
         "description": "A repository identified by its normalized origin, without a URL scheme or `.git` suffix.",
         "type": "string"
+      },
+      "Served": {
+        "description": "Where one read of a caching source's task was answered from.",
+        "oneOf": [
+          {
+            "const": "cache",
+            "description": "From the cache, with no request.",
+            "type": "string"
+          },
+          {
+            "const": "remote",
+            "description": "From the source.",
+            "type": "string"
+          }
+        ]
       },
       "SourceError": {
         "description": "Why a source could not answer.\n\nEvery variant carries owned data only, so an error survives the JSON-over-stdio\nboundary a subprocess-hosted plugin crosses without losing anything.",
@@ -15094,6 +16973,17 @@ export const runtimeSchemas = {
           "null"
         ]
       },
+      "cache": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/CacheUse"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "How the read used its source's local cache: `{\"served\": \"cache\" | \"remote\",\n\"bypassed\": null | \"<reason>\"}` — absent for a source keeping none, and for an id\nnaming no configured source."
+      },
       "comments": {
         "description": "The task's comments, oldest first, for a source whose tasks have comments.\n\n**Absent** rather than empty for a source declaring none, for a task that was not\nfound, and for a task whose comments could not be read — the last with the failure in\nthe response's `errors`, a source refusing the read (a GitHub draft, which has none)\nincluded, so showing such a task is a partial answer that says why. An empty list says\nthe source has comments and this task holds none, which is a different thing to tell a\nreader.",
         "items": {
@@ -15202,6 +17092,26 @@ export const runtimeSchemas = {
       "AssetName": {
         "description": "One asset's name: a bare file name ending in an accepted image extension.\n\nValidated wherever one is built, deserialized included: non-empty, no `/`, no `\\`, no\n`..`, no whitespace, control character or parenthesis — none of which a bare Markdown link\ntarget can hold — and ending, case-insensitively, in `.png`, `.jpg`, `.jpeg`, `.gif` or\n`.webp` after a non-empty stem. The name is kept exactly as written, case included: it is\nthe text a reference names and the file name a source stores the bytes under.",
         "type": "string"
+      },
+      "CacheUse": {
+        "description": "How one read of a caching source's task used the cache: the `cache` member of its JSON.",
+        "properties": {
+          "bypassed": {
+            "description": "Why the cache could not be used at all for it — a part the source's change token does\nnot cover, or a task that carries no token — or `null` when nothing kept it from being.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "served": {
+            "$ref": "#/$defs/Served",
+            "description": "Where it was answered from."
+          }
+        },
+        "required": [
+          "served"
+        ],
+        "type": "object"
       },
       "Classification": {
         "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository or a\nprivate project — a classification only ever tightens.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
@@ -15535,6 +17445,21 @@ export const runtimeSchemas = {
       "Repository": {
         "description": "A repository identified by its normalized origin, without a URL scheme or `.git` suffix.",
         "type": "string"
+      },
+      "Served": {
+        "description": "Where one read of a caching source's task was answered from.",
+        "oneOf": [
+          {
+            "const": "cache",
+            "description": "From the cache, with no request.",
+            "type": "string"
+          },
+          {
+            "const": "remote",
+            "description": "From the source.",
+            "type": "string"
+          }
+        ]
       },
       "SourceError": {
         "description": "Why a source could not answer.\n\nEvery variant carries owned data only, so an error survives the JSON-over-stdio\nboundary a subprocess-hosted plugin crosses without losing anything.",
@@ -15960,6 +17885,17 @@ export const runtimeSchemas = {
               "null"
             ]
           },
+          "cache": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CacheUse"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How the read used its source's local cache: `{\"served\": \"cache\" | \"remote\",\n\"bypassed\": null | \"<reason>\"}` — absent for a source keeping none, and for an id\nnaming no configured source."
+          },
           "comments": {
             "description": "The task's comments, oldest first, for a source whose tasks have comments.\n\n**Absent** rather than empty for a source declaring none, for a task that was not\nfound, and for a task whose comments could not be read — the last with the failure in\nthe response's `errors`, a source refusing the read (a GitHub draft, which has none)\nincluded, so showing such a task is a partial answer that says why. An empty list says\nthe source has comments and this task holds none, which is a different thing to tell a\nreader.",
             "items": {
@@ -16031,6 +17967,36 @@ export const runtimeSchemas = {
   },
   "TaskPrioritySet": {
     "$defs": {
+      "BudgetSpent": {
+        "description": "What one command spent against one budget.",
+        "properties": {
+          "amount": {
+            "description": "How much was spent against it, in that unit.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "budget": {
+            "description": "The budget, as the source names it — `graphql`, `rest`.",
+            "type": "string"
+          },
+          "lower_bound": {
+            "description": "Whether any part of `amount` was modelled by a source rather than reported by its\nbackend or counted, which makes `amount` a lower bound on what the backend charged\nrather than a measurement of it.",
+            "type": "boolean"
+          },
+          "unit": {
+            "description": "What it is metered in — `points`, `requests`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "budget",
+          "unit",
+          "amount",
+          "lower_bound"
+        ],
+        "type": "object"
+      },
       "GlobalId": {
         "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
         "type": "string"
@@ -16064,11 +18030,161 @@ export const runtimeSchemas = {
             "type": "string"
           }
         ]
+      },
+      "Spent": {
+        "description": "What one command spent, summed over the sources in it that meter their own requests.\n\n**Source-owned.** Every figure is what a source said it sent and spent while the command\nran, read through [`TaskSource::metering`](onetaskgraph_plugin_api::TaskSource::metering)\nbefore the command and again after it. The engine adds the differences up by name and\ninterprets none of them, which is why the budget and unit names are open vocabulary.",
+        "properties": {
+          "budgets": {
+            "description": "What those requests spent, one entry per budget and unit, ordered by budget name.",
+            "items": {
+              "$ref": "#/$defs/BudgetSpent"
+            },
+            "type": "array"
+          },
+          "requests": {
+            "description": "How many HTTP requests those sources sent for this command.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "requests",
+          "budgets"
+        ],
+        "type": "object"
+      },
+      "WriteFallback": {
+        "description": "That an expected write read its target before writing, and why.",
+        "properties": {
+          "read": {
+            "description": "Always `true`: the write made one read.",
+            "type": "boolean"
+          },
+          "reason": {
+            "description": "Why it could not take what it needed from the cache.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "read",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "WritePart": {
+        "description": "One mutation of an expected write.",
+        "oneOf": [
+          {
+            "description": "The backend answered that it was applied.",
+            "properties": {
+              "outcome": {
+                "const": "landed",
+                "type": "string"
+              }
+            },
+            "required": [
+              "outcome"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The backend answered that it was refused.",
+            "properties": {
+              "error": {
+                "description": "What the backend said.",
+                "type": "string"
+              },
+              "outcome": {
+                "const": "rejected",
+                "type": "string"
+              },
+              "stale": {
+                "default": false,
+                "description": "Whether it was refused because an id the write took from a primed context — an\nitem's node id, a field's or an option's — no longer resolves. Such a part is\nsent again once, after one read.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "outcome",
+              "error"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The request left and no answer came back, so whether it was applied cannot be known.\nNever sent again: doing so could apply it twice.",
+            "properties": {
+              "error": {
+                "description": "What went wrong.",
+                "type": "string"
+              },
+              "outcome": {
+                "const": "unknown",
+                "type": "string"
+              }
+            },
+            "required": [
+              "outcome",
+              "error"
+            ],
+            "type": "object"
+          }
+        ],
+        "properties": {
+          "fields": {
+            "additionalProperties": true,
+            "description": "Each field it set, with the value the response shows.",
+            "type": "object"
+          },
+          "part": {
+            "description": "Which part it was, in the source's words: `fields`, `issue`, `comment`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "part",
+          "fields"
+        ],
+        "type": "object"
+      },
+      "WriteResult": {
+        "description": "What each mutation of an expected write came to, built from the mutations' own responses.",
+        "properties": {
+          "parts": {
+            "description": "One per mutation sent, in the order sent.",
+            "items": {
+              "$ref": "#/$defs/WritePart"
+            },
+            "type": "array"
+          },
+          "version": {
+            "description": "The task's version after the write, where the last response determines it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "parts"
+        ],
+        "type": "object"
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "description": "What `task priority set` answers with.",
     "properties": {
+      "fallback": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/WriteFallback"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "That an expected write read its target first, and why — absent when it sent only its\nmutations, and for a write made without `--expect`."
+      },
       "id": {
         "$ref": "#/$defs/GlobalId",
         "description": "The task whose priority was set."
@@ -16076,6 +18192,28 @@ export const runtimeSchemas = {
       "priority": {
         "$ref": "#/$defs/Priority",
         "description": "Its priority as its source reads it back after the write."
+      },
+      "result": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/WriteResult"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "What each mutation an expected write sent came to — present when the write was made\nwith `--expect` on a source that reports its writes' parts."
+      },
+      "spent": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Spent"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "What an expected write spent at the sources that meter their own requests, its\nfallback read included — absent for a write made without `--expect`."
       }
     },
     "required": [
@@ -16368,6 +18506,36 @@ export const runtimeSchemas = {
   },
   "TaskStatusSet": {
     "$defs": {
+      "BudgetSpent": {
+        "description": "What one command spent against one budget.",
+        "properties": {
+          "amount": {
+            "description": "How much was spent against it, in that unit.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "budget": {
+            "description": "The budget, as the source names it — `graphql`, `rest`.",
+            "type": "string"
+          },
+          "lower_bound": {
+            "description": "Whether any part of `amount` was modelled by a source rather than reported by its\nbackend or counted, which makes `amount` a lower bound on what the backend charged\nrather than a measurement of it.",
+            "type": "boolean"
+          },
+          "unit": {
+            "description": "What it is metered in — `points`, `requests`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "budget",
+          "unit",
+          "amount",
+          "lower_bound"
+        ],
+        "type": "object"
+      },
       "Delivered": {
         "description": "What keeping one delivered task in step with one deliverer came to.",
         "oneOf": [
@@ -16553,6 +18721,29 @@ export const runtimeSchemas = {
         "pattern": "^[a-z0-9][a-z0-9-]*$",
         "type": "string"
       },
+      "Spent": {
+        "description": "What one command spent, summed over the sources in it that meter their own requests.\n\n**Source-owned.** Every figure is what a source said it sent and spent while the command\nran, read through [`TaskSource::metering`](onetaskgraph_plugin_api::TaskSource::metering)\nbefore the command and again after it. The engine adds the differences up by name and\ninterprets none of them, which is why the budget and unit names are open vocabulary.",
+        "properties": {
+          "budgets": {
+            "description": "What those requests spent, one entry per budget and unit, ordered by budget name.",
+            "items": {
+              "$ref": "#/$defs/BudgetSpent"
+            },
+            "type": "array"
+          },
+          "requests": {
+            "description": "How many HTTP requests those sources sent for this command.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "requests",
+          "budgets"
+        ],
+        "type": "object"
+      },
       "Status": {
         "description": "A source's status, kept in both normalised and original form.\n\n`category` is what every filter compares against; `name` is the source's own\nwording, preserved so display never flattens \"In Review\" into \"In Progress\".",
         "properties": {
@@ -16615,6 +18806,122 @@ export const runtimeSchemas = {
             "type": "string"
           }
         ]
+      },
+      "WriteFallback": {
+        "description": "That an expected write read its target before writing, and why.",
+        "properties": {
+          "read": {
+            "description": "Always `true`: the write made one read.",
+            "type": "boolean"
+          },
+          "reason": {
+            "description": "Why it could not take what it needed from the cache.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "read",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "WritePart": {
+        "description": "One mutation of an expected write.",
+        "oneOf": [
+          {
+            "description": "The backend answered that it was applied.",
+            "properties": {
+              "outcome": {
+                "const": "landed",
+                "type": "string"
+              }
+            },
+            "required": [
+              "outcome"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The backend answered that it was refused.",
+            "properties": {
+              "error": {
+                "description": "What the backend said.",
+                "type": "string"
+              },
+              "outcome": {
+                "const": "rejected",
+                "type": "string"
+              },
+              "stale": {
+                "default": false,
+                "description": "Whether it was refused because an id the write took from a primed context — an\nitem's node id, a field's or an option's — no longer resolves. Such a part is\nsent again once, after one read.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "outcome",
+              "error"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The request left and no answer came back, so whether it was applied cannot be known.\nNever sent again: doing so could apply it twice.",
+            "properties": {
+              "error": {
+                "description": "What went wrong.",
+                "type": "string"
+              },
+              "outcome": {
+                "const": "unknown",
+                "type": "string"
+              }
+            },
+            "required": [
+              "outcome",
+              "error"
+            ],
+            "type": "object"
+          }
+        ],
+        "properties": {
+          "fields": {
+            "additionalProperties": true,
+            "description": "Each field it set, with the value the response shows.",
+            "type": "object"
+          },
+          "part": {
+            "description": "Which part it was, in the source's words: `fields`, `issue`, `comment`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "part",
+          "fields"
+        ],
+        "type": "object"
+      },
+      "WriteResult": {
+        "description": "What each mutation of an expected write came to, built from the mutations' own responses.",
+        "properties": {
+          "parts": {
+            "description": "One per mutation sent, in the order sent.",
+            "items": {
+              "$ref": "#/$defs/WritePart"
+            },
+            "type": "array"
+          },
+          "version": {
+            "description": "The task's version after the write, where the last response determines it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "parts"
+        ],
+        "type": "object"
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -16627,9 +18934,42 @@ export const runtimeSchemas = {
         },
         "type": "array"
       },
+      "fallback": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/WriteFallback"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "That an expected write read its target first, and why — absent when it sent only its\nmutations, and for a write made without `--expect`."
+      },
       "id": {
         "$ref": "#/$defs/GlobalId",
         "description": "The task whose status was set."
+      },
+      "result": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/WriteResult"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "What each mutation an expected write sent came to — present when the write was made\nwith `--expect` on a source that reports its writes' parts."
+      },
+      "spent": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Spent"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "What an expected write spent at the sources that meter their own requests, its\nfallback read included — absent for a write made without `--expect`."
       },
       "status": {
         "$ref": "#/$defs/Status",
@@ -17877,6 +20217,122 @@ export const runtimeSchemas = {
             "type": "string"
           }
         ]
+      },
+      "WriteFallback": {
+        "description": "That an expected write read its target before writing, and why.",
+        "properties": {
+          "read": {
+            "description": "Always `true`: the write made one read.",
+            "type": "boolean"
+          },
+          "reason": {
+            "description": "Why it could not take what it needed from the cache.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "read",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "WritePart": {
+        "description": "One mutation of an expected write.",
+        "oneOf": [
+          {
+            "description": "The backend answered that it was applied.",
+            "properties": {
+              "outcome": {
+                "const": "landed",
+                "type": "string"
+              }
+            },
+            "required": [
+              "outcome"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The backend answered that it was refused.",
+            "properties": {
+              "error": {
+                "description": "What the backend said.",
+                "type": "string"
+              },
+              "outcome": {
+                "const": "rejected",
+                "type": "string"
+              },
+              "stale": {
+                "default": false,
+                "description": "Whether it was refused because an id the write took from a primed context — an\nitem's node id, a field's or an option's — no longer resolves. Such a part is\nsent again once, after one read.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "outcome",
+              "error"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The request left and no answer came back, so whether it was applied cannot be known.\nNever sent again: doing so could apply it twice.",
+            "properties": {
+              "error": {
+                "description": "What went wrong.",
+                "type": "string"
+              },
+              "outcome": {
+                "const": "unknown",
+                "type": "string"
+              }
+            },
+            "required": [
+              "outcome",
+              "error"
+            ],
+            "type": "object"
+          }
+        ],
+        "properties": {
+          "fields": {
+            "additionalProperties": true,
+            "description": "Each field it set, with the value the response shows.",
+            "type": "object"
+          },
+          "part": {
+            "description": "Which part it was, in the source's words: `fields`, `issue`, `comment`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "part",
+          "fields"
+        ],
+        "type": "object"
+      },
+      "WriteResult": {
+        "description": "What each mutation of an expected write came to, built from the mutations' own responses.",
+        "properties": {
+          "parts": {
+            "description": "One per mutation sent, in the order sent.",
+            "items": {
+              "$ref": "#/$defs/WritePart"
+            },
+            "type": "array"
+          },
+          "version": {
+            "description": "The task's version after the write, where the last response determines it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "parts"
+        ],
+        "type": "object"
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -17889,9 +20345,31 @@ export const runtimeSchemas = {
         },
         "type": "array"
       },
+      "fallback": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/WriteFallback"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "That an expected write read its target first, and why — absent when it sent only its\nmutations, and for a write made without `--expect`."
+      },
       "id": {
         "$ref": "#/$defs/GlobalId",
         "description": "The task updated."
+      },
+      "result": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/WriteResult"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "What each mutation an expected write sent came to — present when the write was made\nwith `--expect` on a source that reports its writes' parts."
       },
       "spent": {
         "anyOf": [
