@@ -32,7 +32,7 @@ use onetaskgraph_plugin_api::{
 use serde_json::Value;
 
 use super::{
-    CacheUse, ENTRY_SCHEMA, Entry, ExpectedWrite, SourceCache, WriteFallback, WritePart,
+    CacheUse, ENTRY_SCHEMA, Entry, ExpectedWrite, Priming, SourceCache, WriteFallback, WritePart,
     WriteResult,
 };
 
@@ -101,10 +101,7 @@ impl CachedSource {
             return Err(Miss::Bypassed(reason.to_owned()));
         }
         let entry = self.cache.read(id).ok_or(Miss::Behind)?;
-        let fresh = entry
-            .version
-            .as_deref()
-            .is_some_and(|held| self.fresh(held, &pin));
+        let fresh = entry.version().is_some_and(|held| self.fresh(held, &pin));
         if fresh && (!comments || entry.comments.is_some()) {
             Ok(entry)
         } else {
@@ -115,8 +112,10 @@ impl CachedSource {
     /// Record that the read of `id` was answered from `entry`.
     fn served(&self, entry: &Entry) {
         let mut command = self.cache.command();
-        command.used.insert(entry.id.clone(), CacheUse::cache());
-        command.served.insert(entry.id.clone(), entry.clone());
+        command
+            .used
+            .insert(entry.task.id.clone(), CacheUse::cache());
+        command.served.insert(entry.task.id.clone(), entry.clone());
     }
 
     /// Record that the read of `id` went to the source, for `miss`, and answered `version`.
@@ -152,7 +151,7 @@ impl CachedSource {
         let held = self
             .cache
             .read(&task.id)
-            .filter(|held| held.version.is_some() && held.version == task.version);
+            .filter(|held| held.version().is_some() && held.version() == task.version.as_deref());
         let (assets, edges, kept) = match held {
             Some(held) => (held.assets, held.edges, held.comments),
             None => (None, None, None),
@@ -160,8 +159,6 @@ impl CachedSource {
         self.cache.write(&Entry {
             schema: ENTRY_SCHEMA,
             remote: self.cache.remote.clone(),
-            id: task.id.clone(),
-            version: task.version.clone(),
             task: task.clone(),
             comments: comments.or(kept),
             assets,
@@ -180,7 +177,7 @@ impl CachedSource {
         let Some(mut entry) = self.cache.read(id) else {
             return;
         };
-        if entry.version.as_deref() != Some(read.as_str()) {
+        if entry.version() != Some(read.as_str()) {
             return;
         }
         if let Some(assets) = assets {
@@ -292,7 +289,7 @@ impl CachedSource {
 
     /// Prime the source with what the cache kept for `id`, once, when a write expecting it
     /// is under way: whether it was primed, and why a read follows when it was not.
-    fn prime_expected(&self, id: &NativeId) -> Option<(bool, String)> {
+    fn prime_expected(&self, id: &NativeId) -> Option<Priming> {
         let version = {
             let command = self.cache.command();
             let expected = command
@@ -306,48 +303,42 @@ impl CachedSource {
         };
         let entry = self.cache.read(id);
         let decided = match &entry {
-            None => (
-                false,
-                "the cache holds no entry for this task, so its target was read".to_owned(),
-            ),
+            None => Priming::Unprimed {
+                reason: "the cache holds no entry for this task, so its target was read".to_owned(),
+            },
             Some(entry)
                 if !entry
-                    .version
-                    .as_deref()
+                    .version()
                     .is_some_and(|held| self.fresh(held, &version)) =>
             {
-                (
-                    false,
-                    "the cache holds this task only at an older version than the one expected, \
-                     so its target was read"
+                Priming::Unprimed {
+                    reason: "the cache holds this task only at an older version than the one \
+                             expected, so its target was read"
                         .to_owned(),
-                )
+                }
             }
             Some(entry) => match &entry.context {
                 Some(context) => {
                     let board = self.cache.board();
                     if self.inner.prime_write(id, context, board.as_ref()) {
-                        (
-                            true,
-                            "the cache did not hold all the write needed — the board's field \
-                             ids — so it was read"
+                        Priming::Primed {
+                            reason: "the cache did not hold all the write needed — the board's \
+                                     field ids — so it was read"
                                 .to_owned(),
-                        )
+                        }
                     } else {
-                        (
-                            false,
-                            "the source could not take what the cache kept for this task, so \
-                             its target was read"
+                        Priming::Unprimed {
+                            reason: "the source could not take what the cache kept for this \
+                                     task, so its target was read"
                                 .to_owned(),
-                        )
+                        }
                     }
                 }
-                None => (
-                    false,
-                    "the cache kept nothing a write of this task could take instead of reading \
-                     it, so its target was read"
+                None => Priming::Unprimed {
+                    reason: "the cache kept nothing a write of this task could take instead of \
+                             reading it, so its target was read"
                         .to_owned(),
-                ),
+                },
             },
         };
         let mut command = self.cache.command();
@@ -385,12 +376,14 @@ impl CachedSource {
             return written;
         };
         let before = self.inner.metering().await.ok().flatten();
-        let (primed, mut reason) = self.prime_expected(id).unwrap_or_else(|| {
-            (
-                false,
-                "the write was not expected when it began, so its target was read".to_owned(),
-            )
-        });
+        let priming = self
+            .prime_expected(id)
+            .unwrap_or_else(|| Priming::Unprimed {
+                reason: "the write was not expected when it began, so its target was read"
+                    .to_owned(),
+            });
+        let primed = priming.primed();
+        let mut reason = priming.reason().to_owned();
         self.inner.begin_journal();
         let mut written = write().await;
         let mut journal = self.inner.end_journal();
@@ -458,8 +451,6 @@ impl CachedSource {
                 self.cache.write(&Entry {
                     schema: ENTRY_SCHEMA,
                     remote: self.cache.remote.clone(),
-                    id: id.clone(),
-                    version: whole.task.version.clone(),
                     task: whole.task.clone(),
                     comments: Some(whole.comments.clone()),
                     assets: Some(whole.assets.clone()),

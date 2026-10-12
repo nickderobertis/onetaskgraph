@@ -152,7 +152,7 @@ pub fn clear(config: &Config, only: Option<&SourceName>) -> Result<CacheCleared,
         if only.is_some_and(|name| *name != source) {
             continue;
         }
-        let entries = SourceCache::empty(&location.dir).map_err(|error| {
+        let entries = SourceCache::empty(&location.dir, &location.remote).map_err(|error| {
             format!(
                 "the cache of source {source} at {} could not be emptied: {error}; next: \
                  check that directory's permissions",
@@ -179,6 +179,10 @@ pub enum Served {
 }
 
 /// How one read of a caching source's task used the cache: the `cache` member of its JSON.
+///
+/// Built only by [`CacheUse::cache`], which carries no reason, and [`CacheUse::remote`], so a
+/// served entry never carries one.
+// llmlint: ignore[invalid_states_unrepresentable] The task this lands fixes the wire shape as `cache: {served: "cache"|"remote", bypassed: null|"<reason>"}`, which both SDKs are generated from; an enum would serialize as another shape. The two constructors below are the only ways one is built, and neither pairs `cache` with a reason.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct CacheUse {
     /// Where it was answered from.
@@ -244,6 +248,7 @@ pub struct WritePart {
 }
 
 /// That an expected write read its target before writing, and why.
+// llmlint: ignore[invalid_states_unrepresentable] The task this lands fixes the wire shape as `fallback: {read: true, reason}`; the member is present only when a read was made, and the one place one is built sets `read` from that fact, so `false` is never written.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct WriteFallback {
     /// Always `true`: the write made one read.
@@ -253,17 +258,15 @@ pub struct WriteFallback {
 }
 
 /// One task as the cache keeps it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub(crate) struct Entry {
     /// [`ENTRY_SCHEMA`].
     pub(crate) schema: u32,
     /// The digest of the remote it is from, which a reader holds it to.
     pub(crate) remote: String,
-    /// The task's own id.
-    pub(crate) id: NativeId,
-    /// The token it was read at: `task.version`, spelled out so a reader decides on it alone.
-    pub(crate) version: Option<String>,
-    /// The task.
+    /// The task, its `id` the entry's own and its `version` the token the entry was read at —
+    /// one value each, so an entry cannot vouch for another task or another version than the
+    /// one it holds.
     pub(crate) task: Task,
     /// Every comment on it, oldest first — absent when the read that wrote it did not carry
     /// them whole.
@@ -276,8 +279,15 @@ pub(crate) struct Entry {
     pub(crate) context: Option<Value>,
 }
 
+impl Entry {
+    /// The token the entry was read at.
+    pub(crate) fn version(&self) -> Option<&str> {
+        self.task.version.as_deref()
+    }
+}
+
 /// A board's context, as the cache keeps it.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 struct BoardEntry {
     schema: u32,
     remote: String,
@@ -289,10 +299,41 @@ struct BoardEntry {
 pub(crate) struct Expectation {
     pub(crate) id: NativeId,
     pub(crate) version: String,
-    /// Whether the source took what the cache kept, and why a read would follow if not —
-    /// decided at the first call touching the task, so every read the write's own verb makes
-    /// of it first is answered from what was primed too.
-    pub(crate) primed: Option<(bool, String)>,
+    /// Whether the source took what the cache kept — decided at the first call touching the
+    /// task, so every read the write's own verb makes of it first is answered from what was
+    /// primed too — or `None` until then.
+    pub(crate) primed: Option<Priming>,
+}
+
+/// What priming a source for an expected write came to, each with the reason a fallback read
+/// would report.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Priming {
+    /// The source took what the cache kept; a read can still follow when the write needs what
+    /// it did not hold, which `reason` says.
+    Primed {
+        /// Why a read followed, should one.
+        reason: String,
+    },
+    /// The source took nothing, so the write reads its target, for `reason`.
+    Unprimed {
+        /// Why.
+        reason: String,
+    },
+}
+
+impl Priming {
+    /// Whether the source took what the cache kept.
+    pub(crate) fn primed(&self) -> bool {
+        matches!(self, Self::Primed { .. })
+    }
+
+    /// Why a read followed, should one.
+    pub(crate) fn reason(&self) -> &str {
+        match self {
+            Self::Primed { reason } | Self::Unprimed { reason } => reason,
+        }
+    }
 }
 
 /// Everything one command has learnt about a caching source's tasks, dropped when it ends.
@@ -429,7 +470,7 @@ impl SourceCache {
             return None;
         }
         let entry: Entry = serde_json::from_value(value).ok()?;
-        (entry.remote == self.remote && entry.id == *id).then_some(entry)
+        (entry.remote == self.remote && entry.task.id == *id).then_some(entry)
     }
 
     /// Write `entry`, whole, in place of whatever was there.
@@ -440,7 +481,7 @@ impl SourceCache {
         let Ok(bytes) = serde_json::to_vec(entry) else {
             return;
         };
-        let _ = self.write_atomically(&self.task_path(&entry.id), &bytes);
+        let _ = self.write_atomically(&self.task_path(&entry.task.id), &bytes);
     }
 
     /// Make the entry for `id` unserveable: a write whose response could not vouch for what
@@ -498,29 +539,66 @@ impl SourceCache {
         written
     }
 
-    /// Remove every entry under `dir`, answering how many task entries there were.
-    fn empty(dir: &Path) -> std::io::Result<u64> {
-        let tasks = dir.join("tasks");
-        let entries = match std::fs::read_dir(&tasks) {
-            Ok(listed) => listed
-                .filter_map(Result::ok)
-                .filter(|entry| entry.file_name().to_string_lossy().ends_with(".json"))
-                .count() as u64,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
-            Err(error) => return Err(error),
+    /// Remove every entry this store wrote under `dir` for `remote`, answering how many task
+    /// entries there were.
+    ///
+    /// A file is removed only when it reads as one of this store's entries for that remote — a
+    /// task entry under `tasks/`, the board entry, or a staging file this store left — so a
+    /// `cache.dir` pointed at a directory holding anything else, another remote's cache
+    /// included, loses nothing else. An entry of a schema this build does not know is another
+    /// release's, and is left for that release to clear.
+    fn empty(dir: &Path, remote: &str) -> std::io::Result<u64> {
+        let ours = |path: &Path| -> bool {
+            std::fs::read(path)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+                .is_some_and(|value| {
+                    value.get("schema").and_then(Value::as_u64) == Some(u64::from(ENTRY_SCHEMA))
+                        && value.get("remote").and_then(Value::as_str) == Some(remote)
+                })
         };
-        match std::fs::remove_dir_all(&tasks) {
-            Ok(()) => {}
+        let gone = |result: std::io::Result<()>| match result {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
+            _ => Ok(()),
+        };
+        let mut entries = 0;
+        let tasks = dir.join("tasks");
+        match std::fs::read_dir(&tasks) {
+            Ok(listed) => {
+                for file in listed {
+                    let path = file?.path();
+                    let name = path.file_name().unwrap_or_default().to_string_lossy();
+                    if name.starts_with(".staged-") {
+                        gone(std::fs::remove_file(&path))?;
+                    } else if name.ends_with(".json") && ours(&path) {
+                        gone(std::fs::remove_file(&path))?;
+                        entries += 1;
+                    }
+                }
+            }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error),
         }
-        match std::fs::remove_file(dir.join("board.json")) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error),
+        let board = dir.join("board.json");
+        if ours(&board) {
+            gone(std::fs::remove_file(&board))?;
         }
         Ok(entries)
     }
+}
+
+/// The JSON Schema of every entry this build writes under [`ENTRY_SCHEMA`]: a task's and the
+/// board's.
+///
+/// What `tests/cache.rs` holds that number to: a change to either shape that does not move
+/// [`ENTRY_SCHEMA`] would have a release read another's entries as its own, so the shape is
+/// pinned beside the number and a change to one without the other fails there.
+#[must_use]
+pub fn entry_shapes() -> Value {
+    serde_json::json!({
+        "task": schemars::schema_for!(Entry),
+        "board": schemars::schema_for!(BoardEntry),
+    })
 }
 
 /// The lower-case hex SHA-256 of `text`.

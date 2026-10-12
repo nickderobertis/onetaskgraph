@@ -1942,3 +1942,228 @@ fn a_project_copy_loads_only_the_tasks_its_listing_does_not_find_cached() {
     );
     assert!(second.len() <= first.len());
 }
+
+/// A command that had to fail: its exit code, and what it said on stderr.
+fn refused(cached: &Cached, arguments: &[&str]) -> (Option<i32>, String) {
+    let output = cached.run_with(arguments, None);
+    assert_ne!(
+        output.status.code(),
+        Some(0),
+        "`{}` succeeded",
+        arguments.join(" ")
+    );
+    (output.status.code(), stderr(&output))
+}
+
+#[test]
+fn cache_clear_refuses_a_source_that_keeps_none_and_one_nothing_configures_naming_the_next_step() {
+    let cached = Cached::new();
+    let (_, said) = refused(&cached, &["cache", "clear", "plans"]);
+    assert!(
+        said.contains("keeps no cache") && said.contains("cache.enabled"),
+        "{said}"
+    );
+    let (_, said) = refused(&cached, &["cache", "clear", "nowhere"]);
+    assert!(said.contains("no source named nowhere"), "{said}");
+}
+
+#[test]
+fn cache_clear_removes_only_what_the_store_wrote_in_a_directory_holding_other_files() {
+    let cached = Cached::with(&json!({"enabled": true, "dir": "shared"}));
+    let dir = cached.sandbox.project().join("shared");
+    std::fs::create_dir_all(dir.join("tasks")).unwrap();
+    std::fs::write(dir.join("notes.txt"), "a person's notes").unwrap();
+    std::fs::write(dir.join("tasks/mine.json"), "{\"a person's\": \"file\"}").unwrap();
+    std::fs::write(dir.join("board.json"), "not the store's board").unwrap();
+    cached.ok(&["task", "show", "board:T-3", "--json"]);
+    assert_eq!(
+        Cached::entries(&dir).len(),
+        2,
+        "the store's entry beside the person's file"
+    );
+    let (cleared, _) = cached.ok(&["cache", "clear", "board", "--json"]);
+    assert_eq!(cleared["cleared"][0]["entries"], 1);
+    assert_eq!(
+        std::fs::read_to_string(dir.join("notes.txt")).unwrap(),
+        "a person's notes"
+    );
+    assert!(dir.join("tasks/mine.json").exists());
+    assert_eq!(
+        std::fs::read_to_string(dir.join("board.json")).unwrap(),
+        "not the store's board"
+    );
+    assert_eq!(Cached::entries(&dir), [dir.join("tasks/mine.json")]);
+}
+
+#[test]
+fn a_cache_that_cannot_be_written_costs_nothing_but_the_cache() {
+    let cached = Cached::with(&json!({"enabled": true, "dir": "blocked"}));
+    // A file where the cache's directory belongs: no entry can be written under it.
+    std::fs::write(cached.sandbox.project().join("blocked"), "in the way").unwrap();
+    for _ in 0..2 {
+        let (shown, sent) = cached.ok(&["task", "show", "board:T-3", "--json"]);
+        assert_eq!(sent, [ONE_READ]);
+        assert_eq!(shown["items"][0]["item"]["title"], "Gamma");
+        let v = version_of(&shown);
+        let (pinned, sent) = cached.ok(&["task", "show", "board:T-3", "--pin", &v, "--json"]);
+        assert_eq!(
+            sent,
+            [ONE_READ],
+            "nothing could be cached, so the pin reads"
+        );
+        assert_eq!(served_by(&pinned), from_remote());
+    }
+}
+
+#[test]
+fn a_stale_option_in_a_multi_part_write_retries_the_refused_part_once_and_never_resends_a_landed_one()
+ {
+    let cached = Cached::new();
+    let (_, version) = bound(&cached, "title: Bound\nstatus: Todo\npriority: high");
+    retitle(&cached, "Bound, retitled", "high");
+    let path = cached.sandbox.project().join("plans/tasks/B-1.md");
+    let text = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, text.replace("status: Todo", "status: Doing")).unwrap();
+    // A person renames `Doing` on the board after the cache kept its id.
+    cached.board.remint_status_option("Doing");
+    let (copied, sent) = cached.ok(&[
+        "task",
+        "copy",
+        "plans:B-1",
+        "--to",
+        "board",
+        "--expect",
+        &version,
+        "--json",
+    ]);
+    let item = &copied["items"][0];
+    let reported = parts(item);
+    assert_eq!(reported[0].1, "rejected", "{item}");
+    assert_eq!(item["result"]["parts"][0]["stale"], true);
+    assert_eq!(
+        reported
+            .iter()
+            .filter(|(part, outcome)| part == "issue" && outcome == "landed")
+            .count(),
+        1,
+        "the issue part lands once: {item}"
+    );
+    assert_eq!(item["fallback"]["read"], true);
+    let reads = sent
+        .iter()
+        .filter(|document| *document == graphql::ISSUE)
+        .count();
+    assert_eq!(reads, 1, "one read: {sent:?}");
+    let issue_parts = sent
+        .iter()
+        .filter(|document| *document == graphql::UPDATE_ISSUE_WHOLE)
+        .count();
+    assert_eq!(issue_parts, 1, "never sent twice: {sent:?}");
+    let destination = copied["items"][0]["destination"].as_str().unwrap();
+    let native = destination.split_once(':').unwrap().1;
+    assert_eq!(cached.board.status(native).as_deref(), Some("Doing"));
+}
+
+#[test]
+fn a_malformed_pin_and_an_expect_no_cache_can_take_are_refused_before_anything_is_read() {
+    let cached = Cached::new();
+    let before = cached.board.served().len();
+    let (code, said) = refused(
+        &cached,
+        &["task", "show-many", "board:T-3", "--pin", "board:T-3"],
+    );
+    assert_eq!(code, Some(1));
+    assert!(said.contains("<ID>=<VERSION>"), "{said}");
+    let (_, said) = refused(
+        &cached,
+        &[
+            "task",
+            "copy",
+            "board:T-1",
+            "board:T-3",
+            "--to",
+            "plans",
+            "--expect",
+            "v",
+        ],
+    );
+    assert!(said.contains("one task alone"), "{said}");
+    let (_, said) = refused(
+        &cached,
+        &[
+            "task",
+            "copy",
+            "board:T-3",
+            "--to",
+            "plans",
+            "--expect",
+            "v",
+        ],
+    );
+    assert!(said.contains("source plans keeps no cache"), "{said}");
+    let (_, said) = refused(
+        &cached,
+        &[
+            "project",
+            "metadata",
+            "set",
+            "board:P-1",
+            "caller.note",
+            "1",
+            "--expect",
+            "v",
+        ],
+    );
+    assert!(
+        said.contains("--expect names the version of a task"),
+        "{said}"
+    );
+    let (_, said) = refused(
+        &cached,
+        &[
+            "task",
+            "priority",
+            "set",
+            "plans:X-1",
+            "high",
+            "--expect",
+            "v",
+        ],
+    );
+    assert!(said.contains("source plans keeps no cache"), "{said}");
+    assert_eq!(cached.board.served().len(), before, "nothing was read");
+}
+
+#[test]
+fn the_typescript_sdk_pins_expects_and_clears_through_the_binary() {
+    let cached = Cached::new();
+    let (first, _) = cached.ok(&["task", "show", "board:T-3", "--json"]);
+    let v = version_of(&first);
+    let before = cached.board.served().len();
+    let script = "const many = await client.taskShowMany([id], {pins: {[id]: pin}}); \
+         const comments = await client.taskCommentList(id, {pin}); \
+         const written = await client.taskPrioritySet(id, 'high', {expect: pin}); \
+         const cleared = await client.cacheClear('board'); \
+         let refused = false; try { await client.taskShowMany([id], {pins: [pin]}); } \
+         catch (error) { refused = error instanceof TypeError; } \
+         console.log(JSON.stringify({many, comments, written, cleared, refused}));";
+    let answered = sdk(&cached, true, script, "board:T-3", Some(&v));
+    assert_eq!(answered["many"]["details"][0]["cache"]["served"], "cache");
+    assert_eq!(answered["comments"]["cache"]["served"], "cache");
+    assert_eq!(
+        answered["written"]["result"]["parts"][0]["outcome"],
+        "landed"
+    );
+    assert_eq!(answered["cleared"]["cleared"][0]["source"], "board");
+    assert_eq!(answered["refused"], true);
+    let sent: Vec<String> = cached.board.served()[before..]
+        .iter()
+        .map(|(document, _)| document.clone())
+        .collect();
+    assert_eq!(
+        sent,
+        [graphql::UPDATE_FIELD_WHOLE],
+        "the pinned reads sent nothing"
+    );
+    assert_eq!(Cached::entries(&cached.default_dir()).len(), 0, "cleared");
+}

@@ -33,11 +33,23 @@ use super::{
 
 /// The version of the context this source hands the store, so a context an earlier or a later
 /// build wrote is one this build declines rather than misreads.
-const CONTEXT_VERSION: u64 = 1;
+///
+/// `tests/context.rs` pins it beside the shape [`context_shapes`] answers, so a change to what a
+/// context holds that does not move this number fails there.
+pub const CONTEXT_VERSION: u64 = 1;
+
+/// The JSON Schema of the task context and the board context this source hands the store.
+#[must_use]
+pub fn context_shapes() -> Value {
+    json!({
+        "task": schemars::schema_for!(Context),
+        "board": schemars::schema_for!(Board),
+    })
+}
 
 /// One task's context: its record, and the comments on it this process read, by id, with the
 /// body GitHub holds — which an edit keeps a copy's origin marker from.
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, schemars::JsonSchema)]
 struct Context {
     version: u64,
     item: Resolved,
@@ -45,7 +57,7 @@ struct Context {
 }
 
 /// The board's context: its own id and field definitions.
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, schemars::JsonSchema)]
 struct Board {
     version: u64,
     fields: BoardFields,

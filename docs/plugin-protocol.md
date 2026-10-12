@@ -1232,7 +1232,7 @@ rule — a copy's skip, and the board cache built on the same token.
 
 ### 4.13e The store's local cache
 
-A source configured with `cache.enabled` (README, "A local cache of a remote source") has its
+A source configured with `cache.enabled` has its
 tasks kept on the host the engine runs on, keyed on the `version` of §4.13d and on nothing
 else. The rule it may never break is that **it never adds a request and never serves stale
 data**: an entry is served only when the version a caller pinned — explicitly, or by a listing

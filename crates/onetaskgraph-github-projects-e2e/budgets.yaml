@@ -65,7 +65,7 @@ budgets:
     threshold: 204
   - id: github-cache-points-not-above-uncached
     description: >-
-      An inner measure of the shared board token that no check may spend: the largest difference, cache on minus cache off, in GitHub GraphQL points across four realistic verb sequences against a loopback board, priced with the plugin's own table. Above zero means the cache added quota use, which it must never do; the stale-option fallback is recorded beside it and kept out.
+      An inner measure of the shared board token that no check may spend: the largest difference, cache on minus cache off, in GitHub GraphQL points across four realistic verb sequences against a loopback board, priced with the plugin's own table. It protects every manager's share of that token from quota the cache adds; the stale-option fallback is recorded beside it and kept out.
     labels: [github]
     measure: reported
     command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_cache_points", "--exact", "--nocapture"]

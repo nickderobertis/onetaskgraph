@@ -971,6 +971,11 @@ export class OnetaskgraphClient {
     if (options.noComments !== undefined && typeof options.noComments !== "boolean") {
       throw new TypeError("taskShowMany: noComments must be a boolean");
     }
+    if (options.pins !== undefined && !isPlainObject(options.pins)) {
+      throw new TypeError(
+        "taskShowMany: pins is not an object; next: pass a plain object of id to version",
+      );
+    }
     const pins: string[] = [];
     for (const [id, version] of Object.entries(options.pins ?? {})) {
       pins.push("--pin", `${id}=${stringOption("taskShowMany", "pins", version)}`);

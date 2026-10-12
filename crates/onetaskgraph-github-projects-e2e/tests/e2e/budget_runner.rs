@@ -478,8 +478,8 @@ fn read_cache_points(budget: &str) -> Result<(f64, String), String> {
         return Err("the figure is not the largest difference the sequences record".into());
     }
     let detail = value["detail"].as_str().ok_or("missing detail")?.to_owned();
-    #[allow(clippy::cast_precision_loss)]
-    Ok((figure as f64, detail))
+    let figure = i32::try_from(figure).map_err(|_| "the figure is out of range")?;
+    Ok((f64::from(figure), detail))
 }
 
 fn report_expected(expected: Workload) {

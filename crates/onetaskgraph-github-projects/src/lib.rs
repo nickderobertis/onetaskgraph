@@ -647,6 +647,7 @@ pub mod accounting;
 mod assets;
 pub mod change_token;
 mod expected;
+pub use expected::{CONTEXT_VERSION, context_shapes};
 mod visibility;
 
 use accounting::Accounting;
@@ -2456,7 +2457,7 @@ impl MetadataField {
 }
 
 /// What one item's `Priority` field says, read through this instance's mapping.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 enum HeldPriority {
     /// A priority this source reports: an option the mapping names, or no value (`none`).
     Read(Priority),
@@ -9503,7 +9504,7 @@ struct Board {
 /// under and which far ends it names by reading each of them by its own id; this is the
 /// half of the board those reads cannot carry, and holding no item is what keeps it from
 /// ever being asked whether an item is there.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, schemars::JsonSchema)]
 struct BoardFields {
     id: BoardId,
     fields: Value,
@@ -9513,7 +9514,7 @@ struct BoardFields {
 ///
 /// Never blank, because a blank one addresses no board — so an id GitHub answers blank is
 /// refused where it is read, and one an item names blank is read as not named at all.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, schemars::JsonSchema)]
 struct BoardId(String);
 
 /// Where one write left its item, for the record the rest of the command reads it out of.
@@ -9568,7 +9569,7 @@ impl Board {
 ///
 /// Serializable because it is what [`TaskSource::write_context`] hands the store's cache and
 /// [`TaskSource::prime_write`] takes back — see [`expected`].
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, schemars::JsonSchema)]
 struct Resolved {
     item_id: String,
     id: NativeId,
@@ -10003,7 +10004,7 @@ impl Incoming<'_> {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 enum ContentKind {
     DraftIssue,
     Issue,
@@ -10017,7 +10018,7 @@ enum ContentKind {
 /// board's three answers in one value is what makes every place that asks "which is this?"
 /// answer all three, rather than a `document: bool` beside a `kind` that means nothing for
 /// two thirds of the board.
-#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 enum BoardKind {
     /// An issue whose title begins [`DESIGN_TITLE_PREFIX`].
     Document,
