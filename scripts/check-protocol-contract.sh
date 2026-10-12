@@ -453,6 +453,39 @@ compare(
     "`NOT_METHODS`",
 )
 
+# The trait methods only the local cache calls, both ways against the list §4.13e gives of
+# them: each item's lead — the backticked names before its dash — names what it specifies.
+# `remote_identity` leads an item too, and is a `SourcePlugin` method rather than one of the
+# trait's, so it is set aside here by name.
+CACHE_LEAD = "What a plugin says to the cache, through `TaskSource` and never over this protocol"
+CACHE_PLUGIN_METHODS = {"remote_identity"}
+cache_section = section("### 4.13e The store's local cache")
+cache_lead = cache_section.find(CACHE_LEAD)
+if cache_lead < 0:
+    refuse(
+        f"§4.13e of docs/plugin-protocol.md no longer says \"{CACHE_LEAD}\", which is where "
+        "the methods CACHE_ONLY_REASON exempts are listed.",
+        "restore that paragraph and its list, or update this check.",
+    )
+# The paragraph that leads the list, then the list itself.
+cache_items = cache_section[cache_lead:].split("\n\n", 2)[1]
+cache_listed = set()
+for line in cache_items.splitlines():
+    if line.startswith("- "):
+        cache_listed |= set(re.findall(r"`([a-z_]+)`", line.split(" — ", 1)[0]))
+for name in sorted(CACHE_PLUGIN_METHODS - cache_listed):
+    failures.append(
+        f"§4.13e of docs/plugin-protocol.md no longer leads an item with `{name}`. Restore "
+        f"it, or drop it from CACHE_PLUGIN_METHODS."
+    )
+compare(
+    "cache method not carried",
+    {name for name, why in NOT_METHODS.items() if why is CACHE_ONLY_REASON},
+    cache_listed - CACHE_PLUGIN_METHODS,
+    {},
+    "`NOT_METHODS`",
+)
+
 trait = re.search(r"pub trait TaskSource: Send \+ Sync \{(.*?)\n\}", source_rs, re.DOTALL)
 if trait is None:
     refuse(
