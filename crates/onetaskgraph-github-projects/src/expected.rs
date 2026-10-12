@@ -114,6 +114,12 @@ impl Held {
         held(&self.learnt).insert(issue.clone(), comments);
     }
 
+    /// Whether a write of `id` was primed from the store's cache: a write expecting a version,
+    /// which sends only what differs from it.
+    pub(super) fn is_primed(&self, id: &NativeId) -> bool {
+        held(&self.primed).contains_key(id)
+    }
+
     /// The body comment `comment` holds on `issue`, by a primed context: `Some(Some(body))`
     /// when it is one of the issue's, `Some(None)` when it is not, and `None` when no primed
     /// context says.

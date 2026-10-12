@@ -132,6 +132,11 @@ impl Cached {
     }
 }
 
+/// The one request a caching source's read of one task with its comments sends: the item, its
+/// first page of comments and its `blockedBy` together, as a copy reads it, so a write expecting
+/// it later reads none of them.
+const ONE_READ: &str = graphql::ISSUE_COPY_DETAILS;
+
 /// The `version` a task read reported.
 pub(crate) fn version_of(shown: &Value) -> String {
     shown["items"][0]["item"]["version"]
@@ -158,11 +163,7 @@ fn a_pinned_read_of_a_task_cached_at_that_version_sends_nothing_and_an_unpinned_
  {
     let cached = Cached::new();
     let (first, sent) = cached.ok(&["task", "show", "board:T-3", "--json"]);
-    assert_eq!(
-        sent,
-        [graphql::ISSUE_DETAIL],
-        "a cold read is the one detail read"
-    );
+    assert_eq!(sent, [ONE_READ], "a cold read is the one detail read");
     assert_eq!(served_by(&first), from_remote());
     let version = version_of(&first);
 
@@ -199,7 +200,7 @@ fn a_pinned_read_of_a_task_cached_at_that_version_sends_nothing_and_an_unpinned_
 
     // Unpinned, the read goes to the board as it always did.
     let (unpinned, sent) = cached.ok(&["task", "show", "board:T-3", "--json"]);
-    assert_eq!(sent, [graphql::ISSUE_DETAIL]);
+    assert_eq!(sent, [ONE_READ]);
     assert_eq!(served_by(&unpinned), from_remote());
 }
 
@@ -220,7 +221,7 @@ fn a_pin_is_at_least_as_fresh_as_the_version_held_and_never_discovers_a_change_n
 
     // Read unpinned, the change is there, and the entry is refreshed with it.
     let (current, sent) = cached.ok(&["task", "show", "board:T-3", "--json"]);
-    assert_eq!(sent, [graphql::ISSUE_DETAIL]);
+    assert_eq!(sent, [ONE_READ]);
     assert_eq!(
         current["items"][0]["item"]["title"],
         "Gamma, renamed by a person"
@@ -262,11 +263,7 @@ fn a_pinned_read_the_cache_cannot_vouch_for_makes_exactly_the_one_remote_read() 
         &version(&listed, "T-3"),
         "--json",
     ]);
-    assert_eq!(
-        sent,
-        [graphql::ISSUE_DETAIL],
-        "nothing cached: the one read"
-    );
+    assert_eq!(sent, [ONE_READ], "nothing cached: the one read");
     assert_eq!(served_by(&read), from_remote());
 
     // Cached only at an older version than the pin: the one read, and never the entry. A
@@ -278,7 +275,7 @@ fn a_pinned_read_the_cache_cannot_vouch_for_makes_exactly_the_one_remote_read() 
     let (relisted, _) = cached.ok(&["task", "list", "--source", "board", "--json"]);
     let later = version(&relisted, "T-3");
     let (behind, sent) = cached.ok(&["task", "show", "board:T-3", "--pin", &later, "--json"]);
-    assert_eq!(sent, [graphql::ISSUE_DETAIL]);
+    assert_eq!(sent, [ONE_READ]);
     assert_eq!(served_by(&behind), from_remote());
     assert_eq!(
         behind["items"][0]["item"]["content"],
@@ -301,7 +298,7 @@ fn a_pinned_read_the_cache_cannot_vouch_for_makes_exactly_the_one_remote_read() 
         &incomparable,
         "--json",
     ]);
-    assert_eq!(sent, [graphql::ISSUE_DETAIL]);
+    assert_eq!(sent, [ONE_READ]);
     assert_eq!(served_by(&unordered), from_remote());
 }
 
@@ -446,7 +443,7 @@ fn an_expected_comment_write_sends_only_its_mutation_and_advances_the_entry_its_
     assert_eq!(sent, [graphql::DELETE_COMMENT]);
     assert_eq!(deleted["result"]["version"], Value::Null);
     let (shown, sent) = cached.ok(&["task", "show", "board:T-3", "--pin", &v3, "--json"]);
-    assert_eq!(sent, [graphql::ISSUE_DETAIL]);
+    assert_eq!(sent, [ONE_READ]);
     assert_eq!(served_by(&shown), from_remote());
     assert_eq!(shown["comments"], json!([]));
 }
@@ -555,7 +552,7 @@ fn a_write_whose_response_shows_only_what_it_wrote_leaves_the_entry_unserved_at_
     let (shown, sent) = cached.ok(&["task", "show", "board:T-3", "--pin", &v2, "--json"]);
     assert_eq!(
         sent,
-        [graphql::ISSUE_DETAIL],
+        [ONE_READ],
         "never an entry labelled v2 that lacks them"
     );
     assert_eq!(served_by(&shown), from_remote());
@@ -582,11 +579,7 @@ fn a_write_without_expect_reads_as_it_always_did_and_leaves_the_entry_unserved()
     );
     assert!(written.get("result").is_none(), "{written}");
     let (shown, sent) = cached.ok(&["task", "show", "board:T-3", "--pin", &v1, "--json"]);
-    assert_eq!(
-        sent,
-        [graphql::ISSUE_DETAIL],
-        "the written task's entry is not served"
-    );
+    assert_eq!(sent, [ONE_READ], "the written task's entry is not served");
     assert_eq!(shown["items"][0]["item"]["priority"], "high");
 }
 
@@ -957,7 +950,7 @@ fn an_entry_of_an_unknown_schema_or_of_bytes_that_do_not_parse_is_a_miss_and_the
     ] {
         std::fs::write(&entry, &bytes).unwrap();
         let (shown, sent) = cached.ok(&["task", "show", "board:T-3", "--pin", &v, "--json"]);
-        assert_eq!(sent, [graphql::ISSUE_DETAIL], "a miss, read from the board");
+        assert_eq!(sent, [ONE_READ], "a miss, read from the board");
         assert_eq!(served_by(&shown), from_remote());
         assert_eq!(shown["items"], first["items"]);
     }
@@ -979,11 +972,7 @@ fn an_older_entry_a_racing_writer_left_is_never_served_to_a_later_pin() {
     let entry = Cached::entries(&cached.default_dir()).remove(0);
     std::fs::write(&entry, &older_entry).unwrap();
     let (shown, sent) = cached.ok(&["task", "show", "board:T-3", "--pin", &pin, "--json"]);
-    assert_eq!(
-        sent,
-        [graphql::ISSUE_DETAIL],
-        "the older entry is never served"
-    );
+    assert_eq!(sent, [ONE_READ], "the older entry is never served");
     assert_eq!(
         shown["items"][0]["item"]["content"],
         "changed after the first read"
@@ -1277,8 +1266,8 @@ fn a_show_many_fed_by_a_listing_pinned_to_its_versions_reads_only_what_changed()
     let (details, served) = followups.ok(&pinned);
     // One task left to read is read alone, by the one-item detail read.
     assert_eq!(served.len(), 1, "{served:?}");
-    assert_eq!(served[0].0, graphql::ISSUE_DETAIL);
-    assert_eq!(served[0].1["id"], changed.as_str());
+    assert_eq!(served[0].0, ONE_READ);
+    assert_eq!(served[0].1["id0"], changed.as_str());
     let remote: Vec<&Value> = details["details"]
         .as_array()
         .unwrap()
@@ -1288,4 +1277,143 @@ fn a_show_many_fed_by_a_listing_pinned_to_its_versions_reads_only_what_changed()
     assert_eq!(remote.len(), 1);
     assert_eq!(remote[0]["items"][0]["id"], format!("board:{changed}"));
     let _ = pins;
+}
+
+/// A task of the folder copied onto the cached board, the board's copy read into the cache:
+/// the qualified id it landed under and the version it was read at.
+fn bound(cached: &Cached, front_matter: &str) -> (String, String) {
+    let plans = cached.sandbox.project().join("plans/tasks");
+    std::fs::write(
+        plans.join("B-1.md"),
+        format!("---\n{front_matter}\n---\nthe bound task's body\n"),
+    )
+    .expect("a task file");
+    let (copied, _) = cached.ok(&["task", "copy", "plans:B-1", "--to", "board", "--json"]);
+    let landed = copied["items"][0]["destination"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the copy landed: {copied}"))
+        .to_owned();
+    let (shown, _) = cached.ok(&["task", "show", &landed, "--json"]);
+    (landed, version_of(&shown))
+}
+
+/// Change the bound task's title and priority in its file, keeping every other line — its
+/// link to the board's copy among them.
+fn retitle(cached: &Cached, title: &str, priority: &str) {
+    let path = cached.sandbox.project().join("plans/tasks/B-1.md");
+    let text = std::fs::read_to_string(&path).expect("the task file");
+    let rewritten: String = text
+        .lines()
+        .map(|line| {
+            if line.starts_with("title:") {
+                format!("title: {title}\n")
+            } else if line.starts_with("priority:") {
+                format!("priority: {priority}\n")
+            } else {
+                format!("{line}\n")
+            }
+        })
+        .collect();
+    std::fs::write(&path, rewritten).expect("the task file");
+}
+
+#[test]
+fn a_bound_copy_with_expect_sends_only_the_parts_whose_fields_differ_and_no_read() {
+    let cached = Cached::new();
+    let (landed, version) = bound(&cached, "title: Bound\nstatus: Todo\npriority: high");
+    let native = landed.split_once(':').unwrap().1.to_owned();
+    // A person changes the priority on the board after the caller's read.
+    cached.board.assign_priority(&native, Some("Low"));
+    retitle(&cached, "Bound, retitled", "high");
+    let before = cached.board.served().len();
+    let (copied, sent) = cached.ok(&[
+        "task",
+        "copy",
+        "plans:B-1",
+        "--to",
+        "board",
+        "--expect",
+        &version,
+        "--json",
+    ]);
+    assert_eq!(
+        sent,
+        [graphql::UPDATE_ISSUE_WHOLE],
+        "one part, and no read: {copied}"
+    );
+    let (_, variables) = &cached.board.served()[before];
+    assert_eq!(variables["input"]["title"], "Bound, retitled");
+    // The body differs — its metadata slot records the version of the source this copy read —
+    // and the state does not, so it is not sent.
+    assert!(
+        variables["input"].get("stateInput").is_none(),
+        "only the fields that differ are sent: {variables}"
+    );
+    let item = &copied["items"][0];
+    assert_eq!(item["result"]["parts"][0]["part"], "issue");
+    assert_eq!(
+        item["result"]["parts"][0]["fields"]["title"],
+        "Bound, retitled"
+    );
+    assert!(item.get("fallback").is_none(), "{item}");
+    assert_eq!(
+        cached.board.priority(&native).as_deref(),
+        Some("Low"),
+        "the person's priority is left as they set it"
+    );
+}
+
+#[test]
+fn a_bound_copy_with_expect_reports_each_part_landed_rejected_or_unknown_and_retries_none() {
+    for (refusal, outcome) in [("refuse", "rejected"), ("drop", "unknown")] {
+        let cached = Cached::new();
+        let (_, version) = bound(&cached, "title: Bound\nstatus: Todo\npriority: high");
+        retitle(&cached, "Bound, retitled", "low");
+        match refusal {
+            "refuse" => cached.board.refuse_once("updateIssue(input:$input)"),
+            _ => cached.board.drop_response_once("updateIssue(input:$input)"),
+        }
+        let before = cached.board.served().len();
+        let output = cached.run_with(
+            &[
+                "task",
+                "copy",
+                "plans:B-1",
+                "--to",
+                "board",
+                "--expect",
+                &version,
+                "--json",
+            ],
+            None,
+        );
+        assert_ne!(
+            output.status.code(),
+            Some(0),
+            "{refusal}: {}",
+            stdout(&output)
+        );
+        let failure: Value = serde_json::from_str(&stdout(&output)).expect("a failure document");
+        let reported = parts(&failure);
+        assert_eq!(reported[0], landed("fields"), "{refusal}: {failure}");
+        assert_eq!(
+            reported[1],
+            ("issue".to_owned(), outcome.to_owned()),
+            "{failure}"
+        );
+        if outcome == "rejected" {
+            assert!(failure["result"]["parts"][1]["error"].is_string());
+        }
+        let sent: Vec<String> = cached.board.served()[before..]
+            .iter()
+            .map(|(document, _)| document.clone())
+            .collect();
+        assert_eq!(
+            sent.iter()
+                .filter(|document| *document == graphql::UPDATE_ISSUE_WHOLE)
+                .count(),
+            1,
+            "{refusal}: the issue part is never sent again: {sent:?}"
+        );
+    }
 }

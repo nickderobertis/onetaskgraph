@@ -290,32 +290,22 @@ impl CachedSource {
         answers.into_iter().flatten().collect()
     }
 
-    /// Run one write of task `id` through `write`: plainly, leaving its entry unserveable, or —
-    /// when the engine expects it — primed with what the entry kept, journaled, and sent once
-    /// more after one read if a primed id turned out stale.
-    async fn write<'a, T>(
-        &'a self,
-        id: Option<&NativeId>,
-        write: impl Fn() -> Writing<'a, T>,
-    ) -> Result<T, SourceError> {
-        let expected = id.and_then(|id| {
+    /// Prime the source with what the cache kept for `id`, once, when a write expecting it
+    /// is under way: whether it was primed, and why a read follows when it was not.
+    fn prime_expected(&self, id: &NativeId) -> Option<(bool, String)> {
+        let version = {
             let command = self.cache.command();
-            command
+            let expected = command
                 .expected
                 .as_ref()
-                .filter(|expected| expected.id == *id)
-                .map(|expected| expected.version.clone())
-        });
-        let (Some(id), Some(version)) = (id, expected) else {
-            let written = write().await;
-            if let Some(id) = id {
-                self.cache.invalidate(id);
+                .filter(|expected| expected.id == *id)?;
+            if let Some(primed) = &expected.primed {
+                return Some(primed.clone());
             }
-            return written;
+            expected.version.clone()
         };
-        let before = self.inner.metering().await.ok().flatten();
         let entry = self.cache.read(id);
-        let (primed, mut reason) = match &entry {
+        let decided = match &entry {
             None => (
                 false,
                 "the cache holds no entry for this task, so its target was read".to_owned(),
@@ -336,19 +326,21 @@ impl CachedSource {
             Some(entry) => match &entry.context {
                 Some(context) => {
                     let board = self.cache.board();
-                    let primed = self.inner.prime_write(id, context, board.as_ref());
-                    (
-                        primed,
-                        if primed {
+                    if self.inner.prime_write(id, context, board.as_ref()) {
+                        (
+                            true,
                             "the cache did not hold all the write needed — the board's field \
                              ids — so it was read"
-                                .to_owned()
-                        } else {
+                                .to_owned(),
+                        )
+                    } else {
+                        (
+                            false,
                             "the source could not take what the cache kept for this task, so \
                              its target was read"
-                                .to_owned()
-                        },
-                    )
+                                .to_owned(),
+                        )
+                    }
                 }
                 None => (
                     false,
@@ -358,6 +350,47 @@ impl CachedSource {
                 ),
             },
         };
+        let mut command = self.cache.command();
+        if let Some(expected) = command
+            .expected
+            .as_mut()
+            .filter(|expected| expected.id == *id)
+        {
+            expected.primed = Some(decided.clone());
+        }
+        Some(decided)
+    }
+
+    /// Run one write of task `id` through `write`: plainly, leaving its entry unserveable, or —
+    /// when the engine expects it — primed with what the entry kept, journaled, and sent once
+    /// more after one read if a primed id turned out stale.
+    async fn write<'a, T>(
+        &'a self,
+        id: Option<&NativeId>,
+        write: impl Fn() -> Writing<'a, T>,
+    ) -> Result<T, SourceError> {
+        let expected = id.and_then(|id| {
+            let command = self.cache.command();
+            command
+                .expected
+                .as_ref()
+                .filter(|expected| expected.id == *id)
+                .map(|expected| expected.version.clone())
+        });
+        let (Some(id), Some(_)) = (id, expected) else {
+            let written = write().await;
+            if let Some(id) = id {
+                self.cache.invalidate(id);
+            }
+            return written;
+        };
+        let before = self.inner.metering().await.ok().flatten();
+        let (primed, mut reason) = self.prime_expected(id).unwrap_or_else(|| {
+            (
+                false,
+                "the write was not expected when it began, so its target was read".to_owned(),
+            )
+        });
         self.inner.begin_journal();
         let mut written = write().await;
         let mut journal = self.inner.end_journal();
@@ -506,6 +539,7 @@ impl TaskSource for CachedSource {
     }
 
     async fn get_task(&self, id: &NativeId) -> Result<Option<Task>, SourceError> {
+        self.prime_expected(id);
         match self.servable(id, false) {
             Ok(entry) => {
                 self.served(&entry);
@@ -530,8 +564,19 @@ impl TaskSource for CachedSource {
         ids: &[NativeId],
         comments: Option<&PageRequest>,
     ) -> Vec<Result<Option<TaskDetailRead>, SourceError>> {
+        for id in ids {
+            self.prime_expected(id);
+        }
         self.details(ids, comments, false, |unread| {
-            Box::pin(async move { self.inner.get_task_details(&unread, comments).await })
+            Box::pin(async move {
+                // One task with its comments is read the way a copy reads it — the same one
+                // request — so what the source keeps of it carries its `blockedBy` too, and a
+                // write expecting it later reads none of its edges either.
+                match (unread.as_slice(), comments) {
+                    ([_], Some(page)) => self.inner.get_task_details_for_copy(&unread, page).await,
+                    _ => self.inner.get_task_details(&unread, comments).await,
+                }
+            })
         })
         .await
     }
@@ -589,6 +634,7 @@ impl TaskSource for CachedSource {
         direction: Direction,
         page: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
+        self.prime_expected(id);
         if direction == Direction::DependsOn && page.cursor.is_none() {
             if let Some(edges) = self
                 .held(id)
@@ -639,6 +685,9 @@ impl TaskSource for CachedSource {
         category: StatusCategory,
         target: Option<&NativeId>,
     ) -> Result<(), SourceError> {
+        if let Some(target) = target {
+            self.prime_expected(target);
+        }
         self.inner.check_status_write(kind, category, target).await
     }
 
@@ -944,6 +993,7 @@ impl TaskSource for CachedSource {
     }
 
     async fn task_assets(&self, id: &NativeId) -> Result<Vec<Asset>, SourceError> {
+        self.prime_expected(id);
         if let Some(assets) = self.held(id).and_then(|entry| entry.assets) {
             return Ok(assets);
         }

@@ -289,6 +289,10 @@ struct BoardEntry {
 pub(crate) struct Expectation {
     pub(crate) id: NativeId,
     pub(crate) version: String,
+    /// Whether the source took what the cache kept, and why a read would follow if not —
+    /// decided at the first call touching the task, so every read the write's own verb makes
+    /// of it first is answered from what was primed too.
+    pub(crate) primed: Option<(bool, String)>,
 }
 
 /// Everything one command has learnt about a caching source's tasks, dropped when it ends.
@@ -372,6 +376,7 @@ impl SourceCache {
         command.expected = Some(Expectation {
             id: id.clone(),
             version: version.to_owned(),
+            primed: None,
         });
     }
 

@@ -8199,6 +8199,15 @@ impl GitHubProjectsSource {
             }
         };
 
+        // A write the store's cache expects sends only what differs from the version it expects:
+        // a priority the item already holds there is not sent, so a person's edit of it since is
+        // left alone. Every other write sends it, as its pinned cost says.
+        let priority_write = priority_write.filter(|_| {
+            !existing.is_some_and(|item| {
+                self.expected.is_primed(&item.id)
+                    && incoming.priority.map(HeldPriority::Read) == Some(item.priority.clone())
+            })
+        });
         let written_option = column.as_ref().map(|(_, _, name)| name.clone());
         let column = column
             .filter(|(_, _, name)| existing.is_none_or(|item| item.option.as_ref() != Some(name)))
@@ -8889,11 +8898,32 @@ impl GitHubProjectsSource {
         // A terminal status closes the issue here, in the same mutation as its body: its board
         // option was selected before this, so a close never lands on an item whose board cannot
         // show it.
-        let fields = match item.content_kind {
+        let mut fields = match item.content_kind {
             ContentKind::DraftIssue => json!({"title":title,"body":body}),
             ContentKind::Issue => json!({"title":title,"body":body,
                                          "stateInput":state_input(status_target)}),
         };
+        // A write the store's cache expects sends only the members whose value differs from the
+        // version it expects, and nothing at all when none does.
+        if self.expected.is_primed(&item.id)
+            && let Some(members) = fields.as_object_mut()
+        {
+            if members.get("title").and_then(Value::as_str) == Some(item.title.as_str()) {
+                members.remove("title");
+            }
+            if members.get("body").and_then(Value::as_str)
+                == Some(item.raw_body.as_deref().unwrap_or_default())
+            {
+                members.remove("body");
+            }
+            let terminal = matches!(status_target, Some(StatusTarget::Terminal(_, _)));
+            if members.contains_key("stateInput") && terminal == item.closed {
+                members.remove("stateInput");
+            }
+            if members.is_empty() {
+                return Ok(());
+            }
+        }
         self.update_content(item.content_kind, &item.id, fields)
             .await
     }
