@@ -407,10 +407,28 @@ impl GitHubProjectsSource {
 
     /// The task `issue` is, whole, at `version` — when the response carried every part the
     /// store's entry holds: the issue on this board, its every comment, and a token.
+    ///
+    /// Every member the entry keeps has to be in the response, each connection read to its
+    /// end: the reader a read goes through takes a member left out for an empty one, which is
+    /// the right reading of a read GitHub answered and the wrong one of a response that simply
+    /// did not select it.
     fn whole_of(&self, issue: &Value, version: Option<&str>) -> Option<WholeTask> {
         version?;
+        let carried = |pointer: &str| issue.pointer(pointer).is_some();
+        let ended = |pointer: &str| {
+            issue.pointer(&format!("{pointer}/pageInfo/hasNextPage")) == Some(&Value::Bool(false))
+        };
+        let shown = WHOLE_MEMBERS.iter().all(|member| carried(member))
+            && ended("/labels")
+            && ended("/comments");
+        if !shown {
+            return None;
+        }
         let nodes = issue.pointer("/projectItems/nodes")?.as_array()?;
         let held = self.board_entry(nodes)?;
+        if held.pointer("/fieldValues/pageInfo/hasNextPage") != Some(&Value::Bool(false)) {
+            return None;
+        }
         let item = json!({
             "id": held.get("id")?,
             "updatedAt": held.get("updatedAt"),
@@ -445,6 +463,23 @@ impl GitHubProjectsSource {
         WholeTask::new(task, page.items, assets, None)
     }
 }
+
+/// Every member of an issue a response has to carry for the store's entry to take it whole.
+const WHOLE_MEMBERS: [&str; 13] = [
+    "/id",
+    "/title",
+    "/body",
+    "/url",
+    "/state",
+    "/stateReason",
+    "/repository",
+    "/parent",
+    "/subIssuesSummary",
+    "/labels/nodes",
+    "/projectItems/nodes",
+    "/comments/nodes",
+    "/updatedAt",
+];
 
 /// The issue a mutation's response shows, and each field the mutation set with the value that
 /// response shows it holding — `null` where it shows none.

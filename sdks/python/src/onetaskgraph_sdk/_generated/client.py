@@ -93,6 +93,13 @@ other generates a method that cannot do what it is named for, and nothing would 
 so until the binary refused the invocation.
 """
 
+type VersionToken = str
+"""A task's change token, its `version`, exactly as a read of it reported it.
+
+Opaque: only the source that spelled one reads inside it. A read pinned to one, and a
+write expecting one, hand it back to the binary as it came.
+"""
+
 _ANSWERS = TypeAdapter(dict[str, JsonValue])
 
 
@@ -386,7 +393,7 @@ class GeneratedClient:
         value: str,
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
-        expect: str | None = None,
+        expect: VersionToken | None = None,
         page_size: int | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
@@ -705,7 +712,7 @@ class GeneratedClient:
         value: str,
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
-        expect: str | None = None,
+        expect: VersionToken | None = None,
         page_size: int | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
@@ -916,7 +923,7 @@ class GeneratedClient:
         author: str | None = None,
         body_file: str | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
-        expect: str | None = None,
+        expect: VersionToken | None = None,
         page_size: int | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
@@ -943,7 +950,7 @@ class GeneratedClient:
         comment_id: str,
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
-        expect: str | None = None,
+        expect: VersionToken | None = None,
         page_size: int | None = None,
         set: list[str] | tuple[str, ...] | None = None,
     ) -> DeletedComment:
@@ -966,7 +973,7 @@ class GeneratedClient:
         *,
         body_file: str | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
-        expect: str | None = None,
+        expect: VersionToken | None = None,
         page_size: int | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
@@ -993,7 +1000,7 @@ class GeneratedClient:
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
         page_size: int | None = None,
-        pin: str | None = None,
+        pin: VersionToken | None = None,
         set: list[str] | tuple[str, ...] | None = None,
     ) -> CommentList:
         """Run ``onetaskgraph task comment list``."""
@@ -1013,7 +1020,7 @@ class GeneratedClient:
         file: str,
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
-        expect: str | None = None,
+        expect: VersionToken | None = None,
         page_size: int | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
@@ -1040,7 +1047,7 @@ class GeneratedClient:
         create: bool | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
         dry_run: bool | None = None,
-        expect: str | None = None,
+        expect: VersionToken | None = None,
         match_by: str | None = None,
         metadata: list[str] | tuple[str, ...] | None = None,
         no_link: bool | None = None,
@@ -1233,7 +1240,7 @@ class GeneratedClient:
         value: str,
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
-        expect: str | None = None,
+        expect: VersionToken | None = None,
         page_size: int | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
@@ -1258,7 +1265,7 @@ class GeneratedClient:
         priority: Priority | str,
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
-        expect: str | None = None,
+        expect: VersionToken | None = None,
         page_size: int | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
@@ -1322,7 +1329,7 @@ class GeneratedClient:
         explain: bool | None = None,
         no_comments: bool | None = None,
         page_size: int | None = None,
-        pin: str | None = None,
+        pin: VersionToken | None = None,
         set: list[str] | tuple[str, ...] | None = None,
     ) -> TaskDetail:
         """Run ``onetaskgraph task show``."""
@@ -1367,7 +1374,7 @@ class GeneratedClient:
         category: StatusCategory | str,
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
-        expect: str | None = None,
+        expect: VersionToken | None = None,
         page_size: int | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
@@ -1393,7 +1400,7 @@ class GeneratedClient:
         default_sources: list[str] | tuple[str, ...] | None = None,
         delivers: list[GlobalId | str] | tuple[GlobalId | str, ...] | None = None,
         depends_on: list[GlobalId | str] | tuple[GlobalId | str, ...] | None = None,
-        expect: str | None = None,
+        expect: VersionToken | None = None,
         metadata: list[str] | tuple[str, ...] | None = None,
         no_delivers: bool | None = None,
         no_depends_on: bool | None = None,

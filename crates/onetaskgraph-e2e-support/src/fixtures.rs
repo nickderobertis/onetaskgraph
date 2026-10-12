@@ -1152,6 +1152,8 @@ struct GitHubBoard {
     dropping: Vec<&'static str>,
     /// Operations whose next request is refused as naming a node id that does not resolve.
     refusing_stale: Vec<&'static str>,
+    /// Members of the issue a whole-issue document's answer leaves out.
+    omitting: Vec<&'static str>,
 }
 
 /// Whether one request — its document and its variables — is one a [`BoardHook`] counts.
@@ -1407,6 +1409,13 @@ impl GitHubBoardFields {
     // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board, which lives here for the reason `GitHubBoard` records: what it changes is the board's private state, read by its own request loop, so it can only be a method of this handle, beside `refuse_once` and `rename_option`, and a suite of one plugin could not add it from outside.
     pub fn answer_writes_partially(&self, partially: bool) {
         self.board.lock().unwrap().partial_writes = partially;
+    }
+
+    /// Answer every whole-issue document with `members` of the issue left out, as a response
+    /// that did not select them would.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board, which lives here for the reason `GitHubBoard` records: what it changes is the board's private state, read by its own request loop, so it can only be a method of this handle, beside `refuse_once` and `rename_option`, and a suite of one plugin could not add it from outside.
+    pub fn omit_from_writes(&self, members: &[&'static str]) {
+        self.board.lock().unwrap().omitting = members.to_vec();
     }
 
     /// Refuse the next request carrying `operation` as GitHub refuses one naming a node id that
@@ -2610,6 +2619,7 @@ fn github_projects_board_at(
         partial_writes: false,
         dropping: Vec::new(),
         refusing_stale: Vec::new(),
+        omitting: Vec::new(),
     }));
     let mut owed_failures: Vec<&'static str> = fail_first.to_vec();
     let watched = Arc::clone(&board);
@@ -3026,6 +3036,11 @@ impl GitHubBoard {
                 }
             }
             node = kept;
+        }
+        if let Some(members) = node.as_object_mut() {
+            for member in &self.omitting {
+                members.remove(*member);
+            }
         }
         let Some((parent, leaf)) = at.rsplit_once('/') else {
             return data;

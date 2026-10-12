@@ -2579,3 +2579,36 @@ fn the_default_cache_lives_under_home_without_xdg_cache_home_and_nowhere_without
     let shown = run(None);
     assert!(shown.get("cache").is_none(), "{shown}");
 }
+
+#[test]
+fn a_response_carrying_its_token_but_leaving_out_one_member_is_not_taken_for_the_whole_task() {
+    for member in ["labels", "body", "comments", "parent"] {
+        let cached = Cached::new();
+        let (first, _) = cached.ok(&["task", "show", "board:T-3", "--json"]);
+        let v = version_of(&first);
+        cached.board.omit_from_writes(&[member]);
+        let (written, _) = cached.ok(&[
+            "task",
+            "priority",
+            "set",
+            "board:T-3",
+            "high",
+            "--expect",
+            &v,
+            "--json",
+        ]);
+        let v2 = written_version(&written);
+        cached.board.omit_from_writes(&[]);
+        let (shown, sent) = cached.ok(&["task", "show", "board:T-3", "--pin", &v2, "--json"]);
+        assert_eq!(
+            sent,
+            [ONE_READ],
+            "without {member}, the entry is not served at {v2}"
+        );
+        assert_eq!(served_by(&shown), from_remote());
+        assert_eq!(
+            shown["items"][0]["item"]["labels"][0]["name"], "bug",
+            "{member}"
+        );
+    }
+}
