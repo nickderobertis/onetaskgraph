@@ -2054,6 +2054,103 @@ fn a_cache_that_cannot_be_written_costs_nothing_but_the_cache() {
         );
         assert_eq!(served_by(&pinned), from_remote());
     }
+    // A write is not refused over it: an entry no process can open is served to none.
+    let (_, sent) = cached.ok(&["task", "priority", "set", "board:T-3", "high", "--json"]);
+    assert!(!sent.is_empty(), "the write was sent");
+    let (shown, _) = cached.ok(&["task", "show", "board:T-3", "--json"]);
+    assert_eq!(shown["items"][0]["item"]["priority"], "high");
+}
+
+/// `onetaskgraph <arguments>` run where `dir` is a read-only mount: every entry under it
+/// can be read and none removed, overwritten, emptied or re-moded — `EROFS` refuses each, for
+/// the file's owner too. `None`, after saying so, on a host that cannot make that mount
+/// unprivileged.
+fn under_read_only_mount(cached: &Cached, dir: &Path, arguments: &[&str]) -> Option<Output> {
+    let mounted = |tail: &[&std::ffi::OsStr]| {
+        let mut command = cached.sandbox.subprocess("unshare");
+        command
+            .env("XDG_CACHE_HOME", &cached.cache_home)
+            .args(["--user", "--map-root-user", "--mount", "sh", "-c"])
+            .arg(r#"mount --bind -o ro "$1" "$1" && shift && exec "$@""#)
+            .arg("sh")
+            .arg(dir)
+            .args(tail);
+        command.output().ok()
+    };
+    let probe = mounted(&["touch".as_ref(), dir.join("probe").as_os_str()]);
+    if !probe.is_some_and(|output| {
+        String::from_utf8_lossy(&output.stderr).contains("Read-only file system")
+    }) {
+        eprintln!(
+            "skipped: this host cannot mount a directory read-only without privileges, so no \
+             cache entry can be made to refuse every removal, overwrite and re-mode here"
+        );
+        return None;
+    }
+    let mut tail = vec![onetaskgraph_e2e_support::binary().as_os_str()];
+    tail.extend(arguments.iter().map(std::ffi::OsStr::new));
+    mounted(&tail)
+}
+
+#[test]
+fn a_write_whose_entry_nothing_can_retire_is_refused_unsent_and_no_later_reader_is_served_it() {
+    let cached = Cached::with(&json!({"enabled": true, "dir": "held"}));
+    let dir = cached.sandbox.project().join("held");
+    let (first, _) = cached.ok(&["task", "show", "board:T-3", "--json"]);
+    let v1 = version_of(&first);
+    assert_ne!(
+        first["items"][0]["item"]["priority"], "high",
+        "the write changes it"
+    );
+    let entry = Cached::entries(&dir);
+    assert_eq!(entry.len(), 1, "the task is cached");
+    let held = std::fs::read(&entry[0]).unwrap();
+
+    for expect in [None, Some(v1.as_str())] {
+        let mut arguments = vec!["task", "priority", "set", "board:T-3", "high", "--json"];
+        if let Some(version) = expect {
+            arguments.extend(["--expect", version]);
+        }
+        let before = cached.board.served().len();
+        let Some(output) = under_read_only_mount(&cached, &dir, &arguments) else {
+            return;
+        };
+        let sent = cached.board.served().len() - before;
+
+        // A separate process, pinned to the version the entry holds, is never served a task
+        // the board no longer holds at that version.
+        let (pinned, _) = cached.ok(&["task", "show", "board:T-3", "--pin", &v1, "--json"]);
+        let (board, _) = cached.ok(&["task", "show", "board:T-3", "--json"]);
+        assert_eq!(
+            pinned["items"][0]["item"], board["items"][0]["item"],
+            "a pinned reader was served what the board no longer holds (expect: {expect:?})"
+        );
+
+        assert_ne!(output.status.code(), Some(0), "the write was refused");
+        assert_eq!(
+            sent, 0,
+            "a refused write sends nothing (expect: {expect:?})"
+        );
+        let said = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            said.contains("was not sent") && said.contains(&dir.display().to_string()),
+            "the refusal names the cache directory and that nothing was sent: {said}"
+        );
+        assert_eq!(
+            std::fs::read(&entry[0]).unwrap(),
+            held,
+            "the entry is as it was"
+        );
+    }
+
+    // With the directory writable again, the same write lands, and a pin to the version it
+    // replaced goes to the board for what it wrote.
+    let (_, sent) = cached.ok(&["task", "priority", "set", "board:T-3", "high", "--json"]);
+    assert!(!sent.is_empty(), "the write was sent");
+    let (pinned, sent) = cached.ok(&["task", "show", "board:T-3", "--pin", &v1, "--json"]);
+    assert_eq!(sent, [ONE_READ], "the written task's entry is not served");
+    assert_eq!(served_by(&pinned), from_remote());
+    assert_eq!(pinned["items"][0]["item"]["priority"], "high");
 }
 
 #[test]

@@ -376,7 +376,9 @@ impl CachedSource {
         Some(decided)
     }
 
-    /// Run one write of task `id` through `write`: plainly, leaving its entry unserveable, or —
+    /// Run one write of task `id` through `write`, its entry taken out of service before
+    /// anything is sent — the write refused, sending nothing, when it cannot be: plainly,
+    /// leaving that entry unserveable, or —
     /// when the engine expects it — primed with what the entry kept, journaled, and sent once
     /// more after one read if a primed id turned out stale.
     async fn write<'a, T>(
@@ -393,6 +395,9 @@ impl CachedSource {
                 .map(|expected| expected.version.clone())
         });
         let (Some(id), Some(_)) = (id, expected) else {
+            if let Some(id) = id {
+                self.cache.retire_before_write(id)?;
+            }
             let written = write().await;
             if let Some(id) = id {
                 self.cache.invalidate(id);
@@ -406,6 +411,11 @@ impl CachedSource {
                 reason: "the write was not expected when it began, so its target was read"
                     .to_owned(),
             });
+        // Retired after priming, which is what took the entry's ids and values into the source.
+        if let Err(error) = self.cache.retire_before_write(id) {
+            self.inner.unprime(id);
+            return Err(error);
+        }
         let primed = priming.primed();
         let mut reason = priming.reason().to_owned();
         self.inner.begin_journal();
@@ -1495,9 +1505,10 @@ mod tests {
         // after re-moding the file, which its owner may always do, so what refuses both is a
         // read-only mount or another owner's file — a superuser's to arrange, and a test run as
         // one cannot make the directory refuse the removal in the first place.
-        cache.retire_with(&path, |_| {
+        let refusal = cache.retire_with(&path, |_| {
             Err(std::io::Error::from(std::io::ErrorKind::ReadOnlyFilesystem))
         });
+        assert!(refusal.is_err(), "the file is reported as still there");
         assert!(path.exists(), "the file is as it was");
         assert!(
             cache.read(&id("T-1")).is_none(),
@@ -1531,9 +1542,10 @@ mod tests {
             return;
         }
         // Stood in for as in the task entry's test above, and for the same reason.
-        cache.retire_with(&dir.path().join("board.json"), |_| {
+        let refusal = cache.retire_with(&dir.path().join("board.json"), |_| {
             Err(std::io::Error::from(std::io::ErrorKind::ReadOnlyFilesystem))
         });
+        assert!(refusal.is_err(), "the file is reported as still there");
         assert!(
             cache.board().is_none(),
             "this process withholds it from itself"

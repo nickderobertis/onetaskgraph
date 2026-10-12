@@ -1217,7 +1217,10 @@ command's `spent` counts only the requests it really sent.
 and `content`. It advances the entry only to what that response vouches for: the whole task,
 comments included, at the version the response determines. A response showing only the fields
 it wrote leaves the entry unserved, because a person's concurrent edit to another field, or a
-new comment, can share that version; so does one that determines no version.
+new comment, can share that version; so does one that determines no version. The entry is
+taken out of service before the write is sent, so no other process is served it once the write
+lands; a cache directory that will not let it be removed, emptied or made writable refuses the
+write, naming the directory, before anything is sent.
 
 **`--expect VERSION`** on a write says the caller knows the task at that version: the write
 takes the task's node id, the board's field and option ids and the current values it compares

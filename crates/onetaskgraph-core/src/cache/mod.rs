@@ -32,7 +32,8 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use onetaskgraph_plugin_api::{
-    Asset, Comment, DependencyEdge, NativeId, PartOutcome, SourceName, Task, VersionCoverage,
+    Asset, Comment, DependencyEdge, NativeId, PartOutcome, SourceError, SourceName, Task,
+    VersionCoverage,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -517,6 +518,32 @@ impl SourceCache {
         command.read.remove(id);
     }
 
+    /// Take the entry for `id` out of service for every process before a write of it is
+    /// sent, or refuse the write.
+    ///
+    /// Done before the write rather than after it, because what the write sends changes the
+    /// task at the source while an entry this process could not remove, empty or re-mode would
+    /// still be served to another process — a later command line or SDK call — pinned to the
+    /// version it holds. A file nothing can open for reading is served to no process, so that
+    /// is retired too.
+    pub(crate) fn retire_before_write(&self, id: &NativeId) -> Result<(), SourceError> {
+        let path = self.task_path(id);
+        match self.retire_with(&path, empty_in_place) {
+            Ok(()) => Ok(()),
+            Err(_) if std::fs::File::open(&path).is_err() => Ok(()),
+            Err(error) => Err(SourceError::Config {
+                message: format!(
+                    "the cache entry for {id} at {} could not be removed, emptied or made \
+                     writable ({error}), so the write was not sent: once it changed the task, \
+                     another process pinned to the entry's version would be served it. Make \
+                     the cache directory {} writable, then run the command again",
+                    path.display(),
+                    self.dir.display()
+                ),
+            }),
+        }
+    }
+
     /// The board context, when one is kept.
     pub(crate) fn board(&self) -> Option<Value> {
         let bytes = self.read_file(&self.board_path())?;
@@ -566,22 +593,29 @@ impl SourceCache {
     /// place — an empty file parses as nothing, so that too is a miss for every process — and,
     /// on a host where only its mode stood in the way, made writable first. When even that is
     /// refused — a file this user can neither write nor re-mode — this process withholds it from
-    /// itself until a write of its own replaces it. Another process on the host can still read
-    /// that file, which nothing left to this one can prevent.
+    /// itself until a write of its own replaces it. Another process can still read that file,
+    /// which is why a write of a task retires its entry with [`Self::retire_before_write`]
+    /// first and is not sent when that fails.
     fn retire(&self, path: &Path) {
-        self.retire_with(path, empty_in_place);
+        let _ = self.retire_with(path, empty_in_place);
     }
 
-    /// [`Self::retire`], emptying a file whose removal was refused with `empty`.
-    fn retire_with(&self, path: &Path, empty: fn(&Path) -> std::io::Result<()>) {
+    /// [`Self::retire`], emptying a file whose removal was refused with `empty`, and
+    /// answering why the file is still there when it is.
+    fn retire_with(
+        &self,
+        path: &Path,
+        empty: fn(&Path) -> std::io::Result<()>,
+    ) -> std::io::Result<()> {
         let retired = match std::fs::remove_file(path) {
-            Ok(()) => true,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
-            Err(_) => empty(path).is_ok(),
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(_) => empty(path),
         };
-        if !retired {
+        if retired.is_err() {
             self.withheld().insert(path.to_path_buf());
         }
+        retired
     }
 
     /// Stage `bytes` beside `path` and rename them into place, so no reader ever opens part of
