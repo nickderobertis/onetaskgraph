@@ -2054,7 +2054,8 @@ fn a_cache_that_cannot_be_written_costs_nothing_but_the_cache() {
         );
         assert_eq!(served_by(&pinned), from_remote());
     }
-    // A write is not refused over it: an entry no process can open is served to none.
+    // A write is not refused over it: with a file where the cache directory belongs, no entry
+    // can be there.
     let (_, sent) = cached.ok(&["task", "priority", "set", "board:T-3", "high", "--json"]);
     assert!(!sent.is_empty(), "the write was sent");
     let (shown, _) = cached.ok(&["task", "show", "board:T-3", "--json"]);

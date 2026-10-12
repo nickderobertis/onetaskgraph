@@ -524,13 +524,13 @@ impl SourceCache {
     /// Done before the write rather than after it, because what the write sends changes the
     /// task at the source while an entry this process could not remove, empty or re-mode would
     /// still be served to another process — a later command line or SDK call — pinned to the
-    /// version it holds. A file nothing can open for reading is served to no process, so that
-    /// is retired too.
+    /// version it holds. Only a removal, or the entry shown absent, counts: that this process
+    /// cannot open the file says nothing about another — it may have descriptors to spare, or
+    /// other permissions — so a file still there refuses the write.
     pub(crate) fn retire_before_write(&self, id: &NativeId) -> Result<(), SourceError> {
         let path = self.task_path(id);
         match self.retire(&path) {
             Ok(()) => Ok(()),
-            Err(_) if std::fs::File::open(&path).is_err() => Ok(()),
             Err(error) => Err(SourceError::Config {
                 message: format!(
                     "the cache entry for {id} at {} could not be removed, emptied or made \
@@ -601,7 +601,16 @@ impl SourceCache {
     fn retire(&self, path: &Path) -> std::io::Result<()> {
         let retired = match std::fs::remove_file(path) {
             Ok(()) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            // Absent, positively: nothing at the path, or a file where one of its directories
+            // belongs, under which no entry can be.
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) =>
+            {
+                Ok(())
+            }
             Err(_) => empty_in_place(path),
         };
         if retired.is_err() {

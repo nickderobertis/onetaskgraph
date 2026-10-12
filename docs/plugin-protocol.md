@@ -1277,8 +1277,10 @@ store removes the task's entry first — or, on a Unix host where the cache dire
 that, empties the file in place, making it writable when only its mode refuses, and never
 through a symlink — so no other process pinned to the old version is served it once the write
 lands. An entry nothing can remove or empty (a read-only mount, another owner's file, a
-symlink) refuses the write, naming the entry and the directory, before any request is sent; an
-entry no process can open is served to none and refuses nothing.
+symlink) refuses the write, naming the entry and the directory, before any request is sent —
+including when this process cannot open it, which says nothing about whether another can. Only
+an entry shown absent (nothing at its path, or a file where one of its directories belongs)
+lets a write go without retiring it.
 
 #### `--expect`: a write that sends only its mutations
 

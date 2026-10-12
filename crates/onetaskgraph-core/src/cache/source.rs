@@ -1711,7 +1711,7 @@ mod tests {
         cache.write_board(serde_json::json!({"option": "stale"}));
         let output = std::process::Command::new("unshare")
             .args(["--user", "--map-root-user", "--mount", "sh", "-c"])
-            .arg(r#"mount --bind -o ro "$1" "$1" || exit 77; shift; exec "$@""#)
+            .arg(r#"mount --bind -o ro "$1" "$1" || exit 77; ulimit -n 256; shift; exec "$@""#)
             .arg("sh")
             .arg(dir.path())
             .arg(std::env::current_exe().expect("this test binary"))
@@ -1748,6 +1748,34 @@ mod tests {
         let (source, cache, probe) = counting(dir, task("T-1", "v1"));
         assert!(cache.read(&id("T-1")).is_some(), "the entry can be read");
         assert!(cache.board().is_some(), "the board can be read");
+
+        // This process out of descriptors cannot open the entry, which says nothing about
+        // whether another can: the write is refused all the same.
+        let mut descriptors = Vec::new();
+        while let Ok(file) = std::fs::File::open("/dev/null") {
+            descriptors.push(file);
+            assert!(descriptors.len() < 4096, "the descriptor limit is in force");
+        }
+        let written = source.set_task_priority(&id("T-1"), Priority::High).await;
+        drop(descriptors);
+        assert!(
+            written.is_err(),
+            "a write whose entry is still there is refused"
+        );
+        assert!(
+            probe.lock().expect("the probe").writes.is_empty(),
+            "nothing was sent"
+        );
+        let read = std::process::Command::new("cat")
+            .arg(entry_file(dir))
+            .output()
+            .expect("a separate reader");
+        let seen: Entry = serde_json::from_slice(&read.stdout).expect("the entry it read");
+        assert_eq!(
+            (seen.task.version.as_deref(), seen.task.priority),
+            (Some("v1"), Priority::None),
+            "what a separate reader is served is what the source still holds"
+        );
 
         // An expected write primes the source from the entry, then cannot retire it: it is
         // refused unsent, and the source is primed no longer.
