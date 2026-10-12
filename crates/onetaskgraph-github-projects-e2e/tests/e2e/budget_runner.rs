@@ -144,6 +144,14 @@ fn report_visibility_reads() {
     hand_over(value, &detail);
 }
 #[test]
+fn report_cache_points() {
+    let Some(budget) = selected() else {
+        return;
+    };
+    let (value, detail) = read_cache_points(&budget).unwrap_or_else(|error| refuse(&error));
+    hand_over(value, &detail);
+}
+#[test]
 fn report_metadata_fields() {
     let Some(budget) = selected() else {
         return;
@@ -443,6 +451,35 @@ fn read_visibility(budget: &str) -> Result<(f64, String), String> {
     let detail = value["detail"].as_str().ok_or("missing detail")?.to_owned();
     let figure = u32::try_from(figure).map_err(|_| "figure out of range")?;
     Ok((f64::from(figure), detail))
+}
+
+/// What `cache_budget` recorded for `budget`, refused unless it is that journey's recording at
+/// its workload with every sequence measured in both modes, and its figure the largest
+/// difference among them.
+fn read_cache_points(budget: &str) -> Result<(f64, String), String> {
+    use super::cache_budget::{SEQUENCES, WORKLOAD};
+    let value = recorded(budget)?;
+    if value["workload"].as_str() != Some(WORKLOAD) {
+        return Err("workload does not match the four-sequence board workload".into());
+    }
+    let figure = value["value"]
+        .as_i64()
+        .ok_or("missing whole-number figure")?;
+    let mut largest = i64::MIN;
+    for sequence in SEQUENCES {
+        let measured = &value["sequences"][sequence];
+        let points = |mode: &str| measured[mode]["points"].as_i64();
+        let (Some(on), Some(off)) = (points("on"), points("off")) else {
+            return Err(format!("sequence {sequence} is not measured in both modes"));
+        };
+        largest = largest.max(on - off);
+    }
+    if largest != figure {
+        return Err("the figure is not the largest difference the sequences record".into());
+    }
+    let detail = value["detail"].as_str().ok_or("missing detail")?.to_owned();
+    #[allow(clippy::cast_precision_loss)]
+    Ok((figure as f64, detail))
 }
 
 fn report_expected(expected: Workload) {

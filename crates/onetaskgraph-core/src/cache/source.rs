@@ -220,9 +220,19 @@ impl CachedSource {
                         .is_some_and(|comments| comments.len() <= page.limit as usize)
                 });
                 // A detail read is followed by a read of the task's assets, and a copy's by its
-                // edges too: an entry missing either would send a request the uncached read
-                // carried for nothing, so it is not served.
-                if fits && entry.assets.is_some() && (!edges || entry.edges.is_some()) {
+                // edges — and by its assets' bytes only when its content names one, which the
+                // cache does not keep: an entry missing what follows would send a request the
+                // uncached read carried for nothing, so it is not served.
+                let follows = if edges {
+                    entry.edges.is_some()
+                        && onetaskgraph_plugin_api::asset_references(
+                            entry.task.content.as_deref().unwrap_or_default(),
+                        )
+                        .is_empty()
+                } else {
+                    entry.assets.is_some()
+                };
+                if fits && follows {
                     Ok(entry)
                 } else {
                     Err(Miss::Behind)
@@ -375,12 +385,14 @@ impl CachedSource {
                 first.requests.extend(again.requests);
             }
         }
-        self.inner.unprime(id);
         if let Some(board) = self.inner.board_context() {
             self.cache.write_board(board);
         }
         let after = self.inner.metering().await.ok().flatten();
+        // Settled before the source lets go of what it was primed with: the entry takes the
+        // record the write's own response left behind.
         let report = self.settle(id, journal.as_ref(), reason, before, after);
+        self.inner.unprime(id);
         self.cache.report(id, report);
         written
     }
@@ -646,6 +658,25 @@ impl TaskSource for CachedSource {
         id: &NativeId,
         category: StatusCategory,
     ) -> Result<Option<Task>, SourceError> {
+        // An expected write reads the task it answers with from the cache, at the version
+        // expected, rather than letting the source read it first: the two calls a source's own
+        // answer is defined as, each through this cache.
+        let expected = self
+            .cache
+            .command()
+            .expected
+            .as_ref()
+            .is_some_and(|expected| expected.id == *id);
+        if expected && self.servable(id, false).is_ok() {
+            let Some(mut task) = self.get_task(id).await? else {
+                return Ok(None);
+            };
+            let Some(status) = self.set_task_status(id, category).await? else {
+                return Ok(None);
+            };
+            task.status = status;
+            return Ok(Some(task));
+        }
         self.write(Some(id), || {
             Box::pin(self.inner.set_task_status_reading(id, category))
         })

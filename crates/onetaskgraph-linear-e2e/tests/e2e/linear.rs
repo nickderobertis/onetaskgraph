@@ -16,7 +16,7 @@ use crate::common::{Sandbox, stderr, stdout};
 use crate::fixtures::{LINEAR_TEAM_STATES, LinearWorkspace, document, linear_workspace};
 
 /// The eight-entry mapping the example team is configured with.
-fn eng_mapping() -> Value {
+pub(crate) fn eng_mapping() -> Value {
     json!({
         "backlog": "Proposed",
         "draft": "Backlog",
@@ -98,7 +98,7 @@ fn type_of(name: &str) -> &'static str {
 }
 
 /// One issue held at the team's workflow state `state`.
-fn issue(id: &str, state: &str, extra: Value) -> Value {
+pub(crate) fn issue(id: &str, state: &str, extra: Value) -> Value {
     let kind = type_of(state);
     let category = match kind {
         "unstarted" => "todo",
@@ -121,7 +121,7 @@ fn issue(id: &str, state: &str, extra: Value) -> Value {
 }
 
 /// A workspace holding exactly `tasks`, `projects` and `documents`.
-fn held(tasks: Vec<Value>, projects: Vec<Value>, documents: Vec<Value>) -> Value {
+pub(crate) fn held(tasks: Vec<Value>, projects: Vec<Value>, documents: Vec<Value>) -> Value {
     json!({
         "tasks": tasks, "projects": projects, "documents": documents, "labels": [],
         "task_dependencies": [], "project_dependencies": [],
@@ -154,7 +154,7 @@ fn markdown(root: &Path) -> Value {
 }
 
 /// The Linear source configured over `config`, with `extra` beside the fake's own keys.
-fn linear(config: &Value, extra: Value) -> Value {
+pub(crate) fn linear(config: &Value, extra: Value) -> Value {
     let mut config = config.clone();
     for (key, value) in extra.as_object().expect("an object") {
         config[key] = value.clone();

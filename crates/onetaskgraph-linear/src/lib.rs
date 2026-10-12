@@ -1025,6 +1025,15 @@ impl SourcePlugin for Plugin {
     fn kind(&self) -> &'static str {
         KIND
     }
+    /// The endpoint and the team: what names the Linear work a source reads.
+    fn remote_identity(&self, config: &serde_json::Value) -> Option<String> {
+        let config: LinearConfig = serde_json::from_value(config.clone()).ok()?;
+        Some(format!(
+            "{}\n{}",
+            config.endpoint.0,
+            config.team.map(|team| team.0).unwrap_or_default()
+        ))
+    }
     fn config_schema(&self) -> Schema {
         schema_for!(LinearConfig)
     }
@@ -2749,6 +2758,14 @@ impl LinearSource {
 impl TaskSource for LinearSource {
     fn kind(&self) -> &'static str {
         KIND
+    }
+    /// No part, until the credentialed lane proves `Issue.updatedAt` moves for every change
+    /// kind: a Linear task carries no change token, so a cached copy of it is never served.
+    fn version_coverage(&self) -> onetaskgraph_plugin_api::VersionCoverage {
+        onetaskgraph_plugin_api::VersionCoverage::none(
+            "a linear task carries no change token — Linear's updatedAt has not been proven to \
+             move for every change kind — so the cache cannot vouch for any copy of it",
+        )
     }
     fn capabilities(&self) -> Capabilities {
         Capabilities {

@@ -2985,6 +2985,8 @@ impl GitHubBoard {
                         "id": membership["id"],
                         "updatedAt": membership["updatedAt"],
                         "project": membership["project"],
+                        // The values on the board item, which a field write is answered with.
+                        "fieldValues": membership["fieldValues"],
                     })).collect::<Vec<_>>()
                 })},
             });

@@ -25,7 +25,6 @@ pub(crate) struct Cached {
     /// Where `XDG_CACHE_HOME` points for every command, so the default cache directory is
     /// inside the sandbox.
     pub(crate) cache_home: PathBuf,
-    pub(crate) plans: PathBuf,
 }
 
 impl Cached {
@@ -45,7 +44,6 @@ impl Cached {
             sandbox,
             board,
             cache_home,
-            plans,
         }
     }
 
@@ -757,4 +755,537 @@ fn an_expected_write_sends_only_the_field_it_sets_and_leaves_a_persons_edit_to_a
         "the person's card stays"
     );
     assert_eq!(cached.board.priority("T-3").as_deref(), Some("High"));
+}
+
+/// Run `arguments` with `variables` set, answering the JSON and the documents the board served.
+fn ok_env(cached: &Cached, arguments: &[&str], variables: &[(&str, &str)]) -> (Value, Vec<String>) {
+    let before = cached.board.served().len();
+    let mut command = cached.sandbox.command();
+    command.env("XDG_CACHE_HOME", &cached.cache_home);
+    for (name, value) in variables {
+        command.env(name, value);
+    }
+    let output = command.args(arguments).assert().get_output().clone();
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let served = cached.board.served()[before..]
+        .iter()
+        .map(|(document, _)| document.clone())
+        .collect();
+    (
+        serde_json::from_str(&stdout(&output)).expect("JSON"),
+        served,
+    )
+}
+
+#[test]
+fn cache_enabled_is_read_from_every_layer_and_a_later_false_turns_it_off() {
+    // Off in the document, on from the environment.
+    let cached = Cached::with(&json!({"enabled": false}));
+    let on = [("ONETASKGRAPH_SOURCES__BOARD__CACHE__ENABLED", "true")];
+    let (first, _) = ok_env(&cached, &["task", "show", "board:T-3", "--json"], &on);
+    assert_eq!(served_by(&first), from_remote());
+    let v = version_of(&first);
+    let (pinned, sent) = ok_env(
+        &cached,
+        &["task", "show", "board:T-3", "--pin", &v, "--json"],
+        &on,
+    );
+    assert_eq!(sent, Vec::<String>::new(), "the environment turned it on");
+    assert_eq!(served_by(&pinned), from_cache());
+
+    // Off in the document, on from a flag.
+    let flagged = Cached::with(&json!({"enabled": false}));
+    let set = ["--set", "sources.board.cache.enabled=true"];
+    let (first, _) = flagged.ok(&[set[0], set[1], "task", "show", "board:T-3", "--json"]);
+    let v = version_of(&first);
+    let (_, sent) = flagged.ok(&[
+        set[0],
+        set[1],
+        "task",
+        "show",
+        "board:T-3",
+        "--pin",
+        &v,
+        "--json",
+    ]);
+    assert_eq!(sent, Vec::<String>::new(), "--set turned it on");
+
+    // On in the document: an environment's or a flag's `false` over it writes and serves
+    // nothing.
+    let document_on = Cached::new();
+    let off = [("ONETASKGRAPH_SOURCES__BOARD__CACHE__ENABLED", "false")];
+    for _ in 0..2 {
+        let (shown, sent) = ok_env(&document_on, &["task", "show", "board:T-3", "--json"], &off);
+        assert_eq!(sent, [graphql::ISSUE_DETAIL]);
+        assert!(shown.get("cache").is_none());
+        let (_, sent) = document_on.ok(&[
+            "--set",
+            "sources.board.cache.enabled=false",
+            "task",
+            "show",
+            "board:T-3",
+            "--pin",
+            &version_of(&shown),
+            "--json",
+        ]);
+        assert_eq!(sent, [graphql::ISSUE_DETAIL]);
+    }
+    assert!(
+        !document_on.cache_home.join("onetaskgraph").exists(),
+        "no entry was created"
+    );
+}
+
+#[test]
+fn cache_dir_from_every_layer_relocates_the_cache_and_a_pinned_read_is_served_from_there() {
+    for layer in ["document", "environment", "flag"] {
+        // A document's relative path is measured from the document's own directory.
+        let cached = match layer {
+            "document" => Cached::with(&json!({"enabled": true, "dir": "relocated"})),
+            _ => Cached::new(),
+        };
+        let dir = cached.sandbox.project().join("relocated");
+        let dir_text = dir.to_string_lossy().into_owned();
+        let variables: Vec<(&str, &str)> = match layer {
+            "environment" => vec![("ONETASKGRAPH_SOURCES__BOARD__CACHE__DIR", dir_text.as_str())],
+            _ => Vec::new(),
+        };
+        let setting = format!("sources.board.cache.dir={dir_text}");
+        let with = |arguments: &[&str]| -> Vec<String> {
+            let mut all: Vec<String> = Vec::new();
+            if layer == "flag" {
+                all.extend(["--set".to_owned(), setting.clone()]);
+            }
+            all.extend(arguments.iter().map(|argument| (*argument).to_owned()));
+            all
+        };
+        let first_args = with(&["task", "show", "board:T-3", "--json"]);
+        let refs: Vec<&str> = first_args.iter().map(String::as_str).collect();
+        let (first, _) = ok_env(&cached, &refs, &variables);
+        let v = version_of(&first);
+        assert_eq!(
+            Cached::entries(&dir).len(),
+            1,
+            "{layer}: the entry is in the configured dir"
+        );
+        assert!(
+            !cached.cache_home.join("onetaskgraph").exists(),
+            "{layer}: nothing under the default location"
+        );
+        let pinned_args = with(&["task", "show", "board:T-3", "--pin", &v, "--json"]);
+        let refs: Vec<&str> = pinned_args.iter().map(String::as_str).collect();
+        let (pinned, sent) = ok_env(&cached, &refs, &variables);
+        assert_eq!(sent, Vec::<String>::new(), "{layer}");
+        assert_eq!(served_by(&pinned), from_cache());
+    }
+}
+
+#[test]
+fn cache_clear_empties_exactly_what_it_names_and_the_next_pinned_read_refills_it() {
+    let sandbox = Sandbox::new();
+    let (one, first_board) = github_projects_with_board(&sandbox);
+    let (two, second_board) = github_projects_with_board(&sandbox);
+    sandbox.project_document(&document(&json!({
+        "one": {"plugin":"github-projects","config":one,"cache":{"enabled":true}},
+        "two": {"plugin":"github-projects","config":two,"cache":{"enabled":true}},
+    })));
+    let cache_home = sandbox.subdirectory("cache-home");
+    let run = |arguments: &[&str]| -> Value {
+        let output = sandbox
+            .command()
+            .env("XDG_CACHE_HOME", &cache_home)
+            .args(arguments)
+            .assert()
+            .get_output()
+            .clone();
+        assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+        serde_json::from_str(&stdout(&output)).expect("JSON")
+    };
+    let v_one = version_of(&run(&["task", "show", "one:T-3", "--json"]));
+    let v_two = version_of(&run(&["task", "show", "two:T-3", "--json"]));
+    let dirs: Vec<PathBuf> = std::fs::read_dir(cache_home.join("onetaskgraph"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .collect();
+    assert_eq!(dirs.len(), 2, "two remotes, two caches");
+
+    let cleared = run(&["cache", "clear", "one", "--json"]);
+    assert_eq!(cleared["cleared"].as_array().unwrap().len(), 1);
+    assert_eq!(cleared["cleared"][0]["source"], "one");
+    let remaining: usize = dirs.iter().map(|dir| Cached::entries(dir).len()).sum();
+    assert_eq!(remaining, 1, "only the named source's cache was emptied");
+
+    let before = (first_board.served().len(), second_board.served().len());
+    let shown = run(&["task", "show", "two:T-3", "--pin", &v_two, "--json"]);
+    assert_eq!(served_by(&shown), from_cache());
+    let shown = run(&["task", "show", "one:T-3", "--pin", &v_one, "--json"]);
+    assert_eq!(
+        served_by(&shown),
+        from_remote(),
+        "the cleared cache reads once"
+    );
+    let shown = run(&["task", "show", "one:T-3", "--pin", &v_one, "--json"]);
+    assert_eq!(
+        served_by(&shown),
+        from_cache(),
+        "and is refilled by that read"
+    );
+    assert_eq!(first_board.served().len() - before.0, 1);
+    assert_eq!(second_board.served().len() - before.1, 0);
+
+    let cleared = run(&["cache", "clear", "--json"]);
+    assert_eq!(cleared["cleared"].as_array().unwrap().len(), 2);
+    let remaining: usize = dirs.iter().map(|dir| Cached::entries(dir).len()).sum();
+    assert_eq!(remaining, 0, "every source's cache was emptied");
+}
+
+#[test]
+fn an_entry_of_an_unknown_schema_or_of_bytes_that_do_not_parse_is_a_miss_and_the_read_succeeds() {
+    let cached = Cached::new();
+    let (first, _) = cached.ok(&["task", "show", "board:T-3", "--json"]);
+    let v = version_of(&first);
+    let entry = Cached::entries(&cached.default_dir()).remove(0);
+    let held: Value = serde_json::from_slice(&std::fs::read(&entry).unwrap()).unwrap();
+
+    let mut later = held.clone();
+    later["schema"] = json!(99);
+    for bytes in [
+        serde_json::to_vec(&later).unwrap(),
+        b"{\"schema\": 1, \"not\": \"an entry\"".to_vec(),
+        Vec::new(),
+    ] {
+        std::fs::write(&entry, &bytes).unwrap();
+        let (shown, sent) = cached.ok(&["task", "show", "board:T-3", "--pin", &v, "--json"]);
+        assert_eq!(sent, [graphql::ISSUE_DETAIL], "a miss, read from the board");
+        assert_eq!(served_by(&shown), from_remote());
+        assert_eq!(shown["items"], first["items"]);
+    }
+}
+
+#[test]
+fn an_older_entry_a_racing_writer_left_is_never_served_to_a_later_pin() {
+    let cached = Cached::new();
+    let (first, _) = cached.ok(&["task", "show", "board:T-3", "--json"]);
+    let older_entry = std::fs::read(Cached::entries(&cached.default_dir()).remove(0)).unwrap();
+    cached
+        .board
+        .edit_body("T-3", "changed after the first read");
+    let (later, _) = cached.ok(&["task", "show", "board:T-3", "--json"]);
+    let pin = version_of(&later);
+    assert_ne!(pin, version_of(&first));
+    // A second process, still holding what it read before the change, writes its entry after
+    // the reader's token was taken.
+    let entry = Cached::entries(&cached.default_dir()).remove(0);
+    std::fs::write(&entry, &older_entry).unwrap();
+    let (shown, sent) = cached.ok(&["task", "show", "board:T-3", "--pin", &pin, "--json"]);
+    assert_eq!(
+        sent,
+        [graphql::ISSUE_DETAIL],
+        "the older entry is never served"
+    );
+    assert_eq!(
+        shown["items"][0]["item"]["content"],
+        "changed after the first read"
+    );
+}
+
+#[test]
+fn two_processes_writing_one_cache_never_leave_a_reader_a_partial_entry() {
+    let cached = Cached::new();
+    let (first, _) = cached.ok(&["task", "show", "board:T-3", "--json"]);
+    let v = version_of(&first);
+    let dir = cached.default_dir();
+    let entry = Cached::entries(&dir).remove(0);
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let reader = {
+        let stop = stop.clone();
+        let entry = entry.clone();
+        std::thread::spawn(move || {
+            let mut reads = 0_u64;
+            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                if let Ok(bytes) = std::fs::read(&entry) {
+                    serde_json::from_slice::<Value>(&bytes).unwrap_or_else(|error| {
+                        panic!(
+                            "a reader saw a partial entry ({error}): {} bytes",
+                            bytes.len()
+                        )
+                    });
+                    reads += 1;
+                }
+            }
+            reads
+        })
+    };
+    let writers: Vec<_> = (0..2)
+        .map(|_| {
+            let mut command = cached.sandbox.command();
+            command.env("XDG_CACHE_HOME", &cached.cache_home).args([
+                "task",
+                "show",
+                "board:T-3",
+                "--json",
+            ]);
+            std::thread::spawn(move || {
+                for _ in 0..4 {
+                    command.assert().success();
+                }
+            })
+        })
+        .collect();
+    for writer in writers {
+        writer.join().expect("a writer");
+    }
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    assert!(reader.join().expect("the reader") > 0);
+    let (pinned, sent) = cached.ok(&["task", "show", "board:T-3", "--pin", &v, "--json"]);
+    assert_eq!(sent, Vec::<String>::new());
+    assert_eq!(served_by(&pinned), from_cache());
+    assert!(
+        std::fs::read_dir(dir.join("tasks"))
+            .unwrap()
+            .filter_map(Result::ok)
+            .all(|file| !file.file_name().to_string_lossy().starts_with(".staged")),
+        "no staging file is left behind"
+    );
+}
+
+/// A board of eighty tasks, twenty of them commented on and holding one metadata value, cached
+/// or not, with two empty folders of Markdown to copy into.
+pub(crate) struct Followups {
+    pub(crate) sandbox: Sandbox,
+    pub(crate) board: GitHubBoardFields,
+    pub(crate) cache_home: PathBuf,
+}
+
+/// The twenty tasks the narrowing names.
+pub(crate) const FOLLOWUPS: usize = 20;
+/// The narrowing a follow-up pass lists them by.
+pub(crate) const NARROWED: [&str; 6] = [
+    "--source",
+    "board",
+    "--commented-since",
+    "2026-09-01T00:00:00Z",
+    "--metadata",
+    "orchestrator.follow-up/root_cause=stale-cache",
+];
+
+impl Followups {
+    pub(crate) fn new(cache: bool) -> Self {
+        let sandbox = Sandbox::new();
+        let (config, board) = crate::fixtures::github_projects_with_tasks(&sandbox, 76);
+        let mut sources = serde_json::Map::new();
+        sources.insert(
+            "board".to_owned(),
+            json!({"plugin":"github-projects","config":config,"cache":{"enabled":cache}}),
+        );
+        for folder in ["first", "second"] {
+            let root = sandbox.subdirectory(folder);
+            std::fs::create_dir_all(root.join("tasks")).expect("the folder");
+            sources.insert(
+                folder.to_owned(),
+                json!({"plugin":"local-md","config":{"root":root}}),
+            );
+        }
+        sandbox.project_document(
+            &serde_json::to_string_pretty(&json!({"page_size": 5, "sources": sources}))
+                .expect("a document"),
+        );
+        board.answer_search_pages_of(5);
+        for n in 0..FOLLOWUPS {
+            let task = crate::fixtures::github_extra_task(n);
+            board.set_metadata(
+                &task,
+                "orchestrator.follow-up",
+                json!({"root_cause": "stale-cache"}),
+            );
+            for comment in 0..=n % 5 {
+                board.add_comment(&task, &format!("follow-up note {comment}"));
+            }
+        }
+        board.set_metadata(
+            "T-4",
+            "orchestrator.follow-up",
+            json!({"root_cause": "a different one"}),
+        );
+        let cache_home = sandbox.subdirectory("cache-home");
+        Self {
+            sandbox,
+            board,
+            cache_home,
+        }
+    }
+
+    /// One command that had to succeed: its JSON, and every request the board served for it.
+    pub(crate) fn ok(&self, arguments: &[&str]) -> (Value, Vec<(String, Value)>) {
+        let before = self.board.served().len();
+        let output = self
+            .sandbox
+            .command()
+            .env("XDG_CACHE_HOME", &self.cache_home)
+            .args(arguments)
+            .assert()
+            .get_output()
+            .clone();
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "`{}`: {}",
+            arguments.join(" "),
+            stderr(&output)
+        );
+        (
+            serde_json::from_str(&stdout(&output)).expect("JSON"),
+            self.board.served()[before..].to_vec(),
+        )
+    }
+
+    /// A copy by the narrowing into `folder`, with comments and no link back to the board.
+    pub(crate) fn copy(&self, folder: &str) -> (Value, Vec<(String, Value)>) {
+        let mut arguments = vec![
+            "task",
+            "copy",
+            "--to",
+            folder,
+            "--comments",
+            "--no-link",
+            "--json",
+        ];
+        arguments.extend(NARROWED);
+        self.ok(&arguments)
+    }
+}
+
+/// The ids a batched detail read named, slot by slot.
+pub(crate) fn batched(served: &[(String, Value)], document: &str) -> Vec<String> {
+    let mut ids: Vec<String> = served
+        .iter()
+        .filter(|(sent, _)| sent == document)
+        .flat_map(|(_, variables)| {
+            variables
+                .as_object()
+                .into_iter()
+                .flatten()
+                .filter(|(name, _)| name.starts_with("id"))
+                .filter_map(|(_, id)| id.as_str().map(str::to_owned))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
+#[test]
+fn a_copy_by_query_loads_only_the_tasks_whose_listed_version_the_cache_does_not_hold() {
+    let followups = Followups::new(true);
+    let (first, served) = followups.copy("first");
+    assert_eq!(first["items"].as_array().unwrap().len(), FOLLOWUPS);
+    assert_eq!(
+        batched(&served, graphql::ISSUE_COPY_DETAILS).len(),
+        FOLLOWUPS,
+        "a cold copy reads every task"
+    );
+    let changed: Vec<String> = (0..5)
+        .map(|n| crate::fixtures::github_extra_task(n * 4))
+        .collect();
+    for id in &changed {
+        followups
+            .board
+            .edit_title(id, "changed since the first copy");
+    }
+    // Into a folder holding none of them, so the destination skips nothing: every task is
+    // loaded, and only the five the cache does not hold at their listed version reach the
+    // board.
+    let (second, served) = followups.copy("second");
+    assert_eq!(second["items"].as_array().unwrap().len(), FOLLOWUPS);
+    let mut expected = changed.clone();
+    expected.sort();
+    assert_eq!(batched(&served, graphql::ISSUE_COPY_DETAILS), expected);
+    assert!(
+        served
+            .iter()
+            .all(|(document, _)| document == graphql::SEARCH_ISSUES
+                || document == graphql::ISSUE_COPY_DETAILS),
+        "the listing and the one batch of changed tasks: {:?}",
+        served
+            .iter()
+            .map(|(document, _)| document)
+            .collect::<Vec<_>>()
+    );
+    // What landed is what the board holds, the changed and the cached alike.
+    let file = followups
+        .sandbox
+        .project()
+        .join("second/tasks")
+        .read_dir()
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|entry| std::fs::read_to_string(entry.path()).unwrap())
+        .filter(|text| text.contains("changed since the first copy"))
+        .count();
+    assert_eq!(file, changed.len());
+}
+
+#[test]
+fn a_show_many_fed_by_a_listing_pinned_to_its_versions_reads_only_what_changed() {
+    let followups = Followups::new(true);
+    let mut listing = vec!["task", "list", "--json", "--limit", "100"];
+    listing.extend(NARROWED);
+    let (listed, _) = followups.ok(&listing);
+    let pins: Vec<String> = listed["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|task| {
+            format!(
+                "{}={}",
+                task["id"].as_str().unwrap(),
+                task["item"]["version"].as_str().unwrap()
+            )
+        })
+        .collect();
+    let ids: Vec<String> = listed["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|task| task["id"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(ids.len(), FOLLOWUPS);
+    let mut show_many = vec!["task".to_owned(), "show-many".to_owned()];
+    show_many.extend(ids.iter().cloned());
+    show_many.push("--json".to_owned());
+    let cold: Vec<&str> = show_many.iter().map(String::as_str).collect();
+    let (_, served) = followups.ok(&cold);
+    assert_eq!(batched(&served, graphql::ISSUE_DETAILS).len(), FOLLOWUPS);
+
+    let changed = crate::fixtures::github_extra_task(3);
+    followups
+        .board
+        .edit_title(&changed, "changed since the listing's pass");
+    let (relisted, _) = followups.ok(&listing);
+    let mut pinned = show_many.clone();
+    for task in relisted["items"].as_array().unwrap() {
+        pinned.push("--pin".to_owned());
+        pinned.push(format!(
+            "{}={}",
+            task["id"].as_str().unwrap(),
+            task["item"]["version"].as_str().unwrap()
+        ));
+    }
+    let pinned: Vec<&str> = pinned.iter().map(String::as_str).collect();
+    let (details, served) = followups.ok(&pinned);
+    // One task left to read is read alone, by the one-item detail read.
+    assert_eq!(served.len(), 1, "{served:?}");
+    assert_eq!(served[0].0, graphql::ISSUE_DETAIL);
+    assert_eq!(served[0].1["id"], changed.as_str());
+    let remote: Vec<&Value> = details["details"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|detail| detail["cache"]["served"] == "remote")
+        .collect();
+    assert_eq!(remote.len(), 1);
+    assert_eq!(remote[0]["items"][0]["id"], format!("board:{changed}"));
+    let _ = pins;
 }
