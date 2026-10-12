@@ -412,8 +412,11 @@ impl CachedSource {
                     .to_owned(),
             });
         // Retired after priming, which is what took the entry's ids and values into the source.
+        // A write refused here was never made, so neither the priming nor the expectation
+        // outlives it: a later write of the task through this source is a plain one.
         if let Err(error) = self.cache.retire_before_write(id) {
             self.inner.unprime(id);
+            self.cache.take_expected(id);
             return Err(error);
         }
         let primed = priming.primed();
@@ -1137,6 +1140,8 @@ mod tests {
     struct Answering {
         inner: InMemorySource,
         answer: Task,
+        /// How many priority writes reached it.
+        writes: Arc<std::sync::atomic::AtomicUsize>,
     }
 
     #[async_trait::async_trait]
@@ -1152,6 +1157,15 @@ mod tests {
         }
         async fn get_task(&self, _id: &NativeId) -> Result<Option<Task>, SourceError> {
             Ok(Some(self.answer.clone()))
+        }
+        async fn set_task_priority(
+            &self,
+            _id: &NativeId,
+            priority: Priority,
+        ) -> Result<Option<Priority>, SourceError> {
+            self.writes
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(Some(priority))
         }
         async fn get_project(&self, id: &NativeId) -> Result<Option<Project>, SourceError> {
             self.inner.get_project(id).await
@@ -1223,6 +1237,19 @@ mod tests {
 
     /// A caching source over a source whose every read by id answers `answer`, in `dir`.
     fn cached(dir: &std::path::Path, answer: Task) -> (CachedSource, Arc<SourceCache>) {
+        let (source, cache, _) = counting(dir, answer);
+        (source, cache)
+    }
+
+    /// [`cached`], with how many priority writes reached the source beneath it.
+    fn counting(
+        dir: &std::path::Path,
+        answer: Task,
+    ) -> (
+        CachedSource,
+        Arc<SourceCache>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    ) {
         let cache = SourceCache::new(
             CacheLocation {
                 dir: dir.to_path_buf(),
@@ -1233,8 +1260,14 @@ mod tests {
         let inner = Answering {
             inner: InMemorySource::new(InMemoryConfig::default()).expect("an empty source"),
             answer,
+            writes: Arc::default(),
         };
-        (CachedSource::new(Box::new(inner), cache.clone()), cache)
+        let writes = inner.writes.clone();
+        (
+            CachedSource::new(Box::new(inner), cache.clone()),
+            cache,
+            writes,
+        )
     }
 
     #[tokio::test]
@@ -1491,76 +1524,6 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn an_entry_nothing_can_remove_or_empty_is_withheld_from_this_process_until_rewritten() {
-        let dir = tempfile::tempdir().expect("a directory");
-        let (_, cache) = cached(dir.path(), task("T-1", "v1"));
-        held_at_v1(&cache);
-        let refused = refusing(dir.path());
-        if refused.is_none() {
-            return;
-        }
-        let path = entry_file(dir.path());
-        // The removal is refused for real, by the directory. The emptying is stood in for,
-        // because no real refusal of it is reachable here: the cache retries a mode refusal
-        // after re-moding the file, which its owner may always do, so what refuses both is a
-        // read-only mount or another owner's file — a superuser's to arrange, and a test run as
-        // one cannot make the directory refuse the removal in the first place.
-        let refusal = cache.retire_with(&path, |_| {
-            Err(std::io::Error::from(std::io::ErrorKind::ReadOnlyFilesystem))
-        });
-        assert!(refusal.is_err(), "the file is reported as still there");
-        assert!(path.exists(), "the file is as it was");
-        assert!(
-            cache.read(&id("T-1")).is_none(),
-            "this process withholds it from itself"
-        );
-        drop(refused);
-        cache.write(&Entry {
-            schema: ENTRY_SCHEMA,
-            remote: "remote".to_owned(),
-            task: task("T-1", "v2"),
-            comments: Some(Vec::new()),
-            assets: None,
-            edges: None,
-            context: None,
-        });
-        assert_eq!(
-            cache.read(&id("T-1")).and_then(|entry| entry.task.version),
-            Some("v2".to_owned()),
-            "the withholding process serves what it wrote"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_board_context_nothing_can_remove_or_empty_is_withheld_until_rewritten() {
-        let dir = tempfile::tempdir().expect("a directory");
-        let (_, cache) = cached(dir.path(), task("T-1", "v1"));
-        cache.write_board(serde_json::json!({"option": "stale"}));
-        let refused = refusing_in(dir.path());
-        if refused.is_none() {
-            return;
-        }
-        // Stood in for as in the task entry's test above, and for the same reason.
-        let refusal = cache.retire_with(&dir.path().join("board.json"), |_| {
-            Err(std::io::Error::from(std::io::ErrorKind::ReadOnlyFilesystem))
-        });
-        assert!(refusal.is_err(), "the file is reported as still there");
-        assert!(
-            cache.board().is_none(),
-            "this process withholds it from itself"
-        );
-        drop(refused);
-        cache.write_board(serde_json::json!({"option": "fresh"}));
-        assert_eq!(
-            cache.board(),
-            Some(serde_json::json!({"option": "fresh"})),
-            "the withholding process serves what it wrote"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
     fn a_board_context_the_filesystem_will_not_replace_or_drop_is_served_to_no_one() {
         let dir = tempfile::tempdir().expect("a directory");
         let (_, cache) = cached(dir.path(), task("T-1", "v1"));
@@ -1612,5 +1575,127 @@ mod tests {
             another_process(dir.path()).read(&id("T-1")).is_none(),
             "another process serves it"
         );
+    }
+
+    /// Set in the child [`a_cache_directory_mounted_read_only_withholds_refuses_and_recovers`]
+    /// runs itself as, naming the directory mounted read-only over it.
+    #[cfg(target_os = "linux")]
+    const READ_ONLY_CHILD: &str = "ONETASKGRAPH_TEST_READ_ONLY_CACHE";
+
+    /// A cache directory none of whose files can be removed, overwritten, emptied or re-moded:
+    /// this test runs itself again under an unprivileged read-only bind mount of it, where
+    /// `EROFS` refuses each of those for real, then lifts the mount to watch it recover.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn a_cache_directory_mounted_read_only_withholds_refuses_and_recovers() {
+        if let Some(dir) = std::env::var_os(READ_ONLY_CHILD) {
+            read_only_child(std::path::Path::new(&dir)).await;
+            println!("read-only child ran");
+            return;
+        }
+        let dir = tempfile::tempdir().expect("a directory");
+        let (_, cache) = cached(dir.path(), task("T-1", "v1"));
+        held_at_v1(&cache);
+        cache.write_board(serde_json::json!({"option": "stale"}));
+        let output = std::process::Command::new("unshare")
+            .args(["--user", "--map-root-user", "--mount", "sh", "-c"])
+            .arg(r#"mount --bind -o ro "$1" "$1" || exit 77; shift; exec "$@""#)
+            .arg("sh")
+            .arg(dir.path())
+            .arg(std::env::current_exe().expect("this test binary"))
+            .args([
+                "cache::source::tests::a_cache_directory_mounted_read_only_withholds_refuses_and_recovers",
+                "--exact",
+                "--nocapture",
+            ])
+            .env(READ_ONLY_CHILD, dir.path())
+            .output();
+        // `unshare` refusing to make the namespace, or `mount` the bind, is a host that cannot.
+        let Some(output) = output.ok().filter(|output| {
+            output.status.code() != Some(77)
+                && !String::from_utf8_lossy(&output.stderr).starts_with("unshare:")
+        }) else {
+            eprintln!(
+                "skipped: this host cannot mount a directory read-only without privileges, so no \
+                 cache file can be made to refuse every removal, overwrite and re-mode here"
+            );
+            return;
+        };
+        let printed = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && printed.contains("read-only child ran"),
+            "the child under the read-only mount failed\n{printed}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    /// What [`a_cache_directory_mounted_read_only_withholds_refuses_and_recovers`] proves,
+    /// under the read-only mount of `dir`.
+    #[cfg(target_os = "linux")]
+    async fn read_only_child(dir: &std::path::Path) {
+        let (source, cache, writes) = counting(dir, task("T-1", "v1"));
+        assert!(cache.read(&id("T-1")).is_some(), "the entry can be read");
+        assert!(cache.board().is_some(), "the board can be read");
+
+        // Nothing can take them out of service on disk, so this process withholds them from
+        // itself, and another process can still read them.
+        cache.invalidate(&id("T-1"));
+        cache.drop_board();
+        assert!(entry_file(dir).exists() && dir.join("board.json").exists());
+        assert!(cache.read(&id("T-1")).is_none(), "the entry is withheld");
+        assert!(cache.board().is_none(), "the board is withheld");
+        assert!(another_process(dir).read(&id("T-1")).is_some());
+
+        // Which is why a write is refused before it is sent, expected or not.
+        let refused = source
+            .set_task_priority(&id("T-1"), Priority::High)
+            .await
+            .expect_err("a plain write is refused");
+        assert!(
+            refused.to_string().contains(&dir.display().to_string()),
+            "{refused}"
+        );
+        cache.expect(&id("T-1"), "v1");
+        source
+            .set_task_priority(&id("T-1"), Priority::High)
+            .await
+            .expect_err("an expected write is refused");
+        assert_eq!(
+            writes.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "nothing was sent"
+        );
+
+        // Writable again, the next write is sent as a plain one — the refused write's
+        // expectation did not outlive it — and what this process writes is served again.
+        let lifted = std::process::Command::new("umount")
+            .arg(dir)
+            .status()
+            .expect("umount");
+        assert!(lifted.success(), "the mount is lifted");
+        source
+            .set_task_priority(&id("T-1"), Priority::High)
+            .await
+            .expect("the write is sent");
+        assert_eq!(writes.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert!(
+            cache.take_expected(&id("T-1")).is_none(),
+            "the write was not taken for the refused expected one"
+        );
+        cache.write(&Entry {
+            schema: ENTRY_SCHEMA,
+            remote: "remote".to_owned(),
+            task: task("T-1", "v2"),
+            comments: Some(Vec::new()),
+            assets: None,
+            edges: None,
+            context: None,
+        });
+        assert_eq!(
+            cache.read(&id("T-1")).and_then(|entry| entry.task.version),
+            Some("v2".to_owned())
+        );
+        cache.write_board(serde_json::json!({"option": "fresh"}));
+        assert_eq!(cache.board(), Some(serde_json::json!({"option": "fresh"})));
     }
 }

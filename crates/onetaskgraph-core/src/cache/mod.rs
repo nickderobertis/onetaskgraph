@@ -505,14 +505,14 @@ impl SourceCache {
             .map_err(std::io::Error::from)
             .and_then(|bytes| self.write_atomically(&path, &bytes));
         if written.is_err() {
-            self.retire(&path);
+            let _ = self.retire(&path);
         }
     }
 
     /// Make the entry for `id` unserveable: a write whose response could not vouch for what
     /// the task now holds.
     pub(crate) fn invalidate(&self, id: &NativeId) {
-        self.retire(&self.task_path(id));
+        let _ = self.retire(&self.task_path(id));
         let mut command = self.command();
         command.served.remove(id);
         command.read.remove(id);
@@ -528,7 +528,7 @@ impl SourceCache {
     /// is retired too.
     pub(crate) fn retire_before_write(&self, id: &NativeId) -> Result<(), SourceError> {
         let path = self.task_path(id);
-        match self.retire_with(&path, empty_in_place) {
+        match self.retire(&path) {
             Ok(()) => Ok(()),
             Err(_) if std::fs::File::open(&path).is_err() => Ok(()),
             Err(error) => Err(SourceError::Config {
@@ -563,13 +563,13 @@ impl SourceCache {
             .map_err(std::io::Error::from)
             .and_then(|bytes| self.write_atomically(&path, &bytes));
         if written.is_err() {
-            self.retire(&path);
+            let _ = self.retire(&path);
         }
     }
 
     /// Drop the board context, so the next write needing it reads it.
     pub(crate) fn drop_board(&self) {
-        self.retire(&self.board_path());
+        let _ = self.retire(&self.board_path());
     }
 
     fn withheld(&self) -> MutexGuard<'_, HashSet<PathBuf>> {
@@ -596,21 +596,13 @@ impl SourceCache {
     /// itself until a write of its own replaces it. Another process can still read that file,
     /// which is why a write of a task retires its entry with [`Self::retire_before_write`]
     /// first and is not sent when that fails.
-    fn retire(&self, path: &Path) {
-        let _ = self.retire_with(path, empty_in_place);
-    }
-
-    /// [`Self::retire`], emptying a file whose removal was refused with `empty`, and
-    /// answering why the file is still there when it is.
-    fn retire_with(
-        &self,
-        path: &Path,
-        empty: fn(&Path) -> std::io::Result<()>,
-    ) -> std::io::Result<()> {
+    ///
+    /// Answers why the file is still there, when it is.
+    fn retire(&self, path: &Path) -> std::io::Result<()> {
         let retired = match std::fs::remove_file(path) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(_) => empty(path),
+            Err(_) => empty_in_place(path),
         };
         if retired.is_err() {
             self.withheld().insert(path.to_path_buf());
