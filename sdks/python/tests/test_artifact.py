@@ -272,8 +272,6 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     bundle = generate.validate_schema_bundle(emitted_bundle)
 
     assert emitted_bundle["version"] == 37
-    # Version 37 published the local cache of a remote source: a read's `cache` member, a
-    # source's `cache` setting, and what a write made with `expect` came to.
     assert "cache" in emitted_bundle["roots"]["TaskDetail"]["properties"]
     assert "enabled" in emitted_bundle["roots"]["SourceCacheConfig"]["properties"]
     assert "result" in emitted_bundle["roots"]["TaskPrioritySet"]["properties"]

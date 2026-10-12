@@ -1648,6 +1648,23 @@ fn a_rust_callers_listing_pins_the_reads_that_follow_it_in_the_same_engine() {
         details.details[1].response.items[0].item.title,
         "changed since it was cached"
     );
+
+    // Ending the command drops what the listing pinned: the next unit of work reads unpinned,
+    // from the board.
+    runtime
+        .block_on(engine.end_command())
+        .expect("the command ends");
+    let before = cached.board.served().len();
+    let again = runtime.block_on(engine.task_details(&qualified[..1], true));
+    assert_eq!(
+        cached.board.served().len() - before,
+        1,
+        "read from the board"
+    );
+    assert_eq!(
+        again.details[0].cache.as_ref().map(|used| used.served),
+        Some(onetaskgraph_core::Served::Remote)
+    );
 }
 
 /// Every file under `root`, with its bytes.
@@ -2471,4 +2488,94 @@ fn a_stale_id_refused_after_an_earlier_part_landed_retries_that_part_alone() {
         2,
         "the refused part, once more: {sent:?}"
     );
+}
+
+#[test]
+fn a_bound_copy_carrying_comments_with_expect_reads_neither_the_task_nor_its_comments() {
+    let cached = Cached::new();
+    let (landed, _) = bound(&cached, "title: Bound\nstatus: Todo\npriority: high");
+    // Read the way a copy carrying comments reads its destination, so the cache holds it whole.
+    let (shown, _) = cached.ok(&["task", "show", &landed, "--json"]);
+    let version = version_of(&shown);
+    retitle(&cached, "Bound, retitled", "high");
+    let (copied, sent) = cached.ok(&[
+        "task",
+        "copy",
+        "plans:B-1",
+        "--to",
+        "board",
+        "--comments",
+        "--expect",
+        &version,
+        "--json",
+    ]);
+    assert_eq!(sent, [graphql::UPDATE_ISSUE_WHOLE], "{copied}");
+    assert!(copied["items"][0].get("fallback").is_none(), "{copied}");
+}
+
+#[test]
+fn an_expected_write_answered_before_its_task_settles_gives_no_version_and_leaves_the_entry_unserved()
+ {
+    let cached = Cached::new();
+    let (first, _) = cached.ok(&["task", "show", "board:T-3", "--json"]);
+    let v = version_of(&first);
+    // As against GitHub itself: the response is stamped in the second of the change it made.
+    cached.board.read_as_it_changes(true);
+    let (written, sent) = cached.ok(&[
+        "task",
+        "priority",
+        "set",
+        "board:T-3",
+        "high",
+        "--expect",
+        &v,
+        "--json",
+    ]);
+    assert_eq!(sent, [graphql::UPDATE_FIELD_WHOLE]);
+    assert_eq!(written["result"]["version"], Value::Null, "{written}");
+    assert_eq!(written["result"]["parts"][0]["outcome"], "landed");
+    cached.board.read_as_it_changes(false);
+    let (shown, sent) = cached.ok(&["task", "show", "board:T-3", "--pin", &v, "--json"]);
+    assert_eq!(
+        sent,
+        [ONE_READ],
+        "the written task's entry is not served, and is refreshed"
+    );
+    assert_eq!(shown["items"][0]["item"]["priority"], "high");
+    let refreshed = version_of(&shown);
+    let (_, sent) = cached.ok(&["task", "show", "board:T-3", "--pin", &refreshed, "--json"]);
+    assert_eq!(sent, Vec::<String>::new());
+}
+
+#[test]
+fn the_default_cache_lives_under_home_without_xdg_cache_home_and_nowhere_without_either() {
+    let cached = Cached::new();
+    let home = cached.sandbox.subdirectory("home-dir");
+    let run = |home: Option<&Path>| -> Value {
+        let mut command = cached.sandbox.command();
+        command.env_remove("XDG_CACHE_HOME");
+        if let Some(home) = home {
+            command.env("HOME", home);
+        }
+        let output = command
+            .args(["task", "show", "board:T-3", "--json"])
+            .assert()
+            .success()
+            .get_output()
+            .clone();
+        serde_json::from_str(&stdout(&output)).expect("JSON")
+    };
+    let shown = run(Some(&home));
+    assert_eq!(shown["cache"]["served"], "remote");
+    let root = home.join(".cache/onetaskgraph");
+    let dirs: Vec<PathBuf> = std::fs::read_dir(&root)
+        .expect("the cache under HOME")
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .collect();
+    assert_eq!(dirs.len(), 1);
+    assert_eq!(Cached::entries(&dirs[0]).len(), 1);
+    // With neither variable there is nowhere to default to, and the source keeps no cache.
+    let shown = run(None);
+    assert!(shown.get("cache").is_none(), "{shown}");
 }

@@ -296,8 +296,6 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
     assert_eq!(bundle["version"], 37);
-    // Version 37: the local cache of a remote source — a source's `cache` setting, the `cache`
-    // member a read reports, `cache clear`, and what a write made with `--expect` came to.
     // Version 35: a `github-projects` source's `metadata_fields`, in its configuration and in
     // the `FieldsReport` `sources fields` answers with.
     assert!(

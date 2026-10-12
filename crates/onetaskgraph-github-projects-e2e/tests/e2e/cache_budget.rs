@@ -95,6 +95,7 @@ fn versions(answer: &Value, key: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+// llmlint: ignore-block[budgets_reuse_gate_telemetry] The budget compares the same workload with the cache on and with it off, which no behavioural journey runs — the cache's journeys hold small boards to exact requests, cache on alone — and its task fixes the design: the e2e journeys record the four sequences in both modes, and the reporter only reads what they recorded.
 /// The four sequences against one board, with the cache on or off: what each cost.
 fn sequences(cache: bool) -> Vec<Value> {
     let followups = Followups::new(cache);
@@ -209,6 +210,8 @@ fn stale_option(cache: bool) -> Value {
     }
     cost(&cached.board.served()[before..])
 }
+
+// llmlint: ignore-end[budgets_reuse_gate_telemetry]
 
 /// A figure `copy_recopy`'s re-copy journeys recorded in this crate's telemetry, when they have.
 fn copy_figure(name: &str) -> Value {

@@ -795,13 +795,11 @@ function termScopeFlags(method: string, options: { termScope?: unknown }): strin
   return scope.flatMap((repository) => ["--term-scope", repository]);
 }
 
-// `--expect` with the version a write says it knows, and nothing when none is given.
 function expectFlags(method: string, options: { expect?: unknown }): string[] {
   if (options.expect === undefined) return [];
   return ["--expect", stringOption(method, "expect", options.expect)];
 }
 
-// `--pin` with the version a read is pinned to, and nothing when none is given.
 function pinFlags(method: string, pin: unknown): string[] {
   if (pin === undefined) return [];
   return ["--pin", stringOption(method, "pin", pin)];

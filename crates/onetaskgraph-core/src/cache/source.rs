@@ -221,7 +221,9 @@ impl CachedSource {
                 // cache does not keep: an entry missing what follows would send a request the
                 // uncached read carried for nothing, so it is not served.
                 let follows = if edges {
-                    entry.edges.is_some()
+                    // A source primed for a write expecting this task answers its edges from what
+                    // it was primed with.
+                    (entry.edges.is_some() || self.primed_for(id))
                         && onetaskgraph_plugin_api::asset_references(
                             entry.task.content.as_deref().unwrap_or_default(),
                         )
@@ -285,6 +287,17 @@ impl CachedSource {
             answers.extend(read.map(Some));
         }
         answers.into_iter().flatten().collect()
+    }
+
+    /// Whether the source was primed for a write expecting `id`.
+    fn primed_for(&self, id: &NativeId) -> bool {
+        self.cache
+            .command()
+            .expected
+            .as_ref()
+            .is_some_and(|expected| {
+                expected.id == *id && expected.primed.as_ref().is_some_and(Priming::primed)
+            })
     }
 
     /// Prime the source with what the cache kept for `id`, once, when a write expecting it
@@ -577,6 +590,9 @@ impl TaskSource for CachedSource {
         ids: &[NativeId],
         comments: &PageRequest,
     ) -> Vec<Result<Option<TaskDetailRead>, SourceError>> {
+        for id in ids {
+            self.prime_expected(id);
+        }
         self.details(ids, Some(comments), true, |unread| {
             Box::pin(async move {
                 self.inner

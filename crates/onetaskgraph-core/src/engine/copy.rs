@@ -4770,6 +4770,7 @@ impl Engine {
         let mut held_comments = None;
         let held = match kind {
             Level::Task if comments && destination.source().capabilities().comments.is_native() => {
+                self.expect_copied(destination.name(), id);
                 let mut whole = None;
                 for _ in 0..2 {
                     let Some(read) = snapshot::first(destination, id)

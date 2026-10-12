@@ -121,15 +121,22 @@ impl Held {
         let Some(nodes) = connection.get("nodes").and_then(Value::as_array) else {
             return;
         };
-        let comments = nodes
+        // Every comment read whole, or nothing learnt: a set missing one is not the set the issue
+        // holds, and taking it for that would answer an edit of the missing one as no comment
+        // of this issue.
+        let Some(comments) = nodes
             .iter()
-            .filter_map(|comment| {
+            .map(|comment| {
                 Some((
                     NativeId(comment.get("id")?.as_str()?.to_owned()),
                     comment.get("body")?.as_str()?.to_owned(),
                 ))
             })
-            .collect();
+            .collect::<Option<BTreeMap<_, _>>>()
+        else {
+            held(&self.learnt).remove(issue);
+            return;
+        };
         held(&self.learnt).insert(issue.clone(), comments);
     }
 

@@ -107,7 +107,11 @@ impl Engine {
     /// that failed, whose answer is a failure rather than the verb's own.
     #[must_use]
     pub fn take_last_expected(&self) -> Option<ExpectedWrite> {
-        self.caches.values().find_map(|cache| cache.take_last())
+        self.caches
+            .values()
+            .filter_map(|cache| cache.last_made().map(|made| (made, cache)))
+            .max_by_key(|(made, _)| *made)
+            .and_then(|(_, cache)| cache.take_last())
     }
 
     /// [`take_expected`](Self::take_expected), as the three members a write's answer carries.

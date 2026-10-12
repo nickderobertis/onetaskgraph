@@ -1229,9 +1229,9 @@ backend's error, or `unknown` when its answer was lost — never sent again, bec
 apply it twice. When the cache does not hold what the write needs, it reads once and then
 writes, and says so as `fallback: {"read": true, "reason": …}`, counted in `spent`. **It is
 not a conditional write**: neither GitHub nor Linear takes a precondition, so a person's edit
-to a field the write *does* set, made after the caller's read, is overwritten.
-`docs/plugin-protocol.md`, "The store's local cache", states every rule here for a plugin
-author, with the one request a stale cached option costs.
+to a field the write *does* set, made after the caller's read, is overwritten. The one request
+the cache can add is the first write after a board option it kept was renamed or deleted: the
+refused mutation, one read that refreshes the board's kept ids, and that part once more.
 
 The cache is an efficiency layer and never a snapshot: it serves the pinned version or a later
 one, keeps one entry per task, and is shared and cleared freely. To keep an exact version of a

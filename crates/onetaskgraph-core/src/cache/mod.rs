@@ -356,8 +356,9 @@ struct Command {
     expected: Option<Expectation>,
     /// What each expected write came to, until the engine takes it.
     reports: HashMap<NativeId, ExpectedWrite>,
-    /// The last expected write's report, until anything takes it — for a write that failed.
-    last: Option<ExpectedWrite>,
+    /// The last expected write's report, with when it was made among every source's, until
+    /// anything takes it — for a write that failed.
+    last: Option<(u64, ExpectedWrite)>,
 }
 
 /// One source's cache: the directory, and what the running command knows about it.
@@ -371,6 +372,9 @@ pub struct SourceCache {
 
 /// Distinguishes the staging files one process writes.
 static STAGED: AtomicU64 = AtomicU64::new(0);
+
+/// Orders the expected writes of every source of one process, so the last of them is known.
+static REPORTED: AtomicU64 = AtomicU64::new(0);
 
 impl SourceCache {
     /// The cache at `location`, for a source whose token covers `coverage`.
@@ -437,10 +441,16 @@ impl SourceCache {
         command.reports.remove(id)
     }
 
+    /// When the last expected write of this cache was made, among every source's, if one is
+    /// still untaken.
+    pub(crate) fn last_made(&self) -> Option<u64> {
+        self.command().last.as_ref().map(|(made, _)| *made)
+    }
+
     /// What the last expected write came to, when nothing has taken it.
     pub(crate) fn take_last(&self) -> Option<ExpectedWrite> {
         let mut command = self.command();
-        let last = command.last.take()?;
+        let (_, last) = command.last.take()?;
         command.reports.clear();
         Some(last)
     }
@@ -450,7 +460,10 @@ impl SourceCache {
     pub(crate) fn report(&self, id: &NativeId, report: ExpectedWrite) {
         let mut command = self.command();
         command.expected = None;
-        command.last = Some(report.clone());
+        command.last = Some((
+            REPORTED.fetch_add(1, AtomicOrdering::Relaxed),
+            report.clone(),
+        ));
         command.reports.insert(id.clone(), report);
     }
 
