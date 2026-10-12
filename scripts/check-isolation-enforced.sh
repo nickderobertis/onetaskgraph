@@ -78,11 +78,11 @@ import pathlib
 import sys
 
 path, section, line = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
-text = path.read_text()
+text = path.read_text(encoding="utf-8")
 header = f"[{section}]\n"
 if header not in text:
     text += f"\n{header}"
-path.write_text(text.replace(header, f"{header}{line}\n", 1))
+path.write_text(text.replace(header, f"{header}{line}\n", 1), encoding="utf-8")
 PY
 }
 
@@ -217,7 +217,7 @@ import pathlib
 import sys
 
 path = pathlib.Path(sys.argv[1])
-path.write_text(path.read_text().replace("publish = false\n", "", 1))
+path.write_text(path.read_text(encoding="utf-8").replace("publish = false\n", "", 1))
 PY
 run_guard
 expect_refused "an e2e suite that would be published depending on the engine" \

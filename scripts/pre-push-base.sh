@@ -39,7 +39,7 @@ default_base() {
   python3 -c '
 import json, sys
 try:
-    base = json.load(open("nx.json")).get("defaultBase")
+    base = json.load(open("nx.json", encoding="utf-8")).get("defaultBase")
 except (OSError, ValueError):
     raise SystemExit(0)
 if isinstance(base, str) and base:

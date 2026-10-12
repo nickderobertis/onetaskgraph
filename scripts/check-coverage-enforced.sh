@@ -31,7 +31,7 @@ def read_target(path: Path, target: str) -> dict:
     """
     display = path.as_posix()
     try:
-        project = json.loads(path.read_text())
+        project = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         problems.append(f"{display}: could not be read as JSON ({error}); restore the project file")
         return {}
@@ -70,7 +70,7 @@ def names_in(value: object) -> list[str]:
 # Comment lines out, so a flag a comment names is not read as one the invocation passes.
 coverage_script = "\n".join(
     line
-    for line in Path("scripts/rust-coverage.sh").read_text().splitlines()
+    for line in Path("scripts/rust-coverage.sh").read_text(encoding="utf-8").splitlines()
     if not line.lstrip().startswith("#")
 )
 match = re.search(r"^readonly MIN_LINES=(\d+)$", coverage_script, re.MULTILINE)
@@ -162,7 +162,7 @@ if aggregate:
         )
 
 # The Python SDK carries its own floor in pyproject.toml.
-pyproject = Path("sdks/python/pyproject.toml").read_text()
+pyproject = Path("sdks/python/pyproject.toml").read_text(encoding="utf-8")
 match = re.search(r"--cov-fail-under=(\d+)", pyproject)
 if not match:
     problems.append("sdks/python/pyproject.toml: pytest addopts set no --cov-fail-under")

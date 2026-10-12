@@ -97,7 +97,7 @@ printf '%s\n' "\$*" >> "$UPLOADS"
 GH
 chmod +x "$scratch/bin/gh" || fatal "could not make the gh stand-in executable" "check the permissions of \$TMPDIR, then rerun"
 
-version="$(cd "$ROOT" && python3 -c 'import json; print(json.load(open("npm/cli/package.json"))["version"])')" || fatal \
+version="$(cd "$ROOT" && python3 -c 'import json; print(json.load(open("npm/cli/package.json", encoding="utf-8"))["version"])')" || fatal \
   "could not read the launcher's version out of npm/cli/package.json" "restore that manifest, then rerun"
 tag="v$version"
 

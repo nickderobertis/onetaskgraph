@@ -47,7 +47,7 @@ for path in project_files:
     # repository-relative spelling instead of leaking pathlib's host separator on Windows.
     display_path = path.as_posix()
     try:
-        project = json.loads(path.read_text())
+        project = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as error:
         problems.append(f"{display_path}: is not valid JSON ({error})")
         continue
@@ -447,7 +447,7 @@ if WORKSPACE_PROJECT in project_files and "workspace" in names:
 
 # Every workflow has to parse, and every workflow token has to be least-privilege.
 for workflow in sorted(Path(".github/workflows").glob("*.yml")):
-    text = workflow.read_text()
+    text = workflow.read_text(encoding="utf-8")
     if "\npermissions:" not in text and "\n  permissions:" not in text:
         problems.append(
             f"{workflow}: declares no `permissions:` block. Default the token to read-only "
@@ -461,10 +461,10 @@ def version_tuple(raw: str) -> tuple[int, ...]:
     return tuple(int(part) for part in raw.split("."))
 
 
-msrv = re.search(r'^rust-version\s*=\s*"([\d.]+)"', Path("Cargo.toml").read_text(), re.M)
-clippy_msrv = re.search(r'^msrv\s*=\s*"([\d.]+)"', Path("clippy.toml").read_text(), re.M)
+msrv = re.search(r'^rust-version\s*=\s*"([\d.]+)"', Path("Cargo.toml").read_text(encoding="utf-8"), re.M)
+clippy_msrv = re.search(r'^msrv\s*=\s*"([\d.]+)"', Path("clippy.toml").read_text(encoding="utf-8"), re.M)
 channel = re.search(
-    r'^channel\s*=\s*"([\d.]+)"', Path("rust-toolchain.toml").read_text(), re.M
+    r'^channel\s*=\s*"([\d.]+)"', Path("rust-toolchain.toml").read_text(encoding="utf-8"), re.M
 )
 
 if not (msrv and clippy_msrv and channel):
@@ -518,7 +518,7 @@ if len(set(declared.values())) > 1:
 
 # The `just` floor is stated in .tool-versions; nothing may carry a second copy.
 for path in (Path("scripts/session-setup.sh"), Path("justfile")):
-    if re.search(r'JUST_MIN\s*=\s*"[\d.]+"', path.read_text()):
+    if re.search(r'JUST_MIN\s*=\s*"[\d.]+"', path.read_text(encoding="utf-8")):
         problems.append(
             f"{path}: hard-codes a `just` floor. State it once in .tool-versions and read "
             "it from there."

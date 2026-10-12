@@ -126,7 +126,7 @@ RECONCILED_VERSION_FILES: Tuple[VersionFile, ...] = (
 # llmlint: ignore[async_typed_clients_at_boundaries] This local manifest read is part of the short-lived synchronous release transaction and has no concurrent work.
 def read_json_manifest(path: Path) -> Dict[str, object]:
     """Decode a package manifest only after validating its object boundary."""
-    decoded = json.loads(path.read_text())
+    decoded = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(decoded, dict) or not all(
         isinstance(key, str) for key in decoded
     ):
@@ -138,7 +138,7 @@ def read_json_manifest(path: Path) -> Dict[str, object]:
 def require_writable_manifests() -> None:
     """Refuse the update before mutation when any reconciled file is not writable."""
     for version_file in RECONCILED_VERSION_FILES:
-        with version_file.path.open("r+"):
+        with version_file.path.open("r+", encoding="utf-8"):
             pass
 
 
@@ -160,13 +160,13 @@ def discover_product_version_files() -> Tuple[Path, ...]:
             discovered.append(path)
         elif path.parent.parent == Path("crates") and not INHERITED_VERSION_RE.search(
             # llmlint: ignore[async_typed_clients_at_boundaries] This local manifest read is part of the ordered release inventory, which is synchronous and has no concurrent work.
-            path.read_text()
+            path.read_text(encoding="utf-8")
         ):
             # A crate that inherits `[workspace.package] version` holds no number of its own
             # to drift: the root manifest, registered above, is the one it reads.
             discovered.append(path)
     for path in Path(".").glob("**/pyproject.toml"):
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
         if re.search(r'(?m)^name\s*=\s*"onetaskgraph(?:-sdk|-cli)?"$', text):
             discovered.append(path)
     for path in Path(".").glob("**/package.json"):
@@ -177,7 +177,7 @@ def discover_product_version_files() -> Tuple[Path, ...]:
         if isinstance(name, str) and name.startswith("@onetaskgraph/"):
             discovered.append(path)
     for path in Path(".").glob("**/bun.lock"):
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
         if '"name": "@onetaskgraph/' in text:
             discovered.append(path)
     for path in Path(".").glob("**/*"):
@@ -189,7 +189,7 @@ def discover_product_version_files() -> Tuple[Path, ...]:
             or any(part.startswith(".") for part in path.parts)
         ):
             continue
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
         if re.search(r"(?m)^(?:__version__|export const VERSION)\s*=", text):
             discovered.append(path)
     return tuple(sorted(set(discovered)))
@@ -209,7 +209,7 @@ def _read_version_values(version_file: VersionFile) -> Tuple[object, ...]:
     if isinstance(version_file, JsonVersionFile):
         package = read_json_manifest(path)
         return tuple(_json_field(package, field) for field in version_file.fields)
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     return tuple(
         match.group(2)
         for pattern in version_file.patterns
@@ -273,9 +273,9 @@ def set_reconciled_versions(version: SemanticVersion) -> None:
                         )
                     target = nested
                 target[field[-1]] = version
-            path.write_text(json.dumps(package, indent=2) + "\n")
+            path.write_text(json.dumps(package, indent=2) + "\n", encoding="utf-8")
             continue
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
         updated = text
         for pattern in version_file.patterns:
             updated, count = pattern.subn(rf"\g<1>{version}\g<3>", updated)
@@ -284,7 +284,7 @@ def set_reconciled_versions(version: SemanticVersion) -> None:
                     f"{path}: no product version could be read; next: restore its version field "
                     "and rerun scripts/set-version.sh"
                 )
-        path.write_text(updated)
+        path.write_text(updated, encoding="utf-8")
 
 
 def main() -> int:
