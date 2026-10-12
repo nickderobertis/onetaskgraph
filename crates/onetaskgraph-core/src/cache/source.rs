@@ -1153,6 +1153,8 @@ mod tests {
         /// task, and whether another process could read the task's entry at that moment.
         writes: Vec<(bool, bool)>,
         primed: std::collections::HashSet<NativeId>,
+        /// How many times it was primed.
+        primings: usize,
     }
 
     #[async_trait::async_trait]
@@ -1181,11 +1183,9 @@ mod tests {
             Ok(Some(priority))
         }
         fn prime_write(&self, id: &NativeId, _context: &Value, _board: Option<&Value>) -> bool {
-            self.probe
-                .lock()
-                .expect("the probe")
-                .primed
-                .insert(id.clone());
+            let mut probe = self.probe.lock().expect("the probe");
+            probe.primings += 1;
+            probe.primed.insert(id.clone());
             true
         }
         fn unprime(&self, id: &NativeId) {
@@ -1749,6 +1749,24 @@ mod tests {
         assert!(cache.read(&id("T-1")).is_some(), "the entry can be read");
         assert!(cache.board().is_some(), "the board can be read");
 
+        // An expected write primes the source from the entry, then cannot retire it: it is
+        // refused unsent, and the source is primed no longer.
+        cache.expect(&id("T-1"), "v1");
+        let refused = source
+            .set_task_priority(&id("T-1"), Priority::High)
+            .await
+            .expect_err("an expected write is refused");
+        assert!(
+            refused.to_string().contains(&dir.display().to_string()),
+            "{refused}"
+        );
+        {
+            let probe = probe.lock().expect("the probe");
+            assert!(probe.writes.is_empty(), "nothing was sent");
+            assert_eq!(probe.primings, 1, "the source was primed from the entry");
+            assert!(probe.primed.is_empty(), "the source was unprimed");
+        }
+
         // This process out of descriptors cannot open the entry, which says nothing about
         // whether another can: the write is refused all the same.
         let mut descriptors = Vec::new();
@@ -1776,23 +1794,6 @@ mod tests {
             (Some("v1"), Priority::None),
             "what a separate reader is served is what the source still holds"
         );
-
-        // An expected write primes the source from the entry, then cannot retire it: it is
-        // refused unsent, and the source is primed no longer.
-        cache.expect(&id("T-1"), "v1");
-        let refused = source
-            .set_task_priority(&id("T-1"), Priority::High)
-            .await
-            .expect_err("an expected write is refused");
-        assert!(
-            refused.to_string().contains(&dir.display().to_string()),
-            "{refused}"
-        );
-        {
-            let probe = probe.lock().expect("the probe");
-            assert!(probe.writes.is_empty(), "nothing was sent");
-            assert!(probe.primed.is_empty(), "the source was unprimed");
-        }
 
         // Nothing can take them out of service on disk, so this process withholds them from
         // itself, and another process can still read them — which is why a plain write is
