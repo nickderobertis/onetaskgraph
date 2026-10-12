@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0](https://github.com/nickderobertis/onetaskgraph/compare/v0.4.0...v0.5.0) - 2026-10-12
+
+### Added
+
+- *(copy)* [**breaking**] carry comments, skip items unchanged since the last copy, and copy by query ([#3593](https://github.com/nickderobertis/onetaskgraph/pull/3593))
+
 ## [0.4.0](https://github.com/nickderobertis/onetaskgraph/compare/v0.3.12...v0.4.0) - 2026-10-10
 
 ### Added
