@@ -254,6 +254,9 @@ export type CacheCleared = GeneratedCacheCleared.CacheCleared;
 export namespace GeneratedCacheUse {
 /**
  * How one read of a caching source's task used the cache: the `cache` member of its JSON.
+ *
+ * Built only by [`CacheUse::cache`], which carries no reason, and [`CacheUse::remote`], so a
+ * served entry never carries one.
  */
 export interface CacheUse {
 /**
@@ -549,6 +552,9 @@ comments: Comment[]
 }
 /**
  * How one read of a caching source's task used the cache: the `cache` member of its JSON.
+ *
+ * Built only by [`CacheUse::cache`], which carries no reason, and [`CacheUse::remote`], so a
+ * served entry never carries one.
  */
 export interface CacheUse {
 /**
@@ -8981,6 +8987,9 @@ sha256: string
 }
 /**
  * How one read of a caching source's task used the cache: the `cache` member of its JSON.
+ *
+ * Built only by [`CacheUse::cache`], which carries no reason, and [`CacheUse::remote`], so a
+ * served entry never carries one.
  */
 export interface CacheUse {
 /**
@@ -9551,6 +9560,9 @@ sha256: string
 }
 /**
  * How one read of a caching source's task used the cache: the `cache` member of its JSON.
+ *
+ * Built only by [`CacheUse::cache`], which carries no reason, and [`CacheUse::remote`], so a
+ * served entry never carries one.
  */
 export interface CacheUse {
 /**
