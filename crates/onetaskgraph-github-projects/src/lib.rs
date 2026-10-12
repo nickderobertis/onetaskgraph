@@ -310,6 +310,7 @@
 //! | comment | 2 | ISSUE, ADD_COMMENT: the target is read first, because GitHub accepts a comment on any issue or pull request (see below) |
 //! | detail | 1 | ISSUE_DETAIL: the item and its first page of comments, for `task show` and `task comment list`; `--no-comments` is ISSUE alone |
 //! | batched detail | ceil(n / DETAIL_BATCH) | ISSUE_DETAILS: `task show-many` of `n` items, DETAIL_BATCH (24) at a time, comments included or not |
+//! | copy --comments, n changed tasks | ceil(n / COPY_DETAIL_BATCH) | ISSUE_COPY_DETAILS: each task with its first page of comments and its `blockedBy`, COPY_DETAIL_BATCH (21) at a time; a task whose comments run past that page adds one ISSUE_DETAIL per further page, and a task skipped from its listing costs nothing beyond it |
 //! | recount | 1 | ISSUE_DETAIL |
 //! | status | 2 | ISSUE, UPDATE_FIELD; a terminal status additionally updates issue state |
 //! | priority | 2 | ISSUE, UPDATE_FIELD or CLEAR_FIELD, with stored priority in the mutation response |
@@ -627,13 +628,14 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
-    Capabilities, Classification, Comment, CommentBody, Cursor, DependencyEdge, DependencyEndpoint,
-    DependencyKind, DependencySupport, Direction, Document, DocumentQuery, Health, ItemKind,
-    ItemWrite, Label, LabelFilter, Location, MetadataKey, Metering, NativeId, NewComment, Page,
-    PageRequest, Priority, Project, ProjectFilter, ProjectQuery, Repository, SecretResolver,
-    SharedClock, SourceError, SourceName, SourcePlugin, Status, StatusCategory, StatusMapping,
-    Support, Task, TaskDetailRead, TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome,
-    TextFields, TextQuery, UnmappedStatus, UpdatedField, WriteSupport, system_clock,
+    Capabilities, Classification, Comment, CommentBody, CommentOrigin, Cursor, DependencyEdge,
+    DependencyEndpoint, DependencyKind, DependencySupport, Direction, Document, DocumentQuery,
+    Health, ItemKind, ItemWrite, Label, LabelFilter, Location, MetadataKey, Metering, NativeId,
+    NewComment, Page, PageRequest, Priority, Project, ProjectFilter, ProjectQuery, Repository,
+    SecretResolver, SharedClock, SourceError, SourceName, SourcePlugin, Status, StatusCategory,
+    StatusMapping, Support, Task, TaskDetailRead, TaskQuery, TaskRef, TaskSource, TaskUpdate,
+    TaskUpdateOutcome, TextFields, TextQuery, UnmappedStatus, UpdatedField, WriteSupport,
+    system_clock,
 };
 use reqwest::{Client, StatusCode, Url};
 use schemars::{Schema, schema_for};
@@ -643,6 +645,7 @@ use serde_json::{Value, json};
 
 pub mod accounting;
 mod assets;
+pub mod change_token;
 mod visibility;
 
 use accounting::Accounting;
@@ -665,6 +668,15 @@ pub const SEARCH_PAGE_SIZE: u32 = 20;
 /// twenty-five come to 150, which rounds to two. `tests/point_cost.rs` prices the document at
 /// one point and fails if one item more would still be priced at one.
 pub const DETAIL_BATCH: usize = 24;
+/// How many items one [`graphql::ISSUE_COPY_DETAILS`] request reads: each with the first page
+/// of its comments and its `blockedBy`, the largest batch the node-count model prices at one
+/// point.
+///
+/// The six requests' worth an item of [`DETAIL_BATCH`] costs, and its `blockedBy` connection
+/// besides: seven. Twenty-one items come to 147, which rounds to one point; twenty-two come to
+/// 154, which rounds to two. `tests/point_cost.rs` prices the document at one point and fails
+/// if one item more would still be priced at one.
+pub const COPY_DETAIL_BATCH: usize = 21;
 
 /// The most nodes any one document this source sends may be asked to return.
 ///
@@ -845,6 +857,24 @@ pub mod graphql {
         };
     }
 
+    /// The variable every document reading an issue declares for the relationship events its
+    /// change token counts, with its value as the default, so no caller binds it.
+    ///
+    /// A variable rather than a literal list because every argument a production document
+    /// passes is a declared variable, which `tests/schema.rs` holds them to, and every member of
+    /// its default to the pinned enum. Its default is the six event types GitHub records a
+    /// relationship added or removed with: a dependency on either end, as `blockedBy` and
+    /// `blocking`, so one a person makes from the far end moves this end's count too; and a
+    /// project membership on the task, as its parent, which GitHub records there whichever
+    /// issue the move was made from. A sub-issue's events on its parent are not counted: a
+    /// project carries no task token, and a copy writes nothing of a task its own sub-issues
+    /// decide. [`super::change_token`] says why the count is in the token.
+    macro_rules! relationship_events_variable {
+        () => {
+            ",$relationshipEvents:[IssueTimelineItemsItemType!]=[BLOCKED_BY_ADDED_EVENT,BLOCKED_BY_REMOVED_EVENT,BLOCKING_ADDED_EVENT,BLOCKING_REMOVED_EVENT,PARENT_ISSUE_ADDED_EVENT,PARENT_ISSUE_REMOVED_EVENT]"
+        };
+    }
+
     /// Everything this source reads about one issue, wherever it reaches that issue.
     ///
     /// A macro rather than a constant so the three documents below can `concat!` it: one
@@ -876,9 +906,9 @@ pub mod graphql {
     macro_rules! board_issue {
         () => {
             concat!(
-                r#" fragment BoardIssue on Issue{__typename id number title body url createdAt updatedAt state stateReason(enableDuplicate:$duplicates) repository{nameWithOwner} parent{id} subIssuesSummary{total}
+                r#" fragment BoardIssue on Issue{__typename id number title body url createdAt updatedAt state stateReason(enableDuplicate:$duplicates) repository{nameWithOwner} parent{id} subIssuesSummary{total} commentCount:comments{totalCount} relationshipEvents:timelineItems(itemTypes:$relationshipEvents){totalCount}
       labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}
-      projectItems(first:$boardItems){nodes{id project{id number}
+      projectItems(first:$boardItems){nodes{id updatedAt project{id number}
         "#,
                 board_item_values!(),
                 r#"}pageInfo{hasNextPage endCursor}}}"#
@@ -896,7 +926,9 @@ pub mod graphql {
     /// discriminator has to be applied to the field, which is a scalar on the issue and
     /// costs nothing.
     pub const SEARCH_ISSUES: &str = concat!(
-        r#"query($search:String!,$type:SearchType!,$first:Int!,$after:String,$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!){
+        r#"query($search:String!,$type:SearchType!,$first:Int!,$after:String,$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!"#,
+        relationship_events_variable!(),
+        r#"){
       search(query:$search,type:$type,first:$first,after:$after){
         pageInfo{hasNextPage endCursor}
         nodes{__typename ...BoardIssue}
@@ -929,7 +961,9 @@ pub mod graphql {
     /// pages of [`SEARCH_ISSUES`] and [`SUB_ISSUES`], multiplying both documents' price. Here
     /// they sit under one item, and this read is still one point.
     pub const ISSUE: &str = concat!(
-        r#"query($id:ID!,$first:Int!,$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!){
+        r#"query($id:ID!,$first:Int!,$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!"#,
+        relationship_events_variable!(),
+        r#"){
       node(id:$id){__typename ...BoardIssue ... on Issue{
         boards:projectItems(first:$boardItems){nodes{project{id number fields(first:$nestedFirst){nodes{
           ... on ProjectV2SingleSelectField{__typename id name options{id name}}
@@ -958,7 +992,9 @@ pub mod graphql {
     /// and `$nestedFirst` nodes per issue — and is kept off [`SEARCH_ISSUES`], whose pages
     /// answer questions that never read an edge.
     pub const SUB_ISSUES: &str = concat!(
-        r#"query($id:ID!,$first:Int!,$after:String,$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!){
+        r#"query($id:ID!,$first:Int!,$after:String,$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!"#,
+        relationship_events_variable!(),
+        r#"){
       node(id:$id){__typename
         ... on Issue{subIssues(first:$first,after:$after){
           pageInfo{hasNextPage endCursor}
@@ -979,7 +1015,7 @@ pub mod graphql {
     macro_rules! board_item_content {
         () => {
             r#" content{
-        ... on Issue{__typename id number title body url createdAt updatedAt state stateReason(enableDuplicate:$duplicates) repository{nameWithOwner} parent{id} subIssuesSummary{total} labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}}
+        ... on Issue{__typename id number title body url createdAt updatedAt state stateReason(enableDuplicate:$duplicates) repository{nameWithOwner} parent{id} subIssuesSummary{total} commentCount:comments{totalCount} relationshipEvents:timelineItems(itemTypes:$relationshipEvents){totalCount} labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}}
         ... on PullRequest{__typename id}
         ... on DraftIssue{__typename id title body createdAt updatedAt}
       }"#
@@ -988,7 +1024,9 @@ pub mod graphql {
 
     /// Reads the board's fields and one page of its items.
     pub const BOARD: &str = concat!(
-        r#"query($owner:String!,$number:Int!,$first:Int!,$after:String,$nestedFirst:Int!,$duplicates:Boolean!){
+        r#"query($owner:String!,$number:Int!,$first:Int!,$after:String,$nestedFirst:Int!,$duplicates:Boolean!"#,
+        relationship_events_variable!(),
+        r#"){
       owner:repositoryOwner(login:$owner){
         ... on ProjectV2Owner{projectV2(number:$number){...Board}}
       }
@@ -997,7 +1035,7 @@ pub mod graphql {
         ... on ProjectV2SingleSelectField{__typename id name options{id name}}
         ... on ProjectV2Field{__typename id name dataType}
       }pageInfo{hasNextPage}}
-      items(first:$first,after:$after){nodes{id "#,
+      items(first:$first,after:$after){nodes{id updatedAt "#,
         board_item_values!(),
         board_item_content!(),
         r#"} pageInfo{hasNextPage endCursor}}
@@ -1031,10 +1069,12 @@ pub mod graphql {
     /// The root is aliased `originItems` rather than `owner`, so nothing counting the board's
     /// own whole reads counts this one among them.
     pub const ORIGIN_LOOKUP: &str = concat!(
-        r#"query($owner:String!,$number:Int!,$filter:String!,$search:String!,$type:SearchType!,$originFirst:Int!,$itemsAfter:String,$searchAfter:String,$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!){
+        r#"query($owner:String!,$number:Int!,$filter:String!,$search:String!,$type:SearchType!,$originFirst:Int!,$itemsAfter:String,$searchAfter:String,$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!"#,
+        relationship_events_variable!(),
+        r#"){
       originItems:repositoryOwner(login:$owner){
         ... on ProjectV2Owner{projectV2(number:$number){
-          items(first:$originFirst,after:$itemsAfter,query:$filter){nodes{id "#,
+          items(first:$originFirst,after:$itemsAfter,query:$filter){nodes{id updatedAt "#,
         board_item_values!(),
         board_item_content!(),
         r#"} pageInfo{hasNextPage endCursor}}
@@ -1109,7 +1149,7 @@ pub mod graphql {
         r#"query($id:ID!,$first:Int!,$after:String,$nestedFirst:Int!){
       node(id:$id){
         ... on Issue{projectItems(first:$first,after:$after){
-          nodes{id project{id number}
+          nodes{id updatedAt project{id number}
         "#,
         board_item_values!(),
         r#"}
@@ -1234,7 +1274,9 @@ pub mod graphql {
     /// connection there would multiply through both of those documents' price, and neither
     /// needs one.
     pub const ISSUE_DETAIL: &str = concat!(
-        r#"query($id:ID!,$first:Int!,$after:String,$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!){
+        r#"query($id:ID!,$first:Int!,$after:String,$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!"#,
+        relationship_events_variable!(),
+        r#"){
       node(id:$id){__typename ...BoardIssue ... on Issue{comments(first:$first,after:$after){nodes{"#,
         issue_comment!(),
         r#"}pageInfo{hasNextPage endCursor}}}}
@@ -1273,7 +1315,9 @@ pub mod graphql {
     /// price is the document's, whatever its variables, so a short batch costs what a full
     /// one does and nothing more.
     pub const ISSUE_DETAILS: &str = concat!(
-        r#"query($id0:ID!,$id1:ID!,$id2:ID!,$id3:ID!,$id4:ID!,$id5:ID!,$id6:ID!,$id7:ID!,$id8:ID!,$id9:ID!,$id10:ID!,$id11:ID!,$id12:ID!,$id13:ID!,$id14:ID!,$id15:ID!,$id16:ID!,$id17:ID!,$id18:ID!,$id19:ID!,$id20:ID!,$id21:ID!,$id22:ID!,$id23:ID!,$first:Int!,$comments:Boolean!,$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!){"#,
+        r#"query($id0:ID!,$id1:ID!,$id2:ID!,$id3:ID!,$id4:ID!,$id5:ID!,$id6:ID!,$id7:ID!,$id8:ID!,$id9:ID!,$id10:ID!,$id11:ID!,$id12:ID!,$id13:ID!,$id14:ID!,$id15:ID!,$id16:ID!,$id17:ID!,$id18:ID!,$id19:ID!,$id20:ID!,$id21:ID!,$id22:ID!,$id23:ID!,$first:Int!,$comments:Boolean!,$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!"#,
+        relationship_events_variable!(),
+        r#"){"#,
         issue_details_alias!(0),
         issue_details_alias!(1),
         issue_details_alias!(2),
@@ -1302,12 +1346,65 @@ pub mod graphql {
         board_issue!()
     );
 
+    /// One alias of [`ISSUE_COPY_DETAILS`]: the item a batch's `$id<n>` names, with the first
+    /// page of its comments and the issues it is blocked by.
+    macro_rules! issue_copy_details_alias {
+        ($n:literal) => {
+            concat!(
+                "\n      i",
+                stringify!($n),
+                ":node(id:$id",
+                stringify!($n),
+                "){__typename ...BoardIssue ... on Issue{comments(first:$first){nodes{",
+                issue_comment!(),
+                "}pageInfo{hasNextPage endCursor}} blockedBy(first:$nestedFirst){nodes{...Related}pageInfo{hasNextPage endCursor}}}}"
+            )
+        };
+    }
+
+    /// [`ISSUE_DETAILS`] as a copy reads the tasks it carries: each item with the first page of
+    /// its comments and its `blockedBy` — the edges a copy reads of every task next, which
+    /// [`ISSUE`] carries and [`ISSUE_DETAILS`] does not — [`COPY_DETAIL_BATCH`](super::COPY_DETAIL_BATCH)
+    /// at a time, so a copy of a changed task costs this read and nothing else.
+    ///
+    /// A document of its own rather than a widening of [`ISSUE_DETAILS`], whose batch size is
+    /// what `task show-many` is priced by and which reads no edge.
+    pub const ISSUE_COPY_DETAILS: &str = concat!(
+        r#"query($id0:ID!,$id1:ID!,$id2:ID!,$id3:ID!,$id4:ID!,$id5:ID!,$id6:ID!,$id7:ID!,$id8:ID!,$id9:ID!,$id10:ID!,$id11:ID!,$id12:ID!,$id13:ID!,$id14:ID!,$id15:ID!,$id16:ID!,$id17:ID!,$id18:ID!,$id19:ID!,$id20:ID!,$first:Int!,$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!"#,
+        relationship_events_variable!(),
+        r#"){"#,
+        issue_copy_details_alias!(0),
+        issue_copy_details_alias!(1),
+        issue_copy_details_alias!(2),
+        issue_copy_details_alias!(3),
+        issue_copy_details_alias!(4),
+        issue_copy_details_alias!(5),
+        issue_copy_details_alias!(6),
+        issue_copy_details_alias!(7),
+        issue_copy_details_alias!(8),
+        issue_copy_details_alias!(9),
+        issue_copy_details_alias!(10),
+        issue_copy_details_alias!(11),
+        issue_copy_details_alias!(12),
+        issue_copy_details_alias!(13),
+        issue_copy_details_alias!(14),
+        issue_copy_details_alias!(15),
+        issue_copy_details_alias!(16),
+        issue_copy_details_alias!(17),
+        issue_copy_details_alias!(18),
+        issue_copy_details_alias!(19),
+        issue_copy_details_alias!(20),
+        "\n    }",
+        board_issue!(),
+        related_issue!()
+    );
+
     /// Which issue one comment is on, read before that comment is edited or removed.
     ///
     /// GitHub's comment mutations take the comment's id and nothing else, so without this a
     /// comment id given against the wrong task would change a comment on another issue.
     pub const COMMENT_ISSUE: &str =
-        r#"query($id:ID!){node(id:$id){__typename ... on IssueComment{id issue{id}}}}"#;
+        r#"query($id:ID!){node(id:$id){__typename ... on IssueComment{id body issue{id}}}}"#;
     /// Adds one comment to an issue, signed as the account the token belongs to.
     pub const ADD_COMMENT: &str = concat!(
         r#"mutation($input:AddCommentInput!){addComment(input:$input){subject{id} commentEdge{node{"#,
@@ -1332,7 +1429,7 @@ pub mod graphql {
     /// `documents_are_all_inventoried` reads this file back and fails naming any `pub
     /// const` here that this list omits, so the two cannot part — which is the same guard
     /// `CATEGORIES` carries, in the one shape available to a set of `&str` constants.
-    pub const DOCUMENTS: [(&str, &str); 34] = [
+    pub const DOCUMENTS: [(&str, &str); 35] = [
         (SEARCH_ISSUES, "searching this board's issues"),
         (ISSUE, "reading one issue"),
         (
@@ -1383,6 +1480,10 @@ pub mod graphql {
         (
             ISSUE_DETAILS,
             "reading a batch of issues with their comments",
+        ),
+        (
+            ISSUE_COPY_DETAILS,
+            "reading a batch of issues with their comments and dependencies for a copy",
         ),
         (COMMENT_ISSUE, "reading which issue a comment is on"),
         (ADD_COMMENT, "adding a comment"),
@@ -1690,6 +1791,32 @@ fn plural(count: u32, thing: &str) -> String {
 
 fn seconds(duration: Duration) -> String {
     format!("{:.1}s", duration.as_secs_f64())
+}
+
+/// The member [`stamp_served`] writes onto every node of a response that says when it last
+/// changed: the `Date` that response was served at. No GitHub type has a field of this name.
+const SERVED_AT: &str = "onetaskgraphServedAt";
+
+/// Write `served` onto every object of `data` carrying an `updatedAt`, so whatever reads a
+/// node's time later knows the server's clock on the response that read it — which is what
+/// decides whether that node's change token is given (see [`change_token::SETTLED`]).
+fn stamp_served(data: &mut Value, served: &str) {
+    match data {
+        Value::Object(members) => {
+            if members.contains_key("updatedAt") {
+                members.insert(SERVED_AT.to_owned(), Value::String(served.to_owned()));
+            }
+            for member in members.values_mut() {
+                stamp_served(member, served);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                stamp_served(item, served);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// A header GitHub spells as a whole number of seconds, or `None` when this one is not.
@@ -4229,6 +4356,12 @@ impl GitHubProjectsSource {
             })?;
         let status = response.status();
         let header = |name: &str| whole_seconds(response.headers().get(name));
+        let served = response
+            .headers()
+            .get(reqwest::header::DATE)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| DateTime::parse_from_rfc2822(value).ok())
+            .map(|at| at.with_timezone(&Utc));
         *limits = accounting::RateLimit::read(|name| {
             response
                 .headers()
@@ -4288,7 +4421,11 @@ impl GitHubProjectsSource {
             .as_ref()
             .and_then(|body| body.pointer("/data/rateLimit/cost"))
             .and_then(Value::as_u64);
-        self.answer(&body).map_err(Attempt::Failed)
+        let mut data = self.answer(&body).map_err(Attempt::Failed)?;
+        if let Some(served) = served {
+            stamp_served(&mut data, &served.to_rfc3339());
+        }
+        Ok(data)
     }
 
     /// What one successful HTTP response says, once its GraphQL errors are read.
@@ -4431,8 +4568,11 @@ impl GitHubProjectsSource {
                 }
             }
         };
+        // The membership's own `updatedAt` rides along: it is the board half of the item's change
+        // token, which a field change moves where the issue's own time does not.
         let item = json!({
             "id": required_str(&held, "id")?,
+            "updatedAt": held.get("updatedAt"),
             "project": held.get("project"),
             "fieldValues": held.get("fieldValues"),
             "content": issue,
@@ -5977,6 +6117,19 @@ impl GitHubProjectsSource {
             url: optional_str(content, "url")?.map(str::to_owned),
             created_at: optional_time(content, "createdAt")?,
             updated_at: optional_time(content, "updatedAt")?,
+            item_updated_at: optional_time(item, "updatedAt")?,
+            comment_count: content
+                .pointer("/commentCount/totalCount")
+                .and_then(Value::as_u64),
+            relationship_events: content
+                .pointer("/relationshipEvents/totalCount")
+                .and_then(Value::as_u64),
+            // The issue node is stamped wherever it was read; a board item a read of the issue
+            // put together from its memberships is not.
+            served_at: match optional_time(content, SERVED_AT)? {
+                Some(served) => Some(served),
+                None => optional_time(item, SERVED_AT)?,
+            },
             own_repository,
             repositories,
             classification,
@@ -7065,6 +7218,13 @@ impl GitHubProjectsSource {
                 .await?;
         }
 
+        // The `blockedBy` this item was read with is what the write just changed, so it is no
+        // answer any more: a later write in this command would reconcile against it — re-adding
+        // what it kept and never removing what it dropped — and a forward-edge read would
+        // answer with it. Left unknown, each asks GitHub instead.
+        if blocked_by_moved {
+            item.blocked_by = None;
+        }
         if let Some(title) = &update.title {
             item.title.clone_from(title);
         }
@@ -8048,6 +8208,12 @@ impl GitHubProjectsSource {
             url,
             created_at: existing.and_then(|item| item.created_at),
             updated_at: existing.and_then(|item| item.updated_at),
+            // What this write moved is GitHub's to say, so a record of it gives no token until
+            // it is read again.
+            item_updated_at: None,
+            comment_count: None,
+            relationship_events: None,
+            served_at: None,
             own_repository,
             repositories: incoming.repositories.to_vec(),
             classification: incoming.classification,
@@ -8375,6 +8541,11 @@ impl GitHubProjectsSource {
         } else {
             self.resolve_issue(node).await?
         };
+        // A read that carried the whole of what the issue is blocked by — a copy's — is kept
+        // for this command, so the dependency read the copy makes next is answered from it.
+        if let Some(read) = item.as_ref().filter(|item| item.blocked_by.is_some()) {
+            self.resolved_cache()?.insert(read.id.clone(), read.clone());
+        }
         let Some(item) = item.filter(|item| item.kind == BoardKind::Work(ItemKind::Task)) else {
             return Ok(None);
         };
@@ -8400,24 +8571,37 @@ impl GitHubProjectsSource {
         issue: &NativeId,
         comment: &NativeId,
     ) -> Result<bool, SourceError> {
+        Ok(self.comment_on(issue, comment).await?.is_some())
+    }
+
+    /// The body the comment `comment` holds, exactly as GitHub holds it, when it is one of
+    /// `issue`'s own — the read [`Self::comment_is_on`] makes, answering with what it selected.
+    async fn comment_on(
+        &self,
+        issue: &NativeId,
+        comment: &NativeId,
+    ) -> Result<Option<String>, SourceError> {
         let asked = self
             .graphql(graphql::COMMENT_ISSUE, json!({"id":comment.0}))
             .await;
         let data = match asked {
             Ok(data) => data,
-            Err(error) if unresolvable_node(&error) => return Ok(false),
+            Err(error) if unresolvable_node(&error) => return Ok(None),
             Err(error) => return Err(error),
         };
         let Some(node) = data.get("node").filter(|value| !value.is_null()) else {
-            return Ok(false);
+            return Ok(None);
         };
         if optional_str(node, "__typename")? != Some("IssueComment") {
-            return Ok(false);
+            return Ok(None);
         }
         let on = node.get("issue").ok_or_else(|| SourceError::Malformed {
             message: format!("GitHub issue comment {} names no issue", comment.0),
         })?;
-        Ok(required_str(on, "id")? == issue.0)
+        if required_str(on, "id")? != issue.0 {
+            return Ok(None);
+        }
+        Ok(Some(required_str(node, "body")?.to_owned()))
     }
 
     /// Which far ends this item's own `blockedBy` relationship holds, and which it cannot.
@@ -8860,6 +9044,21 @@ fn noting(error: SourceError, note: &str) -> SourceError {
     }
 }
 
+/// The variables of one [`graphql::ISSUE_COPY_DETAILS`] request, as [`detail_batch`] binds its
+/// own: a slot `batch` has no id for is bound to its last id, read again at no added price.
+fn copy_detail_batch(batch: &[NativeId], comments: &PageRequest) -> Value {
+    let mut variables = serde_json::Map::new();
+    for slot in 0..COPY_DETAIL_BATCH {
+        let id = batch.get(slot).or(batch.last()).map(|id| id.0.clone());
+        variables.insert(format!("id{slot}"), json!(id));
+    }
+    variables.insert("first".to_owned(), json!(comments.limit.min(MAX_PAGE_SIZE)));
+    variables.insert("nestedFirst".to_owned(), json!(NESTED_PAGE_SIZE));
+    variables.insert("boardItems".to_owned(), json!(BOARD_ITEMS_PAGE_SIZE));
+    variables.insert("duplicates".to_owned(), json!(true));
+    Value::Object(variables)
+}
+
 /// The variables of one [`graphql::ISSUE_DETAILS`] request over `batch` — at most
 /// [`DETAIL_BATCH`] ids — each item with the first page of its comments when `comments` asks
 /// for them.
@@ -9223,6 +9422,18 @@ struct Resolved {
     url: Option<String>,
     created_at: Option<DateTime<Utc>>,
     updated_at: Option<DateTime<Utc>>,
+    /// When the board item itself last changed — what a board field write moves — when the
+    /// read that reached it said.
+    item_updated_at: Option<DateTime<Utc>>,
+    /// How many comments the issue holds, when the read that reached it said.
+    comment_count: Option<u64>,
+    /// How many relationship events the issue's timeline holds — every dependency, as
+    /// `blockedBy` or `blocking`, and every project membership, as its parent, added or
+    /// removed — when the read that reached it said.
+    relationship_events: Option<u64>,
+    /// The server's clock on the response that read it — its `Date` header — when the
+    /// response carried one.
+    served_at: Option<DateTime<Utc>>,
     own_repository: Option<Repository>,
     repositories: Vec<Repository>,
     classification: Classification,
@@ -9327,6 +9538,27 @@ impl Resolved {
         self.number.map(|number| number.to_string())
     }
 
+    /// This item's change token — see [`change_token`] — or `None` when the read that
+    /// reached it did not carry all five of its parts, which a draft never does, did not say
+    /// when GitHub served it, or found it changed too recently to have settled.
+    fn version(&self) -> Option<String> {
+        match self.content_kind {
+            ContentKind::Issue => {
+                let (issue, item) = (self.updated_at?, self.item_updated_at?);
+                let parts = change_token::Parts {
+                    issue,
+                    item,
+                    comments: self.comment_count?,
+                    relationships: self.relationship_events?,
+                    repository: self.own_repository.clone()?,
+                };
+                change_token::settled(issue, item, self.served_at?)
+                    .then(|| change_token::spell(&parts))
+            }
+            ContentKind::DraftIssue => None,
+        }
+    }
+
     /// Whether its `Priority` field holds a value at all, mapped or not.
     fn holds_priority(&self) -> bool {
         self.priority != HeldPriority::Read(Priority::None)
@@ -9356,6 +9588,7 @@ impl Resolved {
             }
         };
         Ok(Task {
+            version: self.version(),
             id: self.id.clone(),
             key: self.key(),
             title: self.title.clone(),
@@ -9720,6 +9953,9 @@ fn document_matches(document: &Document, query: &DocumentQuery, project: &Projec
 impl TaskSource for GitHubProjectsSource {
     fn kind(&self) -> &'static str {
         KIND
+    }
+    fn order_versions(&self, a: &str, b: &str) -> Option<std::cmp::Ordering> {
+        change_token::order(a, b)
     }
     fn capabilities(&self) -> Capabilities {
         Capabilities {
@@ -10344,6 +10580,56 @@ impl TaskSource for GitHubProjectsSource {
         }
     }
 
+    /// Every id's task with the first page of its comments and its `blockedBy`, as a copy reads
+    /// the tasks it carries: [`COPY_DETAIL_BATCH`] items per [`graphql::ISSUE_COPY_DETAILS`]
+    /// request, so the dependency read a copy makes of each next is answered from this one.
+    async fn get_task_details_for_copy(
+        &self,
+        ids: &[NativeId],
+        comments: &PageRequest,
+    ) -> Vec<Result<Option<TaskDetailRead>, SourceError>> {
+        // A page past the first is a page of one task's comments, which the detail read of it
+        // alone answers.
+        if comments.cursor.is_some() {
+            return self.get_task_details(ids, Some(comments)).await;
+        }
+        if let Err(error) = validate_page(comments) {
+            return ids.iter().map(|_| Err(error.clone())).collect();
+        }
+        let mut read = Vec::with_capacity(ids.len());
+        for batch in ids.chunks(COPY_DETAIL_BATCH) {
+            match self
+                .graphql(
+                    graphql::ISSUE_COPY_DETAILS,
+                    copy_detail_batch(batch, comments),
+                )
+                .await
+            {
+                Ok(data) => {
+                    for (slot, id) in batch.iter().enumerate() {
+                        let read_one = match data.get(format!("i{slot}")) {
+                            Some(node) => self.detail_of(id, node, true, None).await,
+                            None => Err(SourceError::Malformed {
+                                message: format!(
+                                    "GitHub answered a batch read with no item for {}",
+                                    id.0
+                                ),
+                            }),
+                        };
+                        read.push(read_one);
+                    }
+                }
+                Err(error) if unresolvable_node(&error) => {
+                    for id in batch {
+                        read.push(self.issue_detail(id, comments).await);
+                    }
+                }
+                Err(error) => read.extend(batch.iter().map(|_| Err(error.clone()))),
+            }
+        }
+        read
+    }
+
     /// Add one comment to the task's issue, as the account the token belongs to.
     ///
     /// The author is refused before anything is sent — not even the task is read — because
@@ -10404,9 +10690,11 @@ impl TaskSource for GitHubProjectsSource {
         let Some(issue) = self.commented_issue(task).await? else {
             return Ok(None);
         };
-        if !self.comment_is_on(&issue, comment).await? {
+        let Some(held) = self.comment_on(&issue, comment).await? else {
             return Ok(None);
-        }
+        };
+        // A comment a copy wrote keeps its origin through an edit: its marker is carried over.
+        let body = CommentOrigin::kept(&held, body)?;
         let data = self
             .graphql(
                 graphql::UPDATE_COMMENT,
@@ -10505,8 +10793,13 @@ type ProjectChildren = BTreeMap<NativeId, (NativeId, Vec<Resolved>)>;
 /// `author` is absent both when GitHub answers `null` for an account that no longer exists
 /// and when it answers an actor with no login, because either way the source did not say who
 /// wrote it — which is what an absent author means, rather than an author called nothing.
+///
+/// A comment a copy wrote here carries its origin as the hidden marker at the end of its body
+/// — GitHub sets every comment's author and times itself, so there is nowhere else to keep it —
+/// and is read back with the marker taken out and reported as its origin.
 fn comment_from(value: &Value) -> Result<Comment, SourceError> {
     Ok(Comment {
+        origin: None,
         id: NativeId(required_str(value, "id")?.to_owned()),
         author: optional_str(value.get("author").unwrap_or(&Value::Null), "login")?
             .map(str::to_owned),
@@ -10514,7 +10807,8 @@ fn comment_from(value: &Value) -> Result<Comment, SourceError> {
         updated_at: optional_time(value, "updatedAt")?,
         body: required_str(value, "body")?.to_owned(),
         url: optional_str(value, "url")?.map(str::to_owned),
-    })
+    }
+    .unmarked())
 }
 
 /// The page of comments one issue node carries, resumed from `after`.

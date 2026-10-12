@@ -78,7 +78,8 @@ silence. See the note on `Health` below for the one difference it carries delibe
   `Support`, `DependencySupport`; the write types `ItemWrite`, `WriteSupport`,
   `MetadataKey` and `MetadataRecord`; the targeted-update types `TaskUpdate`,
   `TaskUpdateOutcome` and `UpdatedField`; the
-  comment types `Comment`, `CommentBody`, `NewComment` and `TaskDetailRead`; the
+  comment types `Comment`, `CommentBody`, `NewComment`, `CommentOrigin`, `CommentCopy` and
+  `TaskDetailRead`; the
   metering types `Metering` and `Metered`; the `status_mapping` types `StatusMapping`,
   `StatusNames`, `StatusName` and `UnmappedStatus`; the image-asset types `Asset`,
   `AssetName`, `AssetContentType`, `AssetPayload`, `AssetUpload`, `AssetUploads`, `AssetWrite`
@@ -733,11 +734,13 @@ them do; this is the inventory of what is owed, not a status board.
     handshake predates them is refused before it is sent anything — a source whose comments
     cannot be written, a GitHub draft issue, an author given to a source that records its own,
     and an empty or unreadable body.
-40. A task copy, a project copy and a document copy each neither read nor write a comment at
-    either end: neither board is sent a comment request, both ends' comments are as they
-    were, and nothing the copy wrote carries a comment of what it was copied from.
-41. A copy into a Markdown task keeps that file's comments section byte for byte, and no
-    comment of the copy's source enters it.
+40. Without `--comments`, a task copy, a project copy and a document copy each neither read
+    nor write a comment at either end: neither board is sent a comment request, both ends'
+    comments are as they were, and nothing the copy wrote carries a comment of what it was
+    copied from. The one read is a task copy by query narrowed by `--commented-since`, which
+    reads each matched task's comments once to confirm the match and still writes none.
+41. Without `--comments`, a copy into a Markdown task keeps that file's comments section byte
+    for byte, and no comment of the copy's source enters it.
 42. A task's status is set on its own through the binary — on a folder of Markdown, whose
     record is byte-identical apart from its `status`, over the in-process boundary and the
     stdio plugin protocol alike, and on a GitHub board, whose only mutations are the `Status`
@@ -1002,6 +1005,41 @@ them do; this is the inventory of what is owed, not a status board.
     spending no request a declared-nothing source does not, an unverifiable one refused.
 91. The pinned onevcs boundary schema is what the released `boundary schema --json` prints, and
     every payload the store sends and every verdict it reads is held to it.
+92. A task's `version` is in the JSON of every read on a GitHub board and a folder of Markdown
+    and absent on Linear, and one board task changed by each kind — a comment added, edited and
+    deleted, a body, title, status, priority, label, board-field, metadata and dependency
+    change — carries a token the store orders as later, while no other task's moves.
+93. `task copy --comments` and `project copy --comments` carry comments from a board into
+    Markdown over both boundaries, from Markdown onto a board, between Linear and Markdown, and
+    from a board into a second board and into Linear: each copy names its origin's task, id,
+    author, times and address, Markdown keeps it natively and a board as a marker read back out
+    of the body, an edit and a deletion at the source are followed, a comment written at the
+    destination is never touched, a chain names the first origin, a copy back from either hop
+    echoes nothing, and each outcome counts what it did.
+94. A `--comments` copy or a copy by query reports a task unchanged at both ends `skipped`,
+    sending its source nothing but the listing; one change of each kind reads that task again
+    and no other; a copy adding `--comments` carries them and then skips; a flagless copy
+    between two comment copies advances the record so the second carries what changed; an edit
+    or deletion of a copied comment at the destination is restored and a comment written there
+    costs one skip; and the destination check reads nothing a copy does not.
+95. `task copy --to` with `--source`, `--commented-since` and `--metadata` copies what `task
+    list` answers, reads each task's comments once, and is refused beside ids; `--no-link`
+    writes nothing to the source and the next copy finds the counterpart by its origin.
+96. A copy into a folder lands one revision of each item — a board task changed after its
+    listing or between its comment pages, a Linear task at the same points, a task file
+    rewritten between reads — and a board task changed again while it is read again is
+    reported `failed`, written nowhere, while the rest land and the command exits `4`; the
+    folder's copy stays byte-identical until the next copy.
+97. A repeat copy by query of twenty of eighty board tasks sends four listing pages and nothing
+    else, and after five changed, those pages and one batched read carrying their comments and
+    their edges; both are written to the GitHub Projects suite's telemetry.
+98. A `--comments` copy refused part way takes back every comment write it made — a deleted copy
+    written again, an edit reverted, an addition removed — or names the task still holding one
+    the destination would not take back; one into a source whose tasks hold no comments, named
+    or routed to, is refused before anything is read; a copy deleted at the destination before
+    its edit is written afresh; a dry run counts what the copy then writes and sends no write;
+    and a stdio peer predating `comment_copies` and `task_details` is sent each copy as a marked
+    comment, never the methods it did not declare, and reads back every origin.
 
 ## The public boundary
 

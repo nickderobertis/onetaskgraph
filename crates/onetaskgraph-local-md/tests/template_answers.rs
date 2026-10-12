@@ -82,6 +82,7 @@ const HAND_BLOCK: &str = "<!-- onetaskgraph:template-answers\ngoal: Ship it\nste
 
 fn task(title: &str, content: &str, metadata: Value) -> Task {
     Task {
+        version: None,
         id: id(title),
         key: None,
         title: title.to_owned(),
@@ -306,6 +307,7 @@ async fn a_rendering_replaces_content_provenance_and_answers_and_nothing_else() 
         Task {
             content: before.content.clone(),
             metadata: before.metadata.clone(),
+            version: before.version.clone(),
             ..after
         },
         before,

@@ -37,7 +37,9 @@ pub use asset::{
 };
 pub use capability::{Capabilities, DependencySupport, Support};
 pub use clock::{Clock, SIMULATED_CLOCK_VARIABLE, SharedClock, system_clock};
-pub use comment::{Comment, CommentBody, NewComment, TaskDetailRead, commentless};
+pub use comment::{
+    Comment, CommentBody, CommentCopy, CommentOrigin, NewComment, TaskDetailRead, commentless,
+};
 pub use error::SourceError;
 pub use id::{NativeId, SOURCE_NAME_PATTERN, SourceName};
 pub use metadata::{MetadataKey, MetadataRecord, unwritable_metadata};

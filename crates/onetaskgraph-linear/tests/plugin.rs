@@ -540,6 +540,7 @@ fn pinned_schema_names_every_write_operation_the_plugin_sends() {
         (graphql::DOCUMENT_UPDATE, true),
         (graphql::DOCUMENT_DELETE, true),
         (graphql::ISSUE_COMMENTS, false),
+        (graphql::ISSUE_DETAIL, false),
         (graphql::COMMENT, false),
         (graphql::COMMENT_CREATE, true),
         (graphql::COMMENT_UPDATE, true),
@@ -643,7 +644,7 @@ fn superset_server() -> (String, mpsc::Receiver<String>) {
                               "pageInfo":{"hasPreviousPage":false,"startCursor":null}}},
         // On the issue above, so an edit and a removal get past placing the comment and reach
         // the two mutations: an operation this never provokes is an operation this never checks.
-        "comment": {"id":"C","archivedAt":null,"issue":{"id":"I"}},
+        "comment": {"id":"C","body":"comment","archivedAt":null,"issue":{"id":"I"}},
         "commentCreate": {"success":true,"comment":{"id":"C","body":"comment","url":"u",
                           "createdAt":null,"updatedAt":null,"user":{"displayName":"ada"}}},
         "commentUpdate": {"success":true,"comment":{"id":"C","body":"comment","url":"u",
@@ -4267,6 +4268,7 @@ async fn comments_are_read_oldest_first_across_pages_over_real_http() {
         first.items,
         vec![
             Comment {
+                origin: None,
                 id: "c1".into(),
                 // An integration wrote it, and Linear names no user for one.
                 author: None,
@@ -4276,6 +4278,7 @@ async fn comments_are_read_oldest_first_across_pages_over_real_http() {
                 url: Some("https://linear.app/acme/issue/ENG-1/fixture-issue#comment-c1".into()),
             },
             Comment {
+                origin: None,
                 id: "c2".into(),
                 author: Some("ada".into()),
                 created_at: at("2026-08-02T12:00:00Z"),
@@ -4444,7 +4447,7 @@ async fn a_comment_is_added_edited_and_removed_over_real_http() {
     let revised = "Seen again on main, twice.\n";
     let (endpoint, wire) = response_server(vec![
         held_issue("i1-backend"),
-        serde_json::json!({"comment":{"id":"c7","archivedAt":null,"issue":{"id":"i1-backend"}}}),
+        serde_json::json!({"comment":{"id":"c7","body":"held","archivedAt":null,"issue":{"id":"i1-backend"}}}),
         serde_json::json!({"commentUpdate":{"success":true,
             "comment":comment_node("c7", revised, "2026-08-05T08:00:00Z")}}),
     ]);
@@ -4484,7 +4487,7 @@ async fn a_comment_is_added_edited_and_removed_over_real_http() {
 
     let (endpoint, wire) = response_server(vec![
         held_issue("i1-backend"),
-        serde_json::json!({"comment":{"id":"c7","archivedAt":null,"issue":{"id":"i1-backend"}}}),
+        serde_json::json!({"comment":{"id":"c7","body":"held","archivedAt":null,"issue":{"id":"i1-backend"}}}),
         serde_json::json!({"commentDelete":{"success":true}}),
     ]);
     let removed = writable_source(&endpoint)
@@ -4558,11 +4561,11 @@ async fn a_comment_this_task_does_not_have_answers_none_and_nothing_is_written()
         ("no such comment", serde_json::Value::Null),
         (
             "a comment on another issue",
-            serde_json::json!({"id":"c9","archivedAt":null,"issue":{"id":"i2"}}),
+            serde_json::json!({"id":"c9","body":"held","archivedAt":null,"issue":{"id":"i2"}}),
         ),
         (
             "a comment on no issue at all",
-            serde_json::json!({"id":"c9","archivedAt":null,"issue":null}),
+            serde_json::json!({"id":"c9","body":"held","archivedAt":null,"issue":null}),
         ),
         (
             "a trashed comment",
@@ -4686,7 +4689,7 @@ async fn comment_failures_cross_the_http_boundary() {
     );
     let (endpoint, _) = response_server(vec![
         held_issue("i1"),
-        serde_json::json!({"comment":{"id":"c1","archivedAt":null,"issue":{"id":"i1"}}}),
+        serde_json::json!({"comment":{"id":"c1","body":"held","archivedAt":null,"issue":{"id":"i1"}}}),
         serde_json::json!({"commentDelete":{"success":false}}),
     ]);
     let failure = writable_source(&endpoint)
@@ -4813,7 +4816,7 @@ async fn malformed_comment_shapes_are_rejected_rather_than_read_past() {
         ),
         (
             "an issue with an empty id",
-            serde_json::json!({"id":"c1","archivedAt":null,"issue":{"id":""}}),
+            serde_json::json!({"id":"c1","body":"held","archivedAt":null,"issue":{"id":""}}),
         ),
     ] {
         let (endpoint, _) = response_server(vec![
@@ -6724,4 +6727,82 @@ async fn a_project_whose_slot_is_still_in_its_description_is_read_from_its_conte
         query.contains(" content ") && !query.contains("description"),
         "{query}"
     );
+}
+
+/// An issue read with its comments in one request answers "no such task" on exactly the terms
+/// `get_task` does — Linear holding none, holding it archived or trashed, or it being outside
+/// the project this source is scoped to — and an answer it cannot read is refused as malformed
+/// rather than read as an issue with no comments.
+#[tokio::test]
+async fn an_issue_read_with_its_comments_is_held_on_get_tasks_terms_over_real_http() {
+    let page = PageRequest {
+        cursor: None,
+        limit: 50,
+    };
+    let with_comments = |mut issue: serde_json::Value, comments: serde_json::Value| {
+        issue["issue"]["comments"] = comments;
+        issue
+    };
+    let no_comments = serde_json::json!({"nodes":[],
+        "pageInfo":{"hasPreviousPage":false,"startCursor":null}});
+    let held = with_comments(held_issue("i1"), no_comments.clone());
+    let mut archived = held.clone();
+    archived["issue"]["archivedAt"] = serde_json::json!("2026-09-04T18:55:13.746Z");
+    let mut nameless = held.clone();
+    nameless["issue"]
+        .as_object_mut()
+        .expect("an issue")
+        .remove("title");
+    let unpaged = with_comments(held_issue("i1"), serde_json::json!({"nodes":[]}));
+
+    let read = |endpoint: String, scope: Option<serde_json::Value>| {
+        let page = page.clone();
+        async move {
+            let source = match scope {
+                Some(scope) => configured_source(&endpoint, scope),
+                None => source(&endpoint),
+            };
+            source
+                .get_task_details(&["i1".into()], Some(&page))
+                .await
+                .pop()
+                .expect("one answer for one id")
+        }
+    };
+
+    let (endpoint, _) = response_server(vec![held.clone()]);
+    assert!(
+        matches!(read(endpoint, None).await, Ok(Some(detail))
+            if detail.task.id.as_str() == "i1"
+                && matches!(&detail.comments, Some(Ok(Some(page))) if page.items.is_empty())),
+        "a held issue is read with its comments"
+    );
+    for (why, answer, scope) in [
+        ("held by none", serde_json::json!({"issue":null}), None),
+        ("archived or trashed", archived, None),
+        (
+            "outside the source's project",
+            held,
+            Some(serde_json::json!({"project":"P-SCOPE"})),
+        ),
+    ] {
+        let (endpoint, _) = response_server(vec![answer]);
+        assert!(
+            matches!(read(endpoint, scope).await, Ok(None)),
+            "an issue {why} is no task of this source"
+        );
+    }
+    for (why, answer) in [
+        ("without its title", nameless),
+        ("with an unpaged connection", unpaged),
+    ] {
+        let (endpoint, _) = response_server(vec![answer]);
+        assert!(
+            matches!(
+                read(endpoint, None).await,
+                Err(SourceError::Malformed { .. })
+            ),
+            "an issue answered {why} is refused as malformed"
+        );
+    }
 }

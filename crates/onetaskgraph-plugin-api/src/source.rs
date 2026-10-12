@@ -1,5 +1,6 @@
 //! The two traits a plugin implements, and the secret lookup it is handed.
 
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
 use schemars::{JsonSchema, Schema};
@@ -8,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    Asset, AssetName, AssetWrite, AssetsWritten, Capabilities, Comment, CommentBody,
+    Asset, AssetName, AssetWrite, AssetsWritten, Capabilities, Comment, CommentBody, CommentCopy,
     DependencyEdge, Direction, Document, DocumentQuery, ItemKind, ItemWrite, Label, MetadataKey,
     MetadataRecord, Metering, NativeId, NewComment, Page, PageRequest, Priority, Project,
     ProjectQuery, SharedClock, SourceError, SourceName, Status, StatusCategory, Task,
@@ -75,6 +76,22 @@ pub trait TaskSource: Send + Sync {
 
     /// What this source applies itself. Read once per query by the engine.
     fn capabilities(&self) -> Capabilities;
+
+    /// How `a`, a [`Task::version`] this source gave one of its tasks, stands to `b`, another
+    /// it gave the same task: `Greater` when `a` is the later, `Less` when it is the earlier,
+    /// `Equal` when nothing the token covers changed between them, and `None` when the two
+    /// cannot be put in order — a value this source cannot read, or two versions its token
+    /// says differ without saying which came first.
+    ///
+    /// A token's format and its order are the one source's that spells it, so the engine asks
+    /// the source that gave both rather than reading inside either.
+    ///
+    /// Defaulted to equality alone: two identical tokens are one version, and any two others
+    /// are unordered, which a reader takes as *changed, read it again* and never as
+    /// unchanged. A source whose token says which of two versions is the later overrides it.
+    fn order_versions(&self, a: &str, b: &str) -> Option<Ordering> {
+        (a == b).then_some(Ordering::Equal)
+    }
 
     /// Whether the source is answering right now.
     ///
@@ -623,6 +640,23 @@ pub trait TaskSource: Send + Sync {
         Err(commentless(self.kind()))
     }
 
+    /// [`get_task_details`](Self::get_task_details) as a copy reads the tasks it carries: each
+    /// with the first page of its comments `comments` names — and, where the same request can
+    /// carry them, what this source needs to answer [`task_dependencies`](Self::task_dependencies)
+    /// for it without another, since a copy reads every task's edges next.
+    ///
+    /// Defaulted to `get_task_details(ids, Some(comments))`, which is exactly what it answers.
+    /// A source whose detail read is priced by what it selects overrides it with a read that
+    /// also carries the edges, so a copy of a changed task costs its detail read and nothing
+    /// more; one whose reads are free has no reason to.
+    async fn get_task_details_for_copy(
+        &self,
+        ids: &[NativeId],
+        comments: &PageRequest,
+    ) -> Vec<Result<Option<TaskDetailRead>, SourceError>> {
+        self.get_task_details(ids, Some(comments)).await
+    }
+
     /// Add one comment to `task`, answering with the comment as the source now holds it, or
     /// `None` when this source holds no such task.
     ///
@@ -682,6 +716,39 @@ pub trait TaskSource: Send + Sync {
     ) -> Result<Option<NativeId>, SourceError> {
         let _ = (task, comment);
         Err(commentless(self.kind()))
+    }
+
+    /// Write one comment a copy carries onto `task`: a new one when `existing` is `None`, and
+    /// otherwise the comment `existing`, which a copy wrote before, made to say `copy` — or
+    /// `None` when this source holds no such task or no such comment.
+    ///
+    /// The answer reports [`Comment::origin`] as `copy.origin`, however the source keeps it.
+    ///
+    /// **Defaulted to the hidden marker**, which is right for every source that records a
+    /// comment's author and times itself: the body is written through
+    /// [`add_comment`](Self::add_comment) or [`edit_comment`](Self::edit_comment) with
+    /// [`CommentOrigin::mark`](crate::CommentOrigin::mark) appended, and read back
+    /// [`unmarked`](Comment::unmarked). A source that can store the origin natively — and so
+    /// takes the origin's own id, author and times for the copy — overrides this.
+    ///
+    /// # Errors
+    ///
+    /// As [`add_comment`](Self::add_comment).
+    async fn write_comment_copy(
+        &self,
+        task: &NativeId,
+        existing: Option<&NativeId>,
+        copy: &CommentCopy,
+    ) -> Result<Option<Comment>, SourceError> {
+        let body = CommentBody::new(copy.origin.qualified()?.mark(copy.body.as_str()))?;
+        let written = match existing {
+            Some(comment) => self.edit_comment(task, comment, &body).await?,
+            None => {
+                self.add_comment(task, &NewComment { body, author: None })
+                    .await?
+            }
+        };
+        Ok(written.map(Comment::unmarked))
     }
 
     /// Whether this source keeps template answers beside its items at all.

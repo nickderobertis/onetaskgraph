@@ -85,6 +85,33 @@ impl MetadataKey {
     /// where *that* source serves the bytes.
     pub const ASSETS_KEY: &'static str = "onetaskgraph.assets";
 
+    /// The reserved key a copy records on the **destination** item the source
+    /// [`Task::version`](crate::Task::version) it copied under — and, under `--comments`, a
+    /// token that covered the comments it carried.
+    ///
+    /// Read back by the next copy of the same item, which skips it when the source's current
+    /// version is still this one and the destination is unchanged since, by
+    /// [`Self::COPIED_DESTINATION_VERSION_KEY`]. Absent when the source gave no version.
+    pub const COPIED_VERSION_KEY: &'static str = "onetaskgraph.copied_version";
+
+    /// The reserved key a `--comments` copy records on the destination item as the boolean
+    /// `true`, and a copy without `--comments` removes: whether the copy recorded at
+    /// [`Self::COPIED_VERSION_KEY`] carried the item's comments.
+    ///
+    /// A `--comments` copy never skips an item whose destination lacks it, so a copy that adds
+    /// `--comments` over an unchanged source still carries the comments.
+    pub const COPIED_WITH_COMMENTS_KEY: &'static str = "onetaskgraph.copied_with_comments";
+
+    /// The reserved key a copy records on the destination item a digest of that item as the
+    /// copy left it under, computed by the engine over the item without the three `copied_*`
+    /// keys: `sha256:<hex>`.
+    ///
+    /// A later copy skips the item only when the digest of the destination as it reads it
+    /// then is still this one, so an edit of copied content at the destination — a copied
+    /// comment edited or deleted included — is restored by the next copy rather than skipped.
+    pub const COPIED_DESTINATION_VERSION_KEY: &'static str =
+        "onetaskgraph.copied_destination_version";
+
     /// [`Self::COPIES_KEY`], as the one reserved key a narrow metadata write may carry.
     ///
     /// Not a way round [`Self::new`] for a caller: nothing a person types reaches this, and

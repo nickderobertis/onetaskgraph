@@ -271,7 +271,12 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # read from the raw document and the roots from the validated one.
     bundle = generate.validate_schema_bundle(emitted_bundle)
 
-    assert emitted_bundle["version"] == 35
+    assert emitted_bundle["version"] == 36
+    # Version 36 published a task's change token, a copied comment's origin, and what a
+    # `--comments` copy reports of each item.
+    assert "version" in emitted_bundle["roots"]["Task"]["properties"]
+    assert "origin" in emitted_bundle["roots"]["Comment"]["properties"]
+    assert "CommentCounts" in emitted_bundle["roots"]["CopyReport"]["$defs"]
     # Version 35 published a `github-projects` source's `metadata_fields`: its configuration's
     # list of `{field, key, path}` entries, and the `metadata_fields` list `sources fields`
     # answers with in a `FieldsReport`, each left out when empty.
@@ -424,7 +429,8 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # `onetaskgraph.copies` — on the three actions that land an item, and not on an orphan.
     for root, words in (
         ("CopyVia", {"link", "origin", "scan", "match"}),
-        ("CopyLink", {"recorded", "unchanged", "unrecorded"}),
+        # Version 36 added `skipped`, the link a `--no-link` copy leaves unwritten.
+        ("CopyLink", {"recorded", "unchanged", "unrecorded", "skipped"}),
     ):
         assert root in bundle["roots"], root
         spelled = {entry["const"] for entry in emitted_bundle["roots"][root]["oneOf"]}

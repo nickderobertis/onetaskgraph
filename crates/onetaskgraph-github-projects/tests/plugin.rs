@@ -14,12 +14,12 @@ use std::{
 };
 
 use onetaskgraph_plugin_api::{
-    Capabilities, Comment, CommentBody, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind,
-    DependencySupport, Direction, Document, DocumentQuery, ItemKind, ItemWrite, Label, LabelFilter,
-    Location, MetadataKey, MetadataMatch, NativeId, NewComment, PageRequest, Priority, Project,
-    ProjectFilter, ProjectQuery, Repository, SecretResolver, SourceError, SourceName, SourcePlugin,
-    Status, StatusCategory, Support, Task, TaskQuery, TaskRef, TaskSource, TaskUpdate, TextFields,
-    TextQuery, UpdatedField, WriteSupport,
+    Capabilities, Comment, CommentBody, CommentCopy, CommentOrigin, Cursor, DependencyEdge,
+    DependencyEndpoint, DependencyKind, DependencySupport, Direction, Document, DocumentQuery,
+    ItemKind, ItemWrite, Label, LabelFilter, Location, MetadataKey, MetadataMatch, NativeId,
+    NewComment, PageRequest, Priority, Project, ProjectFilter, ProjectQuery, Repository,
+    SecretResolver, SourceError, SourceName, SourcePlugin, Status, StatusCategory, Support, Task,
+    TaskQuery, TaskRef, TaskSource, TaskUpdate, TextFields, TextQuery, UpdatedField, WriteSupport,
 };
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -239,6 +239,15 @@ struct Item {
     /// GitHub moves it when a comment on the issue is added **or edited**, which is what its
     /// issue search's `updated:` qualifier is read against; see [`Item::updated`].
     updated_at: Option<String>,
+    /// When GitHub last saw this item's board fields change, as `ProjectV2Item.updatedAt`
+    /// carries it, how many comments the issue holds, as `comments { totalCount }` does, and
+    /// how many relationship events its timeline holds, as a `timelineItems` count of the eight
+    /// dependency and project-membership event types does — the three other parts of a change token. Kept for an
+    /// issue this board created and `None` for every seeded one, which is answered as it
+    /// always was.
+    item_updated_at: Option<String>,
+    comment_count: Option<u64>,
+    relationship_events: Option<u64>,
     /// A label set this board answers one path with, instead of the one above.
     ///
     /// Nothing GitHub does. It is how the four-way equivalence check is watched failing:
@@ -293,6 +302,9 @@ impl Item {
             listed: true,
             origin_value: true,
             updated_at: None,
+            item_updated_at: None,
+            comment_count: None,
+            relationship_events: None,
             path_labels: BTreeMap::new(),
             texts: BTreeMap::new(),
         }
@@ -331,6 +343,15 @@ impl Item {
     /// added or edited then.
     fn updated(mut self, at: &str) -> Self {
         self.updated_at = Some(at.to_owned());
+        self
+    }
+    /// Give this issue every part of a change token, its issue and board item last changed at
+    /// `at` and holding `comments` comments, as an issue this board created carries them.
+    fn tokened(mut self, at: &str, comments: u64) -> Self {
+        self.updated_at = Some(at.to_owned());
+        self.item_updated_at = Some(at.to_owned());
+        self.comment_count = Some(comments);
+        self.relationship_events = Some(0);
         self
     }
     fn number(mut self, number: u64) -> Self {
@@ -458,10 +479,9 @@ impl Item {
             })
             .collect::<Vec<_>>();
         if self.on_this_board {
-            nodes.push(
-                json!({"id":self.item_id,"project":{"id":self.board_entry_id,"number":7},
-                       "fieldValues":self.field_values(options)}),
-            );
+            nodes.push(json!({"id":self.item_id,"updatedAt":self.item_updated_at,
+                       "project":{"id":self.board_entry_id,"number":7},
+                       "fieldValues":self.field_values(options)}));
         }
         nodes
     }
@@ -492,6 +512,8 @@ impl Item {
                 "repository":self.repository.as_ref().map(|r| json!({"nameWithOwner":r})),
                 "parent":self.parent.as_ref().map(|id| json!({"id":id})),
                 "subIssuesSummary":{"total":self.sub_issues},
+                "commentCount":self.comment_count.map(|total| json!({"totalCount":total})),
+                "relationshipEvents":self.relationship_events.map(|total| json!({"totalCount":total})),
                 "labels":self.label_nodes(asked.path)}),
         }
     }
@@ -597,6 +619,10 @@ struct State {
     /// is answered out of the source's own record of what it created until the board
     /// catches up — and what that record holds is only observable while it is behind.
     lagging_reads: usize,
+    /// How many of this board's next answers carry a `Date` in the very second of its last
+    /// change, as GitHub's do when a read lands just after a write by GitHub's own clock —
+    /// inside the change token's settling margin, so the plugin withholds every token.
+    unsettled_answers: usize,
     /// Whether this board's issue search orders one answer differently at every page size,
     /// as GitHub's does: the credentialed lane watched a search answer three issues in one
     /// order at a page of twenty and in another when asked a row at a time.
@@ -818,6 +844,27 @@ impl State {
         };
         self.comments.push(held.clone());
         held
+    }
+    /// Move what GitHub moves for an edit of the issue `content_id` itself — its title, body,
+    /// state, labels or relationships — on an issue this board created.
+    fn touch_issue(&mut self, content_id: &Value) {
+        let at = self.tick();
+        let item = self.find(content_id);
+        if item.comment_count.is_some() {
+            item.updated_at = Some(at);
+        }
+    }
+    /// Move what GitHub moves for a change to one of the board item `item_id`'s field values,
+    /// on an issue this board created.
+    fn touch_item(&mut self, item_id: &str) {
+        let at = self.tick();
+        if let Some(item) = self
+            .items
+            .iter_mut()
+            .find(|item| item.item_id == item_id && item.comment_count.is_some())
+        {
+            item.item_updated_at = Some(at);
+        }
     }
     fn find(&mut self, content_id: &Value) -> &mut Item {
         let wanted = content_id.as_str().expect("a content id");
@@ -1071,6 +1118,10 @@ impl Fixture {
     fn read_behind(&self, count: usize) {
         self.state.lock().unwrap().lagging_reads = count;
     }
+    /// Answer this board's next `count` requests inside the change token's settling margin.
+    fn answer_unsettled(&self, count: usize) {
+        self.state.lock().unwrap().unsettled_answers = count;
+    }
     /// Order this board's issue search by the page size it is asked at, the way GitHub's
     /// relevance ordering breaks its ties differently per page size; see
     /// [`State::search_order_varies_with_first`].
@@ -1215,6 +1266,7 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
         refuses: BTreeSet::new(),
         refuse_after: BTreeMap::new(),
         lagging_reads: 0,
+        unsettled_answers: 0,
         search_order_varies_with_first: false,
         items_connection_behind_from: None,
         stuck_membership_cursor: None,
@@ -1268,6 +1320,23 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
             } else {
                 FIXTURE_BUDGET_LIMIT.saturating_sub(used)
             };
+            // The board is read an hour after its last change, as a board nobody is editing at
+            // that moment is: every item has settled, so every issue gives its change token.
+            let served_at = {
+                let mut state = served.lock().unwrap();
+                let since = if state.unsettled_answers > 0 {
+                    state.unsettled_answers -= 1;
+                    state.comment_ticks
+                } else {
+                    state.comment_ticks + 3600
+                };
+                format!(
+                    "Tue, 01 Sep 2026 {:02}:{:02}:{:02} GMT",
+                    since / 3600,
+                    (since / 60) % 60,
+                    since % 60
+                )
+            };
             let (status, headers, body) = match limited {
                 Some(refusal) => (refusal.status, refusal.headers, refusal.body),
                 None => (
@@ -1276,7 +1345,8 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
                         "x-ratelimit-limit: {FIXTURE_BUDGET_LIMIT}\r\n\
                          x-ratelimit-used: {used}\r\n\
                          x-ratelimit-remaining: {remaining}\r\n\
-                         x-ratelimit-resource: graphql\r\n"
+                         x-ratelimit-resource: graphql\r\n\
+                         date: {served_at}\r\n"
                     ),
                     match unbound_refusal(&served, query, variables)
                         .or_else(|| refused(&served, query, variables))
@@ -1343,7 +1413,7 @@ fn refused(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Option<
     // null node alone, and a comment id is read this way before anything is changed — so
     // that read is answered the way GitHub answers it. A `rateLimit(dryRun: true)` probe of
     // the same document is not executed, so nothing in it is resolved and nothing refuses.
-    if query.contains("on IssueComment{id issue{id}}") && board::strip_probe(query).is_none() {
+    if query.contains("on IssueComment{id body issue{id}}") && board::strip_probe(query).is_none() {
         let id = variables["id"].as_str().expect("a node id");
         if !state.comments.iter().any(|held| held.id == id)
             && !state.items.iter().any(|item| item.content_id == id)
@@ -1547,7 +1617,11 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         // nowhere to say anything else.
         let added = state.comment(&subject, Some(COMMENTER), &body);
         // GitHub moves the issue's `updatedAt` with every comment written on it.
-        state.find(&json!(subject)).updated_at = Some(added.updated_at.clone());
+        let issue = state.find(&json!(subject));
+        issue.updated_at = Some(added.updated_at.clone());
+        if let Some(count) = &mut issue.comment_count {
+            *count += 1;
+        }
         return json!({"addComment":{"subject":{"id":subject},
                                     "commentEdge":{"node":added.as_node()}}});
     }
@@ -1572,13 +1646,24 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
             state.comments.iter().any(|held| held.id == id),
             "deleteIssueComment names {id}, which this board does not hold"
         );
+        let issue = state
+            .comments
+            .iter()
+            .find(|held| held.id == id)
+            .map(|held| held.issue.clone());
         state.comments.retain(|held| held.id != id);
+        // A deleted comment moves the issue's count and neither of its times.
+        if let Some(issue) = issue
+            && let Some(count) = &mut state.find(&json!(issue)).comment_count
+        {
+            *count -= 1;
+        }
         return json!({"deleteIssueComment":{"clientMutationId":null}});
     }
-    if query.contains("on IssueComment{id issue{id}}") {
+    if query.contains("on IssueComment{id body issue{id}}") {
         let id = variables["id"].as_str().expect("a node id");
         if let Some(held) = state.comments.iter().find(|held| held.id == id) {
-            return json!({"node":{"__typename":"IssueComment","id":id,
+            return json!({"node":{"__typename":"IssueComment","id":id,"body":held.body,
                                   "issue":{"id":held.issue}}});
         }
         // `refused` has already answered an id naming nothing, so this one names an item.
@@ -1674,6 +1759,10 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         state.next += 1;
         let id = format!("I_new{}", state.next);
         let mut created = Item::issue(&id, input["title"].as_str().unwrap_or_default());
+        // An issue this board creates carries every part of its change token.
+        created.updated_at = Some(state.tick());
+        created.comment_count = Some(0);
+        created.relationship_events = Some(0);
         // Its own band, so an assertion about a created issue's number cannot pass against
         // a number a seeded board item happened to be wearing.
         created.number = 2000 + state.next as u64;
@@ -1724,8 +1813,9 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
             .iter()
             .position(|item| item.content_id == content)
             .expect("the issue was created first");
-        let item = state.pending.remove(position);
+        let mut item = state.pending.remove(position);
         let item_id = item.item_id.clone();
+        item.item_updated_at = Some(state.tick());
         state.items.push(item);
         return json!({"addProjectV2ItemById":{"item":{"id":item_id}}});
     }
@@ -1745,6 +1835,7 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
             };
             item.state_reason = state_input["stateReason"].as_str().map(str::to_owned);
         }
+        state.touch_issue(&input["id"]);
         return json!({"updateIssue":{"issue":{"id":input["id"]}}});
     }
     if query.contains("updateProjectV2DraftIssue(input:$input)") {
@@ -1786,6 +1877,7 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
             (Some(text), _) => item.origin = Some(text),
             (None, _) => {}
         }
+        state.touch_item(&item_id);
         return json!({"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":item_id}}});
     }
     if query.contains("clearProjectV2ItemFieldValue(input:$input)") {
@@ -1805,6 +1897,17 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         let parent = input["issueId"].as_str().unwrap().to_owned();
         let child = input["subIssueId"].clone();
         state.find(&child).parent = adding.then(|| parent.clone());
+        // A project membership is a relationship GitHub records on both ends' timelines.
+        for end in [child.as_str().expect("a sub-issue id"), parent.as_str()] {
+            if let Some(count) = state
+                .items
+                .iter_mut()
+                .find(|item| item.content_id == end)
+                .and_then(|item| item.relationship_events.as_mut())
+            {
+                *count += 1;
+            }
+        }
         let held = state
             .items
             .iter()
@@ -1835,6 +1938,19 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
             edges.push(blocker.clone());
         } else {
             edges.retain(|held| held != &blocker);
+        }
+        // Neither issue's time moves, nor either board item's: the credentialed lane added a
+        // dependency to a real issue and saw all three stay where they were. What GitHub does
+        // record is one event on each end's timeline.
+        for end in [&issue, &blocker] {
+            if let Some(count) = state
+                .items
+                .iter_mut()
+                .find(|item| item.content_id == *end)
+                .and_then(|item| item.relationship_events.as_mut())
+            {
+                *count += 1;
+            }
         }
         let root = if adding {
             "addBlockedBy"
@@ -1958,6 +2074,16 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         }
         let page = membership_page(&item.memberships(&options), offset, first, asked);
         return json!({"node":{"projectItems":page}});
+    }
+    if query.contains("query LiveBoardItem") {
+        let id = variables["id"].as_str().expect("an issue id");
+        let item = state
+            .items
+            .iter()
+            .find(|item| item.content_id == id)
+            .expect("a board item lookup names an issue this board holds");
+        return json!({"node":{"projectItems":{"nodes":[
+            {"id":item.item_id,"project":{"id":"PVT_board"}}]}}});
     }
     if query.contains("query TerminalStatus") {
         let id = variables["id"].as_str().expect("an issue id");
@@ -2269,6 +2395,7 @@ fn answer_a_session_call(
                 .expect("an issue this board holds");
             item.labels.push((id, name));
         }
+        state.touch_issue(&json!(labelable));
         return Some(json!({"addLabelsToLabelable":{"labelable":{"id":labelable}}}));
     }
     None
@@ -2696,6 +2823,7 @@ fn build_refusal(config: Value) -> String {
 
 fn task(id: &str, title: &str, status: Status) -> Task {
     Task {
+        version: None,
         id: NativeId(id.to_owned()),
         key: None,
         title: title.to_owned(),
@@ -10247,6 +10375,41 @@ async fn a_board_changed_by_something_else_is_seen_by_the_next_source_and_not_by
     assert_eq!(fixture.requests("issue"), 1);
 }
 
+/// The change-kind leg's token read, driven against a board whose answers land inside the
+/// token's settling margin.
+///
+/// `journey::settled_token` is the real one — the code the credentialed lane reads every
+/// token through. A token withheld for a few answers is asked for again; one withheld past
+/// the leg's bound fails naming the moment.
+#[tokio::test]
+async fn the_change_kind_leg_asks_again_while_a_token_is_withheld() {
+    let fixture = board(vec![
+        Item::issue("I_kinds", "every change kind").tokened("2026-09-01T00:00:00Z", 0),
+    ]);
+    let task = NativeId("I_kinds".to_owned());
+    let rebuild = || source(&fixture);
+
+    fixture.answer_unsettled(3);
+    let token = journey::settled_token(&rebuild, &task, "after a comment edited")
+        .await
+        .expect("a token withheld for three answers is given on the fourth");
+    assert!(token.starts_with(onetaskgraph_github_projects::change_token::PREFIX));
+    assert_eq!(
+        fixture.state.lock().unwrap().unsettled_answers,
+        0,
+        "the leg took a token before the board had answered past the margin"
+    );
+
+    fixture.answer_unsettled(usize::MAX);
+    let withheld = journey::settled_token(&rebuild, &task, "after a comment edited")
+        .await
+        .expect_err("a token withheld past the leg's bound is a failure");
+    assert!(
+        withheld.contains("no change token after a comment edited"),
+        "{withheld}"
+    );
+}
+
 /// The wait a live run reads its own fixture through, driven against a board that is behind.
 ///
 /// `journey::settled_fixture` is the real one — the code the credentialed lane runs — and
@@ -12994,6 +13157,7 @@ async fn a_whole_session_of_the_live_journey_costs_what_the_record_beside_it_say
         // changes no count, so paying for it here would only make the measurement slower.
         source: Some(json!({"endpoint":fixture.endpoint,
             "pacing":{"min_mutation_interval_ms":0,"retry_budget_ms":0}})),
+        settle: std::time::Duration::ZERO,
     });
     journey::run(journey::Nomination {
         token: "test-token".to_owned(),
@@ -13575,6 +13739,8 @@ enum CommentCall {
     Add,
     Edit,
     Delete,
+    /// A copy's write of one comment: a new one, or over the copy `IC_1` already is.
+    Copy(Option<&'static str>),
 }
 
 #[tokio::test]
@@ -13584,7 +13750,25 @@ async fn a_comment_answer_this_source_cannot_read_is_refused_as_malformed_rather
                "updatedAt":"2026-09-01T00:00:01Z","body":"said","url":null})
     };
     let owned = json!({"data":{"node":{"__typename":"IssueComment","id":"IC_1",
-                                       "issue":{"id":"I_1"}}}});
+                                       "body":"held","issue":{"id":"I_1"}}}});
+    let bodiless = json!({"data":{"node":{"__typename":"IssueComment","id":"IC_1",
+                                          "issue":{"id":"I_1"}}}});
+    let unsaid = |id: &str| {
+        let mut node = comment(id);
+        node.as_object_mut().expect("a comment node").remove("body");
+        node
+    };
+    let copied = CommentCopy {
+        body: comment_body("said at the origin"),
+        origin: CommentOrigin {
+            task: "notes:A".to_owned(),
+            id: native("C-1"),
+            author: Some("ada".to_owned()),
+            created_at: None,
+            updated_at: None,
+            url: None,
+        },
+    };
     let cases: Vec<(Vec<Value>, CommentCall, &str)> = vec![
         // A listing is one read of the issue with its comments, so each of these is the issue
         // answered with a comment connection this source cannot read.
@@ -13662,6 +13846,52 @@ async fn a_comment_answer_this_source_cannot_read_is_refused_as_malformed_rather
             CommentCall::Edit,
             "comment update returned the wrong comment",
         ),
+        // The body is selected so a copied comment's marker survives the edit; an answer
+        // without it cannot be edited without guessing what the marker was.
+        (
+            vec![issue_read("I_1"), bodiless],
+            CommentCall::Edit,
+            "missing string field body",
+        ),
+        // And the comment a mutation answers with is what a copy reads its marker back out
+        // of: one answered without its body is refused, never read as an empty comment that
+        // carries no origin.
+        (
+            vec![
+                issue_read("I_1"),
+                json!({"data":{"addComment":{"subject":{"id":"I_1"},
+                                             "commentEdge":{"node":unsaid("IC_1")}}}}),
+            ],
+            CommentCall::Add,
+            "missing string field body",
+        ),
+        (
+            vec![
+                issue_read("I_1"),
+                owned.clone(),
+                json!({"data":{"updateIssueComment":{"issueComment":unsaid("IC_1")}}}),
+            ],
+            CommentCall::Edit,
+            "missing string field body",
+        ),
+        (
+            vec![
+                issue_read("I_1"),
+                json!({"data":{"addComment":{"subject":{"id":"I_1"},
+                                             "commentEdge":{"node":unsaid("IC_1")}}}}),
+            ],
+            CommentCall::Copy(None),
+            "missing string field body",
+        ),
+        (
+            vec![
+                issue_read("I_1"),
+                owned.clone(),
+                json!({"data":{"updateIssueComment":{"issueComment":unsaid("IC_1")}}}),
+            ],
+            CommentCall::Copy(Some("IC_1")),
+            "missing string field body",
+        ),
         (
             vec![
                 issue_read("I_1"),
@@ -13691,6 +13921,10 @@ async fn a_comment_answer_this_source_cannot_read_is_refused_as_malformed_rather
                 .map(|_| ()),
             CommentCall::Delete => source
                 .delete_comment(&task, &native("IC_1"))
+                .await
+                .map(|_| ()),
+            CommentCall::Copy(existing) => source
+                .write_comment_copy(&task, existing.map(native).as_ref(), &copied)
                 .await
                 .map(|_| ()),
         };
@@ -14105,6 +14339,59 @@ async fn named_edges_send_only_the_blocked_by_difference() {
         .expect("a task of this board");
     assert!(again.written.is_empty());
     assert_eq!(fixture.seen().len(), 2);
+}
+
+/// Two edge updates of one task through one source, as the live change-kind leg makes them:
+/// the second is reconciled against what the first wrote, not against what the task held
+/// before it — so a dependency the second drops is removed, and a forward-edge read after
+/// either answers what the board now holds.
+#[tokio::test]
+async fn a_second_edge_update_in_one_process_reconciles_against_the_first() {
+    let fixture = update_board(settled_task());
+    let edge = |far: &str| DependencyEdge {
+        from: DependencyEndpoint::from_native(id("I_1"), ItemKind::Task),
+        to: DependencyEndpoint::from_native(id(far), ItemKind::Task),
+        kind: DependencyKind::Blocks,
+    };
+    let depends = |on: &[&str]| TaskUpdate {
+        depends_on: Some(on.iter().map(|far| edge(far)).collect()),
+        ..TaskUpdate::default()
+    };
+    let writer = source(&fixture);
+    writer
+        .update_task(&id("I_1"), &depends(&["I_2", "I_3"]))
+        .await
+        .expect("the first update lands")
+        .expect("a task of this board");
+    let removed = writer
+        .update_task(&id("I_1"), &depends(&["I_2"]))
+        .await
+        .expect("the second update lands")
+        .expect("a task of this board");
+    assert_eq!(
+        fixture.seen(),
+        vec![
+            json!(["addBlockedBy", {"issueId":"I_1","blockingIssueId":"I_2"}]),
+            json!(["addBlockedBy", {"issueId":"I_1","blockingIssueId":"I_3"}]),
+            json!(["removeBlockedBy", {"issueId":"I_1","blockingIssueId":"I_3"}]),
+        ],
+        "the second update removes the dependency it drops, and re-adds nothing"
+    );
+    assert_eq!(removed.written, BTreeSet::from([UpdatedField::DependsOn]));
+    let forward = writer
+        .task_dependencies(&id("I_1"), Direction::DependsOn, &page(10))
+        .await
+        .expect("a dependency read");
+    let ends: Vec<_> = forward
+        .items
+        .iter()
+        .map(|edge| edge.to.id().to_owned())
+        .collect();
+    assert_eq!(
+        ends,
+        ["I_2"],
+        "the read after the writes answers what they left"
+    );
 }
 
 #[tokio::test]
@@ -17835,6 +18122,63 @@ async fn a_batch_answer_missing_an_item_or_naming_another_is_refused_as_malforme
         matches!(&read[0], Err(SourceError::Malformed { message }) if message.contains("no node")),
         "{:?}",
         read[0]
+    );
+}
+
+/// A copy's batched read is held to the same three answers as every other batch: an id naming
+/// no node sends the batch back one item at a time, any other refusal is every id's answer, and
+/// an alias left out is refused as malformed rather than read as missing.
+#[tokio::test]
+async fn a_copys_batch_read_is_read_again_alone_refused_whole_or_refused_for_a_missing_item() {
+    let unresolvable = json!({"errors":[{
+        "message":"Could not resolve to a node with the global id of 'garbage'"}]});
+    let no_comments = json!({"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}});
+    let endpoint = sequence_server(vec![
+        unresolvable.clone(),
+        issue_with_comments("I_1", no_comments.clone()),
+        unresolvable,
+    ]);
+    let read = configured(&endpoint, json!({}))
+        .get_task_details_for_copy(&[native("I_1"), native("garbage")], &page(50))
+        .await;
+    assert_eq!(read.len(), 2);
+    assert!(
+        matches!(&read[0], Ok(Some(detail)) if detail.task.id == native("I_1")
+            && matches!(&detail.comments, Some(Ok(Some(comments))) if comments.items.is_empty())),
+        "I_1 is read on its own: {:?}",
+        read[0]
+    );
+    assert!(matches!(read[1], Ok(None)), "{:?}", read[1]);
+
+    let endpoint = sequence_server(vec![json!({"errors":[{
+        "message":"Something went wrong while executing your query"}]})]);
+    let read = configured(&endpoint, json!({}))
+        .get_task_details_for_copy(&[native("I_1"), native("I_2")], &page(50))
+        .await;
+    assert_eq!(read.len(), 2);
+    for answered in &read {
+        assert!(
+            matches!(answered, Err(SourceError::Refused { message })
+                if message.contains("Something went wrong")),
+            "{answered:?}"
+        );
+    }
+
+    let first = issue_with_comments("I_1", no_comments)["data"]["node"].clone();
+    let endpoint = sequence_server(vec![json!({"data":{"i0": first}})]);
+    let read = configured(&endpoint, json!({}))
+        .get_task_details_for_copy(&[native("I_1"), native("I_3")], &page(50))
+        .await;
+    assert!(
+        matches!(&read[0], Ok(Some(detail)) if detail.task.id == native("I_1")),
+        "{:?}",
+        read[0]
+    );
+    assert!(
+        matches!(&read[1], Err(SourceError::Malformed { message })
+            if message.contains("no item for I_3")),
+        "{:?}",
+        read[1]
     );
 }
 

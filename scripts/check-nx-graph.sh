@@ -81,7 +81,7 @@ for package in metadata["packages"]:
         )
         continue
 
-    project = json.loads(project_file.read_text())
+    project = json.loads(project_file.read_text(encoding="utf-8"))
     declared = set(project.get("implicitDependencies", []))
     # Every edge counts: a dev-dependency recompiles this crate just as a normal one does.
     actual = {

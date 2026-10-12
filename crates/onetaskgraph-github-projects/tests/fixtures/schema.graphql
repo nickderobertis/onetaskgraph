@@ -19,6 +19,23 @@
 # https://docs.github.com/en/graphql/reference/projects#projectv2item (2026-10-01).
 # Priority writes select that value from their mutation payload instead of reading the issue again.
 #
+# `ProjectV2Item.updatedAt: DateTime!` ("Identifies the date and time when the object was last
+# updated") and `IssueCommentConnection.totalCount: Int!` ("Identifies the total count of items in
+# the connection") are pinned from https://docs.github.com/en/graphql/reference/objects
+# (2026-10-10). They are two of the five parts of a task's change token; a third,
+# `Issue.updatedAt`, was already selected.
+#
+# `Issue.timelineItems(since, skip, itemTypes: [IssueTimelineItemsItemType!], after, before, first,
+# last): IssueTimelineItemsConnection!`, that connection's `totalCount: Int!` ("Identifies the
+# total count of items in the connection") and the six `IssueTimelineItemsItemType` members
+# `BLOCKED_BY_ADDED_EVENT`, `BLOCKED_BY_REMOVED_EVENT`, `BLOCKING_ADDED_EVENT`,
+# `BLOCKING_REMOVED_EVENT`, `PARENT_ISSUE_ADDED_EVENT` and `PARENT_ISSUE_REMOVED_EVENT` were read
+# by introspecting GitHub.com's GraphQL API on 2026-10-11, the enum reduced to those six — the
+# credentialed lane's `CONTRACT_ENUMS` re-reads them from GitHub every run — and an `itemTypes`-filtered
+# `totalCount` observed counting only the named types. They are the fourth part of a task's
+# change token, the relationship-event count: the credentialed lane saw a dependency added to a
+# real issue move neither time nor the comment count.
+#
 # `ProjectV2Field.dataType: ProjectV2FieldType!` — "The field's type." — and that enum's members
 # were read from GitHub.com's own published schema artifact
 # <https://docs.github.com/public/fpt/schema.docs.graphql> on 2026-10-10, the enum reduced to the
@@ -305,6 +322,7 @@ type ProjectV2FieldConfigurationConnection {
 }
 type ProjectV2Item implements Node {
   id: ID!
+  updatedAt: DateTime!
   project: ProjectV2!
   fieldValues(first: Int, after: String): ProjectV2ItemFieldValueConnection!
   fieldValueByName(name: String!): ProjectV2ItemFieldValue
@@ -372,6 +390,26 @@ type Issue implements Node {
   blockedBy(first: Int, after: String): IssueConnection!
   blocking(first: Int, after: String): IssueConnection!
   comments(first: Int, after: String, orderBy: IssueCommentOrder): IssueCommentConnection!
+  timelineItems(
+    since: DateTime
+    skip: Int
+    itemTypes: [IssueTimelineItemsItemType!]
+    after: String
+    before: String
+    first: Int
+    last: Int
+  ): IssueTimelineItemsConnection!
+}
+enum IssueTimelineItemsItemType {
+  BLOCKED_BY_ADDED_EVENT
+  BLOCKED_BY_REMOVED_EVENT
+  BLOCKING_ADDED_EVENT
+  BLOCKING_REMOVED_EVENT
+  PARENT_ISSUE_ADDED_EVENT
+  PARENT_ISSUE_REMOVED_EVENT
+}
+type IssueTimelineItemsConnection {
+  totalCount: Int!
 }
 interface Actor {
   login: String!
@@ -386,6 +424,7 @@ type IssueComment implements Node {
   issue: Issue!
 }
 type IssueCommentConnection {
+  totalCount: Int!
   nodes: [IssueComment]
   pageInfo: PageInfo!
 }

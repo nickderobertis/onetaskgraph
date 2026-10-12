@@ -1729,6 +1729,9 @@ fn github_signed_storage_redirect_reaches_the_proxy_and_refuses_a_transport_fail
         let mut requests = Vec::new();
         while !stopping.load(std::sync::atomic::Ordering::SeqCst) {
             if let Ok((mut stream, _)) = proxy.accept() {
+                // Windows hands the accepted stream the listener's non-blocking mode, so a
+                // read before the request arrives would fail `WouldBlock` there.
+                stream.set_nonblocking(false).unwrap();
                 let mut request = [0; 4096];
                 let length = stream.read(&mut request).unwrap();
                 requests.push(String::from_utf8_lossy(&request[..length]).into_owned());

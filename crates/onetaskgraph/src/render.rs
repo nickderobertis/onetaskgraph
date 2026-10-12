@@ -13,10 +13,10 @@
 
 use onetaskgraph_core::config::SourceRoute;
 use onetaskgraph_core::{
-    CommentList, CopyReport, DeletedComment, Delivered, DeliveryOutcome, GlobalId, MetadataSet,
-    Predicate, Qualified, QualifiedEdge, QueryPlan, Regenerated, SearchHit, SourceListing,
-    SourceState, TaskContentSet, TaskDetails, TaskPrioritySet, TaskStatusSet, TaskUpdated,
-    TemplateVariables,
+    CommentList, CopyAction, CopyReport, DeletedComment, Delivered, DeliveryOutcome, GlobalId,
+    MetadataSet, Predicate, Qualified, QualifiedEdge, QueryPlan, Regenerated, SearchHit,
+    SourceListing, SourceState, TaskContentSet, TaskDetails, TaskPrioritySet, TaskStatusSet,
+    TaskUpdated, TemplateVariables,
 };
 use onetaskgraph_plugin_api::{
     Asset, Capabilities, Comment, Document, Label, Location, MetadataKey, Priority, Project,
@@ -492,7 +492,13 @@ pub fn copied(report: &CopyReport) -> String {
                     outcome
                         .destination()
                         .map_or_else(|| "-".to_owned(), ToString::to_string),
-                    outcome.action.name(),
+                    // A task decided from change tokens alone says so: nothing of it was read
+                    // from its source, which is the difference a reader may be counting on.
+                    if outcome.action.skipped() {
+                        format!("{} (skipped)", outcome.action.name())
+                    } else {
+                        outcome.action.name()
+                    },
                 ];
                 // Only a routed copy places anything, so only its rows say where and why.
                 if let Some(placed) = &outcome.placed {
@@ -500,6 +506,23 @@ pub fn copied(report: &CopyReport) -> String {
                         Some(index) => format!("in {} by route {index}", placed.destination),
                         None => format!("in {} by no route", placed.destination),
                     });
+                }
+                // Only a `--comments` copy touches comments, so only its rows count them.
+                if let Some(comments) = outcome.comments() {
+                    row.push(format!(
+                        "comments: {} added, {} edited, {} deleted, {} unchanged",
+                        comments.added, comments.edited, comments.deleted, comments.unchanged
+                    ));
+                }
+                if let CopyAction::Failed { error } = &outcome.action {
+                    row.push(
+                        error
+                            .message()
+                            .lines()
+                            .next()
+                            .unwrap_or_default()
+                            .to_owned(),
+                    );
                 }
                 row
             })

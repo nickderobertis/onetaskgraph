@@ -286,7 +286,7 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 35);
+    assert_eq!(bundle["version"], 36);
     // Version 35: a `github-projects` source's `metadata_fields`, in its configuration and in
     // the `FieldsReport` `sources fields` answers with.
     assert!(
@@ -878,6 +878,9 @@ fn the_reserved_key_inventory_names_exactly_the_keys_the_code_spells() {
         MetadataKey::COPIES_KEY,
         MetadataKey::MEMBERS_KEY,
         MetadataKey::MEMBER_OF_KEY,
+        MetadataKey::COPIED_VERSION_KEY,
+        MetadataKey::COPIED_WITH_COMMENTS_KEY,
+        MetadataKey::COPIED_DESTINATION_VERSION_KEY,
         onetaskgraph_core::GlobalId::ORIGIN_KEY,
     ]
     .into_iter()
@@ -902,6 +905,7 @@ fn the_reserved_key_inventory_names_exactly_the_keys_the_code_spells() {
     assert_eq!(listed, spelled, "the keys docs/metadata.md lists");
     let words = [
         "", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+        "eleven", "twelve", "thirteen",
     ];
     assert!(
         bullet.contains(&format!("defines exactly {} keys", words[spelled.len()])),
@@ -1241,7 +1245,7 @@ fn the_readme_names_every_word_of_the_copy_reports_via_and_link() {
         })
         .collect();
     assert_eq!(via.len(), 5, "{via:?}");
-    assert_eq!(link.len(), 3, "{link:?}");
+    assert_eq!(link.len(), 4, "{link:?}");
 
     let readme = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../README.md"),
@@ -1265,6 +1269,7 @@ fn the_readme_names_every_word_of_the_copy_reports_via_and_link() {
         "via",
         "link",
         "--match-by",
+        "--no-link",
         "CopyVia",
         "NoCounterpart",
         "CopyLink",

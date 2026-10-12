@@ -315,6 +315,8 @@ fn copy_of(items: &[&str], scope: CopyScope) -> CopyRequest {
         recreate: false,
         create: false,
         dry_run: false,
+        comments: false,
+        no_link: false,
     }
 }
 
@@ -351,7 +353,7 @@ fn via(outcome: &CopyOutcome) -> Option<String> {
     });
     match &outcome.action {
         CopyAction::Created { .. } => assert_eq!(word.as_deref(), Some("created")),
-        CopyAction::Orphaned { .. } => assert_eq!(word, None),
+        CopyAction::Orphaned { .. } | CopyAction::Failed { .. } => assert_eq!(word, None),
         CopyAction::Updated { .. } | CopyAction::Unchanged { .. } => assert_eq!(word, typed),
     }
     word

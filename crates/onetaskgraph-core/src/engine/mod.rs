@@ -58,8 +58,8 @@ use resume::{Resume, StreamKind};
 pub use comment::{CommentList, DeletedComment, DocumentDetail, TaskDetail, TaskDetails};
 pub(crate) use copy::malformed_links;
 pub use copy::{
-    BudgetSpent, CopyAction, CopyItems, CopyLink, CopyLookup, CopyOutcome, CopyReport, CopyRequest,
-    CopyScope, CopyVia, MatchBy, NoCounterpart, Spent,
+    BudgetSpent, CommentCounts, CopyAction, CopyItems, CopyLink, CopyLookup, CopyOutcome,
+    CopyReport, CopyRequest, CopyScope, CopyVia, MatchBy, NoCounterpart, Spent,
 };
 pub use delivery::{Delivered, DeliveryOutcome, TaskStatusSet, settled};
 pub use graph::{
@@ -201,7 +201,7 @@ pub struct Filters {
 }
 
 /// A request for a page of tasks.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TaskRequest {
     /// Which sources to address. Empty means the configuration's own selection.
     pub sources: Vec<SourceName>,
@@ -1041,6 +1041,54 @@ pub enum EngineError {
         flag: CopyLookup,
     },
 
+    /// A `--comments` copy into a source whose plugin has no comments, refused before
+    /// anything is read: it has nowhere to put the comments it was asked to carry.
+    #[error(
+        "--comments cannot carry comments into {name}: its plugin is {kind}, whose tasks hold \
+         none\n\
+         next: copy without --comments, or copy into a source whose plugin has comments — \
+         `onetaskgraph sources list` reports each one's plugin."
+    )]
+    CommentlessDestination {
+        /// The configured name of the destination.
+        name: String,
+        /// The plugin behind it.
+        kind: String,
+    },
+
+    /// A copy named its items by a query and was asked to copy projects or documents: a query
+    /// names tasks, so only a task copy names its items that way.
+    #[error(
+        "a copy names its items by a query only when it copies tasks\n\
+         next: name the projects or documents to copy by their qualified ids."
+    )]
+    QueryNotTasks,
+
+    /// A copy of documents was asked to carry comments: a document holds none, so only a task
+    /// or a project copy carries them.
+    #[error(
+        "a document holds no comments, so a document copy carries none\n\
+         next: copy the documents without --comments, or copy tasks or projects with it."
+    )]
+    CommentsNotDocuments,
+
+    /// A copy read a task whose source moved to another revision of it between two of the
+    /// requests that read it, and again when the copy read it a second time — or, for a task
+    /// giving no change token whose comments run past one page, whose full passes over its
+    /// comments never agreed two in a row.
+    ///
+    /// Reported against that task alone, as a failed outcome of the copy, rather than failing
+    /// the copy: nothing was written for it, and every other item landed.
+    #[error(
+        "{item} changed while it was being copied, twice, so nothing was written for it rather \
+         than a mix of two of its revisions\n\
+         next: copy it again once it has stopped changing."
+    )]
+    ChangedWhileCopied {
+        /// The task.
+        item: GlobalId,
+    },
+
     /// `--create` named an item that itself records a counterpart at the destination.
     ///
     /// Refused rather than created: the item's own `onetaskgraph.copies` link — or its
@@ -1326,6 +1374,16 @@ impl Engine {
             ConfiguredSource::Ready(ready) => Some(ready),
             ConfiguredSource::Unavailable(_) => None,
         })
+    }
+
+    /// The source called `name`, when it built.
+    pub(crate) fn ready_source(
+        &self,
+        name: &SourceName,
+    ) -> Option<&dyn onetaskgraph_plugin_api::TaskSource> {
+        self.ready()
+            .find(|source| source.name() == name)
+            .map(ResolvedSource::source)
     }
 
     /// Every source that did not, in the same order.

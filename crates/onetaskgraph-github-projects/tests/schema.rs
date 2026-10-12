@@ -52,6 +52,16 @@ fn status_option_colors_match_the_pinned_graphql_vocabulary() {
     assert_eq!(rust_colors, graphql_colors);
 }
 
+/// Every enum member a value names, inside lists and objects alike.
+fn enum_values<'a>(value: &'a query::Value<'a, String>) -> Vec<&'a str> {
+    match value {
+        query::Value::Enum(member) => vec![member.as_str()],
+        query::Value::List(values) => values.iter().flat_map(enum_values).collect(),
+        query::Value::Object(fields) => fields.values().flat_map(enum_values).collect(),
+        _ => Vec::new(),
+    }
+}
+
 fn named_type<'a>(kind: &'a schema::Type<'a, String>) -> &'a str {
     match kind {
         schema::Type::NamedType(name) => name,
@@ -125,6 +135,22 @@ fn pinned_schema_checks_selected_fields_arguments_types_fragments_and_fixture_ke
             _ => None,
         })
         .collect::<HashSet<_>>();
+    // Every enum's members, so a variable's default naming one can be held to the pin.
+    let enum_members = schema
+        .definitions
+        .iter()
+        .filter_map(|definition| match definition {
+            schema::Definition::TypeDefinition(schema::TypeDefinition::Enum(value)) => Some((
+                value.name.as_str(),
+                value
+                    .values
+                    .iter()
+                    .map(|member| member.name.as_str())
+                    .collect::<HashSet<_>>(),
+            )),
+            _ => None,
+        })
+        .collect::<HashMap<_, _>>();
     let possible_types = |name: &str| {
         let mut possible = HashSet::new();
         for definition in &schema.definitions {
@@ -372,6 +398,21 @@ fn pinned_schema_checks_selected_fields_arguments_types_fragments_and_fixture_ke
                 "pinned schema lacks variable type {}",
                 named_type(&variable.var_type)
             );
+            // A default is part of what the document sends, so every enum member it names is
+            // one the pinned enum declares — and the credentialed lane holds GitHub to the pin.
+            if let Some(default) = &variable.default_value {
+                let enum_name = named_type(&variable.var_type);
+                for member in enum_values(default) {
+                    let members = enum_members.get(enum_name).unwrap_or_else(|| {
+                        panic!("${} defaults to enum members of {enum_name}, which the pinned schema declares no enum of", variable.name)
+                    });
+                    assert!(
+                        members.contains(member),
+                        "${} defaults to {member}, which the pinned {enum_name} does not declare",
+                        variable.name
+                    );
+                }
+            }
         }
         let variables = variable_definitions
             .iter()

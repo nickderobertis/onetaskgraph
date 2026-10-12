@@ -20,8 +20,8 @@ use onetaskgraph_core::{
 };
 use onetaskgraph_plugin_api::{
     Capabilities, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport,
-    Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label, NativeId, Page,
-    PageRequest, Priority, Project, ProjectQuery, SecretResolver, SourceError, SourceName,
+    Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label, MetadataKey, NativeId,
+    Page, PageRequest, Priority, Project, ProjectQuery, SecretResolver, SourceError, SourceName,
     SourcePlugin, Status, StatusCategory, Support, Task, TaskQuery, TaskSource, WriteSupport,
     documentless,
 };
@@ -88,6 +88,8 @@ fn many(items: &[&str], scope: CopyScope) -> CopyRequest {
         recreate: false,
         create: false,
         dry_run: false,
+        comments: false,
+        no_link: false,
     }
 }
 
@@ -413,6 +415,11 @@ async fn every_reserved_key_has_the_owner_docs_metadata_states_on_an_update() {
     destination.insert(GlobalId::ORIGIN_KEY.to_owned(), json!("from:T-1"));
     for (key, owner) in &owners {
         match owner.as_str() {
+            // The copy's record of itself is held at both ends, and neither end's is kept.
+            "the copy" if key.starts_with("onetaskgraph.copied_") => {
+                source.insert(key.clone(), reserved_value(key, "source"));
+                destination.insert(key.clone(), reserved_value(key, "destination"));
+            }
             "the destination" | "neither" => {
                 source.insert(key.clone(), reserved_value(key, "source"));
                 destination.insert(key.clone(), reserved_value(key, "destination"));
@@ -446,6 +453,18 @@ async fn every_reserved_key_has_the_owner_docs_metadata_states_on_an_update() {
         .clone();
     for (key, owner) in &owners {
         let expected = match owner.as_str() {
+            // The record this copy wrote: no token, because an in-memory source gives none, and
+            // no `copied_with_comments`, because this copy carried none — but a digest of what
+            // it left.
+            "the copy" if key == MetadataKey::COPIED_DESTINATION_VERSION_KEY => {
+                let held = metadata
+                    .get(key)
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                assert!(held.starts_with("sha256:"), "{key}: {held:?}");
+                Some(json!(held))
+            }
+            "the copy" if key.starts_with("onetaskgraph.copied_") => None,
             "the copy" => Some(json!("from:T-1")),
             "the destination" => Some(reserved_value(key, "destination")),
             _ => None,
@@ -600,9 +619,62 @@ async fn a_dry_run_reads_everything_and_writes_nothing() {
             destination: None,
             via: onetaskgraph_core::NoCounterpart::Created,
             link: None,
+            comments: None,
         }
     );
     assert!(listed(&engine, "into").await.is_empty());
+}
+
+#[tokio::test]
+async fn a_rust_caller_asking_what_only_a_task_copy_can_do_of_another_is_refused_first() {
+    // The command line offers neither on a document copy, so a Rust caller is the one that
+    // can ask: comments of documents, which hold none, and a query naming projects, when a
+    // query names tasks. Each is refused before anything is read or written.
+    let everything = TaskRequest {
+        sources: vec![name("from")],
+        filters: onetaskgraph_core::Filters::default(),
+        project: onetaskgraph_core::ProjectSelector::Any,
+        priorities: Vec::new(),
+        commented_since: None,
+        metadata: Vec::new(),
+        origin: None,
+        include_members: false,
+        paging: Paging {
+            limit: NonZeroU32::new(50).expect("a non-zero limit"),
+            token: None,
+        },
+    };
+    for (request, refusal) in [
+        (
+            CopyRequest {
+                comments: true,
+                ..many(&["from:D-1"], CopyScope::Documents)
+            },
+            "a document holds no comments",
+        ),
+        (
+            CopyRequest {
+                items: CopyItems::matching(everything),
+                ..many(&["from:P-1"], CopyScope::Projects { tasks: true })
+            },
+            "only when it copies tasks",
+        ),
+    ] {
+        let engine = pair();
+        let Err(refused) = engine.copy(&request).await else {
+            panic!("expected a refusal naming {refusal:?}");
+        };
+        assert!(
+            matches!(
+                refused,
+                EngineError::CommentsNotDocuments | EngineError::QueryNotTasks
+            ),
+            "{refused:?}"
+        );
+        assert!(refused.to_string().contains(refusal), "{refused}");
+        assert!(refused.to_string().contains("next:"), "{refused}");
+        assert!(listed(&engine, "into").await.is_empty());
+    }
 }
 
 #[tokio::test]
@@ -2507,6 +2579,7 @@ impl Misbehaving {
 
 fn reported(id: &NativeId) -> Task {
     Task {
+        version: None,
         id: id.clone(),
         key: None,
         title: "Alpha engine".to_owned(),
@@ -4408,5 +4481,41 @@ async fn create_lands_each_task_without_looking_and_refuses_what_says_there_is_a
         );
         assert!(refused.to_string().contains(carrier), "{refused}");
         assert!(listed(&engine, "into").await.is_empty(), "nothing written");
+    }
+}
+
+#[tokio::test]
+async fn a_destination_never_keeps_the_change_token_a_copied_task_arrives_with() {
+    // The source's token is the source's: the destination derives its own on a read, and an
+    // in-memory source derives none, so what a copy lands there carries none — on the create
+    // and on the update over it.
+    let mut held = task("T-1", "Alpha engine");
+    held["version"] = json!("from-v1");
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "config": {"tasks": [held]}},
+        "into": {"plugin": "in-memory", "config": {}},
+    }));
+    for _ in 0..2 {
+        engine.copy(&one("from:T-1")).await.expect("the copy lands");
+        let landed = engine
+            .tasks(&TaskRequest {
+                sources: vec![name("into")],
+                filters: onetaskgraph_core::Filters::default(),
+                project: onetaskgraph_core::ProjectSelector::Any,
+                priorities: Vec::new(),
+                commented_since: None,
+                metadata: Vec::new(),
+                origin: None,
+                include_members: false,
+                paging: Paging {
+                    limit: NonZeroU32::new(50).expect("a non-zero limit"),
+                    token: None,
+                },
+            })
+            .await
+            .expect("the list verb answers")
+            .items;
+        assert_eq!(landed.len(), 1);
+        assert_eq!(landed[0].item.version, None, "{:?}", landed[0].item);
     }
 }

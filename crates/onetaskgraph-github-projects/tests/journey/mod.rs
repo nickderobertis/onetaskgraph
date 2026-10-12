@@ -34,9 +34,9 @@ use onetaskgraph_github_projects::{
 use onetaskgraph_plugin_api::{
     Capabilities, CommentBody, DependencyEdge, DependencyEndpoint, DependencyKind,
     DependencySupport, Direction, Document, DocumentQuery, ItemKind, ItemWrite, LabelFilter,
-    NativeId, NewComment, PageRequest, Priority, Project, ProjectFilter, ProjectQuery, SourceError,
-    SourceName, Status, StatusCategory, Support, Task, TaskQuery, TaskSource, TextFields,
-    TextQuery,
+    MetadataKey, NativeId, NewComment, PageRequest, Priority, Project, ProjectFilter, ProjectQuery,
+    SourceError, SourceName, Status, StatusCategory, Support, Task, TaskQuery, TaskSource,
+    TaskUpdate, TextFields, TextQuery,
 };
 use serde_json::{Value, json};
 
@@ -76,6 +76,10 @@ pub struct Endpoints {
     pub rest_host: String,
     /// What the built source is configured to reach, when that is not GitHub.
     pub source: Option<Value>,
+    /// How long after a change the change-kind leg waits before it reads a task's token: the
+    /// plugin gives none until the change is more than `change_token::SETTLED` behind the
+    /// server's `Date`. Nothing for a stand-in whose `Date` is already well past every change.
+    pub settle: std::time::Duration,
 }
 
 impl Endpoints {
@@ -85,6 +89,10 @@ impl Endpoints {
             graphql: "https://api.github.com/graphql".to_owned(),
             rest_host: "https://api.github.com".to_owned(),
             source: None,
+            settle: onetaskgraph_github_projects::change_token::SETTLED
+                .to_std()
+                .expect("a positive margin")
+                + std::time::Duration::from_secs(2),
         }
     }
 }
@@ -1088,6 +1096,90 @@ async fn attach_artifact_label(token: &str, issue_id: &str, label_id: &str) -> R
     Ok(())
 }
 
+/// Send one sub-issue relationship mutation — `document` is the plugin's own `ADD_SUB_ISSUE` or
+/// `REMOVE_SUB_ISSUE` — between the project `parent` and the task `child`.
+async fn refile(
+    token: &str,
+    document: &str,
+    parent: &NativeId,
+    child: &NativeId,
+) -> Result<(), String> {
+    let root = if document == graphql::ADD_SUB_ISSUE {
+        "addSubIssue"
+    } else {
+        "removeSubIssue"
+    };
+    let response = graphql_variables(
+        token,
+        document,
+        "live project membership change",
+        json!({"input":{"issueId":parent.0,"subIssueId":child.0}}),
+    )
+    .await?;
+    if response
+        .pointer(&format!("/data/{root}/subIssue/id"))
+        .and_then(Value::as_str)
+        != Some(child.0.as_str())
+    {
+        return Err(format!(
+            "GitHub did not confirm {root} of {} under {}",
+            child.0, parent.0
+        ));
+    }
+    Ok(())
+}
+
+/// Write `value` into the board's origin text field on the issue `issue_id`'s item, the way a
+/// person editing that field on the board would.
+async fn rewrite_origin_field(
+    token: &str,
+    board: &str,
+    issue_id: &str,
+    value: &str,
+) -> Result<(), String> {
+    let field_id = writable_fields(token, board)
+        .await?
+        .into_iter()
+        .find(|field| field.get("name").and_then(Value::as_str) == Some(ORIGIN_FIELD))
+        .and_then(|field| field.get("id").and_then(Value::as_str).map(str::to_owned))
+        .ok_or_else(|| "the live board holds no origin field to rewrite".to_owned())?;
+    let items = graphql_variables(
+        token,
+        "query LiveBoardItem($id:ID!){node(id:$id){... on Issue{projectItems(first:20){nodes{id project{id}}}}}}",
+        "live board item lookup",
+        json!({"id":issue_id}),
+    )
+    .await?;
+    let item_id = items
+        .pointer("/data/node/projectItems/nodes")
+        .and_then(Value::as_array)
+        .and_then(|nodes| {
+            nodes
+                .iter()
+                .find(|node| node.pointer("/project/id").and_then(Value::as_str) == Some(board))
+        })
+        .and_then(|node| node.get("id").and_then(Value::as_str))
+        .ok_or_else(|| format!("issue {issue_id} has no item on the live board"))?
+        .to_owned();
+    let response = graphql_variables(
+        token,
+        "mutation($input:UpdateProjectV2ItemFieldValueInput!){updateProjectV2ItemFieldValue(input:$input){projectV2Item{id}}}",
+        "live board text field write",
+        json!({"input":{"projectId":board,"itemId":item_id,"fieldId":field_id,"value":{"text":value}}}),
+    )
+    .await?;
+    if response
+        .pointer("/data/updateProjectV2ItemFieldValue/projectV2Item/id")
+        .and_then(Value::as_str)
+        != Some(item_id.as_str())
+    {
+        return Err(format!(
+            "GitHub did not confirm writing the origin field of {issue_id}"
+        ));
+    }
+    Ok(())
+}
+
 /// Every label of the repository `matches` names, walked to exhaustion.
 async fn listed_labels(
     token: &str,
@@ -1447,13 +1539,28 @@ pub const CONTRACT_TYPES: [(&str, bool, &[&str]); 35] = [
     ("ProjectV2Field", false, &["id", "name", "dataType"]),
 ];
 
-/// Every enum a write reads a member of, with the members it reads.
+/// Every enum a read or a write names a member of, with the members it names.
 ///
 /// `ProjectV2FieldType.TEXT` is what tells a board text field a projected metadata value can be
 /// written to, so GitHub is held to that member as the input and payload types above are held
-/// to theirs. Asked in the first introspection document beside its types, so it costs no
-/// request of its own.
-pub const CONTRACT_ENUMS: [(&str, &[&str]); 1] = [("ProjectV2FieldType", &["TEXT"])];
+/// to theirs. `IssueTimelineItemsItemType`'s members are the relationship events every read
+/// counts for a task's change token, so GitHub is held to every one: a member it renamed or
+/// dropped would leave a count that never moves. Both are asked in the first introspection
+/// document beside its types, so they cost no request of their own.
+pub const CONTRACT_ENUMS: [(&str, &[&str]); 2] = [
+    ("ProjectV2FieldType", &["TEXT"]),
+    (
+        "IssueTimelineItemsItemType",
+        &[
+            "BLOCKED_BY_ADDED_EVENT",
+            "BLOCKED_BY_REMOVED_EVENT",
+            "BLOCKING_ADDED_EVENT",
+            "BLOCKING_REMOVED_EVENT",
+            "PARENT_ISSUE_ADDED_EVENT",
+            "PARENT_ISSUE_REMOVED_EVENT",
+        ],
+    ),
+];
 
 /// How many times one document may select a given introspection field.
 ///
@@ -1822,6 +1929,7 @@ fn artifact_task(
     metadata: BTreeMap<String, Value>,
 ) -> Task {
     Task {
+        version: None,
         id: NativeId("live-source-item".into()),
         key: None,
         title: title.to_owned(),
@@ -2776,7 +2884,260 @@ async fn drive_every_declared_capability(
         &run_tasks,
         &by_prefix,
     )
+    .await?;
+    // Renamed to another of this run's own titles, so the artifact cleanup still knows it.
+    every_change_kind_moves_a_tasks_token(
+        writer,
+        rebuilt,
+        (&run.token, &run.project_id),
+        (&second_id, &first_id, &orphan_id),
+        (&beta_id, &alpha_id),
+        (&label_id, &run.title(LAST_TITLE_OFFSET)),
+    )
     .await
+}
+
+/// How many times, a second apart, the change-kind leg asks for a task's token before it holds
+/// the answer it has: GitHub stamps a change's `updatedAt` by its own clock, which neither this
+/// machine's clock nor the moment the write returned bound to the second, so a read made just
+/// past [`Endpoints::settle`] by this machine's clock can still fall inside the plugin's margin.
+const TOKEN_READS: u32 = 30;
+
+/// A task's change token, as a source that has read nothing of the board yet reads it — so a
+/// record this run's own writer kept is not what answers. `None` is the plugin withholding it,
+/// which it does while the task's last change is within `change_token::SETTLED` of the read.
+async fn token_now(
+    rebuilt: &dyn Fn() -> Box<dyn TaskSource>,
+    task: &NativeId,
+    when: &str,
+) -> Result<Option<String>, String> {
+    Ok(rebuilt()
+        .get_task(task)
+        .await
+        .map_err(|error| format!("live read of the task {when} failed: {error}"))?
+        .ok_or_else(|| format!("the task was not there {when}"))?
+        .version)
+}
+
+/// The task's token once the plugin gives one, asked again a second apart while it withholds
+/// it — failing, naming `when`, only when it is still withheld [`TOKEN_READS`] reads later.
+pub async fn settled_token(
+    rebuilt: &dyn Fn() -> Box<dyn TaskSource>,
+    task: &NativeId,
+    when: &str,
+) -> Result<String, String> {
+    for read in 0..TOKEN_READS {
+        if read > 0 {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        }
+        if let Some(token) = token_now(rebuilt, task, when).await? {
+            return Ok(token);
+        }
+    }
+    Err(format!(
+        "GitHub gave the task no change token {when}, though the leg waited {TOKEN_READS} \
+         seconds past the plugin's settling margin; the plugin withholds a token only while \
+         the task's last change is within change_token::SETTLED of the read"
+    ))
+}
+
+/// Wait for the token to move off `before` after `kind`, and hold it to being the later one
+/// by the plugin's own ordering — asked again for a bounded while, because a read made the
+/// moment a write returns can be answered from before it, and a token is withheld until the
+/// change has settled.
+async fn moved(
+    rebuilt: &dyn Fn() -> Box<dyn TaskSource>,
+    task: &NativeId,
+    kind: &str,
+    before: &str,
+) -> Result<String, String> {
+    tokio::time::sleep(endpoints().settle).await;
+    let when = format!("after {kind}");
+    let mut after = settled_token(rebuilt, task, &when).await?;
+    for _ in 1..10 {
+        if after != before {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        after = settled_token(rebuilt, task, &when).await?;
+    }
+    ensure!(
+        after != before,
+        "{kind} left the task's change token at {before}, ten seconds after it; the token is \
+         what a copy skips by, so the plugin's statement of what it covers \
+         (docs/plugin-protocol.md §4.13d) no longer holds; next: tell the owner of the \
+         github-projects plugin that GitHub's behaviour changed, rather than re-running"
+    );
+    ensure!(
+        onetaskgraph_github_projects::change_token::order(&after, before)
+            == Some(std::cmp::Ordering::Greater),
+        "{kind} moved the task's change token from {before} to {after}, which the plugin's own \
+         ordering does not put after it"
+    );
+    Ok(after)
+}
+
+/// Every change kind `docs/plugin-protocol.md` §4.13d says a GitHub task's change token covers,
+/// made to one live task in turn, and the token held to moving to a later one after each.
+///
+/// GitHub reports both of the token's times to the whole second, and the plugin gives a token
+/// only once its item's last change is more than `change_token::SETTLED` behind the server's
+/// clock, so every read of a token here — the first included, of a task this run just wrote —
+/// waits [`Endpoints::settle`] past the change before it. Each change also waits a second past
+/// the one before, so no two of them share a second.
+async fn every_change_kind_moves_a_tasks_token(
+    writer: &dyn TaskSource,
+    rebuilt: &dyn Fn() -> Box<dyn TaskSource>,
+    (token, board): (&str, &str),
+    (task, first, orphan): (&NativeId, &NativeId, &NativeId),
+    (filed_under, other_project): (&NativeId, &NativeId),
+    (label_id, renamed): (&str, &str),
+) -> Result<(), String> {
+    let body = |text: &str| {
+        CommentBody::new(text).map_err(|error| format!("a live comment body: {error}"))
+    };
+    let pause = || tokio::time::sleep(std::time::Duration::from_millis(1_100));
+    tokio::time::sleep(endpoints().settle).await;
+    let mut before = settled_token(rebuilt, task, "before any change").await?;
+
+    pause().await;
+    let comment = writer
+        .add_comment(
+            task,
+            &NewComment {
+                body: body("temporary credentialed comment; the live lane removes it")?,
+                author: None,
+            },
+        )
+        .await
+        .map_err(|error| format!("live comment write failed: {error}"))?
+        .ok_or_else(|| "the task to comment on was not there".to_owned())?;
+    before = moved(rebuilt, task, "a comment added", &before).await?;
+
+    pause().await;
+    writer
+        .edit_comment(
+            task,
+            &comment.id,
+            &body("temporary credentialed comment, edited")?,
+        )
+        .await
+        .map_err(|error| format!("live comment edit failed: {error}"))?
+        .ok_or_else(|| "the comment to edit was not there".to_owned())?;
+    before = moved(rebuilt, task, "a comment edited", &before).await?;
+
+    pause().await;
+    writer
+        .delete_comment(task, &comment.id)
+        .await
+        .map_err(|error| format!("live comment deletion failed: {error}"))?
+        .ok_or_else(|| "the comment to delete was not there".to_owned())?;
+    before = moved(rebuilt, task, "a comment deleted", &before).await?;
+
+    pause().await;
+    writer
+        .set_task_content(task, "temporary credentialed write, its body edited")
+        .await
+        .map_err(|error| format!("live content write failed: {error}"))?
+        .ok_or_else(|| "the task to edit was not there".to_owned())?;
+    before = moved(rebuilt, task, "a body edit", &before).await?;
+
+    pause().await;
+    let renamed = TaskUpdate {
+        title: Some(renamed.to_owned()),
+        ..TaskUpdate::default()
+    };
+    writer
+        .update_task(task, &renamed)
+        .await
+        .map_err(|error| format!("live title write failed: {error}"))?
+        .ok_or_else(|| "the task to rename was not there".to_owned())?;
+    before = moved(rebuilt, task, "a title edit", &before).await?;
+
+    pause().await;
+    attach_artifact_label(token, &task.0, label_id).await?;
+    before = moved(rebuilt, task, "a label change", &before).await?;
+
+    pause().await;
+    writer
+        .set_task_metadata(
+            task,
+            &MetadataKey::new("live.change_kind").map_err(|error| format!("a key: {error}"))?,
+            &json!("metadata"),
+        )
+        .await
+        .map_err(|error| format!("live metadata write failed: {error}"))?
+        .ok_or_else(|| "the task to annotate was not there".to_owned())?;
+    before = moved(rebuilt, task, "a metadata change", &before).await?;
+
+    // A board text field — the origin field, the one this lane's board holds — written as a
+    // person editing it would, so nothing else of the issue moves with it.
+    pause().await;
+    rewrite_origin_field(token, board, &task.0, "live:origin-rewritten").await?;
+    before = moved(rebuilt, task, "a board text field change", &before).await?;
+
+    pause().await;
+    let depends = |on: &[&NativeId]| TaskUpdate {
+        depends_on: Some(on.iter().map(|far| blocks(far, ItemKind::Task)).collect()),
+        ..TaskUpdate::default()
+    };
+    writer
+        .update_task(task, &depends(&[first, orphan]))
+        .await
+        .map_err(|error| format!("live dependency write failed: {error}"))?
+        .ok_or_else(|| "the task to make depend was not there".to_owned())?;
+    before = moved(rebuilt, task, "a dependency added", &before).await?;
+
+    pause().await;
+    writer
+        .update_task(task, &depends(&[first]))
+        .await
+        .map_err(|error| format!("live dependency removal failed: {error}"))?
+        .ok_or_else(|| "the task to unhook was not there".to_owned())?;
+    before = moved(rebuilt, task, "a dependency removed", &before).await?;
+
+    // Replaced: one dependency removed and another added in one write, which leaves the count
+    // of what the task depends on where it was. GitHub moves neither of the token's times for a
+    // dependency, so this is the case only the dependency-event count can tell apart.
+    pause().await;
+    writer
+        .update_task(task, &depends(&[orphan]))
+        .await
+        .map_err(|error| format!("live dependency replacement failed: {error}"))?
+        .ok_or_else(|| "the task to rewire was not there".to_owned())?;
+    before = moved(rebuilt, task, "a dependency replaced", &before).await?;
+
+    // Project membership, which is a parent issue: taken out of its project, then filed under
+    // another, each by the one relationship mutation a person's move sends, so nothing else of
+    // the issue moves with it.
+    pause().await;
+    refile(token, graphql::REMOVE_SUB_ISSUE, filed_under, task).await?;
+    before = moved(rebuilt, task, "taken out of its project", &before).await?;
+
+    pause().await;
+    refile(token, graphql::ADD_SUB_ISSUE, other_project, task).await?;
+    before = moved(rebuilt, task, "filed under another project", &before).await?;
+
+    if writer.capabilities().priority.is_native() {
+        pause().await;
+        writer
+            .set_task_priority(task, Priority::Low)
+            .await
+            .map_err(|error| format!("live priority write failed: {error}"))?
+            .ok_or_else(|| "the task to prioritise was not there".to_owned())?;
+        before = moved(rebuilt, task, "a priority change", &before).await?;
+    }
+
+    // Last, because it closes the issue: the status is a board field, and done is the state
+    // the board moves a task to without an option this board may not have.
+    pause().await;
+    writer
+        .set_task_status(task, StatusCategory::Done)
+        .await
+        .map_err(|error| format!("live status write failed: {error}"))?
+        .ok_or_else(|| "the task to finish was not there".to_owned())?;
+    moved(rebuilt, task, "a status change", &before).await?;
+    Ok(())
 }
 
 /// `filter_by_comment_activity`, and the GitHub fact it rests on, re-taken on every run.
@@ -2983,7 +3344,7 @@ pub struct Nomination {
 
 /// The highest offset [`LiveRun::title`] is asked for, so a run checks before it writes
 /// anything that every stamp it will write can be spelled.
-const LAST_TITLE_OFFSET: u64 = 5;
+const LAST_TITLE_OFFSET: u64 = 6;
 
 /// The credentialed lane's whole entry: admit it, open its one session, and run it.
 ///

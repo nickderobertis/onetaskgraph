@@ -25,10 +25,21 @@ class BudgetSpent(BaseModel):
     unit: Annotated[str, Field(description="What it is metered in — `points`, `requests`.")]
 
 
+class CommentCounts(BaseModel):
+    added: Annotated[int, Field(description="Copies the copy created.", ge=0)]
+    deleted: Annotated[int, Field(description="Copies the copy deleted.", ge=0)]
+    edited: Annotated[int, Field(description="Copies the copy edited.", ge=0)]
+    unchanged: Annotated[
+        int,
+        Field(description="Copies that already read as their origin comments.", ge=0),
+    ]
+
+
 class CopyLink(StrEnum):
     CopyLinkRecorded = "recorded"
     CopyLinkUnchanged = "unchanged"
     CopyLinkUnrecorded = "unrecorded"
+    CopyLinkSkipped = "skipped"
 
 
 class CopyVia(StrEnum):
@@ -207,6 +218,12 @@ class CopyOutcomeCreatedOrWouldCreate(BaseModel):
     ] = None
     source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
     action: Literal["created"]
+    comments: Annotated[
+        CommentCounts | None,
+        Field(
+            description="What the copy did to the task's comments at the destination — present for every\ntask a `--comments` copy landed, a dry run's included, and absent for a copy without\nit and for a project and a document."
+        ),
+    ] = None
     destination: Annotated[
         GlobalId | None,
         Field(
@@ -236,6 +253,12 @@ class CopyOutcomeUpdated(BaseModel):
     ] = None
     source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
     action: Literal["updated"]
+    comments: Annotated[
+        CommentCounts | None,
+        Field(
+            description="What the copy did to the task's comments at the destination — present for every\ntask a `--comments` copy landed, a dry run's included, and absent for a copy without\nit and for a project and a document."
+        ),
+    ] = None
     destination: Annotated[GlobalId, Field(description="The item that was updated.")]
     link: Annotated[
         CopyLink | None,
@@ -253,11 +276,23 @@ class CopyOutcomeUnchanged(BaseModel):
     ] = None
     source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
     action: Literal["unchanged"]
+    comments: Annotated[
+        CommentCounts | None,
+        Field(
+            description="What the copy did to the task's comments at the destination — present for every\ntask a `--comments` copy found unchanged, a skipped one's included, and absent for a\ncopy without it and for a project and a document."
+        ),
+    ] = None
     destination: Annotated[GlobalId, Field(description="The item that already said it.")]
     link: Annotated[
         CopyLink | None,
         Field(description="What the copy did to the copied item's link; absent for a dry run."),
     ] = None
+    skipped: Annotated[
+        bool,
+        Field(
+            description="Whether the copy decided this from change tokens alone, without reading the item's\nbody or comments from the source: the source's current `version` is the one the\ndestination records at `onetaskgraph.copied_version`, and the destination reads as\nthe copy left it. `false` for an item read and compared."
+        ),
+    ] = False
     via: Annotated[CopyVia, Field(description="Which rule found it.")]
 
 
@@ -273,19 +308,36 @@ class CopyOutcomeOrphaned(BaseModel):
     destination: Annotated[GlobalId, Field(description="The item that was left alone.")]
 
 
+class CopyOutcomeFailed(BaseModel):
+    placed: Annotated[
+        Placement | None,
+        Field(
+            description="Which source a routed copy placed it in, and the index of the route entry that\nmatched — `null` there when none did.\n\nPresent for every item a copy into a source declaring `routes` landed, a dry run's\nincluded, so a would-be create still says where it would go; absent for a copy into\na source with none, whose output is what it always was, and for an orphan, which was\nnot placed at all."
+        ),
+    ] = None
+    source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
+    action: Literal["failed"]
+    error: Annotated[
+        Failure,
+        Field(description="Why, in the failure document every verb reports a failure in."),
+    ]
+
+
 class CopyOutcome(
     RootModel[
         CopyOutcomeCreatedOrWouldCreate
         | CopyOutcomeUpdated
         | CopyOutcomeUnchanged
         | CopyOutcomeOrphaned
+        | CopyOutcomeFailed
     ]
 ):
     root: Annotated[
         CopyOutcomeCreatedOrWouldCreate
         | CopyOutcomeUpdated
         | CopyOutcomeUnchanged
-        | CopyOutcomeOrphaned,
+        | CopyOutcomeOrphaned
+        | CopyOutcomeFailed,
         Field(
             description="What happened to one item.\n\n`action` and `destination` are one value rather than two fields side by side: an\nupdated item without a destination id, or an orphan without one, are states this type\nmust not be able to say — the id *is* what those outcomes are about. The one outcome\nthat legitimately has none is a dry run that would create, because nothing was\ncreated and there is no id to report."
         ),

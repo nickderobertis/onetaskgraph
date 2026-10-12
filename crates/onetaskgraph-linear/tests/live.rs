@@ -293,6 +293,7 @@ async fn drive_every_declared_capability(
         classification: Default::default(),
     };
     let task = |name: &str, status: &Status, under: Option<&NativeId>, labels: Vec<Label>| Task {
+        version: None,
         id: NativeId("live-source-item".into()),
         key: None,
         title: name.to_owned(),
@@ -618,7 +619,213 @@ async fn drive_every_declared_capability(
     );
 
     drive_documents(run, source, &alpha_id, &title(5), &title(6)).await?;
-    drive_follow_ups(run, source, &title(7), &title(8), &title(9), &title(10)).await
+    drive_follow_ups(run, source, &title(7), &title(8), &title(9), &title(10)).await?;
+    // Renamed to another of this run's own titles, so the artifact cleanup still knows it.
+    linear_gives_no_change_token(
+        source,
+        (&second_id, &first_id, &orphan_id),
+        (&title(11), &label(&only_label)),
+    )
+    .await
+}
+
+/// A Linear task carries no change token, through every kind of change a copy would have to
+/// see — and what this lane learns along the way is printed, as the evidence a token would rest
+/// on.
+///
+/// `docs/plugin-protocol.md` §4.13d gives Linear none until this lane proves which of those
+/// changes move `Issue.updatedAt`, since a token that missed one would let a copy skip a task
+/// that changed. So each change is made to one of this run's tasks in turn, a second apart, and
+/// every read after it is held to carrying no `version`; whether its `updated_at` moved is
+/// printed beside the change, so a later change to the plugin has the record to decide from.
+async fn linear_gives_no_change_token(
+    source: &dyn TaskSource,
+    (task, first, orphan): (&NativeId, &NativeId, &NativeId),
+    (renamed, extra_label): (&str, &Label),
+) -> Result<(), String> {
+    use onetaskgraph_plugin_api::{CommentBody, MetadataKey, NewComment, TaskUpdate};
+    let read = || async {
+        let held = source
+            .get_task(task)
+            .await
+            .map_err(|error| format!("live read of the task failed: {error}"))?
+            .ok_or_else(|| "the task was not there".to_owned())?;
+        ensure!(
+            held.version.is_none(),
+            "Linear gave a change token, {:?}, which docs/plugin-protocol.md §4.13d says it does \
+             not until this lane proves what Issue.updatedAt covers",
+            held.version
+        );
+        Ok::<Task, String>(held)
+    };
+    let pause = || tokio::time::sleep(std::time::Duration::from_millis(1_100));
+    let mut evidence = Vec::new();
+    let mut before = read().await?;
+    let mut note = |kind: &str, before: &Task, after: &Task| {
+        evidence.push(format!(
+            "{kind}: updatedAt {} → {}",
+            before
+                .updated_at
+                .map_or("none".to_owned(), |at| at.to_rfc3339()),
+            after
+                .updated_at
+                .map_or("none".to_owned(), |at| at.to_rfc3339()),
+        ));
+    };
+    let body = |text: &str| {
+        CommentBody::new(text).map_err(|error| format!("a live comment body: {error}"))
+    };
+
+    pause().await;
+    let comment = source
+        .add_comment(
+            task,
+            &NewComment {
+                body: body("temporary credentialed comment; the live lane removes it")?,
+                author: None,
+            },
+        )
+        .await
+        .map_err(|error| format!("live comment write failed: {error}"))?
+        .ok_or_else(|| "the task to comment on was not there".to_owned())?;
+    let after = read().await?;
+    note("a comment added", &before, &after);
+    before = after;
+
+    pause().await;
+    source
+        .edit_comment(
+            task,
+            &comment.id,
+            &body("temporary credentialed comment, edited")?,
+        )
+        .await
+        .map_err(|error| format!("live comment edit failed: {error}"))?
+        .ok_or_else(|| "the comment to edit was not there".to_owned())?;
+    let after = read().await?;
+    note("a comment edited", &before, &after);
+    before = after;
+
+    pause().await;
+    source
+        .delete_comment(task, &comment.id)
+        .await
+        .map_err(|error| format!("live comment deletion failed: {error}"))?
+        .ok_or_else(|| "the comment to delete was not there".to_owned())?;
+    let after = read().await?;
+    note("a comment deleted", &before, &after);
+    before = after;
+
+    pause().await;
+    source
+        .set_task_content(task, "temporary credentialed write, its body edited")
+        .await
+        .map_err(|error| format!("live content write failed: {error}"))?
+        .ok_or_else(|| "the task to edit was not there".to_owned())?;
+    let after = read().await?;
+    note("a body edit", &before, &after);
+    before = after;
+
+    pause().await;
+    source
+        .update_task(
+            task,
+            &TaskUpdate {
+                title: Some(renamed.to_owned()),
+                ..TaskUpdate::default()
+            },
+        )
+        .await
+        .map_err(|error| format!("live title write failed: {error}"))?
+        .ok_or_else(|| "the task to rename was not there".to_owned())?;
+    let after = read().await?;
+    note("a title edit", &before, &after);
+    before = after;
+
+    pause().await;
+    let mut labelled = before.clone();
+    labelled.labels.push(extra_label.clone());
+    let edges = source
+        .task_dependencies(task, Direction::DependsOn, &page(50))
+        .await
+        .map_err(|error| format!("live dependency read failed: {error}"))?
+        .items;
+    source
+        .write_task(&ItemWrite {
+            target: Some(task.clone()),
+            item: labelled,
+            depends_on: edges,
+        })
+        .await
+        .map_err(|error| format!("live label write failed: {error}"))?;
+    let after = read().await?;
+    note("a label change", &before, &after);
+    before = after;
+
+    pause().await;
+    source
+        .set_task_metadata(
+            task,
+            &MetadataKey::new("live.change_kind").map_err(|error| format!("a key: {error}"))?,
+            &json!("metadata"),
+        )
+        .await
+        .map_err(|error| format!("live metadata write failed: {error}"))?
+        .ok_or_else(|| "the task to annotate was not there".to_owned())?;
+    let after = read().await?;
+    note("a metadata change", &before, &after);
+    before = after;
+
+    pause().await;
+    source
+        .set_task_priority(task, Priority::Low)
+        .await
+        .map_err(|error| format!("live priority write failed: {error}"))?
+        .ok_or_else(|| "the task to prioritise was not there".to_owned())?;
+    let after = read().await?;
+    note("a priority change", &before, &after);
+    before = after;
+
+    for (kind, on) in [
+        ("a dependency added", vec![first, orphan]),
+        ("a dependency removed", vec![first]),
+    ] {
+        pause().await;
+        source
+            .update_task(
+                task,
+                &TaskUpdate {
+                    depends_on: Some(
+                        on.into_iter()
+                            .map(|far| blocks(far, ItemKind::Task))
+                            .collect(),
+                    ),
+                    ..TaskUpdate::default()
+                },
+            )
+            .await
+            .map_err(|error| format!("live dependency write failed: {error}"))?
+            .ok_or_else(|| "the task to make depend was not there".to_owned())?;
+        let after = read().await?;
+        note(kind, &before, &after);
+        before = after;
+    }
+
+    pause().await;
+    source
+        .set_task_status(task, StatusCategory::Done)
+        .await
+        .map_err(|error| format!("live status write failed: {error}"))?
+        .ok_or_else(|| "the task to finish was not there".to_owned())?;
+    let after = read().await?;
+    note("a status change", &before, &after);
+
+    eprintln!(
+        "Linear's Issue.updatedAt across every change a copy has to see, for whoever proves a \
+         Linear change token:\n  {}",
+        evidence.join("\n  ")
+    );
+    Ok(())
 }
 
 /// One issue's raw `description`, as Linear hands it back.
@@ -680,6 +887,7 @@ async fn drive_follow_ups(
     let tag = format!("otg-live-{}", run.stamp_micros);
     let origin = format!("elsewhere:{tag}");
     let issue = |title: &str, content: String, metadata: Value, priority: Priority| Task {
+        version: None,
         id: NativeId("live-source-item".into()),
         key: None,
         title: title.to_owned(),

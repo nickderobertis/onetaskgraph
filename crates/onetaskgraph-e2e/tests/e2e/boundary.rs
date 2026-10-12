@@ -493,6 +493,42 @@ fn a_public_write_naming_a_private_repository_in_its_text_title_or_metadata_is_r
 }
 
 #[test]
+fn a_comment_a_copy_would_carry_is_held_to_the_boundary_with_the_task_it_is_on() {
+    let store = Store::new(Some(registered), json!({}));
+    // One comment each, written in the folder's own section: one naming a private repository
+    // in what it says, and one whose author does.
+    let commented = |id: &str, author: &str, said: &str| {
+        store.record(
+            "plan",
+            "tasks",
+            id,
+            "title: Clean\nstatus: todo",
+            &format!(
+                "{PLAIN}\n\n## Comments\n\n<!-- onetaskgraph:comment id=\"20260913T151107Z-1\" \
+                 author=\"{author}\" created_at=\"2026-09-13T15:11:07Z\" \
+                 updated_at=\"2026-09-13T15:11:07Z\" -->\n### {author} — 2026-09-13T15:11:07Z\n\n\
+                 {said}\n\n<!-- /onetaskgraph:comment -->"
+            ),
+        );
+    };
+    commented("said", "ada", A_TEXT);
+    commented("signed", "hiddenco/quietharbor", PLAIN);
+    let before = store.tree();
+    for (task, where_) in [("plan:said", "text"), ("plan:signed", "metadata")] {
+        let (kind, said) = store.refused(&["task", "copy", task, "--to", "site", "--comments"]);
+        assert_eq!(kind, "boundary-refused", "{task}: {said}");
+        assert!(
+            said.contains(&format!("term of a private repository in its {where_}"))
+                && !said.contains("quietharbor"),
+            "{task}: the refusal is neutral: {said}"
+        );
+    }
+    assert_eq!(store.tree(), before, "no refused copy left anything");
+    // Without --comments no comment is carried, so none is held to the boundary.
+    store.ok(&["task", "copy", "plan:said", "--to", "site"]);
+}
+
+#[test]
 fn a_missing_or_absent_policy_never_approves_a_public_write() {
     // A write_policy naming only a visibility command, an empty one, and none at all beside a
     // declared visibility: each is an active store whose check is missing.

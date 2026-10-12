@@ -327,15 +327,48 @@ hand. The rules, all of which the plugin enforces:
   body with a line that is exactly the closing line is refused on `add` and `edit`, saying
   why, rather than escaped — an escaped body would not be the one you wrote.
 - **A comment id** is minted as the comment's creation time in UTC as `YYYYMMDDTHHMMSSZ`,
-  a dash, and the smallest positive integer not already an id in that file:
-  `20260913T151107Z-1`, then `20260913T151107Z-2` for a second comment in the same second.
-  Ids are never renumbered.
+  a dash, and the microsecond within that second it was minted at, plus one:
+  `20260913T151107Z-482311`. An id the file already holds — a copied comment's, or one written
+  by hand, such as `20260913T151107Z-1` — is passed over for a later instant's. Ids are never
+  renumbered, and none is minted twice: a comment deleted and another added in the same second
+  get different ids, so a `--comments` copy reading the folder sees one comment gone and one
+  new rather than one edited.
 - **The section is not the task's content.** `task show` and every query report the content
   as the body above the section, so `search --in content` never matches a comment's text.
-- **A copy never touches it.** Copying a task into this folder over an existing file keeps
-  that file's section byte for byte, and no comment of the task being copied is written into
-  it. Content that would itself read back as a section is refused rather than turned into
-  comments nobody wrote.
+- **A copy without `--comments` never touches it.** Copying a task into this folder over an
+  existing file keeps that file's section byte for byte, and no comment of the task being
+  copied is written into it. Content that would itself read back as a section is refused
+  rather than turned into comments nobody wrote.
+- **A copy with `--comments` keeps its copies of the source's comments in step** — adding,
+  editing and deleting only comments that record an origin, never one written here.
+- **A copied comment records where it came from natively.** It takes its origin's own id,
+  author and times — so the copy of a board comment is addressed here by the board's own
+  comment id — and its body opens with one more line recording the rest:
+
+  ```markdown
+  <!-- onetaskgraph:comment id="IC_kwDOA" author="ada" created_at="2026-09-01T00:00:05Z" updated_at="2026-09-01T00:00:05Z" -->
+  ### ada — 2026-09-01T00:00:05Z
+
+  <!-- onetaskgraph:comment-origin task="board:I_kwDOB" url="https://github.com/acme/sync/issues/7#issuecomment-1" -->
+  Seen on main.
+
+  <!-- /onetaskgraph:comment -->
+  ```
+
+  `task` is the qualified id of the task the comment was written on; `id` is added only when
+  the comment's own id here had to differ from the origin's, because this task already held
+  one by that id; `url` is the origin's address when it has one; and `created_at` and
+  `updated_at` are added only when the marker's whole second is not the origin's own time —
+  the instant in full when the origin gave one finer than a second, as Linear does, and empty
+  when it gave none — so the origin reads back exactly as it was copied. An origin naming no
+  qualified task, or whose id or address holds a line break, is refused rather than written.
+  `task show` reports the line
+  as the comment's `origin` and never as part of its body. It is a line of the body rather than
+  attributes of the marker line on purpose: a release of this plugin from before comments had
+  origins refuses a marker carrying an attribute it does not know — and would then read the
+  whole section as task content — while it reads this line as part of the comment's text and
+  every comment as a comment. A body a person writes whose first line opens with
+  `<!-- onetaskgraph:comment-origin` is refused, rather than read as a copy's origin.
 
 `--author` is recorded here as given — this folder has no signed-in account to record
 instead — and must be one line with no control characters.

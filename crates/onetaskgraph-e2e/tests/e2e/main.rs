@@ -46,9 +46,30 @@ mod clock;
 // sit behind a plugin crate's edge, which AGENTS.md forbids depending on the engine at any
 // depth.
 mod commented_since;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No credential and no network: the
+// journeys drive the binary against the loopback board and folders of Markdown in seconds. What
+// they prove is a contract member of every plugin read through the engine — a task's change
+// token, ordered by the engine's own reader — so no one plugin crate's edge is narrower.
+mod change_tokens;
 mod comments;
 mod copy;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No credential and no network: the
+// journeys drive the binary between loopback boards, a loopback Linear workspace and folders of
+// Markdown in seconds. The rule they prove is the engine's copy, which carries comments between
+// every pair of plugins, so no one plugin crate's edge is narrower.
+mod copy_comments;
 mod copy_link;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No credential and no network: the
+// journeys drive the binary between loopback boards and a folder of Markdown in seconds, and
+// read the boards' own request logs. What they prove — a copy's skip and its copy by query — is
+// the engine's, so no one plugin crate's edge is narrower.
+mod copy_skip;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No credential and no network: the
+// journeys drive the binary against a loopback board, a loopback Linear workspace and a folder
+// of Markdown behind a Python relay, in seconds. What they prove — that a copy writes one
+// revision of an item and never a mix — is the engine's read, so no plugin crate's edge is
+// narrower.
+mod copy_snapshot;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
 // narrower edge for it: every journey here drives the binary against folders of Markdown and a
 // loopback fixture board, with no credential and no network, and the whole module finishes in

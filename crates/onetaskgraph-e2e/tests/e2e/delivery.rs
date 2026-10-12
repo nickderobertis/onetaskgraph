@@ -214,9 +214,15 @@ fn a_status_set_on_local_markdown_rewrites_the_status_and_nothing_else() {
 
         let mut expected = before.clone();
         expected["items"][0]["item"]["status"] = json!({"category": "queued", "name": "queued"});
+        // The file changed, so its change token did: a status is a change the token covers.
+        let after = show(&sandbox, "work:T-1");
+        assert_ne!(
+            after["items"][0]["item"]["version"], expected["items"][0]["item"]["version"],
+            "{who}: the task's token moved with its status"
+        );
+        expected["items"][0]["item"]["version"] = after["items"][0]["item"]["version"].clone();
         assert_eq!(
-            show(&sandbox, "work:T-1"),
-            expected,
+            after, expected,
             "{who}: everything else reads back unchanged"
         );
         assert_eq!(

@@ -168,8 +168,12 @@ returned byte for byte, and an empty one is refused. `--author` is for a source 
 what it is given, such as a folder of Markdown; GitHub and Linear record the signed-in
 account themselves and refuse it rather than drop it. `task show` prints a task's comments
 after its body, and its `--json` carries them as a top-level `comments` list for a source
-whose tasks have comments — absent, rather than empty, for one whose tasks have none. A
-`task copy`, `project copy` or `document copy` never reads or writes a comment at either end.
+whose tasks have comments — absent, rather than empty, for one whose tasks have none.
+Without `--comments`, a `task copy`, `project copy` or `document copy` never writes a comment
+at either end, and reads one only for a `task copy` by query narrowed by `--commented-since`,
+which reads each matched task's comments once to confirm the match; with it, a task or project copy keeps the destination's copies of each
+task's comments in step with the source's — see
+[Carrying comments, and copying only what changed](#carrying-comments-and-copying-only-what-changed).
 
 `task show-many <ID>...` shows several tasks at once, whatever sources they are in, and its
 `--json` is `{"details": [...]}`: one entry per id, in the order given, each exactly what
@@ -575,6 +579,9 @@ copied from, which is what makes the next copy of it an update.
 | `--create` | `task copy` only: you assert the destination holds no counterpart of any task named — typically because you have just asked it — so each is created without the correspondence lookup, and a GitHub board is sent no origin query. Sound because that query reads an index that lags a fresh write by the same amount whoever asks, so repeating yours could find nothing yours did not. Refused beside `--match-by` or `--recreate`, and for a task whose own link or origin already names an item at the destination, naming that item. |
 | `--match-by KEY` | Delete or corrupt the origin key and neither rule can find the counterpart, so the next copy back creates a new item. This re-establishes the lost correspondence by matching on `title`, or on a metadata key of your choosing, without hand-editing ids. |
 | `--no-tasks` | Copy a project on its own. By default `project copy` copies the project and every task in it, matching each task independently. |
+| `--comments` | `task copy` and `project copy`: keep the destination's copies of each task's comments in step with the source's, as [below](#carrying-comments-and-copying-only-what-changed). Without it a copy reads and writes no comment. |
+| `--no-link` | Write nothing at all to the source — no `onetaskgraph.copies` link — and report every link `skipped`. The next copy finds each counterpart by the destination's own `onetaskgraph.origin`. |
+| `--source S`, `--commented-since RFC3339`, `--metadata KEY=VALUE` | `task copy` only, in place of ids: copy what `task list` with the same narrowing answers. Refused beside ids. |
 | `--member TASK-ID` | Copy the project and exactly the tasks named, repeating the flag for each, when you know which of them changed. A task not named is not read at the destination, not written and not reported, so a one-task change costs what one task costs rather than a read of the whole project. A named task the destination does not hold yet is still created. An edge to a task not named is written to the destination id that task records at `onetaskgraph.origin`, and a copy whose edge names a task recording none is refused before anything is written, naming that task. A copy naming members was not told about the rest, so it reports nothing `orphaned`. |
 
 `--dry-run` is how you read that table's first row before trusting it: every source is
@@ -616,8 +623,10 @@ refusal says so and names what is still there rather than leaving you to find it
             "via": "link", "link": "unchanged"}]}
 ```
 
-`action` says which of the four things above happened to that item, and `destination` is
-`null` only for a dry run that would have created something. The vocabulary itself is the
+`action` says which of the things above happened to that item — `created`, `updated`,
+`unchanged`, `orphaned`, or `failed` for a task a copy left unwritten because it kept changing
+while it was read — and `destination` is `null` for a dry run that would have created
+something and absent from a `failed` item. The vocabulary itself is the
 `CopyAction` root of `onetaskgraph schema`, which is what both SDKs are generated from and
 what the journeys validate this output against.
 
@@ -629,11 +638,76 @@ what the journeys validate this output against.
 `updated` and `unchanged` it names the rule above that found the counterpart: `link`,
 `origin`, `scan`, or `match` for `--match-by`. On `created` it is always `created`, because
 none did. `link` says what became of the item's own link, on those same three actions of a
-copy that writes: `recorded`, `unchanged`, or `unrecorded` where its source could not hold
-one. A dry run reports `via` and leaves `link` out, and an `orphaned` item carries neither.
+copy that writes: `recorded`, `unchanged`, `unrecorded` where its source could not hold
+one, or `skipped` under `--no-link`, which writes nothing at all to the source. A dry run
+reports `via` and leaves `link` out, and an `orphaned` item and a `failed` one carry neither.
 In the generated SDKs the four rule words are the type `CopyVia` and `created` is
 `NoCounterpart`, and the link words are `CopyLink`.
 <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
+
+### Carrying comments, and copying only what changed
+
+Every task a source reads carries a **change token**, `version` in the JSON of `task list`,
+`task show`, `task show-many` and every list, search and `--commented-since` result, when its
+source can promise that two equal tokens of one task mean nothing in it changed — its title,
+body, status, priority, labels, board fields, metadata, edges and comments, a comment added,
+edited or deleted included. A GitHub Projects board builds it from the issue's `updatedAt`,
+its board item's `updatedAt`, its comment count, the count of dependency and project
+membership events on its timeline — GitHub moves neither time for either — and its
+repository, which its reads already select; a folder
+of Markdown gives the digest of the task file; Linear gives none until its live lane proves
+which changes its `updatedAt` covers, and a task without one is always read. The token is
+opaque: `docs/plugin-protocol.md` §4.13d states what each plugin's keys on.
+
+**`--comments`** keeps the destination's copies of each task's comments in step with the
+source's, in either direction, by one rule: the copy adds a copy of each source comment the
+destination holds none of, edits a copy whose origin comment changed, and deletes a copy whose
+origin comment is gone. A comment written at the destination is never edited or deleted, and
+a source comment that is itself a copy of one of the destination's own is never sent back — so
+copying a local task back to the board it came from carries only the comments written locally.
+Each copy names where it came from as its `origin` — the task, the comment's id there, its
+author, its times and its address — and a chain of copies keeps naming the first one. A folder
+of Markdown keeps the origin natively, taking the origin's id, author and times for the copy;
+GitHub and Linear set a comment's author and times themselves, so there it rides as a hidden
+marker at the end of the body, which every read takes back out and reports as `origin`, and an
+edit through `task comment edit` keeps. Each item's outcome counts what was done:
+
+```json
+{"source": "board:I_1", "action": "updated", "destination": "notes:I_1", "via": "scan",
+ "link": "skipped", "comments": {"added": 1, "edited": 1, "deleted": 0, "unchanged": 3}}
+```
+
+Every copy records itself on each task it writes — the source token it read, whether it
+carried the comments, and a digest of what it left (`docs/metadata.md` has the three keys) —
+and a `--comments` copy or a copy by query **skips** a task nothing has changed at either end
+since: it is reported `unchanged` with `skipped: true`, and nothing more of it is read than the
+listing that named it, or by id the read that found it. An edit at the destination since —
+a copied comment edited or deleted, a comment written there — is never skipped: the copy reads
+the task again and restores what it copied, leaving the destination's own comment alone. A copy
+by id without `--comments` reads and compares every task as it always did. Two bounds, stated
+rather than discovered: a task skipped from its listing keeps the edges its last copy wrote, which
+a copy of a different set of tasks might name differently; and a task the rest of a query keeps
+but which no comment has touched since the instant, and which was never copied, is read on every
+copy to be ruled out.
+
+**A copy by query** — `task copy --to notes --source board --commented-since <INSTANT>
+--metadata <KEY>=<VALUE>` — copies exactly what `task list` with the same narrowing answers,
+and the query's own answer carries the tokens it skips by. Its comment activity is confirmed
+from the comments the copy reads anyway, or for a skipped task from the destination's copies of
+them, so no task's comments are read twice in one copy.
+
+**A copy is one revision of each item, or none of it.** A task whose comments fit one page is
+read whole in one request; one whose comments run longer is read a page at a time, each page
+beside the task, and when two of those reads disagree — a comment edited, added, or the body
+changed in between — the task is read again from its first page, once. A task whose source
+gives it no change token — every Linear task, and a GitHub task changed within the minute
+before the read — has nothing on a page read that moves when a comment alone is edited, so when
+its comments run past one page it is read again in full until two passes in a row agree on
+every comment's id, body and time, at most three passes. Read differently again, or never
+settling, it is written nowhere and reported `failed`, with the failure document every verb reports in,
+while every other item lands and the command exits `4`. So a copy by query into a fresh folder
+of Markdown, with `--comments --no-link`, is a snapshot of the board: nothing writes to that
+folder afterwards but another copy into it, and the board is left exactly as it was.
 
 A copy that reaches a source which counts its own requests — `github-projects` does — also
 says what it **spent**: the requests those sources sent for the command, and what that cost
@@ -973,6 +1047,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         recreate: false,
         create: false,
         dry_run: false,
+        comments: false,
+        no_link: false,
     }).await?;
 
     let outcome = &report.items[0];

@@ -21,6 +21,7 @@ import {
   OnetaskgraphExecutionError,
   OnetaskgraphValidationError,
   projectGraphDirections,
+  taskCopyFlags,
   taskUpdateFlags,
   taskUpdateOptionFlags,
 } from "../src/index.ts";
@@ -373,6 +374,8 @@ test("copy drives the real binary and reports what it did to each item", async (
         destination: "into:P-1",
         via: "link",
         link: "unchanged",
+        // Read and compared: a copy without `comments`, by id, never skips.
+        skipped: false,
       },
     ]);
     // The project and exactly the members named; a folder of Markdown meters nothing, so
@@ -804,6 +807,43 @@ test("taskUpdate sends exactly the flags the binary's task update reports, no mo
   for (const flag of Object.values(taskUpdateOptionFlags)) expect(own).toContain(flag);
 });
 
+test("taskCopy sends exactly the flags the binary's task copy reports, no more and no fewer", () => {
+  // `CopyOptions`, `CopyQueryOptions` and `create` are a second statement of `task copy`'s
+  // command line, reconciled against the binary's own help both ways as taskUpdate's are.
+  const flags = (verb: string[]) => {
+    const help = spawnSync(binary, [...verb, "--help"], { encoding: "utf8" });
+    expect(help.status, help.stderr).toBe(0);
+    return new Set(
+      [...help.stdout.matchAll(/^\s+(?:-[a-zA-Z], )?(--[a-z][a-z-]*)/gm)].flatMap((found) =>
+        found[1] === undefined ? [] : [found[1]],
+      ),
+    );
+  };
+  const global = flags(["config", "show"]);
+  // `--to` is the destination, which `taskCopy` takes as an argument of its own.
+  const own = [...flags(["task", "copy"])]
+    .filter((flag) => !global.has(flag) && flag !== "--to")
+    .sort();
+  const sent = new Set(
+    [
+      ...taskCopyFlags({
+        matchBy: "title",
+        recreate: true,
+        dryRun: true,
+        noLink: true,
+        comments: true,
+        create: true,
+        sources: ["work"],
+        commentedSince: "2026-09-01T00:00:00Z",
+        metadata: ["myapp.a=1"],
+        termScope: ["github.com/example-org/widget"],
+      }),
+      ...taskCopyFlags({ termScope: [] }),
+    ].filter((argument) => argument.startsWith("--")),
+  );
+  expect([...sent].sort()).toEqual(own);
+});
+
 test("taskUpdate refuses options it could not send as the caller wrote them", () => {
   expect(() => taskUpdateFlags(null)).toThrow("options is not an object");
   expect(() => taskUpdateFlags([])).toThrow("options is not an object");
@@ -1154,7 +1194,13 @@ test("a task's content is replaced from a file through the real binary, and noth
     expect(await contentClient.taskContentSet("work:T-1", body)).toEqual({ id: "work:T-1" });
     const after = (await contentClient.taskShow("work:T-1")).items[0]?.item;
     expect(after?.content).toBe("The new body.\n\nWith a second paragraph.");
-    expect({ ...after, content: null }).toEqual({ ...before, content: null });
+    // The task's change token moves with its content; nothing else does.
+    expect(after?.version).not.toBe(before?.version);
+    expect({ ...after, content: null, version: null }).toEqual({
+      ...before,
+      content: null,
+      version: null,
+    });
 
     const refused = contentClient.taskContentSet("work:T-1", resolve(contentRoot, "absent.md"));
     await expect(refused).rejects.toThrow("--file");
@@ -1517,5 +1563,99 @@ test("sources route answers from configuration, and a home reads with its member
     expect(own.items.map((task) => task.id.split(":")[0])).toEqual(["notes"]);
   } finally {
     rmSync(routeRoot, { recursive: true, force: true });
+  }
+});
+
+test("a copy with comments carries them, and a repeat by query skips the unchanged task", async () => {
+  const root = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-comments-copy-"));
+  mkdirSync(resolve(root, "from/tasks"), { recursive: true });
+  mkdirSync(resolve(root, "into"), { recursive: true });
+  writeFileSync(
+    resolve(root, "from/tasks/T-1.md"),
+    "---\ntitle: Alpha engine\nstatus: todo\n---\nthe engine core\n",
+  );
+  const folder = (at: string) => ({
+    plugin: "local-md",
+    config: { root: resolve(root, at), status_mapping: { todo: "todo" } },
+  });
+  mkdirSync(resolve(root, "elsewhere"), { recursive: true });
+  writeFileSync(
+    resolve(root, "onetaskgraph.yaml"),
+    JSON.stringify({
+      sources: { from: folder("from"), into: folder("into"), elsewhere: folder("elsewhere") },
+    }),
+  );
+  try {
+    const client = new OnetaskgraphClient({ binaryPath: binary, cwd: root });
+    const said = await client.taskCommentAdd("from:T-1", {
+      body: "said at the source\n",
+      author: "ada",
+    });
+
+    // `noLink`, so the source file is left as it was and its token with it.
+    const copied = await client.taskCopy(["from:T-1"], "into", { comments: true, noLink: true });
+    expect(copied.items[0]?.action).toBe("created");
+    expect(copied.items[0]?.comments).toEqual({ added: 1, edited: 0, deleted: 0, unchanged: 0 });
+    const carried = (await client.taskCommentList("into:T-1")).comments;
+    expect(carried.map((comment) => comment.body)).toEqual(["said at the source\n"]);
+    expect(carried[0]?.origin?.task).toBe("from:T-1");
+    expect(carried[0]?.origin?.id).toBe(said.id);
+    expect(carried[0]?.origin?.author).toBe("ada");
+    expect((await client.taskShow("from:T-1")).items[0]?.item.version).toMatch(/^md1\|/);
+
+    // The same task named by `task list`'s narrowing, unchanged at both ends: skipped, and
+    // nothing written to the source.
+    const again = await client.taskCopy([], "into", {
+      sources: ["from"],
+      comments: true,
+      noLink: true,
+    });
+    expect(again.items).toEqual([
+      expect.objectContaining({
+        source: "from:T-1",
+        action: "unchanged",
+        skipped: true,
+        link: "skipped",
+      }),
+    ]);
+    // Narrowed as `task list` narrows: commented since an instant and holding a metadata
+    // value. `T-2` holds the value and no comment; `T-3` a comment and another value.
+    const tagged = (title: string, tag: string) =>
+      `---\ntitle: ${title}\nstatus: todo\nmetadata:\n  caller.tag: ${tag}\n---\nbody\n`;
+    writeFileSync(
+      resolve(root, "from/tasks/T-1.md"),
+      readFileSync(resolve(root, "from/tasks/T-1.md"), "utf8").replace(
+        "status: todo\n",
+        "status: todo\nmetadata:\n  caller.tag: keep\n",
+      ),
+    );
+    writeFileSync(resolve(root, "from/tasks/T-2.md"), tagged("Beta", "keep"));
+    writeFileSync(resolve(root, "from/tasks/T-3.md"), tagged("Gamma", "other"));
+    await client.taskCommentAdd("from:T-3", { body: "said elsewhere\n" });
+    const narrowing = {
+      sources: ["from"],
+      commentedSince: "2000-01-01T00:00:00Z",
+      metadata: ["caller.tag=keep"],
+    };
+    const listed = await client.taskList(narrowing);
+    expect(listed.items.map((task) => task.id)).toEqual(["from:T-1"]);
+    const narrowed = await client.taskCopy([], "elsewhere", { ...narrowing, noLink: true });
+    expect(narrowed.items.map((item) => item.source)).toEqual(["from:T-1"]);
+    // Cast past the type on purpose: a JavaScript caller can pass a number, and the client is
+    // what refuses it, before the binary is asked.
+    expect(() =>
+      client.taskCopy([], "elsewhere", { commentedSince: 7 } as unknown as {
+        commentedSince: string;
+      }),
+    ).toThrow(TypeError);
+
+    // Refused on the client before the binary is asked, as every option of the wrong type is.
+    expect(() =>
+      client.taskCopy(["from:T-1"], "into", { comments: "yes" } as unknown as {
+        comments: boolean;
+      }),
+    ).toThrow(TypeError);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });

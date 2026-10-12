@@ -346,10 +346,10 @@ import json
 import sys
 
 path = sys.argv[1]
-with open(path) as stream:
+with open(path, encoding="utf-8") as stream:
     project = json.load(stream)
 project["targets"] = []
-with open(path, "w") as stream:
+with open(path, "w", encoding="utf-8") as stream:
     json.dump(project, stream)
 PY
 # llmlint: ignore[work_goes_through_command_surface] This failure journey drives the workspace validator against a scratch project with a valid JSON value of the wrong type at a trust boundary.
@@ -362,7 +362,7 @@ import json
 import sys
 
 path = sys.argv[1]
-with open(path) as stream:
+with open(path, encoding="utf-8") as stream:
     project = json.load(stream)
 # The test target's command with one flag dropped resolves a different unit of the binary
 # from the one the build target links, so cargo would relink target/debug/onetaskgraph when
@@ -370,7 +370,7 @@ with open(path) as stream:
 command = project["targets"]["test"]["options"]["command"]
 assert " --all-features" in command, command
 project["targets"]["test"]["options"]["command"] = command.replace(" --all-features", "")
-with open(path, "w") as stream:
+with open(path, "w", encoding="utf-8") as stream:
     json.dump(project, stream)
 PY
 # llmlint: ignore[work_goes_through_command_surface] This failure journey drives the workspace validator against a scratch project whose test target has lost its binary-isolation guarantee.
@@ -414,6 +414,57 @@ grep -q 'onetaskgraph-cli==0.1.1' "$tmp/version-repo/sdks/python/pyproject.toml"
 node -e 'const p=require(process.argv[1]); if(p.version!=="0.1.1" || Object.values(p.optionalDependencies).some(v=>v!=="0.1.1")) process.exit(1)' "$tmp/version-repo/npm/cli/package.json" || { echo "version updater missed npm metadata; next: inspect JSON mutation" >&2; exit 1; }
 grep -q '^      "version": "0.1.1",' "$tmp/version-repo/bun.lock" || { echo "version updater missed the TypeScript workspace lock version; next: inspect lock mutation" >&2; exit 1; }
 grep -q '^        "@onetaskgraph/cli": "0.1.1",' "$tmp/version-repo/bun.lock" || { echo "version updater missed the TypeScript CLI lock pin; next: inspect lock mutation" >&2; exit 1; }
+# A tracked source discovery reads, holding UTF-8 that cp1252 cannot decode (0x9d). Off
+# Windows the checks also run through a python that decodes with cp1252 by default.
+printf '# \342\200\234quoted\342\200\235 \342\200\224 a tracked source that is not ASCII\n' > "$tmp/version-repo/crates/onetaskgraph/tests/non_ascii_probe.py"
+git -C "$tmp/version-repo" add crates/onetaskgraph/tests/non_ascii_probe.py
+mkdir "$tmp/code-page"
+# The shim reaches `open` and `io.text_encoding` rather than the locale module, because a
+# python of 3.11 or later resolves an unnamed file encoding in C, past anything `locale`
+# answers.
+cat > "$tmp/code-page/sitecustomize.py" <<'PY'
+import builtins
+import io
+
+_open = io.open
+
+
+def _platform_encoding(encoding):
+    return "cp1252" if encoding in (None, "locale") else encoding
+
+
+def _code_page_open(file, mode="r", buffering=-1, encoding=None, *args, **kwargs):
+    if "b" not in mode:
+        encoding = _platform_encoding(encoding)
+    return _open(file, mode, buffering, encoding, *args, **kwargs)
+
+
+builtins.open = io.open = _code_page_open
+io.text_encoding = lambda encoding, stacklevel=2: _platform_encoding(encoding)
+PY
+code_page_paths=("")
+case "${OS:-}${OSTYPE:-}" in
+  *Windows_NT* | *msys* | *cygwin* | *win32*) ;;
+  *)
+    # The simulation has to take, or the case below would pass on a lane it cannot fail on.
+    [[ $(PYTHONPATH="$tmp/code-page" "$python_bin" -c 'from pathlib import Path; import sys; Path(sys.argv[1]).read_text(); print("taken")' "$tmp/version-repo/crates/onetaskgraph/tests/non_ascii_probe.py" 2>/dev/null || true) != taken ]] || { echo "the cp1252 code-page shim did not take, so a script decoding with the platform's encoding would pass here; next: inspect $tmp/code-page/sitecustomize.py against this python's locale module" >&2; exit 1; }
+    code_page_paths+=("$tmp/code-page")
+    ;;
+esac
+for code_page_path in "${code_page_paths[@]}"; do
+  if ! (cd "$tmp/version-repo" && PYTHONPATH="$code_page_path" "$python_bin" scripts/product_versions.py check 0.1.1) 2>"$tmp/error"; then
+    cat "$tmp/error" >&2
+    echo "product-version check failed on a tracked non-ASCII UTF-8 source${code_page_path:+ under the cp1252 code page}; next: name encoding=\"utf-8\" where scripts/product_versions.py reads a file" >&2
+    exit 1
+  fi
+  # llmlint: ignore[work_goes_through_command_surface] This journey must run discovery inside its scratch tree, which holds the non-ASCII source; the just recipe addresses the outer working tree.
+  if ! (cd "$tmp/version-repo" && PYTHONPATH="$code_page_path" bash scripts/check-workspace-config.sh) 2>"$tmp/error"; then
+    cat "$tmp/error" >&2
+    echo "workspace check failed on a tracked non-ASCII UTF-8 source${code_page_path:+ under the cp1252 code page}; next: name encoding=\"utf-8\" where its python reads a file" >&2
+    exit 1
+  fi
+done
+git -C "$tmp/version-repo" rm --quiet --force crates/onetaskgraph/tests/non_ascii_probe.py
 assert_unregistered_version() {
   relative_path=$1
   mkdir -p "$(dirname "$tmp/version-repo/$relative_path")"

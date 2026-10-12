@@ -21,7 +21,7 @@ LabelName = NewType('LabelName', str)
 RunId = NewType('RunId', int)
 Token = NewType('Token', str)
 
-JANITOR = (Path(__file__).resolve().parents[1] / 'src/lib.rs').read_text()
+JANITOR = (Path(__file__).resolve().parents[1] / 'src/lib.rs').read_text(encoding="utf-8")
 # The janitor's one declaration of GitHub's run statuses, read rather than restated.
 Status = StrEnum('Status', [(re.sub(r'(?<!^)(?=[A-Z])', '_', variant).upper(), spelled) for variant, spelled in re.findall(r'Self::(\w+) => "([a-z_]+)",', JANITOR.split('fn spelling(self)', 1)[1].split('fn read(', 1)[0])])
 assert {s.value for s in Status} == {'completed', 'queued', 'in_progress', 'waiting', 'requested', 'pending'}, 'RunStatus::spelling changed; update the journeys to the new vocabulary'
@@ -95,14 +95,14 @@ class FailedPage(NamedTuple):
 ROOT = Path(__file__).resolve().parents[3]
 BINARY = os.environ.get('JANITOR_BINARY', str(ROOT / 'target/debug/onetaskgraph-live-janitor'))
 # Read the shared declarations, rather than introducing another nomination or prefix.
-SOURCE = (ROOT / 'crates/onetaskgraph-github-live/src/lib.rs').read_text()
+SOURCE = (ROOT / 'crates/onetaskgraph-github-live/src/lib.rs').read_text(encoding="utf-8")
 
 def declaration(name):
     return re.search(rf'pub const {name}: &str = "([^"]+)"', SOURCE)[1]
 
 BOARD_OWNER = declaration('BOARD_OWNER')
 # The plugin's document prefix, read from its one declaration like the names above.
-DESIGN = re.search(r'pub const DESIGN_TITLE_PREFIX: &str = "([^"]+)"', (ROOT / 'crates/onetaskgraph-github-projects/src/lib.rs').read_text())[1]
+DESIGN = re.search(r'pub const DESIGN_TITLE_PREFIX: &str = "([^"]+)"', (ROOT / 'crates/onetaskgraph-github-projects/src/lib.rs').read_text(encoding="utf-8"))[1]
 BOARD_NUMBER = int(re.search(r'pub const BOARD_NUMBER: u32 = (\d+);', SOURCE)[1])
 # The entry point's exit statuses, as its module documentation states them.
 FAILED, REFUSED, DECLINED = 1, 2, 3
@@ -124,7 +124,7 @@ class RestOperation(TypedDict):
 
 # GitHub's REST contract for every operation the janitor sends, reduced from GitHub's
 # published description; fixtures/rest-operations.json says from which commit and when.
-REST: list[RestOperation] = cast(list[RestOperation], json.loads((Path(__file__).resolve().parent / 'fixtures/rest-operations.json').read_text())['operations'])
+REST: list[RestOperation] = cast(list[RestOperation], json.loads((Path(__file__).resolve().parent / 'fixtures/rest-operations.json').read_text(encoding="utf-8"))['operations'])
 
 def rest_operation(method: str, path: str) -> RestOperation | None:
     for operation in REST:

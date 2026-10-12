@@ -19,11 +19,11 @@ use std::sync::OnceLock;
 use clap::{CommandFactory as _, Parser};
 use onetaskgraph_core::config::{self, Layer};
 use onetaskgraph_core::{
-    CopyItems, CopyRequest, CopyScope, Delivered, DeliveryOutcome, DependencyRequest,
-    DocumentFilters, DocumentRequest, Engine, Environment, Failure, FailureDocument, Filters,
-    GlobalId, LabelRequest, Loaded, MatchBy, OutputFormat, PageToken, Paging, ProjectGraphRequest,
-    ProjectRequest, ProjectSelector, QueryResponse, RenderedRecord, SearchRequest, SourceFailure,
-    TaskRequest,
+    CopyAction, CopyItems, CopyReport, CopyRequest, CopyScope, Delivered, DeliveryOutcome,
+    DependencyRequest, DocumentFilters, DocumentRequest, Engine, Environment, Failure,
+    FailureDocument, Filters, GlobalId, LabelRequest, Loaded, MatchBy, OutputFormat, PageToken,
+    Paging, ProjectGraphRequest, ProjectRequest, ProjectSelector, QueryResponse, RenderedRecord,
+    SearchRequest, SourceFailure, TaskRequest,
 };
 use onetaskgraph_plugin_api::{
     CommentBody, LabelFilter, MetadataKey, MetadataRecord, NativeId, NewComment, SharedClock,
@@ -516,12 +516,29 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
         Command::Task {
             command: TaskCommand::Copy(args),
         } => {
-            let mut request = copy_request(
-                args.id.iter().map(String::as_str),
-                CopyScope::Tasks,
-                &args.copy,
-            )?;
+            let items = if args.query.given() {
+                CopyItems::matching(TaskRequest {
+                    sources: selection(&SelectionArgs {
+                        source: args.query.source.clone(),
+                    })?,
+                    filters: Filters::default(),
+                    project: ProjectSelector::Any,
+                    priorities: Vec::new(),
+                    commented_since: args.query.commented_since,
+                    metadata: args.query.metadata.clone(),
+                    origin: None,
+                    include_members: false,
+                    paging: Paging {
+                        limit: loaded.config.page_size(),
+                        token: None,
+                    },
+                })
+            } else {
+                named(args.id.iter().map(String::as_str))?
+            };
+            let mut request = copy_request(items, CopyScope::Tasks, &args.copy)?;
             request.create = args.create;
+            request.comments = args.comments;
             copy(out, loaded, &request).await
         }
 
@@ -539,7 +556,9 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
                     tasks: !args.no_tasks,
                 },
             };
-            let request = copy_request(std::iter::once(args.id.as_str()), scope, &args.copy)?;
+            let mut request =
+                copy_request(named(std::iter::once(args.id.as_str()))?, scope, &args.copy)?;
+            request.comments = args.comments;
             copy(out, loaded, &request).await
         }
 
@@ -677,7 +696,7 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
             command: DocumentCommand::Copy(args),
         } => {
             let request = copy_request(
-                args.id.iter().map(String::as_str),
+                named(args.id.iter().map(String::as_str))?,
                 CopyScope::Documents,
                 &args.copy,
             )?;
@@ -1153,7 +1172,24 @@ async fn copy(out: &mut impl Write, loaded: &Loaded, request: &CopyRequest) -> R
         OutputFormat::Json => json(&report, "the copy")?,
     };
     emit(out, rendered.trim_end(), "the copy")?;
-    Ok(delivery_exit(&report.delivered))
+    Ok(delivery_exit(&report.delivered).max(failed_exit(&report)))
+}
+
+/// Name every item a copy left unwritten, and say what the exit code will mean: `4`, the
+/// code a copy that landed and could not finish everything exits with, when there is one.
+fn failed_exit(report: &CopyReport) -> u8 {
+    let mut failed = false;
+    for outcome in &report.items {
+        if let CopyAction::Failed { error } = &outcome.action {
+            failed = true;
+            eprintln!(
+                "onetaskgraph: {} was not copied: {}",
+                outcome.source,
+                error.message()
+            );
+        }
+    }
+    if failed { EXIT_PARTIAL } else { EXIT_OK }
 }
 
 /// Set one metadata key of one record.
@@ -1229,21 +1265,28 @@ fn delivery_exit(delivered: &[Delivered]) -> u8 {
     EXIT_PARTIAL
 }
 
+/// The items a copy names by id, refused when it names none.
+fn named<'a>(ids: impl Iterator<Item = &'a str>) -> Result<CopyItems, Failure> {
+    let items = ids.map(qualified).collect::<Result<Vec<_>, _>>()?;
+    CopyItems::new(items).ok_or_else(|| {
+        Failure::decided(
+            "no-id",
+            "no id to copy\n\
+             next: name at least one qualified id — `onetaskgraph task list` reports them — or, \
+             for `task copy`, the narrowing `task list` takes: --source, --commented-since, \
+             --metadata.",
+        )
+    })
+}
+
 /// One copy, as a verb that takes one reads it.
-fn copy_request<'a>(
-    ids: impl Iterator<Item = &'a str>,
+fn copy_request(
+    items: CopyItems,
     scope: CopyScope,
     args: &CopyArgs,
 ) -> Result<CopyRequest, Failure> {
-    let items = ids.map(qualified).collect::<Result<Vec<_>, _>>()?;
     Ok(CopyRequest {
-        items: CopyItems::new(items).ok_or_else(|| {
-            Failure::decided(
-                "no-id",
-                "no id to copy\n\
-                 next: name at least one qualified id — `onetaskgraph task list` reports them.",
-            )
-        })?,
+        items,
         scope,
         destination: SourceName::new(args.to.clone()).map_err(|error| {
             Failure::decided(
@@ -1261,6 +1304,10 @@ fn copy_request<'a>(
         // Only `task copy` takes `--create`; it sets this on the request it builds.
         create: false,
         dry_run: args.dry_run,
+        // Only `task copy` and `project copy` take `--comments`; each sets this on the
+        // request it builds.
+        comments: false,
+        no_link: args.no_link,
     })
 }
 

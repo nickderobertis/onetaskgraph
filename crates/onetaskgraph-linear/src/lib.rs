@@ -360,13 +360,13 @@ pub mod assets;
 
 use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
-    Capabilities, Classification, Comment, CommentBody, Cursor, DependencyEdge, DependencyEndpoint,
-    DependencyKind, DependencySupport, Direction, Document, DocumentQuery, Health, ItemKind,
-    ItemWrite, Label, LabelFilter, Location, MetadataKey, NativeId, NewComment, Page, PageRequest,
-    Priority, Project, ProjectFilter, ProjectQuery, Repository, SecretResolver, SourceError,
-    SourceName, SourcePlugin, Status, StatusCategory, StatusMapping, StatusName, Support, Task,
-    TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome, TextFields, TextQuery,
-    UpdatedField, WriteSupport,
+    Capabilities, Classification, Comment, CommentBody, CommentOrigin, Cursor, DependencyEdge,
+    DependencyEndpoint, DependencyKind, DependencySupport, Direction, Document, DocumentQuery,
+    Health, ItemKind, ItemWrite, Label, LabelFilter, Location, MetadataKey, NativeId, NewComment,
+    Page, PageRequest, Priority, Project, ProjectFilter, ProjectQuery, Repository, SecretResolver,
+    SourceError, SourceName, SourcePlugin, Status, StatusCategory, StatusMapping, StatusName,
+    Support, Task, TaskDetailRead, TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome,
+    TextFields, TextQuery, UpdatedField, WriteSupport,
 };
 use schemars::{Schema, schema_for};
 use secrecy::{ExposeSecret, SecretString};
@@ -545,11 +545,19 @@ pub mod graphql {
     /// crate's module documentation. `archivedAt` is selected for the reason every by-id read
     /// here selects it: a trashed issue is not an issue this source holds.
     pub const ISSUE_COMMENTS: &str = "query($id:String!,$last:Int,$before:String){ issue(id:$id){ archivedAt comments(last:$last,before:$before){ nodes{id body url createdAt updatedAt user{displayName}} pageInfo{hasPreviousPage startCursor} } } }";
+    /// One issue and one page of its comments, in one request: [`ISSUE`]'s selection and
+    /// [`ISSUE_COMMENTS`]'s connection on one `issue(id:)` field.
+    ///
+    /// What a copy reads a task with when it carries its comments: one request answers both
+    /// where the comments fit one page, and every further page through this same read carries
+    /// the issue beside it, so the copy can tell the issue changed between two of them.
+    pub const ISSUE_DETAIL: &str = "query($id:String!,$last:Int,$before:String){ issue(id:$id){ id identifier title description url createdAt updatedAt archivedAt state{name type} priority labels{nodes{id name color}} project{id} comments(last:$last,before:$before){ nodes{id body url createdAt updatedAt user{displayName}} pageInfo{hasPreviousPage startCursor} } } }";
     /// Place one comment: which issue it is on, if any.
     ///
     /// `$id` is a nullable `String` because that is what `Query.comment` declares — it also
     /// takes a `hash` instead — and a variable has to be exactly its argument's type.
-    pub const COMMENT: &str = "query($id:String){ comment(id:$id){ id archivedAt issue{id} } }";
+    pub const COMMENT: &str =
+        "query($id:String){ comment(id:$id){ id body archivedAt issue{id} } }";
     /// Add a comment to an issue.
     pub const COMMENT_CREATE: &str = "mutation($input:CommentCreateInput!){ commentCreate(input:$input){success comment{id body url createdAt updatedAt user{displayName}}} }";
     /// Replace a comment's body.
@@ -2814,6 +2822,28 @@ impl TaskSource for LinearSource {
     async fn get_task(&self, id: &NativeId) -> Result<Option<Task>, SourceError> {
         Ok(self.issue_held(id).await?.map(|(task, _)| task))
     }
+    /// Each issue with the page of its comments `comments` names in one request,
+    /// [`graphql::ISSUE_DETAIL`]; an issue alone, as [`get_task`](Self::get_task) reads it,
+    /// when no page is asked for.
+    async fn get_task_details(
+        &self,
+        ids: &[NativeId],
+        comments: Option<&PageRequest>,
+    ) -> Vec<Result<Option<TaskDetailRead>, SourceError>> {
+        let mut read = Vec::with_capacity(ids.len());
+        for id in ids {
+            read.push(match comments {
+                Some(page) => self.issue_detail(id, page).await,
+                None => self.issue_held(id).await.map(|held| {
+                    held.map(|(task, _)| TaskDetailRead {
+                        task,
+                        comments: None,
+                    })
+                }),
+            });
+        }
+        read
+    }
     async fn get_project(&self, id: &NativeId) -> Result<Option<Project>, SourceError> {
         Ok(self.project_held(id).await?.map(|(project, _)| project))
     }
@@ -3325,9 +3355,11 @@ impl TaskSource for LinearSource {
         comment: &NativeId,
         body: &CommentBody,
     ) -> Result<Option<Comment>, SourceError> {
-        if !self.comment_is_on(task, comment).await? {
+        let Some(held) = self.comment_on(task, comment).await? else {
             return Ok(None);
-        }
+        };
+        // A comment a copy wrote keeps its origin through an edit: its marker is carried over.
+        let body = CommentOrigin::kept(&held, body)?;
         // `body` alone: the id, the author and the time it was written are the comment's
         // own, so nothing else is sent that Linear could move.
         let data = self
@@ -3833,11 +3865,26 @@ impl LinearSource {
         task: &NativeId,
         comment: &NativeId,
     ) -> Result<bool, SourceError> {
+        Ok(self.comment_on(task, comment).await?.is_some())
+    }
+
+    /// The body the comment `comment` holds, exactly as Linear holds it, when it is one of
+    /// `task`'s own — the read [`Self::comment_is_on`] makes, answering with what it selected.
+    async fn comment_on(
+        &self,
+        task: &NativeId,
+        comment: &NativeId,
+    ) -> Result<Option<String>, SourceError> {
         let Some(issue) = self.commented_issue(task).await? else {
-            return Ok(false);
+            return Ok(None);
         };
         let data = self.send(graphql::COMMENT, json!({"id":comment.0})).await?;
-        Ok(optional(&data, "comment", comment_issue)?.flatten() == Some(issue))
+        let held = optional(&data, "comment", |v| {
+            Ok((comment_issue(v)?, str_at(v, "body")?.to_owned()))
+        })?;
+        Ok(held
+            .filter(|(on, _)| on.as_ref() == Some(&issue))
+            .map(|(_, body)| body))
     }
 }
 
@@ -3860,6 +3907,34 @@ impl LinearSource {
             ))
         })?
         .filter(|(task, _)| self.in_scope(task.project.as_ref())))
+    }
+
+    /// One issue and the page of its comments `page` names, in one request, on the terms of
+    /// [`Self::issue_held`] and [`TaskSource::task_comments`] both.
+    async fn issue_detail(
+        &self,
+        id: &NativeId,
+        page: &PageRequest,
+    ) -> Result<Option<TaskDetailRead>, SourceError> {
+        if page.limit == 0 {
+            return Err(SourceError::Config {
+                message: "a page limit of 0 is not a page; ask for at least 1 comment".to_owned(),
+            });
+        }
+        let data = self
+            .send(
+                graphql::ISSUE_DETAIL,
+                json!({"id":id.0,"last":page.limit.min(MAX_PAGE_SIZE),"before":page.cursor.as_ref().map(|c|&c.0)}),
+            )
+            .await?;
+        Ok(optional(&data, "issue", |v| {
+            Ok((map_task(v, &self.name, &self.statuses)?, comment_page(v)?))
+        })?
+        .filter(|(task, _)| self.in_scope(task.project.as_ref()))
+        .map(|(task, comments)| TaskDetailRead {
+            task,
+            comments: Some(Ok(Some(comments))),
+        }))
     }
 
     /// One project and its raw `content`, on the terms of [`Self::issue_held`]: a source
@@ -4171,14 +4246,19 @@ fn map_comment(v: &Value) -> Result<Comment, SourceError> {
         Some(Value::Null) => None,
         Some(user) => Some(str_at(user, "displayName")?.to_owned()),
     };
+    // A comment a copy wrote here carries its origin as the hidden marker at the end of its
+    // body — Linear sets every comment's author and times itself — and is read back with the
+    // marker taken out and reported as its origin.
     Ok(Comment {
+        origin: None,
         id: NativeId(backend_id(v, "id")?.into()),
         author,
         created_at: time(v, "createdAt")?,
         updated_at: time(v, "updatedAt")?,
         body: str_at(v, "body")?.into(),
         url: optional_string(v, "url")?,
-    })
+    }
+    .unmarked())
 }
 
 /// The comment a `commentCreate` or `commentUpdate` answered with, as Linear now holds it.
@@ -4366,6 +4446,7 @@ fn map_task(v: &Value, source: &SourceName, statuses: &StatusMapping) -> Result<
     let delivers = delivery_list(&mut metadata, TaskRef::DELIVERS_KEY, &id, source)?;
     let delivered_by = delivery_list(&mut metadata, TaskRef::DELIVERED_BY_KEY, &id, source)?;
     Ok(Task {
+        version: None,
         id,
         // `Issue.identifier` is `String!` and every read of an issue selects it, so a
         // response without one is a response this source cannot read rather than an issue

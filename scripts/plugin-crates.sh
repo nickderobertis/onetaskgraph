@@ -19,7 +19,7 @@ from pathlib import Path
 names = []
 for path in sorted(Path("crates").glob("*/project.json")):
     try:
-        project = json.loads(path.read_text())
+        project = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
         # Named, with the cause: every caller of this script is a guard, and a guard that
         # dies on a traceback tells its reader nothing about which file to open.

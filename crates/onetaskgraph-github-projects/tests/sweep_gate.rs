@@ -425,6 +425,7 @@ static STANDIN: LazyLock<Arc<Mutex<Board>>> = LazyLock::new(|| {
         graphql: format!("{host}/graphql"),
         rest_host: host,
         source: None,
+        settle: std::time::Duration::ZERO,
     });
     board
 });

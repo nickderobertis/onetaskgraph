@@ -156,6 +156,7 @@ fn edge(from: &str, to: &str) -> DependencyEdge {
 
 fn held() -> Task {
     Task {
+        version: None,
         id: NativeId::from("T-1"),
         key: None,
         title: "Alpha engine".to_owned(),

@@ -638,6 +638,7 @@ impl TaskSource for Rendezvous {
     ) -> Result<Page<Task>, SourceError> {
         self.barrier.wait().await;
         Ok(Page::last(vec![Task {
+            version: None,
             id: NativeId::from("T-1"),
             key: None,
             title: "Waited".to_owned(),
@@ -951,6 +952,7 @@ impl TaskSource for StuckEdges {
 /// The one task [`StuckEdges`] holds, under whichever id it was asked for.
 fn one_task(id: &NativeId) -> Task {
     Task {
+        version: None,
         id: id.clone(),
         key: None,
         title: "Alpha".to_owned(),
@@ -1317,6 +1319,7 @@ impl Recording {
             .min(self.rows);
         let items = (start..end)
             .map(|index| Task {
+                version: None,
                 id: NativeId::from(format!("T-{index}")),
                 key: None,
                 title: format!("task {index}"),

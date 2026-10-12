@@ -9,7 +9,7 @@ import subprocess
 import sys
 import threading
 import tomllib
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Mapping
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -35,7 +35,12 @@ from onetaskgraph_sdk import (
     UpdatedField,
     __version__,
 )
-from onetaskgraph_sdk._generated.copy_report import CopyOutcome
+from onetaskgraph_sdk._generated.copy_report import (
+    CopyOutcome,
+    CopyOutcomeFailed,
+    CopyOutcomeUnchanged,
+)
+from onetaskgraph_sdk._generated.copy_report import GlobalId as LandedAt
 from onetaskgraph_sdk._generated.models import QueryResponseOfQualifiedTask
 from onetaskgraph_sdk._generated.query_response_of_search_hit import SearchHitTask
 from onetaskgraph_sdk._generated.task_status_set import DeliveredFailed
@@ -312,8 +317,28 @@ def test_status_options_method_decodes_a_real_binary_plan(binary: Path, tmp_path
 def landed(outcome: CopyOutcome) -> str:
     """The id a copy wrote to, absent only for a dry run that would have created one."""
     reported = outcome.root
+    assert not isinstance(reported, CopyOutcomeFailed), "this copy wrote whole"
     assert reported.destination is not None, "this copy wrote, so it reports where"
     return reported.destination.root
+
+
+def without_record(metadata: Mapping[str, object]) -> dict[str, object]:
+    """A copied task's metadata without the record the copy keeps of itself.
+
+    The record is checked to be there first: every copy records the source's token and a digest
+    of what it left.
+    """
+    record = ("onetaskgraph.copied_version", "onetaskgraph.copied_destination_version")
+    assert all(key in metadata for key in record), metadata
+    return {key: value for key, value in metadata.items() if key not in record}
+
+
+def destination_of(outcome: CopyOutcome) -> LandedAt | None:
+    """Where one outcome landed, or `None` for a dry run's create and an item left unwritten."""
+    reported = outcome.root
+    if isinstance(reported, CopyOutcomeFailed):
+        return None
+    return reported.destination
 
 
 def folders(tmp_path: Path) -> Path:
@@ -356,7 +381,7 @@ def test_copy_drives_the_binary_and_reports_each_item(binary: Path, tmp_path: Pa
 
     planned = run(client.task_copy(ids=["from:T-1"], to="into", dry_run=True))
     assert [
-        (item.root.source.root, item.root.destination, item.root.action) for item in planned.items
+        (item.root.source.root, destination_of(item), item.root.action) for item in planned.items
     ] == [("from:T-1", None, "created")]
     assert not (tmp_path / "into" / "tasks").exists()
 
@@ -365,7 +390,7 @@ def test_copy_drives_the_binary_and_reports_each_item(binary: Path, tmp_path: Pa
         ("from:T-1", "into:T-1", "created")
     ]
     # The destination really holds it, read back through the same binary.
-    assert run(client.task_show(id="into:T-1")).items[0].item.metadata == {
+    assert without_record(run(client.task_show(id="into:T-1")).items[0].item.metadata) == {
         "caller.count": 3,
         "onetaskgraph.origin": "from:T-1",
     }
@@ -457,7 +482,7 @@ def test_task_copy_create_drives_the_binary(binary: Path, tmp_path: Path) -> Non
     assert [(item.root.source.root, landed(item), item.root.action) for item in created.items] == [
         ("from:T-2", "into:T-2", "created")
     ]
-    assert run(client.task_show(id="into:T-2")).items[0].item.metadata == {
+    assert without_record(run(client.task_show(id="into:T-2")).items[0].item.metadata) == {
         "onetaskgraph.origin": "from:T-2"
     }
 
@@ -579,7 +604,7 @@ def test_document_copy_drives_the_binary_and_refuses_a_destination_with_no_docum
 
     planned = run(client.document_copy(ids=["memory:D-1"], to="markdown", dry_run=True))
     assert [
-        (item.root.source.root, item.root.destination, item.root.action) for item in planned.items
+        (item.root.source.root, destination_of(item), item.root.action) for item in planned.items
     ] == [("memory:D-1", None, "created")]
     assert not (root / "markdown" / "documents").exists()
 
@@ -997,7 +1022,11 @@ def test_task_content_set_drives_the_binary(binary: Path, tmp_path: Path) -> Non
     assert answer.id.root == "work:T-1"
     after = run(client.task_show(id="work:T-1")).items[0].item
     assert after.content == "The new body.\n\nWith a second paragraph."
-    assert after.model_dump(exclude={"content"}) == before.model_dump(exclude={"content"})
+    # The task's change token moves with its content; nothing else does.
+    assert after.version != before.version
+    assert after.model_dump(exclude={"content", "version"}) == before.model_dump(
+        exclude={"content", "version"}
+    )
 
     with pytest.raises(OnetaskgraphError) as refused:
         run(client.task_content_set(id="work:T-1", file=str(tmp_path / "absent.md")))
@@ -1566,3 +1595,31 @@ def test_a_dependency_endpoint_carries_its_kind_and_may_leave_the_source(
     # The far source is not configured, so reporting the edge cannot have resolved it.
     with pytest.raises(OnetaskgraphError, match="elsewhere"):
         run(client.project_show(id="elsewhere:P-9"))
+
+
+def test_copy_with_comments_carries_them_and_a_repeat_by_query_skips(
+    binary: Path, tmp_path: Path
+) -> None:
+    """A `--comments` copy through the real binary, then the same tasks again by query."""
+    client = Client(binary, cwd=folders(tmp_path))
+    said = run(client.task_comment_add(id="from:T-1", body="said at the source\n", author="ada"))
+
+    copied = run(client.task_copy(ids=["from:T-1"], to="into", comments=True))
+    outcome = copied.items[0].root
+    assert outcome.action == "created"
+    assert outcome.comments is not None
+    assert (outcome.comments.added, outcome.comments.unchanged) == (1, 0)
+    carried = run(client.task_comment_list(id="into:T-1")).comments
+    assert [comment.body for comment in carried] == ["said at the source\n"]
+    origin = carried[0].origin
+    assert origin is not None
+    assert (origin.task, origin.id.root, origin.author) == ("from:T-1", said.id.root, "ada")
+    shown = run(client.task_show(id="from:T-1")).items[0].item
+    assert shown.version is not None, "a folder of Markdown gives every task a token"
+
+    # The same task named by `task list`'s narrowing, unchanged at both ends: skipped.
+    again = run(client.task_copy(ids=[], to="into", source=["from"], comments=True, no_link=True))
+    skipped = again.items[0].root
+    assert isinstance(skipped, CopyOutcomeUnchanged)
+    assert skipped.skipped is True
+    assert skipped.link == "skipped"

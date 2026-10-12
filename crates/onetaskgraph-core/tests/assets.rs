@@ -73,6 +73,8 @@ fn copy_of(items: &[GlobalId], scope: CopyScope) -> CopyRequest {
         recreate: false,
         create: false,
         dry_run: false,
+        comments: false,
+        no_link: false,
     }
 }
 

@@ -206,6 +206,8 @@ the source can do natively, and what configuration it is being built with.
 | `content_updates` | boolean | Whether this plugin answers the narrow content write. Optional; see §3.9. |
 | `targeted_updates` | boolean | Whether this plugin answers the targeted update of one task. Optional; see §3.10. |
 | `ends_commands` | boolean | Whether this plugin answers `end_command`. Optional; see §3.11. |
+| `comment_copies` | boolean | Whether this plugin answers `write_comment_copy`. Optional; see §3.12. |
+| `task_details` | boolean | Whether this plugin answers `get_task_detail`. Optional; see §3.13. |
 
 An `initialize` that fails answers with an `error` envelope, ordinarily
 `{"kind": "config"}` for a `config` block this plugin cannot use, or
@@ -374,6 +376,29 @@ requests that §4.22 forbids it to keep must answer `true`.** One that reads its
 for every request has nothing to drop and may leave the member out, which is what every plugin
 written before the method did.
 
+### 3.12 `comment_copies`
+
+A boolean: `true` when this plugin answers `write_comment_copy` (§4.16a), and `false` when it
+does not.
+
+The member is **optional**, and an absent one means `false`. Such a plugin is never sent the
+method: a comment a `--comments` copy carries to it is written through `add_comment` and
+`edit_comment` (§4.16) instead, with its origin appended to the body as the hidden marker
+§4.15 describes, and every comment read back from it has the marker taken out again. A plugin
+written before the method therefore keeps working unchanged, and it was added without a
+protocol version bump.
+
+### 3.13 `task_details`
+
+A boolean: `true` when this plugin answers `get_task_detail` (§4.4a), and `false` when it does
+not.
+
+The member is **optional**, and an absent one means `false`. Such a plugin is never sent the
+method: the engine reads a task and a page of its comments from it as two requests, `get_task`
+and then `task_comments`, which is the trait's own default. A plugin that can read the two in
+one — and so promise they are one revision of the task — answers `true`. Added without a
+protocol version bump.
+
 ## 4. The methods
 
 One method per trait method, named after it. Each is given below as its `params` and
@@ -385,6 +410,7 @@ its `result`; the JSON shape of every contract type in them is what
 | `initialize` | `SourcePlugin::build` + `TaskSource::kind` + `TaskSource::capabilities` |
 | `health` | `TaskSource::health` |
 | `get_task` | `TaskSource::get_task` |
+| `get_task_detail` | `TaskSource::get_task_details`, one task and a page of its comments |
 | `get_project` | `TaskSource::get_project` |
 | `query_tasks` | `TaskSource::query_tasks` |
 | `query_projects` | `TaskSource::query_projects` |
@@ -404,6 +430,7 @@ its `result`; the JSON shape of every contract type in them is what
 | `add_comment` | `TaskSource::add_comment` |
 | `edit_comment` | `TaskSource::edit_comment` |
 | `delete_comment` | `TaskSource::delete_comment` |
+| `write_comment_copy` | `TaskSource::write_comment_copy` |
 | `set_task_status` | `TaskSource::set_task_status` |
 | `set_delivered_by` | `TaskSource::set_delivered_by` |
 | `set_task_priority` | `TaskSource::set_task_priority` |
@@ -586,11 +613,40 @@ the same `params` and returns `result.project`, a `Project` or `null`.
 `{"kind": "refused"}` for an id that simply does not exist makes an ordinary lookup
 look like a failure of the source.
 
-`TaskSource::get_task_details` — several tasks, each with the first page of its comments — is
-not a message of this protocol. For a hosted source the engine answers it the way the trait's
-default does, with one `get_task` per id and, for a source whose tasks have comments, one
-`task_comments` for the first page of each task found, so a plugin written against this
-document implements nothing more for `task show-many` to reach it.
+`TaskSource::get_task_details` — several tasks, each with a page of its comments — crosses as
+one `get_task_detail` per task (§4.4a) to a plugin that declared `task_details` (§3.13). To one
+that did not, the engine answers it the way the trait's default does, with one `get_task` per id
+and, for a source whose tasks have comments, one `task_comments` for that page of each task
+found, so a plugin written against this document implements nothing more for `task show-many`
+to reach it.
+
+`TaskSource::get_task_details_for_copy` — the read a copy makes of the tasks it carries — is not
+a message either: for a hosted source the engine answers it exactly as `get_task_details`, so it
+crosses as the same `get_task_detail` or `get_task` and `task_comments` requests.
+
+### 4.4a `get_task_detail`
+
+Only a plugin that declared `task_details: true` (§3.13) and `comments` `"native"` (§4.2) is
+ever sent this.
+
+```json
+{ "id": "2", "method": "get_task_detail", "params": { "id": "ENG-1", "comments": { "cursor": null, "limit": 100 } } }
+{ "id": "2", "result": { "task": { }, "page": { "items": [], "next": null } } }
+```
+
+`id` is the task and `comments` a `PageRequest` (§4.1) for its comments. `result.task` is the
+`Task` §4.4 answers and `result.page` the `Page<Comment>` §4.15 answers for that page, **both
+read as one revision of the task**: a plugin answering this owes that no change landed between
+what it read of the two. Both are `null` when there is no such task. A task that exists and
+whose comments could not be read — not refused as a whole — is answered with `task` and
+`comments_error`, the `SourceError` its comments were refused with, in place of `page`.
+
+A copy reads a task whose comments run past one page a page at a time through this method, and
+compares the task each answer carries with the first: when they differ, the task changed while
+it was being read, and the copy reads it again (§4.13d). For a task carrying no `version`, which
+says nothing of a comment edited alone, the copy also reads every page again from the first,
+until two full passes in a row agree on every comment's id, body and `updated_at`, at most three
+passes; a task that never settles is written nowhere and reported failed.
 
 ### 4.5 `query_tasks`
 
@@ -1086,6 +1142,94 @@ decide: it writes one only to a source declared `visibility: private` whose own 
 answers `unknown` there (see the paragraph after the method table), so a private record is never
 written to one.
 
+### 4.13d A task's `version`
+
+A `Task` carries one more optional member, `version`: a string, the task's **change token**.
+Two equal versions of one task from one source mean nothing in it has changed — its title,
+body, status, priority, labels, board fields, metadata, edges and comments, a comment added,
+edited or deleted included. A plugin that cannot promise all of that for a task leaves the
+member out, which the engine reads as *always read it*, and a plugin written before the member
+existed is read exactly that way: it is optional under §2.1, and was added without a protocol
+version bump.
+
+It is **opaque** to every caller. The one reader that looks inside is the source that spelled
+it: the engine orders two versions of one task (`Engine::compare_versions`) by asking that
+source's `TaskSource::order_versions`, and answers `equal`, `later`, `earlier` or
+`incomparable` — the last for versions of different tasks, a source it does not hold, a value
+the source cannot parse, and two different versions a token says differ without saying which
+came first. The protocol carries no ordering method, so a plugin hosted over it has its tokens
+compared for equality alone: one token is one version, and two different ones are unordered,
+which a copy reads as changed and never as unchanged.
+
+A plugin derives its token on a read and never stores one it is handed: a `Task` arriving on a
+write may still hold its source's token, and a destination ignores it.
+
+What each plugin of this build keys its token on, and the change kinds it covers, is stated
+here once, as what the credentialed journeys named below re-take against the real service:
+
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by the journeys it names: every row of the GitHub member table below names its leg in `every_change_kind_moves_the_changed_tasks_token_and_no_other` in `crates/onetaskgraph-e2e/tests/e2e/change_tokens.rs`, which makes that change to one loopback board task and holds its token to moving (to a later one, or for a transfer to an unordered one) and both ends of a relationship with it, and in `every_change_kind_moves_a_tasks_token` in the GitHub Projects plugin's credentialed `tests/journey`, which re-takes each live leg against GitHub; `a_recopy_by_query_of_unchanged_board_items_skips_each_and_sends_nothing_but_the_listing` in `crates/onetaskgraph-e2e/tests/e2e/copy_skip.rs` makes the same loopback changes and holds the copy to reading exactly the tasks each reaches and to the folder's edges, project and repository being the board's after it; `two_digests_of_one_task_file_are_equal_until_it_changes_and_then_incomparable` in `crates/onetaskgraph-core/tests/version.rs` holds the folder's; `linear_gives_no_change_token` in the Linear plugin's credentialed `tests/live.rs` holds Linear's absence; `two_edits_inside_one_second_are_never_served_from_a_skip` and `a_board_read_without_the_servers_clock_gives_no_token_and_is_never_skipped` in that `copy_skip.rs` hold the settling rule; `a_later_time_beside_fewer_relationship_events_is_no_version_read_after_the_other` in that `change_tokens.rs` puts a crossed pair to the engine's own ordering; `a_destination_recorded_under_the_tokens_older_spelling_is_read_again_once_and_then_skipped` in that `copy_skip.rs` holds a `gh1` record; and the plugin's `tests/point_cost.rs` holds the unchanged prices. The loopback counts only the timeline types a document names, so a type dropped from the plugin's list fails the leg it covers. -->
+| Plugin | Keys its token on | Change kinds covered |
+| --- | --- | --- |
+| `github-projects` | `gh2\|<issue updatedAt>\|<board item updatedAt>\|<comment count>\|<relationship events>\|<repository>`, from what every list, search and detail read already selects | every member a copy writes, as the table below states member by member. Given only once the task has settled: when its later time is more than 60 seconds before the `Date` of the response that read it, and never from a response with no `Date` (below) |
+| `local-md` | `md1\|<SHA-256 of the task file's bytes>` | every kind: everything a task is lives in its one file. Two different digests say the file changed and never which came first |
+| `linear` | none | none yet: Linear's `Issue.updatedAt` has not been proven to move for every kind above, so a Linear task carries no token and is always read |
+| `in-memory` | none | none |
+
+**What keeps each member of a GitHub task fresh.** Every member a copy writes is covered by a
+part of the token GitHub moves for it, and the leg named beside it — the same name in the
+loopback journey and in the credentialed one, unless the row says otherwise — makes that change
+alone and holds the token to moving:
+
+| Member | Where the board keeps it | Kept fresh by | Leg |
+| --- | --- | --- | --- |
+| title | the issue's title | the issue's `updatedAt` | `a title edit` |
+| content | the issue's body | the issue's `updatedAt` | `a body edit` |
+| metadata, `delivers`, `delivered_by`, classification, named repositories, asset references | the body's metadata slot (`docs/metadata.md`) | the issue's `updatedAt`: the slot is bytes of the body, so any change to it is a body edit | `a metadata change` |
+| labels | the issue's labels | the issue's `updatedAt` | `a label change` |
+| status | the `Status` field, and the issue's state | the board item's `updatedAt`, and the issue's for a close or reopen | `a status change` |
+| priority | the `Priority` field | the board item's `updatedAt` | `a priority change` (live, on a board with a `Priority` field) |
+| projected metadata, `onetaskgraph.origin` | board text fields | the board item's `updatedAt` | `a board text field change` live; `the origin field rewritten` and `a project field change` on the loopback |
+| project | the issue's parent | the relationship events — `PARENT_ISSUE_ADDED_EVENT` and `PARENT_ISSUE_REMOVED_EVENT`, on the task. A project carries no task token, so the sub-issue events GitHub records on it are not counted | `taken out of its project` and `filed under another project` live, each sent as the project's own `removeSubIssue` or `addSubIssue`; `filed under a project`, `moved to another project` and `taken out of its project` on the loopback |
+| dependencies | the issue's `blockedBy` | the relationship events — `BLOCKED_BY_ADDED_EVENT` and `BLOCKED_BY_REMOVED_EVENT` on the dependent task, `BLOCKING_ADDED_EVENT` and `BLOCKING_REMOVED_EVENT` on the one it depends on | `a dependency added`, `a dependency removed` and `a dependency replaced` |
+| comments, under `--comments` | the issue's comments | the issue's `updatedAt` for one added or edited, the comment count for one deleted | `a comment added`, `a comment edited` and `a comment deleted` live; `a new comment`, `an edited comment` and `a deleted comment` on the loopback |
+| repository, when the slot names none | the issue's repository | the token itself: it carries the `owner/name` every read returns, so a transfer leaves no two tokens equal, and two tokens naming different repositories are never ordered | `a repository transfer`, on the loopback alone: the lane holds one scratch repository and refuses the core one, so it has nowhere to transfer to. What it proves needs no live leg, because the token holds the very value the read returned |
+
+**GitHub moves neither time nor the comment count for a relationship.** The credentialed lane
+added a dependency to a real issue and read all three where they were, so a token of those
+three alone read an edge change as no change, and a copy skipped the task with its edges stale.
+So the token counts the issue's timeline events of the six relationship types above
+(`timelineItems(itemTypes: [...]) { totalCount }`), and a project membership — a parent issue
+— is counted the same way rather than trusted to a time. Each relationship added or removed is
+one more event, a replacement or a move between projects two, and an event is never taken
+back, so the count only grows and the later version is the one holding more. A dependency's
+types are counted on both its ends, so one a person makes from the far end still moves this
+end's token — and the far end's token moves with it, which reads that task again once and never
+serves either stale. A membership is counted on the task, where GitHub records it whichever of
+the two issues the move was made from: the live legs make it from the project's side. The
+types are pinned in the plugin's `tests/fixtures/schema.graphql`, which its schema test holds
+every document's default to, and the credentialed lane holds GitHub to the pin.
+
+The count is a connection selected for its `totalCount` alone, with no page size, exactly as
+the comment count beside it is, and the offline model `tests/point_cost.rs` prices documents by
+adds nothing for it: every document's recorded price is what it was before the count was
+selected, and the credentialed lane reconciles each against GitHub's own `cost`. A token spelled
+`gh1`, without the count or the repository, is one this plugin no longer orders or gives, so a
+copy recorded under it reads its task once more.
+<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
+
+**Why a GitHub token waits for its task to settle.** GitHub reports both of the token's times
+to the whole second. A change made in the same second as the state a read saw would move
+neither time, and, with the comment count unmoved, the token would read the same — so a copy
+that recorded it would skip the task and keep content that had changed. The plugin therefore
+gives a token only when the task's later time is more than `change_token::SETTLED`, 60 seconds,
+before the server's own clock on the response that read it, its `Date` header. GitHub aborts a
+GraphQL query that runs past ten seconds, so the state a response reports was read at most
+about ten seconds before that `Date`; a change after the read then always falls in a later
+second than the token records, and moves it. A task changed within the minute before a read,
+and every task read from a response carrying no `Date`, has no token and is read in full; once
+it settles, the next read gives it one. Every reader that keys on this token inherits the
+rule — a copy's skip, and the board cache built on the same token.
+
 ### 4.14 `metering`
 
 Sent only to a plugin that answered `meters: true` at the handshake (§3.4), and never to one
@@ -1151,8 +1295,18 @@ A `Comment` is an object with exactly these members:
 | `updated_at` | RFC 3339 string or `null` | When it last changed. |
 | `body` | string | What it says, byte for byte — a trailing newline included. |
 | `url` | string or `null` | Where a person can open it. |
+| `origin` | object, optional | Present only on a comment a copy wrote: the comment it is a copy of, as `{"task": "<source>:<native task id>", "id": "<comment id there>", "author", "created_at", "updated_at", "url"}`. |
 
 `null` says this source did not give that member. `id` and `body` are always present.
+
+**A comment's `origin`** names the comment where it was written, however many copies it has
+been through: a chained copy carries it on. A plugin that can keep it natively reports it as
+the member (§4.16a). One that cannot — a hosted service that records every comment's author
+and times itself — is handed the comment with its origin appended to the body as one hidden
+line, `<!-- onetaskgraph.comment_origin `{…}` -->` after a blank line, the origin as compact
+JSON whose `<`, `>` and `` ` `` are escaped; the engine takes that line back out of every
+comment it reads and reports it as `origin`. A plugin keeping the marker should carry it over
+when a person edits the comment's body, so the comment is still the copy it was.
 
 **A plugin whose tasks have no comments refuses rather than answering an empty page**, for
 the reason §4.11 gives about documents: it declared `comments` `"unsupported"`, so the engine
@@ -1163,7 +1317,10 @@ never sends it one, and a plugin should still implement the case defensively wit
 
 Only a plugin that declared `comments` `"native"` in §4.2 **and** answered `"supported"` to
 §3.3 is ever sent any of these. Unlike §4.10, all three are verbs of the product: a person
-adds, edits and removes a comment through them, and nothing a copy does sends one.
+adds, edits and removes a comment through them. A copy without `--comments` sends none of them;
+a `--comments` copy sends `delete_comment` for a copy whose origin comment is gone, and writes
+the rest through §4.16a — or, to a plugin that did not declare §3.12, through `add_comment` and
+`edit_comment` with the origin's marker in the body.
 
 ```json
 { "id": "13", "method": "add_comment", "params": { "task": "ENG-1", "comment": { "body": "Seen again on main.\n", "author": null } } }
@@ -1193,6 +1350,26 @@ under a name other than the one given. A plugin that cannot represent a body ref
 same way, naming why, rather than escaping it into something else. A comment id that names a
 comment on a *different* task of this source is a comment this task does not have, and is
 answered `null`.
+
+### 4.16a `write_comment_copy`
+
+Only a plugin that declared `comments` `"native"`, answered `"supported"` to §3.3 **and**
+declared `comment_copies: true` (§3.12) is ever sent this.
+
+```json
+{ "id": "16", "method": "write_comment_copy", "params": { "task": "ENG-1", "existing": null, "copy": { "body": "Seen on main.\n", "origin": { "task": "board:I_1", "id": "IC_9", "author": "someone", "created_at": "2026-09-01T00:00:05Z", "updated_at": "2026-09-01T00:00:05Z", "url": null } } } }
+{ "id": "16", "result": { "comment": { } } }
+```
+
+One comment a `--comments` copy carries onto `task`: a new one when `existing` is `null`, and
+otherwise the comment `existing` — one a copy wrote before — made to say `copy.body` with
+`copy.origin`. `result.comment` is the `Comment` this source now holds, reporting `origin` as
+`copy.origin` however it keeps it, or `null` when this source holds no such task or no such
+comment. A plugin that keeps a comment's author and times as it is told may take the origin's
+for the copy; a folder of Markdown does, and its copy reads back with the origin's own id.
+`copy.origin.task` is always a qualified task id, `<source>:<native task id>`: the shipped host
+refuses one that is not with `{"kind": "malformed"}` before it writes anything, and an engine
+reading back a comment whose `origin` names no qualified task reads it as having none.
 
 ### 4.17 `set_task_status` and `set_delivered_by`
 
@@ -1780,6 +1957,7 @@ plugin's crate documentation to the same figures.
 | comment | 2 | ISSUE, ADD_COMMENT: the target is read first, because GitHub accepts a comment on any issue or pull request |
 | detail | 1 | ISSUE_DETAIL: the item and its first page of comments, for `task show` and `task comment list`; `--no-comments` is ISSUE alone |
 | batched detail | ceil(n / DETAIL_BATCH) | ISSUE_DETAILS: `task show-many` of `n` items, DETAIL_BATCH (24) at a time |
+| copy --comments, n changed tasks | ceil(n / COPY_DETAIL_BATCH) | ISSUE_COPY_DETAILS: each task with its first page of comments and its `blockedBy`, COPY_DETAIL_BATCH (21) at a time; a task whose comments run past that page adds one ISSUE_DETAIL per further page, and a task skipped from its listing costs nothing beyond it |
 | update | 3 | `task update` naming any of title, body, metadata, status and priority — all five included: ISSUE, UPDATE_FIELDS (the status option and the priority together), UPDATE_ISSUE (title, body and state) last |
 
 `DETAIL_BATCH` is 24, the largest batch of `ISSUE_DETAILS` the node-count model prices at one

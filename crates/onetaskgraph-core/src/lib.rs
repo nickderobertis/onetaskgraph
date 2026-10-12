@@ -43,6 +43,7 @@ mod secrets;
 pub mod subprocess;
 // llmlint: ignore[code_lands_in_the_domain_that_owns_it] The task that introduced templates fixes their API at this crate's root; the head of `template/mod.rs` states why.
 pub mod template;
+pub mod version;
 
 pub use clock::{
     ClockChoice, SIMULATED_CLOCK_VARIABLE, attach as attach_simulated_clock, clock_choice,
@@ -51,15 +52,15 @@ pub use clock::{
 pub use config::{Config, ConfigError, Loaded, OutputFormat, SourceConfig};
 pub use engine::boundary;
 pub use engine::{
-    Body, BudgetSpent, CommentList, ConfiguredSource, CopyAction, CopyItems, CopyLink, CopyLookup,
-    CopyOutcome, CopyReport, CopyRequest, CopyScope, CopyVia, DeletedComment, Delivered,
-    DeliveryOutcome, DependencyRequest, DocumentDetail, DocumentFilters, DocumentRequest, Engine,
-    EngineError, Filters, GraphDirection, GraphEdge, GraphNode, GroupKey, LabelRequest, LeftBehind,
-    MatchBy, MetadataSet, NoCounterpart, PROJECT_GRAPH_SCHEMA_VERSION, Paging, ProjectGraph,
-    ProjectGraphRequest, ProjectRequest, ProjectSelector, Qualified, QualifiedEdge,
-    QualifiedEndpoint, SearchHit, SearchKind, SearchRequest, SourceListing, SourceState, Spent,
-    TaskContentSet, TaskDetail, TaskDetails, TaskPrioritySet, TaskRequest, TaskStatusSet,
-    TaskUpdated, graph_label, settled,
+    Body, BudgetSpent, CommentCounts, CommentList, ConfiguredSource, CopyAction, CopyItems,
+    CopyLink, CopyLookup, CopyOutcome, CopyReport, CopyRequest, CopyScope, CopyVia, DeletedComment,
+    Delivered, DeliveryOutcome, DependencyRequest, DocumentDetail, DocumentFilters,
+    DocumentRequest, Engine, EngineError, Filters, GraphDirection, GraphEdge, GraphNode, GroupKey,
+    LabelRequest, LeftBehind, MatchBy, MetadataSet, NoCounterpart, PROJECT_GRAPH_SCHEMA_VERSION,
+    Paging, ProjectGraph, ProjectGraphRequest, ProjectRequest, ProjectSelector, Qualified,
+    QualifiedEdge, QualifiedEndpoint, SearchHit, SearchKind, SearchRequest, SourceListing,
+    SourceState, Spent, TaskContentSet, TaskDetail, TaskDetails, TaskPrioritySet, TaskRequest,
+    TaskStatusSet, TaskUpdated, graph_label, settled,
 };
 pub use engine::{
     DocumentCreate, ProjectCreate, Regenerated, Regeneration, RenderRequest, RenderTemplate,

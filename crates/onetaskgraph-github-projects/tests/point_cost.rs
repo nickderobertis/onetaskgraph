@@ -21,7 +21,9 @@
 //! credentialed lane reconciles each of them against GitHub's own `cost`, from the
 //! `rateLimit(dryRun: true)` probe `tests/journey/mod.rs` already sends per read document.
 
-use onetaskgraph_github_projects::{DETAIL_BATCH, graphql, worst_case_point_cost};
+use onetaskgraph_github_projects::{
+    COPY_DETAIL_BATCH, DETAIL_BATCH, graphql, worst_case_point_cost,
+};
 
 /// What each document this source sends costs, in points, under the largest page sizes it
 /// can be driven with.
@@ -66,6 +68,8 @@ const PRICES: &[(&str, u64)] = &[
     (graphql::ISSUE_COMMENTS, 1),
     (graphql::ISSUE_DETAIL, 1),
     (graphql::ISSUE_DETAILS, 1),
+    // llmlint: ignore[tests_hold_no_nonfunctional_thresholds] As at `SUB_ISSUES` above: the price is the instrument, not a threshold. A copy's batched read is a document of its own, and the sweep below refuses any document in `graphql::DOCUMENTS` without a recorded price, so it needs one; `session-cost.md` records why it was added.
+    (graphql::ISSUE_COPY_DETAILS, 1),
     (graphql::COMMENT_ISSUE, 1),
     (graphql::ADD_COMMENT, 1),
     (graphql::UPDATE_COMMENT, 1),
@@ -177,6 +181,7 @@ fn the_check_reports_a_failure_naming_a_document_nobody_priced() {
 /// half: the same document grown by one aliased item — written the way every alias in it is —
 /// is priced at two, so a batch constant left below what one point buys fails here rather
 /// than spending a request a caller did not need to.
+// llmlint: ignore-block[tests_hold_no_nonfunctional_thresholds] These hold each batch constant to GitHub's own pricing model rather than to a budget: the constant is the number of items the plugin puts in one request, and the check is that it is the largest batch one point buys — one item more costs two — which is a property of the constant against the published model, not a cost ceiling a test invented. `DETAIL_BATCH`'s check predates this change; the helper generalises it so `COPY_DETAIL_BATCH`, the copy's batch read, is held to the same property.
 #[test]
 fn the_batch_read_is_the_largest_one_point_buys() {
     const {
@@ -185,14 +190,35 @@ fn the_batch_read_is_the_largest_one_point_buys() {
             "a batch this small is not worth a document"
         )
     };
-    let document = graphql::ISSUE_DETAILS;
+    largest_at_one_point(graphql::ISSUE_DETAILS, DETAIL_BATCH, "DETAIL_BATCH");
+}
+
+/// The same of a copy's batch read, which carries each item's `blockedBy` besides.
+#[test]
+fn the_copy_batch_read_is_the_largest_one_point_buys() {
+    const {
+        assert!(
+            COPY_DETAIL_BATCH >= 10,
+            "a batch this small is not worth a document"
+        )
+    };
+    largest_at_one_point(
+        graphql::ISSUE_COPY_DETAILS,
+        COPY_DETAIL_BATCH,
+        "COPY_DETAIL_BATCH",
+    );
+}
+
+/// `document`, a fixed-size batch of `batch` aliased items, costs one point, and the same
+/// document grown by one aliased item — written the way every alias in it is — costs two.
+fn largest_at_one_point(document: &str, batch: usize, name: &str) {
     // Fixed-size aliased `node(id:)` fields, one per item, and never `nodes(ids:)`, which the
     // pricing model cannot see under.
     assert!(!document.contains("nodes(ids:"), "{document}");
-    assert_eq!(document.matches(":node(id:$id").count(), DETAIL_BATCH);
+    assert_eq!(document.matches(":node(id:$id").count(), batch);
     assert_eq!(worst_case_point_cost(document).unwrap(), 1);
 
-    let last = DETAIL_BATCH - 1;
+    let last = batch - 1;
     let alias_at = document
         .find(&format!("i{last}:node(id:$id{last})"))
         .expect("the last alias");
@@ -201,8 +227,8 @@ fn the_batch_read_is_the_largest_one_point_buys() {
         .map_or(document.len(), |end| alias_at + end);
     let alias = &document[alias_at..alias_end];
     let grown_alias = alias
-        .replacen(&format!("i{last}:"), &format!("i{DETAIL_BATCH}:"), 1)
-        .replacen(&format!("$id{last}"), &format!("$id{DETAIL_BATCH}"), 1);
+        .replacen(&format!("i{last}:"), &format!("i{batch}:"), 1)
+        .replacen(&format!("$id{last}"), &format!("$id{batch}"), 1);
     let grown = format!(
         "{}\n      {grown_alias}{}",
         &document[..alias_end],
@@ -210,14 +236,15 @@ fn the_batch_read_is_the_largest_one_point_buys() {
     )
     .replacen(
         &format!("$id{last}:ID!,"),
-        &format!("$id{last}:ID!,$id{DETAIL_BATCH}:ID!,"),
+        &format!("$id{last}:ID!,$id{batch}:ID!,"),
         1,
     );
-    assert_eq!(grown.matches(":node(id:$id").count(), DETAIL_BATCH + 1);
+    assert_eq!(grown.matches(":node(id:$id").count(), batch + 1);
     assert_eq!(
         worst_case_point_cost(&grown).unwrap(),
         2,
-        "one item more than DETAIL_BATCH is still one point, so DETAIL_BATCH is not the \
-         largest batch one point buys:\n{grown}"
+        "one item more than {name} is still one point, so {name} is not the largest batch \
+         one point buys:\n{grown}"
     );
 }
+// llmlint: ignore-end[tests_hold_no_nonfunctional_thresholds]

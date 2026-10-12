@@ -12,6 +12,9 @@ files:
     - "**/.git/**"
     # Generated from the binary's schema; generator drift is checked deterministically.
     - "sdks/typescript/src/generated/**"
+    # Generated from the binary's schema; drift is checked deterministically by
+    # sdk-python:generate-check.
+    - "sdks/python/src/onetaskgraph_sdk/_generated/**"
     # Rendered by running the real CLI and gated by digest against
     # shots/baseline/<arch>.json, so nothing here is hand-written for a judge to read.
     # Each SVG also embeds the vendored font as base64 — about 360 KB of encoded font

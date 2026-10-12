@@ -15,8 +15,8 @@ use std::collections::BTreeMap;
 use std::io::{BufRead, Write};
 
 use onetaskgraph_plugin_api::{
-    Document, Page, Project, SecretResolver, SourceError, SourceName, Status, StatusCategory, Task,
-    TaskSource, TaskUpdateOutcome,
+    Document, NativeId, Page, Project, SecretResolver, SourceError, SourceName, Status,
+    StatusCategory, Task, TaskDetailRead, TaskSource, TaskUpdateOutcome,
 };
 use secrecy::SecretString;
 use serde::Deserialize;
@@ -24,12 +24,12 @@ use serde_json::{Value, json};
 
 use super::connection::{Line, MAX_LINE, read_line};
 use super::wire::{
-    AddCommentParams, CommentsParams, ContentParams, DeleteCommentParams, DeleteParams,
-    DeliveredByParams, DependencyParams, DocumentDir, DocumentQueryParams, EditCommentParams,
-    HandshakePluginKind, IdParams, InitializeParams, InitializeResult, LabelParams, MetadataParams,
-    PROTOCOL_VERSION, PriorityParams, ProjectQueryParams, ProjectWriteParams, Request, Response,
-    ServedWriteParams, StatusParams, TaskQueryParams, UpdateParams, after_the_first_vocabulary,
-    knows_every_category, vocabulary,
+    AddCommentParams, CommentCopyParams, CommentsParams, ContentParams, DeleteCommentParams,
+    DeleteParams, DeliveredByParams, DependencyParams, DocumentDir, DocumentQueryParams,
+    EditCommentParams, HandshakePluginKind, IdParams, InitializeParams, InitializeResult,
+    LabelParams, MetadataParams, PROTOCOL_VERSION, PriorityParams, ProjectQueryParams,
+    ProjectWriteParams, Request, Response, ServedWriteParams, StatusParams, TaskDetailParams,
+    TaskQueryParams, UpdateParams, after_the_first_vocabulary, knows_every_category, vocabulary,
 };
 use crate::config::rebased;
 use crate::registry::PluginKind;
@@ -269,6 +269,12 @@ async fn initialize(
                 // And the end of a command: this host forwards it to whichever plugin it
                 // serves, which drops what it holds or holds nothing and does nothing.
                 ends_commands: true,
+                // And a copied comment: every plugin of this build stores its origin natively
+                // or through the contract's default marker.
+                comment_copies: true,
+                // And a task read beside a page of its comments, which this host answers with
+                // the plugin's own detail read — one read of the two, where the plugin makes one.
+                task_details: true,
             };
             *source = Some(Hosted {
                 source: built,
@@ -416,6 +422,25 @@ async fn dispatch(
             let params: IdParams = decode(method, params)?;
             let task = source.get_task(&params.id).await?;
             encode(json!({ "task": task.map(|task| told_task(task, known)) }))
+        }
+        "get_task_detail" => {
+            let params: TaskDetailParams = decode(method, params)?;
+            let read = one_detail(
+                &params.id,
+                source
+                    .get_task_details(std::slice::from_ref(&params.id), Some(&params.comments))
+                    .await,
+            )?;
+            let Some(read) = read else {
+                return encode(json!({ "task": null, "page": null }));
+            };
+            let task = told_task(read.task, known);
+            match read.comments {
+                Some(Ok(page)) => encode(json!({ "task": task, "page": page })),
+                // The task was read and its comments were refused: both are the answer.
+                Some(Err(error)) => encode(json!({ "task": task, "comments_error": error })),
+                None => encode(json!({ "task": task, "page": null })),
+            }
         }
         "get_project" => {
             let params: IdParams = decode(method, params)?;
@@ -584,6 +609,18 @@ async fn dispatch(
                     .await?
             }))
         }
+        "write_comment_copy" => {
+            let params: CommentCopyParams = decode(method, params)?;
+            // The origin's task decides which copies a later copy owns, edits and deletes, so
+            // one naming no task is refused before anything is written rather than stored and
+            // only found out when it is read back.
+            params.copy.origin.qualified()?;
+            encode(json!({
+                "comment": source
+                    .write_comment_copy(&params.task, params.existing.as_ref(), &params.copy)
+                    .await?
+            }))
+        }
         "delete_comment" => {
             let params: DeleteCommentParams = decode(method, params)?;
             encode(json!({
@@ -604,6 +641,35 @@ async fn dispatch(
     }
 }
 
+/// The one answer a hosted source owes a detail read of `id` alone: refused as malformed when
+/// it gave any other number, or answered about another task, rather than sent on as the
+/// answer about `id`.
+fn one_detail(
+    id: &NativeId,
+    mut answers: Vec<Result<Option<TaskDetailRead>, SourceError>>,
+) -> Result<Option<TaskDetailRead>, SourceError> {
+    if answers.len() != 1 {
+        return Err(SourceError::Malformed {
+            message: format!(
+                "the hosted source answered {} details for one read of task {id}",
+                answers.len()
+            ),
+        });
+    }
+    let read = answers.pop().expect("exactly one answer")?;
+    if let Some(read) = &read
+        && read.task.id != *id
+    {
+        return Err(SourceError::Malformed {
+            message: format!(
+                "the hosted source answered a read of task {id} with task {}",
+                read.task.id
+            ),
+        });
+    }
+    Ok(read)
+}
+
 /// One method's parameters, or the reason they could not be read.
 fn decode<T: for<'de> Deserialize<'de>>(method: &str, params: Value) -> Result<T, SourceError> {
     serde_json::from_value(params).map_err(|error| SourceError::Malformed {
@@ -616,4 +682,39 @@ fn encode<T: serde::Serialize>(value: T) -> Result<Value, SourceError> {
     serde_json::to_value(value).map_err(|error| SourceError::Malformed {
         message: format!("this source returned data that will not serialize: {error}"),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn task(id: &str) -> TaskDetailRead {
+        TaskDetailRead {
+            task: serde_json::from_value(json!({"id": id, "title": "Alpha",
+                "status": {"category": "todo", "name": "Todo"}, "labels": []}))
+            .expect("a task"),
+            comments: None,
+        }
+    }
+
+    #[test]
+    fn a_detail_read_of_one_task_is_held_to_one_answer_about_that_task() {
+        let id = NativeId("T-1".to_owned());
+        assert!(
+            matches!(one_detail(&id, vec![Ok(Some(task("T-1")))]), Ok(Some(read))
+            if read.task.id == id)
+        );
+        assert!(matches!(one_detail(&id, vec![Ok(None)]), Ok(None)));
+        for (answers, named) in [
+            (Vec::new(), "answered 0 details"),
+            (vec![Ok(None), Ok(Some(task("T-1")))], "answered 2 details"),
+            (vec![Ok(Some(task("T-2")))], "with task T-2"),
+        ] {
+            assert!(
+                matches!(one_detail(&id, answers), Err(SourceError::Malformed { message })
+                    if message.contains(named)),
+                "{named}"
+            );
+        }
+    }
 }

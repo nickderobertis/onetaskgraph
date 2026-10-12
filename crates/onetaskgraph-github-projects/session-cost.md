@@ -1037,3 +1037,77 @@ GitHub's cap of two capped selections a document is **ten** documents rather tha
 a `__type` read with no connection. `session-cost.txt` moves on that line and its total alone,
 122 → 123 requests. The projection's own writes ride `UPDATE_FIELDS`, which the journey already
 sends, so no write row moves.
+
+## A copy's batched read carries what each task is blocked by, and what that moved
+
+A `--comments` copy reads every task it carries with the first page of its comments and then
+reads that task's forward edges. `graphql::ISSUE_DETAILS` carries no `blockedBy`, so that second
+read was one `ISSUE_DEPENDENCIES` per task: a copy of five changed tasks cost one batched read
+and five more. `graphql::ISSUE_COPY_DETAILS` is the batched read a copy makes instead — the same
+aliases with each item's `blockedBy` beside its comments, `COPY_DETAIL_BATCH` (21) to a request
+at one point — and the read of it is kept for the command, so each task's dependency read is
+answered from it. It is a document of its own rather than a widening of `ISSUE_DETAILS`, whose
+batch of 24 is what `task show-many` is priced by and which reads no edge.
+`a_recopy_by_query_reads_only_the_listing_and_then_only_what_changed` in
+`crates/onetaskgraph-github-projects-e2e/tests/e2e/copy_recopy.rs` holds a copy of five changed
+tasks to that one request.
+
+**`session-cost.txt`** moves only by the reconciliation step's line for the new entry of
+`graphql::DOCUMENTS`: its request total 123 → 124, and its node count by the document's
+worst case, 7,413 nodes, 249,562 → 256,975. Nothing the journey writes or reads besides that
+probe moved, because the journey makes no copy with `--comments`.
+
+## Every change kind moves a task's change token, re-taken on every run
+
+`docs/plugin-protocol.md` §4.13d states that a GitHub task's change token moves for every kind
+of change a copy has to see — a comment added, edited or deleted; a body, title, label,
+metadata or dependency change; a priority or status change — because a copy skips a task whose
+token has not moved. That is GitHub's behaviour as much as this plugin's, so the live journey
+re-takes it: `every_change_kind_moves_a_tasks_token` makes each change to one of the run's own
+tasks in turn, a second apart, and holds the token a fresh read gives to moving to a later one
+by the plugin's own ordering after each. It renames the task to another of the run's own titles,
+so the artifact cleanup still finds it, and closes it last.
+
+Because the plugin gives a token only once its task has settled — its later time more than
+`change_token::SETTLED`, 60 seconds, before the response's `Date` (§4.13d) — the leg waits that
+margin and two seconds more before each read of the token, the first included. That costs the
+credentialed lane about twelve minutes of waiting and no request: each read is the one it always
+made, made later. The stand-in this record is replayed against answers with a `Date` an hour past
+its last change, so it waits for nothing.
+
+**`session-cost.txt`** moves by that leg alone: 124 → 150 requests, every one of them a read or
+a write of the run's own second task — a comment added, edited and deleted with the read of
+which issue the comment is on before each edit, a content, a title, a metadata and two
+dependency writes, a label attachment, the status write that closes it, and a fresh read of the
+task after each change — and its node count 256,975 → 269,919 with those reads. Nothing the
+journey did before the leg moved.
+
+## A replaced dependency, which GitHub moves no time for
+
+The credentialed lane added a dependency to a real issue and read the issue's `updatedAt`, its
+board item's and its comment count all where they were, so a token of those three alone read
+an edge change as no change. The token now counts the issue's dependency events as its fourth
+part (§4.13d), and the change-kind leg adds the one case only that count can tell apart: one
+dependency removed and another added in a single write, which leaves the number of edges where
+it was.
+
+**`session-cost.txt`** moves by that write alone: 150 → 155 requests — the dependency read and
+the one `addBlockedBy` and one `removeBlockedBy` the write sends, and two reads of one issue,
+the write's own and the fresh read of the token after it — and its node count 269,919 →
+271,031 with those reads. The dependency-event count is selected for its `totalCount` alone, so
+no document's node count or price moved for it.
+
+## Project membership and a board text field, each made alone
+
+Every member a copy writes either moves a GitHub task's token or keeps the copy from skipping
+it (§4.13d), and the change-kind leg re-takes the members it had not: a project membership —
+the task taken out of its project and filed under another, by the one `removeSubIssue` and
+one `addSubIssue` a person's move sends, which the token's relationship count moves for — and
+a board text field, the origin field rewritten by one `updateProjectV2ItemFieldValue`, which
+moves the board item's time. Each is sent alone, so no other part of the issue moves with it.
+
+**`session-cost.txt`** moves by those three legs alone: 155 → 163 requests — the two sub-issue
+mutations, the field discovery and the board item lookup the text-field write needs, that
+write, and one fresh read of the task after each leg — and its node count 271,031 → 272,519
+with those reads.
+

@@ -19,7 +19,7 @@ use std::path::PathBuf;
 use onetaskgraph_github_projects::accounting::{Accounting, Call, RateLimit, Request, Session};
 use serde_json::{Value, json};
 
-use crate::common::{Sandbox, stderr, stdout};
+use crate::common::{Sandbox, stderr, stdout, unclocked};
 use crate::fixtures::{GitHubBoardFields, document, github_projects_with_board};
 
 /// The checked-in record the copies below are held to.
@@ -1307,7 +1307,8 @@ fn a_bound_recopy_adds_one_project_read_and_batches_the_dependencies_it_newly_na
         "{refused:#?}"
     );
     let (_, _, after) = plan.measure(&show);
-    assert_eq!(after, before);
+    // The board's own clock moved for the write the undo made; nothing else did.
+    assert_eq!(unclocked(&after), unclocked(&before));
     let many: Vec<usize> = (1..=DETAIL_BATCH + 1).collect();
     edit("Todo", &many);
     let (_, newly_many, _) = plan.measure(&recopy);

@@ -82,17 +82,19 @@ use std::{
 use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
     Asset, AssetName, AssetWrite, AssetsWritten, Capabilities, Classification, Comment,
-    CommentBody, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport,
-    Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label, LabelFilter, Location,
-    MetadataKey, NativeId, NewComment, Page, PageRequest, Priority, Project, ProjectFilter,
-    ProjectQuery, Repository, SecretResolver, SourceError, SourceName, SourcePlugin, Status,
-    StatusCategory, Support, Task, TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome,
-    TextFields, TextQuery, UpdatedField, Visibility, WriteSupport, WriteTarget,
+    CommentBody, CommentCopy, CommentOrigin, Cursor, DependencyEdge, DependencyEndpoint,
+    DependencyKind, DependencySupport, Direction, Document, DocumentQuery, Health, ItemKind,
+    ItemWrite, Label, LabelFilter, Location, MetadataKey, NativeId, NewComment, Page, PageRequest,
+    Priority, Project, ProjectFilter, ProjectQuery, Repository, SecretResolver, SourceError,
+    SourceName, SourcePlugin, Status, StatusCategory, Support, Task, TaskDetailRead, TaskQuery,
+    TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome, TextFields, TextQuery, UpdatedField,
+    Visibility, WriteSupport, WriteTarget,
 };
 use schemars::{Schema, schema_for};
 use serde::{Deserialize, Serialize};
 
 mod assets;
+pub mod change_token;
 #[cfg(windows)]
 mod probe;
 #[cfg(any(windows, test))]
@@ -416,6 +418,8 @@ struct Entry {
     /// Empty for a project, which delivers nothing and is delivered by nothing.
     delivers: Vec<TaskRef>,
     delivered_by: Vec<TaskRef>,
+    /// The file's change token, for a task; `None` for a project.
+    version: Option<String>,
 }
 
 /// What every Markdown file of this source carries, whichever folder it is in.
@@ -889,6 +893,7 @@ impl LocalMdSource {
             dependencies,
             delivers,
             delivered_by,
+            version: matches!(kind, WorkKind::Task).then(|| change_token::spell(text.as_bytes())),
         })
     }
 
@@ -1101,6 +1106,9 @@ fn text_match(title: &str, body: Option<&str>, q: &TextQuery) -> bool {
 impl TaskSource for LocalMdSource {
     fn kind(&self) -> &'static str {
         KIND
+    }
+    fn order_versions(&self, a: &str, b: &str) -> Option<std::cmp::Ordering> {
+        change_token::order(a, b)
     }
     fn capabilities(&self) -> Capabilities {
         Capabilities {
@@ -1406,14 +1414,29 @@ impl TaskSource for LocalMdSource {
         key: &MetadataKey,
         value: &serde_json::Value,
     ) -> Result<Option<Task>, SourceError> {
-        self.set_metadata(
+        // Compared without the file's change token, which any edit moves, and answered with
+        // the token of the file as it was written.
+        let Some(written) = self.set_metadata(
             Kind::Task,
             id,
             key,
             value,
-            |path, text| self.parse_text(WorkKind::Task, path, text).map(task),
+            |path, text| {
+                self.parse_text(WorkKind::Task, path, text)
+                    .map(task)
+                    .map(unversioned)
+            },
             |task| &mut task.metadata,
-        )
+        )?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(Task {
+            version: self
+                .find(WorkKind::Task, id)?
+                .and_then(|entry| entry.version),
+            ..written
+        }))
     }
 
     /// Edit every entry of the task file the update names — each front-matter key, each
@@ -1500,7 +1523,7 @@ impl TaskSource for LocalMdSource {
         let edges_landed = edges.as_ref().is_none_or(|edges| {
             edges.len() == edges_after.len() && edges.iter().all(|edge| edges_after.contains(edge))
         });
-        if task(reread) != wanted || (edges_differ && !edges_landed) {
+        if unversioned(task(reread)) != unversioned(wanted) || (edges_differ && !edges_landed) {
             return Err(SourceError::Refused {
                 message: format!(
                     "{}: cannot update this task without changing more than the update names: \
@@ -1715,7 +1738,11 @@ impl TaskSource for LocalMdSource {
                 provenance,
                 answers,
             },
-            |path, text| self.parse_text(WorkKind::Task, path, text).map(task),
+            |path, text| {
+                self.parse_text(WorkKind::Task, path, text)
+                    .map(task)
+                    .map(unversioned)
+            },
             |task, content, provenance| {
                 task.content = (!content.is_empty()).then(|| content.to_owned());
                 task.metadata
@@ -1788,6 +1815,17 @@ impl TaskSource for LocalMdSource {
         };
         self.paginate(file.comments, page).map(Some)
     }
+    /// Each task with the page of its comments `comments` names, the two out of one read of
+    /// its file.
+    async fn get_task_details(
+        &self,
+        ids: &[NativeId],
+        comments: Option<&PageRequest>,
+    ) -> Vec<Result<Option<TaskDetailRead>, SourceError>> {
+        ids.iter()
+            .map(|id| self.task_detail(id, comments))
+            .collect()
+    }
     async fn add_comment(
         &self,
         task: &NativeId,
@@ -1800,9 +1838,10 @@ impl TaskSource for LocalMdSource {
         let Some(mut file) = self.task_file(task)? else {
             return Ok(None);
         };
-        let now = this_second();
+        let (now, minted) = minted_comment_id(&file.comments);
         let added = Comment {
-            id: minted_comment_id(now, &file.comments),
+            origin: None,
+            id: minted,
             author: comment.author.clone(),
             created_at: Some(now),
             updated_at: Some(now),
@@ -1846,6 +1885,60 @@ impl TaskSource for LocalMdSource {
         file.comments.remove(at);
         file.rewrite()?;
         Ok(Some(comment.clone()))
+    }
+    /// Write a copied comment with its origin stored natively: the comment takes the origin's
+    /// own id, author and times, and its marker line records the origin's task and address.
+    ///
+    /// The origin's id is the comment's id unless another comment of this task already holds
+    /// it, when an id is minted as `add` mints one and the origin's is recorded beside it. A
+    /// time the origin did not give is this second's.
+    async fn write_comment_copy(
+        &self,
+        task: &NativeId,
+        existing: Option<&NativeId>,
+        copy: &CommentCopy,
+    ) -> Result<Option<Comment>, SourceError> {
+        if let Some(author) = &copy.origin.author {
+            representable_author(author)?;
+        }
+        representable_origin(&copy.origin)?;
+        representable_body(&copy.body)?;
+        let Some(mut file) = self.task_file(task)? else {
+            return Ok(None);
+        };
+        let now = this_second();
+        let written = |id: NativeId| Comment {
+            id,
+            author: copy.origin.author.clone(),
+            // To the second, as the marker records them: the answer is what a read gives back.
+            created_at: Some(to_the_second(copy.origin.created_at.unwrap_or(now))),
+            updated_at: Some(to_the_second(copy.origin.updated_at.unwrap_or(now))),
+            body: copy.body.as_str().to_owned(),
+            url: None,
+            origin: Some(copy.origin.clone()),
+        };
+        let held = match existing {
+            Some(existing) => {
+                let Some(held) = file.comments.iter_mut().find(|held| &held.id == existing) else {
+                    return Ok(None);
+                };
+                *held = written(existing.clone());
+                held.clone()
+            }
+            None => {
+                let taken = file.comments.iter().any(|held| held.id == copy.origin.id);
+                let id = if taken || copy.origin.id.as_str().is_empty() {
+                    minted_comment_id(&file.comments).1
+                } else {
+                    copy.origin.id.clone()
+                };
+                let added = written(id);
+                file.comments.push(added.clone());
+                added
+            }
+        };
+        file.rewrite()?;
+        Ok(Some(held))
     }
 }
 
@@ -1961,7 +2054,9 @@ fn answered_body(content: &str, block: &str, section: &str) -> String {
 /// - A body containing a line that is exactly [`COMMENT_CLOSE`] is refused rather than
 ///   escaped, because escaping it would store a body other than the one written.
 /// - A comment id is minted as `<created_at in UTC as YYYYMMDDTHHMMSSZ>-<n>`, with `n` the
-///   smallest positive integer not already an id in that file, and is never renumbered.
+///   microsecond within that second it was minted at, plus one, or a later instant's when the
+///   file already holds that id. It is never renumbered and never minted again for another
+///   comment, a deleted one's included.
 /// - The section is not the task's content: every read reports content as the body above it,
 ///   so a content search never matches a comment. A copy written into the file keeps its
 ///   existing section byte for byte, and content that would itself read as a section is
@@ -1979,6 +2074,16 @@ pub const COMMENT_CLOSE: &str = "<!-- /onetaskgraph:comment -->";
 
 /// The end of the marker line that opens one comment block.
 const MARKER_END: &str = " -->";
+
+/// The start of the line a copied comment's body opens with, recording where it was copied
+/// from: `<!-- onetaskgraph:comment-origin task="…" id="…" url="…" -->`, `id` and `url` only
+/// when they say something the comment's own marker does not.
+///
+/// A line of the body rather than attributes of the marker, so a release of this plugin from
+/// before comments had origins — which refuses a marker carrying an attribute it does not know,
+/// and would then read the whole section as task content — still reads every comment, the line
+/// merely part of that comment's text.
+pub const COPIED_FROM_LINE_OPEN: &str = "<!-- onetaskgraph:comment-origin ";
 
 /// One task file, read for its comments: where its content ends and what its section holds.
 struct TaskFile {
@@ -2050,10 +2155,38 @@ impl LocalMdSource {
         let Some(path) = self.locate(Kind::Task, id)? else {
             return Ok(None);
         };
-        self.parse(WorkKind::Task, &path)?;
-        let text = fs::read_to_string(&path).map_err(|e| SourceError::Malformed {
-            message: format!("{}: {e}", path.display()),
-        })?;
+        let text = Self::read_text(&path)?;
+        self.parse_text(WorkKind::Task, &path, &text)?;
+        Self::task_file_of(path, text).map(Some)
+    }
+
+    /// The task and the page of its comments `comments` names, both out of one read of its
+    /// file — so the two are always one revision of the task, which two reads of a file a
+    /// person may be saving cannot promise.
+    fn task_detail(
+        &self,
+        id: &NativeId,
+        comments: Option<&PageRequest>,
+    ) -> Result<Option<TaskDetailRead>, SourceError> {
+        let Some(path) = self.locate(Kind::Task, id)? else {
+            return Ok(None);
+        };
+        let text = Self::read_text(&path)?;
+        let read = task(self.parse_text(WorkKind::Task, &path, &text)?);
+        let comments = comments.map(|page| {
+            Self::task_file_of(path, text)
+                .and_then(|file| self.paginate(file.comments, page))
+                .map(Some)
+        });
+        Ok(Some(TaskDetailRead {
+            task: read,
+            comments,
+        }))
+    }
+
+    /// The task file at `path`, whose whole text is `text`, split into what a comment write
+    /// needs.
+    fn task_file_of(path: PathBuf, text: String) -> Result<TaskFile, SourceError> {
         let (_, body_at) = front_matter(&text).ok_or_else(|| unfronted(&path))?;
         let (content, comments) = sectioned(&text[body_at..]);
         let section_at = body_at + content.len();
@@ -2069,13 +2202,13 @@ impl LocalMdSource {
                 ),
             });
         }
-        Ok(Some(TaskFile {
+        Ok(TaskFile {
             path,
             text,
             body_at,
             section_at,
             comments,
-        }))
+        })
     }
 }
 
@@ -2460,18 +2593,47 @@ fn block(text: &str) -> Option<(Comment, &str)> {
             return None;
         }
     }
-    let timestamp = |value: String| {
-        DateTime::parse_from_rfc3339(&value)
+    // A copied comment's body opens with the line recording its origin.
+    let (origin, body) = match origin_line(body) {
+        Some((origin, rest)) => (origin, rest),
+        None => (OriginLine::default(), body),
+    };
+    if body.is_empty() {
+        return None;
+    }
+    let timestamp = |value: &str| {
+        DateTime::parse_from_rfc3339(value)
             .ok()
             .map(|at| at.with_timezone(&Utc))
     };
     let id = id.filter(|id| !id.is_empty())?;
+    let created_at = timestamp(&created_at?)?;
+    let updated_at = timestamp(&updated_at?)?;
+    // An origin time the line records overrides the marker's: empty when the origin gave none.
+    let origin_time = |recorded: Option<String>, own: DateTime<Utc>| match recorded {
+        None => Some(Some(own)),
+        Some(value) if value.is_empty() => Some(None),
+        Some(value) => timestamp(&value).map(Some),
+    };
+    let origin_created = origin_time(origin.created_at, created_at)?;
+    let origin_updated = origin_time(origin.updated_at, updated_at)?;
+    // A copied comment: its own id, author and times are its origin's, and the origin line
+    // records the rest.
+    let origin = origin.task.map(|task| CommentOrigin {
+        task,
+        id: NativeId(origin.id.unwrap_or_else(|| id.clone())),
+        author: author.clone(),
+        created_at: origin_created,
+        updated_at: origin_updated,
+        url: origin.url,
+    });
     Some((
         Comment {
+            origin,
             id: NativeId(id),
             author,
-            created_at: Some(timestamp(created_at?)?),
-            updated_at: Some(timestamp(updated_at?)?),
+            created_at: Some(created_at),
+            updated_at: Some(updated_at),
             body: body.to_owned(),
             url: None,
         },
@@ -2552,6 +2714,70 @@ fn rendered_section(comments: &[Comment]) -> String {
     section
 }
 
+/// The origin line a copied comment's body opens with: its task, and — each only when it
+/// differs from what the comment's own marker says — its id, its address, and its two times.
+#[derive(Default)]
+struct OriginLine {
+    task: Option<String>,
+    id: Option<String>,
+    url: Option<String>,
+    /// The origin's own time, when the marker's whole second is not it: an RFC 3339 instant,
+    /// or empty for an origin that gave none.
+    created_at: Option<String>,
+    /// As `created_at`, for when it last changed.
+    updated_at: Option<String>,
+}
+
+/// The origin line `body` opens with and the body after it; `None` for a body that opens with
+/// no such line.
+fn origin_line(body: &str) -> Option<(OriginLine, &str)> {
+    let (line, rest) = body.split_once('\n')?;
+    let attributes = attributes(
+        line.strip_prefix(COPIED_FROM_LINE_OPEN)?
+            .strip_suffix(MARKER_END)?,
+    )?;
+    let mut origin = OriginLine::default();
+    for (name, value) in attributes {
+        let slot = match name {
+            "task" => &mut origin.task,
+            "id" => &mut origin.id,
+            "url" => &mut origin.url,
+            "created_at" => &mut origin.created_at,
+            "updated_at" => &mut origin.updated_at,
+            _ => return None,
+        };
+        if slot.replace(value).is_some() {
+            return None;
+        }
+    }
+    // A line naming no qualified task is no origin, and the body keeps it as written.
+    if !origin
+        .task
+        .as_deref()
+        .is_some_and(onetaskgraph_plugin_api::CommentOrigin::is_qualified_task)
+    {
+        return None;
+    }
+    Some((origin, rest))
+}
+
+/// What an origin time reads back as from the marker alone: its whole second.
+fn to_the_second(at: DateTime<Utc>) -> DateTime<Utc> {
+    DateTime::from_timestamp(at.timestamp(), 0).unwrap_or(at)
+}
+
+/// An origin time as the origin line records it, when the comment's own marker would not read
+/// back as it: absent when the marker's second is the origin's time, and otherwise the instant
+/// in full or, for an origin that gave none, empty.
+fn origin_time(origin: Option<DateTime<Utc>>, own: Option<DateTime<Utc>>) -> Option<String> {
+    if origin.is_some() && origin == own.map(to_the_second) {
+        return None;
+    }
+    Some(origin.map_or_else(String::new, |at| {
+        at.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)
+    }))
+}
+
 /// One comment block, marker first and closing line last.
 fn rendered_block(comment: &Comment) -> String {
     let mut marker = format!("{COMMENT_OPEN}id=\"{}\"", escaped(comment.id.as_str()));
@@ -2561,25 +2787,62 @@ fn rendered_block(comment: &Comment) -> String {
     let created = comment.created_at.as_ref().map(stamped).unwrap_or_default();
     let updated = comment.updated_at.as_ref().map(stamped).unwrap_or_default();
     marker.push_str(&format!(
-        " created_at=\"{}\" updated_at=\"{}\"{MARKER_END}",
+        " created_at=\"{}\" updated_at=\"{}\"",
         escaped(&created),
         escaped(&updated)
     ));
+    marker.push_str(MARKER_END);
+    let mut body = String::new();
+    if let Some(origin) = &comment.origin {
+        body.push_str(&format!(
+            "{COPIED_FROM_LINE_OPEN}task=\"{}\"",
+            escaped(&origin.task)
+        ));
+        if origin.id != comment.id {
+            body.push_str(&format!(" id=\"{}\"", escaped(origin.id.as_str())));
+        }
+        if let Some(url) = &origin.url {
+            body.push_str(&format!(" url=\"{}\"", escaped(url)));
+        }
+        for (name, origin, own) in [
+            ("created_at", origin.created_at, comment.created_at),
+            ("updated_at", origin.updated_at, comment.updated_at),
+        ] {
+            if let Some(at) = origin_time(origin, own) {
+                body.push_str(&format!(" {name}=\"{}\"", escaped(&at)));
+            }
+        }
+        body.push_str(MARKER_END);
+        body.push('\n');
+    }
+    body.push_str(&comment.body);
     let who = comment.author.as_deref().unwrap_or("comment");
-    format!(
-        "{marker}\n### {who} — {created}\n\n{}\n\n{COMMENT_CLOSE}\n",
-        comment.body
-    )
+    format!("{marker}\n### {who} — {created}\n\n{body}\n\n{COMMENT_CLOSE}\n")
 }
 
-/// `<created_at in UTC as YYYYMMDDTHHMMSSZ>-<n>`, for the smallest positive `n` not already an
-/// id among `comments`.
-fn minted_comment_id(at: DateTime<Utc>, comments: &[Comment]) -> NativeId {
-    let stamp = at.format("%Y%m%dT%H%M%SZ");
-    (1_u64..)
-        .map(|n| NativeId(format!("{stamp}-{n}")))
-        .find(|candidate| !comments.iter().any(|held| &held.id == candidate))
-        .expect("an unbounded counter eventually clears a finite set of ids")
+/// A new comment id and the second it is written at: `<that second in UTC as
+/// YYYYMMDDTHHMMSSZ>-<n>`, `n` the microsecond within it the id is minted at, plus one.
+///
+/// An id names the instant it was minted at, so no later mint can spell an id this file held
+/// before: a comment deleted and another added in the same second get different ids, and a
+/// `--comments` copy reading the folder sees one comment gone and another new rather than one
+/// edited. The smallest free number would hand the deleted comment's id straight to the next
+/// one. An instant whose id the file already holds — a copied comment keeping its origin's id,
+/// or one written by hand — is passed over for the next.
+fn minted_comment_id(comments: &[Comment]) -> (DateTime<Utc>, NativeId) {
+    loop {
+        let now = Utc::now();
+        let second = DateTime::from_timestamp(now.timestamp(), 0).unwrap_or(now);
+        let candidate = NativeId(format!(
+            "{}-{}",
+            second.format("%Y%m%dT%H%M%SZ"),
+            now.timestamp_subsec_micros() + 1
+        ));
+        if !comments.iter().any(|held| held.id == candidate) {
+            return (second, candidate);
+        }
+        std::thread::yield_now();
+    }
 }
 
 /// Now, to the second — the precision the section writes a time down in, so a comment reads
@@ -2591,6 +2854,15 @@ fn this_second() -> DateTime<Utc> {
 
 /// Refuse a body the section cannot hold byte for byte.
 fn representable_body(body: &CommentBody) -> Result<(), SourceError> {
+    if body.as_str().starts_with(COPIED_FROM_LINE_OPEN) {
+        return Err(SourceError::Refused {
+            message: format!(
+                "cannot represent this comment body: its first line opens with {COPIED_FROM_LINE_OPEN}, \
+                 which in a task file records where a copied comment came from rather than \
+                 what it says; next: change that line"
+            ),
+        });
+    }
     if body.as_str().split('\n').any(|line| line == COMMENT_CLOSE) {
         return Err(SourceError::Refused {
             message: format!(
@@ -2599,6 +2871,39 @@ fn representable_body(body: &CommentBody) -> Result<(), SourceError> {
                  early; next: change that line"
             ),
         });
+    }
+    Ok(())
+}
+
+/// Refuse an origin the origin line cannot record so that it reads back as given: one naming
+/// no qualified task, which reads back as no origin at all, and a task, an id or an address
+/// holding a line break or another control character, which would end the line part way
+/// through it.
+fn representable_origin(origin: &CommentOrigin) -> Result<(), SourceError> {
+    if !CommentOrigin::is_qualified_task(&origin.task) {
+        return Err(SourceError::Refused {
+            message: format!(
+                "cannot record a copied comment whose origin names the task {:?}: an origin \
+                 here names a qualified task id, `<source>:<native task id>`; next: copy it \
+                 from a configured source",
+                origin.task
+            ),
+        });
+    }
+    for (what, value) in [
+        ("task", Some(origin.task.as_str())),
+        ("id", Some(origin.id.as_str())),
+        ("address", origin.url.as_deref()),
+    ] {
+        if value.is_some_and(|value| value.chars().any(char::is_control)) {
+            return Err(SourceError::Refused {
+                message: format!(
+                    "cannot record a copied comment whose origin {what} is {value:?}: it is \
+                     written on one line, so it must hold no line break or control character; \
+                     next: correct it at the origin"
+                ),
+            });
+        }
     }
     Ok(())
 }
@@ -2636,8 +2941,17 @@ impl LocalMdSource {
         self.paginate(edges, p)
     }
 }
+/// `task` without its change token, for comparing what a file reads as before and after an
+/// edit: the token is the file's digest, so it moves with any edit at all.
+fn unversioned(task: Task) -> Task {
+    Task {
+        version: None,
+        ..task
+    }
+}
 fn task(d: Entry) -> Task {
     Task {
+        version: d.version,
         id: d.common.id,
         // A folder of Markdown has no handle of its own: a task's id *is* the path a
         // person reads it by, so a key here would be a second spelling of the id rather

@@ -814,6 +814,7 @@ fn schema_requires_root_and_refuses_unknown_fields() {
 /// A task on its way into a folder, with a caller-defined key of every JSON type.
 fn outgoing(id: &str, title: &str, status: &str, category: StatusCategory) -> Task {
     Task {
+        version: None,
         id: NativeId(id.into()),
         key: None,
         title: title.into(),
@@ -1326,6 +1327,7 @@ async fn an_unstated_status_reads_as_backlog_and_draft_is_read_as_an_ordinary_st
         .write_task(&ItemWrite {
             target: Some(NativeId("sketch".into())),
             item: Task {
+                version: None,
                 id: NativeId("sketch".into()),
                 key: None,
                 title: "Sketch".into(),

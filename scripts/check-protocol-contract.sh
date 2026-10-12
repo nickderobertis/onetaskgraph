@@ -89,6 +89,15 @@ NOT_METHODS = {
         "not a message: §4.4 says the engine answers it for a hosted source from `get_task` "
         "and `task_comments`, which carry everything it reads"
     ),
+    "order_versions": (
+        "not carried: §4.13d says the protocol carries no ordering method, so a hosted "
+        "plugin's tokens are compared for equality alone"
+    ),
+    "get_task_details_for_copy": (
+        "not a message: §4.4 says the engine answers it for a hosted source exactly as "
+        "`get_task_details`, which crosses as `get_task_detail` or `get_task` and "
+        "`task_comments`"
+    ),
     "check_status_write": (
         "not a message: §4.9 says the engine answers it for a hosted source as the trait's "
         "default does, and the plugin's own write refuses a status it has no name for"
@@ -143,6 +152,13 @@ NOT_METHODS = {
 # source and reading what it can do, which the method table's own row says.
 HANDSHAKE_METHOD = "initialize"
 
+# Protocol methods that carry a batched trait method one item at a time, each with the trait
+# method it stands for. The method table's own row names that trait method, and the trait
+# method itself is carried in NOT_METHODS with the section saying how it crosses.
+PER_ITEM_METHODS = {
+    "get_task_detail": "get_task_details",
+}
+
 # Where each thing is specified. Every one-way check below reads one of these sections
 # rather than the whole document, so an incidental mention elsewhere cannot stand in for a
 # specification. A heading that moves fails here by name.
@@ -170,6 +186,7 @@ METHOD_SECTIONS = {
     "add_comment": "### 4.16 `add_comment`, `edit_comment` and `delete_comment`",
     "edit_comment": "### 4.16 `add_comment`, `edit_comment` and `delete_comment`",
     "delete_comment": "### 4.16 `add_comment`, `edit_comment` and `delete_comment`",
+    "write_comment_copy": "### 4.16a `write_comment_copy`",
     "set_task_status": "### 4.17 `set_task_status` and `set_delivered_by`",
     "set_delivered_by": "### 4.17 `set_task_status` and `set_delivered_by`",
     "set_task_metadata": (
@@ -442,10 +459,24 @@ if not methods:
 compare(
     "trait method",
     methods,
-    first_column("| Method | Trait method |") - {HANDSHAKE_METHOD},
+    first_column("| Method | Trait method |") - {HANDSHAKE_METHOD} - set(PER_ITEM_METHODS),
     NOT_METHODS,
     "`TaskSource`",
 )
+
+for message, batched in sorted(PER_ITEM_METHODS.items()):
+    if batched not in methods or batched not in NOT_METHODS:
+        failures.append(
+            f"`{message}` is carried here as `TaskSource::{batched}` one item at a time, but "
+            f"that trait method is no longer declared, or no longer recorded in NOT_METHODS. "
+            f"Drop the entry, or restore the trait method and its reason."
+        )
+    if f"| `{message}` | `TaskSource::{batched}`" not in document:
+        failures.append(
+            f"docs/plugin-protocol.md's method table no longer maps `{message}` to "
+            f"`TaskSource::{batched}`. Restore that row, or drop the entry here."
+        )
+
 
 
 def signature(method):
@@ -915,6 +946,150 @@ for (struct, member), specified in MEMBER_SECTIONS.items():
                 f"is `{specified['type']}`, which a peer sends as a JSON "
                 f"{WIRE_TYPES[inner].__name__}. Make the example and the declaration agree."
             )
+
+# The payloads a section shows as JSON, both ways against the structs that read and write
+# them. The scans above see a method's parameters and a contract struct's fields one way only —
+# a field the section never names — so a member an example still sends after the struct
+# dropped it, or a member the struct gained that the example and its prose never mention,
+# reached a plugin author as a payload this engine does not speak. Each entry names the
+# section, the method its example line is the request of, the path to the object inside that
+# request or its answer, and the struct that object is: every key of the example object has
+# to be a field of the struct, and every field of the struct has to be named in the section,
+# where an optional member the example leaves out is still specified in prose.
+comment_rs = api("comment.rs")
+
+
+def struct_fields(struct, text, visibility):
+    """The fields of `struct` as declared in `text`, refusing a struct that cannot be read."""
+    declaration = re.search(
+        r"pub(?:\(crate\))? struct %s(?:<[^>]*>)? \{(.*?)\n\}" % re.escape(struct), text, re.DOTALL
+    )
+    if declaration is None:
+        refuse(
+            f"could not read the `{struct}` struct whose payload docs/plugin-protocol.md shows.",
+            "restore it, or teach PAYLOAD_EXAMPLES in this script where it lives now.",
+        )
+    fields = set(re.findall(r"^    %s (\w+):" % visibility, declaration.group(1), re.MULTILINE))
+    if not fields:
+        refuse(
+            f"read no fields from `{struct}`.",
+            "restore its fields, or teach this script the shape they have now.",
+        )
+    return fields
+
+
+PAYLOAD_EXAMPLES = (
+    # (section, method, "params" or "result", path inside it, struct, where it is declared)
+    ("### 4.4a `get_task_detail`", "get_task_detail", "params", (), "TaskDetailParams", "wire"),
+    ("### 4.4a `get_task_detail`", "get_task_detail", "result", (), "TaskDetailResult", "wire"),
+    (
+        "### 4.16a `write_comment_copy`",
+        "write_comment_copy",
+        "params",
+        (),
+        "CommentCopyParams",
+        "wire",
+    ),
+    (
+        "### 4.16a `write_comment_copy`",
+        "write_comment_copy",
+        "params",
+        ("copy",),
+        "CommentCopy",
+        "api",
+    ),
+    (
+        "### 4.16a `write_comment_copy`",
+        "write_comment_copy",
+        "params",
+        ("copy", "origin"),
+        "CommentOrigin",
+        "api",
+    ),
+)
+
+
+def example_lines(heading):
+    """Every line of the section's JSON blocks, each read as the one message it is."""
+    messages = []
+    for block in re.findall(r"```json\n(.*?)\n```", section(heading), re.DOTALL):
+        for line in block.splitlines():
+            try:
+                message = json.loads(line)
+            except ValueError as error:
+                message, problem = None, f"is not JSON ({error})"
+            else:
+                problem = "is not a JSON object"
+            if isinstance(message, dict):
+                messages.append(message)
+            else:
+                failures.append(
+                    f'"{heading}" has a JSON example line that {problem}:\n{line}\nWrite '
+                    f"each message of an exchange as one object on a line of its own, as it "
+                    f"crosses the wire."
+                )
+    return messages
+
+
+for heading, method, half, path, struct, declared_in in PAYLOAD_EXAMPLES:
+    if declared_in == "wire":
+        fields = struct_fields(struct, wire, r"pub\(crate\)")
+    else:
+        fields = struct_fields(struct, comment_rs, "pub")
+    messages = example_lines(heading)
+    request = next((m for m in messages if m.get("method") == method), None)
+    if request is None:
+        refuse(
+            f'"{heading}" has no JSON example of a `{method}` request.',
+            "restore it — it is the payload this check holds to the struct that reads it.",
+        )
+    if half == "params":
+        shown = request.get("params")
+    else:
+        shown = next(
+            (m.get("result") for m in messages if m.get("id") == request.get("id") and "result" in m),
+            None,
+        )
+    for step in path:
+        shown = shown.get(step) if isinstance(shown, dict) else None
+    where = ".".join((half,) + path)
+    if not isinstance(shown, dict):
+        failures.append(
+            f'"{heading}" shows no `{where}` object in its `{method}` example, which is the '
+            f"payload `{struct}` reads. Show it as a peer sends it."
+        )
+        continue
+    for key in sorted(set(shown) - fields):
+        failures.append(
+            f'"{heading}" shows `{where}.{key}`, but `{struct}` has no such field, so the '
+            f"engine never reads or writes it. Remove it from the example, or declare it."
+        )
+    specified = re.sub(r"<!--.*?-->", "", section(heading), flags=re.DOTALL)
+    for field in sorted(fields):
+        if not spelled(field, specified):
+            failures.append(
+                f'`{struct}` carries the field "{field}" but "{heading}", which shows its '
+                f"payload, never names it. Specify it there — in the example, or in prose "
+                f"for a member the example leaves out."
+            )
+
+# A comment's members, both ways against the table §4.15 gives of them, and the origin's
+# against the section that describes it: a reader written from that section alone parses
+# every comment it is ever sent.
+COMMENTS_SECTION = "### 4.15 `task_comments`"
+compare(
+    "comment member",
+    struct_fields("Comment", comment_rs, "pub"),
+    first_column("| Member | Type | Meaning |", after=(COMMENTS_SECTION,)),
+    {},
+    "`Comment`",
+)
+for field in sorted(struct_fields("CommentOrigin", comment_rs, "pub")):
+    if not spelled(field, section(COMMENTS_SECTION)):
+        failures.append(
+            f'`CommentOrigin` carries the field "{field}" but "{COMMENTS_SECTION}", which '
+            f"specifies a comment's `origin`, never names it. Specify it there."
+        )
 
 # The framing limit is a number rather than a name, so neither of the two scans above
 # would ever notice it drifting. It is normative — a plugin author reads it and sizes their

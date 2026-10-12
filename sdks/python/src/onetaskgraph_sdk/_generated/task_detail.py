@@ -258,30 +258,27 @@ class Asset(BaseModel):
     sha256: Annotated[str, Field(description="The lowercase hex SHA-256 of its bytes.")]
 
 
-class Comment(BaseModel):
+class CommentOrigin(BaseModel):
     author: Annotated[
         str | None,
-        Field(description="Who wrote it, in the source's own spelling of a person."),
+        Field(description="Who wrote it there, in that source's spelling of a person."),
     ] = None
-    body: Annotated[
+    created_at: Annotated[
+        AwareDatetime | None, Field(description="When the origin says it was written.")
+    ] = None
+    id: Annotated[NativeId, Field(description="The comment's own id at its origin.")]
+    task: Annotated[
         str,
         Field(
-            description="What it says, byte for byte as it was written — a trailing newline included."
-        ),
-    ]
-    created_at: Annotated[
-        AwareDatetime | None, Field(description="When the source says it was written.")
-    ] = None
-    id: Annotated[
-        NativeId,
-        Field(
-            description="The comment's own id, exactly as its source issued it.\n\nOpaque, as every [`NativeId`] is, and never qualified: a comment is addressed through\nthe qualified id of the task it is on, so its own id needs no source of its own."
+            description="The task the comment is on at its origin, qualified: `<source>:<native task id>`."
         ),
     ]
     updated_at: Annotated[
-        AwareDatetime | None, Field(description="When the source says it last changed.")
+        AwareDatetime | None, Field(description="When the origin says it last changed.")
     ] = None
-    url: Annotated[str | None, Field(description="Where a person can open it.")] = None
+    url: Annotated[str | None, Field(description="Where a person can open it at its origin.")] = (
+        None
+    )
 
 
 class Label(BaseModel):
@@ -396,6 +393,12 @@ class Task(BaseModel):
         Field(description="When the source says the task last changed."),
     ] = None
     url: Annotated[str | None, Field(description="Where a human can open this task.")] = None
+    version: Annotated[
+        str | None,
+        Field(
+            description="The task's change token: an opaque value its source gives so a reader can tell whether\nthe task changed without reading it whole.\n\n**Two equal versions of one task from one source mean nothing in it has changed** — its\ntitle, body, status, priority, labels, project fields, metadata, edges and comments,\ncomments added, edited and deleted included. A source that cannot promise all of that\nfor a task leaves this absent, which means *always read it*. What each plugin keys its\ntoken on, and which change kinds it covers, is stated per plugin in\n`docs/plugin-protocol.md` §4.13d.\n\nOpaque to every caller: nothing compares one but for equality, and the one reader that\nlooks inside is the source that gave it, through\n[`TaskSource::order_versions`](crate::TaskSource::order_versions). Absent by default and left out of the wire when absent, so a source written\nbefore it existed is read as giving none.\n\n**Read-only.** A source derives it on a read and never stores one it is handed: a task\narriving on an [`ItemWrite`](crate::ItemWrite) may still hold its source's token, and a\ndestination ignores it."
+        ),
+    ] = None
 
 
 class QualifiedTask(BaseModel):
@@ -404,6 +407,38 @@ class QualifiedTask(BaseModel):
         Field(description="`<source>:<native>`, the form a user types back at the command line."),
     ]
     item: Annotated[Task, Field(description="The item as its source reported it, unchanged.")]
+
+
+class Comment(BaseModel):
+    author: Annotated[
+        str | None,
+        Field(description="Who wrote it, in the source's own spelling of a person."),
+    ] = None
+    body: Annotated[
+        str,
+        Field(
+            description="What it says, byte for byte as it was written — a trailing newline included."
+        ),
+    ]
+    created_at: Annotated[
+        AwareDatetime | None, Field(description="When the source says it was written.")
+    ] = None
+    id: Annotated[
+        NativeId,
+        Field(
+            description="The comment's own id, exactly as its source issued it.\n\nOpaque, as every [`NativeId`] is, and never qualified: a comment is addressed through\nthe qualified id of the task it is on, so its own id needs no source of its own."
+        ),
+    ]
+    origin: Annotated[
+        CommentOrigin | None,
+        Field(
+            description="The comment this one is a copy of, at its origin — present only on a comment a copy\nwrote, and absent on every comment a person wrote where it is.\n\nOn the second hop of a chained copy it still names the *first* origin, never the\nsource the copy read it from. Left out of the wire when absent, so a reader written\nbefore it existed reads exactly what it read before."
+        ),
+    ] = None
+    updated_at: Annotated[
+        AwareDatetime | None, Field(description="When the source says it last changed.")
+    ] = None
+    url: Annotated[str | None, Field(description="Where a person can open it.")] = None
 
 
 class TaskDetail(BaseModel):

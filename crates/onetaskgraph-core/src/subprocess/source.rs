@@ -15,26 +15,28 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use onetaskgraph_plugin_api::{
-    AssetWrite, AssetsWritten, Capabilities, Comment, CommentBody, DependencyEdge, Direction,
-    Document, DocumentQuery, Health, ItemWrite, Label, MetadataKey, MetadataRecord, Metering,
-    NativeId, NewComment, Page, PageRequest, Priority, Project, ProjectQuery, SourceError,
-    SourceName, Status, StatusCategory, Task, TaskQuery, TaskRef, TaskSource, TaskUpdate,
-    TaskUpdateOutcome, WriteSupport, assetless, unwritable_field, unwritable_metadata,
+    AssetWrite, AssetsWritten, Capabilities, Comment, CommentBody, CommentCopy, DependencyEdge,
+    Direction, Document, DocumentQuery, Health, ItemWrite, Label, MetadataKey, MetadataRecord,
+    Metering, NativeId, NewComment, Page, PageRequest, Priority, Project, ProjectQuery,
+    SourceError, SourceName, Status, StatusCategory, Task, TaskDetailRead, TaskQuery, TaskRef,
+    TaskSource, TaskUpdate, TaskUpdateOutcome, WriteSupport, assetless, unwritable_field,
+    unwritable_metadata,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::connection::{Connection, Peer};
 use super::wire::{
-    AddCommentParams, CommentResult, CommentsParams, CommentsResult, ContentParams, ContentResult,
-    DeleteCommentParams, DeleteParams, DeletedCommentResult, DeliveredByParams, DeliveredByResult,
-    DependencyParams, DocumentAssetWriteParams, DocumentDir, DocumentQueryParams, DocumentResult,
-    DocumentWriteParams, EditCommentParams, EngineIdentity, IdParams, InitializeParams,
-    InitializeResult, LabelParams, MetadataParams, MeteringResult, PROTOCOL_VERSION,
-    PriorityParams, PriorityResult, ProjectQueryParams, ProjectResult, ProjectWriteParams, Request,
-    StatusParams, StatusResult, TaskAssetWriteParams, TaskQueryParams, TaskResult, TaskWriteParams,
-    UpdateParams, UpdateResult, WriteResult, after_the_first_vocabulary, knows_every_category,
-    spelled, vocabulary,
+    AddCommentParams, CommentCopyParams, CommentResult, CommentsParams, CommentsResult,
+    ContentParams, ContentResult, DeleteCommentParams, DeleteParams, DeletedCommentResult,
+    DeliveredByParams, DeliveredByResult, DependencyParams, DocumentAssetWriteParams, DocumentDir,
+    DocumentQueryParams, DocumentResult, DocumentWriteParams, EditCommentParams, EngineIdentity,
+    IdParams, InitializeParams, InitializeResult, LabelParams, MetadataParams, MeteringResult,
+    PROTOCOL_VERSION, PriorityParams, PriorityResult, ProjectQueryParams, ProjectResult,
+    ProjectWriteParams, Request, StatusParams, StatusResult, TaskAssetWriteParams,
+    TaskDetailParams, TaskDetailResult, TaskQueryParams, TaskResult, TaskWriteParams, UpdateParams,
+    UpdateResult, WriteResult, after_the_first_vocabulary, knows_every_category, spelled,
+    vocabulary,
 };
 
 /// The id the handshake is sent under. §3 makes it the first request on a connection, so
@@ -123,6 +125,18 @@ pub struct SubprocessSource {
     /// A plugin that said nothing holds nothing between requests a person can change, which
     /// is what §3.11 makes an absent member mean, and is never sent the method.
     ends_commands: bool,
+    /// Whether the plugin said it answers `write_comment_copy` (§3.12), read at the same
+    /// handshake.
+    ///
+    /// A plugin that said nothing is handed a copied comment through `add_comment` and
+    /// `edit_comment`, its origin as the hidden marker, and is never sent the method.
+    comment_copies: bool,
+    /// Whether the plugin said it answers `get_task_detail` (§3.13), read at the same
+    /// handshake.
+    ///
+    /// A plugin that said nothing is read a task and a page of its comments through
+    /// `get_task` and `task_comments`, and is never sent the method.
+    task_details: bool,
     /// The live process.
     connection: Connection,
 }
@@ -361,6 +375,8 @@ impl SubprocessSource {
             content_updates,
             targeted_updates,
             ends_commands,
+            comment_copies,
+            task_details,
         } = match result {
             Ok(result) => result,
             Err(error) => return Err(with_diagnostics(error, &mut peer)),
@@ -393,6 +409,8 @@ impl SubprocessSource {
             content_updates,
             targeted_updates,
             ends_commands,
+            comment_copies,
+            task_details,
             connection: Connection::adopt(peer),
         })
     }
@@ -622,6 +640,63 @@ impl TaskSource for SubprocessSource {
             .ask("get_task", params(&IdParams { id: id.clone() }))
             .await?;
         Ok(result.task)
+    }
+
+    async fn get_task_details(
+        &self,
+        ids: &[NativeId],
+        comments: Option<&PageRequest>,
+    ) -> Vec<Result<Option<TaskDetailRead>, SourceError>> {
+        let mut read = Vec::with_capacity(ids.len());
+        for id in ids {
+            read.push(match comments {
+                // Never sent to a plugin that did not declare it (§3.13): one written before the
+                // method existed is read the task and the page in two calls, as the contract's
+                // own default reads them.
+                Some(page) if self.task_details => self
+                    .ask::<TaskDetailResult>(
+                        "get_task_detail",
+                        params(&TaskDetailParams {
+                            id: id.clone(),
+                            comments: page.clone(),
+                        }),
+                    )
+                    .await
+                    .and_then(TaskDetailResult::into_read)
+                    // An answer about another task than the one asked for would put that task's
+                    // body and comments under this one's id.
+                    .and_then(|read| match read {
+                        Some(read) if read.task.id != *id => Err(SourceError::Malformed {
+                            message: format!(
+                                "get_task_detail was asked for task {id} and answered with \
+                                 task {}",
+                                read.task.id
+                            ),
+                        }),
+                        read => Ok(read),
+                    })
+                    .map(|read| {
+                        read.map(|mut read| {
+                            read.comments = read
+                                .comments
+                                .map(|comments| comments.map(|page| page.map(unmarked)));
+                            read
+                        })
+                    }),
+                _ => match self.get_task(id).await {
+                    Ok(Some(task)) => {
+                        let comments = match comments {
+                            Some(page) => Some(self.task_comments(id, page).await),
+                            None => None,
+                        };
+                        Ok(Some(TaskDetailRead { task, comments }))
+                    }
+                    Ok(None) => Ok(None),
+                    Err(error) => Err(error),
+                },
+            });
+        }
+        read
     }
 
     async fn get_project(&self, id: &NativeId) -> Result<Option<Project>, SourceError> {
@@ -1156,7 +1231,7 @@ impl TaskSource for SubprocessSource {
                 }),
             )
             .await?;
-        Ok(result.page)
+        Ok(result.page.map(unmarked))
     }
 
     async fn add_comment(
@@ -1173,7 +1248,7 @@ impl TaskSource for SubprocessSource {
                 }),
             )
             .await?;
-        Ok(result.comment)
+        Ok(result.comment.map(Comment::unmarked))
     }
 
     async fn edit_comment(
@@ -1192,7 +1267,7 @@ impl TaskSource for SubprocessSource {
                 }),
             )
             .await?;
-        Ok(result.comment)
+        Ok(result.comment.map(Comment::unmarked))
     }
 
     async fn delete_comment(
@@ -1210,6 +1285,40 @@ impl TaskSource for SubprocessSource {
             )
             .await?;
         Ok(result.deleted)
+    }
+
+    async fn write_comment_copy(
+        &self,
+        task: &NativeId,
+        existing: Option<&NativeId>,
+        copy: &CommentCopy,
+    ) -> Result<Option<Comment>, SourceError> {
+        // Never sent to a plugin that did not declare it (§3.12): one written before the
+        // method existed is handed the comment through the two verbs it already answers, with
+        // the origin as the marker the engine reads back out of every comment.
+        copy.origin.qualified()?;
+        if !self.comment_copies {
+            let body = CommentBody::new(copy.origin.mark(copy.body.as_str()))?;
+            let written = match existing {
+                Some(comment) => self.edit_comment(task, comment, &body).await?,
+                None => {
+                    self.add_comment(task, &NewComment { body, author: None })
+                        .await?
+                }
+            };
+            return Ok(written.map(Comment::unmarked));
+        }
+        let result: CommentResult = self
+            .ask(
+                "write_comment_copy",
+                params(&CommentCopyParams {
+                    task: task.clone(),
+                    existing: existing.cloned(),
+                    copy: copy.clone(),
+                }),
+            )
+            .await?;
+        Ok(result.comment.map(Comment::unmarked))
     }
 
     async fn metering(&self) -> Result<Option<Metering>, SourceError> {
@@ -1231,6 +1340,18 @@ impl TaskSource for SubprocessSource {
         }
         let _: IgnoredResult = self.ask("end_command", json!({})).await?;
         Ok(())
+    }
+}
+
+/// A page of comments with each one's origin read back out of the marker its body ends in.
+///
+/// A plugin that keeps an origin natively answers it as `origin` and is left as it answered;
+/// one handed copies through `add_comment` and `edit_comment` (§3.12) stores the marker as body
+/// text, and every comment read from it has the marker taken out again (§4.15).
+fn unmarked(page: Page<Comment>) -> Page<Comment> {
+    Page {
+        items: page.items.into_iter().map(Comment::unmarked).collect(),
+        next: page.next,
     }
 }
 

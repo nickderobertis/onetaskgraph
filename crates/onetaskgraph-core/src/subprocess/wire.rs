@@ -15,10 +15,10 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use onetaskgraph_plugin_api::{
-    AssetWrite, Capabilities, Comment, CommentBody, Direction, Document, DocumentQuery, ItemWrite,
-    MetadataKey, Metering, NativeId, NewComment, Page, PageRequest, Priority, Project,
-    ProjectQuery, SourceError, Status, StatusCategory, Task, TaskQuery, TaskRef, TaskUpdate,
-    TaskUpdateOutcome, WriteSupport,
+    AssetWrite, Capabilities, Comment, CommentBody, CommentCopy, Direction, Document,
+    DocumentQuery, ItemWrite, MetadataKey, Metering, NativeId, NewComment, Page, PageRequest,
+    Priority, Project, ProjectQuery, SourceError, Status, StatusCategory, Task, TaskDetailRead,
+    TaskQuery, TaskRef, TaskUpdate, TaskUpdateOutcome, WriteSupport,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -309,6 +309,20 @@ pub(crate) struct InitializeResult {
     /// what it wrote before the member existed.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) ends_commands: bool,
+    /// Whether this plugin answers `write_comment_copy` (§3.12).
+    ///
+    /// Optional, and absent means it does not: such a plugin is never sent the method, and a
+    /// comment a copy carries to it is written through `add_comment` and `edit_comment` with
+    /// the origin's hidden marker appended to its body (§4.16a). Omitted when `false`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) comment_copies: bool,
+    /// Whether this plugin answers `get_task_detail` (§3.13).
+    ///
+    /// Optional, and absent means it does not: such a plugin is never sent the method, and a
+    /// task and a page of its comments are read from it through `get_task` and `task_comments`,
+    /// one call each. Omitted when `false`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) task_details: bool,
 }
 
 /// The `metering` result (§4.14).
@@ -555,6 +569,66 @@ pub(crate) struct CommentsParams {
     pub(crate) page: PageRequest,
 }
 
+/// `get_task_detail` parameters (§4.4a).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct TaskDetailParams {
+    /// The task.
+    pub(crate) id: NativeId,
+    /// The page of its comments wanted beside it.
+    pub(crate) comments: PageRequest,
+}
+
+/// The `get_task_detail` result (§4.4a): the task and that page of its comments, read as one
+/// revision of it — both `null` when there is no such task.
+// llmlint: ignore-block[invalid_states_unrepresentable] This is the §4.4a answer as it crosses the wire, where each member is optional so a plugin can omit what it does not hold; the contradictory shapes the decoder admits never leave this module, because `TaskDetailResult::into_read` refuses each of them as malformed before the engine sees a read.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct TaskDetailResult {
+    /// The task, or `null`.
+    #[serde(default)]
+    pub(crate) task: Option<Task>,
+    /// The page of its comments, or `null` with the task — and `null` beside a task whose
+    /// comments could not be read, the refusal then in `comments_error`.
+    #[serde(default)]
+    pub(crate) page: Option<Page<Comment>>,
+    /// Why the task's comments could not be read, when the task itself could — a board draft,
+    /// which has none — so the task is still answered. Omitted when they were read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) comments_error: Option<SourceError>,
+}
+// llmlint: ignore-end[invalid_states_unrepresentable]
+
+impl TaskDetailResult {
+    /// The read the answer states, refused as malformed when its members contradict each other:
+    /// no task beside a page or a comment refusal, or a task with neither or both — the three
+    /// shapes the wire allows and §4.4a does not.
+    pub(crate) fn into_read(self) -> Result<Option<TaskDetailRead>, SourceError> {
+        let comments = match (self.task.is_some(), self.page, self.comments_error) {
+            (false, None, None) => return Ok(None),
+            (true, Some(page), None) => Ok(Some(page)),
+            (true, None, Some(error)) => Err(error),
+            (false, ..) => {
+                return Err(SourceError::Malformed {
+                    message: "get_task_detail answered comments for no task".into(),
+                });
+            }
+            (true, page, _) => {
+                return Err(SourceError::Malformed {
+                    message: if page.is_some() {
+                        "get_task_detail answered both a page and a comment refusal"
+                    } else {
+                        "get_task_detail answered a task with neither a page nor a comment refusal"
+                    }
+                    .into(),
+                });
+            }
+        };
+        Ok(self.task.map(|task| TaskDetailRead {
+            task,
+            comments: Some(comments),
+        }))
+    }
+}
+
 /// The `task_comments` result (§4.15): a page, or `null` when there is no such task.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct CommentsResult {
@@ -581,6 +655,18 @@ pub(crate) struct EditCommentParams {
     pub(crate) comment: NativeId,
     /// Its new body.
     pub(crate) body: CommentBody,
+}
+
+/// `write_comment_copy` parameters (§4.16a).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct CommentCopyParams {
+    /// The task the comment is on.
+    pub(crate) task: NativeId,
+    /// The comment a copy wrote before and now makes say `copy`, or `null` for a new one.
+    #[serde(default)]
+    pub(crate) existing: Option<NativeId>,
+    /// What it says, and the comment it is a copy of.
+    pub(crate) copy: CommentCopy,
 }
 
 /// `delete_comment` parameters (§4.16).
