@@ -2,6 +2,9 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Current internal telemetry schema, including actual and requested PNG sizes.
+pub const SCHEMA_VERSION: u32 = 2;
+
 /// One invocation's accounting; only a completed matching pair establishes a session bill.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionRecord {
@@ -49,8 +52,11 @@ pub struct Workload {
     pub fixture_tasks: u64,
     /// Main fixture documents.
     pub fixture_documents: u64,
-    /// Requested PNG sizes, in bytes.
+    /// Actual uploaded PNG sizes, in bytes.
     pub asset_bytes: Vec<u64>,
+    /// Requested PNG generator sizes; absent in older telemetry.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub asset_target_bytes: Vec<u64>,
     /// Initial eligible orphan count, only when measured.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_orphans: Option<u64>,
@@ -399,7 +405,7 @@ pub fn bill(records: &[SessionRecord], current: &CurrentSession<'_>) -> Result<B
 }
 
 fn validate_record(record: &SessionRecord, current: &CurrentSession<'_>) -> Result<(), String> {
-    if record.schema_version != 1
+    if record.schema_version != SCHEMA_VERSION
         || record.session_id != current.session_id.0
         || record.source_revision != current.source_revision.0
         || record.workspace_version != current.workspace_version.0
@@ -508,8 +514,8 @@ impl InvocationWriter {
             &record.workspace_version,
             &record.workload,
         )?;
-        if record.schema_version != 1 || !record.calls.is_empty() {
-            return Err("a new invocation must start with version one and no calls".into());
+        if record.schema_version != SCHEMA_VERSION || !record.calls.is_empty() {
+            return Err("a new invocation must start with the current schema and no calls".into());
         }
         record.complete = false;
         let filename = match record.invocation {
@@ -616,7 +622,8 @@ pub fn reference_workload() -> Workload {
         fixture_projects: 2,
         fixture_tasks: 3,
         fixture_documents: 1,
-        asset_bytes: vec![75_000, 480_000, 75_000, 480_000],
+        asset_bytes: vec![74_666, 479_959, 74_666, 479_959],
+        asset_target_bytes: vec![75_000, 480_000, 75_000, 480_000],
         initial_orphans: None,
     }
 }

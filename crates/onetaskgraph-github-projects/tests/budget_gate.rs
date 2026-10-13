@@ -598,7 +598,8 @@ fn a_journey_the_account_cannot_afford_does_not_run_and_says_which_budget_was_sh
     // whose GraphQL budget is one point short of this session plus its retained buffer.
     // Nothing below the precondition is reached: the decline is the session's first act.
     let buffer = RETAINED_BUFFER.of(LIMIT);
-    let remaining = estimated(Budget::Graphql) + buffer - 1;
+    let demand = budget::session_design_points(onetaskgraph_github_live::quota::EntryPoint::Main);
+    let remaining = demand + buffer - 1;
     let standin = Standin::with(remaining, LIMIT);
     journey::against(journey::Endpoints {
         // Both point at the stand-in, which answers the allowance read and 404s everything
@@ -638,13 +639,7 @@ fn a_journey_the_account_cannot_afford_does_not_run_and_says_which_budget_was_sh
         "{message}"
     );
     assert!(message.contains("graphql"), "{message}");
-    for figure in [
-        LIMIT,
-        remaining,
-        estimated(Budget::Graphql),
-        buffer,
-        RESETS_AT,
-    ] {
+    for figure in [LIMIT, remaining, demand, buffer, RESETS_AT] {
         assert!(message.contains(&figure.to_string()), "{figure}: {message}");
     }
     // One request, and it is the allowance read: a declined session spends the account

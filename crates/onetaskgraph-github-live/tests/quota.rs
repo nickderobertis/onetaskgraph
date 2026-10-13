@@ -4,9 +4,12 @@ use onetaskgraph_github_live::quota::{Charge, SessionRecord};
 #[test]
 fn version_one_round_trips_without_inventing_unknown_orphans_or_allowance() {
     let golden: serde_json::Value =
-        serde_json::from_str(include_str!("fixtures/session-v1.json")).unwrap();
+        serde_json::from_str(include_str!("fixtures/session-v2.json")).unwrap();
     let record: SessionRecord = serde_json::from_value(golden.clone()).unwrap();
-    assert_eq!(record.schema_version, 1);
+    assert_eq!(
+        record.schema_version,
+        onetaskgraph_github_live::quota::SCHEMA_VERSION
+    );
     assert_eq!(record.workload.initial_orphans, None);
     assert_eq!(record.calls[1].allowance, None);
     assert!(matches!(record.calls[1].charge, Charge::Mutation { .. }));
@@ -19,7 +22,7 @@ fn version_one_round_trips_without_inventing_unknown_orphans_or_allowance() {
 #[test]
 fn invalid_prices_and_unknown_outcomes_are_refused_by_the_shared_reader() {
     let golden: serde_json::Value =
-        serde_json::from_str(include_str!("fixtures/session-v1.json")).unwrap();
+        serde_json::from_str(include_str!("fixtures/session-v2.json")).unwrap();
     for invalid in [serde_json::json!(-1), serde_json::json!(1.5)] {
         let mut value = golden.clone();
         value["calls"][0]["charge"]["ReportedQuery"]["points"] = invalid;
@@ -33,7 +36,7 @@ fn invalid_prices_and_unknown_outcomes_are_refused_by_the_shared_reader() {
 fn completed_pair() -> Vec<SessionRecord> {
     use onetaskgraph_github_live::quota::{EntryPoint, Phase};
     let mut main: SessionRecord =
-        serde_json::from_str(include_str!("fixtures/session-v1.json")).unwrap();
+        serde_json::from_str(include_str!("fixtures/session-v2.json")).unwrap();
     main.complete = true;
     let query = main.calls[0].clone();
     main.calls = [
@@ -156,7 +159,9 @@ fn reader_refuses_malformed_request_and_allowance_facts() {
         assert!(CurrentSession::new(id, revision, version, &identity.workload).is_err());
     }
     for mutate in [
-        |record: &mut SessionRecord| record.schema_version = 2,
+        |record: &mut SessionRecord| {
+            record.schema_version = onetaskgraph_github_live::quota::SCHEMA_VERSION + 1
+        },
         |record: &mut SessionRecord| record.calls.clear(),
         |record: &mut SessionRecord| record.calls[0].sequence = 2,
         |record: &mut SessionRecord| record.calls[0].attempt = 0,
@@ -469,7 +474,7 @@ fn file_backed_invocations_and_reader_refuse_partial_stale_duplicate_and_corrupt
     assert!(read_bill(&directory.path().join("missing"), &current).is_err());
     let mut invalid = pair[0].clone();
     invalid.calls.clear();
-    invalid.schema_version = 2;
+    invalid.schema_version = onetaskgraph_github_live::quota::SCHEMA_VERSION + 1;
     assert!(InvocationWriter::start(directory.path(), invalid).is_err());
     assert!(InvocationWriter::start(directory.path(), pair[0].clone()).is_err());
     let mut initial = pair[0].clone();
@@ -523,4 +528,22 @@ fn asset_admission_requires_the_current_complete_and_priced_main_file() {
         .unwrap();
         assert!(require_current_main(directory.path(), &current).is_err());
     }
+}
+
+#[test]
+fn absent_asset_targets_round_trip_without_inventing_an_old_field() {
+    let mut json: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/session-v2.json")).unwrap();
+    json["workload"]
+        .as_object_mut()
+        .unwrap()
+        .remove("asset_target_bytes");
+    let record: onetaskgraph_github_live::quota::SessionRecord =
+        serde_json::from_value(json).unwrap();
+    assert!(record.workload.asset_target_bytes.is_empty());
+    assert!(
+        serde_json::to_value(record).unwrap()["workload"]
+            .get("asset_target_bytes")
+            .is_none()
+    );
 }

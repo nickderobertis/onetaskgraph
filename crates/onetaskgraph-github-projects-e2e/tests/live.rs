@@ -310,11 +310,19 @@ async fn disposable_task_and_document_asset_copies() {
         std::fs::create_dir_all(&directory).unwrap();
         let body = "![First written alt](./one.png)\n![Second written alt](./two.png)\n";
         for (index, file, size) in [(0, "one.png", 75_000), (1, "two.png", 480_000)] {
-            std::fs::write(
-                directory.join(file),
-                images::png(stamp + offset + index, size),
-            )
-            .unwrap();
+            let bytes = images::png(stamp + offset + index, size);
+            let workload = onetaskgraph_github_live::quota::reference_workload();
+            let position = usize::try_from(offset * 2 + index).unwrap();
+            assert_eq!(
+                workload.asset_target_bytes[position],
+                u64::try_from(size).unwrap()
+            );
+            assert_eq!(
+                workload.asset_bytes[position],
+                u64::try_from(bytes.len()).unwrap()
+            );
+            assert!(bytes.len().abs_diff(size) <= size * images::PNG_SIZE_TOLERANCE_PERCENT / 100);
+            std::fs::write(directory.join(file), bytes).unwrap();
         }
         std::fs::write(
             root.join(format!("{kind}s/{id}.md")),

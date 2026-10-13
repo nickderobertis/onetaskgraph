@@ -43,7 +43,7 @@ pub fn start(
         None => return Ok(Scope),
     };
     let record = SessionRecord {
-        schema_version: 1,
+        schema_version: onetaskgraph_github_live::quota::SCHEMA_VERSION,
         session_id: std::env::var("GITHUB_LIVE_SESSION_ID").map_err(|error| error.to_string())?,
         source_revision: std::env::var("GITHUB_LIVE_SOURCE_REVISION")
             .map_err(|error| error.to_string())?,

@@ -835,7 +835,7 @@ fn live_session_figure() -> Result<(f64, String), String> {
         .collect::<Vec<_>>()
         .join(", ");
     let detail = format!(
-        "session_id={id}; source_revision={revision}; workspace_version={WORKSPACE_VERSION}; reported query points={}; Modelled mutation points={} ({} requests); Documented mutation points={} ({} requests); mutation count={}; pricing URL={PRICING_URL}; GraphQL requests={}; REST requests={} (excluded from points); phases: {phases}; corroborating account movement={:?}; concurrent movement flagged={}",
+        "session_id={id}; source_revision={revision}; workspace_version={WORKSPACE_VERSION}; reported query points={}; Modelled mutation points={} ({} requests); Documented mutation points={} ({} requests); mutation count={}; pricing URL={PRICING_URL}; GraphQL requests={}; REST requests={} (excluded from points); phases: {phases}; corroborating account movement={:?}; concurrent movement flagged={}; actual asset bytes={:?}; requested PNG bytes={:?}",
         bill.query_points,
         bill.modelled_mutation_points,
         bill.modelled_mutations,
@@ -845,7 +845,9 @@ fn live_session_figure() -> Result<(f64, String), String> {
         bill.graphql_requests,
         bill.rest_requests,
         bill.account_movement,
-        bill.movement_flagged
+        bill.movement_flagged,
+        workload.asset_bytes,
+        workload.asset_target_bytes
     );
     Ok((f64::from(figure), detail))
 }
@@ -884,7 +886,7 @@ fn live_report_pair(points: u64) -> Vec<onetaskgraph_github_live::quota::Session
     let mut pair: Vec<_> = phases
         .into_iter()
         .map(|(invocation, phases)| SessionRecord {
-            schema_version: 1,
+            schema_version: onetaskgraph_github_live::quota::SCHEMA_VERSION,
             session_id: "current-test-session".into(),
             source_revision: "a".repeat(40),
             workspace_version: WORKSPACE_VERSION.into(),

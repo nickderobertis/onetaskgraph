@@ -753,6 +753,7 @@ struct Limits {
     other_traffic_per_request: u64,
     /// Actual cost this double reports when a query selects its price.
     reported_query_cost: Option<u64>,
+    reported_refusal_cost: Option<u64>,
     /// When each request arrived, which operation it carried, and whether that operation
     /// creates content.
     arrivals: Vec<(Instant, String, bool)>,
@@ -1353,7 +1354,16 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
                     match unbound_refusal(&served, query, variables)
                         .or_else(|| refused(&served, query, variables))
                     {
-                        Some(message) => json!({"errors":[{"message":message}]}).to_string(),
+                        Some(message) => {
+                            let mut response = json!({"errors":[{"message":message}]});
+                            if query.contains("rateLimit{cost}")
+                                && let Some(cost) =
+                                    served.lock().unwrap().limits.reported_refusal_cost
+                            {
+                                response["data"] = json!({"rateLimit":{"cost":cost}});
+                            }
+                            response.to_string()
+                        }
                         None => {
                             let mut data = answer(&served, query, variables);
                             if query.contains("rateLimit{cost}")
@@ -2088,7 +2098,9 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         let page = membership_page(&item.memberships(&options), offset, first, asked);
         return json!({"node":{"projectItems":page}});
     }
-    if query.contains("query LiveBoardItem") {
+    if query.contains("query LiveBoardItem")
+        || query.contains("projectItems(first:100){nodes{id project{id}}}")
+    {
         let id = variables["id"].as_str().expect("an issue id");
         let item = state
             .items
@@ -19751,5 +19763,133 @@ async fn fresh_token_polling_child() {
         !calls
             .iter()
             .any(|call| call.document().unwrap().contains("title body"))
+    );
+}
+
+// The entry-point pair in the e2e live target starts this child and owns its stdin.
+// llmlint: ignore[tests_assert_real_behavior] This subprocess fixture is asserted by actual_entry_points_complete_one_loopback_session; an ordinary test invocation has no readiness path and serves nothing.
+#[test]
+fn live_pair_fixture_child() {
+    let Ok(ready) = std::env::var("GITHUB_LIVE_FIXTURE_READY") else {
+        return;
+    };
+    let fixture = board_with(
+        (0..90)
+            .map(|index| Item::draft(&format!("DI_existing_{index}"), "existing board note"))
+            .collect(),
+        true,
+        true,
+    );
+    for index in 0..12 {
+        fixture.state.lock().unwrap().extra_fields.push(json!({"__typename":"ProjectV2Field","id":format!("FIELD_existing_{index}"),"name":format!("existing {index}"),"dataType":"TEXT"}));
+    }
+    fixture.items_connection_falls_behind();
+    fixture.state.lock().unwrap().limits.reported_query_cost = Some(1);
+    fixture.state.lock().unwrap().limits.reported_refusal_cost = Some(1);
+    let labels = label_endpoints(&fixture.state);
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let host = format!("http://{}", listener.local_addr().unwrap());
+    let endpoint = format!("{host}/graphql");
+    let graphql = fixture
+        .endpoint
+        .trim_start_matches("http://")
+        .split('/')
+        .next()
+        .unwrap()
+        .to_owned();
+    let rest = labels.trim_start_matches("http://").to_owned();
+    let upload_sizes = Arc::new(Mutex::new(Vec::new()));
+    let uploaded = Arc::clone(&upload_sizes);
+    let rendering_reads = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let read = Arc::clone(&rendering_reads);
+    thread::spawn(move || {
+        let mut assets = BTreeMap::<String, Vec<u8>>::new();
+        for stream in listener.incoming() {
+            let mut stream = stream.unwrap();
+            let mut bytes = Vec::new();
+            let mut chunk = [0; 4096];
+            let end = loop {
+                let n = stream.read(&mut chunk).unwrap();
+                assert!(n > 0);
+                bytes.extend_from_slice(&chunk[..n]);
+                if let Some(end) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                    break end + 4;
+                }
+            };
+            let headers = String::from_utf8(bytes[..end].to_vec()).unwrap();
+            let length = headers
+                .lines()
+                .find_map(|line| {
+                    line.to_ascii_lowercase()
+                        .strip_prefix("content-length: ")?
+                        .parse::<usize>()
+                        .ok()
+                })
+                .unwrap_or(0);
+            while bytes.len() < end + length {
+                let n = stream.read(&mut chunk).unwrap();
+                assert!(n > 0);
+                bytes.extend_from_slice(&chunk[..n]);
+            }
+            let line = headers.lines().next().unwrap();
+            let path = line.split_whitespace().nth(1).unwrap();
+            let answer = if line.starts_with("POST /user-attachments/assets?") {
+                let path = format!("/user-attachments/assets/{}", assets.len() + 1);
+                uploaded
+                    .lock()
+                    .unwrap()
+                    .push(u64::try_from(bytes.len() - end).unwrap());
+                assets.insert(path.clone(), bytes[end..].to_vec());
+                Some((
+                    201,
+                    serde_json::to_vec(&json!({"url":format!("{host}{path}")})).unwrap(),
+                ))
+            } else if line.starts_with("GET /user-attachments/assets/") {
+                assert!(
+                    headers
+                        .to_ascii_lowercase()
+                        .contains("authorization: bearer test-token")
+                );
+                read.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Some((200, assets.get(path).unwrap().clone()))
+            } else if path == "/repos/acme/work" {
+                Some((200, br#"{"id":123456}"#.to_vec()))
+            } else {
+                None
+            };
+            if let Some((status, body)) = answer {
+                write!(
+                    stream,
+                    "HTTP/1.1 {status} Fixture\r\nContent-Length: {}\r\nx-ratelimit-limit: 4321\r\nx-ratelimit-remaining: 4320\r\nx-ratelimit-used: 1\r\nx-ratelimit-resource: core\r\nx-ratelimit-reset: 1775000000\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .unwrap();
+                stream.write_all(&body).unwrap();
+            } else {
+                let mut upstream =
+                    std::net::TcpStream::connect(if path == "/graphql" { &graphql } else { &rest })
+                        .unwrap();
+                upstream.write_all(&bytes).unwrap();
+                let mut response = Vec::new();
+                upstream.read_to_end(&mut response).unwrap();
+                stream.write_all(&response).unwrap();
+            }
+        }
+    });
+    std::fs::write(ready, endpoint).unwrap();
+    let mut done = String::new();
+    std::io::stdin().read_to_string(&mut done).unwrap();
+    assert_eq!(
+        *upload_sizes.lock().unwrap(),
+        onetaskgraph_github_live::quota::reference_workload().asset_bytes
+    );
+    assert_eq!(rendering_reads.load(std::sync::atomic::Ordering::SeqCst), 8);
+    assert!(
+        fixture.state.lock().unwrap().items.len() == 90,
+        "both entry points cleaned up their items"
+    );
+    assert!(
+        fixture.state.lock().unwrap().labels.is_empty(),
+        "main cleaned up its label"
     );
 }
