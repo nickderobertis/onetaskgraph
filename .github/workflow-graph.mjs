@@ -8,11 +8,60 @@ import { data, Evaluator, Lexer, Parser } from "./actions-expressions.mjs";
 
 export const root = new URL("../", import.meta.url);
 export const read = (path) => readFileSync(new URL(path, root), "utf8");
+function validatedWorkflow(value, path) {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    !value.jobs ||
+    typeof value.jobs !== "object" ||
+    Array.isArray(value.jobs) ||
+    !Object.keys(value.jobs).length ||
+    !(
+      typeof value.on === "string" ||
+      Array.isArray(value.on) ||
+      (value.on && typeof value.on === "object")
+    )
+  )
+    throw Error(`Unresolved workflow declaration: ${path}`);
+  const events =
+    typeof value.on === "string"
+      ? { [value.on]: null }
+      : Array.isArray(value.on)
+        ? Object.fromEntries(value.on.map((event) => [event, null]))
+        : value.on;
+  const known = new Set([
+    "push",
+    "pull_request",
+    "release",
+    "workflow_run",
+    "repository_dispatch",
+    "schedule",
+    "workflow_dispatch",
+    "workflow_call",
+  ]);
+  for (const [event, spec] of Object.entries(events)) {
+    if (
+      !known.has(event) ||
+      (event === "schedule"
+        ? !Array.isArray(spec) ||
+          !spec.length ||
+          spec.some((row) => !row || typeof row.cron !== "string")
+        : spec !== null && (typeof spec !== "object" || Array.isArray(spec)))
+    )
+      throw Error(`Unresolved workflow trigger: ${path}/${event}`);
+  }
+  for (const [id, job] of Object.entries(value.jobs)) {
+    if (!job || typeof job !== "object" || Array.isArray(job) || (!job.uses && !job["runs-on"]))
+      throw Error(`Unresolved workflow job: ${path}/${id}`);
+  }
+  return value;
+}
 export const workflows = () =>
   Object.fromEntries(
     readdirSync(new URL(".github/workflows/", root))
       .filter((p) => /\.ya?ml$/.test(p))
-      .map((p) => [p, parse(read(`.github/workflows/${p}`))]),
+      .map((p) => [p, validatedWorkflow(parse(read(`.github/workflows/${p}`)), p)]),
   );
 export function digest() {
   const files = [
@@ -97,6 +146,7 @@ export function matrices(matrix, context) {
   return rows;
 }
 export function triggered(workflow, scenario) {
+  validatedWorkflow(workflow, "event routing");
   const on = workflow.on;
   const spec =
     typeof on === "string"
@@ -124,9 +174,21 @@ export function triggered(workflow, scenario) {
   return true;
 }
 function reusable(call) {
-  if (call.startsWith("./")) return parse(read(call.slice(2)));
+  if (call.startsWith("./")) {
+    if (!call.startsWith("./.github/workflows/") || call.split("/").includes(".."))
+      throw Error(`Unresolved local reusable call: ${call}`);
+    return validatedWorkflow(parse(read(call.slice(2))), call);
+  }
   const lock = JSON.parse(read(".github/reusable-lock.json"))[call];
   if (!lock) throw Error(`Unresolved reusable workflow: ${call}`);
+  if (
+    typeof lock.path !== "string" ||
+    !lock.path.startsWith(".github/reusable/") ||
+    lock.path.split("/").some((part) => part === ".." || !part) ||
+    typeof lock.sha256 !== "string" ||
+    !/^[a-f0-9]{64}$/.test(lock.sha256)
+  )
+    throw Error(`Unresolved reusable lock entry: ${call}`);
   const source = read(lock.path);
   if (createHash("sha256").update(source).digest("hex") !== lock.sha256)
     throw Error(`Reusable source digest mismatch: ${call}`);
@@ -137,7 +199,7 @@ function reusable(call) {
       .digest("hex") !== lock.upstreamSha256
   )
     throw Error(`Reusable upstream source drift: ${call}`);
-  return parse(source);
+  return validatedWorkflow(parse(source), call);
 }
 const archMatrices = new Map();
 let configuredArches;
@@ -309,7 +371,6 @@ export function graph(scenario, policy, declared = workflows()) {
         ...(current.scenario.workflow ? { triggeredBy: current.scenario.workflow } : {}),
         rows: jobs(wf, current.scenario, policy),
       });
-      // A completed automatic run fans out to each actual workflow_run declaration.
       queue.push({
         scenario: {
           ...current.scenario,

@@ -1,4 +1,4 @@
-/** The recorded graph is an input boundary; reporting must not trust its numeric rows. */
+/** Runtime validation narrows the recorded graph before the SDK reporter consumes it. */
 export interface JobRow {
   job: string;
   name: string;
@@ -48,31 +48,47 @@ function count(value: unknown): asserts value is number {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0)
     throw Error("Invalid telemetry measurement");
 }
+function job(value: unknown): asserts value is JobRow {
+  object(value);
+  string(value.job);
+  string(value.name);
+  array(value.runner);
+  object(value.matrix);
+  if (!value.runner.length || typeof value.target !== "string" || typeof value.macos !== "boolean")
+    throw Error("Invalid telemetry runner/job");
+  const labels = value.runner.map((label) => {
+    string(label);
+    return label;
+  });
+  const macos = labels.some((label) => /^macos-[a-z0-9.-]+$/i.test(label));
+  if (
+    value.macos !== macos ||
+    !labels.some((label) => /^(?:ubuntu|windows|macos)-[a-z0-9.-]+$/i.test(label))
+  )
+    throw Error("Telemetry runner classification disagrees with labels");
+}
 function run(value: unknown): asserts value is WorkflowRun {
   object(value);
   string(value.workflow);
   string(value.event);
   count(value.macJobs);
   array(value.rows);
-  for (const row of value.rows) {
-    object(row);
-    string(row.job);
-    string(row.name);
-    array(row.runner);
-    if (!row.runner.length) throw Error("Missing telemetry runner");
-    for (const label of row.runner) string(label);
-    if (typeof row.target !== "string" || typeof row.macos !== "boolean")
-      throw Error("Invalid telemetry job");
-    object(row.matrix);
-    const macos = row.runner.some((label) => /^macos-[a-z0-9.-]+$/i.test(label as string));
-    if (
-      row.macos !== macos ||
-      !row.runner.some((label) => /^(?:ubuntu|windows|macos)-[a-z0-9.-]+$/i.test(label as string))
-    )
-      throw Error("Telemetry runner classification disagrees with labels");
-  }
-  if (value.macJobs !== value.rows.filter((row) => (row as JobRow).macos).length)
+  if (value.phase !== undefined) string(value.phase);
+  const rows = value.rows.map((row) => {
+    job(row);
+    return row;
+  });
+  if (value.macJobs !== rows.filter((row) => row.macos).length)
     throw Error("Telemetry job total disagrees with rows");
+}
+function scenario(value: unknown): asserts value is Scenario {
+  object(value);
+  string(value.id);
+  string(value.diff);
+  object(value.vars);
+  array(value.runs);
+  if (typeof value.fork !== "boolean") throw Error("Invalid telemetry ownership");
+  for (const row of value.runs) run(row);
 }
 export function validateTelemetry(value: unknown): asserts value is Telemetry {
   object(value);
@@ -86,16 +102,11 @@ export function validateTelemetry(value: unknown): asserts value is Telemetry {
     !value.lifecycles.length
   )
     throw Error("Invalid telemetry envelope");
-  for (const scenario of value.scenarios) {
-    object(scenario);
-    string(scenario.id);
-    string(scenario.diff);
-    object(scenario.vars);
-    array(scenario.runs);
-    if (typeof scenario.fork !== "boolean") throw Error("Invalid telemetry ownership");
-    for (const row of scenario.runs) run(row);
-  }
-  if (!value.scenarios.some((scenario) => (scenario as Scenario).runs.length))
+  const scenarios = value.scenarios.map((row) => {
+    scenario(row);
+    return row;
+  });
+  if (!scenarios.some((row) => row.runs.length))
     throw Error("Telemetry has no workflow measurements");
   for (const lifecycle of value.lifecycles) {
     object(lifecycle);
@@ -105,10 +116,11 @@ export function validateTelemetry(value: unknown): asserts value is Telemetry {
     array(lifecycle.runs);
     if (typeof lifecycle.fork !== "boolean") throw Error("Invalid telemetry ownership");
     if (!lifecycle.runs.length) throw Error("Telemetry has no lifecycle measurements");
-    for (const row of lifecycle.runs) run(row);
-    if (
-      lifecycle.macRuns !== lifecycle.runs.filter((row) => (row as WorkflowRun).macJobs > 0).length
-    )
+    const runs = lifecycle.runs.map((row) => {
+      run(row);
+      return row;
+    });
+    if (lifecycle.macRuns !== runs.filter((row) => row.macJobs > 0).length)
       throw Error("Telemetry lifecycle total disagrees with runs");
   }
 }

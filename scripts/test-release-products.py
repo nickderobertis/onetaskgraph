@@ -201,11 +201,11 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
             with zipfile.ZipFile(wheel_path, 'w') as wheel:
                 for info, data in contents.values():
                     wheel.writestr(info, data)
-            subprocess.run(['bash', '-c', body], cwd=tree, env=env, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(['bash', '-c', body], cwd=tree, env=env, check=True, stdout=subprocess.DEVNULL)
             refuses(reason)
             canonical.write_bytes(original_binary)
             wheel_path.write_bytes(original_wheel)
-            subprocess.run(['bash', '-c', body], cwd=tree, env=env, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(['bash', '-c', body], cwd=tree, env=env, check=True, stdout=subprocess.DEVNULL)
         subprocess.run(command, cwd=tree, check=True, stdout=subprocess.DEVNULL)
 
 

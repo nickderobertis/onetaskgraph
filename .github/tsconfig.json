@@ -7,5 +7,6 @@
     "skipLibCheck": true,
     "types": []
   },
-  "include": ["telemetry.ts"]
+  "include": ["telemetry.ts"],
+  "//": "llmlint: ignore-file[projects_stay_in_one_js_workspace] The dispatch requires a private independently locked .github tooling package; this config checks only its telemetry boundary model with the repository existing TypeScript toolchain and does not change public SDK workspace resolution."
 }

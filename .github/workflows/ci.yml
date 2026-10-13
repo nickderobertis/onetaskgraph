@@ -62,7 +62,7 @@ jobs:
   install-path:
     name: install path (${{ matrix.os }})
     needs: [macos-lanes]
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -89,7 +89,7 @@ jobs:
   check:
     name: check (${{ matrix.os }})
     needs: [macos-lanes]
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -287,8 +287,7 @@ jobs:
             echo "No base could be derived; Nx will fall back to its own defaultBase."
           fi
 
-      # llmlint: ignore[live_tier_compiles_and_requires_credential] This leg is given no credential, for the reason the file header states, so it cannot demand one.
-      # llmlint: ignore[no_second_broader_sweep_over_an_already_gated_commit] The task explicitly permits one default-off manual diagnostic outside the automatic lifecycle; its opt-in intentionally reruns the original Mac proof on the selected ref.
+      # llmlint: ignore-block[live_tier_compiles_and_requires_credential,no_second_broader_sweep_over_an_already_gated_commit] The Linux lane alone carries live credentials; this Mac proof runs without them exactly as before. The task explicitly permits an opted-in manual diagnostic rerun outside the automatic lifecycle.
       - name: Check the affected projects
         if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
         env:
@@ -299,6 +298,7 @@ jobs:
           NX_HEAD: HEAD
         # just check includes distribution-test, preserving the former install-path proof once.
         run: just check
+      # llmlint: ignore-end[live_tier_compiles_and_requires_credential,no_second_broader_sweep_over_an_already_gated_commit]
 
   macos-check:
     name: check (macos-latest)
@@ -332,6 +332,7 @@ jobs:
   # times would buy nothing. This is where the two mechanically-enforced invariants fail —
   # the banned-store list and the onetaskgraph-core wrapper restriction. See deny.toml.
   deny:
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

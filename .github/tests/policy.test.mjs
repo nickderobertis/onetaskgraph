@@ -229,6 +229,22 @@ test("Actions event environment overrides payload kinds and unreadable kinds req
     assert.equal(classify({ event_name }).macosRequired, true);
 });
 
+test("malformed product versions, non-version uv content and empty diffs never authorize omission", () => {
+  assert.equal(classify(event("release-plz-123"), base, base).macosRequired, true);
+  for (const changed of [
+    { "pyproject.toml": files["pyproject.toml"].replace("1.2.3", "01.2.3") },
+    { "uv.lock": files["uv.lock"].replace('editable = "."', 'editable = "other"') },
+    {
+      "sdks/python/uv.lock": files["sdks/python/uv.lock"].replace(
+        'virtual = "."',
+        'virtual = "other"',
+      ),
+    },
+    { "uv.lock": "version = 1\n" },
+  ])
+    assert.equal(classify(event("release-plz-123"), revision(changed)).macosRequired, true);
+});
+
 test("member changelog additions are releases; deleted changelogs and malformed refs are conservative", () => {
   assert.equal(
     classify(
@@ -275,6 +291,20 @@ test("actual carrier run bodies preserve success, failure, cancellation, missing
     assert.equal(job.if, `\${{ always() }}`);
     const run = job.steps.find((s) => s.run)?.run;
     assert.match(run, /macos-result\.mjs/);
+    for (const diagnostic of [null, false, "invalid", {}]) {
+      const needs = {
+        "macos-lanes": { result: "success", outputs: { macosRequired: "false", diagnostic } },
+        macos: { result: "skipped" },
+      };
+      assert.notEqual(
+        spawnSync("bash", ["-c", run], {
+          cwd: history,
+          encoding: "utf8",
+          env: { ...process.env, NEEDS_JSON: JSON.stringify(needs) },
+        }).status,
+        0,
+      );
+    }
     for (const diagnostic of ["true", "false"])
       for (const result of ["success", "skipped", "cancelled", "failure"]) {
         const needs = {

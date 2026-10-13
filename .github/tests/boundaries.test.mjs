@@ -64,6 +64,9 @@ test("telemetry boundary refuses malformed shapes, invalid measurements and inco
   absentLifecycle.lifecycles[0].runs = [];
   absentLifecycle.lifecycles[0].macRuns = 0;
   assert.throws(() => validateTelemetry(absentLifecycle), /no lifecycle measurements/);
+  const badPhase = structuredClone(current);
+  badPhase.lifecycles[0].runs[0].phase = {};
+  assert.throws(() => validateTelemetry(badPhase), /string/);
   const corrupted = structuredClone(current);
   corrupted.scenarios[0].runs[0].rows[0].runner = [];
   assert.throws(() => validateTelemetry(corrupted), /runner/);
@@ -132,6 +135,7 @@ test("real reporters write both measurements through the SDK result boundary", (
 
 test("trigger filters discriminate event types, branches and tags and refuse unsupported filters", () => {
   const workflow = {
+    jobs: { proof: { "runs-on": "ubuntu-latest" } },
     on: {
       push: { branches: ["main"] },
       release: { types: ["published"] },
@@ -144,13 +148,22 @@ test("trigger filters discriminate event types, branches and tags and refuse uns
   assert.equal(triggered(workflow, { event: "release", action: "created" }), false);
   assert.equal(triggered(workflow, { event: "release", action: "published" }), true);
   assert.equal(triggered(workflow, { event: "workflow_run", workflow: "other" }), false);
+  for (const on of [null, 42, { push: [] }, { push: "bad" }, { schedule: [{}] }, { unknown: null }])
+    assert.throws(
+      () => triggered({ on, jobs: { proof: { "runs-on": "ubuntu-latest" } } }, { event: "push" }),
+      /Unresolved/,
+    );
   for (const filter of [
     { paths: ["src/**"] },
     { "branches-ignore": ["draft"] },
     { branches: ["release-*"] },
   ])
     assert.throws(
-      () => triggered({ on: { push: filter } }, { event: "push", branch: "main" }),
+      () =>
+        triggered(
+          { jobs: { proof: { "runs-on": "ubuntu-latest" } }, on: { push: filter } },
+          { event: "push", branch: "main" },
+        ),
       /Unresolved/,
     );
 });

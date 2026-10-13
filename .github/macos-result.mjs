@@ -5,6 +5,9 @@ try {
   const needs = JSON.parse(readFileSync(process.argv[2], "utf8"));
   if (needs["macos-lanes"]?.result !== "success")
     throw Error("macOS classification failed or is missing");
+  const diagnostic = needs["macos-lanes"].outputs?.diagnostic;
+  if (diagnostic !== undefined && !["true", "false"].includes(diagnostic))
+    throw Error("Malformed macOS diagnostic output");
   const required =
     needs["macos-lanes"].outputs?.diagnostic === "true"
       ? "true"

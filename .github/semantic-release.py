@@ -37,7 +37,10 @@ def blob(ref, path):
 
 def normalize_lock(text, path, products):
     obj = tomllib.loads(text)
-    for package in obj.get('package', []):
+    packages = obj.get('package')
+    if not isinstance(packages, list) or not packages or any(not isinstance(package, dict) for package in packages):
+        raise ValueError('lockfile must contain a nonempty package array')
+    for package in packages:
         name = package.get('name', '')
         local = name in products and ('source' not in package if path == 'Cargo.lock' else isinstance(package.get('source'), dict) and ('editable' in package['source'] or 'virtual' in package['source']))
         if local:
@@ -75,11 +78,10 @@ def main():
     entries = {str(entry.path): entry for entry in RECONCILED_VERSION_FILES}
     root = tomllib.loads(blob(base, 'Cargo.toml'))
     members = root['workspace']['members']
-    # Expand only real workspace member manifests from the base tree.
     paths = subprocess.check_output(['git', 'ls-tree', '-r', '--name-only', base], text=True).splitlines()
     import fnmatch
     crates = {p.removesuffix('/Cargo.toml') for p in paths if p.endswith('/Cargo.toml') and any(fnmatch.fnmatch(p.removesuffix('/Cargo.toml'), m) for m in members)}
-    products = {tomllib.loads(blob(base, p + '/Cargo.toml'))['package']['name'] for p in crates} | {'onetaskgraph-cli', 'onetaskgraph-sdk'}
+    products = {tomllib.loads(blob(base, p + '/Cargo.toml'))['package']['name'] for p in crates} | {tomllib.loads(blob(base, path))['project']['name'] for path in ('pyproject.toml', 'sdks/python/pyproject.toml')}
     changelogs = {'CHANGELOG.md', *(p + '/CHANGELOG.md' for p in crates)}
     changed = subprocess.check_output(['git', 'diff', '--name-only', '--no-renames', base, head], text=True).splitlines()
     if not changed:
