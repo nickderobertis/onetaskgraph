@@ -619,6 +619,20 @@ pub struct Sending {
     call: Call,
     mode: Mode,
     drawn: Drawn,
+    document: Option<String>,
+}
+
+/// Result at the protocol boundary, independent of the legacy retry classification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResponseOutcome {
+    /// A successful HTTP and GraphQL response.
+    Success,
+    /// A GraphQL error, including one carried by HTTP 200.
+    GraphqlError,
+    /// An unsuccessful HTTP status.
+    HttpError,
+    /// No readable protocol response.
+    TransportError,
 }
 
 /// What a request draws on, and what only that kind of request can carry.
@@ -666,6 +680,17 @@ impl Sending {
             outcome,
             limits,
             spend,
+            document: self.document,
+            reported_query_cost: match self.drawn {
+                Drawn::Graphql { reported_cost } => reported_cost,
+                Drawn::Rest => None,
+            },
+            response_outcome: if outcome == Outcome::Answered {
+                ResponseOutcome::Success
+            } else {
+                ResponseOutcome::TransportError
+            },
+            attempt: 1,
         }
     }
 }
@@ -681,6 +706,10 @@ pub struct Request {
     outcome: Outcome,
     limits: RateLimit,
     spend: Spend,
+    document: Option<String>,
+    reported_query_cost: Option<u64>,
+    response_outcome: ResponseOutcome,
+    attempt: u32,
 }
 
 impl Request {
@@ -721,6 +750,7 @@ impl Request {
             },
             mode: Mode::of_document(document),
             drawn: Drawn::Graphql { reported_cost },
+            document: Some(document.to_owned()),
         }
     }
     /// Begin recording one REST request against `endpoint`.
@@ -736,6 +766,7 @@ impl Request {
             mode: endpoint.method().mode(),
             call: Call::Endpoint { endpoint },
             drawn: Drawn::Rest,
+            document: None,
         }
     }
     /// What was called.
@@ -777,6 +808,39 @@ impl Request {
     #[must_use]
     pub const fn rate_limit(&self) -> &RateLimit {
         &self.limits
+    }
+    /// Operation document alone; variables and response bodies are never retained here.
+    #[must_use]
+    pub fn document(&self) -> Option<&str> {
+        self.document.as_deref()
+    }
+    /// The actual response cost, without substituting the legacy ledger's model.
+    #[must_use]
+    pub const fn reported_query_cost(&self) -> Option<u64> {
+        self.reported_query_cost
+    }
+    /// Exact protocol result for live-session accounting.
+    #[must_use]
+    pub const fn response_outcome(&self) -> ResponseOutcome {
+        self.response_outcome
+    }
+    /// Attempt number for this dispatch.
+    #[must_use]
+    pub const fn attempt(&self) -> u32 {
+        self.attempt
+    }
+    /// Attach facts known only to the actual transport, preserving legacy ledger readers.
+    #[must_use]
+    pub fn with_execution(
+        mut self,
+        document: Option<String>,
+        outcome: ResponseOutcome,
+        attempt: u32,
+    ) -> Self {
+        self.document = document;
+        self.response_outcome = outcome;
+        self.attempt = attempt;
+        self
     }
 }
 

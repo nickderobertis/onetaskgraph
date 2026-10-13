@@ -2621,7 +2621,10 @@ fn operation_name(query: &str) -> &str {
         .split_once('{')
         .map_or(query, |(_, rest)| rest)
         .trim_start();
-    let body = body.strip_prefix("rateLimit{cost} ").unwrap_or(body);
+    let body = body
+        .strip_prefix("rateLimit{cost} ")
+        .unwrap_or(body)
+        .trim_start();
     let root = &body[..body
         .find(|c: char| !c.is_alphanumeric() && c != '_')
         .unwrap_or(body.len())];
@@ -19589,4 +19592,86 @@ async fn opted_in_actual_query_prices_reach_the_ledger_through_the_real_source()
             .all(|query| !query.contains("rateLimit"))
     );
     assert_eq!(fixture.comments_on("I_task").len(), 1);
+}
+
+#[tokio::test]
+async fn actual_execution_facts_distinguish_refusals_retries_and_unreadable_responses() {
+    use onetaskgraph_github_projects::accounting::ResponseOutcome;
+    for (status, body, expected) in [
+        (
+            "200 OK",
+            json!({"errors":[{"message":"not permitted"}],"data":{"rateLimit":{"cost":3}}})
+                .to_string(),
+            ResponseOutcome::GraphqlError,
+        ),
+        (
+            "503 Service Unavailable",
+            json!({"data":{"rateLimit":{"cost":4}}}).to_string(),
+            ResponseOutcome::HttpError,
+        ),
+        (
+            "200 OK",
+            "{ truncated".to_owned(),
+            ResponseOutcome::TransportError,
+        ),
+    ] {
+        let fixture = comment_board();
+        fixture.script_for(
+            "board",
+            vec![Refusal {
+                status,
+                headers: String::new(),
+                body,
+            }],
+        );
+        let ledger = Arc::new(Accounting::with_query_prices());
+        let source = recording(&fixture.endpoint, &ledger);
+        assert!(source.health().await.is_err());
+        let snapshot = ledger.snapshot();
+        assert_eq!(snapshot.requests().len(), 1);
+        let call = &snapshot.requests()[0];
+        assert_eq!(call.response_outcome(), expected);
+        assert_eq!(call.document(), Some(fixture.documents()[0].as_str()));
+        assert_eq!(call.attempt(), 1);
+        assert_eq!(
+            call.reported_query_cost(),
+            match expected {
+                ResponseOutcome::GraphqlError => Some(3),
+                ResponseOutcome::HttpError => Some(4),
+                _ => None,
+            }
+        );
+    }
+    let fixture = comment_board();
+    fixture.state.lock().unwrap().limits.reported_query_cost = Some(7);
+    fixture.script_for("board", vec![Refusal::secondary_forbidden().after(0)]);
+    let ledger = Arc::new(Accounting::with_query_prices());
+    let retrying = Plugin
+        .build_recording_into(
+            &SourceName::new("work").unwrap(),
+            &fixture_config(
+                &fixture.endpoint,
+                &json!({"pacing":{
+                    "min_mutation_interval_ms":0,"retry_backoff_ms":1,"retry_budget_ms":1000
+                }}),
+            ),
+            &Secrets,
+            Arc::clone(&ledger),
+        )
+        .unwrap();
+    assert!(retrying.health().await.unwrap().reachable);
+    let snapshot = ledger.snapshot();
+    assert_eq!(snapshot.requests().len(), 2);
+    assert_eq!(snapshot.requests()[0].attempt(), 1);
+    assert_eq!(snapshot.requests()[1].attempt(), 2);
+    assert_eq!(
+        snapshot.requests()[0].response_outcome(),
+        ResponseOutcome::HttpError
+    );
+    assert_eq!(
+        snapshot.requests()[1].response_outcome(),
+        ResponseOutcome::Success
+    );
+    assert_eq!(snapshot.requests()[0].reported_query_cost(), None);
+    assert_eq!(snapshot.requests()[1].reported_query_cost(), Some(7));
 }

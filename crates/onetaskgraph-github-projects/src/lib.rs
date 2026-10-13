@@ -1891,6 +1891,7 @@ struct Attempted {
     limits: accounting::RateLimit,
     /// GitHub's own reported cost for this call, for a document that asked for it.
     reported_cost: Option<u64>,
+    response_outcome: accounting::ResponseOutcome,
 }
 
 /// One attempt's outcome: an error to report, or a rate limit to wait out.
@@ -4334,7 +4335,7 @@ impl GitHubProjectsSource {
                     self.clock.sleep(spacing).await;
                 }
             }
-            let attempt = self.send_once(query, &variables).await;
+            let attempt = self.send_once(query, &variables, waits + 1).await;
             if is_mutation(query) {
                 self.finish_mutation();
             }
@@ -4447,32 +4448,14 @@ impl GitHubProjectsSource {
     /// anybody remembering to count it, and
     /// `the_session_report_counts_every_request_the_board_served_and_what_each_cost` fails
     /// when one is not.
-    async fn send_once(&self, query: &str, variables: &Value) -> Result<Value, Attempt> {
-        let Attempted {
-            result,
-            limits,
-            reported_cost,
-        } = self.attempt(query, variables).await;
-        // No `otherwise` name: every document this source sends is one of its own, and the
-        // inventory gate on `graphql::DOCUMENTS` is what keeps that true.
-        let sending = accounting::Request::graphql(query, variables, None, reported_cost);
-        let outcome = match &result {
-            Ok(_) => accounting::Outcome::Answered,
-            Err(Attempt::Limited(_)) => accounting::Outcome::RateLimited,
-            Err(Attempt::Failed(_)) => accounting::Outcome::Refused,
-        };
-        self.ledger.record(sending.finished(outcome, limits));
-        result
-    }
-
-    /// The attempt itself, with what its response said about the rate limit alongside.
-    ///
-    /// The two are returned together rather than recorded here because every one of the
-    /// early exits below is a different outcome, and a record written at each of them is a
-    /// record one of them can be added without.
-    async fn attempt(&self, query: &str, variables: &Value) -> Attempted {
+    async fn send_once(
+        &self,
+        query: &str,
+        variables: &Value,
+        number: u32,
+    ) -> Result<Value, Attempt> {
         let priced;
-        let query = if self.ledger.prices_queries() && !is_mutation(query) {
+        let executed = if self.ledger.prices_queries() && !is_mutation(query) {
             // Insert in the operation's root selection, before any appended fragments.
             // The inventory contains generated documents, never caller-supplied text.
             let root = query.find('{').expect("a query has a root selection");
@@ -4485,15 +4468,52 @@ impl GitHubProjectsSource {
         } else {
             query
         };
+        let Attempted {
+            result,
+            limits,
+            reported_cost,
+            response_outcome,
+        } = self.attempt(executed, variables).await;
+        // No `otherwise` name: every document this source sends is one of its own, and the
+        // inventory gate on `graphql::DOCUMENTS` is what keeps that true.
+        let sending = accounting::Request::graphql(query, variables, None, reported_cost);
+        let outcome = match &result {
+            Ok(_) => accounting::Outcome::Answered,
+            Err(Attempt::Limited(_)) => accounting::Outcome::RateLimited,
+            Err(Attempt::Failed(_)) => accounting::Outcome::Refused,
+        };
+        self.ledger
+            .record(sending.finished(outcome, limits).with_execution(
+                Some(executed.to_owned()),
+                response_outcome,
+                number,
+            ));
+        result
+    }
+
+    /// The attempt itself, with what its response said about the rate limit alongside.
+    ///
+    /// The two are returned together rather than recorded here because every one of the
+    /// early exits below is a different outcome, and a record written at each of them is a
+    /// record one of them can be added without.
+    async fn attempt(&self, query: &str, variables: &Value) -> Attempted {
         let mut limits = accounting::RateLimit::default();
         let mut reported_cost = None;
+        let mut response_outcome = accounting::ResponseOutcome::TransportError;
         let result = self
-            .attempted(query, variables, &mut limits, &mut reported_cost)
+            .attempted(
+                query,
+                variables,
+                &mut limits,
+                &mut reported_cost,
+                &mut response_outcome,
+            )
             .await;
         Attempted {
             result,
             limits,
             reported_cost,
+            response_outcome,
         }
     }
 
@@ -4504,6 +4524,7 @@ impl GitHubProjectsSource {
         variables: &Value,
         limits: &mut accounting::RateLimit,
         reported_cost: &mut Option<u64>,
+        response_outcome: &mut accounting::ResponseOutcome,
     ) -> Result<Value, Attempt> {
         let response = self
             .client
@@ -4518,6 +4539,9 @@ impl GitHubProjectsSource {
                 })
             })?;
         let status = response.status();
+        if !status.is_success() {
+            *response_outcome = accounting::ResponseOutcome::HttpError;
+        }
         let header = |name: &str| whole_seconds(response.headers().get(name));
         let served = response
             .headers()
@@ -4565,6 +4589,17 @@ impl GitHubProjectsSource {
             .as_ref()
             .and_then(|body| body.pointer("/data/rateLimit/cost"))
             .and_then(Value::as_u64);
+        if status.is_success()
+            && let Ok(answer) = serde_json::from_str::<Value>(&body)
+        {
+            *response_outcome = if answer.get("errors").is_some_and(|errors| {
+                !errors.is_null() && errors.as_array().is_none_or(|errors| !errors.is_empty())
+            }) {
+                accounting::ResponseOutcome::GraphqlError
+            } else {
+                accounting::ResponseOutcome::Success
+            };
+        }
         if let Some(limiter) = Limiter::classify(status, exhausted, &body) {
             return Err(Attempt::Limited(Limited { limiter, hint }));
         }
