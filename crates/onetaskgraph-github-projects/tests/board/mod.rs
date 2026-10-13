@@ -91,6 +91,13 @@ pub fn answer_a_stateless_session_call(
     variables: &Value,
     pricing: Pricing,
 ) -> Option<Value> {
+    const EXECUTED: &str = "rateLimit{cost nodeCount limit remaining} ";
+    if query.contains(EXECUTED) {
+        let document = query.replace(EXECUTED, "");
+        let mut answer = probe_answer(&document, pricing);
+        answer.as_object_mut().unwrap().remove("actualCost");
+        return Some(answer);
+    }
     let unpriced = query.replacen("rateLimit{cost} ", "", 1);
     let mut answer = stateless_session_call(&unpriced, variables, pricing)?;
     if query.contains("rateLimit{cost}") {

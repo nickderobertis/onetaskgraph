@@ -272,6 +272,18 @@ async fn graphql_answer(
     graphql_answer_at(token, query, query_name, variables, 1).await
 }
 
+fn valid_graphql_errors(response: &Value) -> bool {
+    response
+        .get("errors")
+        .and_then(Value::as_array)
+        .is_some_and(|errors| {
+            !errors.is_empty()
+                && errors
+                    .iter()
+                    .all(|error| error.get("message").is_some_and(Value::is_string))
+        })
+}
+
 async fn graphql_answer_at(
     token: &str,
     query: &str,
@@ -358,7 +370,9 @@ async fn graphql_answer_at(
         });
     let protocol = if !status.is_success() {
         ResponseOutcome::HttpError
-    } else if parsed.is_err() {
+    } else if !parsed.as_ref().is_ok_and(Value::is_object)
+        || (errors.is_some() && !parsed.as_ref().is_ok_and(valid_graphql_errors))
+    {
         ResponseOutcome::TransportError
     } else if errors.is_some() {
         ResponseOutcome::GraphqlError
@@ -375,6 +389,13 @@ async fn graphql_answer_at(
             .finished(ended, limits)
             .with_execution(Some(query.to_owned()), protocol, attempt),
     );
+    if query == onetaskgraph_github_live::quota::PAGE_SIZE_PROBE_DOCUMENT
+        && variables["first"].as_u64() == Some(101)
+        && protocol == ResponseOutcome::GraphqlError
+        && reported_cost.is_none()
+    {
+        quota::model_last_page_size_refusal().map_err(Refusal::Unanswered)?;
+    }
     if !status.is_success() {
         let problem = format!("{query_name} query failed: HTTP {status}");
         return Err(if status.is_server_error() {
@@ -382,6 +403,12 @@ async fn graphql_answer_at(
         } else {
             Refusal::Answered(problem, None)
         });
+    }
+    if errors.is_some() && !parsed.as_ref().is_ok_and(valid_graphql_errors) {
+        return Err(Refusal::Answered(
+            format!("{query_name} returned an invalid GraphQL errors envelope"),
+            None,
+        ));
     }
     if let Some(errors) = errors {
         return Err(Refusal::Answered(
@@ -395,8 +422,14 @@ async fn graphql_answer_at(
             None,
         )
     })?;
+    let object = response.as_object_mut().ok_or_else(|| {
+        Refusal::Answered(
+            format!("{query_name} GraphQL response must be an object"),
+            None,
+        )
+    })?;
     if let Some(served) = served {
-        response["_served"] = json!(served);
+        object.insert("_served".into(), json!(served));
     }
 
     Ok(response)
@@ -459,6 +492,7 @@ fn budget_exhausted(response: &reqwest::Response) -> bool {
 async fn reconcile_node_counts_and_point_costs(token: &str) -> Result<(), String> {
     let (limit, before) = account_allowance(token, "before").await?;
     let mut asked = 0_usize;
+    let mut strategy = PricingStrategy::Aliases;
     for (document, doing) in graphql::DOCUMENTS {
         if Mode::of_document(document) == Mode::Write {
             // A mutation is skipped because `rateLimit` is a field of `Query` and there is
@@ -479,37 +513,127 @@ async fn reconcile_node_counts_and_point_costs(token: &str) -> Result<(), String
             }
             continue;
         }
-        let response = graphql_variables(
-            token,
-            &with_rate_limit_probe(document)?,
-            &format!("node-count and point-cost reconciliation while {doing}"),
-            dry_run_variables(document),
-        )
-        .await?;
-        say(&format!(
-            "pricing reconciliation while {doing}: hypothetical node_count={:?} cost={:?}; executed actual_cost={:?}",
-            response
-                .pointer("/data/rateLimit/nodeCount")
-                .and_then(Value::as_u64),
-            response
-                .pointer("/data/rateLimit/cost")
-                .and_then(Value::as_u64),
-            response
-                .pointer("/data/actualCost/cost")
-                .and_then(Value::as_u64)
-        ));
+        let response = reconciliation_response(token, document, doing, &mut strategy).await?;
+        match strategy {
+            PricingStrategy::Aliases => {
+                say(&format!(
+                    "pricing reconciliation while {doing}: hypothetical node_count={:?} cost={:?}; executed actual_cost={:?}",
+                    response
+                        .pointer("/data/rateLimit/nodeCount")
+                        .and_then(Value::as_u64),
+                    response
+                        .pointer("/data/rateLimit/cost")
+                        .and_then(Value::as_u64),
+                    response
+                        .pointer("/data/actualCost/cost")
+                        .and_then(Value::as_u64)
+                ));
+            }
+            PricingStrategy::Executed => say(&format!(
+                "executed read-only reconciliation while {doing}: node_count={:?}; actual_cost={:?}",
+                response
+                    .pointer("/data/rateLimit/nodeCount")
+                    .and_then(Value::as_u64),
+                response
+                    .pointer("/data/rateLimit/cost")
+                    .and_then(Value::as_u64),
+            )),
+        }
         reconciled(doing, document, &response)?;
         asked += 1;
     }
     let (_, after) = account_allowance(token, "after").await?;
     say(&format!(
         "node-count and point-cost reconciliation: {asked} documents agreed with GitHub's own \
-         dryRun nodeCount and cost; the account's GraphQL allowance read {before} of {limit} \
+         nodeCount and cost under {strategy:?}; the account's GraphQL allowance read {before} of {limit} \
          before and {after} after, a movement of {} across the whole reconciliation (the \
          account's, shared with everything else this credential does)",
         before.saturating_sub(after)
     ));
     Ok(())
+}
+
+/// Whether GitHub supports separate hypothetical and executed price aliases.
+#[derive(Debug)]
+enum PricingStrategy {
+    Aliases,
+    Executed,
+}
+
+async fn reconciliation_response(
+    token: &str,
+    document: &str,
+    doing: &str,
+    strategy: &mut PricingStrategy,
+) -> Result<Value, String> {
+    let name = format!("node-count and point-cost reconciliation while {doing}");
+    let attempt = if matches!(strategy, PricingStrategy::Aliases) {
+        2
+    } else {
+        1
+    };
+    if matches!(strategy, PricingStrategy::Aliases) {
+        match graphql_answer(
+            token,
+            &with_rate_limit_probe(document)?,
+            &name,
+            dry_run_variables(document),
+        )
+        .await
+        {
+            Ok(answer)
+                if answer
+                    .pointer("/data/actualCost/cost")
+                    .and_then(Value::as_u64)
+                    .is_some() =>
+            {
+                return Ok(answer);
+            }
+            Ok(_) | Err(Refusal::Answered(_, _)) => {
+                // The original request remains recorded, including an unavailable actual
+                // price. A fallback cannot make a missing-price session numerically complete.
+                *strategy = PricingStrategy::Executed;
+                say(
+                    "GitHub did not support both pricing aliases; using executed read-only reconciliation",
+                );
+            }
+            Err(refusal) => return Err(refusal.into_message()),
+        }
+    }
+    let opening = document
+        .find('{')
+        .ok_or("a reconciliation document has no selection set")?;
+    let executed = format!(
+        "{}rateLimit{{cost nodeCount limit remaining}} {}",
+        &document[..=opening],
+        &document[opening + 1..]
+    );
+    match graphql_answer_at(
+        token,
+        &executed,
+        &name,
+        dry_run_variables(document),
+        attempt,
+    )
+    .await
+    {
+        Ok(answer) => Ok(answer),
+        // An execution error resolving a deliberately nonexistent node may preserve the
+        // sibling rateLimit's actual price and planned node count; reconcile those facts.
+        Err(Refusal::Answered(_, Some(answer)))
+            if answer
+                .pointer("/data/rateLimit/cost")
+                .and_then(Value::as_u64)
+                .is_some()
+                && answer
+                    .pointer("/data/rateLimit/nodeCount")
+                    .and_then(Value::as_u64)
+                    .is_some() =>
+        {
+            Ok(answer)
+        }
+        Err(refusal) => Err(refusal.into_message()),
+    }
 }
 
 /// What GitHub's own answer about one document says against this workspace's figures, or
@@ -2189,10 +2313,10 @@ async fn project_titles(
 ///
 /// Reads nothing this lane needs; what it establishes is whether GitHub's own connection
 /// accepts that page size, which is what `max_page_size` claims to describe.
-async fn board_items_page(token: &str, project_id: &str, first: u32) -> Result<Value, String> {
-    graphql_variables(
+async fn board_items_page(token: &str, project_id: &str, first: u32) -> Result<Value, Refusal> {
+    graphql_answer(
         token,
-        "query($id:ID!,$first:Int!){node(id:$id){... on ProjectV2{items(first:$first){nodes{id}}}}}",
+        onetaskgraph_github_live::quota::PAGE_SIZE_PROBE_DOCUMENT,
         "board page size probe",
         json!({"id":project_id,"first":first}),
     )
@@ -2966,17 +3090,25 @@ async fn drive_every_declared_capability(
     board_items_page(&run.token, &run.project_id, ceiling)
         .await
         .map_err(|error| {
-            format!("GitHub refused a page of the declared maximum {ceiling}: {error}")
+            format!(
+                "GitHub refused a page of the declared maximum {ceiling}: {}",
+                error.into_message()
+            )
         })?;
-    if board_items_page(&run.token, &run.project_id, ceiling + 1)
-        .await
-        .is_ok()
-    {
-        return Err(format!(
-            "GitHub served a page of {} board items, so {ceiling} is not its connection \
-             maximum and max_page_size no longer describes it",
-            ceiling + 1
-        ));
+    match board_items_page(&run.token, &run.project_id, ceiling + 1).await {
+        Err(Refusal::Answered(_, Some(response))) if valid_graphql_errors(&response) => (),
+        Err(refusal) => {
+            return Err(format!(
+                "GitHub did not establish its page-size ceiling: {}",
+                refusal.into_message()
+            ));
+        }
+        Ok(_) => {
+            return Err(format!(
+                "GitHub served a page of {} board items, so {ceiling} is not its connection maximum and max_page_size no longer describes it",
+                ceiling + 1,
+            ));
+        }
     }
 
     // The values a copy carries: caller metadata keeps its JSON types, and the column the
@@ -3978,4 +4110,17 @@ pub async fn run(nomination: Nomination) {
     )
     .await
     .unwrap_or_else(|error| panic!("GitHub live capability journey failed: {error}"));
+}
+
+/// Invalid required-flag input on every platform; Unix also exercises non-Unicode input.
+pub fn malformed_required_flag() -> std::ffi::OsString {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt;
+        std::ffi::OsString::from_vec(vec![0xff])
+    }
+    #[cfg(not(unix))]
+    {
+        "invalid".into()
+    }
 }

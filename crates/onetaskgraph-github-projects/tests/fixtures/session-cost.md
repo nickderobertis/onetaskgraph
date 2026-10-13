@@ -45,11 +45,15 @@ executed read-only fallback preserves the same reconciliation when aliases are r
 Mutations use the explicitly Modelled one-point primary price, with count and
 [GitHub pricing documentation](https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api).
 That page documents a minimum call price, not an exact primary mutation tariff; its
-secondary mutation price belongs to a different allowance. Missing query prices refuse
-a bill. Headers only corroborate it: any internal reset switch invalidates the movement,
+secondary mutation price belongs to a different allowance. Missing query prices refuse a bill, except for the single deliberately refused
+page-size-101 probe under manager rulings `c-7408370fba3af9d6ed0546b26f210c7b` and
+`c-f3f629ad2efff2cc3377ad030549f02d`: if that GraphQL refusal reports no price,
+the telemetry labels its one-point minimum as Modelled and reports its count separately.
+The reader pins the operation hash, main capability phase, GraphQL-error outcome,
+documentation URL, one-point price and single occurrence. A reported price wins. Headers only corroborate it: any internal reset switch invalidates the movement,
 and unexplained movement is flagged without subtracting presumed other-host use.
 
-Schema 2 records actual uploaded PNG sizes (74,666 and 479,959 bytes for each item kind)
+Schema 3 records actual uploaded PNG sizes (74,666 and 479,959 bytes for each item kind)
 and the generator targets (75,000 and 480,000) separately. This follows manager ruling
 `c-99c85599e4fc9fdb1f91beaf5d1c3bd9`; the actual entry point checks the generator's
 output against the shared workload and its documented tolerance. The target list is
@@ -96,3 +100,11 @@ reconciliation, allowance, reporter and rendering boundary journeys cover refuse
 prices, unsupported aliases, retries, resets, shared movement, stale/mismatched/duplicate
 records and the onebudgetspec threshold on either side. The real settling margin remains
 60 seconds plus two; only the loopback server's already-settled Date avoids waiting.
+
+Attachment HTTP calls remain in the ledger and session record. Under manager ruling
+`c-525806e5edcaf01944951bfb35a7b430`, headerless uploads, GitHub attachment reads and
+CDN rendering do not contradict the api.github.com Core REST allowance. Rechecks use
+the latest response belonging to that budget; a declared attachment rate resource is
+honoured, and an unread actual Core response still declines. The loopback pair returns
+no invented Core headers on attachments and also proves a declared-but-unread Core
+response stops completion after owned cleanup.

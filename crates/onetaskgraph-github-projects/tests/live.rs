@@ -202,10 +202,8 @@ fn the_actual_main_entry_point_reaches_only_its_loopback_allowance_boundary() {
     assert!(said.contains("estimated to spend 281"), "{said}");
 }
 
-#[cfg(unix)]
 #[test]
 fn malformed_required_flag_cannot_become_an_optional_main_skip() {
-    use std::os::unix::ffi::OsStringExt;
     let output = std::process::Command::new(std::env::current_exe().unwrap())
         .args([
             "real_projects_v2_contract_writes_and_leaves_no_residue",
@@ -215,7 +213,7 @@ fn malformed_required_flag_cannot_become_an_optional_main_skip() {
         .env("GITHUB_LIVE_SELECTION", "run")
         .env(
             "ONETASKGRAPH_LIVE_REQUIRED",
-            std::ffi::OsString::from_vec(vec![0xff]),
+            journey::malformed_required_flag(),
         )
         .env_remove("GH_PROJECTS_OWNER")
         .env_remove("GH_PROJECTS_NUMBER")
@@ -226,8 +224,5 @@ fn malformed_required_flag_cannot_become_an_optional_main_skip() {
         .output()
         .unwrap();
     assert!(!output.status.success());
-    assert!(
-        String::from_utf8_lossy(&output.stderr)
-            .contains("ONETASKGRAPH_LIVE_REQUIRED must be Unicode")
-    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("ONETASKGRAPH_LIVE_REQUIRED must be"));
 }

@@ -805,9 +805,11 @@ fn report_live_session() {
     let Some(budget) = selected() else {
         return;
     };
+    // llmlint: ignore-block[budget_commands_measure_directly] The task requires this named report-only entry point; checking its SDK selector prevents a foreign budget id from receiving a live-session figure. The function measures only saved telemetry, with no threshold comparison.
     if budget != "github-live-session-points" {
         refuse("live-session reporter selected for a different budget");
     }
+    // llmlint: ignore-end[budget_commands_measure_directly]
     let (value, detail) = live_session_figure()
         .unwrap_or_else(|error| refuse(&format!("live-session measurement unavailable: {error}")));
     hand_over(value, &detail);
@@ -835,7 +837,7 @@ fn live_session_figure() -> Result<(f64, String), String> {
         .collect::<Vec<_>>()
         .join(", ");
     let detail = format!(
-        "session_id={id}; source_revision={revision}; workspace_version={WORKSPACE_VERSION}; reported query points={}; Modelled mutation points={} ({} requests); Documented mutation points={} ({} requests); mutation count={}; pricing URL={PRICING_URL}; GraphQL requests={}; REST requests={} (excluded from points); phases: {phases}; corroborating account movement={:?}; concurrent movement flagged={}; actual asset bytes={:?}; requested PNG bytes={:?}",
+        "session_id={id}; source_revision={revision}; workspace_version={WORKSPACE_VERSION}; reported query points={}; Modelled mutation points={} ({} requests); Documented mutation points={} ({} requests); mutation count={}; pricing URL={PRICING_URL}; GraphQL requests={}; REST requests={} (excluded from points); phases: {phases}; corroborating account movement={:?}; concurrent movement flagged={}; actual asset bytes={:?}; requested PNG bytes={:?}; Modelled deliberate page-size refusal points={} ({} requests)",
         bill.query_points,
         bill.modelled_mutation_points,
         bill.modelled_mutations,
@@ -847,7 +849,9 @@ fn live_session_figure() -> Result<(f64, String), String> {
         bill.account_movement,
         bill.movement_flagged,
         workload.asset_bytes,
-        workload.asset_target_bytes
+        workload.asset_target_bytes,
+        bill.modelled_page_refusal_points,
+        bill.modelled_page_refusals
     );
     Ok((f64::from(figure), detail))
 }

@@ -754,6 +754,10 @@ struct Limits {
     /// Actual cost this double reports when a query selects its price.
     reported_query_cost: Option<u64>,
     reported_refusal_cost: Option<u64>,
+    after_setup_remaining: Option<u64>,
+    refuse_pricing_aliases: bool,
+    ignore_pricing_aliases: bool,
+    malformed_ceiling_error: bool,
     /// When each request arrived, which operation it carried, and whether that operation
     /// creates content.
     arrivals: Vec<(Instant, String, bool)>,
@@ -1315,6 +1319,19 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
             // faster than one per request is how a shared account behaves.
             let used = {
                 let mut state = served.lock().unwrap();
+                if state
+                    .seen
+                    .iter()
+                    .filter(|call| call[0] == "createIssue")
+                    .count()
+                    >= 5
+                    && let Some(remaining) = state.limits.after_setup_remaining
+                {
+                    state.limits.budget_used = state
+                        .limits
+                        .budget_used
+                        .max(FIXTURE_BUDGET_LIMIT - remaining);
+                }
                 state.limits.budget_used += 1 + state.limits.other_traffic_per_request;
                 state.limits.budget_used
             };
@@ -1362,6 +1379,20 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
                             {
                                 response["data"] = json!({"rateLimit":{"cost":cost}});
                             }
+                            if query.contains("rateLimit{cost nodeCount limit remaining}") {
+                                response["data"] = board::answer_a_stateless_session_call(
+                                    query,
+                                    variables,
+                                    Pricing::AsComputed,
+                                )
+                                .unwrap();
+                            }
+                            if variables["first"].as_u64() == Some(101)
+                                && served.lock().unwrap().limits.malformed_ceiling_error
+                            {
+                                response["errors"] = json!(false);
+                                response["data"] = Value::Null;
+                            }
                             response.to_string()
                         }
                         None => {
@@ -1371,6 +1402,11 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
                                     served.lock().unwrap().limits.reported_query_cost
                             {
                                 data["rateLimit"] = json!({"cost":cost});
+                            }
+                            if query.contains("actualCost:rateLimit")
+                                && served.lock().unwrap().limits.ignore_pricing_aliases
+                            {
+                                data.as_object_mut().unwrap().remove("actualCost");
                             }
                             json!({"data":data}).to_string()
                         }
@@ -1417,6 +1453,10 @@ fn unbound_refusal(state: &Arc<Mutex<State>>, query: &str, variables: &Value) ->
 /// A refused call is still recorded as seen and still changes nothing: that is what GitHub
 /// failing one mutation of a write looks like from here.
 fn refused(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Option<String> {
+    if query.contains("actualCost:rateLimit") && state.lock().unwrap().limits.refuse_pricing_aliases
+    {
+        return Some("rateLimit aliases with different dryRun arguments are not supported".into());
+    }
     // A connection asked for more rows than GitHub's own maximum is refused before it runs,
     // which is what `max_page_size` claims to describe and what the journey's page-size
     // probe asks this board to prove one row either side of.
@@ -1490,6 +1530,10 @@ fn repository_node_id(slug: &str) -> String {
 }
 
 fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
+    if query.contains("rateLimit{cost nodeCount limit remaining}") {
+        return board::answer_a_stateless_session_call(query, variables, Pricing::AsComputed)
+            .unwrap();
+    }
     let unpriced = query.replacen("rateLimit{cost} ", "", 1);
     let query = unpriced.as_str();
     if query == onetaskgraph_github_projects::graphql::UPDATE_FIELDS {
@@ -19773,6 +19817,12 @@ fn live_pair_fixture_child() {
     let Ok(ready) = std::env::var("GITHUB_LIVE_FIXTURE_READY") else {
         return;
     };
+    let decline = std::env::var("GITHUB_LIVE_FIXTURE_DECLINE").as_deref() == Ok("setup");
+    let scenario = std::env::var("GITHUB_LIVE_FIXTURE_DECLINE").unwrap_or_default();
+    let aliases = matches!(scenario.as_str(), "aliases" | "ignored-aliases");
+    let scalar = scenario == "scalar";
+    let malformed_ceiling = scenario == "malformed-ceiling";
+    let declared_core = scenario == "attachment-core-unread";
     let fixture = board_with(
         (0..90)
             .map(|index| Item::draft(&format!("DI_existing_{index}"), "existing board note"))
@@ -19784,8 +19834,23 @@ fn live_pair_fixture_child() {
         fixture.state.lock().unwrap().extra_fields.push(json!({"__typename":"ProjectV2Field","id":format!("FIELD_existing_{index}"),"name":format!("existing {index}"),"dataType":"TEXT"}));
     }
     fixture.items_connection_falls_behind();
+    fixture.state.lock().unwrap().limits.malformed_ceiling_error = malformed_ceiling;
     fixture.state.lock().unwrap().limits.reported_query_cost = Some(1);
-    fixture.state.lock().unwrap().limits.reported_refusal_cost = Some(1);
+    fixture.state.lock().unwrap().limits.refuse_pricing_aliases = scenario == "aliases";
+    fixture.state.lock().unwrap().limits.ignore_pricing_aliases = scenario == "ignored-aliases";
+    fixture.state.lock().unwrap().limits.reported_refusal_cost = if scenario == "page-refusal" {
+        None
+    } else {
+        Some(1)
+    };
+    if decline {
+        fixture.state.lock().unwrap().limits.after_setup_remaining = Some(
+            journey::budget::remaining_design_points(
+                onetaskgraph_github_live::quota::Phase::Capabilities,
+            ) + onetaskgraph_live::RETAINED_BUFFER.of(FIXTURE_BUDGET_LIMIT)
+                - 1,
+        );
+    }
     let labels = label_endpoints(&fixture.state);
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let host = format!("http://{}", listener.local_addr().unwrap());
@@ -19833,7 +19898,9 @@ fn live_pair_fixture_child() {
             }
             let line = headers.lines().next().unwrap();
             let path = line.split_whitespace().nth(1).unwrap();
-            let answer = if line.starts_with("POST /user-attachments/assets?") {
+            let answer = if scalar && path == "/graphql" {
+                Some((200, b"[]".to_vec()))
+            } else if line.starts_with("POST /user-attachments/assets?") {
                 let path = format!("/user-attachments/assets/{}", assets.len() + 1);
                 uploaded
                     .lock()
@@ -19858,9 +19925,18 @@ fn live_pair_fixture_child() {
                 None
             };
             if let Some((status, body)) = answer {
+                let allowance = if path == "/graphql" {
+                    "x-ratelimit-limit: 4321\r\nx-ratelimit-remaining: 4320\r\nx-ratelimit-used: 1\r\nx-ratelimit-resource: graphql\r\nx-ratelimit-reset: 1775000000\r\n"
+                } else if path == "/repos/acme/work" {
+                    "x-ratelimit-limit: 4321\r\nx-ratelimit-remaining: 4320\r\nx-ratelimit-used: 1\r\nx-ratelimit-resource: core\r\nx-ratelimit-reset: 1775000000\r\n"
+                } else if declared_core {
+                    "x-ratelimit-resource: core\r\n"
+                } else {
+                    ""
+                };
                 write!(
                     stream,
-                    "HTTP/1.1 {status} Fixture\r\nContent-Length: {}\r\nx-ratelimit-limit: 4321\r\nx-ratelimit-remaining: 4320\r\nx-ratelimit-used: 1\r\nx-ratelimit-resource: core\r\nx-ratelimit-reset: 1775000000\r\nConnection: close\r\n\r\n",
+                    "HTTP/1.1 {status} Fixture\r\nContent-Length: {}\r\n{allowance}Date: Tue, 01 Sep 2026 01:00:00 GMT\r\nConnection: close\r\n\r\n",
                     body.len()
                 )
                 .unwrap();
@@ -19879,11 +19955,16 @@ fn live_pair_fixture_child() {
     std::fs::write(ready, endpoint).unwrap();
     let mut done = String::new();
     std::io::stdin().read_to_string(&mut done).unwrap();
-    assert_eq!(
-        *upload_sizes.lock().unwrap(),
-        onetaskgraph_github_live::quota::reference_workload().asset_bytes
-    );
-    assert_eq!(rendering_reads.load(std::sync::atomic::Ordering::SeqCst), 8);
+    if decline || aliases || scalar || malformed_ceiling {
+        assert!(upload_sizes.lock().unwrap().is_empty());
+        assert_eq!(rendering_reads.load(std::sync::atomic::Ordering::SeqCst), 0);
+    } else {
+        assert_eq!(
+            *upload_sizes.lock().unwrap(),
+            onetaskgraph_github_live::quota::reference_workload().asset_bytes
+        );
+        assert_eq!(rendering_reads.load(std::sync::atomic::Ordering::SeqCst), 8);
+    }
     assert!(
         fixture.state.lock().unwrap().items.len() == 90,
         "both entry points cleaned up their items"

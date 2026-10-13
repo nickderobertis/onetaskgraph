@@ -31,7 +31,7 @@ fn executable(package: &str, target: &str) -> PathBuf {
                 .starts_with(&format!("{target}-"))
             && std::fs::read_to_string(&path).unwrap().contains(&source)
         {
-            let binary = path.with_extension("");
+            let binary = path.with_extension(std::env::consts::EXE_EXTENSION);
             if binary.is_file() {
                 candidates.push((binary.metadata().unwrap().modified().unwrap(), binary));
             }
@@ -46,6 +46,47 @@ fn executable(package: &str, target: &str) -> PathBuf {
 
 #[test]
 fn actual_entry_points_complete_one_loopback_session() {
+    run_pair("none");
+}
+
+#[test]
+fn later_phase_refusal_retains_the_real_owned_cleanup_in_a_partial_record() {
+    run_pair("setup");
+}
+
+#[test]
+fn unsupported_pricing_aliases_execute_all_contracts_but_never_hide_the_unpriced_refusal() {
+    run_pair("aliases");
+}
+
+#[test]
+fn ignored_actual_cost_alias_executes_the_read_only_fallback_and_refuses_a_numeric_bill() {
+    run_pair("ignored-aliases");
+}
+
+#[test]
+fn the_deliberate_ceiling_refusal_uses_only_the_approved_disclosed_minimum_model() {
+    run_pair("page-refusal");
+}
+
+#[test]
+fn a_scalar_graphql_response_with_a_date_refuses_the_entry_point_without_a_parser_panic() {
+    run_pair("scalar");
+}
+
+#[test]
+fn an_attachment_that_declares_core_without_an_allowance_refuses_after_owned_cleanup() {
+    run_pair("attachment-core-unread");
+}
+
+#[test]
+fn malformed_errors_cannot_establish_the_page_ceiling_or_inherit_its_price_model() {
+    run_pair("malformed-ceiling");
+}
+
+fn run_pair(scenario: &str) {
+    let decline = scenario == "setup";
+    let aliases = matches!(scenario, "aliases" | "ignored-aliases");
     let sandbox = onetaskgraph_e2e_support::common::Sandbox::new();
     let directory = sandbox.subdirectory("live-pair");
     let records = directory.join("session");
@@ -55,6 +96,7 @@ fn actual_entry_points_complete_one_loopback_session() {
     let mut fixture = Command::new(executable("onetaskgraph-github-projects", "plugin"))
         .args(["live_pair_fixture_child", "--exact", "--nocapture"])
         .env("GITHUB_LIVE_FIXTURE_READY", &ready)
+        .env("GITHUB_LIVE_FIXTURE_DECLINE", scenario)
         .stdin(Stdio::piped())
         .stdout(fixture_log.try_clone().unwrap())
         .stderr(fixture_log)
@@ -110,6 +152,170 @@ fn actual_entry_points_complete_one_loopback_session() {
     }
     drop(fixture.stdin.take());
     let fixture_status = fixture.wait().unwrap();
+    if scenario == "malformed-ceiling" {
+        assert_eq!(outputs.len(), 1);
+        assert!(!outputs[0].status.success());
+        assert!(
+            String::from_utf8_lossy(&outputs[0].stderr).contains("invalid GraphQL errors envelope")
+        );
+        assert!(fixture_status.success());
+        let main: SessionRecord =
+            serde_json::from_slice(&std::fs::read(records.join("main.json")).unwrap()).unwrap();
+        assert!(!main.complete);
+        let refused = main
+            .calls
+            .iter()
+            .find(|call| {
+                call.phase == Phase::Capabilities
+                    && matches!(
+                        call.charge,
+                        onetaskgraph_github_live::quota::Charge::Unavailable { .. }
+                    )
+            })
+            .unwrap();
+        assert_eq!(
+            refused.outcome,
+            onetaskgraph_github_live::quota::Outcome::TransportError
+        );
+        assert!(main.calls.iter().any(|call| call.phase == Phase::Cleanup));
+        return;
+    }
+    if scenario == "attachment-core-unread" {
+        assert_eq!(outputs.len(), 2);
+        assert!(outputs[0].status.success());
+        assert!(!outputs[1].status.success());
+        assert!(
+            String::from_utf8_lossy(&outputs[1].stderr)
+                .contains("no allowance this session could read")
+        );
+        assert!(
+            fixture_status.success(),
+            "{}",
+            std::fs::read_to_string(directory.join("fixture.log")).unwrap()
+        );
+        let assets: SessionRecord =
+            serde_json::from_slice(&std::fs::read(records.join("assets.json")).unwrap()).unwrap();
+        assert!(!assets.complete);
+        assert!(assets.calls.iter().any(|call| call.phase == Phase::Cleanup));
+        let workload = reference_workload();
+        let current =
+            CurrentSession::new("entry-point-pair", &revision, WORKSPACE_VERSION, &workload)
+                .unwrap();
+        assert!(read_bill(&records, &current).is_err());
+        return;
+    }
+    if scenario == "scalar" {
+        assert_eq!(outputs.len(), 1);
+        assert!(!outputs[0].status.success());
+        let said = String::from_utf8_lossy(&outputs[0].stderr);
+        assert!(said.contains("response must be an object"), "{said}");
+        assert!(fixture_status.success());
+        let main: SessionRecord =
+            serde_json::from_slice(&std::fs::read(records.join("main.json")).unwrap()).unwrap();
+        assert!(!main.complete);
+        assert_eq!(
+            main.calls.last().unwrap().outcome,
+            onetaskgraph_github_live::quota::Outcome::TransportError
+        );
+        assert!(matches!(
+            main.calls.last().unwrap().charge,
+            onetaskgraph_github_live::quota::Charge::Unavailable { .. }
+        ));
+        return;
+    }
+    if aliases {
+        assert_eq!(
+            outputs.len(),
+            2,
+            "main: {}; fixture: {}",
+            String::from_utf8_lossy(&outputs[0].stderr),
+            std::fs::read_to_string(directory.join("fixture.log")).unwrap()
+        );
+        assert!(
+            outputs[0].status.success(),
+            "{}",
+            String::from_utf8_lossy(&outputs[0].stderr)
+        );
+        let said = String::from_utf8_lossy(&outputs[0].stderr);
+        assert!(said.contains("using executed read-only reconciliation"));
+        assert!(said.contains("18 documents agreed"));
+        assert!(!outputs[1].status.success());
+        assert!(
+            String::from_utf8_lossy(&outputs[1].stderr)
+                .contains("query response did not report its actual primary price")
+        );
+        assert!(
+            fixture_status.success(),
+            "{}",
+            std::fs::read_to_string(directory.join("fixture.log")).unwrap()
+        );
+        let main: SessionRecord =
+            serde_json::from_slice(&std::fs::read(records.join("main.json")).unwrap()).unwrap();
+        let probes: Vec<_> = main
+            .calls
+            .iter()
+            .filter(|call| call.phase == Phase::Reconciliation)
+            .collect();
+        assert_eq!(probes.len(), 21);
+        assert_eq!(
+            probes[1].outcome,
+            if scenario == "aliases" {
+                onetaskgraph_github_live::quota::Outcome::GraphqlError
+            } else {
+                onetaskgraph_github_live::quota::Outcome::Success
+            }
+        );
+        assert_eq!(probes[2].attempt, 2);
+        assert!(probes.iter().any(|call| matches!(
+            call.charge,
+            onetaskgraph_github_live::quota::Charge::Unavailable { .. }
+        )));
+        let workload = reference_workload();
+        let current =
+            CurrentSession::new("entry-point-pair", &revision, WORKSPACE_VERSION, &workload)
+                .unwrap();
+        assert!(read_bill(&records, &current).is_err());
+        return;
+    }
+    if decline {
+        assert_eq!(
+            outputs.len(),
+            1,
+            "fixture: {}; main: {}",
+            std::fs::read_to_string(directory.join("fixture.log")).unwrap(),
+            String::from_utf8_lossy(&outputs[0].stderr)
+        );
+        assert!(!outputs[0].status.success());
+        let said = String::from_utf8_lossy(&outputs[0].stderr);
+        assert!(said.contains("remaining design demand"), "{said}");
+        assert!(
+            fixture_status.success(),
+            "{}",
+            std::fs::read_to_string(directory.join("fixture.log")).unwrap()
+        );
+        let main: SessionRecord =
+            serde_json::from_slice(&std::fs::read(records.join("main.json")).unwrap()).unwrap();
+        assert!(!main.complete);
+        assert!(main.calls.iter().any(|call| call.phase == Phase::Cleanup));
+        assert!(
+            main.calls
+                .iter()
+                .any(|call| call.phase == Phase::OrphanRecovery)
+        );
+        assert!(
+            !main
+                .calls
+                .iter()
+                .any(|call| call.phase == Phase::Capabilities)
+        );
+        assert!(!records.join("assets.json").exists());
+        let workload = reference_workload();
+        let current =
+            CurrentSession::new("entry-point-pair", &revision, WORKSPACE_VERSION, &workload)
+                .unwrap();
+        assert!(read_bill(&records, &current).is_err());
+        return;
+    }
     for output in outputs {
         assert!(
             output.status.success(),
@@ -128,6 +334,14 @@ fn actual_entry_points_complete_one_loopback_session() {
     let current =
         CurrentSession::new("entry-point-pair", &revision, WORKSPACE_VERSION, &workload).unwrap();
     let bill = read_bill(&records, &current).unwrap();
+    assert_eq!(
+        bill.modelled_page_refusals,
+        u64::from(scenario == "page-refusal")
+    );
+    assert_eq!(
+        bill.modelled_page_refusal_points,
+        u64::from(scenario == "page-refusal")
+    );
     assert!(bill.query_points > 0 && bill.modelled_mutations > 0 && bill.rest_requests > 0);
     for (file, invocation, phases) in [
         (

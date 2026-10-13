@@ -115,7 +115,7 @@
 use std::collections::BTreeMap;
 
 use onetaskgraph_github_projects::accounting::{
-    Accounting, Budget, Endpoint, Method, Outcome, RateLimit, Request,
+    Accounting, Budget, Call, Endpoint, Method, Outcome, RateLimit, Request,
 };
 use onetaskgraph_github_projects::largest_page_sizes;
 use onetaskgraph_live::{
@@ -788,6 +788,29 @@ pub fn remaining_design_points(phase: onetaskgraph_github_live::quota::Phase) ->
     total - retired
 }
 
+/// Attachment hosts are outside api.github.com's Core REST allowance. Their calls
+/// remain metered as HTTP detail; any declared rate resource still governs its own budget.
+fn recheck_budget(request: &Request) -> Result<Option<Budget>, String> {
+    match request.call() {
+        Call::Endpoint { endpoint }
+            if matches!(
+                endpoint.path(),
+                "/user-attachments/assets" | "/user-attachments/assets/{asset}"
+            ) =>
+        {
+            match request.rate_limit().resource() {
+                None => Ok(None),
+                Some("core") => Ok(Some(Budget::Rest)),
+                Some("graphql") => Ok(Some(Budget::Graphql)),
+                Some(resource) => Err(format!(
+                    "attachment response declared an unknown allowance resource {resource:?}"
+                )),
+            }
+        }
+        _ => Ok(Some(request.budget())),
+    }
+}
+
 /// Check the remaining job demand against already-received headers, with the shared 20% buffer.
 /// Owned cleanup is always attempted by the caller even if this recheck refuses.
 pub fn recheck_remaining(
@@ -802,11 +825,23 @@ pub fn recheck_remaining(
         } else {
             Budget::Rest
         };
-        let Some(request) = recorded.requests()[admitted.before..]
-            .iter()
-            .rev()
-            .find(|request| request.budget() == budget)
-        else {
+        let mut latest = None;
+        for request in recorded.requests()[admitted.before..].iter().rev() {
+            let carried_budget = recheck_budget(request).map_err(|why| {
+                Declined::unaffordable(
+                    SESSION_NAME,
+                    Unaffordable::Unread {
+                        metered: original.metered(),
+                        why,
+                    },
+                )
+            })?;
+            if carried_budget == Some(budget) {
+                latest = Some(request);
+                break;
+            }
+        }
+        let Some(request) = latest else {
             continue;
         };
         let claimed = original

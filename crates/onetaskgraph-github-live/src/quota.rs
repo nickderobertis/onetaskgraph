@@ -2,8 +2,11 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Current internal telemetry schema, including actual and requested PNG sizes.
-pub const SCHEMA_VERSION: u32 = 2;
+/// Current internal schema, including actual PNG sizes and the deliberate-refusal model.
+pub const SCHEMA_VERSION: u32 = 3;
+
+/// The one deliberately refused query eligible for the manager-approved minimum-price model.
+pub const PAGE_SIZE_PROBE_DOCUMENT: &str = "query($id:ID!,$first:Int!){rateLimit{cost} node(id:$id){... on ProjectV2{items(first:$first){nodes{id}}}}}";
 
 /// One invocation's accounting; only a completed matching pair establishes a session bill.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -148,6 +151,14 @@ pub enum Charge {
         /// Reported integer points.
         points: u64,
     },
+    /// Approved one-point model for the deliberate page-size-101 GraphQL refusal alone.
+    ModelledPageSizeRefusal {
+        /// Approved minimum primary price, pinned to one by the reader.
+        points: u64,
+        /// GitHub's documentation of the primary minimum.
+        // llmlint: ignore[invalid_states_unrepresentable] The manager-approved internal wire amendment fixes String here; the reader pins the exact documentation URL and refusal identity before accepting a price.
+        url: String,
+    },
     /// Explicitly priced mutation.
     Mutation {
         /// Primary points attributed to the request.
@@ -264,6 +275,10 @@ pub struct Bill {
     pub points: u64,
     /// Points reported by executed query responses.
     pub query_points: u64,
+    /// Minimum-price model for the one deliberate connection-ceiling refusal.
+    pub modelled_page_refusal_points: u64,
+    /// Deliberately refused page-size probes priced by that model.
+    pub modelled_page_refusals: u64,
     /// Mutation points attributed under the approved explicit model.
     pub modelled_mutation_points: u64,
     /// Mutation requests attributed under the approved explicit model.
@@ -309,6 +324,8 @@ pub fn bill(records: &[SessionRecord], current: &CurrentSession<'_>) -> Result<B
     let mut result = Bill {
         points: 0,
         query_points: 0,
+        modelled_page_refusal_points: 0,
+        modelled_page_refusals: 0,
         modelled_mutation_points: 0,
         modelled_mutations: 0,
         documented_mutation_points: 0,
@@ -335,6 +352,19 @@ pub fn bill(records: &[SessionRecord], current: &CurrentSession<'_>) -> Result<B
                         .query_points
                         .checked_add(*points)
                         .ok_or("query points overflow")?;
+                    *points
+                }
+                (RequestKind::Query, Charge::ModelledPageSizeRefusal { points, .. })
+                    if approved_page_size_refusal(record, call) =>
+                {
+                    result.graphql_requests += 1;
+                    result.modelled_page_refusals += 1;
+                    result.modelled_page_refusal_points += *points;
+                    if result.modelled_page_refusals > 1 {
+                        return Err(
+                            "more than one deliberate page-size refusal was modelled".into()
+                        );
+                    }
                     *points
                 }
                 (RequestKind::Mutation, Charge::Mutation { points, basis }) => {
@@ -404,6 +434,15 @@ pub fn bill(records: &[SessionRecord], current: &CurrentSession<'_>) -> Result<B
     Ok(result)
 }
 
+fn approved_page_size_refusal(record: &SessionRecord, call: &CallRecord) -> bool {
+    matches!(&call.charge, Charge::ModelledPageSizeRefusal { points: 1, url } if url == PRICING_URL)
+        && record.invocation == EntryPoint::Main
+        && call.kind == RequestKind::Query
+        && call.phase == Phase::Capabilities
+        && call.outcome == Outcome::GraphqlError
+        && call.operation_sha256 == operation_sha256(PAGE_SIZE_PROBE_DOCUMENT)
+}
+
 fn validate_record(record: &SessionRecord, current: &CurrentSession<'_>) -> Result<(), String> {
     if record.schema_version != SCHEMA_VERSION
         || record.session_id != current.session_id.0
@@ -460,6 +499,8 @@ fn validate_record(record: &SessionRecord, current: &CurrentSession<'_>) -> Resu
         match (&call.kind, &call.charge) {
             (RequestKind::Query, Charge::ReportedQuery { .. })
             | (RequestKind::Rest, Charge::Rest) => (),
+            (RequestKind::Query, Charge::ModelledPageSizeRefusal { .. })
+                if approved_page_size_refusal(record, call) => {}
             (RequestKind::Mutation, Charge::Mutation { points, basis }) => match basis {
                 MutationBasis::Documented { url } if url == PRICING_URL => (),
                 MutationBasis::Modelled {

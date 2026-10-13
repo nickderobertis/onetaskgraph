@@ -43,6 +43,10 @@ async fn bridge_child() {
     assert!(source.health().await.unwrap().reachable);
     quota::phase(Phase::Schema).unwrap();
     let outcome = source.health().await;
+    assert!(
+        quota::model_last_page_size_refusal().is_err(),
+        "an unpriced health/schema request must never inherit the deliberate page-refusal exception"
+    );
     quota::phase(Phase::Cleanup).unwrap();
     assert!(source.health().await.unwrap().reachable);
     assert!(outcome.unwrap().reachable);

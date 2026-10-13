@@ -1,5 +1,8 @@
 //! Bridges the existing request ledger to the one internal session wire contract.
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::BTreeSet,
+    sync::{Arc, Mutex},
+};
 
 use onetaskgraph_github_live::quota::{
     Allowance, CallRecord, Charge, EntryPoint, InvocationWriter, MutationBasis, Outcome,
@@ -12,6 +15,7 @@ struct Invocation {
     writer: InvocationWriter,
     phase: Phase,
     written: usize,
+    modelled_page_refusals: BTreeSet<usize>,
 }
 
 static CURRENT: Mutex<Option<Invocation>> = Mutex::new(None);
@@ -63,6 +67,7 @@ pub fn start(
         writer,
         phase: Phase::Admission,
         written: 0,
+        modelled_page_refusals: BTreeSet::new(),
     });
     Ok(Scope)
 }
@@ -98,7 +103,7 @@ fn flush() -> Result<(), String> {
 impl Invocation {
     fn flush(&mut self) -> Result<(), String> {
         let snapshot = self.ledger.snapshot();
-        for request in &snapshot.requests()[self.written..] {
+        for (index, request) in snapshot.requests().iter().enumerate().skip(self.written) {
             let kind = match (request.budget(), request.mode()) {
                 (Budget::Rest, _) => RequestKind::Rest,
                 (Budget::Graphql, Mode::Read) => RequestKind::Query,
@@ -115,6 +120,12 @@ impl Invocation {
                 },
                 RequestKind::Query => match request.reported_query_cost() {
                     Some(points) => Charge::ReportedQuery { points },
+                    None if self.modelled_page_refusals.contains(&index) => {
+                        Charge::ModelledPageSizeRefusal {
+                            points: 1,
+                            url: PRICING_URL.to_owned(),
+                        }
+                    }
                     None => Charge::Unavailable {
                         reason: "query response did not report its actual primary price".into(),
                     },
@@ -174,6 +185,34 @@ pub fn observe_initial_board(items: Option<u64>, fields: Option<u64>) -> Result<
                 expected.initial_items, expected.initial_fields
             ));
         }
+    }
+    Ok(())
+}
+
+/// Mark only the last, not-yet-flushed request whose caller confirmed first=101.
+/// The response and operation are independently checked here; no variables are persisted.
+pub fn model_last_page_size_refusal() -> Result<(), String> {
+    use onetaskgraph_github_live::quota::PAGE_SIZE_PROBE_DOCUMENT;
+    let mut current = CURRENT.lock().map_err(|error| error.to_string())?;
+    if let Some(current) = current.as_mut() {
+        let snapshot = current.ledger.snapshot();
+        let index = snapshot
+            .requests()
+            .len()
+            .checked_sub(1)
+            .ok_or("no page-size request was recorded")?;
+        let request = &snapshot.requests()[index];
+        if index < current.written
+            || current.phase != Phase::Capabilities
+            || request.document() != Some(PAGE_SIZE_PROBE_DOCUMENT)
+            || request.response_outcome() != ResponseOutcome::GraphqlError
+            || request.reported_query_cost().is_some()
+        {
+            return Err(
+                "only the unpriced deliberate page-size GraphQL refusal can be modelled".into(),
+            );
+        }
+        current.modelled_page_refusals.insert(index);
     }
     Ok(())
 }

@@ -78,10 +78,12 @@
         "command": "cargo test --quiet -p onetaskgraph-github-projects-e2e --all-features --locked"
       },
       "// end": "llmlint: ignore-end[external_service_suite_stays_out_of_the_affected_tier]",
+      "// live dependency": "llmlint: ignore-block[external_service_suite_stays_out_of_the_affected_tier] This task explicitly requires the main and asset credentialed journeys to contribute to one session, ordered main before assets; repository policy requires these live tests in the affected domain target.",
       "dependsOn": [
         "onetaskgraph:build",
         "onetaskgraph-github-projects:test"
       ],
+      "// live dependency end": "llmlint: ignore-end[external_service_suite_stays_out_of_the_affected_tier]",
       "//": "Spawns target/debug/onetaskgraph, which onetaskgraph:build alone produces and this target depends on; it never builds the onetaskgraph package itself, so it cannot relink the file another spawner is running. scripts/check-workspace-config.sh holds the arrangement.",
       "outputs": [
         "{workspaceRoot}/target/debug/telemetry/onetaskgraph-github-projects-e2e",
@@ -120,10 +122,12 @@
       ]
     },
     "coverage": {
+      "// union": "llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] AGENTS.md explicitly requires the aggregate coverage union to run every crate's instrumented tests on affected changes; functional tests still select by the graph, and scripts/rust-coverage.sh removes credentials so this target's entry-point pairs use only loopback GitHub.",
       "executor": "nx:run-commands",
       "dependsOn": [
         "workspace:coverage-clear",
-        "onetaskgraph:coverage"
+        "onetaskgraph:coverage",
+        "onetaskgraph-github-projects:coverage"
       ],
       "options": {
         "command": "bash scripts/rust-coverage.sh onetaskgraph-github-projects-e2e"
@@ -132,14 +136,17 @@
         "{workspaceRoot}/target/llvm-cov-target/*.profraw"
       ],
       "cache": false,
-      "//": "Uncached: cargo-llvm-cov names every raw profile after the workspace, not the crate, so a cache hit would restore a sibling's stale profiles beside its own. It depends on onetaskgraph:coverage because that run is what builds the instrumented binary into target/llvm-cov-target, where these journeys find it, so its lines are attributed to the union workspace:coverage holds to the floor; this run never builds the onetaskgraph package, so it cannot relink that file while it runs."
+      "//": "Uncached: cargo-llvm-cov names every raw profile after the workspace, not the crate, so a cache hit would restore a sibling's stale profiles beside its own. It depends on onetaskgraph:coverage because that run is what builds the instrumented binary into target/llvm-cov-target, where these journeys find it, so its lines are attributed to the union workspace:coverage holds to the floor; this run never builds the onetaskgraph package, so it cannot relink that file while it runs.",
+      "// union end": "llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]"
     },
     "budgets": {
       "executor": "nx:run-commands",
+      "// live dependency": "llmlint: ignore-block[external_service_suite_stays_out_of_the_affected_tier] This task requires report-only whole-session pricing after both domain tests; the explicit main dependency joins the same Nx task once and prevents reporting before both current records exist.",
       "dependsOn": [
         "test",
         "onetaskgraph-github-projects:test"
       ],
+      "// live dependency end": "llmlint: ignore-end[external_service_suite_stays_out_of_the_affected_tier]",
       "options": {
         "command": "python3 crates/onetaskgraph-github-projects-e2e/lane_runner.py budgets"
       },

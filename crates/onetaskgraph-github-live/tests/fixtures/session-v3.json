@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "session_id": "job-42-attempt-1",
   "source_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "workspace_version": "0.6.1",
@@ -60,6 +60,20 @@
               "points_per_request": 1
             }
           }
+        }
+      }
+    },
+    {
+      "sequence": 3,
+      "phase": "Capabilities",
+      "operation_sha256": "df8f138d170c99b7a7b88254fff8628ad66716bd02d1ff61453f4629f1ddda2d",
+      "attempt": 1,
+      "kind": "Query",
+      "outcome": "GraphqlError",
+      "charge": {
+        "ModelledPageSizeRefusal": {
+          "points": 1,
+          "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api"
         }
       }
     }

@@ -2,9 +2,9 @@
 use onetaskgraph_github_live::quota::{Charge, SessionRecord};
 
 #[test]
-fn version_one_round_trips_without_inventing_unknown_orphans_or_allowance() {
+fn current_schema_round_trips_without_inventing_unknown_orphans_or_allowance() {
     let golden: serde_json::Value =
-        serde_json::from_str(include_str!("fixtures/session-v2.json")).unwrap();
+        serde_json::from_str(include_str!("fixtures/session-v3.json")).unwrap();
     let record: SessionRecord = serde_json::from_value(golden.clone()).unwrap();
     assert_eq!(
         record.schema_version,
@@ -22,7 +22,7 @@ fn version_one_round_trips_without_inventing_unknown_orphans_or_allowance() {
 #[test]
 fn invalid_prices_and_unknown_outcomes_are_refused_by_the_shared_reader() {
     let golden: serde_json::Value =
-        serde_json::from_str(include_str!("fixtures/session-v2.json")).unwrap();
+        serde_json::from_str(include_str!("fixtures/session-v3.json")).unwrap();
     for invalid in [serde_json::json!(-1), serde_json::json!(1.5)] {
         let mut value = golden.clone();
         value["calls"][0]["charge"]["ReportedQuery"]["points"] = invalid;
@@ -36,7 +36,7 @@ fn invalid_prices_and_unknown_outcomes_are_refused_by_the_shared_reader() {
 fn completed_pair() -> Vec<SessionRecord> {
     use onetaskgraph_github_live::quota::{EntryPoint, Phase};
     let mut main: SessionRecord =
-        serde_json::from_str(include_str!("fixtures/session-v2.json")).unwrap();
+        serde_json::from_str(include_str!("fixtures/session-v3.json")).unwrap();
     main.complete = true;
     let query = main.calls[0].clone();
     main.calls = [
@@ -533,7 +533,7 @@ fn asset_admission_requires_the_current_complete_and_priced_main_file() {
 #[test]
 fn absent_asset_targets_round_trip_without_inventing_an_old_field() {
     let mut json: serde_json::Value =
-        serde_json::from_str(include_str!("fixtures/session-v2.json")).unwrap();
+        serde_json::from_str(include_str!("fixtures/session-v3.json")).unwrap();
     json["workload"]
         .as_object_mut()
         .unwrap()
@@ -546,4 +546,50 @@ fn absent_asset_targets_round_trip_without_inventing_an_old_field() {
             .get("asset_target_bytes")
             .is_none()
     );
+}
+
+#[test]
+fn only_one_pinned_deliberate_refusal_can_use_the_approved_minimum_model() {
+    use onetaskgraph_github_live::quota::{
+        Outcome, PAGE_SIZE_PROBE_DOCUMENT, PRICING_URL, Phase, operation_sha256,
+    };
+    let mut pair = completed_pair();
+    let call = &mut pair[0].calls[4];
+    call.charge = Charge::ModelledPageSizeRefusal {
+        points: 1,
+        url: PRICING_URL.to_owned(),
+    };
+    call.operation_sha256 = operation_sha256(PAGE_SIZE_PROBE_DOCUMENT);
+    call.outcome = Outcome::GraphqlError;
+    let bill = read_pair(&pair).unwrap();
+    assert_eq!(bill.modelled_page_refusals, 1);
+    assert_eq!(bill.modelled_page_refusal_points, 1);
+    for invalidate in [
+        |call: &mut onetaskgraph_github_live::quota::CallRecord| call.outcome = Outcome::HttpError,
+        |call: &mut onetaskgraph_github_live::quota::CallRecord| call.phase = Phase::Schema,
+        |call: &mut onetaskgraph_github_live::quota::CallRecord| {
+            call.operation_sha256 = "b".repeat(64)
+        },
+        |call: &mut onetaskgraph_github_live::quota::CallRecord| {
+            call.charge = Charge::ModelledPageSizeRefusal {
+                points: 2,
+                url: PRICING_URL.to_owned(),
+            }
+        },
+        |call: &mut onetaskgraph_github_live::quota::CallRecord| {
+            call.charge = Charge::ModelledPageSizeRefusal {
+                points: 1,
+                url: "https://example.test".into(),
+            }
+        },
+    ] {
+        let mut invalid = pair.clone();
+        invalidate(&mut invalid[0].calls[4]);
+        assert!(read_pair(&invalid).is_err());
+    }
+    let mut duplicate = pair.clone();
+    let mut call = duplicate[0].calls[4].clone();
+    call.sequence = duplicate[0].calls.len() as u64 + 1;
+    duplicate[0].calls.push(call);
+    assert!(read_pair(&duplicate).is_err());
 }
