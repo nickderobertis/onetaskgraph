@@ -836,8 +836,21 @@ fn live_session_figure() -> Result<(f64, String), String> {
         .map(|(phase, points)| format!("{phase:?}={points}"))
         .collect::<Vec<_>>()
         .join(", ");
+    // A smaller shared board bills less; say so rather than let its figure read as the
+    // registered workload's measurement.
+    let board = if bill.initial_items == workload.initial_items {
+        format!(
+            "initial board items={} (the registered workload)",
+            bill.initial_items
+        )
+    } else {
+        format!(
+            "initial board items={} (fewer than the registered workload's {}; not its measurement)",
+            bill.initial_items, workload.initial_items
+        )
+    };
     let detail = format!(
-        "session_id={id}; source_revision={revision}; workspace_version={WORKSPACE_VERSION}; reported query points={}; Modelled mutation points={} ({} requests); Documented mutation points={} ({} requests); mutation count={}; pricing URL={PRICING_URL}; GraphQL requests={}; REST requests={} (excluded from points); phases: {phases}; corroborating account movement={:?}; concurrent movement flagged={}; actual asset bytes={:?}; requested PNG bytes={:?}; Modelled deliberate page-size refusal points={} ({} requests)",
+        "session_id={id}; source_revision={revision}; workspace_version={WORKSPACE_VERSION}; {board}; reported query points={}; Modelled mutation points={} ({} requests); Documented mutation points={} ({} requests); mutation count={}; pricing URL={PRICING_URL}; GraphQL requests={}; REST requests={} (excluded from points); phases: {phases}; corroborating account movement={:?}; concurrent movement flagged={}; actual asset bytes={:?}; requested PNG bytes={:?}; Modelled deliberate page-size refusal points={} ({} requests)",
         bill.query_points,
         bill.modelled_mutation_points,
         bill.modelled_mutations,
@@ -1061,6 +1074,7 @@ fn live_session_report_boundary() {
                 "workspace_version=",
                 "source_revision=",
                 "session_id=current-test-session",
+                "initial board items=90 (the registered workload)",
             ] {
                 assert!(detail.contains(fact), "{fact}: {detail}");
             }

@@ -144,6 +144,48 @@ fn partial_stale_duplicate_missing_price_and_missing_cleanup_records_refuse_a_bi
 }
 
 #[test]
+fn a_shared_board_is_billed_between_the_journey_minimum_and_the_measured_items() {
+    use onetaskgraph_github_live::quota::{MINIMUM_INITIAL_ITEMS, reference_workload};
+    let good = completed_pair();
+    let measured = good[0].workload.initial_items;
+    assert_eq!(measured, reference_workload().initial_items);
+    assert_eq!(MINIMUM_INITIAL_ITEMS, 51);
+    for (items, billed) in [
+        (measured, true),
+        (84, true),
+        (MINIMUM_INITIAL_ITEMS, true),
+        (MINIMUM_INITIAL_ITEMS - 1, false),
+        (0, false),
+        (measured + 1, false),
+    ] {
+        let mut pair = good.clone();
+        pair[0].workload.initial_items = items;
+        let bill = read_pair(&pair);
+        assert_eq!(bill.is_ok(), billed, "{items} items");
+        if let Ok(bill) = bill {
+            assert_eq!(
+                bill.initial_items, items,
+                "the bill names the board it ran on"
+            );
+        }
+    }
+    let mut pair = good.clone();
+    pair[0].workload.initial_items = 84;
+    pair[0].workload.initial_fields -= 1;
+    assert!(
+        read_pair(&pair).is_err(),
+        "fields are this lane's own and exact"
+    );
+    let mut pair = good;
+    pair[0].workload.initial_items = 84;
+    pair[0].workload.fixture_tasks += 1;
+    assert!(
+        read_pair(&pair).is_err(),
+        "a smaller board excuses no other fact"
+    );
+}
+
+#[test]
 fn reader_refuses_malformed_request_and_allowance_facts() {
     use onetaskgraph_github_live::quota::{Charge, CurrentSession, MutationBasis, RequestKind};
     let good = completed_pair();

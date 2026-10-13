@@ -68,6 +68,35 @@ pub struct Workload {
     pub initial_orphans: Option<u64>,
 }
 
+/// Tasks per page of the main journey's read-only cursor walk over the whole board.
+///
+/// The walk asserts that no task repeats across pages, which exercises a cursor only when
+/// the board holds more tasks than one page: hence [`MINIMUM_INITIAL_ITEMS`].
+pub const BOARD_WALK_PAGE_SIZE: u32 = 50;
+
+/// The fewest board items before setup on which every main-journey assertion exercises what
+/// it covers: the cursor walk needs a second page, so more than [`BOARD_WALK_PAGE_SIZE`].
+/// Every other assertion over the board's own items needs one at most.
+pub const MINIMUM_INITIAL_ITEMS: u64 = BOARD_WALK_PAGE_SIZE as u64 + 1;
+
+impl Workload {
+    /// Whether this recorded workload is `reference` on a shared board that may hold fewer
+    /// items than the registered measurement, but never more and never too few to exercise
+    /// the journey.
+    ///
+    /// The upper bound is the registered measurement's own board: a larger one is unmeasured
+    /// and could read more pages. The board's fields and every fixture fact are this lane's
+    /// own setup and must match exactly.
+    #[must_use]
+    pub fn admits(&self, reference: &Self) -> bool {
+        (MINIMUM_INITIAL_ITEMS..=reference.initial_items).contains(&self.initial_items)
+            && Self {
+                initial_items: reference.initial_items,
+                ..self.clone()
+            } == *reference
+    }
+}
+
 /// Facts about one executed request, without variables or bodies.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CallRecord {
@@ -276,6 +305,9 @@ impl<'a> CurrentSession<'a> {
 /// An attributed bill with corroboration kept separate from its price.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Bill {
+    /// Board items the main journey observed before setup; the registered measurement's
+    /// own count only when the board held exactly that many.
+    pub initial_items: u64,
     /// Actual query prices plus explicit mutation prices; excludes REST.
     pub points: u64,
     /// Points reported by executed query responses.
@@ -327,6 +359,7 @@ pub fn bill(records: &[SessionRecord], current: &CurrentSession<'_>) -> Result<B
         return Err("a current session requires both Main and Assets".into());
     };
     let mut result = Bill {
+        initial_items: main.workload.initial_items,
         points: 0,
         query_points: 0,
         modelled_page_refusal_points: 0,
@@ -451,7 +484,7 @@ fn validate_record(record: &SessionRecord, current: &CurrentSession<'_>) -> Resu
         || record.session_id != current.session_id.0
         || record.source_revision != current.source_revision.0
         || record.workspace_version != current.workspace_version.0
-        || record.workload != *current.workload
+        || !record.workload.admits(current.workload)
         || !record.complete
         || record.calls.is_empty()
     {
@@ -668,7 +701,8 @@ pub fn operation_sha256(document: &str) -> String {
     format!("{:x}", Sha256::digest(document.as_bytes()))
 }
 
-/// The nominated workload required for the whole-lane budget, with unknown initial orphans.
+/// The nominated workload the whole-lane budget was measured on, with unknown initial orphans.
+/// Its item count is the most a recorded session's board may hold; see [`Workload::admits`].
 #[must_use]
 pub fn reference_workload() -> Workload {
     Workload {

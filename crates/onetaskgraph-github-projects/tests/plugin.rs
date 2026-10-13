@@ -720,7 +720,6 @@ impl Refusal {
 enum WorkloadFault {
     MissingItems,
     MissingFields,
-    WrongDimensions,
 }
 
 /// What this board refuses for going too fast, and what it counts while it does.
@@ -2437,9 +2436,6 @@ fn answer_a_session_call(
                     .as_object_mut()
                     .unwrap()
                     .remove("fields");
-            }
-            Some(WorkloadFault::WrongDimensions) => {
-                result["repositoryOwner"]["projectV2"]["items"]["totalCount"] = json!(91);
             }
             None => (),
         }
@@ -19868,8 +19864,16 @@ fn live_pair_fixture_child() {
     let scalar = scenario == "scalar";
     let malformed_ceiling = scenario == "malformed-ceiling";
     let declared_core = scenario == "attachment-core-unread";
+    // The shared board's own population: the registered measurement's 90 unless a scenario
+    // names another, as `board-84` does for the CI board after its residue was cleared.
+    let population: usize = scenario
+        .strip_prefix("board-")
+        .map_or(90, |items| items.parse().unwrap());
+    let refused_population = !(onetaskgraph_github_live::quota::MINIMUM_INITIAL_ITEMS
+        ..=onetaskgraph_github_live::quota::reference_workload().initial_items)
+        .contains(&u64::try_from(population).unwrap());
     let fixture = board_with(
-        (0..90)
+        (0..population)
             .map(|index| Item::draft(&format!("DI_existing_{index}"), "existing board note"))
             .collect(),
         true,
@@ -19881,7 +19885,6 @@ fn live_pair_fixture_child() {
     fixture.state.lock().unwrap().limits.workload_fault = match scenario.as_str() {
         "missing-items" => Some(WorkloadFault::MissingItems),
         "missing-fields" => Some(WorkloadFault::MissingFields),
-        "wrong-workload" => Some(WorkloadFault::WrongDimensions),
         _ => None,
     };
     fixture.items_connection_falls_behind();
@@ -20014,7 +20017,7 @@ fn live_pair_fixture_child() {
         || scalar
         || malformed_ceiling
         || scenario.starts_with("missing-")
-        || scenario == "wrong-workload"
+        || refused_population
     {
         assert!(upload_sizes.lock().unwrap().is_empty());
         assert_eq!(rendering_reads.load(std::sync::atomic::Ordering::SeqCst), 0);
@@ -20026,7 +20029,7 @@ fn live_pair_fixture_child() {
         assert_eq!(rendering_reads.load(std::sync::atomic::Ordering::SeqCst), 8);
     }
     assert!(
-        fixture.state.lock().unwrap().items.len() == 90,
+        fixture.state.lock().unwrap().items.len() == population,
         "both entry points cleaned up their items"
     );
     assert!(

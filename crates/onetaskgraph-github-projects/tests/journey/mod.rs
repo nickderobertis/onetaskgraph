@@ -2131,7 +2131,10 @@ pub fn contract_field_types(type_name: &str) -> &'static [(&'static str, &'stati
 }
 
 fn page(cursor: Option<onetaskgraph_plugin_api::Cursor>) -> PageRequest {
-    PageRequest { cursor, limit: 50 }
+    PageRequest {
+        cursor,
+        limit: onetaskgraph_github_live::quota::BOARD_WALK_PAGE_SIZE,
+    }
 }
 
 /// The one board, repository and naming this run may write under.

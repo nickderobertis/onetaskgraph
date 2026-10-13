@@ -105,8 +105,13 @@ fn malformed_errors_cannot_establish_the_page_ceiling_or_inherit_its_price_model
 }
 
 #[test]
-fn missing_or_different_board_observations_never_start_the_fixture_or_make_a_bill() {
-    for scenario in ["missing-items", "missing-fields", "wrong-workload"] {
+fn a_shared_board_smaller_than_the_measured_one_runs_and_bills_within_the_budget() {
+    run_pair("board-84");
+}
+
+#[test]
+fn missing_or_unadmitted_board_observations_never_start_the_fixture_or_make_a_bill() {
+    for scenario in ["missing-items", "missing-fields", "board-91", "board-50"] {
         run_pair(scenario);
     }
 }
@@ -179,17 +184,24 @@ fn run_pair(scenario: &str) {
     }
     drop(fixture.stdin.take());
     let fixture_status = fixture.wait().unwrap();
-    if scenario.starts_with("missing-") || scenario == "wrong-workload" {
+    let population = scenario
+        .strip_prefix("board-")
+        .map(|items| items.parse::<u64>().unwrap());
+    if scenario.starts_with("missing-") || matches!(population, Some(91 | 50)) {
         assert_eq!(outputs.len(), 1);
         assert!(!outputs[0].status.success());
         let said = String::from_utf8_lossy(&outputs[0].stderr);
         assert!(
-            said.contains(if scenario == "wrong-workload" {
-                "initial board workload is 91"
+            said.contains(&if let Some(items) = population {
+                format!(
+                    "initial board workload is {items} items and 14 fields; registered workload requires {} to {} items and 14 fields",
+                    onetaskgraph_github_live::quota::MINIMUM_INITIAL_ITEMS,
+                    reference_workload().initial_items
+                )
             } else if scenario == "missing-items" {
-                "initial board item count was not reported"
+                "initial board item count was not reported".to_owned()
             } else {
-                "initial board field count was not reported"
+                "initial board field count was not reported".to_owned()
             }),
             "{said}"
         );
@@ -203,8 +215,8 @@ fn run_pair(scenario: &str) {
                 .iter()
                 .any(|call| call.kind == onetaskgraph_github_live::quota::RequestKind::Mutation)
         );
-        if scenario == "wrong-workload" {
-            assert_eq!(main.workload.initial_items, 91);
+        if let Some(items) = population {
+            assert_eq!(main.workload.initial_items, items);
         }
         assert!(!records.join("assets.json").exists());
         return;
@@ -392,6 +404,10 @@ fn run_pair(scenario: &str) {
         CurrentSession::new("entry-point-pair", &revision, WORKSPACE_VERSION, &workload).unwrap();
     let bill = read_bill(&records, &current).unwrap();
     assert_eq!(
+        bill.initial_items,
+        population.unwrap_or(workload.initial_items)
+    );
+    assert_eq!(
         bill.modelled_page_refusals,
         u64::from(scenario == "page-refusal")
     );
@@ -500,11 +516,40 @@ fn run_pair(scenario: &str) {
         reported["value"].as_f64(),
         Some(f64::from(u32::try_from(bill.points).unwrap()))
     );
+    let detail = reported["detail"].as_str().unwrap();
+    assert!(detail.contains("Modelled mutation points="));
+    // A smaller board's bill names that board and never reads as the measured workload's.
     assert!(
-        reported["detail"]
-            .as_str()
-            .unwrap()
-            .contains("Modelled mutation points=")
+        detail.contains(&if bill.initial_items == workload.initial_items {
+            format!("initial board items={} (the registered workload)", bill.initial_items)
+        } else {
+            format!(
+                "initial board items={} (fewer than the registered workload's {}; not its measurement)",
+                bill.initial_items, workload.initial_items
+            )
+        }),
+        "{detail}"
+    );
+    let configuration = onebudgetspec_core::load(
+        &[PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("budgets.yaml")],
+        false,
+    )
+    .unwrap();
+    let budget = configuration
+        .files()
+        .iter()
+        .flat_map(|file| &file.contents.budgets)
+        .find(|budget| budget.id == "github-live-session-points")
+        .unwrap();
+    assert_eq!(
+        onebudgetspec_core::judge(
+            budget.direction,
+            budget.threshold,
+            reported["value"].as_f64().unwrap()
+        )
+        .0,
+        onebudgetspec_core::report::Verdict::Within,
+        "the registered budget judges this session's bill within its threshold"
     );
     std::fs::remove_file(&result).unwrap();
     // Removing real cleanup evidence must make the same reader refuse numeric success.

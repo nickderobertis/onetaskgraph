@@ -172,7 +172,8 @@ impl Invocation {
     }
 }
 
-/// Retain actual board facts, then refuse a workload different from the registered one.
+/// Retain actual board facts, then refuse a board the registered workload does not admit:
+/// more items than it was measured on, fewer than the journey needs, or other fields.
 pub fn observe_initial_board(items: Option<u64>, fields: Option<u64>) -> Result<(), String> {
     let mut current = CURRENT.lock().map_err(|error| error.to_string())?;
     if let Some(current) = current.as_mut() {
@@ -180,9 +181,11 @@ pub fn observe_initial_board(items: Option<u64>, fields: Option<u64>) -> Result<
         let fields = fields.ok_or("initial board field count was not reported")?;
         current.writer.observe_initial_board(items, fields)?;
         let expected = onetaskgraph_github_live::quota::reference_workload();
-        if items != expected.initial_items || fields != expected.initial_fields {
+        let minimum = onetaskgraph_github_live::quota::MINIMUM_INITIAL_ITEMS;
+        if !(minimum..=expected.initial_items).contains(&items) || fields != expected.initial_fields
+        {
             return Err(format!(
-                "initial board workload is {items} items and {fields} fields; registered workload requires {} items and {} fields",
+                "initial board workload is {items} items and {fields} fields; registered workload requires {minimum} to {} items and {} fields",
                 expected.initial_items, expected.initial_fields
             ));
         }
