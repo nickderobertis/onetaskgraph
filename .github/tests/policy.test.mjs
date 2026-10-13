@@ -81,6 +81,8 @@ const files = {
     'version = 1\n[[package]]\nname = "onetaskgraph-cli"\nversion = "1.2.3"\nsource = { editable = "." }\n',
   "sdks/python/uv.lock":
     'version = 1\n[[package]]\nname = "onetaskgraph-sdk"\nversion = "1.2.3"\nsource = { virtual = "." }\ndependencies = [{name = "onetaskgraph-cli", version = "1.2.3"}]\n[package.metadata]\nrequires-dist = [{name = "onetaskgraph-cli", specifier = "==1.2.3"}]\n',
+  "crates/onetaskgraph-core/fixtures/Cargo.toml":
+    '[package]\nname = "fixture"\nversion = "1.2.3"\n',
   "source.rs": "fn main() {}\n",
   "CHANGELOG.md": "# Changes\n",
 };
@@ -100,7 +102,7 @@ function revision(changes) {
 }
 const versions = Object.fromEntries(
   Object.entries(files)
-    .filter(([p]) => p !== "source.rs")
+    .filter(([p]) => p !== "source.rs" && !p.includes("/fixtures/"))
     .map(([p, s]) => [
       p,
       p === "Cargo.lock"
@@ -207,6 +209,7 @@ test("semantic comparison refuses mixed fields, dependency lock versions and unr
       ),
     },
     { "fixtures/CHANGELOG.md": "# unrelated" },
+    { "crates/onetaskgraph-core/fixtures/CHANGELOG.md": "# fixture changes" },
     { "fixtures/Cargo.toml": '[package]\nversion = "1.2.4"' },
     { "pyproject.toml": "malformed" },
   ];
@@ -245,6 +248,25 @@ test("malformed product versions, non-version uv content and empty diffs never a
       ),
     },
     { "uv.lock": "version = 1\n" },
+  ])
+    assert.equal(classify(event("release-plz-123"), revision(changed)).macosRequired, true);
+});
+
+test("repository identities and nested uv lock data fail conservatively", () => {
+  for (const identity of ["", "malformed", {}, ["owner/repo"], "owner/", "/repo"]) {
+    const payload = event("release-plz-123");
+    payload.pull_request.head.repo.full_name = identity;
+    payload.pull_request.base.repo.full_name = identity;
+    assert.equal(classify(payload).macosRequired, true);
+  }
+  for (const changed of [
+    {
+      "sdks/python/uv.lock": files["sdks/python/uv.lock"].replace(
+        'specifier = "==1.2.3"',
+        'specifier = "==1.2.3", extra = "external-change"',
+      ),
+    },
+    { "uv.lock": `${files["uv.lock"]}metadata = "invalid"\n` },
   ])
     assert.equal(classify(event("release-plz-123"), revision(changed)).macosRequired, true);
 });
@@ -466,6 +488,28 @@ test("workflow matrices, event fan-out and exact release head model record sched
             )
             .runs.map((r) => ({ ...r, phase: id })),
         );
+        // Each merge also closes its PR; actual closed-event declarations determine
+        // the downstream run inventory without adding another user-push scenario.
+        for (const phase of ["base-push", "release-pr-merge"]) {
+          for (const run of graph(
+            {
+              event: "pull_request",
+              action: "closed",
+              fork: phase === "base-push" && fork,
+              vars: {
+                CARGO_PUBLISH: optional & 1 ? "true" : "false",
+                PYPI_PUBLISH: optional & 2 ? "true" : "false",
+                NPM_PUBLISH: optional & 4 ? "true" : "false",
+              },
+            },
+            { macosRequired: false, reason: "closed PR has no CI trigger" },
+          ))
+            runs.push({
+              ...run,
+              phase: `${phase}-closed`,
+              macJobs: run.rows.filter((row) => row.macos).length,
+            });
+        }
         lifecycles.push({
           diff,
           fork,

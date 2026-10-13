@@ -11,6 +11,15 @@ if (args.length > 1 || (args.length === 1 && args[0] !== "--parse-only")) {
   process.exit(1);
 }
 const normalized = parse(readFileSync(0, "utf8"));
+if (
+  !normalized ||
+  typeof normalized !== "object" ||
+  Array.isArray(normalized) ||
+  !normalized.workspaces ||
+  typeof normalized.workspaces !== "object" ||
+  Array.isArray(normalized.workspaces)
+)
+  throw Error("Invalid Bun workspace object; next: restore the generated lockfile");
 if (process.argv.includes("--parse-only")) {
   console.log(JSON.stringify(normalized));
   process.exit(0);

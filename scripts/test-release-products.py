@@ -93,6 +93,14 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
             if result.returncode == 0 or reason not in result.stderr:
                 raise ValueError(f'tampered staged product did not fail for {reason}; repair the production verifier before publishing')
 
+        checksum = tree / f'onetaskgraph-v{version}-{target}.{selected.extension}.sha256'
+        original_checksum = checksum.read_bytes()
+        checksum.write_text('0' * 64 + '  incorrect-archive\n')
+        refuses('checksum mismatch')
+        checksum.write_bytes(original_checksum)
+        checksum.unlink()
+        refuses('No such file')
+        checksum.write_bytes(original_checksum)
         original_binary = canonical.read_bytes()
         canonical.write_bytes(original_binary + b'corrupt')
         refuses('release binary drift')

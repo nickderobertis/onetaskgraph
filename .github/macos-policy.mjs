@@ -11,10 +11,9 @@ export function classify(event, base, head) {
       macosRequired: true,
       reason: "Unknown PR input requires coverage",
     };
-  if (
-    typeof pr.head?.repo?.full_name !== "string" ||
-    typeof pr.base?.repo?.full_name !== "string"
-  ) {
+  const validRepository = (value) =>
+    typeof value === "string" && /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(value);
+  if (!validRepository(pr.head?.repo?.full_name) || !validRepository(pr.base?.repo?.full_name)) {
     return {
       isReleaseOnly: false,
       macosRequired: true,

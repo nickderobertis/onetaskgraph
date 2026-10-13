@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { validateTelemetry } from "../telemetry.ts";
-import { digest, graph, jobs, triggered } from "../workflow-graph.mjs";
+import { digest, graph, jobs, matrices, triggered } from "../workflow-graph.mjs";
 
 function recording() {
   const scenario = {
@@ -142,6 +142,9 @@ test("trigger filters discriminate event types, branches and tags and refuse uns
       workflow_run: { workflows: ["ci"] },
     },
   };
+  const barePR = { on: { pull_request: null }, jobs: { proof: { "runs-on": "ubuntu-latest" } } };
+  assert.equal(triggered(barePR, { event: "pull_request", action: "opened" }), true);
+  assert.equal(triggered(barePR, { event: "pull_request", action: "closed" }), false);
   assert.equal(triggered(workflow, { event: "push", branch: "main" }), true);
   assert.equal(triggered(workflow, { event: "push", branch: "other" }), false);
   assert.equal(triggered(workflow, { event: "push", tag: "v1.2.3" }), false);
@@ -153,6 +156,18 @@ test("trigger filters discriminate event types, branches and tags and refuse uns
       () => triggered({ on, jobs: { proof: { "runs-on": "ubuntu-latest" } } }, { event: "push" }),
       /Unresolved/,
     );
+  for (const key of ["types", "branches", "tags", "workflows"])
+    assert.throws(
+      () =>
+        triggered(
+          { jobs: { proof: { "runs-on": "ubuntu-latest" } }, on: { push: { [key]: "main" } } },
+          { event: "push" },
+        ),
+      /Unresolved/,
+    );
+  for (const key of ["include", "exclude"])
+    for (const value of ["bad", [null], ["bad"], [[]]])
+      assert.throws(() => matrices({ os: ["ubuntu-latest"], [key]: value }, {}), /Unresolved/);
   for (const filter of [
     { paths: ["src/**"] },
     { "branches-ignore": ["draft"] },
@@ -206,10 +221,105 @@ test("local Bun parser rejects unsupported CLI arguments at its real entrypoint"
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /usage/);
   }
+  for (const bad of ["null", "42", "[]", "{}", '{"workspaces":[]}'])
+    assert.notEqual(
+      spawnSync(process.execPath, [helper], { input: bad, encoding: "utf8" }).status,
+      0,
+    );
   const accepted = spawnSync(process.execPath, [helper, "--parse-only"], {
     input,
     encoding: "utf8",
   });
   assert.equal(accepted.status, 0, accepted.stderr);
   assert.equal(JSON.parse(accepted.stdout).workspaces["sdks/typescript"].name, "@onetaskgraph/sdk");
+});
+
+test("classifier and carriers enforce invocation and actual filesystem IO failure contracts", () => {
+  const scratch = mkdtempSync(
+    join(process.env.ONEPIPELINE_NODE_SCRATCH_DIR || tmpdir(), "cli-io-"),
+  );
+  try {
+    const classifier = fileURLToPath(new URL("../macos-policy.mjs", import.meta.url));
+    const carrier = fileURLToPath(new URL("../macos-result.mjs", import.meta.url));
+    const event = join(scratch, "event.json");
+    writeFileSync(event, JSON.stringify({ event_name: "push" }));
+    for (const args of [[], ["other"], ["classify", "--unknown", event]])
+      assert.notEqual(
+        spawnSync(process.execPath, [classifier, ...args], { encoding: "utf8" }).status,
+        0,
+      );
+    const outputFailure = spawnSync(
+      process.execPath,
+      [classifier, "classify", "--event", event, "--base", "missing", "--head", "missing"],
+      {
+        env: { ...process.env, GITHUB_EVENT_NAME: "push", GITHUB_OUTPUT: scratch },
+        encoding: "utf8",
+      },
+    );
+    assert.notEqual(outputFailure.status, 0);
+    const needs = join(scratch, "needs.json");
+    for (const path of [join(scratch, "missing.json"), scratch])
+      assert.notEqual(spawnSync(process.execPath, [carrier, path], { encoding: "utf8" }).status, 0);
+    writeFileSync(needs, "{bad");
+    assert.notEqual(spawnSync(process.execPath, [carrier, needs], { encoding: "utf8" }).status, 0);
+    for (const reason of [undefined, null, {}, "", " \n"]) {
+      writeFileSync(
+        needs,
+        JSON.stringify({
+          "macos-lanes": { result: "success", outputs: { macosRequired: "false", reason } },
+          macos: { result: "skipped" },
+        }),
+      );
+      assert.notEqual(
+        spawnSync(process.execPath, [carrier, needs], { encoding: "utf8" }).status,
+        0,
+      );
+    }
+    writeFileSync(
+      needs,
+      JSON.stringify({
+        "macos-lanes": {
+          result: "success",
+          outputs: { macosRequired: "false", reason: "authorized semantic release" },
+        },
+        macos: { result: "skipped" },
+      }),
+    );
+    assert.notEqual(
+      spawnSync(process.execPath, [carrier, needs, "extra"], { encoding: "utf8" }).status,
+      0,
+    );
+    assert.equal(spawnSync(process.execPath, [carrier, needs], { encoding: "utf8" }).status, 0);
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+});
+
+test("reporter rejects invalid invocations and an unwritable SDK result destination", () => {
+  const scratch = mkdtempSync(
+    join(process.env.ONEPIPELINE_NODE_SCRATCH_DIR || tmpdir(), "reporter-io-"),
+  );
+  try {
+    const reporter = fileURLToPath(new URL("../macos-budget.mjs", import.meta.url));
+    for (const args of [
+      [],
+      ["--metric", "other", "--telemetry", "missing"],
+      ["--wrong", "jobs-per-run", "--telemetry", "missing"],
+    ])
+      assert.notEqual(
+        spawnSync(process.execPath, [reporter, ...args], { encoding: "utf8" }).status,
+        0,
+      );
+    const path = join(scratch, "telemetry.json");
+    writeFileSync(path, JSON.stringify(recording()));
+    const result = spawnSync(
+      process.execPath,
+      [reporter, "--metric", "jobs-per-run", "--telemetry", path],
+      { env: { ...process.env, ONEBUDGETSPEC_RESULT: scratch }, encoding: "utf8" },
+    );
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /next:/);
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
 });

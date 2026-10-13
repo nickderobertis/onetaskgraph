@@ -67,6 +67,7 @@ export function digest() {
   const files = [
     "release-targets.toml",
     "screencomp.toml",
+    "scripts/product_versions.py",
     ...readdirSync(new URL(".github/", root))
       .filter((p) => /\.(mjs|py|json|lock|ts)$/.test(p))
       .map((p) => `.github/${p}`),
@@ -122,6 +123,13 @@ export function matrices(matrix, context) {
   const resolved = resolve(matrix, context);
   if (!resolved || typeof resolved !== "object" || Array.isArray(resolved))
     throw Error("Unresolved matrix");
+  for (const key of ["include", "exclude"])
+    if (
+      resolved[key] !== undefined &&
+      (!Array.isArray(resolved[key]) ||
+        resolved[key].some((row) => !row || typeof row !== "object" || Array.isArray(row)))
+    )
+      throw Error(`Unresolved matrix ${key} entries`);
   const axes = Object.entries(resolved).filter(([k]) => !["include", "exclude"].includes(k));
   let rows = axes.length ? [{}] : [];
   for (const [key, values] of axes) {
@@ -159,6 +167,12 @@ export function triggered(workflow, scenario) {
           : undefined
         : on?.[scenario.event];
   if (spec === undefined) return false;
+  for (const key of ["types", "branches", "tags", "workflows"])
+    if (
+      spec?.[key] !== undefined &&
+      (!Array.isArray(spec[key]) || spec[key].some((value) => typeof value !== "string" || !value))
+    )
+      throw Error(`Unresolved event filter values: ${key}`);
   const supported = new Set(["types", "branches", "tags", "workflows", "inputs"]);
   if (spec && !Array.isArray(spec) && typeof spec === "object")
     for (const key of Object.keys(spec))
@@ -167,6 +181,12 @@ export function triggered(workflow, scenario) {
     if (spec?.[key]?.some((pattern) => /[*!?[\\]/.test(pattern)))
       throw Error(`Unresolved Actions glob filter: ${key}`);
   if (spec?.workflows && !spec.workflows.includes(scenario.workflow)) return false;
+  if (
+    scenario.event === "pull_request" &&
+    !spec?.types &&
+    !["opened", "synchronize", "reopened"].includes(scenario.action)
+  )
+    return false;
   if (spec?.types && !spec.types.includes(scenario.action)) return false;
   if (spec?.branches && !spec.branches.includes(scenario.branch || "main")) return false;
   if (spec?.tags && !spec.tags.includes(scenario.tag)) return false;
@@ -345,7 +365,15 @@ export function jobs(workflow, scenario, policy, prefix = "", inputs = {}, ances
               : ""
           }`,
           runner: labels,
-          target: matrix.target || matrix.arch || "",
+          target:
+            matrix.target ||
+            matrix.arch ||
+            (job.env?.TARGETS
+              ? resolve(job.env.TARGETS, rowContext)
+                  .split(" ")
+                  .map((pair) => pair.split("=")[0])
+                  .join(",")
+              : ""),
           macos: labels.some((x) => /macos/i.test(x)),
           matrix,
         });

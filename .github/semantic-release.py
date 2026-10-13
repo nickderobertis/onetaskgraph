@@ -45,11 +45,21 @@ def normalize_lock(text, path, products):
         local = name in products and ('source' not in package if path == 'Cargo.lock' else isinstance(package.get('source'), dict) and ('editable' in package['source'] or 'virtual' in package['source']))
         if local:
             package['version'] = version(package['version'])
-        for dep in package.get('dependencies', []):
+        dependencies = package.get('dependencies', [])
+        metadata = package.get('metadata', {})
+        if not isinstance(dependencies, list) or not isinstance(metadata, dict):
+            raise ValueError('invalid lockfile dependencies or metadata')
+        requires = metadata.get('requires-dist', [])
+        if not isinstance(requires, list) or any(not isinstance(dep, dict) for dep in requires):
+            raise ValueError('invalid lockfile requires-dist records')
+        if path == 'Cargo.lock' and any(not isinstance(dep, str) for dep in dependencies):
+            raise ValueError('invalid Cargo dependency records')
+        if path != 'Cargo.lock' and any(not isinstance(dep, dict) for dep in dependencies):
+            raise ValueError('invalid uv dependency records')
+        for dep in dependencies:
             if isinstance(dep, dict) and dep.get('name', '') in products and 'version' in dep:
                 dep['version'] = version(dep['version'])
-        metadata = package.get('metadata', {})
-        for dep in metadata.get('requires-dist', []):
+        for dep in requires:
             if dep.get('name', '') in products and 'specifier' in dep:
                 dep['specifier'] = version(dep['specifier'], '==')
     return obj
@@ -80,7 +90,12 @@ def main():
     members = root['workspace']['members']
     paths = subprocess.check_output(['git', 'ls-tree', '-r', '--name-only', base], text=True).splitlines()
     import fnmatch
-    crates = {p.removesuffix('/Cargo.toml') for p in paths if p.endswith('/Cargo.toml') and any(fnmatch.fnmatch(p.removesuffix('/Cargo.toml'), m) for m in members)}
+    if not isinstance(members, list) or any(not isinstance(member, str) or '**' in member for member in members):
+        raise ValueError('unresolved workspace member patterns')
+    def workspace_member(directory: str) -> bool:
+        parts = directory.split('/')
+        return any(len(parts) == len(member.split('/')) and all(fnmatch.fnmatchcase(part, pattern) for part, pattern in zip(parts, member.split('/'))) for member in members)
+    crates = {p.removesuffix('/Cargo.toml') for p in paths if p.endswith('/Cargo.toml') and workspace_member(p.removesuffix('/Cargo.toml'))}
     products = {tomllib.loads(blob(base, p + '/Cargo.toml'))['package']['name'] for p in crates} | {tomllib.loads(blob(base, path))['project']['name'] for path in ('pyproject.toml', 'sdks/python/pyproject.toml')}
     changelogs = {'CHANGELOG.md', *(p + '/CHANGELOG.md' for p in crates)}
     changed = subprocess.check_output(['git', 'diff', '--name-only', '--no-renames', base, head], text=True).splitlines()

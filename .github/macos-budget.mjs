@@ -26,7 +26,10 @@ try {
   );
   const value =
     args[1] === "jobs-per-run"
-      ? Math.max(...runs.map((r) => r.macJobs))
+      ? Math.max(
+          ...runs.map((r) => r.macJobs),
+          ...telemetry.lifecycles.flatMap((lifecycle) => lifecycle.runs.map((run) => run.macJobs)),
+        )
       : Math.max(...telemetry.lifecycles.map((l) => l.macRuns));
   const detail = JSON.stringify({
     sourceDigest: telemetry.sourceDigest,

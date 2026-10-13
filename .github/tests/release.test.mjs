@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { test } from "node:test";
-import { matrices, read, resolve, root, workflows } from "../workflow-graph.mjs";
+import { graph, matrices, read, resolve, root, workflows } from "../workflow-graph.mjs";
 
 function ancestors(jobs, id, seen = new Set()) {
   const needs = typeof jobs[id].needs === "string" ? [jobs[id].needs] : jobs[id].needs || [];
@@ -133,4 +133,28 @@ test("actual release declarations retain every platform, package and independent
 test("release routing prefix agrees with the production PR builder", () => {
   assert.match(read("scripts/prepare-release-pr.sh"), /branch="release-plz-\$version"/);
   assert.match(read(".github/macos-policy.mjs"), /startsWith\("release-plz-"\)/);
+});
+
+test("Mac comparison base is the exact production body and environment exercised by the live-lane journey", () => {
+  const ci = workflows()["ci.yml"];
+  const original = ci.jobs.check.steps.find((step) => step.id === "base");
+  const combined = ci.jobs.macos.steps.find((step) => step.id === "macos-base");
+  // scripts/check-live-lane-selection.sh executes original.run over merge-base,
+  // predecessor, HEAD~1 and missing-base histories; equality extends that same proof.
+  assert.equal(combined.run, original.run);
+  assert.deepEqual(combined.env, original.env);
+  assert.match(read("justfile"), /^check:.*distribution-test/m);
+  assert.ok(ci.jobs.macos.steps.some((step) => step.run === "just check"));
+  assert.ok(!ci.jobs.macos.steps.some((step) => step.run === "just distribution-test"));
+});
+
+test("telemetry retains both compiled Darwin architectures on the single runner row", () => {
+  const release = workflows()["release.yml"];
+  const row = graph({ event: "release", action: "published" }, { macosRequired: false })
+    .find((run) => run.workflow === "release.yml")
+    .rows.find((row) => row.job === "macos-assets-carriers-and-wheels");
+  const declared = release.jobs["macos-assets-carriers-and-wheels"].env.TARGETS.split(" ").map(
+    (pair) => pair.split("=")[0],
+  );
+  assert.deepEqual(row.target.split(",").sort(), declared.sort());
 });
