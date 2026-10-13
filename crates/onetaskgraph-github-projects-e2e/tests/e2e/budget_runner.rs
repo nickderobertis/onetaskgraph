@@ -941,8 +941,21 @@ fn live_session_report_boundary() {
     let directory = sandbox.subdirectory("live-session");
     std::fs::create_dir_all(&directory).unwrap();
     let result = directory.join("sdk-result");
-    let good = live_report_pair(299);
-    let mut cases = vec![(good.clone(), None), (live_report_pair(300), None)];
+    let configuration = onebudgetspec_core::load(
+        &[PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("budgets.yaml")],
+        false,
+    )
+    .unwrap();
+    let budget = configuration
+        .files()
+        .iter()
+        .flat_map(|file| &file.contents.budgets)
+        .find(|budget| budget.id == "github-live-session-points")
+        .unwrap();
+    assert!(budget.labels.iter().any(|label| label == "github"));
+    let boundary = budget.threshold.to_string().parse::<u64>().unwrap();
+    let good = live_report_pair(boundary);
+    let mut cases = vec![(good.clone(), None), (live_report_pair(boundary + 1), None)];
     for change in [
         |pair: &mut Vec<onetaskgraph_github_live::quota::SessionRecord>| {
             pair.pop();
@@ -1018,6 +1031,19 @@ fn live_session_report_boundary() {
                     _ => unreachable!(),
                 })
             );
+            let verdict = onebudgetspec_core::judge(
+                budget.direction,
+                budget.threshold,
+                reported["value"].as_f64().unwrap(),
+            )
+            .0;
+            let expected = if matches!(pair[0].calls[0].charge, Charge::ReportedQuery { points } if points + 13 == boundary)
+            {
+                onebudgetspec_core::report::Verdict::Within
+            } else {
+                onebudgetspec_core::report::Verdict::Over
+            };
+            assert_eq!(verdict, expected);
             let detail = reported["detail"].as_str().unwrap();
             for fact in [
                 "Modelled mutation points=1 (1 requests)",

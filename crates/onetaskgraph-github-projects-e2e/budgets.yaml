@@ -73,3 +73,12 @@ budgets:
     unit: points
     direction: max
     threshold: 0
+  - id: github-live-session-points
+    description: >-
+      Whole credentialed Linux lane at the retained real-board workload: main Projects-v2 and asset-copy journeys, including admission, schema, 18 pricing probes, retries, owned cleanup and orphan recovery. Queries use each response's actual primary cost; mutation prices are explicitly documented or Modelled. Missing or partial evidence is unavailable.
+    labels: [github, live-session]
+    measure: reported
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_live_session", "--exact", "--nocapture"]
+    unit: points
+    direction: max
+    threshold: 299

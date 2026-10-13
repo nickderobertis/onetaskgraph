@@ -27,6 +27,12 @@ use lane::SESSION_NAME;
 
 #[tokio::test]
 async fn real_projects_v2_contract_writes_and_leaves_no_residue() {
+    if !onetaskgraph_github_live::quota::live_selected().unwrap() {
+        journey::say(
+            "GitHub live journey did not run: existing selection policy did not select the lane",
+        );
+        return;
+    }
     journey::against(journey::Endpoints::github());
     // `Shared`: this lane takes no seat. Every artifact it writes carries this process's own
     // stamp, its cleanup removes only those, and what it recovers of an interrupted run's is
@@ -56,5 +62,46 @@ async fn real_projects_v2_contract_writes_and_leaves_no_residue() {
     if recording.is_some() {
         journey::quota::complete()
             .unwrap_or_else(|error| panic!("live-session telemetry incomplete: {error}"));
+    }
+}
+
+#[test]
+fn propagated_selection_prevents_the_main_entry_point_from_opening_a_session() {
+    for (selection, succeeds, message) in [
+        (
+            "not-selected",
+            true,
+            "existing selection policy did not select the lane",
+        ),
+        (
+            "wrong",
+            false,
+            "GITHUB_LIVE_SELECTION must be run or not-selected",
+        ),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "real_projects_v2_contract_writes_and_leaves_no_residue",
+                "--exact",
+                "--nocapture",
+            ])
+            .env("GITHUB_LIVE_SELECTION", selection)
+            .env("ONETASKGRAPH_LIVE_REQUIRED", "1")
+            .env("GH_PROJECTS_TOKEN", "test-token")
+            .env("GH_PROJECTS_OWNER", "fixture-owner")
+            .env("GH_PROJECTS_NUMBER", "1")
+            .env("GH_PROJECTS_REPOSITORY", "fixture-owner/repository")
+            .env("GITHUB_LIVE_SESSION_DIR", directory.path())
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.success(),
+            succeeds,
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stderr).contains(message));
+        assert!(!directory.path().join("main.json").exists());
     }
 }

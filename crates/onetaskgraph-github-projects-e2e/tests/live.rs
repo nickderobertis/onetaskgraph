@@ -225,6 +225,12 @@ async fn nominated_status_option(
 
 #[tokio::test]
 async fn disposable_task_and_document_asset_copies() {
+    if !onetaskgraph_github_live::quota::live_selected().unwrap() {
+        journey::say(
+            "live asset journey did not run: existing selection policy did not select the lane",
+        );
+        return;
+    }
     let admission = lane::admit(&|variable| match std::env::var(variable) {
         Ok(value) => Some(value),
         Err(std::env::VarError::NotPresent) => None,
@@ -851,4 +857,46 @@ fn credentialless_asset_entry_point_never_writes_live_evidence() {
     );
     assert!(String::from_utf8_lossy(&output.stderr).contains("live asset journey did not run"));
     assert!(!directory.join("assets.json").exists());
+}
+
+#[test]
+fn propagated_selection_prevents_the_asset_entry_point_from_opening_a_session() {
+    for (selection, succeeds, message) in [
+        (
+            "not-selected",
+            true,
+            "existing selection policy did not select the lane",
+        ),
+        (
+            "wrong",
+            false,
+            "GITHUB_LIVE_SELECTION must be run or not-selected",
+        ),
+    ] {
+        let sandbox = Sandbox::new();
+        let directory = sandbox.subdirectory("session");
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "disposable_task_and_document_asset_copies",
+                "--exact",
+                "--nocapture",
+            ])
+            .env("GITHUB_LIVE_SELECTION", selection)
+            .env("ONETASKGRAPH_LIVE_REQUIRED", "1")
+            .env("GH_PROJECTS_TOKEN", "test-token")
+            .env("GH_PROJECTS_OWNER", "fixture-owner")
+            .env("GH_PROJECTS_NUMBER", "1")
+            .env("GH_PROJECTS_REPOSITORY", "fixture-owner/repository")
+            .env("GITHUB_LIVE_SESSION_DIR", &directory)
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.success(),
+            succeeds,
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stderr).contains(message));
+        assert!(!directory.join("assets.json").exists());
+    }
 }

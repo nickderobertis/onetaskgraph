@@ -577,3 +577,17 @@ pub fn reference_workload() -> Workload {
         initial_orphans: None,
     }
 }
+
+/// Read only the selection already computed by the repository's existing policy.
+/// No value means a direct test invocation, which remains selected.
+///
+/// # Errors
+/// Refuses malformed or non-Unicode propagated selection rather than silently skipping.
+pub fn live_selected() -> Result<bool, String> {
+    match std::env::var("GITHUB_LIVE_SELECTION") {
+        Ok(value) if value == "run" => Ok(true),
+        Ok(value) if value == "not-selected" => Ok(false),
+        Err(std::env::VarError::NotPresent) => Ok(true),
+        _ => Err("GITHUB_LIVE_SELECTION must be run or not-selected".into()),
+    }
+}
