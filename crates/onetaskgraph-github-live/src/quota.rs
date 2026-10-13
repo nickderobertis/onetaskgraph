@@ -189,3 +189,177 @@ pub struct Allowance {
     /// Reset time in Unix seconds.
     pub reset_epoch_seconds: u64,
 }
+
+/// GitHub's primary and secondary pricing documentation, kept with the mutation model.
+pub const PRICING_URL: &str =
+    "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api";
+
+/// Identity expected by the current invocation, rather than inferred from saved records.
+pub struct CurrentSession<'a> {
+    /// Job-supplied current session id.
+    pub session_id: &'a str,
+    /// Source revision being checked.
+    pub source_revision: &'a str,
+    /// Workspace source version being checked.
+    pub workspace_version: &'a str,
+    /// Reference workload for this job.
+    pub workload: &'a Workload,
+}
+
+/// An attributed bill with corroboration kept separate from its price.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Bill {
+    /// Actual query prices plus explicit mutation prices; excludes REST.
+    pub points: u64,
+    /// Requests attributed at a mutation price, so the model can be repriced.
+    pub mutations: u64,
+    /// Executed GraphQL requests, including retries and refusals.
+    pub graphql_requests: u64,
+    /// Same-window account movement; absent if any reset switches internally.
+    pub account_movement: Option<u64>,
+    /// Movement exceeds attribution by more than the number of GraphQL requests.
+    pub movement_flagged: bool,
+    /// Points for each phase, independent of the budget threshold.
+    pub phases: Vec<(Phase, u64)>,
+}
+
+/// Validate a complete current pair and attribute only per-response prices.
+///
+/// This does not compare a threshold. Account movement is corroboration alone: concurrent
+/// callers are never subtracted, and an internal reset invalidates the whole delta.
+///
+/// # Errors
+/// Refuses stale, duplicate, partial or malformed records and unavailable GraphQL prices.
+pub fn bill(records: &[SessionRecord], current: &CurrentSession<'_>) -> Result<Bill, String> {
+    if records.len() != 2 || current.session_id.is_empty() {
+        return Err("a current session requires exactly two invocation records".into());
+    }
+    let main = records
+        .iter()
+        .find(|record| record.invocation == EntryPoint::Main);
+    let assets = records
+        .iter()
+        .find(|record| record.invocation == EntryPoint::Assets);
+    let (Some(main), Some(assets)) = (main, assets) else {
+        return Err("a current session requires both Main and Assets".into());
+    };
+    let mut result = Bill {
+        points: 0,
+        mutations: 0,
+        graphql_requests: 0,
+        account_movement: None,
+        movement_flagged: false,
+        phases: Vec::new(),
+    };
+    let mut allowances = Vec::new();
+    for record in [main, assets] {
+        if record.schema_version != 1
+            || record.session_id != current.session_id
+            || record.source_revision != current.source_revision
+            || record.workspace_version != current.workspace_version
+            || record.workload != *current.workload
+            || !record.complete
+            || record.calls.is_empty()
+        {
+            return Err("incomplete, stale or mismatched live-session record".into());
+        }
+        let required: &[Phase] = match record.invocation {
+            EntryPoint::Main => &[
+                Phase::Admission,
+                Phase::Schema,
+                Phase::Reconciliation,
+                Phase::Setup,
+                Phase::Capabilities,
+                Phase::CommentActivity,
+                Phase::ChangeToken,
+                Phase::Cleanup,
+                Phase::OrphanRecovery,
+            ],
+            EntryPoint::Assets => &[
+                Phase::Admission,
+                Phase::AssetSetup,
+                Phase::AssetTask,
+                Phase::AssetDocument,
+                Phase::Cleanup,
+            ],
+        };
+        if required
+            .iter()
+            .any(|phase| !record.calls.iter().any(|call| call.phase == *phase))
+        {
+            return Err("live-session record is missing a required journey phase".into());
+        }
+        for (index, call) in record.calls.iter().enumerate() {
+            if call.sequence != u64::try_from(index).map_err(|error| error.to_string())? + 1
+                || call.attempt == 0
+                || call.operation_sha256.len() != 64
+                || !call
+                    .operation_sha256
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit())
+            {
+                return Err("invalid live-session request identity".into());
+            }
+            let points = match (&call.kind, &call.charge) {
+                (RequestKind::Rest, Charge::Rest) => 0,
+                (RequestKind::Query, Charge::ReportedQuery { points }) => {
+                    result.graphql_requests += 1;
+                    *points
+                }
+                (RequestKind::Mutation, Charge::Mutation { points, basis }) => {
+                    match basis {
+                        MutationBasis::Documented { url } if url == PRICING_URL => {}
+                        MutationBasis::Modelled {
+                            url,
+                            points_per_request,
+                        } if url == PRICING_URL && points == points_per_request => {}
+                        _ => return Err("invalid mutation pricing basis".into()),
+                    }
+                    result.graphql_requests += 1;
+                    result.mutations += 1;
+                    *points
+                }
+                (_, Charge::Unavailable { reason }) => {
+                    return Err(format!("live-session accounting unavailable: {reason}"));
+                }
+                _ => return Err("request kind and pricing basis disagree".into()),
+            };
+            result.points = result
+                .points
+                .checked_add(points)
+                .ok_or("session points overflow")?;
+            if let Some((_, total)) = result
+                .phases
+                .iter_mut()
+                .find(|(phase, _)| *phase == call.phase)
+            {
+                *total = total.checked_add(points).ok_or("phase points overflow")?;
+            } else {
+                result.phases.push((call.phase, points));
+            }
+            if let Some(allowance) = call.allowance {
+                if allowance.used.checked_add(allowance.remaining) != Some(allowance.limit) {
+                    return Err("inconsistent allowance facts".into());
+                }
+                if call.kind != RequestKind::Rest {
+                    allowances.push(allowance);
+                }
+            }
+        }
+    }
+    if let (Some(first), Some(last)) = (allowances.first(), allowances.last())
+        && allowances.iter().all(|allowance| {
+            allowance.reset_epoch_seconds == first.reset_epoch_seconds
+                && allowance.limit == first.limit
+        })
+        && allowances
+            .windows(2)
+            .all(|pair| pair[1].used >= pair[0].used)
+    {
+        result.account_movement = last.used.checked_sub(first.used);
+    }
+    result.movement_flagged = result
+        .account_movement
+        .is_some_and(|movement| movement.saturating_sub(result.points) > result.graphql_requests);
+    Ok(result)
+}
