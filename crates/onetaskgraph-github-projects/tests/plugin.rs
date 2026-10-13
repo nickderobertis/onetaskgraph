@@ -20003,7 +20003,10 @@ fn live_pair_fixture_child() {
             }
         }
     });
-    std::fs::write(ready, endpoint).unwrap();
+    // The pair polls for the file and reads it at once, so it appears whole or not at all.
+    let staged = format!("{ready}.partial");
+    std::fs::write(&staged, endpoint).unwrap();
+    std::fs::rename(&staged, &ready).unwrap();
     let mut done = String::new();
     std::io::stdin().read_to_string(&mut done).unwrap();
     if decline

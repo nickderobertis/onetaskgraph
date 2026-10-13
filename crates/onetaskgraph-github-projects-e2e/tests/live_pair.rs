@@ -29,7 +29,7 @@ fn executable(package: &str, target: &str) -> PathBuf {
                 .unwrap()
                 .to_string_lossy()
                 .starts_with(&format!("{target}-"))
-            && std::fs::read_to_string(&path).unwrap().contains(&source)
+            && names_source(&std::fs::read_to_string(&path).unwrap(), &source)
         {
             let binary = path.with_extension(std::env::consts::EXE_EXTENSION);
             if binary.is_file() {
@@ -42,6 +42,26 @@ fn executable(package: &str, target: &str) -> PathBuf {
         .pop()
         .unwrap_or_else(|| panic!("compile {package} --test {target} before this pair"))
         .1
+}
+
+/// Whether a dep-info file lists `source`. rustc writes each path with the separator the
+/// host spells it in, so on Windows the file reads `crates\<package>\tests\<target>.rs`.
+fn names_source(dep_info: &str, source: &str) -> bool {
+    dep_info.replace('\\', "/").contains(source)
+}
+
+#[test]
+fn a_dep_info_file_names_its_source_in_either_separator() {
+    let source = "crates/onetaskgraph-github-projects/tests/plugin.rs";
+    let linux =
+        "target/debug/deps/plugin-1.d: crates/onetaskgraph-github-projects/tests/plugin.rs\n";
+    let windows = "D:\\a\\target\\debug\\deps\\plugin-1.d: crates\\onetaskgraph-github-projects\\tests\\plugin.rs\n";
+    assert!(names_source(linux, source));
+    assert!(names_source(windows, source));
+    assert!(!names_source(
+        "plugin-2.d: crates\\onetaskgraph-linear\\tests\\plugin.rs\n",
+        source
+    ));
 }
 
 #[test]
