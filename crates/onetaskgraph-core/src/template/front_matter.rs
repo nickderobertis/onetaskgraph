@@ -1,14 +1,127 @@
 // llmlint: ignore-file[code_lands_in_the_domain_that_owns_it] A part of the `template` module; why that module sits in this crate is stated once, at the head of its `mod.rs`.
 //! A template file's front matter: split off the body, and read strictly by key.
 //!
-//! Read through `serde_norway::Value` rather than a derived struct, for two reasons a derive
-//! cannot serve: a refusal has to name the key it is about (`variables.title.type`, not a
-//! serde position), and a file's variables keep the order they were written in, which is the
-//! order a prompt asks them in.
+//! Read through serde-saphyr into [`Yaml`], a node whose mappings keep their keys in the
+//! order written, rather than a derived struct, for two reasons a derive cannot serve: a
+//! refusal has to name the key it is about (`variables.title.type`, not a serde position),
+//! and a file's variables keep the order they were written in, which is the order a prompt
+//! asks them in. Not `serde_json::Value`, whose object sorts its keys.
 
-use serde_norway::Value as Yaml;
+use std::fmt;
+
+use serde::de::{Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
+use serde_json::{Map, Number, Value};
 
 use super::{ItemType, TemplateError, TemplateVariable, VariableType, check_value};
+
+/// One node of front matter, as serde-saphyr reads it.
+#[derive(Clone)]
+enum Yaml {
+    Null,
+    Bool(bool),
+    Number(Number),
+    String(String),
+    Sequence(Vec<Yaml>),
+    /// Every entry in the order the file wrote it.
+    Mapping(Vec<(String, Yaml)>),
+}
+
+impl Yaml {
+    fn as_str(&self) -> Option<&str> {
+        match self {
+            Self::String(text) => Some(text),
+            _ => None,
+        }
+    }
+
+    /// The node as a JSON value, the form a variable's default takes.
+    fn into_json(self) -> Value {
+        match self {
+            Self::Null => Value::Null,
+            Self::Bool(value) => Value::Bool(value),
+            Self::Number(number) => Value::Number(number),
+            Self::String(text) => Value::String(text),
+            Self::Sequence(items) => Value::Array(items.into_iter().map(Self::into_json).collect()),
+            Self::Mapping(entries) => Value::Object(
+                entries
+                    .into_iter()
+                    .map(|(key, value)| (key, value.into_json()))
+                    .collect::<Map<_, _>>(),
+            ),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Yaml {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_any(NodeVisitor)
+    }
+}
+
+/// Collects a mapping's entries in the order they arrive.
+struct NodeVisitor;
+
+impl<'de> Visitor<'de> for NodeVisitor {
+    type Value = Yaml;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a YAML value")
+    }
+
+    fn visit_unit<E>(self) -> Result<Yaml, E> {
+        Ok(Yaml::Null)
+    }
+
+    fn visit_none<E>(self) -> Result<Yaml, E> {
+        Ok(Yaml::Null)
+    }
+
+    fn visit_some<D: Deserializer<'de>>(self, deserializer: D) -> Result<Yaml, D::Error> {
+        Yaml::deserialize(deserializer)
+    }
+
+    fn visit_bool<E>(self, value: bool) -> Result<Yaml, E> {
+        Ok(Yaml::Bool(value))
+    }
+
+    fn visit_i64<E>(self, value: i64) -> Result<Yaml, E> {
+        Ok(Yaml::Number(value.into()))
+    }
+
+    fn visit_u64<E>(self, value: u64) -> Result<Yaml, E> {
+        Ok(Yaml::Number(value.into()))
+    }
+
+    fn visit_f64<E: serde::de::Error>(self, value: f64) -> Result<Yaml, E> {
+        Number::from_f64(value)
+            .map(Yaml::Number)
+            .ok_or_else(|| E::custom(format!("{value} is not a number JSON can carry")))
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<Yaml, E> {
+        Ok(Yaml::String(value.to_owned()))
+    }
+
+    fn visit_string<E>(self, value: String) -> Result<Yaml, E> {
+        Ok(Yaml::String(value))
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, mut items: A) -> Result<Yaml, A::Error> {
+        let mut read = Vec::new();
+        while let Some(item) = items.next_element()? {
+            read.push(item);
+        }
+        Ok(Yaml::Sequence(read))
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut entries: A) -> Result<Yaml, A::Error> {
+        let mut read = Vec::new();
+        while let Some(entry) = entries.next_entry()? {
+            read.push(entry);
+        }
+        Ok(Yaml::Mapping(read))
+    }
+}
 
 /// The front matter's own version key, and the one value it may take.
 const VERSION_KEY: &str = "onetaskgraph_template";
@@ -79,7 +192,7 @@ pub(super) fn split(file: &str, source: &str) -> Result<Split, TemplateError> {
         ));
     }
 
-    let parsed: Yaml = serde_norway::from_str(&matter).map_err(|error| {
+    let parsed: Yaml = crate::yaml::from_str(&matter).map_err(|error| {
         TemplateError::malformed(file, None, format!("its front matter is not YAML: {error}"))
     })?;
     Ok(Split {
@@ -116,7 +229,6 @@ fn read(file: &str, matter: &Yaml) -> Result<Vec<TemplateVariable>, TemplateErro
     let mut version = None;
     let mut variables = None;
     for (key, value) in mapping {
-        let key = key_name(file, key, "")?;
         // The list alone decides which keys are accepted; the arms below give each its meaning,
         // and `the_published_keys_are_exactly_the_ones_read` proves every listed key has one.
         let listed_key = FRONT_MATTER_KEYS.contains(&key.as_str());
@@ -124,7 +236,7 @@ fn read(file: &str, matter: &Yaml) -> Result<Vec<TemplateVariable>, TemplateErro
             _ if !listed_key => {
                 return Err(TemplateError::malformed(
                     file,
-                    Some(&key),
+                    Some(key),
                     format!(
                         "is not a front matter key; the keys are {}",
                         listed(&FRONT_MATTER_KEYS)
@@ -187,30 +299,8 @@ fn read(file: &str, matter: &Yaml) -> Result<Vec<TemplateVariable>, TemplateErro
 
     variables
         .iter()
-        .map(|(name, declaration)| {
-            let name = key_name(file, name, "variables.")?;
-            declaration_of(file, name, declaration)
-        })
+        .map(|(name, declaration)| declaration_of(file, name.clone(), declaration))
         .collect()
-}
-
-/// A mapping key as the string it has to be.
-fn key_name(file: &str, key: &Yaml, prefix: &str) -> Result<String, TemplateError> {
-    match key {
-        Yaml::String(key) => Ok(key.clone()),
-        other => Err(TemplateError::malformed(
-            file,
-            Some(&format!("{prefix}{}", render_yaml(other))),
-            "is not a string key",
-        )),
-    }
-}
-
-/// A YAML value, compactly, for a message.
-fn render_yaml(value: &Yaml) -> String {
-    serde_norway::to_string(value)
-        .map(|rendered| rendered.trim_end().to_owned())
-        .unwrap_or_else(|_| "?".to_owned())
 }
 
 /// Whether `name` is one a variable can be declared with: `^[a-z][a-z0-9_]*$`.
@@ -251,7 +341,6 @@ fn declaration_of(
     let mut required = None;
     let mut default = None;
     for (key, field) in fields {
-        let key = key_name(file, key, &format!("{base}."))?;
         let path = format!("{base}.{key}");
         // As in `read`: the list decides which keys are accepted, the arms what each means.
         let listed_key = DECLARATION_KEYS.contains(&key.as_str());
@@ -310,15 +399,7 @@ fn declaration_of(
                     ));
                 }
             },
-            "default" => {
-                default = Some(serde_json::to_value(field).map_err(|error| {
-                    TemplateError::malformed(
-                        file,
-                        Some(&path),
-                        format!("cannot be read as a value: {error}"),
-                    )
-                })?);
-            }
+            "default" => default = Some(field.clone().into_json()),
             _ => {
                 return Err(TemplateError::malformed(
                     file,

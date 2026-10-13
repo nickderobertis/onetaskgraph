@@ -48,7 +48,7 @@ impl Answers {
     /// level is not a mapping with string keys.
     pub fn from_yaml(text: &str) -> Result<Self, TemplateError> {
         let parsed: Value =
-            serde_norway::from_str(text).map_err(|error| TemplateError::MalformedAnswers {
+            crate::yaml::from_str(text).map_err(|error| TemplateError::MalformedAnswers {
                 message: format!("it is not YAML a mapping of answers can be read from: {error}"),
             })?;
         match parsed {
