@@ -112,6 +112,9 @@ fn bridge_persists_the_real_sources_prices_and_failure_cleanup() {
                         Err(error) => panic!("{error}"),
                     }
                 };
+                // Winsock inherits the listener's nonblocking mode on accepted sockets.
+                // Request parsing uses blocking reads on every platform.
+                stream.set_nonblocking(false).unwrap();
                 stream
                     .set_read_timeout(Some(std::time::Duration::from_secs(5)))
                     .unwrap();

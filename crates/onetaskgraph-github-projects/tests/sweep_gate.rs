@@ -1043,7 +1043,7 @@ async fn a_presence_read_that_settles_nothing_fails_the_cleanup() {
         (PresenceFault::Forbidden, "presence query failed: HTTP 403"),
         (
             PresenceFault::InvalidJson,
-            "presence query returned invalid JSON",
+            "live artifact issue presence GraphQL response must be an object with a data object or valid errors",
         ),
         (PresenceFault::NoNode, "answered no data.node"),
         (
@@ -1052,7 +1052,7 @@ async fn a_presence_read_that_settles_nothing_fails_the_cleanup() {
         ),
         (
             PresenceFault::NullMalformedErrors,
-            "answered null for a reason other than there being no such node",
+            "live artifact issue presence returned an invalid GraphQL errors envelope",
         ),
         (
             PresenceFault::NullForbidden,
