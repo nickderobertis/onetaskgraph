@@ -142,7 +142,6 @@ pub async fn read(source: &dyn TaskSource, root: &Path, relative: &str, folder: 
 
 /// What every record of the store at `root` reads as.
 pub async fn reads(root: &Path) -> BTreeMap<String, Value> {
-    // The path a record reports its location under, which `read` spells `<store>`.
     let root = fs::canonicalize(root).expect("the store exists");
     let source = source(&root);
     let mut observed = BTreeMap::new();
