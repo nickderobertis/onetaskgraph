@@ -376,3 +376,33 @@ board at `2f23f8f6` (a detached scratch worktree, since removed) and on the fini
 tree: identical 193-operation sequences, byte-identical `prices.json`, and a
 byte-identical bill of 174 points (108 reported + 66 modelled). Only `test-token` was
 used; no live GitHub session ran.
+
+## Repeat collection, decline follow-through and Windows pair lookup, to e5e9532b
+
+The merge path at `615d7019` refused two `check` jobs. On Linux the GitHub live
+collection created `GITHUB_LIVE_SESSION_DIR` (CI keys it on
+`<run id>-<run attempt>` under the main checkout's `target/debug/telemetry/github-live-session/`)
+exclusively, so `scripts/check-live-lane-selection.sh`, driving `just check` and
+`just gate` again in the same job, refused with `File exists` before reaching Nx; its
+missing `scripts:distribution-check` and `scripts:distribution-test` followed from that
+refusal. A repeat now takes the first unused `<dir>.<n>` beside it, created exclusively
+(`1f06bedd`). With that directory pre-created holding a sentinel and CI's absolute
+`GITHUB_LIVE_SESSION_DIR` set, the check passed, its three repeats recorded in `.2`,
+`.3` and `.4`, and the sentinel was untouched.
+
+The Windows `recheck_gate` panic was not platform-dependent: it is the deliberate
+decline follow-through of `scripts/check-budget-decline.sh`, which still required the
+recheck's old reading name and failed on every platform (`cee6d552`). At `449b2f3d`
+the merge path's Windows `onetaskgraph-github-projects:test` passed; only
+`live_pair` failed, all nine tests with `compile ... before this pair`, because rustc
+writes dep-info paths with the host separator (`crates\...\tests\plugin.rs`) and the
+lookup matched forward slashes alone. `e5e9532b` matches either separator, with a
+test that fails on the Windows spelling against the old match, and publishes the
+fixture's readiness file by rename.
+
+With the same recording proxy, both actual live entry points ran against the loopback
+board at `615d7019` (a detached scratch worktree, since removed) and at `e5e9532b`:
+identical 193-operation sequences (174 GraphQL, 19 REST; methods, paths with the
+ownership nonce normalized, and GraphQL documents), byte-identical `prices.json`, and a
+byte-identical bill of 174 points (108 reported + 66 modelled). Only `test-token` was
+used; no live GitHub session ran.
