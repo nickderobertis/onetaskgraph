@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 /// Current internal schema, including actual PNG sizes and the deliberate-refusal model.
 pub const SCHEMA_VERSION: u32 = 3;
 
+/// Manager-approved primary mutation model; change only with a pricing-agreement ruling.
+pub const MODELLED_MUTATION_POINTS: u64 = 1;
+
 /// The one deliberately refused query eligible for the manager-approved minimum-price model.
 pub const PAGE_SIZE_PROBE_DOCUMENT: &str = "query($id:ID!,$first:Int!){rateLimit{cost} node(id:$id){... on ProjectV2{items(first:$first){nodes{id}}}}}";
 
@@ -376,7 +379,10 @@ pub fn bill(records: &[SessionRecord], current: &CurrentSession<'_>) -> Result<B
                         MutationBasis::Modelled {
                             url,
                             points_per_request,
-                        } if url == PRICING_URL && points == points_per_request => {
+                        } if url == PRICING_URL
+                            && *points == MODELLED_MUTATION_POINTS
+                            && *points_per_request == MODELLED_MUTATION_POINTS =>
+                        {
                             result.modelled_mutations += 1;
                             result.modelled_mutation_points = result
                                 .modelled_mutation_points
@@ -512,7 +518,9 @@ fn validate_record(record: &SessionRecord, current: &CurrentSession<'_>) -> Resu
                 MutationBasis::Modelled {
                     url,
                     points_per_request,
-                } if url == PRICING_URL && points == points_per_request => (),
+                } if url == PRICING_URL
+                    && *points == MODELLED_MUTATION_POINTS
+                    && *points_per_request == MODELLED_MUTATION_POINTS => {}
                 _ => return Err("invalid mutation pricing basis".into()),
             },
             (_, Charge::Unavailable { reason }) => {

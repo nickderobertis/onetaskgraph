@@ -403,6 +403,25 @@ fn run_pair(scenario: &str) {
             serde_json::from_slice(&std::fs::read(records.join(file)).unwrap()).unwrap();
         assert_eq!(record.invocation, invocation);
         assert!(record.complete);
+        for call in &record.calls {
+            if let onetaskgraph_github_live::quota::Charge::Mutation {
+                points,
+                basis:
+                    onetaskgraph_github_live::quota::MutationBasis::Modelled {
+                        points_per_request, ..
+                    },
+            } = &call.charge
+            {
+                assert_eq!(
+                    *points,
+                    onetaskgraph_github_live::quota::MODELLED_MUTATION_POINTS
+                );
+                assert_eq!(
+                    *points_per_request,
+                    onetaskgraph_github_live::quota::MODELLED_MUTATION_POINTS
+                );
+            }
+        }
         for phase in phases {
             assert!(
                 record.calls.iter().any(|call| call.phase == phase),

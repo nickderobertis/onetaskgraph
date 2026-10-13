@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "results": [
+    {
+      "id": "github-live-session-points",
+      "file": "crates/onetaskgraph-github-projects-e2e/budgets.yaml",
+      "labels": [
+        "github",
+        "live-session"
+      ],
+      "unit": "points",
+      "direction": "max",
+      "threshold": 299.0,
+      "verdict": "within",
+      "actual": 212.0,
+      "headroom": 87.0,
+      "headroom_percent": 29.09698996655518,
+      "detail": "session_id=implementation-s-b0f666475f66-1791893895; source_revision=ca86536a98dfe5a412598e3b4adac1749da228af; workspace_version=0.6.0; reported query points=146; Modelled mutation points=66 (66 requests); Documented mutation points=0 (0 requests); mutation count=66; pricing URL=https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api; GraphQL requests=182; REST requests=19 (excluded from points); phases: Admission=0, Schema=10, Reconciliation=30, Setup=41, Capabilities=39, CommentActivity=15, ChangeToken=44, Cleanup=20, OrphanRecovery=1, AssetSetup=1, AssetTask=6, AssetDocument=5; corroborating account movement=None; concurrent movement flagged=false; actual asset bytes=[74666, 479959, 74666, 479959]; requested PNG bytes=[75000, 480000, 75000, 480000]; Modelled deliberate page-size refusal points=0 (0 requests)",
+      "error": null,
+      "started_at": "2026-10-13T12:36:58.416279435Z",
+      "ended_at": "2026-10-13T12:36:58.687670121Z",
+      "host": {
+        "load1": 0.9658203125,
+        "cpus": 14,
+        "mem_available_mib": 21360,
+        "conditions": {}
+      }
+    }
+  ]
+}

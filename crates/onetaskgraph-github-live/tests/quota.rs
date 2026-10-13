@@ -263,6 +263,23 @@ fn mutation_models_rest_exclusion_and_phase_aggregation_survive_serialization() 
 }
 
 #[test]
+fn reader_refuses_matching_but_unapproved_mutation_models() {
+    use onetaskgraph_github_live::quota::{Charge, MutationBasis, PRICING_URL, RequestKind};
+    for points in [0, 2] {
+        let mut pair = completed_pair();
+        pair[0].calls[0].kind = RequestKind::Mutation;
+        pair[0].calls[0].charge = Charge::Mutation {
+            points,
+            basis: MutationBasis::Modelled {
+                url: PRICING_URL.into(),
+                points_per_request: points,
+            },
+        };
+        assert!(read_pair(&pair).is_err());
+    }
+}
+
+#[test]
 fn corroboration_handles_absence_limits_regressions_and_flag_boundary() {
     let mut pair = completed_pair();
     let last = pair[1]

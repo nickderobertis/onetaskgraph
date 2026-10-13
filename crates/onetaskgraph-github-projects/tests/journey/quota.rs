@@ -112,10 +112,11 @@ impl Invocation {
             let charge = match kind {
                 RequestKind::Rest => Charge::Rest,
                 RequestKind::Mutation => Charge::Mutation {
-                    points: 1,
+                    points: onetaskgraph_github_live::quota::MODELLED_MUTATION_POINTS,
                     basis: MutationBasis::Modelled {
                         url: PRICING_URL.to_owned(),
-                        points_per_request: 1,
+                        points_per_request:
+                            onetaskgraph_github_live::quota::MODELLED_MUTATION_POINTS,
                     },
                 },
                 RequestKind::Query => match request.reported_query_cost() {

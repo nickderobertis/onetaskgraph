@@ -501,7 +501,7 @@ async fn reconcile_node_counts_and_point_costs(token: &str) -> Result<(), String
             let ours = worst_case_point_cost(document).map_err(|error| {
                 format!("the document for {doing} could not be priced: {error}")
             })?;
-            if ours != 1 {
+            if ours != onetaskgraph_github_live::quota::MODELLED_MUTATION_POINTS {
                 return Err(format!(
                     "the mutation for {doing} computes {ours} points, and GitHub cannot be \
                      asked about a mutation — `rateLimit` is a field of Query. This differs \

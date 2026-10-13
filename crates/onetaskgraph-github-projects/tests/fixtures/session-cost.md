@@ -108,3 +108,113 @@ the latest response belonging to that budget; a declared attachment rate resourc
 honoured, and an unread actual Core response still declines. The loopback pair returns
 no invented Core headers on attachments and also proves a declared-but-unread Core
 response stops completion after owned cleanup.
+
+## Completed implementation measurement, 2026-10-13
+
+The real main and asset entry points both exited 0, then the report-only command handed
+**212 attributed points** to onebudgetspec. Its configured max 299 returned `within`,
+with **87 points headroom**. Retained machine-produced records are
+[`live-session-20261013/records/main.json`](live-session-20261013/records/main.json)
+and [`assets.json`](live-session-20261013/records/assets.json); the exact checker result is
+[`onebudgetspec-result.json`](live-session-20261013/onebudgetspec-result.json).
+These records are historical implementation evidence, never inputs substituting for
+current-session CI telemetry.
+
+- Measured source revision: `ca86536a98dfe5a412598e3b4adac1749da228af`.
+- Workspace source version: **0.6.0**. Both entry points use the Rust plugin/Engine APIs;
+  no workspace CLI was spawned for this measurement.
+- Authoring/plan-store CLI, separately captured on PATH: **onetaskgraph 0.4.0**.
+- Session id: `implementation-s-b0f666475f66-1791893895`; internal record schema **3**.
+- Both records complete: 182 GraphQL requests (116 queries, 66 mutations), plus 19 REST
+  requests retained as detail and excluded from GraphQL points.
+- Pricing: **146 response-reported query points + 66 Modelled mutation points** at one
+  point/request; zero documented mutation points and zero modelled ceiling-refusal points.
+  GitHub reported the deliberately refused page-size probe's actual price.
+- Four additional fresh-token reads were recorded as retry attempts; no query price was
+  unavailable. All 10 schema requests and 18 pricing contracts completed; both pricing
+  aliases were supported by real GitHub.
+- Corroborating account movement is unavailable because the observed reset windows switch
+  internally. No presumed other-host use was subtracted.
+
+| Phase | Combined attributed points |
+| --- | ---: |
+| Admission | 0 (REST detail) |
+| Schema | 10 |
+| Reconciliation | 30 |
+| Setup | 41 |
+| Capabilities | 39 |
+| Comment activity | 15 |
+| Change token | 44 |
+| Cleanup | 20 (main 14, assets 6) |
+| Orphan recovery | 1 |
+| Asset setup | 1 |
+| Asset task | 6 |
+| Asset document | 5 |
+| **Total** | **212** |
+
+The phase labels follow the current journey's boundaries: Setup includes source
+initialization and the first five fixture writes; the document write belongs to
+Capabilities. The design allocations above are not phase gates or a measured baseline
+for subtraction. No before/after point saving is claimed.
+
+The measured board began with 90 items and 14 fields. Main wrote its two projects, three
+tasks (one orphan) and one document; all six owned items/issues and the owned label were
+removed. Recovery found zero eligible artifacts and labels; initial orphan population
+and board peak remain unmeasured. Assets wrote two issues and four PNGs, verified each
+upload, read authenticated renderings, checked markdown/record rewriting, re-copied both
+items without another upload, and removed both disposable items/issues. Both entry
+points completed their owned cleanup before setting their completion flags.
+
+All fourteen unconditional token changes passed with the real settling margin. Around
+deleting the comment, the fresh responses showed count **2 → 1**, issue updatedAt
+**12:21:59 → 12:23:07 UTC**, and item updatedAt **12:22:01 → 12:23:10 UTC**; two reads
+still withheld the token before a later settled token was observed. Only afterward did
+the body update run. This establishes the deletion/read-after-write behavior on this
+source revision. The earlier spike's discarded inner error remains unknown; HTTP 200
+from that earlier attempt is not a diagnosis of UPDATE_ISSUE or a complete bill.
+
+This is one authorized implementation measurement, not a CI verdict or merge-path check.
+The later evidence commit retains these records and prose. A subsequent refactor shares
+`MODELLED_MUTATION_POINTS = 1` between writer, admission, billing and reconciliation,
+and rejects an unapproved model in the reader. It changes no requests or emitted prices;
+before/after actual entry-point loopback pairs produced identical request sequences
+(operation hashes, phases, attempts, kinds, outcomes), prices and attributed bills.
+The final entry-point test also reconciles every emitted model with that constant. The measurement above remains explicitly about `ca86536a`; no live measurement
+of those later edits is claimed.
+
+## Verification and scoped suppressions
+
+Focused checks passed on the measured code: all nine actual-entry-point loopback
+journeys; the real policy/Nx/bun/onebudgetspec wiring journeys; shared-schema/accounting
+and admission tests; source execution-price/error/retry journeys; writer/reader bridge;
+comment refusal/deletion and fresh-token regressions; reconciliation and main request
+count golden; rendering recovery/failure and raw asset query journeys; reporter integer
+fixtures on both sides of the configured boundary; live-lane shape/selection scripts;
+changed-crate formatting and clippy. Judged diff lint run `20261013T121400Z-9c7d9` passed
+35 rules with zero failures (12 skipped, 9 not relevant). Publication checks were not run.
+
+Negative evidence is labelled as such: disabling the budget adapter's live exclusion
+made its boundary assertion fail; bypassing the remaining-demand refusal made the
+actual entry-point refusal journey fail; a scalar response with Date reproduced the
+old parser panic before the shared envelope validation. The restored implementations
+passed afterward. The two-process loopback pair also refused missing actual prices,
+partial cleanup, unsupported/ignored aliases and malformed errors rather than inventing
+a numeric success.
+
+The diff's scoped suppressions, including standing scopes over changed lines, are:
+
+| Site | Rule and reason |
+| --- | --- |
+| `github-live/src/quota.rs`: session id, source revision, workspace version, completion flag and operation hash | `invalid_states_unrepresentable`: the agreed wire requires String/bool; the reader validates identity, provenance, completion and hash |
+| Same file: separate kind/outcome/charge fields | Same rule: the frozen shared wire names separate fields; admission and billing validate combinations rather than change that agreement |
+| Same file: documented/modelled mutation URLs and modelled page-refusal URL | Same rule: agreed String fields; the reader pins documentation and each permitted pricing basis, including the exact refusal identity |
+| `github-projects-e2e/budgets.yaml`: live command | `budget_commands_measure_directly`: the task fixes a named report-only command using saved telemetry and the existing SDK; only onebudgetspec judges 299 |
+| Same crate `tests/e2e/budget_runner.rs`: `report_live_session` and its selector check | `tests_assert_real_behavior` / `budget_commands_measure_directly`: a command entry, not a standalone journey; executable reporter tests assert its result/refusal and the selector prevents a foreign budget receiving the figure |
+| Same crate `project.json`: test's main dependency and budget's main dependency | `external_service_suite_stays_out_of_the_affected_tier`: this task requires the ordered main/assets pair; the repository requires live tests under their own affected domain edge |
+| Same file: coverage target | `expensive_tests_stay_behind_their_own_edge`: AGENTS.md requires aggregate instrumented coverage; credentials are cleared and the pair uses GitHub loopback only |
+| `github-projects/tests/plugin.rs`: fresh-token child and pair fixture child | `tests_assert_real_behavior`: subprocess helpers whose parents assert fresh reads, real entry points, prices, refusal, uploads and cleanup; ordinary runs omit the child selector |
+| Same crate `tests/quota_writer.rs`: bridge child | Same rule: its parent drives the source over HTTP and asserts persisted prices, failure cleanup and refusal of an inappropriate pricing exception |
+| `justfile`: standing affected-test block | `external_service_suite_stays_out_of_the_affected_tier`: the existing plugin edge and version-only selection policy remain; the adapter propagates that decision and fresh session identity |
+
+No enforcement threshold, shared lint rule, public plugin/Engine interface, hook,
+bootstrap file, branch protection, Linear implementation or orchestration code changed.
