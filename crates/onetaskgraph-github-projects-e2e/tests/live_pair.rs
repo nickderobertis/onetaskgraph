@@ -70,6 +70,11 @@ fn actual_entry_points_complete_one_loopback_session() {
 }
 
 #[test]
+fn a_shared_board_smaller_than_the_registered_one_completes_and_bills_what_it_held() {
+    run_pair("smaller-board");
+}
+
+#[test]
 fn later_phase_refusal_retains_the_real_owned_cleanup_in_a_partial_record() {
     run_pair("setup");
 }
@@ -429,6 +434,12 @@ fn run_pair(scenario: &str) {
             serde_json::from_slice(&std::fs::read(records.join(file)).unwrap()).unwrap();
         assert_eq!(record.invocation, invocation);
         assert!(record.complete);
+        if invocation == EntryPoint::Main {
+            assert_eq!(
+                record.workload.initial_items,
+                if scenario == "smaller-board" { 84 } else { 90 }
+            );
+        }
         for call in &record.calls {
             if let onetaskgraph_github_live::quota::Charge::ReportedQuery { points } = call.charge {
                 reported_query_points += points;
