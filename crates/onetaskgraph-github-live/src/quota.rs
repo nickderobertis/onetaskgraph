@@ -405,3 +405,101 @@ pub fn bill(records: &[SessionRecord], current: &CurrentSession<'_>) -> Result<B
         .is_some_and(|movement| movement.saturating_sub(result.points) > result.graphql_requests);
     Ok(result)
 }
+
+/// File-backed invocation recording, reserved in a fresh job directory before requests run.
+/// A crash leaves a partial record; the reporter cannot treat it as numeric success.
+pub struct InvocationWriter {
+    file: std::fs::File,
+    record: SessionRecord,
+}
+
+impl InvocationWriter {
+    /// Reserve this invocation's file without replacing an old or duplicate recording.
+    ///
+    /// # Errors
+    /// Refuses an existing file, invalid identity, or an unwritable directory.
+    pub fn start(directory: &std::path::Path, mut record: SessionRecord) -> Result<Self, String> {
+        CurrentSession::new(
+            &record.session_id,
+            &record.source_revision,
+            &record.workspace_version,
+            &record.workload,
+        )?;
+        if record.schema_version != 1 || !record.calls.is_empty() {
+            return Err("a new invocation must start with version one and no calls".into());
+        }
+        record.complete = false;
+        let filename = match record.invocation {
+            EntryPoint::Main => "main.json",
+            EntryPoint::Assets => "assets.json",
+        };
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(directory.join(filename))
+            .map_err(|error| error.to_string())?;
+        let mut writer = Self { file, record };
+        writer.persist()?;
+        Ok(writer)
+    }
+
+    /// Retain one executed call, assigning its sequence in this invocation.
+    ///
+    /// # Errors
+    /// Refuses a write after completion or a failed telemetry write.
+    pub fn record(&mut self, mut call: CallRecord) -> Result<(), String> {
+        if self.record.complete {
+            return Err("cannot append to a completed invocation".into());
+        }
+        call.sequence =
+            u64::try_from(self.record.calls.len()).map_err(|error| error.to_string())? + 1;
+        self.record.calls.push(call);
+        self.persist()
+    }
+
+    /// Mark completion only after every assertion and owned cleanup succeeded.
+    ///
+    /// # Errors
+    /// Refuses completion twice or a failed telemetry write.
+    pub fn complete(&mut self) -> Result<(), String> {
+        if self.record.complete {
+            return Err("invocation already completed".into());
+        }
+        self.record.complete = true;
+        self.persist()
+    }
+
+    fn persist(&mut self) -> Result<(), String> {
+        use std::io::{Seek, Write};
+        let bytes = serde_json::to_vec(&self.record).map_err(|error| error.to_string())?;
+        self.file.rewind().map_err(|error| error.to_string())?;
+        self.file.set_len(0).map_err(|error| error.to_string())?;
+        self.file
+            .write_all(&bytes)
+            .map_err(|error| error.to_string())?;
+        self.file.sync_all().map_err(|error| error.to_string())
+    }
+}
+
+/// Read the current directory's records through the shared serde contract and validate them.
+/// This performs no network requests and compares no budget threshold.
+///
+/// # Errors
+/// Refuses missing, duplicate, corrupt, stale, partial or unavailable telemetry.
+pub fn read_bill(
+    directory: &std::path::Path,
+    current: &CurrentSession<'_>,
+) -> Result<Bill, String> {
+    let mut records = Vec::new();
+    for entry in std::fs::read_dir(directory).map_err(|error| error.to_string())? {
+        let path = entry.map_err(|error| error.to_string())?.path();
+        if path
+            .extension()
+            .is_some_and(|extension| extension == "json")
+        {
+            let bytes = std::fs::read(&path).map_err(|error| error.to_string())?;
+            records.push(serde_json::from_slice(&bytes).map_err(|error| error.to_string())?);
+        }
+    }
+    bill(&records, current)
+}

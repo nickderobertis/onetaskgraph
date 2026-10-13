@@ -15,6 +15,7 @@ authors.workspace = true
 # The cross-lane stamp grammar, whose widest value these names must leave room for.
 onetaskgraph-live.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
-serde_json.workspace = true
+tempfile.workspace = true

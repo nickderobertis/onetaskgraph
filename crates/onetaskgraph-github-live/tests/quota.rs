@@ -172,6 +172,15 @@ fn reader_refuses_malformed_request_and_allowance_facts() {
             record.calls[0].kind = RequestKind::Mutation;
             record.calls[0].charge = Charge::Mutation {
                 points: 1,
+                basis: MutationBasis::Documented {
+                    url: "wrong".into(),
+                },
+            };
+        },
+        |record: &mut SessionRecord| {
+            record.calls[0].kind = RequestKind::Mutation;
+            record.calls[0].charge = Charge::Mutation {
+                points: 1,
                 basis: MutationBasis::Modelled {
                     url: "wrong".into(),
                     points_per_request: 1,
@@ -326,17 +335,19 @@ fn current_identity_boundaries_and_every_main_phase_are_validated() {
         record.source_revision = long_revision.clone();
     }
     assert!(bill(&long_pair, &current).is_ok());
-    for index in 0..pair[0].calls.len() {
-        let mut missing = pair.clone();
-        missing[0].calls.remove(index);
-        for (index, call) in missing[0].calls.iter_mut().enumerate() {
-            call.sequence = index as u64 + 1;
+    for invocation in 0..pair.len() {
+        for index in 0..pair[invocation].calls.len() {
+            let mut missing = pair.clone();
+            missing[invocation].calls.remove(index);
+            for (index, call) in missing[invocation].calls.iter_mut().enumerate() {
+                call.sequence = index as u64 + 1;
+            }
+            assert!(
+                read_pair(&missing)
+                    .unwrap_err()
+                    .contains("required journey phase")
+            );
         }
-        assert!(
-            read_pair(&missing)
-                .unwrap_err()
-                .contains("required journey phase")
-        );
     }
 }
 
@@ -379,4 +390,71 @@ fn failed_attempts_and_successful_retries_all_contribute_their_own_prices() {
         reason: "transport failure".into(),
     };
     assert!(read_pair(&pair).is_err());
+}
+
+#[test]
+fn file_backed_invocations_and_reader_refuse_partial_stale_duplicate_and_corrupt_pairs() {
+    use onetaskgraph_github_live::quota::{CurrentSession, InvocationWriter, read_bill};
+    let directory = tempfile::tempdir().unwrap();
+    let pair = completed_pair();
+    let expected = &pair[0];
+    let current = CurrentSession::new(
+        &expected.session_id,
+        &expected.source_revision,
+        &expected.workspace_version,
+        &expected.workload,
+    )
+    .unwrap();
+    assert!(read_bill(directory.path(), &current).is_err());
+    let mut writers = Vec::new();
+    for record in &pair {
+        let mut initial = record.clone();
+        initial.calls.clear();
+        let mut writer = InvocationWriter::start(directory.path(), initial.clone()).unwrap();
+        assert!(InvocationWriter::start(directory.path(), initial).is_err());
+        for call in &record.calls {
+            let mut call = call.clone();
+            call.sequence = 999; // The writer, rather than a caller, owns sequence assignment.
+            writer.record(call).unwrap();
+        }
+        assert!(read_bill(directory.path(), &current).is_err());
+        writers.push(writer);
+    }
+    writers[0].complete().unwrap();
+    assert!(read_bill(directory.path(), &current).is_err());
+    writers[1].complete().unwrap();
+    assert_eq!(
+        read_bill(directory.path(), &current).unwrap(),
+        read_pair(&pair).unwrap()
+    );
+    assert!(writers[0].complete().is_err());
+    assert!(writers[0].record(pair[0].calls[0].clone()).is_err());
+    let stale = CurrentSession::new(
+        "other-job",
+        &expected.source_revision,
+        &expected.workspace_version,
+        &expected.workload,
+    )
+    .unwrap();
+    assert!(read_bill(directory.path(), &stale).is_err());
+    std::fs::copy(
+        directory.path().join("main.json"),
+        directory.path().join("duplicate.json"),
+    )
+    .unwrap();
+    assert!(read_bill(directory.path(), &current).is_err());
+    std::fs::remove_file(directory.path().join("duplicate.json")).unwrap();
+    std::fs::write(directory.path().join("assets.json"), "{ truncated").unwrap();
+    assert!(read_bill(directory.path(), &current).is_err());
+    std::fs::remove_file(directory.path().join("assets.json")).unwrap();
+    assert!(read_bill(directory.path(), &current).is_err());
+    assert!(read_bill(&directory.path().join("missing"), &current).is_err());
+    let mut invalid = pair[0].clone();
+    invalid.calls.clear();
+    invalid.schema_version = 2;
+    assert!(InvocationWriter::start(directory.path(), invalid).is_err());
+    assert!(InvocationWriter::start(directory.path(), pair[0].clone()).is_err());
+    let mut initial = pair[0].clone();
+    initial.calls.clear();
+    assert!(InvocationWriter::start(&directory.path().join("missing"), initial).is_err());
 }
