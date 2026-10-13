@@ -97,6 +97,76 @@ impl Endpoints {
                 + std::time::Duration::from_secs(2),
         }
     }
+    /// Only explicit loopback URLs may replace GitHub in entry-point regressions.
+    /// Real invocations retain the API hosts and the full settling margin above.
+    pub fn configured() -> Result<Self, String> {
+        let read = |name: &str| match std::env::var(name) {
+            Ok(value) => Ok(Some(value)),
+            Err(std::env::VarError::NotPresent) => Ok(None),
+            Err(error) => Err(error.to_string()),
+        };
+        let graphql = read("GITHUB_LIVE_TEST_GRAPHQL")?;
+        let rest = read("GITHUB_LIVE_TEST_REST")?;
+        match (graphql, rest) {
+            (None, None) => Ok(Self::github()),
+            (Some(graphql), Some(rest)) => Self::loopback(&graphql, &rest),
+            _ => Err("both loopback endpoint variables must be supplied".into()),
+        }
+    }
+
+    pub fn loopback(graphql: &str, rest: &str) -> Result<Self, String> {
+        let validate = |value: &str, path: &str| {
+            let url = reqwest::Url::parse(value).map_err(|error| error.to_string())?;
+            let local = url
+                .host_str()
+                .and_then(|host| {
+                    host.trim_matches(['[', ']'])
+                        .parse::<std::net::IpAddr>()
+                        .ok()
+                })
+                .is_some_and(|host| host.is_loopback());
+            if url.scheme() != "http"
+                || !local
+                || url.port().is_none()
+                || !url.username().is_empty()
+                || url.password().is_some()
+                || url.query().is_some()
+                || url.fragment().is_some()
+                || url.path() != path
+            {
+                return Err(
+                    "live test endpoints must be plain HTTP loopback URLs with an explicit port"
+                        .to_owned(),
+                );
+            }
+            Ok(url)
+        };
+        let graphql = validate(graphql, "/graphql")?;
+        let rest = validate(rest, "/")?;
+        Ok(Self {
+            graphql: graphql.to_string(),
+            rest_host: rest.origin().ascii_serialization(),
+            source: Some(
+                json!({"endpoint":graphql.as_str(),"pacing":{"min_mutation_interval_ms":0,"retry_budget_ms":0}}),
+            ),
+            // The double supplies a Date past SETTLED; the token itself still checks 60 seconds.
+            settle: std::time::Duration::ZERO,
+        })
+    }
+
+    pub fn attachment_prefix(&self) -> String {
+        if self.source.is_some() {
+            format!(
+                "{}/user-attachments/assets/",
+                reqwest::Url::parse(&self.graphql)
+                    .expect("validated endpoint")
+                    .origin()
+                    .ascii_serialization()
+            )
+        } else {
+            "https://github.com/user-attachments/assets/".into()
+        }
+    }
 }
 
 static ENDPOINTS: std::sync::OnceLock<Endpoints> = std::sync::OnceLock::new();
@@ -121,7 +191,7 @@ fn endpoints() -> &'static Endpoints {
 /// Everything the credentialed lane builds is here plus whatever [`Endpoints::source`]
 /// carries, so a fixture drive builds the same source the live one does and only reaches
 /// somewhere else.
-fn source_config(mut config: Value) -> Value {
+pub fn source_config(mut config: Value) -> Value {
     if let (Some(extra), Some(object)) = (endpoints().source.as_ref(), config.as_object_mut()) {
         for (key, value) in extra.as_object().expect("a source configuration object") {
             object.insert(key.clone(), value.clone());

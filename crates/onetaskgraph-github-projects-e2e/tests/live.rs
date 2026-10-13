@@ -231,6 +231,11 @@ async fn disposable_task_and_document_asset_copies() {
         );
         return;
     }
+    let endpoints = journey::Endpoints::configured().unwrap();
+    let attachment_prefix = endpoints.attachment_prefix();
+    let graphql_endpoint = endpoints.graphql.clone();
+    let rest_host = endpoints.rest_host.clone();
+    journey::against(endpoints);
     let admission = lane::admit(&|variable| match std::env::var(variable) {
         Ok(value) => Some(value),
         Err(std::env::VarError::NotPresent) => None,
@@ -273,29 +278,28 @@ async fn disposable_task_and_document_asset_copies() {
     }
     let admitted = journey::budget::precondition_session(
         token,
-        "https://api.github.com",
+        &rest_host,
         &ledger,
         onetaskgraph_github_live::quota::EntryPoint::Assets,
     )
     .await
     .unwrap_or_else(|declined| declined.refuse());
     journey::quota::phase(onetaskgraph_github_live::quota::Phase::AssetSetup).unwrap();
-    let option = nominated_status_option(
-        "https://api.github.com/graphql",
-        token,
-        &owner,
-        number,
-        &ledger,
-    )
-    .await
-    .unwrap();
+    let option = nominated_status_option(&graphql_endpoint, token, &owner, number, &ledger)
+        .await
+        .unwrap();
     journey::budget::recheck_remaining(
         &admitted,
         &ledger,
         journey::budget::assets_remaining_design_points(),
     )
     .unwrap_or_else(|declined| declined.refuse());
-    let config = lane::live_write_config(&owner, number, &repository, &option);
+    let config = journey::source_config(lane::live_write_config(
+        &owner,
+        number,
+        &repository,
+        &option,
+    ));
     let secrets = lane::LiveSecret(token.to_owned().into());
     let sandbox = Sandbox::new();
     let root = sandbox.subdirectory("notes");
@@ -404,7 +408,7 @@ async fn disposable_task_and_document_asset_copies() {
             ] {
                 let name = onetaskgraph_plugin_api::AssetName::new(file)?;
                 let url = &uploads.0.get(&name).ok_or("missing asset")?.url;
-                if !url.starts_with("https://github.com/user-attachments/assets/")
+                if !url.starts_with(&attachment_prefix)
                     || !content.contains(&format!("![{alt}]({url})"))
                 {
                     return Err(format!("unrewritten or wrong attachment URL {url}"));
@@ -469,7 +473,7 @@ async fn disposable_task_and_document_asset_copies() {
     for (kind, id) in &created {
         let native = id.native.clone();
         // Read only this disposable issue's board memberships, to report each created item.
-        let answer = asset_graphql("https://api.github.com/graphql", token,
+        let answer = asset_graphql(&graphql_endpoint, token,
             "query($id:ID!){node(id:$id){...on Issue{projectItems(first:100){nodes{id project{id}}}}}}",
             &json!({"id":native.0}), &ledger).await;
         if let Ok(answer) = answer {
@@ -926,4 +930,44 @@ fn propagated_selection_prevents_the_asset_entry_point_from_opening_a_session() 
         assert!(String::from_utf8_lossy(&output.stderr).contains(message));
         assert!(!directory.join("assets.json").exists());
     }
+}
+
+#[test]
+fn the_actual_asset_entry_point_refuses_missing_main_before_any_request() {
+    let sandbox = Sandbox::new();
+    let directory = sandbox.subdirectory("session");
+    std::fs::create_dir_all(&directory).unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let host = format!("http://{}", listener.local_addr().unwrap());
+    drop(listener);
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "disposable_task_and_document_asset_copies",
+            "--exact",
+            "--nocapture",
+        ])
+        .env("GITHUB_LIVE_SELECTION", "run")
+        .env("GITHUB_LIVE_TEST_GRAPHQL", format!("{host}/graphql"))
+        .env("GITHUB_LIVE_TEST_REST", &host)
+        .env("ONETASKGRAPH_LIVE_REQUIRED", "1")
+        .env("GH_PROJECTS_TOKEN", "test-token")
+        .env("GH_PROJECTS_OWNER", "fixture-owner")
+        .env("GH_PROJECTS_NUMBER", "1")
+        .env("GH_PROJECTS_REPOSITORY", "fixture-owner/repository")
+        .env("GITHUB_LIVE_SESSION_DIR", &directory)
+        .env("GITHUB_LIVE_SESSION_ID", "missing-main-test")
+        .env("GITHUB_LIVE_SOURCE_REVISION", "a".repeat(40))
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("current main contribution unavailable")
+    );
+    let record: onetaskgraph_github_live::quota::SessionRecord =
+        serde_json::from_slice(&std::fs::read(directory.join("assets.json")).unwrap()).unwrap();
+    assert!(!record.complete);
+    assert!(
+        record.calls.is_empty(),
+        "missing main evidence must not spend another API request"
+    );
 }
