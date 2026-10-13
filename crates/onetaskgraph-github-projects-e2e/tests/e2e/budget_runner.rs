@@ -797,3 +797,241 @@ fn the_visibility_report_refuses_a_missing_or_foreign_recording_without_a_figure
     );
     assert!(written, "a valid recording is reported");
 }
+
+/// Report the current complete live pair without making any GitHub request.
+// llmlint: ignore[tests_assert_real_behavior] This report-only command is selected by budgets.yaml; live_session_report_boundary invokes this executable and checks its result and refusal paths.
+#[test]
+fn report_live_session() {
+    let Some(budget) = selected() else {
+        return;
+    };
+    if budget != "github-live-session-points" {
+        refuse("live-session reporter selected for a different budget");
+    }
+    let (value, detail) = live_session_figure()
+        .unwrap_or_else(|error| refuse(&format!("live-session measurement unavailable: {error}")));
+    hand_over(value, &detail);
+}
+
+fn live_session_figure() -> Result<(f64, String), String> {
+    use onetaskgraph_github_live::quota::{
+        CurrentSession, PRICING_URL, WORKSPACE_VERSION, read_bill, reference_workload,
+    };
+    let directory =
+        std::env::var_os("GITHUB_LIVE_SESSION_DIR").ok_or("no current session directory")?;
+    let id = std::env::var("GITHUB_LIVE_SESSION_ID").map_err(|error| error.to_string())?;
+    let revision =
+        std::env::var("GITHUB_LIVE_SOURCE_REVISION").map_err(|error| error.to_string())?;
+    let workload = reference_workload();
+    let current = CurrentSession::new(&id, &revision, WORKSPACE_VERSION, &workload)?;
+    let bill = read_bill(std::path::Path::new(&directory), &current)?;
+    // The SDK accepts f64. Refuse rather than round an integer outside its exact range.
+    let figure =
+        u32::try_from(bill.points).map_err(|_| "session figure out of exact reporting range")?;
+    let phases = bill
+        .phases
+        .iter()
+        .map(|(phase, points)| format!("{phase:?}={points}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let detail = format!(
+        "session_id={id}; source_revision={revision}; workspace_version={WORKSPACE_VERSION}; reported query points={}; Modelled mutation points={} ({} requests); Documented mutation points={} ({} requests); mutation count={}; pricing URL={PRICING_URL}; GraphQL requests={}; REST requests={} (excluded from points); phases: {phases}; corroborating account movement={:?}; concurrent movement flagged={}",
+        bill.query_points,
+        bill.modelled_mutation_points,
+        bill.modelled_mutations,
+        bill.documented_mutation_points,
+        bill.documented_mutations,
+        bill.mutations,
+        bill.graphql_requests,
+        bill.rest_requests,
+        bill.account_movement,
+        bill.movement_flagged
+    );
+    Ok((f64::from(figure), detail))
+}
+
+fn live_report_pair(points: u64) -> Vec<onetaskgraph_github_live::quota::SessionRecord> {
+    use onetaskgraph_github_live::quota::{
+        CallRecord, Charge, EntryPoint, MutationBasis, Outcome, PRICING_URL, Phase, RequestKind,
+        SessionRecord, WORKSPACE_VERSION, operation_sha256, reference_workload,
+    };
+    let phases = [
+        (
+            EntryPoint::Main,
+            vec![
+                Phase::Admission,
+                Phase::Schema,
+                Phase::Reconciliation,
+                Phase::Setup,
+                Phase::Capabilities,
+                Phase::CommentActivity,
+                Phase::ChangeToken,
+                Phase::Cleanup,
+                Phase::OrphanRecovery,
+            ],
+        ),
+        (
+            EntryPoint::Assets,
+            vec![
+                Phase::Admission,
+                Phase::AssetSetup,
+                Phase::AssetTask,
+                Phase::AssetDocument,
+                Phase::Cleanup,
+            ],
+        ),
+    ];
+    let mut pair: Vec<_> = phases
+        .into_iter()
+        .map(|(invocation, phases)| SessionRecord {
+            schema_version: 1,
+            session_id: "current-test-session".into(),
+            source_revision: "a".repeat(40),
+            workspace_version: WORKSPACE_VERSION.into(),
+            invocation,
+            workload: reference_workload(),
+            complete: true,
+            calls: phases
+                .into_iter()
+                .enumerate()
+                .map(|(index, phase)| CallRecord {
+                    sequence: u64::try_from(index + 1).unwrap(),
+                    phase,
+                    operation_sha256: operation_sha256("query{rateLimit{cost}}"),
+                    attempt: 1,
+                    kind: RequestKind::Query,
+                    outcome: Outcome::Success,
+                    charge: Charge::ReportedQuery { points: 1 },
+                    allowance: None,
+                })
+                .collect(),
+        })
+        .collect();
+    pair[0].calls[0].charge = Charge::ReportedQuery {
+        points: points - 13,
+    };
+    pair[0].calls[3].kind = RequestKind::Mutation;
+    pair[0].calls[3].charge = Charge::Mutation {
+        points: 1,
+        basis: MutationBasis::Modelled {
+            url: PRICING_URL.into(),
+            points_per_request: 1,
+        },
+    };
+    pair[1].calls[3].kind = RequestKind::Mutation;
+    pair[1].calls[3].charge = Charge::Mutation {
+        points: 1,
+        basis: MutationBasis::Documented {
+            url: PRICING_URL.into(),
+        },
+    };
+    let mut rest = pair[1].calls[4].clone();
+    rest.sequence = 6;
+    rest.kind = RequestKind::Rest;
+    rest.charge = Charge::Rest;
+    pair[1].calls.push(rest);
+    pair
+}
+
+#[test]
+fn live_session_report_boundary() {
+    use onetaskgraph_e2e_support::common::Sandbox;
+    use onetaskgraph_github_live::quota::{Charge, Phase};
+    let sandbox = Sandbox::new();
+    let directory = sandbox.subdirectory("live-session");
+    std::fs::create_dir_all(&directory).unwrap();
+    let result = directory.join("sdk-result");
+    let good = live_report_pair(299);
+    let mut cases = vec![(good.clone(), None), (live_report_pair(300), None)];
+    for change in [
+        |pair: &mut Vec<onetaskgraph_github_live::quota::SessionRecord>| {
+            pair.pop();
+        },
+        |pair: &mut Vec<onetaskgraph_github_live::quota::SessionRecord>| pair[1].complete = false,
+        |pair: &mut Vec<onetaskgraph_github_live::quota::SessionRecord>| {
+            pair[1].session_id.push('x')
+        },
+        |pair: &mut Vec<onetaskgraph_github_live::quota::SessionRecord>| {
+            pair[1].source_revision = "b".repeat(40)
+        },
+        |pair: &mut Vec<onetaskgraph_github_live::quota::SessionRecord>| {
+            pair[1].workspace_version.push('x')
+        },
+        |pair: &mut Vec<onetaskgraph_github_live::quota::SessionRecord>| {
+            pair[1].workload.asset_bytes.pop().map(|_| ()).unwrap()
+        },
+        |pair: &mut Vec<onetaskgraph_github_live::quota::SessionRecord>| {
+            pair[1].calls.retain(|call| call.phase != Phase::Cleanup)
+        },
+        |pair: &mut Vec<onetaskgraph_github_live::quota::SessionRecord>| {
+            pair[0].calls[0].charge = Charge::Unavailable {
+                reason: "missing actual price".into(),
+            }
+        },
+        |pair: &mut Vec<onetaskgraph_github_live::quota::SessionRecord>| pair[1] = pair[0].clone(),
+    ] {
+        let mut pair = good.clone();
+        change(&mut pair);
+        cases.push((pair, Some("live-session measurement unavailable")));
+    }
+    for (pair, failure) in cases {
+        for file in ["main.json", "assets.json", "sdk-result"] {
+            let _ = std::fs::remove_file(directory.join(file));
+        }
+        for (index, record) in pair.iter().enumerate() {
+            std::fs::write(
+                directory.join(if index == 0 {
+                    "main.json"
+                } else {
+                    "assets.json"
+                }),
+                serde_json::to_vec(record).unwrap(),
+            )
+            .unwrap();
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "budget_runner::report_live_session",
+                "--exact",
+                "--nocapture",
+            ])
+            .env("GITHUB_LIVE_SESSION_DIR", &directory)
+            .env("GITHUB_LIVE_SESSION_ID", "current-test-session")
+            .env("GITHUB_LIVE_SOURCE_REVISION", "a".repeat(40))
+            .env("ONEBUDGETSPEC_BUDGET_ID", "github-live-session-points")
+            .env("ONEBUDGETSPEC_RESULT", &result)
+            .output()
+            .unwrap();
+        let said = String::from_utf8_lossy(&output.stderr);
+        if let Some(message) = failure {
+            assert!(!output.status.success(), "{said}");
+            assert!(said.contains(message), "{said}");
+            assert!(!result.exists());
+        } else {
+            assert!(output.status.success(), "{said}");
+            let reported: Value = serde_json::from_slice(&std::fs::read(&result).unwrap()).unwrap();
+            assert_eq!(
+                reported["value"].as_f64(),
+                Some(match pair[0].calls[0].charge {
+                    Charge::ReportedQuery { points } =>
+                        f64::from(u32::try_from(points + 13).unwrap()),
+                    _ => unreachable!(),
+                })
+            );
+            let detail = reported["detail"].as_str().unwrap();
+            for fact in [
+                "Modelled mutation points=1 (1 requests)",
+                "Documented mutation points=1 (1 requests)",
+                "mutation count=2",
+                "REST requests=1",
+                "AssetDocument=1",
+                "Cleanup=2",
+                "workspace_version=",
+                "source_revision=",
+                "session_id=current-test-session",
+            ] {
+                assert!(detail.contains(fact), "{fact}: {detail}");
+            }
+        }
+    }
+}

@@ -256,6 +256,18 @@ impl<'a> CurrentSession<'a> {
 pub struct Bill {
     /// Actual query prices plus explicit mutation prices; excludes REST.
     pub points: u64,
+    /// Points reported by executed query responses.
+    pub query_points: u64,
+    /// Mutation points attributed under the approved explicit model.
+    pub modelled_mutation_points: u64,
+    /// Mutation requests attributed under the approved explicit model.
+    pub modelled_mutations: u64,
+    /// Mutation points attributed at an exact documented primary tariff.
+    pub documented_mutation_points: u64,
+    /// Mutation requests attributed at an exact documented primary tariff.
+    pub documented_mutations: u64,
+    /// REST requests retained as detail, excluded from GraphQL points.
+    pub rest_requests: u64,
     /// Requests attributed at a mutation price, so the model can be repriced.
     pub mutations: u64,
     /// Executed GraphQL requests, including retries and refusals.
@@ -290,6 +302,12 @@ pub fn bill(records: &[SessionRecord], current: &CurrentSession<'_>) -> Result<B
     };
     let mut result = Bill {
         points: 0,
+        query_points: 0,
+        modelled_mutation_points: 0,
+        modelled_mutations: 0,
+        documented_mutation_points: 0,
+        documented_mutations: 0,
+        rest_requests: 0,
         mutations: 0,
         graphql_requests: 0,
         account_movement: None,
@@ -346,18 +364,37 @@ pub fn bill(records: &[SessionRecord], current: &CurrentSession<'_>) -> Result<B
                 return Err("invalid live-session request identity".into());
             }
             let points = match (&call.kind, &call.charge) {
-                (RequestKind::Rest, Charge::Rest) => 0,
+                (RequestKind::Rest, Charge::Rest) => {
+                    result.rest_requests += 1;
+                    0
+                }
                 (RequestKind::Query, Charge::ReportedQuery { points }) => {
                     result.graphql_requests += 1;
+                    result.query_points = result
+                        .query_points
+                        .checked_add(*points)
+                        .ok_or("query points overflow")?;
                     *points
                 }
                 (RequestKind::Mutation, Charge::Mutation { points, basis }) => {
                     match basis {
-                        MutationBasis::Documented { url } if url == PRICING_URL => {}
+                        MutationBasis::Documented { url } if url == PRICING_URL => {
+                            result.documented_mutations += 1;
+                            result.documented_mutation_points = result
+                                .documented_mutation_points
+                                .checked_add(*points)
+                                .ok_or("documented mutation points overflow")?;
+                        }
                         MutationBasis::Modelled {
                             url,
                             points_per_request,
-                        } if url == PRICING_URL && points == points_per_request => {}
+                        } if url == PRICING_URL && points == points_per_request => {
+                            result.modelled_mutations += 1;
+                            result.modelled_mutation_points = result
+                                .modelled_mutation_points
+                                .checked_add(*points)
+                                .ok_or("modelled mutation points overflow")?;
+                        }
                         _ => return Err("invalid mutation pricing basis".into()),
                     }
                     result.graphql_requests += 1;

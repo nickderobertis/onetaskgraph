@@ -236,6 +236,12 @@ fn mutation_models_rest_exclusion_and_phase_aggregation_survive_serialization() 
     let result = read_pair(&records).unwrap();
     assert_eq!(result.points, 14);
     assert_eq!(result.mutations, 2);
+    assert_eq!(result.query_points, 12);
+    assert_eq!(result.modelled_mutation_points, 1);
+    assert_eq!(result.modelled_mutations, 1);
+    assert_eq!(result.documented_mutation_points, 1);
+    assert_eq!(result.documented_mutations, 1);
+    assert_eq!(result.rest_requests, 1);
     assert_eq!(result.graphql_requests, 14);
     assert_eq!(result.account_movement, Some(0));
     assert_eq!(
