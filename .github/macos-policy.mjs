@@ -78,15 +78,19 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       "repository_dispatch",
       "schedule",
       "workflow_dispatch",
+      "merge_group",
     ]);
     const suppliedEvent = event?.event_name;
     const eventName =
       process.env.GITHUB_EVENT_NAME ||
-      (typeof suppliedEvent === "string" && knownEvents.has(suppliedEvent)
-        ? suppliedEvent
-        : "pull_request");
-    const result =
-      eventName === "pull_request"
+      (typeof suppliedEvent === "string" && suppliedEvent ? suppliedEvent : "pull_request");
+    const result = !knownEvents.has(eventName)
+      ? {
+          isReleaseOnly: false,
+          macosRequired: true,
+          reason: `Unknown event kind ${JSON.stringify(eventName)} requires coverage`,
+        }
+      : eventName === "pull_request"
         ? classify(event, args[4], args[6])
         : {
             isReleaseOnly: false,

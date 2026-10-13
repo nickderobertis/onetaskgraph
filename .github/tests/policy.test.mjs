@@ -95,7 +95,7 @@ const files = {
   "uv.lock":
     'version = 1\n[[package]]\nname = "onetaskgraph-cli"\nversion = "1.2.3"\nsource = { editable = "." }\n',
   "sdks/python/uv.lock":
-    'version = 1\n[[package]]\nname = "onetaskgraph-sdk"\nversion = "1.2.3"\nsource = { virtual = "." }\ndependencies = [{name = "onetaskgraph-cli", version = "1.2.3"}]\n[package.metadata]\nrequires-dist = [{name = "onetaskgraph-cli", specifier = "==1.2.3"}]\n',
+    'version = 1\n[[package]]\nname = "onetaskgraph-sdk"\nversion = "1.2.3"\nsource = { virtual = "." }\ndependencies = [{name = "onetaskgraph-cli", version = "1.2.3"}]\n[package.metadata]\nrequires-dist = [{name = "onetaskgraph-cli", specifier = "==1.2.3"}]\n[[package]]\nname = "onetaskgraph-cli"\nversion = "1.2.3"\nsource = { editable = "../.." }\n',
   "crates/onetaskgraph-core/fixtures/Cargo.toml":
     '[package]\nname = "fixture"\nversion = "1.2.3"\n',
   "source.rs": "fn main() {}\n",
@@ -251,6 +251,56 @@ test("same-named registry packages retain their versions in semantic lock compar
   }
 });
 
+for (const field of ["dependency reference", "requires-dist specifier"]) {
+  test(`registry ${field} cannot borrow a local product name`, () => {
+    const dependency =
+      field === "dependency reference"
+        ? 'dependencies = [{ name = "onetaskgraph-core", version = "9.8.7", source = { registry = "https://pypi.org/simple" } }]'
+        : '[package.metadata]\nrequires-dist = [{ name = "onetaskgraph-core", specifier = "==9.8.7" }]';
+    const lock = `version = 1\n[[package]]\nname = "onetaskgraph-sdk"\nversion = "1.2.3"\nsource = { editable = "sdks/python" }\n${dependency}\n[[package]]\nname = "onetaskgraph-core"\nversion = "9.8.7"\nsource = { registry = "https://pypi.org/simple" }\n`;
+    const before = revision({ "uv.lock": lock });
+    const after = revision({
+      "uv.lock": lock
+        .replace('version = "9.8.7", source', 'version = "9.8.8", source')
+        .replace('specifier = "==9.8.7"', 'specifier = "==9.8.8"'),
+    });
+    assert.equal(classify(event("release-plz-123"), after, before).macosRequired, true);
+  });
+}
+
+test("lock references resolve explicit local sources and refuse ambiguous or absent identities", () => {
+  for (const metadata of [false, true]) {
+    for (const identity of ["explicit", "ambiguous", "absent"]) {
+      const selector =
+        identity === "explicit"
+          ? metadata
+            ? ', editable = "."'
+            : ', source = { editable = "." }'
+          : "";
+      const reference = metadata
+        ? `[package.metadata]\nrequires-dist = [{ name = "onetaskgraph-cli", specifier = "==1.2.3"${selector} }]`
+        : `dependencies = [{ name = "onetaskgraph-cli", version = "1.2.3"${selector} }]`;
+      const local =
+        identity === "absent"
+          ? ""
+          : '\n[[package]]\nname = "onetaskgraph-cli"\nversion = "1.2.3"\nsource = { editable = "." }\n';
+      const registry =
+        identity === "absent"
+          ? ""
+          : '\n[[package]]\nname = "onetaskgraph-cli"\nversion = "1.2.3"\nsource = { registry = "https://pypi.org/simple" }\n';
+      const beforeLock = `version = 1\n[[package]]\nname = "onetaskgraph-sdk"\nversion = "1.2.3"\nsource = { editable = "sdks/python" }\n${reference}\n${local}${registry}`;
+      const afterLock = beforeLock
+        .replace(reference, reference.replaceAll("1.2.3", "1.2.4"))
+        .replace(local || "never-match", local.replace("1.2.3", "1.2.4"));
+      const before = revision({ "uv.lock": beforeLock });
+      const after = revision({ "uv.lock": afterLock });
+      const result = classify(event("release-plz-123"), after, before);
+      assert.equal(result.isReleaseOnly, identity === "explicit", `${metadata}/${identity}`);
+      assert.equal(result.macosRequired, identity !== "explicit", `${metadata}/${identity}`);
+    }
+  }
+});
+
 test("Actions event environment overrides payload kinds and unreadable kinds require coverage", () => {
   const conflicting = { ...event("feature"), event_name: "push" };
   assert.equal(classify(conflicting, heads.source, base, "pull_request").macosRequired, true);
@@ -264,6 +314,18 @@ test("Actions event environment overrides payload kinds and unreadable kinds req
   );
   for (const event_name of ["unknown", {}, 42])
     assert.equal(classify({ event_name }).macosRequired, true);
+});
+
+test("unknown authoritative event names fail closed even over a release-only PR", () => {
+  for (const name of ["unknown", "pull-request", "unknown\nevent"]) {
+    const result = classify(event("release-plz-123"), heads.version, base, name);
+    assert.equal(result.macosRequired, true);
+    assert.equal(result.isReleaseOnly, false);
+    assert.ok(result.reason.includes(JSON.stringify(name)));
+  }
+  const payload = { ...event("release-plz-123"), event_name: "unknown" };
+  assert.equal(classify(payload).macosRequired, true);
+  assert.equal(classify(payload, heads.version, base, "merge_group").macosRequired, false);
 });
 
 test("malformed product versions, non-version uv content and empty diffs never authorize omission", () => {

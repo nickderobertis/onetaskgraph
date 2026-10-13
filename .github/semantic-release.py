@@ -35,14 +35,55 @@ def version(value: object, prefix: str = '') -> str:
 def blob(ref, path):
     return subprocess.check_output(['git', 'show', f'{ref}:{path}'], text=True)
 
+@dataclass(frozen=True)
+class LockIdentity:
+    name: str
+    version: str
+    source: dict[str, object] | str | None
+
+    @classmethod
+    def parse(cls, package: dict[str, object]) -> 'LockIdentity':
+        name, package_version, source = (package.get(key) for key in ('name', 'version', 'source'))
+        if not isinstance(name, str) or not name or not isinstance(package_version, str) or not package_version:
+            raise ValueError('invalid lockfile package identity')
+        if source is not None and not isinstance(source, (str, dict)):
+            raise ValueError('invalid lockfile package source')
+        return cls(name, package_version, source)
+
+    def is_local(self, path: str, products: set[str]) -> bool:
+        return self.name in products and (
+            self.source is None if path == 'Cargo.lock' else
+            isinstance(self.source, dict) and len(self.source) == 1 and
+            any(isinstance(self.source.get(key), str) and self.source[key] for key in ('editable', 'virtual'))
+        )
+
+
 def normalize_lock(text, path, products):
     obj = tomllib.loads(text)
     packages = obj.get('package')
     if not isinstance(packages, list) or not packages or any(not isinstance(package, dict) for package in packages):
         raise ValueError('lockfile must contain a nonempty package array')
-    for package in packages:
-        name = package.get('name', '')
-        local = name in products and ('source' not in package if path == 'Cargo.lock' else isinstance(package.get('source'), dict) and ('editable' in package['source'] or 'virtual' in package['source']))
+    # Resolve against original identities before package versions are normalized.
+    identities = [LockIdentity.parse(package) for package in packages]
+
+    def local_reference(reference: dict[str, object]) -> bool:
+        candidates = [identity for identity in identities if identity.name == reference['name']]
+        if 'version' in reference:
+            candidates = [identity for identity in candidates if identity.version == reference['version']]
+        if 'source' in reference:
+            if not isinstance(reference['source'], dict):
+                raise ValueError('invalid uv dependency source')
+            candidates = [identity for identity in candidates if identity.source == reference['source']]
+        # requires-dist writes source selectors directly on its metadata record.
+        selectors = {key: reference[key] for key in ('registry', 'git', 'url', 'path', 'directory', 'editable', 'virtual') if key in reference}
+        if selectors:
+            candidates = [identity for identity in candidates if identity.source == selectors]
+        if len(candidates) != 1:
+            raise ValueError('ambiguous or unresolved local-product dependency identity')
+        return candidates[0].is_local(path, products)
+
+    for package, identity in zip(packages, identities):
+        local = identity.is_local(path, products)
         if local:
             package['version'] = version(package['version'])
         dependencies = package.get('dependencies', [])
@@ -57,10 +98,10 @@ def normalize_lock(text, path, products):
         if path != 'Cargo.lock' and any(not isinstance(dep, dict) for dep in dependencies):
             raise ValueError('invalid uv dependency records')
         for dep in dependencies:
-            if isinstance(dep, dict) and dep.get('name', '') in products and 'version' in dep:
+            if isinstance(dep, dict) and dep.get('name', '') in products and 'version' in dep and local_reference(dep):
                 dep['version'] = version(dep['version'])
         for dep in requires:
-            if dep.get('name', '') in products and 'specifier' in dep:
+            if dep.get('name', '') in products and 'specifier' in dep and local_reference(dep):
                 dep['specifier'] = version(dep['specifier'], '==')
     return obj
 
