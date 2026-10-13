@@ -1,16 +1,21 @@
 //! A store an earlier release wrote, read and written by this one.
 //!
 //! A local Markdown store is a long-lived directory on a user's disk, often under version
-//! control. `tests/fixtures/plan-store` holds redacted copies of real records of this
-//! project's own plan store, chosen to hold every shape YAML writers disagree on: strings that
-//! need quotes, a timestamp-shaped string, blank lines inside literal blocks, a block opening
-//! with a blank line (`|2-`), a multi-line string holding a whitespace-only line, lines past
-//! eighty columns, a `|+` block, stored answers blocks holding those, edges, `delivers`,
-//! nested metadata, projects and documents. `plan-store.expected.json` is what the release
-//! before the YAML crate moved observed of them — each record read, rewritten whole, given a
-//! status, and its title and status spliced back — so a difference is a record this release
-//! reads with another meaning or writes with other bytes.
-
+//! control. `tests/fixtures/plan-store` holds copies of real records of this project's own
+//! plan store with every word of their text, keys and file names replaced by a placeholder
+//! word of the same length and case and every other byte kept, so each record keeps the
+//! shape YAML writers disagree on while carrying none of its text: strings that need quotes,
+//! a timestamp-shaped string, blank lines inside literal blocks, a block opening with a blank
+//! line (`|2-`), a multi-line string holding a whitespace-only line, lines past eighty
+//! columns, a `|+` block, stored answers blocks holding those, edges, `delivers`, nested
+//! metadata, projects and documents. No record of that store carries a label, so
+//! `placeholder-project` holds the labelled ones: a project and two tasks written by the
+//! release before the YAML crate moved, through this source, with labels that need quoting
+//! (`needs: quoting`, `#triage`, `1.0`, `007`) and labels that do not (`2026-Q4`, `yes`), and
+//! a task whose labels are written by hand in the short forms the documentation shows.
+//! `plan-store.expected.json` is what that release observed of every record — each read,
+//! rewritten whole, given a status, and its title and status spliced back — so a difference
+//! is a record this release reads with another meaning or writes with other bytes.
 mod capture;
 
 use std::collections::BTreeMap;
@@ -73,7 +78,7 @@ fn differences(
 async fn every_record_an_earlier_release_wrote_reads_with_the_same_meaning() {
     let observed = capture::reads(&fixture("plan-store")).await;
     let expected = expected("reads");
-    assert_eq!(observed.len(), 10, "every record of the store is read");
+    assert_eq!(observed.len(), 15, "every record of the store is read");
     let found = differences(&observed, &expected);
     assert!(found.is_empty(), "{}", found.join("\n"));
 }
