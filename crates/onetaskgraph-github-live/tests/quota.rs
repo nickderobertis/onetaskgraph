@@ -296,3 +296,87 @@ fn corroboration_handles_absence_limits_regressions_and_flag_boundary() {
     }
     assert_eq!(read_pair(&pair).unwrap().account_movement, None);
 }
+
+#[test]
+fn current_identity_boundaries_and_every_main_phase_are_validated() {
+    use onetaskgraph_github_live::quota::{CurrentSession, bill};
+    let pair = completed_pair();
+    let identity = &pair[0];
+    assert!(
+        CurrentSession::new(
+            &"x".repeat(257),
+            &identity.source_revision,
+            &identity.workspace_version,
+            &identity.workload
+        )
+        .is_err()
+    );
+    let long_id = "x".repeat(256);
+    let long_revision = "a".repeat(64);
+    let current = CurrentSession::new(
+        &long_id,
+        &long_revision,
+        &identity.workspace_version,
+        &identity.workload,
+    )
+    .unwrap();
+    let mut long_pair = pair.clone();
+    for record in &mut long_pair {
+        record.session_id = long_id.clone();
+        record.source_revision = long_revision.clone();
+    }
+    assert!(bill(&long_pair, &current).is_ok());
+    for index in 0..pair[0].calls.len() {
+        let mut missing = pair.clone();
+        missing[0].calls.remove(index);
+        for (index, call) in missing[0].calls.iter_mut().enumerate() {
+            call.sequence = index as u64 + 1;
+        }
+        assert!(
+            read_pair(&missing)
+                .unwrap_err()
+                .contains("required journey phase")
+        );
+    }
+}
+
+#[test]
+fn failed_attempts_and_successful_retries_all_contribute_their_own_prices() {
+    use onetaskgraph_github_live::quota::{
+        Charge, MutationBasis, Outcome, PRICING_URL, RequestKind,
+    };
+    let mut pair = completed_pair();
+    for outcome in [
+        Outcome::GraphqlError,
+        Outcome::HttpError,
+        Outcome::TransportError,
+    ] {
+        let mut failed = pair[0].calls[0].clone();
+        failed.sequence = pair[0].calls.len() as u64 + 1;
+        failed.kind = RequestKind::Mutation;
+        failed.outcome = outcome;
+        failed.charge = Charge::Mutation {
+            points: 1,
+            basis: MutationBasis::Modelled {
+                url: PRICING_URL.into(),
+                points_per_request: 1,
+            },
+        };
+        pair[0].calls.push(failed.clone());
+        failed.sequence += 1;
+        failed.attempt = 2;
+        failed.outcome = Outcome::Success;
+        pair[0].calls.push(failed);
+    }
+    let wire = serde_json::to_string(&pair).unwrap();
+    let result = read_pair(&serde_json::from_str::<Vec<SessionRecord>>(&wire).unwrap()).unwrap();
+    assert_eq!(result.points, 20);
+    assert_eq!(result.mutations, 6);
+    assert_eq!(result.graphql_requests, 20);
+    // Queries without a response cost refuse numeric reporting even after recovery.
+    pair[0].calls[0].outcome = Outcome::TransportError;
+    pair[0].calls[0].charge = Charge::Unavailable {
+        reason: "transport failure".into(),
+    };
+    assert!(read_pair(&pair).is_err());
+}
