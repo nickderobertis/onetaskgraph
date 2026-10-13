@@ -751,6 +751,8 @@ struct Limits {
     /// difference — which is the whole distinction between measuring a session and
     /// differencing a counter somebody else is also spending.
     other_traffic_per_request: u64,
+    /// Actual cost this double reports when a query selects its price.
+    reported_query_cost: Option<u64>,
     /// When each request arrived, which operation it carried, and whether that operation
     /// creates content.
     arrivals: Vec<(Instant, String, bool)>,
@@ -1352,7 +1354,16 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
                         .or_else(|| refused(&served, query, variables))
                     {
                         Some(message) => json!({"errors":[{"message":message}]}).to_string(),
-                        None => json!({ "data": answer(&served, query, variables) }).to_string(),
+                        None => {
+                            let mut data = answer(&served, query, variables);
+                            if query.contains("rateLimit{cost}")
+                                && let Some(cost) =
+                                    served.lock().unwrap().limits.reported_query_cost
+                            {
+                                data["rateLimit"] = json!({"cost":cost});
+                            }
+                            json!({"data":data}).to_string()
+                        }
                     },
                 ),
             };
@@ -1469,6 +1480,8 @@ fn repository_node_id(slug: &str) -> String {
 }
 
 fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
+    let unpriced = query.replacen("rateLimit{cost} ", "", 1);
+    let query = unpriced.as_str();
     if query == onetaskgraph_github_projects::graphql::UPDATE_FIELDS {
         let mut result = serde_json::Map::new();
         let writes = onetaskgraph_github_projects::FIELD_WRITE_SLOTS.map(|slot| {
@@ -2608,6 +2621,7 @@ fn operation_name(query: &str) -> &str {
         .split_once('{')
         .map_or(query, |(_, rest)| rest)
         .trim_start();
+    let body = body.strip_prefix("rateLimit{cost} ").unwrap_or(body);
     let root = &body[..body
         .find(|c: char| !c.is_alphanumeric() && c != '_')
         .unwrap_or(body.len())];
@@ -19523,4 +19537,56 @@ async fn a_projected_value_follows_a_copy_over_a_board_draft() {
         .unwrap()
         .unwrap();
     assert_eq!(read.metadata["orchestrator.follow-up"]["host"], Value::Null);
+}
+
+#[tokio::test]
+async fn opted_in_actual_query_prices_reach_the_ledger_through_the_real_source() {
+    let fixture = comment_board();
+    fixture.state.lock().unwrap().limits.reported_query_cost = Some(7);
+    let ledger = Arc::new(Accounting::with_query_prices());
+    let source = recording(&fixture.endpoint, &ledger);
+    assert!(source.health().await.unwrap().reachable);
+    assert!(source.get_task(&native("I_task")).await.unwrap().is_some());
+    let snapshot = ledger.snapshot();
+    assert!(!snapshot.requests().is_empty());
+    assert!(
+        snapshot
+            .requests()
+            .iter()
+            .all(|request| request.spend().basis() == Basis::Reported)
+    );
+    assert!(
+        snapshot
+            .requests()
+            .iter()
+            .all(|request| request.spend().amount() == 7)
+    );
+    assert!(
+        fixture
+            .documents()
+            .iter()
+            .all(|query| query.contains("rateLimit{cost}"))
+    );
+    // Unknown prices are retained as unknown response facts by the live reader, rather
+    // than inferred from account movement; the legacy ledger retains its model.
+    fixture.state.lock().unwrap().limits.reported_query_cost = None;
+    assert!(source.health().await.unwrap().reachable);
+    assert_eq!(
+        ledger.snapshot().requests().last().unwrap().spend().basis(),
+        Basis::Modelled
+    );
+    fixture.refuse("deleteIssueComment");
+    let id = fixture.commented("I_task", Some("octocat"), "retain after refusal");
+    assert!(matches!(
+        source.delete_comment(&native("I_task"), &native(&id)).await,
+        Err(SourceError::Refused { .. })
+    ));
+    assert!(
+        fixture
+            .documents()
+            .iter()
+            .filter(|query| query.starts_with("mutation"))
+            .all(|query| !query.contains("rateLimit"))
+    );
+    assert_eq!(fixture.comments_on("I_task").len(), 1);
 }

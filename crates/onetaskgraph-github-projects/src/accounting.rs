@@ -843,6 +843,7 @@ pub struct Accounting {
     requests: Mutex<Vec<Request>>,
     attachment_responses: Mutex<Vec<AttachmentResponse>>,
     estimates: Mutex<BTreeMap<Budget, u64>>,
+    query_prices: bool,
 }
 
 impl Accounting {
@@ -850,6 +851,18 @@ impl Accounting {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+    /// Record actual query prices by selecting `rateLimit { cost }` on outgoing reads.
+    /// Existing ledger readers and default request documents retain their behavior.
+    #[must_use]
+    pub fn with_query_prices() -> Self {
+        Self {
+            query_prices: true,
+            ..Self::default()
+        }
+    }
+    pub(crate) const fn prices_queries(&self) -> bool {
+        self.query_prices
     }
     /// Record what a caller estimated this session would spend against `budget`, before
     /// it started.

@@ -4471,6 +4471,20 @@ impl GitHubProjectsSource {
     /// early exits below is a different outcome, and a record written at each of them is a
     /// record one of them can be added without.
     async fn attempt(&self, query: &str, variables: &Value) -> Attempted {
+        let priced;
+        let query = if self.ledger.prices_queries() && !is_mutation(query) {
+            // Insert in the operation's root selection, before any appended fragments.
+            // The inventory contains generated documents, never caller-supplied text.
+            let root = query.find('{').expect("a query has a root selection");
+            priced = format!(
+                "{}rateLimit{{cost}} {}",
+                &query[..=root],
+                &query[root + 1..]
+            );
+            priced.as_str()
+        } else {
+            query
+        };
         let mut limits = accounting::RateLimit::default();
         let mut reported_cost = None;
         let result = self
@@ -4546,6 +4560,11 @@ impl GitHubProjectsSource {
                 message: format!("GitHub GraphQL response could not be read: {e}"),
             })
         })?;
+        *reported_cost = serde_json::from_str::<Value>(&body)
+            .ok()
+            .as_ref()
+            .and_then(|body| body.pointer("/data/rateLimit/cost"))
+            .and_then(Value::as_u64);
         if let Some(limiter) = Limiter::classify(status, exhausted, &body) {
             return Err(Attempt::Limited(Limited { limiter, hint }));
         }
@@ -4561,15 +4580,6 @@ impl GitHubProjectsSource {
                 message: format!("GitHub GraphQL returned HTTP {status}"),
             }));
         }
-        // GitHub reports what a call cost only when the document asked it to, and no
-        // document this source sends does — so this is `None` here and carries the figure
-        // for a caller whose own document selects `rateLimit { cost }`. What it must never
-        // pick up is a `dryRun` probe's cost, which is some other document's.
-        *reported_cost = serde_json::from_str::<Value>(&body)
-            .ok()
-            .as_ref()
-            .and_then(|body| body.pointer("/data/rateLimit/cost"))
-            .and_then(Value::as_u64);
         let mut data = self.answer(&body).map_err(Attempt::Failed)?;
         if let Some(served) = served {
             stamp_served(&mut data, &served.to_rfc3339());
