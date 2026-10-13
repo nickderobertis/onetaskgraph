@@ -18,6 +18,9 @@ LIVE_LABEL = "live-session"
 SELECTION_ENCODING = "utf-8"  # live-lane-selection.sh reconfigures both its streams to this
 OBJECT_NAME_ENCODING = "ascii"  # `git rev-parse` prints a hexadecimal object name
 SessionId = NewType("SessionId", str)
+# Repeats of this step within one job (the gate's own recipe checks drive `just check` and
+# `just gate` again) each take a fresh sibling of the job's location rather than refusing.
+MAX_INVOCATIONS = 100
 
 
 class Selection(StrEnum):
@@ -29,6 +32,25 @@ def session_id(value: str) -> SessionId:
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,256}", value):
         raise ValueError("session identity must be a safe path component")
     return SessionId(value)
+
+
+def fresh_directory(requested: Path) -> Path:
+    """The requested location, or the first unused `<name>.<n>` beside it when an earlier
+    invocation of this job already holds it. Each is created exclusively, so no earlier
+    invocation's records are ever reused, overwritten or mixed into this one's bill."""
+    requested.parent.mkdir(parents=True, exist_ok=True)
+    for ordinal in range(1, MAX_INVOCATIONS + 1):
+        candidate = requested if ordinal == 1 else requested.with_name(f"{requested.name}.{ordinal}")
+        try:
+            candidate.mkdir()
+        except FileExistsError:
+            continue
+        if candidate != requested:
+            print(f"github-live-session telemetry: {requested} holds an earlier invocation's "
+                  f"records; this invocation records in {candidate}", file=sys.stderr, flush=True)
+        return candidate
+    raise ValueError(f"{MAX_INVOCATIONS} invocations already recorded beside {requested}; "
+                     "remove the stale ones under target/debug/telemetry, then rerun")
 
 
 @dataclass(frozen=True)
@@ -99,7 +121,7 @@ async def select(policy: str, command: list[str], root: Path) -> int:
         identity = session_id(environment.get("GITHUB_LIVE_SESSION_ID") or f"local-{uuid.uuid4().hex}")
         directory = Path(environment.get("GITHUB_LIVE_SESSION_DIR") or
                          root / "target/debug/telemetry/github-live-session" / identity)
-        await asyncio.to_thread(directory.mkdir, parents=True, exist_ok=False)
+        directory = await asyncio.to_thread(fresh_directory, directory)
         environment["GITHUB_LIVE_SESSION_ID"] = identity
         environment["GITHUB_LIVE_SESSION_DIR"] = str(await asyncio.to_thread(directory.resolve))
         if not environment.get("GITHUB_LIVE_SOURCE_REVISION"):

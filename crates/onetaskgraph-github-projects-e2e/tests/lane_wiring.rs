@@ -246,7 +246,7 @@ fn budget_adapter_uses_the_real_checker_and_never_substitutes_missing_live_evide
 }
 
 #[test]
-fn the_real_policy_and_nx_graph_preserve_fresh_directories_and_refuse_unsafe_identities() {
+fn the_real_policy_and_nx_graph_give_each_invocation_a_fresh_directory_and_refuse_unsafe_identities() {
     let sandbox = Sandbox::new();
     let root = sandbox.subdirectory("session-identity");
     std::fs::create_dir_all(&root).unwrap();
@@ -304,19 +304,54 @@ fn the_real_policy_and_nx_graph_preserve_fresh_directories_and_refuse_unsafe_ide
                     .unwrap()
                     .contains_key("onetaskgraph-github-projects:test")
             );
-            std::fs::write(&graph, "duplicate must not reach Nx").unwrap();
-            let duplicate = command.output().unwrap();
-            assert!(!duplicate.status.success());
-            assert!(
-                String::from_utf8_lossy(&duplicate.stderr)
-                    .contains("GitHub live collection refused")
-            );
-            assert_eq!(
-                std::fs::read_to_string(&graph).unwrap(),
-                "duplicate must not reach Nx"
-            );
             std::fs::remove_file(&graph).unwrap();
+            // A repeat in the same job (the gate's recipe checks drive `just check` and
+            // `just gate` again under the job's own location) proceeds into a fresh
+            // sibling, and the earlier invocation's records stay exactly as written.
+            let earlier = directory.join("main.json");
+            std::fs::write(&earlier, "earlier invocation's record").unwrap();
+            let mut received = Vec::new();
+            for ordinal in [2, 3] {
+                let recorded = root.join(format!("received-{ordinal}"));
+                let repeat = std::process::Command::new("python3")
+                    .arg(&runner)
+                    .arg("select")
+                    .arg(&policy)
+                    .args([
+                        "python3",
+                        "-c",
+                        "import os,sys; open(sys.argv[1],'w').write(os.environ['GITHUB_LIVE_SESSION_DIR'])",
+                    ])
+                    .arg(&recorded)
+                    .env("NX_BASE", "missing-base-for-session-validation")
+                    .env("GH_PROJECTS_TOKEN", "fixture-token")
+                    .env("GITHUB_LIVE_SESSION_ID", identity)
+                    .env("GITHUB_LIVE_SESSION_DIR", &directory)
+                    .output()
+                    .unwrap();
+                let said = String::from_utf8_lossy(&repeat.stderr);
+                assert!(repeat.status.success(), "{said}");
+                let sibling = root.join(format!("must-be-fresh.{ordinal}"));
+                assert!(said.contains("holds an earlier invocation's records"), "{said}");
+                assert_eq!(
+                    std::path::PathBuf::from(std::fs::read_to_string(&recorded).unwrap())
+                        .canonicalize()
+                        .unwrap(),
+                    sibling.canonicalize().unwrap()
+                );
+                assert_eq!(std::fs::read_dir(&sibling).unwrap().count(), 0);
+                received.push(sibling);
+                std::fs::remove_file(recorded).unwrap();
+            }
+            assert_eq!(
+                std::fs::read_to_string(&earlier).unwrap(),
+                "earlier invocation's record"
+            );
+            std::fs::remove_file(earlier).unwrap();
             std::fs::remove_dir(directory).unwrap();
+            for sibling in received {
+                std::fs::remove_dir(sibling).unwrap();
+            }
         } else {
             assert!(!output.status.success());
             assert!(String::from_utf8_lossy(&output.stderr).contains("safe path component"));
