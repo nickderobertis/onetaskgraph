@@ -137,3 +137,36 @@ env -u GH_PROJECTS_TOKEN -u GH_TOKEN -u GITHUB_TOKEN cargo test --locked --all-f
 The same command was also repeated on the finished tree and passed (10 filtered out).
 Thus this branch introduced the obsolete expectation; commit `661d762d` fixes it.
 No pre-existing admission failure remains to draft as a follow-up.
+
+## Merge-path repair verification
+
+Commit `9c3e0895` formats `sequence.json` with the repository's Biome configuration
+and inventories `LIVE_CHANGE_TOKEN`, including its one-point offline price pin.
+The manager approved excluding this live-only document from reconciliation: its actual
+response cost is already billed on every live-lane read. This preserves the measured
+request workload while the schema, node-count and price inventories cover the document.
+The loopback pair now checks each priced fresh-token document's recorded charge and
+checks the complete bill's query subtotal. Injecting zero-point fresh-token charges
+made the actual entry-point pair fail at that charge assertion; restoring the recorder
+made all nine pair tests pass. No serialized contract changed.
+
+Verification used a newly created detached worktree at `ca86536a` under the dispatch's
+scratch directory, with Cargo run inside that worktree. The same capture harness
+described above drove both actual entry points on the baseline and the repaired tree.
+The final `sequence.json`, `prices.json` and reporter output were byte-identical across
+both runs: 193 HTTP operations, 174 GraphQL requests, 19 REST requests, and 174 loopback
+points. The sequence and price captures also match the retained evidence above.
+The current reporter read the retained historical records and again reported 212 points,
+87 below 299. No real GitHub session ran. The detached worktree was removed afterwards.
+
+Passed on the repaired executable tree:
+
+- `workspace:format-check`, invoked through Nx with its cache skipped.
+- Plugin `schema` (10), `node_count` (4), `point_cost` (6), `budget_gate` (13),
+  `lane_entry` (1), and `reconciliation_gate` (3) tests.
+- Session accounting `quota` (14), the complete loopback pair (9), and the reporter
+  boundary (1).
+- The three plugin accounting/fresh-token selectors and six asset accounting,
+  rendering and board-admission checks listed above.
+- Rust formatting and clippy with warnings denied over `onetaskgraph-github-live`,
+  `onetaskgraph-github-projects` and `onetaskgraph-github-projects-e2e`.
