@@ -5,7 +5,7 @@ use onetaskgraph_core::{
 use onetaskgraph_e2e_support::{common::Sandbox, images};
 use onetaskgraph_github_projects::{
     Plugin,
-    accounting::{Accounting, Outcome, RateLimit, Request},
+    accounting::{Accounting, Outcome, RateLimit, Request, ResponseOutcome},
     graphql,
 };
 use onetaskgraph_live::{Exclusivity, Session};
@@ -79,22 +79,37 @@ async fn read_live_rendering(
     Ok(())
 }
 
-async fn nominated_status_option(
+/// Record each raw asset-lane query before interpreting its response, including refusals.
+async fn asset_graphql(
     endpoint: &str,
     token: &str,
-    owner: &str,
-    number: u32,
+    query: &str,
+    variables: &Value,
     ledger: &Accounting,
-) -> Result<String, String> {
-    let variables = json!({"owner":owner,"number":number,"nestedFirst":100});
-    let response = reqwest::Client::new()
+) -> Result<Value, String> {
+    let document = ledger.priced_document(query);
+    let sending = reqwest::Client::new()
         .post(endpoint)
         .header("user-agent", "onetaskgraph-live-assets")
         .bearer_auth(token)
-        .json(&json!({"query":graphql::BOARD_FIELDS,"variables":variables}))
+        .json(&json!({"query":document,"variables":variables}))
         .send()
-        .await
-        .map_err(|error| error.to_string())?;
+        .await;
+    let response = match sending {
+        Ok(response) => response,
+        Err(error) => {
+            ledger.record(
+                Request::graphql(&document, variables, None, None)
+                    .finished(Outcome::Refused, RateLimit::default())
+                    .with_execution(
+                        Some(document.into_owned()),
+                        ResponseOutcome::TransportError,
+                        1,
+                    ),
+            );
+            return Err(error.to_string());
+        }
+    };
     let limits = RateLimit::read(|header| {
         response
             .headers()
@@ -103,20 +118,55 @@ async fn nominated_status_option(
             .map(str::to_owned)
     });
     let status = response.status();
-    let answer: Value = response.json().await.map_err(|error| error.to_string())?;
-    let outcome = Outcome::of_response(status, limits.exhausted(), &answer.to_string());
+    let parsed = response.json::<Value>().await;
+    let cost = parsed
+        .as_ref()
+        .ok()
+        .and_then(|answer| answer["data"]["rateLimit"]["cost"].as_u64());
+    let graphql_error = parsed.as_ref().is_ok_and(|answer| {
+        !answer["errors"].is_null()
+            && answer["errors"]
+                .as_array()
+                .is_none_or(|errors| !errors.is_empty())
+    });
+    let response_outcome = if !status.is_success() {
+        ResponseOutcome::HttpError
+    } else if parsed.is_err() {
+        ResponseOutcome::TransportError
+    } else if graphql_error {
+        ResponseOutcome::GraphqlError
+    } else {
+        ResponseOutcome::Success
+    };
+    let outcome = if graphql_error {
+        Outcome::Refused
+    } else {
+        Outcome::of_response(status, limits.exhausted(), "")
+    };
     ledger.record(
-        Request::graphql(graphql::BOARD_FIELDS, &variables, None, None).finished(outcome, limits),
+        Request::graphql(&document, variables, None, cost)
+            .finished(outcome, limits)
+            .with_execution(Some(document.into_owned()), response_outcome, 1),
     );
     if !status.is_success() {
         return Err(format!("nominated board read returned HTTP {status}"));
     }
-    if !answer["errors"].is_null() {
-        return Err(format!(
-            "nominated board read refused: {}",
-            answer["errors"]
-        ));
+    let answer = parsed.map_err(|error| error.to_string())?;
+    if graphql_error {
+        return Err("asset query refused by GraphQL".into());
     }
+    Ok(answer)
+}
+
+async fn nominated_status_option(
+    endpoint: &str,
+    token: &str,
+    owner: &str,
+    number: u32,
+    ledger: &Accounting,
+) -> Result<String, String> {
+    let variables = json!({"owner":owner,"number":number,"nestedFirst":100});
+    let answer = asset_graphql(endpoint, token, graphql::BOARD_FIELDS, &variables, ledger).await?;
     let board = &answer["data"]["boardFields"]["projectV2"];
     board["id"]
         .as_str()
@@ -444,6 +494,108 @@ async fn board_admission_rejects_non_success_even_with_valid_board_json() {
             assert_eq!(snapshot.requests()[0].outcome(), Outcome::Refused);
         }
     }
+}
+
+#[tokio::test]
+async fn raw_asset_queries_retain_actual_prices_and_failure_outcomes() {
+    use std::io::{BufRead, Read, Write};
+    for (status, body, expected_cost, expected_outcome) in [
+        (
+            200,
+            r#"{"data":{"rateLimit":{"cost":7},"node":{"id":"fixture"}}}"#,
+            Some(7),
+            ResponseOutcome::Success,
+        ),
+        (
+            200,
+            r#"{"data":{"rateLimit":{"cost":3}},"errors":[{"message":"refused"}]}"#,
+            Some(3),
+            ResponseOutcome::GraphqlError,
+        ),
+        (
+            503,
+            r#"{"data":{"rateLimit":{"cost":4}}}"#,
+            Some(4),
+            ResponseOutcome::HttpError,
+        ),
+        (200, "unreadable", None, ResponseOutcome::TransportError),
+        (
+            200,
+            r#"{"data":{"node":{"id":"fixture"}}}"#,
+            None,
+            ResponseOutcome::Success,
+        ),
+    ] {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}/graphql", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = std::io::BufReader::new(&stream);
+            let mut length = 0;
+            loop {
+                let mut line = String::new();
+                assert!(reader.read_line(&mut line).unwrap() > 0);
+                if line == "\r\n" {
+                    break;
+                }
+                if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length: ") {
+                    length = value.trim().parse().unwrap();
+                }
+            }
+            let mut bytes = vec![0; length];
+            reader.read_exact(&mut bytes).unwrap();
+            let request: Value = serde_json::from_slice(&bytes).unwrap();
+            assert!(
+                request["query"]
+                    .as_str()
+                    .unwrap()
+                    .contains("rateLimit{cost}")
+            );
+            assert_eq!(request["variables"], json!({"id":"fixture"}));
+            write!(stream, "HTTP/1.1 {status} Fixture\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            request["query"].as_str().unwrap().to_owned()
+        });
+        let ledger = Accounting::with_query_prices();
+        let result = asset_graphql(
+            &endpoint,
+            "test-token",
+            "query($id:ID!){node(id:$id){id}}",
+            &json!({"id":"fixture"}),
+            &ledger,
+        )
+        .await;
+        let sent = server.join().unwrap();
+        assert_eq!(result.is_ok(), expected_outcome == ResponseOutcome::Success);
+        let snapshot = ledger.snapshot();
+        assert_eq!(snapshot.requests().len(), 1);
+        let record = &snapshot.requests()[0];
+        assert_eq!(record.document(), Some(sent.as_str()));
+        assert_eq!(record.reported_query_cost(), expected_cost);
+        assert_eq!(record.response_outcome(), expected_outcome);
+        assert_eq!(record.attempt(), 1);
+    }
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}/graphql", listener.local_addr().unwrap());
+    drop(listener);
+    let ledger = Accounting::with_query_prices();
+    assert!(
+        asset_graphql(
+            &endpoint,
+            "test-token",
+            "query{viewer{login}}",
+            &json!({}),
+            &ledger
+        )
+        .await
+        .is_err()
+    );
+    let snapshot = ledger.snapshot();
+    assert_eq!(snapshot.requests().len(), 1);
+    assert_eq!(snapshot.requests()[0].reported_query_cost(), None);
+    assert_eq!(
+        snapshot.requests()[0].response_outcome(),
+        ResponseOutcome::TransportError
+    );
 }
 
 #[cfg(unix)]
