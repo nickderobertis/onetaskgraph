@@ -202,6 +202,7 @@ if ! "$python_bin" - "$ROOT" "$TREE" "$tag" <<'PYREFUSALS'
 from pathlib import Path
 import io
 import json
+import os
 import platform
 import re
 import subprocess
@@ -219,8 +220,17 @@ canonical = tree / f'target/{target}/release/{binary}'
 canonical.parent.mkdir(parents=True, exist_ok=True)
 canonical.write_bytes(payload)
 archive = tree / f'onetaskgraph-{tag}-{target}.zip'
-with zipfile.ZipFile(archive, 'w') as packed:
-    packed.writestr(binary, payload)
+native = re.search(r'(?ms)^  native-assets-and-carriers:\n(.*?)(?=^  [a-z-]+:)', workflow)
+step = re.search(r'(?ms)^      - name: Archive, checksum, and stage\n.*?^        run: \|\n(.*?)(?=^      - )', native[1])
+body = '\n'.join(line[10:] for line in step[1].splitlines())
+sys.path.insert(0, str(root / 'scripts'))
+from release_products import bash_executable
+subprocess.run([bash_executable(platform.system()), '-e', '-c', body], cwd=tree,
+               env={**os.environ, 'TARGETS': f'{target}={npm}', 'EXT': extension, 'TAG': tag}, check=True)
+with zipfile.ZipFile(archive) as packed:
+    entries = packed.infolist()
+    if len(entries) != 1 or entries[0].filename != binary or packed.read(entries[0]) != payload:
+        raise SystemExit('production Windows ZIP must contain only the canonical CLI at its root')
 wheels = tree / f'dist/wheels/{target}'
 wheels.mkdir(parents=True, exist_ok=True)
 with zipfile.ZipFile(wheels / f'onetaskgraph_cli-{version}-py3-none-win_amd64.whl', 'w') as wheel:
@@ -228,12 +238,6 @@ with zipfile.ZipFile(wheels / f'onetaskgraph_cli-{version}-py3-none-win_amd64.wh
     wheel.writestr(f'onetaskgraph_cli-{version}.dist-info/METADATA', f'Name: onetaskgraph-cli\nVersion: {version}\n')
     wheel.writestr(f'onetaskgraph_cli-{version}.dist-info/WHEEL', 'Tag: py3-none-win_amd64\n')
 carriers = tree / f'dist/carriers/{npm}'
-carriers.mkdir(parents=True, exist_ok=True)
-with tarfile.open(carriers / 'fixture.tgz', 'w:gz') as packed:
-    for name, data in [('package/package.json', (root / f'npm/platforms/{npm}/package.json').read_bytes()), (f'package/bin/{binary}', payload)]:
-        info = tarfile.TarInfo(name)
-        info.size = len(data)
-        packed.addfile(info, io.BytesIO(data))
 command = [sys.executable, str(root / 'scripts/verify-release-products.py'), '--target', target, '--npm', npm, '--tag', tag, '--ext', extension]
 def refused(args, reason):
     result = subprocess.run(args, cwd=tree, capture_output=True, text=True)

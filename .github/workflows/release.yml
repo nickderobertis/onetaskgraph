@@ -44,7 +44,7 @@ jobs:
             target="${pair%%=*}"; npm_platform="${pair#*=}"
             name="onetaskgraph-${TAG}-${target}"; bin="target/${target}/release/onetaskgraph"
             [ "$EXT" != zip ] || bin="${bin}.exe"
-            if [ "$EXT" = zip ]; then 7z a "${name}.zip" "$bin"; else tar -czf "${name}.tar.gz" -C "$(dirname "$bin")" "$(basename "$bin")"; fi
+            if [ "$EXT" = zip ]; then (cd "$(dirname "$bin")" && python3 -m zipfile -c "../../../${name}.zip" "$(basename "$bin")"); else tar -czf "${name}.tar.gz" -C "$(dirname "$bin")" "$(basename "$bin")"; fi
             asset="${name}.${EXT}"
             if command -v sha256sum >/dev/null; then sha256sum "$asset" > "$asset.sha256"; else shasum -a 256 "$asset" > "$asset.sha256"; fi
             mkdir -p dist/assets
@@ -98,7 +98,7 @@ jobs:
             target="${pair%%=*}"; npm_platform="${pair#*=}"
             name="onetaskgraph-${TAG}-${target}"; bin="target/${target}/release/onetaskgraph"
             [ "$EXT" != zip ] || bin="${bin}.exe"
-            if [ "$EXT" = zip ]; then 7z a "${name}.zip" "$bin"; else tar -czf "${name}.tar.gz" -C "$(dirname "$bin")" "$(basename "$bin")"; fi
+            if [ "$EXT" = zip ]; then (cd "$(dirname "$bin")" && python3 -m zipfile -c "../../../${name}.zip" "$(basename "$bin")"); else tar -czf "${name}.tar.gz" -C "$(dirname "$bin")" "$(basename "$bin")"; fi
             asset="${name}.${EXT}"
             if command -v sha256sum >/dev/null; then sha256sum "$asset" > "$asset.sha256"; else shasum -a 256 "$asset" > "$asset.sha256"; fi
             mkdir -p dist/assets
