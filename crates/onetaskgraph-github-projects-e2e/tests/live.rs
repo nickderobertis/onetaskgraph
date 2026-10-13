@@ -158,21 +158,8 @@ async fn asset_graphql(
         .as_ref()
         .ok()
         .and_then(|answer| answer["data"]["rateLimit"]["cost"].as_u64());
-    let graphql_error = parsed.as_ref().is_ok_and(|answer| {
-        !answer["errors"].is_null()
-            && answer["errors"]
-                .as_array()
-                .is_none_or(|errors| !errors.is_empty())
-    });
-    let response_outcome = if !status.is_success() {
-        ResponseOutcome::HttpError
-    } else if parsed.is_err() {
-        ResponseOutcome::TransportError
-    } else if graphql_error {
-        ResponseOutcome::GraphqlError
-    } else {
-        ResponseOutcome::Success
-    };
+    let response_outcome = ResponseOutcome::of_graphql_reply(status, parsed.as_ref().ok());
+    let graphql_error = response_outcome == ResponseOutcome::GraphqlError;
     let outcome = if graphql_error {
         Outcome::Refused
     } else {
@@ -189,6 +176,9 @@ async fn asset_graphql(
     let answer = parsed.map_err(|error| error.to_string())?;
     if graphql_error {
         return Err("asset query refused by GraphQL".into());
+    }
+    if response_outcome == ResponseOutcome::TransportError {
+        return Err("asset query returned an invalid GraphQL envelope".into());
     }
     Ok(answer)
 }
@@ -619,6 +609,27 @@ async fn raw_asset_queries_retain_actual_prices_and_failure_outcomes() {
             r#"{"data":{"node":{"id":"fixture"}}}"#,
             None,
             ResponseOutcome::Success,
+        ),
+        (200, "null", None, ResponseOutcome::TransportError),
+        (200, "[]", None, ResponseOutcome::TransportError),
+        (200, "{}", None, ResponseOutcome::TransportError),
+        (
+            200,
+            r#"{"data":null}"#,
+            None,
+            ResponseOutcome::TransportError,
+        ),
+        (
+            200,
+            r#"{"errors":false}"#,
+            None,
+            ResponseOutcome::TransportError,
+        ),
+        (
+            200,
+            r#"{"errors":[{}]}"#,
+            None,
+            ResponseOutcome::TransportError,
         ),
     ] {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();

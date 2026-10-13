@@ -592,4 +592,22 @@ fn only_one_pinned_deliberate_refusal_can_use_the_approved_minimum_model() {
     call.sequence = duplicate[0].calls.len() as u64 + 1;
     duplicate[0].calls.push(call);
     assert!(read_pair(&duplicate).is_err());
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(
+        directory.path().join("main.json"),
+        serde_json::to_vec(&duplicate[0]).unwrap(),
+    )
+    .unwrap();
+    let main = &duplicate[0];
+    let current = onetaskgraph_github_live::quota::CurrentSession::new(
+        &main.session_id,
+        &main.source_revision,
+        &main.workspace_version,
+        &main.workload,
+    )
+    .unwrap();
+    assert!(
+        onetaskgraph_github_live::quota::require_current_main(directory.path(), &current).is_err(),
+        "asset admission must reject duplicate modelled refusals before spending"
+    );
 }

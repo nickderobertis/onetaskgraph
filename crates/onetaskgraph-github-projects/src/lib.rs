@@ -4589,17 +4589,8 @@ impl GitHubProjectsSource {
             .as_ref()
             .and_then(|body| body.pointer("/data/rateLimit/cost"))
             .and_then(Value::as_u64);
-        if status.is_success()
-            && let Ok(answer) = serde_json::from_str::<Value>(&body)
-        {
-            *response_outcome = if answer.get("errors").is_some_and(|errors| {
-                !errors.is_null() && errors.as_array().is_none_or(|errors| !errors.is_empty())
-            }) {
-                accounting::ResponseOutcome::GraphqlError
-            } else {
-                accounting::ResponseOutcome::Success
-            };
-        }
+        let parsed = serde_json::from_str::<Value>(&body).ok();
+        *response_outcome = accounting::ResponseOutcome::of_graphql_reply(status, parsed.as_ref());
         if let Some(limiter) = Limiter::classify(status, exhausted, &body) {
             return Err(Attempt::Limited(Limited { limiter, hint }));
         }

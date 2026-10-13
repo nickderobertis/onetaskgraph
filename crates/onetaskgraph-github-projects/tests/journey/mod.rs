@@ -368,17 +368,7 @@ async fn graphql_answer_at(
         .filter(|errors| {
             !errors.is_null() && errors.as_array().is_none_or(|errors| !errors.is_empty())
         });
-    let protocol = if !status.is_success() {
-        ResponseOutcome::HttpError
-    } else if !parsed.as_ref().is_ok_and(Value::is_object)
-        || (errors.is_some() && !parsed.as_ref().is_ok_and(valid_graphql_errors))
-    {
-        ResponseOutcome::TransportError
-    } else if errors.is_some() {
-        ResponseOutcome::GraphqlError
-    } else {
-        ResponseOutcome::Success
-    };
+    let protocol = ResponseOutcome::of_graphql_reply(status, parsed.as_ref().ok());
     let ended = if errors.is_some() {
         Outcome::Refused
     } else {
@@ -414,6 +404,14 @@ async fn graphql_answer_at(
         return Err(Refusal::Answered(
             format!("{query_name} query was rejected by GitHub: {errors}"),
             parsed.ok(),
+        ));
+    }
+    if protocol == ResponseOutcome::TransportError {
+        return Err(Refusal::Answered(
+            format!(
+                "{query_name} GraphQL response must be an object with a data object or valid errors"
+            ),
+            None,
         ));
     }
     let mut response = parsed.map_err(|error| {

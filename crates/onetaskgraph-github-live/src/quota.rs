@@ -77,12 +77,14 @@ pub struct CallRecord {
     pub operation_sha256: String,
     /// Attempt number for this operation; retries retain their phase.
     pub attempt: u32,
+    // llmlint: ignore-block[invalid_states_unrepresentable] The task's shared serde agreement fixes separate kind/outcome/charge fields; replacing them with a combined request enum would change that contract. Both admission and billing validate the combinations before numeric success.
     /// Protocol operation kind.
     pub kind: RequestKind,
     /// Result at the actual protocol boundary.
     pub outcome: Outcome,
     /// Actual reported query price or explicit mutation model.
     pub charge: Charge,
+    // llmlint: ignore-end[invalid_states_unrepresentable]
     /// Validated primary allowance headers from this response.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowance: Option<Allowance>,
@@ -360,11 +362,6 @@ pub fn bill(records: &[SessionRecord], current: &CurrentSession<'_>) -> Result<B
                     result.graphql_requests += 1;
                     result.modelled_page_refusals += 1;
                     result.modelled_page_refusal_points += *points;
-                    if result.modelled_page_refusals > 1 {
-                        return Err(
-                            "more than one deliberate page-size refusal was modelled".into()
-                        );
-                    }
                     *points
                 }
                 (RequestKind::Mutation, Charge::Mutation { points, basis }) => {
@@ -453,6 +450,15 @@ fn validate_record(record: &SessionRecord, current: &CurrentSession<'_>) -> Resu
         || record.calls.is_empty()
     {
         return Err("incomplete, stale or mismatched live-session record".into());
+    }
+    if record
+        .calls
+        .iter()
+        .filter(|call| matches!(call.charge, Charge::ModelledPageSizeRefusal { .. }))
+        .count()
+        > 1
+    {
+        return Err("more than one deliberate page-size refusal was modelled".into());
     }
     let required: &[Phase] = match record.invocation {
         EntryPoint::Main => &[

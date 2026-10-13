@@ -716,6 +716,13 @@ impl Refusal {
     }
 }
 
+#[derive(Clone, Copy)]
+enum WorkloadFault {
+    MissingItems,
+    MissingFields,
+    WrongDimensions,
+}
+
 /// What this board refuses for going too fast, and what it counts while it does.
 #[derive(Default)]
 struct Limits {
@@ -758,6 +765,7 @@ struct Limits {
     refuse_pricing_aliases: bool,
     ignore_pricing_aliases: bool,
     malformed_ceiling_error: bool,
+    workload_fault: Option<WorkloadFault>,
     /// When each request arrived, which operation it carried, and whether that operation
     /// creates content.
     arrivals: Vec<(Instant, String, bool)>,
@@ -2414,9 +2422,28 @@ fn answer_a_session_call(
     if query.contains("query LiveBoardWorkload(") {
         assert_eq!(variables["owner"], json!("octo-org"));
         assert_eq!(variables["number"], json!(7));
-        return Some(json!({"repositoryOwner":{"projectV2":{"id":"PVT_board",
+        let mut result = json!({"repositoryOwner":{"projectV2":{"id":"PVT_board",
             "items":{"totalCount":state.items.len()},
-            "fields":{"totalCount":state.fields()["nodes"].as_array().unwrap().len()}}}}));
+            "fields":{"totalCount":state.fields()["nodes"].as_array().unwrap().len()}}}});
+        match state.limits.workload_fault {
+            Some(WorkloadFault::MissingItems) => {
+                result["repositoryOwner"]["projectV2"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("items");
+            }
+            Some(WorkloadFault::MissingFields) => {
+                result["repositoryOwner"]["projectV2"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("fields");
+            }
+            Some(WorkloadFault::WrongDimensions) => {
+                result["repositoryOwner"]["projectV2"]["items"]["totalCount"] = json!(91);
+            }
+            None => (),
+        }
+        return Some(result);
     }
     if query.contains("on ProjectV2{fields(first:100") {
         return Some(json!({"node":{"fields":state.fields()}}));
@@ -19681,6 +19708,24 @@ async fn actual_execution_facts_distinguish_refusals_retries_and_unreadable_resp
             "{ truncated".to_owned(),
             ResponseOutcome::TransportError,
         ),
+        ("200 OK", "null".into(), ResponseOutcome::TransportError),
+        ("200 OK", "[]".into(), ResponseOutcome::TransportError),
+        ("200 OK", "{}".into(), ResponseOutcome::TransportError),
+        (
+            "200 OK",
+            r#"{"data":null}"#.into(),
+            ResponseOutcome::TransportError,
+        ),
+        (
+            "200 OK",
+            r#"{"errors":false}"#.into(),
+            ResponseOutcome::TransportError,
+        ),
+        (
+            "200 OK",
+            r#"{"errors":[{}]}"#.into(),
+            ResponseOutcome::TransportError,
+        ),
     ] {
         let fixture = comment_board();
         fixture.script_for(
@@ -19833,6 +19878,12 @@ fn live_pair_fixture_child() {
     for index in 0..12 {
         fixture.state.lock().unwrap().extra_fields.push(json!({"__typename":"ProjectV2Field","id":format!("FIELD_existing_{index}"),"name":format!("existing {index}"),"dataType":"TEXT"}));
     }
+    fixture.state.lock().unwrap().limits.workload_fault = match scenario.as_str() {
+        "missing-items" => Some(WorkloadFault::MissingItems),
+        "missing-fields" => Some(WorkloadFault::MissingFields),
+        "wrong-workload" => Some(WorkloadFault::WrongDimensions),
+        _ => None,
+    };
     fixture.items_connection_falls_behind();
     fixture.state.lock().unwrap().limits.malformed_ceiling_error = malformed_ceiling;
     fixture.state.lock().unwrap().limits.reported_query_cost = Some(1);
@@ -19955,7 +20006,13 @@ fn live_pair_fixture_child() {
     std::fs::write(ready, endpoint).unwrap();
     let mut done = String::new();
     std::io::stdin().read_to_string(&mut done).unwrap();
-    if decline || aliases || scalar || malformed_ceiling {
+    if decline
+        || aliases
+        || scalar
+        || malformed_ceiling
+        || scenario.starts_with("missing-")
+        || scenario == "wrong-workload"
+    {
         assert!(upload_sizes.lock().unwrap().is_empty());
         assert_eq!(rendering_reads.load(std::sync::atomic::Ordering::SeqCst), 0);
     } else {

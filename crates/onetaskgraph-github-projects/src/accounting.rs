@@ -635,6 +635,42 @@ pub enum ResponseOutcome {
     TransportError,
 }
 
+impl ResponseOutcome {
+    /// Classify the real HTTP response and GraphQL envelope before recording success.
+    #[must_use]
+    pub fn of_graphql_reply(
+        status: reqwest::StatusCode,
+        reply: Option<&serde_json::Value>,
+    ) -> Self {
+        use serde_json::Value;
+        if !status.is_success() {
+            return Self::HttpError;
+        }
+        let Some(reply) = reply.filter(|reply| reply.is_object()) else {
+            return Self::TransportError;
+        };
+        if let Some(errors) = reply.get("errors")
+            && !errors.is_null()
+            && !errors.as_array().is_some_and(Vec::is_empty)
+        {
+            return if errors.as_array().is_some_and(|errors| {
+                errors
+                    .iter()
+                    .all(|error| error.get("message").is_some_and(Value::is_string))
+            }) {
+                Self::GraphqlError
+            } else {
+                Self::TransportError
+            };
+        }
+        if reply.get("data").is_some_and(Value::is_object) {
+            Self::Success
+        } else {
+            Self::TransportError
+        }
+    }
+}
+
 /// What a request draws on, and what only that kind of request can carry.
 ///
 /// The reported cost lives inside the GraphQL arm rather than beside the call, because a

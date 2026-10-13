@@ -84,6 +84,13 @@ fn malformed_errors_cannot_establish_the_page_ceiling_or_inherit_its_price_model
     run_pair("malformed-ceiling");
 }
 
+#[test]
+fn missing_or_different_board_observations_never_start_the_fixture_or_make_a_bill() {
+    for scenario in ["missing-items", "missing-fields", "wrong-workload"] {
+        run_pair(scenario);
+    }
+}
+
 fn run_pair(scenario: &str) {
     let decline = scenario == "setup";
     let aliases = matches!(scenario, "aliases" | "ignored-aliases");
@@ -152,6 +159,36 @@ fn run_pair(scenario: &str) {
     }
     drop(fixture.stdin.take());
     let fixture_status = fixture.wait().unwrap();
+    if scenario.starts_with("missing-") || scenario == "wrong-workload" {
+        assert_eq!(outputs.len(), 1);
+        assert!(!outputs[0].status.success());
+        let said = String::from_utf8_lossy(&outputs[0].stderr);
+        assert!(
+            said.contains(if scenario == "wrong-workload" {
+                "initial board workload is 91"
+            } else if scenario == "missing-items" {
+                "initial board item count was not reported"
+            } else {
+                "initial board field count was not reported"
+            }),
+            "{said}"
+        );
+        assert!(fixture_status.success());
+        let main: SessionRecord =
+            serde_json::from_slice(&std::fs::read(records.join("main.json")).unwrap()).unwrap();
+        assert!(!main.complete);
+        assert!(
+            !main
+                .calls
+                .iter()
+                .any(|call| call.kind == onetaskgraph_github_live::quota::RequestKind::Mutation)
+        );
+        if scenario == "wrong-workload" {
+            assert_eq!(main.workload.initial_items, 91);
+        }
+        assert!(!records.join("assets.json").exists());
+        return;
+    }
     if scenario == "malformed-ceiling" {
         assert_eq!(outputs.len(), 1);
         assert!(!outputs[0].status.success());
