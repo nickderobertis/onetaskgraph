@@ -8,20 +8,20 @@ pub struct SessionRecord {
     /// Version of this internal representation.
     pub schema_version: u32,
     /// Job-supplied identity shared by both entry points.
-    // llmlint: ignore[invalid_states_unrepresentable] The planner-owned additive telemetry agreement requires a String here. Pair validation belongs to the reporter before any numeric success; changing this field to a newtype would amend that frozen agreement.
+    // llmlint: ignore[invalid_states_unrepresentable] The agreed wire format requires String; eligibility validation belongs to the reporter.
     pub session_id: String,
     /// Revision whose journeys ran.
-    // llmlint: ignore[invalid_states_unrepresentable] The planner-owned wire agreement requires String and exact revision matching across the pair. This representation records identity; eligibility validation belongs to the reporter.
+    // llmlint: ignore[invalid_states_unrepresentable] The agreed wire format requires String; eligibility validation belongs to the reporter.
     pub source_revision: String,
     /// Workspace source version, distinct from the authoring CLI version.
-    // llmlint: ignore[invalid_states_unrepresentable] The planner-owned wire agreement requires String and exact workspace-version matching across the pair. A version newtype would change the agreed Rust representation.
+    // llmlint: ignore[invalid_states_unrepresentable] The agreed wire format requires String; eligibility validation belongs to the reporter.
     pub workspace_version: String,
     /// Journey producing this record.
     pub invocation: EntryPoint,
     /// Numeric workload facts, shared by both records.
     pub workload: Workload,
     /// True only after successful assertions and owned cleanup.
-    // llmlint: ignore[invalid_states_unrepresentable] The planner-owned wire agreement explicitly requires a completion bool. Writers set it only after assertions and cleanup; the reporter refuses false records. A completion enum would amend the agreement.
+    // llmlint: ignore[invalid_states_unrepresentable] The agreed wire format requires a bool; the reporter validates completion.
     pub complete: bool,
     /// Every executed request, including failed attempts and cleanup.
     pub calls: Vec<CallRecord>,
@@ -64,7 +64,7 @@ pub struct CallRecord {
     /// Work being performed.
     pub phase: Phase,
     /// SHA256 of the operation document alone.
-    // llmlint: ignore[invalid_states_unrepresentable] The planner-owned wire agreement requires String for the document digest. Writers compute SHA256 without retaining variables or bodies; reader eligibility validates records before reporting.
+    // llmlint: ignore[invalid_states_unrepresentable] The agreed wire format requires String; eligibility validation belongs to the reporter.
     pub operation_sha256: String,
     /// Attempt number for this operation; retries retain their phase.
     pub attempt: u32,
@@ -164,13 +164,13 @@ pub enum MutationBasis {
     /// An exact primary tariff stated by GitHub.
     Documented {
         /// Documentation establishing the tariff.
-        // llmlint: ignore[invalid_states_unrepresentable] The planner-owned pricing-basis agreement requires a String URL. Writers supply the fixed public GitHub rate-limit documentation URL, never request URLs or credentials; a newtype would amend the agreement.
+        // llmlint: ignore[invalid_states_unrepresentable] The agreed wire format requires a String URL; the reporter validates the pricing basis.
         url: String,
     },
     /// Approved explicit model when no exact primary tariff is documented.
     Modelled {
         /// Documentation inspected for a primary tariff.
-        // llmlint: ignore[invalid_states_unrepresentable] The planner-owned pricing-basis agreement requires a String URL. Writers supply the fixed public GitHub rate-limit documentation URL, never request URLs or credentials; a newtype would amend the agreement.
+        // llmlint: ignore[invalid_states_unrepresentable] The agreed wire format requires a String URL; the reporter validates the pricing basis.
         url: String,
         /// Model price retained so the mutation count can be repriced.
         points_per_request: u64,
@@ -197,13 +197,55 @@ pub const PRICING_URL: &str =
 /// Identity expected by the current invocation, rather than inferred from saved records.
 pub struct CurrentSession<'a> {
     /// Job-supplied current session id.
-    pub session_id: &'a str,
+    session_id: SessionId<'a>,
     /// Source revision being checked.
-    pub source_revision: &'a str,
+    source_revision: Revision<'a>,
     /// Workspace source version being checked.
-    pub workspace_version: &'a str,
+    workspace_version: Version<'a>,
     /// Reference workload for this job.
-    pub workload: &'a Workload,
+    workload: &'a Workload,
+}
+
+struct SessionId<'a>(&'a str);
+struct Revision<'a>(&'a str);
+struct Version<'a>(&'a str);
+
+impl<'a> CurrentSession<'a> {
+    /// Validate the job identity before reading saved telemetry.
+    ///
+    /// # Errors
+    /// Refuses an empty or non-printable identity, a nonhex revision, or an empty version.
+    pub fn new(
+        session_id: &'a str,
+        source_revision: &'a str,
+        workspace_version: &'a str,
+        workload: &'a Workload,
+    ) -> Result<Self, String> {
+        if session_id.is_empty()
+            || session_id.len() > 256
+            || !session_id.bytes().all(|byte| byte.is_ascii_graphic())
+        {
+            return Err("invalid current session identity".into());
+        }
+        if !matches!(source_revision.len(), 40 | 64)
+            || !source_revision.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err("invalid current source revision".into());
+        }
+        if workspace_version.is_empty()
+            || !workspace_version
+                .bytes()
+                .all(|byte| byte.is_ascii_graphic())
+        {
+            return Err("invalid current workspace version".into());
+        }
+        Ok(Self {
+            session_id: SessionId(session_id),
+            source_revision: Revision(source_revision),
+            workspace_version: Version(workspace_version),
+            workload,
+        })
+    }
 }
 
 /// An attributed bill with corroboration kept separate from its price.
@@ -231,7 +273,7 @@ pub struct Bill {
 /// # Errors
 /// Refuses stale, duplicate, partial or malformed records and unavailable GraphQL prices.
 pub fn bill(records: &[SessionRecord], current: &CurrentSession<'_>) -> Result<Bill, String> {
-    if records.len() != 2 || current.session_id.is_empty() {
+    if records.len() != 2 || current.session_id.0.is_empty() {
         return Err("a current session requires exactly two invocation records".into());
     }
     let main = records
@@ -254,9 +296,9 @@ pub fn bill(records: &[SessionRecord], current: &CurrentSession<'_>) -> Result<B
     let mut allowances = Vec::new();
     for record in [main, assets] {
         if record.schema_version != 1
-            || record.session_id != current.session_id
-            || record.source_revision != current.source_revision
-            || record.workspace_version != current.workspace_version
+            || record.session_id != current.session_id.0
+            || record.source_revision != current.source_revision.0
+            || record.workspace_version != current.workspace_version.0
             || record.workload != *current.workload
             || !record.complete
             || record.calls.is_empty()

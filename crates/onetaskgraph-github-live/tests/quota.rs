@@ -82,12 +82,12 @@ fn read_pair(records: &[SessionRecord]) -> Result<onetaskgraph_github_live::quot
     let expected = completed_pair().remove(0);
     bill(
         records,
-        &CurrentSession {
-            session_id: &expected.session_id,
-            source_revision: &expected.source_revision,
-            workspace_version: &expected.workspace_version,
-            workload: &expected.workload,
-        },
+        &CurrentSession::new(
+            &expected.session_id,
+            &expected.source_revision,
+            &expected.workspace_version,
+            &expected.workload,
+        )?,
     )
 }
 
@@ -138,4 +138,161 @@ fn partial_stale_duplicate_missing_price_and_missing_cleanup_records_refuse_a_bi
         mutate(&mut pair[1]);
         assert!(read_pair(&pair).is_err());
     }
+}
+
+#[test]
+fn reader_refuses_malformed_request_and_allowance_facts() {
+    use onetaskgraph_github_live::quota::{Charge, CurrentSession, MutationBasis, RequestKind};
+    let good = completed_pair();
+    let identity = &good[0];
+    for (id, revision, version) in [
+        ("", identity.source_revision.as_str(), "0.6.0"),
+        ("job\n42", identity.source_revision.as_str(), "0.6.0"),
+        ("job", "bad", "0.6.0"),
+        ("job", "gggggggggggggggggggggggggggggggggggggggg", "0.6.0"),
+        ("job", identity.source_revision.as_str(), ""),
+        ("job", identity.source_revision.as_str(), "0.6.0\n"),
+    ] {
+        assert!(CurrentSession::new(id, revision, version, &identity.workload).is_err());
+    }
+    for mutate in [
+        |record: &mut SessionRecord| record.schema_version = 2,
+        |record: &mut SessionRecord| record.calls.clear(),
+        |record: &mut SessionRecord| record.calls[0].sequence = 2,
+        |record: &mut SessionRecord| record.calls[0].attempt = 0,
+        |record: &mut SessionRecord| record.calls[0].operation_sha256.clear(),
+        |record: &mut SessionRecord| record.calls[0].operation_sha256 = "g".repeat(64),
+        |record: &mut SessionRecord| record.calls[0].kind = RequestKind::Rest,
+        |record: &mut SessionRecord| {
+            record.calls[0].charge = Charge::ReportedQuery { points: u64::MAX }
+        },
+        |record: &mut SessionRecord| record.calls[0].allowance.as_mut().unwrap().used += 1,
+        |record: &mut SessionRecord| record.calls[0].allowance.as_mut().unwrap().used = u64::MAX,
+        |record: &mut SessionRecord| {
+            record.calls[0].kind = RequestKind::Mutation;
+            record.calls[0].charge = Charge::Mutation {
+                points: 1,
+                basis: MutationBasis::Modelled {
+                    url: "wrong".into(),
+                    points_per_request: 1,
+                },
+            };
+        },
+        |record: &mut SessionRecord| {
+            record.calls[0].kind = RequestKind::Mutation;
+            record.calls[0].charge = Charge::Mutation {
+                points: 2,
+                basis: MutationBasis::Modelled {
+                    url: onetaskgraph_github_live::quota::PRICING_URL.into(),
+                    points_per_request: 1,
+                },
+            };
+        },
+    ] {
+        let mut pair = good.clone();
+        mutate(&mut pair[0]);
+        assert!(read_pair(&pair).is_err());
+    }
+}
+
+#[test]
+fn mutation_models_rest_exclusion_and_phase_aggregation_survive_serialization() {
+    use onetaskgraph_github_live::quota::{Charge, MutationBasis, PRICING_URL, Phase, RequestKind};
+    let mut pair = completed_pair();
+    for (index, basis) in [
+        MutationBasis::Modelled {
+            url: PRICING_URL.into(),
+            points_per_request: 1,
+        },
+        MutationBasis::Documented {
+            url: PRICING_URL.into(),
+        },
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let call = &mut pair[0].calls[index];
+        call.kind = RequestKind::Mutation;
+        call.charge = Charge::Mutation { points: 1, basis };
+    }
+    let mut rest = pair[1].calls[4].clone();
+    rest.sequence = 6;
+    rest.kind = RequestKind::Rest;
+    rest.charge = Charge::Rest;
+    rest.allowance.as_mut().unwrap().reset_epoch_seconds += 1;
+    pair[1].calls.push(rest);
+    // Exercise the wire boundary instead of handing only in-memory structs to the reader.
+    let saved = serde_json::to_string(&pair).unwrap();
+    let records: Vec<SessionRecord> = serde_json::from_str(&saved).unwrap();
+    let result = read_pair(&records).unwrap();
+    assert_eq!(result.points, 14);
+    assert_eq!(result.mutations, 2);
+    assert_eq!(result.graphql_requests, 14);
+    assert_eq!(result.account_movement, Some(0));
+    assert_eq!(
+        result
+            .phases
+            .iter()
+            .find(|(phase, _)| *phase == Phase::Admission),
+        Some(&(Phase::Admission, 2))
+    );
+    assert_eq!(
+        result.phases.iter().map(|(_, points)| points).sum::<u64>(),
+        result.points
+    );
+}
+
+#[test]
+fn corroboration_handles_absence_limits_regressions_and_flag_boundary() {
+    let mut pair = completed_pair();
+    let last = pair[1]
+        .calls
+        .last_mut()
+        .unwrap()
+        .allowance
+        .as_mut()
+        .unwrap();
+    last.used = 528;
+    last.remaining = 4472;
+    let result = read_pair(&pair).unwrap();
+    assert_eq!(result.account_movement, Some(28));
+    assert!(!result.movement_flagged);
+    let last = pair[1]
+        .calls
+        .last_mut()
+        .unwrap()
+        .allowance
+        .as_mut()
+        .unwrap();
+    last.used += 1;
+    last.remaining -= 1;
+    assert!(read_pair(&pair).unwrap().movement_flagged);
+    for mutate in [
+        |record: &mut SessionRecord| record.calls[2].allowance = None,
+        |record: &mut SessionRecord| {
+            let allowance = record.calls[2].allowance.as_mut().unwrap();
+            allowance.limit += 1;
+            allowance.remaining += 1;
+        },
+        |record: &mut SessionRecord| {
+            let allowance = record.calls[2].allowance.as_mut().unwrap();
+            allowance.used -= 1;
+            allowance.remaining += 1;
+        },
+    ] {
+        let mut changed = completed_pair();
+        mutate(&mut changed[0]);
+        let result = read_pair(&changed).unwrap();
+        if changed[0].calls[2].allowance.is_none() {
+            assert_eq!(result.account_movement, Some(0));
+        } else {
+            assert_eq!(result.account_movement, None);
+        }
+    }
+    for record in &mut pair {
+        for call in &mut record.calls {
+            call.allowance = None;
+        }
+    }
+    assert_eq!(read_pair(&pair).unwrap().account_movement, None);
 }
