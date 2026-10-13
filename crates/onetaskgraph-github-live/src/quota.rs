@@ -316,53 +316,8 @@ pub fn bill(records: &[SessionRecord], current: &CurrentSession<'_>) -> Result<B
     };
     let mut allowances = Vec::new();
     for record in [main, assets] {
-        if record.schema_version != 1
-            || record.session_id != current.session_id.0
-            || record.source_revision != current.source_revision.0
-            || record.workspace_version != current.workspace_version.0
-            || record.workload != *current.workload
-            || !record.complete
-            || record.calls.is_empty()
-        {
-            return Err("incomplete, stale or mismatched live-session record".into());
-        }
-        let required: &[Phase] = match record.invocation {
-            EntryPoint::Main => &[
-                Phase::Admission,
-                Phase::Schema,
-                Phase::Reconciliation,
-                Phase::Setup,
-                Phase::Capabilities,
-                Phase::CommentActivity,
-                Phase::ChangeToken,
-                Phase::Cleanup,
-                Phase::OrphanRecovery,
-            ],
-            EntryPoint::Assets => &[
-                Phase::Admission,
-                Phase::AssetSetup,
-                Phase::AssetTask,
-                Phase::AssetDocument,
-                Phase::Cleanup,
-            ],
-        };
-        if required
-            .iter()
-            .any(|phase| !record.calls.iter().any(|call| call.phase == *phase))
-        {
-            return Err("live-session record is missing a required journey phase".into());
-        }
-        for (index, call) in record.calls.iter().enumerate() {
-            if call.sequence != u64::try_from(index).map_err(|error| error.to_string())? + 1
-                || call.attempt == 0
-                || call.operation_sha256.len() != 64
-                || !call
-                    .operation_sha256
-                    .bytes()
-                    .all(|byte| byte.is_ascii_hexdigit())
-            {
-                return Err("invalid live-session request identity".into());
-            }
+        validate_record(record, current)?;
+        for call in &record.calls {
             let points = match (&call.kind, &call.charge) {
                 (RequestKind::Rest, Charge::Rest) => {
                     result.rest_requests += 1;
@@ -419,13 +374,10 @@ pub fn bill(records: &[SessionRecord], current: &CurrentSession<'_>) -> Result<B
             } else {
                 result.phases.push((call.phase, points));
             }
-            if let Some(allowance) = call.allowance {
-                if allowance.used.checked_add(allowance.remaining) != Some(allowance.limit) {
-                    return Err("inconsistent allowance facts".into());
-                }
-                if call.kind != RequestKind::Rest {
-                    allowances.push(allowance);
-                }
+            if let Some(allowance) = call.allowance
+                && call.kind != RequestKind::Rest
+            {
+                allowances.push(allowance);
             }
         }
     }
@@ -444,6 +396,97 @@ pub fn bill(records: &[SessionRecord], current: &CurrentSession<'_>) -> Result<B
         .account_movement
         .is_some_and(|movement| movement.saturating_sub(result.points) > result.graphql_requests);
     Ok(result)
+}
+
+fn validate_record(record: &SessionRecord, current: &CurrentSession<'_>) -> Result<(), String> {
+    if record.schema_version != 1
+        || record.session_id != current.session_id.0
+        || record.source_revision != current.source_revision.0
+        || record.workspace_version != current.workspace_version.0
+        || record.workload != *current.workload
+        || !record.complete
+        || record.calls.is_empty()
+    {
+        return Err("incomplete, stale or mismatched live-session record".into());
+    }
+    let required: &[Phase] = match record.invocation {
+        EntryPoint::Main => &[
+            Phase::Admission,
+            Phase::Schema,
+            Phase::Reconciliation,
+            Phase::Setup,
+            Phase::Capabilities,
+            Phase::CommentActivity,
+            Phase::ChangeToken,
+            Phase::Cleanup,
+            Phase::OrphanRecovery,
+        ],
+        EntryPoint::Assets => &[
+            Phase::Admission,
+            Phase::AssetSetup,
+            Phase::AssetTask,
+            Phase::AssetDocument,
+            Phase::Cleanup,
+        ],
+    };
+    if required
+        .iter()
+        .any(|phase| !record.calls.iter().any(|call| call.phase == *phase))
+    {
+        return Err("live-session record is missing a required journey phase".into());
+    }
+    for (index, call) in record.calls.iter().enumerate() {
+        if call.sequence != u64::try_from(index).map_err(|error| error.to_string())? + 1
+            || call.attempt == 0
+            || call.operation_sha256.len() != 64
+            || !call
+                .operation_sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err("invalid live-session request identity".into());
+        }
+        if let Some(allowance) = call.allowance
+            && allowance.used.checked_add(allowance.remaining) != Some(allowance.limit)
+        {
+            return Err("inconsistent allowance facts".into());
+        }
+        match (&call.kind, &call.charge) {
+            (RequestKind::Query, Charge::ReportedQuery { .. })
+            | (RequestKind::Rest, Charge::Rest) => (),
+            (RequestKind::Mutation, Charge::Mutation { points, basis }) => match basis {
+                MutationBasis::Documented { url } if url == PRICING_URL => (),
+                MutationBasis::Modelled {
+                    url,
+                    points_per_request,
+                } if url == PRICING_URL && points == points_per_request => (),
+                _ => return Err("invalid mutation pricing basis".into()),
+            },
+            (_, Charge::Unavailable { reason }) => {
+                return Err(format!("live-session accounting unavailable: {reason}"));
+            }
+            _ => return Err("request kind and pricing basis disagree".into()),
+        }
+    }
+    Ok(())
+}
+
+/// Confirm the current main contribution before the asset entry point spends anything.
+/// This reads the same wire and eligibility checks as the whole-session reporter.
+///
+/// # Errors
+/// Refuses a missing, stale, partial or unpriced main contribution.
+pub fn require_current_main(
+    directory: &std::path::Path,
+    current: &CurrentSession<'_>,
+) -> Result<(), String> {
+    let bytes = std::fs::read(directory.join("main.json")).map_err(|error| error.to_string())?;
+    let record: SessionRecord =
+        serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
+    if record.invocation != EntryPoint::Main {
+        return Err("main telemetry belongs to another invocation".into());
+    }
+    validate_record(&record, current)
 }
 
 /// File-backed invocation recording, reserved in a fresh job directory before requests run.

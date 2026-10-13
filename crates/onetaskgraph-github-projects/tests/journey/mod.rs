@@ -384,8 +384,8 @@ fn budget_exhausted(response: &reqwest::Response) -> bool {
 /// reports is what that run saw.
 ///
 /// `rateLimit` is a field of `Query`, so a **mutation** cannot be asked at all. What is
-/// checked instead is that each mutation this source sends is priced at GitHub's one-point
-/// minimum, which a connection resolved once under a mutation could not move either.
+/// checked instead is the approved one-point mutation model. GitHub documents a minimum
+/// call price, not an exact primary mutation tariff; the session record labels it Modelled.
 async fn reconcile_node_counts_and_point_costs(token: &str) -> Result<(), String> {
     let (limit, before) = account_allowance(token, "before").await?;
     let mut asked = 0_usize;
@@ -402,9 +402,9 @@ async fn reconcile_node_counts_and_point_costs(token: &str) -> Result<(), String
             if ours != 1 {
                 return Err(format!(
                     "the mutation for {doing} computes {ours} points, and GitHub cannot be \
-                     asked about a mutation — `rateLimit` is a field of Query. A mutation \
-                     costs GitHub's one-point minimum unless a connection under it multiplies; \
-                     reconcile that another way, or the calculation is wrong"
+                     asked about a mutation — `rateLimit` is a field of Query. This differs \
+                     from the approved Modelled one-point-per-request basis; ask the manager \
+                     before changing that pricing agreement"
                 ));
             }
             continue;
@@ -416,6 +416,18 @@ async fn reconcile_node_counts_and_point_costs(token: &str) -> Result<(), String
             dry_run_variables(document),
         )
         .await?;
+        say(&format!(
+            "pricing reconciliation while {doing}: hypothetical node_count={:?} cost={:?}; executed actual_cost={:?}",
+            response
+                .pointer("/data/rateLimit/nodeCount")
+                .and_then(Value::as_u64),
+            response
+                .pointer("/data/rateLimit/cost")
+                .and_then(Value::as_u64),
+            response
+                .pointer("/data/actualCost/cost")
+                .and_then(Value::as_u64)
+        ));
         reconciled(doing, document, &response)?;
         asked += 1;
     }
@@ -2419,6 +2431,7 @@ async fn drive_every_declared_capability(
     // A source built the way `writer` was, for the legs that follow the one mutation this
     // journey makes without going through a source at all. See where it is called.
     rebuilt: &dyn Fn() -> Box<dyn TaskSource>,
+    admitted: &budget::Admitted,
 ) -> Result<(), String> {
     let (alpha, beta) = (run.title(0), run.title(1));
     let (first, second, orphan) = (run.title(2), run.title(3), run.title(4));
@@ -2525,6 +2538,13 @@ async fn drive_every_declared_capability(
         projects: run_projects,
     } = settled_fixture(rebuilt, &prefix, 3, 2).await?;
     let writer = source.as_ref();
+    quota::phase(onetaskgraph_github_live::quota::Phase::Capabilities)?;
+    budget::recheck_remaining(
+        admitted,
+        &SESSION,
+        budget::remaining_design_points(onetaskgraph_github_live::quota::Phase::Capabilities),
+    )
+    .map_err(|declined| declined.to_string())?;
 
     // `search_title` and `projects`: one title search over the whole board selects exactly
     // this run's five items, three of which are tasks and two of which are projects.
@@ -2948,6 +2968,12 @@ async fn drive_every_declared_capability(
         "cancelled did not read back as Status=Cancelled, state=CLOSED, reason=NOT_PLANNED"
     );
     quota::phase(onetaskgraph_github_live::quota::Phase::CommentActivity)?;
+    budget::recheck_remaining(
+        admitted,
+        &SESSION,
+        budget::remaining_design_points(onetaskgraph_github_live::quota::Phase::CommentActivity),
+    )
+    .map_err(|declined| declined.to_string())?;
     an_edited_comment_moves_its_issue_and_is_selected_since(
         writer,
         (&first_id, &first),
@@ -2958,6 +2984,12 @@ async fn drive_every_declared_capability(
     .await?;
     // Renamed to another of this run's own titles, so the artifact cleanup still knows it.
     quota::phase(onetaskgraph_github_live::quota::Phase::ChangeToken)?;
+    budget::recheck_remaining(
+        admitted,
+        &SESSION,
+        budget::remaining_design_points(onetaskgraph_github_live::quota::Phase::ChangeToken),
+    )
+    .map_err(|declined| declined.to_string())?;
     every_change_kind_moves_a_tasks_token(
         writer,
         (&run.token, &run.project_id),
@@ -3599,9 +3631,14 @@ pub async fn run(nomination: Nomination) {
     // account can pay for this session and still keep the share it may never touch. A
     // session that cannot is DECLINED — it did not run, so it is neither a pass nor a
     // failing assertion — and nothing below has reached GitHub by the time it is.
-    let admitted = budget::precondition(&token, &endpoints().rest_host, &SESSION)
-        .await
-        .unwrap_or_else(|declined| declined.refuse());
+    let admitted = budget::precondition_session(
+        &token,
+        &endpoints().rest_host,
+        &SESSION,
+        onetaskgraph_github_live::quota::EntryPoint::Main,
+    )
+    .await
+    .unwrap_or_else(|declined| declined.refuse());
     // Decided again on the session's own first real call, whose headers are the account's
     // word about this very request where the endpoint above was a claim about it. The two
     // have been observed to disagree, and a session the headers cannot afford is DECLINED
@@ -3609,7 +3646,8 @@ pub async fn run(nomination: Nomination) {
     // fail on its next one.
     quota::phase(onetaskgraph_github_live::quota::Phase::Schema).unwrap();
     verify_contract_schema(&token, || {
-        budget::recheck(&admitted, &SESSION).unwrap_or_else(|declined| declined.refuse());
+        budget::recheck_first_session(&admitted, &SESSION)
+            .unwrap_or_else(|declined| declined.refuse());
     })
     .await
     .unwrap_or_else(|error| panic!("GitHub contract schema drifted: {error}"));
@@ -3619,6 +3657,12 @@ pub async fn run(nomination: Nomination) {
     // unconditionally once that credential is present: behind no flag, and not skipped
     // because the setup above went well.
     quota::phase(onetaskgraph_github_live::quota::Phase::Reconciliation).unwrap();
+    budget::recheck_remaining(
+        &admitted,
+        &SESSION,
+        budget::remaining_design_points(onetaskgraph_github_live::quota::Phase::Reconciliation),
+    )
+    .unwrap_or_else(|declined| declined.refuse());
     reconcile_node_counts_and_point_costs(&token)
         .await
         .unwrap_or_else(|error| {
@@ -3629,6 +3673,12 @@ pub async fn run(nomination: Nomination) {
     // recording into this run's own accounting, so the session total covers the source's
     // requests and this lane's alike rather than either one on its own.
     quota::phase(onetaskgraph_github_live::quota::Phase::Setup).unwrap();
+    budget::recheck_remaining(
+        &admitted,
+        &SESSION,
+        budget::remaining_design_points(onetaskgraph_github_live::quota::Phase::Setup),
+    )
+    .unwrap_or_else(|declined| declined.refuse());
     let source = onetaskgraph_github_projects::Plugin
         .build_recording_into(
             &SourceName::new("github-live").unwrap(),
@@ -3793,8 +3843,7 @@ pub async fn run(nomination: Nomination) {
     let writer = rebuild();
     run_then_cleanup(
         || async {
-            quota::phase(onetaskgraph_github_live::quota::Phase::Capabilities)?;
-            drive_every_declared_capability(&run, writer.as_ref(), &rebuild).await
+            drive_every_declared_capability(&run, writer.as_ref(), &rebuild, &admitted).await
         },
         || async {
             // This run's own, first: everything it wrote goes whether the journey passed or
@@ -3805,6 +3854,12 @@ pub async fn run(nomination: Nomination) {
             // beside this one; a sweep after it recovers exactly the same orphans and can
             // reach nothing a live run owns.
             let cleanup_telemetry = quota::phase(onetaskgraph_github_live::quota::Phase::Cleanup);
+            let cleanup_budget = budget::recheck_remaining(
+                &admitted,
+                &SESSION,
+                budget::remaining_design_points(onetaskgraph_github_live::quota::Phase::Cleanup),
+            )
+            .map_err(|declined| declined.to_string());
             let mine = remove_live_state(
                 &token,
                 &project_id,
@@ -3818,6 +3873,14 @@ pub async fn run(nomination: Nomination) {
             // runner that is none.
             let orphan_telemetry =
                 quota::phase(onetaskgraph_github_live::quota::Phase::OrphanRecovery);
+            let orphan_budget = budget::recheck_remaining(
+                &admitted,
+                &SESSION,
+                budget::remaining_design_points(
+                    onetaskgraph_github_live::quota::Phase::OrphanRecovery,
+                ),
+            )
+            .map_err(|declined| declined.to_string());
             let orphans = sweep_orphans(
                 &token,
                 &project_id,
@@ -3825,7 +3888,11 @@ pub async fn run(nomination: Nomination) {
                 &Sweep::of(Run::current(), now_micros()),
             )
             .await;
-            let mine = mine.and(cleanup_telemetry).and(orphan_telemetry);
+            let mine = mine
+                .and(cleanup_telemetry)
+                .and(orphan_telemetry)
+                .and(cleanup_budget)
+                .and(orphan_budget);
             match (mine, orphans) {
                 (Ok(()), Ok(())) => Ok(()),
                 (Err(mine), Ok(())) => Err(mine),

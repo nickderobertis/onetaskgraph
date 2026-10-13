@@ -476,3 +476,51 @@ fn file_backed_invocations_and_reader_refuse_partial_stale_duplicate_and_corrupt
     initial.calls.clear();
     assert!(InvocationWriter::start(&directory.path().join("missing"), initial).is_err());
 }
+
+#[test]
+fn asset_admission_requires_the_current_complete_and_priced_main_file() {
+    use onetaskgraph_github_live::quota::{CurrentSession, require_current_main};
+    let good = completed_pair()[0].clone();
+    let current = CurrentSession::new(
+        &good.session_id,
+        &good.source_revision,
+        &good.workspace_version,
+        &good.workload,
+    )
+    .unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    assert!(require_current_main(directory.path(), &current).is_err());
+    std::fs::write(
+        directory.path().join("main.json"),
+        serde_json::to_vec(&good).unwrap(),
+    )
+    .unwrap();
+    require_current_main(directory.path(), &current).unwrap();
+    for change in [
+        |record: &mut SessionRecord| record.complete = false,
+        |record: &mut SessionRecord| record.session_id.push('x'),
+        |record: &mut SessionRecord| record.source_revision.push('x'),
+        |record: &mut SessionRecord| record.workspace_version.push('x'),
+        |record: &mut SessionRecord| record.workload.asset_bytes.clear(),
+        |record: &mut SessionRecord| {
+            record.invocation = onetaskgraph_github_live::quota::EntryPoint::Assets
+        },
+        |record: &mut SessionRecord| {
+            record.calls.pop();
+        },
+        |record: &mut SessionRecord| {
+            record.calls[0].charge = Charge::Unavailable {
+                reason: "missing actual query price".into(),
+            }
+        },
+    ] {
+        let mut record = good.clone();
+        change(&mut record);
+        std::fs::write(
+            directory.path().join("main.json"),
+            serde_json::to_vec(&record).unwrap(),
+        )
+        .unwrap();
+        assert!(require_current_main(directory.path(), &current).is_err());
+    }
+}

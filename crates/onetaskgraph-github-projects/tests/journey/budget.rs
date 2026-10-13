@@ -477,7 +477,86 @@ pub async fn precondition(
     rest_host: &str,
     into: &Accounting,
 ) -> Result<Admitted, Declined> {
-    let estimated = estimate();
+    precondition_estimated(token, rest_host, into, estimate()).await
+}
+
+/// Approved allocations are design estimates, not observed savings or phase ceilings.
+struct Design {
+    admission: u64,
+    schema: u64,
+    reconciliation: u64,
+    setup: u64,
+    capabilities: u64,
+    comments: u64,
+    tokens: u64,
+    cleanup: u64,
+    orphans: u64,
+    assets: u64,
+    observations: u64,
+}
+const DESIGN: Design = Design {
+    admission: 3,
+    schema: 10,
+    reconciliation: 20,
+    setup: 14,
+    capabilities: 42,
+    comments: 12,
+    tokens: 60,
+    cleanup: 15,
+    orphans: 2,
+    assets: 85,
+    observations: 18,
+};
+
+/// Remaining asset envelope after the combined admission, including owned cleanup.
+pub const fn assets_remaining_design_points() -> u64 {
+    DESIGN.assets + DESIGN.observations
+}
+
+/// The initial whole-job demand or the remainder after a successful main contribution.
+pub const fn session_design_points(invocation: onetaskgraph_github_live::quota::EntryPoint) -> u64 {
+    use onetaskgraph_github_live::quota::EntryPoint;
+    let assets = DESIGN.admission + DESIGN.assets + DESIGN.observations;
+    match invocation {
+        EntryPoint::Assets => assets,
+        EntryPoint::Main => {
+            assets
+                + DESIGN.schema
+                + DESIGN.reconciliation
+                + DESIGN.setup
+                + DESIGN.capabilities
+                + DESIGN.comments
+                + DESIGN.tokens
+                + DESIGN.cleanup
+                + DESIGN.orphans
+        }
+    }
+}
+
+/// Whole-lane design admission, independent of the node-count projection and actual bill.
+/// The asset invocation retains the demand left after the successful main contribution.
+pub async fn precondition_session(
+    token: &str,
+    rest_host: &str,
+    into: &Accounting,
+    invocation: onetaskgraph_github_live::quota::EntryPoint,
+) -> Result<Admitted, Declined> {
+    let points = session_design_points(invocation);
+    precondition_estimated(
+        token,
+        rest_host,
+        into,
+        BTreeMap::from([(Budget::Graphql, points), (Budget::Rest, 26)]),
+    )
+    .await
+}
+
+async fn precondition_estimated(
+    token: &str,
+    rest_host: &str,
+    into: &Accounting,
+    estimated: BTreeMap<Budget, u64>,
+) -> Result<Admitted, Declined> {
     for (budget, cost) in &estimated {
         into.estimate(*budget, *cost);
     }
@@ -663,4 +742,114 @@ pub fn recheck(admitted: &Admitted, into: &Accounting) -> Result<(), Declined> {
     ));
     still_affordable(demand, &allowance_read(), carried, &carried_by)
         .map_err(|cause| Declined::unaffordable(SESSION_NAME, cause))
+}
+
+/// Retire completed design allocations; these are estimates, never phase cost gates.
+/// Admission (3), assets (85), and observations/retries (18) remain after main completion.
+pub fn remaining_design_points(phase: onetaskgraph_github_live::quota::Phase) -> u64 {
+    use onetaskgraph_github_live::quota::{EntryPoint, Phase};
+    let total = session_design_points(EntryPoint::Main);
+    let retired = match phase {
+        Phase::Admission | Phase::Schema | Phase::Observation => 0,
+        Phase::Reconciliation => DESIGN.schema,
+        Phase::Setup => DESIGN.schema + DESIGN.reconciliation,
+        Phase::Capabilities => DESIGN.schema + DESIGN.reconciliation + DESIGN.setup,
+        Phase::CommentActivity => {
+            DESIGN.schema + DESIGN.reconciliation + DESIGN.setup + DESIGN.capabilities
+        }
+        Phase::ChangeToken => {
+            DESIGN.schema
+                + DESIGN.reconciliation
+                + DESIGN.setup
+                + DESIGN.capabilities
+                + DESIGN.comments
+        }
+        Phase::Cleanup => {
+            DESIGN.schema
+                + DESIGN.reconciliation
+                + DESIGN.setup
+                + DESIGN.capabilities
+                + DESIGN.comments
+                + DESIGN.tokens
+        }
+        Phase::OrphanRecovery => {
+            DESIGN.schema
+                + DESIGN.reconciliation
+                + DESIGN.setup
+                + DESIGN.capabilities
+                + DESIGN.comments
+                + DESIGN.tokens
+                + DESIGN.cleanup
+        }
+        Phase::AssetSetup | Phase::AssetTask | Phase::AssetDocument => {
+            return assets_remaining_design_points();
+        }
+    };
+    total - retired
+}
+
+/// Check the remaining job demand against already-received headers, with the shared 20% buffer.
+/// Owned cleanup is always attempted by the caller even if this recheck refuses.
+pub fn recheck_remaining(
+    admitted: &Admitted,
+    into: &Accounting,
+    remaining_points: u64,
+) -> Result<(), Declined> {
+    let recorded = into.snapshot();
+    for original in &admitted.demands {
+        let budget = if original.metered() == metered(Budget::Graphql) {
+            Budget::Graphql
+        } else {
+            Budget::Rest
+        };
+        let Some(request) = recorded.requests()[admitted.before..]
+            .iter()
+            .rev()
+            .find(|request| request.budget() == budget)
+        else {
+            continue;
+        };
+        let claimed = original
+            .allowance()
+            .expect("admitted allowance was readable");
+        let remaining = if budget == Budget::Graphql {
+            remaining_points
+        } else {
+            original.estimated_cost()
+        };
+        let demand = Demand::read(original.metered(), remaining, claimed);
+        let carried = match carried_allowance(request, claimed) {
+            Carried::Allowance(allowance) => Ok(allowance),
+            Carried::Declining(why) => Err(why),
+            Carried::NothingAboutTheBudget(_) => continue,
+        };
+        still_affordable(
+            &demand,
+            &allowance_read(),
+            carried,
+            &format!(
+                "headers of {} while retaining {remaining} {} of remaining design demand",
+                request.name(),
+                demand.unit()
+            ),
+        )
+        .map_err(|cause| Declined::unaffordable(SESSION_NAME, cause))?;
+    }
+    Ok(())
+}
+
+/// The first executed schema request is already paid, so it no longer reserves demand.
+pub fn recheck_first_session(admitted: &Admitted, into: &Accounting) -> Result<(), Declined> {
+    let snapshot = into.snapshot();
+    let paid = snapshot
+        .requests()
+        .get(admitted.before)
+        .and_then(onetaskgraph_github_projects::accounting::Request::reported_query_cost)
+        .unwrap_or(0);
+    recheck_remaining(
+        admitted,
+        into,
+        session_design_points(onetaskgraph_github_live::quota::EntryPoint::Main)
+            .saturating_sub(paid),
+    )
 }

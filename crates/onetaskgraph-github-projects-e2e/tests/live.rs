@@ -260,9 +260,25 @@ async fn disposable_task_and_document_asset_copies() {
         onetaskgraph_github_live::quota::reference_workload(),
     )
     .unwrap();
-    let admitted = journey::budget::precondition(token, "https://api.github.com", &ledger)
-        .await
-        .unwrap_or_else(|declined| declined.refuse());
+    if let Some(directory) = std::env::var_os("GITHUB_LIVE_SESSION_DIR") {
+        use onetaskgraph_github_live::quota::{
+            CurrentSession, WORKSPACE_VERSION, reference_workload, require_current_main,
+        };
+        let id = std::env::var("GITHUB_LIVE_SESSION_ID").unwrap();
+        let revision = std::env::var("GITHUB_LIVE_SOURCE_REVISION").unwrap();
+        let workload = reference_workload();
+        let current = CurrentSession::new(&id, &revision, WORKSPACE_VERSION, &workload).unwrap();
+        require_current_main(std::path::Path::new(&directory), &current)
+            .unwrap_or_else(|error| panic!("current main contribution unavailable: {error}"));
+    }
+    let admitted = journey::budget::precondition_session(
+        token,
+        "https://api.github.com",
+        &ledger,
+        onetaskgraph_github_live::quota::EntryPoint::Assets,
+    )
+    .await
+    .unwrap_or_else(|declined| declined.refuse());
     journey::quota::phase(onetaskgraph_github_live::quota::Phase::AssetSetup).unwrap();
     let option = nominated_status_option(
         "https://api.github.com/graphql",
@@ -273,7 +289,12 @@ async fn disposable_task_and_document_asset_copies() {
     )
     .await
     .unwrap();
-    journey::budget::recheck(&admitted, &ledger).unwrap_or_else(|declined| declined.refuse());
+    journey::budget::recheck_remaining(
+        &admitted,
+        &ledger,
+        journey::budget::assets_remaining_design_points(),
+    )
+    .unwrap_or_else(|declined| declined.refuse());
     let config = lane::live_write_config(&owner, number, &repository, &option);
     let secrets = lane::LiveSecret(token.to_owned().into());
     let sandbox = Sandbox::new();
@@ -436,6 +457,11 @@ async fn disposable_task_and_document_asset_copies() {
     }
     // Recording failures must not prevent removal of items this invocation created.
     let cleanup_recording = journey::quota::phase(onetaskgraph_github_live::quota::Phase::Cleanup);
+    let cleanup_budget = journey::budget::recheck_remaining(
+        &admitted,
+        &ledger,
+        journey::budget::assets_remaining_design_points(),
+    );
     let cleanup = Plugin
         .build_recording_into(&name("board"), &config, &secrets, ledger.clone())
         .unwrap();
@@ -470,6 +496,7 @@ async fn disposable_task_and_document_asset_copies() {
     );
     assert!(outcome.is_ok(), "live asset journey: {outcome:?}");
     cleanup_recording.unwrap();
+    cleanup_budget.unwrap_or_else(|declined| declined.refuse());
     journey::quota::complete().unwrap();
 }
 

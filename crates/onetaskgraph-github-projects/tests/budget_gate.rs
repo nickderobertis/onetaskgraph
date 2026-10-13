@@ -655,3 +655,26 @@ fn a_journey_the_account_cannot_afford_does_not_run_and_says_which_budget_was_sh
         std::panic::resume_unwind(declined);
     }
 }
+
+#[tokio::test]
+async fn the_combined_design_admits_both_roles_and_keeps_the_whole_retained_buffer() {
+    use onetaskgraph_github_live::quota::EntryPoint;
+    let retained = RETAINED_BUFFER.of(LIMIT);
+    for (role, estimate) in [(EntryPoint::Main, 281), (EntryPoint::Assets, 106)] {
+        for (remaining, succeeds) in [
+            (retained + estimate, true),
+            (retained + estimate - 1, false),
+        ] {
+            let server = Standin::serving((
+                "200 OK",
+                budget::documented_answer(LIMIT, remaining, LIMIT, RESETS_AT).to_string(),
+            ));
+            let ledger = Accounting::with_query_prices();
+            let result =
+                budget::precondition_session("test-token", &server.host, &ledger, role).await;
+            assert_eq!(result.is_ok(), succeeds);
+            assert_eq!(*server.asked.lock().unwrap(), vec!["GET /rate_limit"]);
+            assert_eq!(ledger.snapshot().total_requests(), 1);
+        }
+    }
+}
