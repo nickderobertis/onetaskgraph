@@ -509,7 +509,11 @@ async fn board_admission_rejects_non_success_even_with_valid_board_json() {
     for (status, answer, expected) in [
         (200, complete.clone(), None),
         (503, complete, Some("503")),
-        (200, json!({}), Some("missing nominated board id")),
+        (
+            200,
+            json!({}),
+            Some("asset query returned an invalid GraphQL envelope"),
+        ),
         (
             200,
             json!({"data":{"boardFields":{"projectV2":{"id":"fixture-board"}}}}),
