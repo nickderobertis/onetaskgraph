@@ -161,8 +161,8 @@ for pair in $targets; do
     report_unless_archive_lists "$TREE/$asset" onetaskgraph \
       "$asset does not carry a bare 'onetaskgraph' at its root, which is what the installer extracts"
   fi
-  cmp "$TREE/$asset" "$TREE/dist/assets/$asset" || report "the staged archive differs from $asset"
-  cmp "$TREE/$asset.sha256" "$TREE/dist/assets/$asset.sha256" || report "the staged checksum differs from $asset.sha256"
+  cmp "$TREE/$asset" "$TREE/dist/assets/$asset" >&2 || report "the staged archive differs from $asset"
+  cmp "$TREE/$asset.sha256" "$TREE/dist/assets/$asset.sha256" >&2 || report "the staged checksum differs from $asset.sha256"
   carrier="$TREE/dist/carriers/$npm_platform/onetaskgraph-cli-$npm_platform-$version.tgz"
   [ -f "$carrier" ] || report "the step left no carrier at dist/carriers/$npm_platform/onetaskgraph-cli-$npm_platform-$version.tgz, which is the path and name scripts/publish-npm.sh reads after the carrier-$npm_platform artifact is downloaded"
   if [ -f "$carrier" ]; then

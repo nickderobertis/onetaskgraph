@@ -51,8 +51,8 @@ for npm in darwin-x64 darwin-arm64; do
 done
 # Maturin owns the canonical bytes. Every other form is staged from those bytes,
 # and all registry publication waits for the Linux archive attachment after install proofs.
-wheel_line=$(grep -Fn 'PyO3/maturin-action' <<< "$macos_job" | head -n1 | cut -d: -f1)
-archive_line=$(grep -Fn 'name: Archive, checksum, and stage' <<< "$macos_job" | head -n1 | cut -d: -f1)
+wheel_line=$(grep -Fn 'PyO3/maturin-action' <<< "$macos_job" | head -n1 | cut -d: -f1) || fail "the macOS job must declare its canonical wheel build"
+archive_line=$(grep -Fn 'name: Archive, checksum, and stage' <<< "$macos_job" | head -n1 | cut -d: -f1) || fail "the macOS job must name its archive staging step 'Archive, checksum, and stage'"
 [[ -n $archive_line && -n $wheel_line && $wheel_line -lt $archive_line ]] || fail "the macOS job must build its canonical wheels before packaging archives"
 grep -Fq 'python3 scripts/release-wheel-binary.py' <<< "$macos_job" || fail "the macOS job must reuse maturin wheel binaries"
 grep -Fq 'python3 scripts/verify-release-products.py' <<< "$macos_job" || fail "the macOS job must install and run both staged products before publication"

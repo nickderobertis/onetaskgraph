@@ -18,6 +18,8 @@ import {
   validateEventInventory,
 } from "../workflow-graph.mjs";
 
+import { Lexer } from "../actions-expressions.mjs";
+
 validateEventInventory(JSON.parse(read(".github/event-classes.json")));
 
 const policy =
@@ -234,6 +236,21 @@ test("semantic comparison refuses mixed fields, dependency lock versions and unr
     );
 });
 
+test("same-named registry packages retain their versions in semantic lock comparison", () => {
+  for (const path of ["Cargo.lock", "uv.lock"]) {
+    const source =
+      path === "Cargo.lock"
+        ? 'source = "registry+example"'
+        : 'source = { registry = "https://pypi.org/simple" }';
+    const record = `\n[[package]]\nname = "onetaskgraph-core"\nversion = "9.8.7"\n${source}\n`;
+    const before = revision({ [path]: files[path] + record });
+    const after = revision({ [path]: files[path] + record.replace("9.8.7", "9.8.8") });
+    const decision = classify(event("release-plz-123"), after, before);
+    assert.equal(decision.isReleaseOnly, false, path);
+    assert.equal(decision.macosRequired, true, path);
+  }
+});
+
 test("Actions event environment overrides payload kinds and unreadable kinds require coverage", () => {
   const conflicting = { ...event("feature"), event_name: "push" };
   assert.equal(classify(conflicting, heads.source, base, "pull_request").macosRequired, true);
@@ -425,6 +442,58 @@ test("actual carrier run bodies preserve success, failure, cancellation, missing
   rmSync(resolve(history, "needs.json"), { force: true });
 });
 
+const publishControls = ["CARGO_PUBLISH", "PYPI_PUBLISH", "NPM_PUBLISH"];
+function validatePublishControls(definitions = workflows()) {
+  const found = new Set();
+  function visit(value) {
+    if (!value || typeof value !== "object") return;
+    for (const [key, entry] of Object.entries(value)) {
+      if (key === "if" && typeof entry === "string") {
+        const expression = entry.trim().replace(/^\$\{\{\s*|\s*\}\}$/g, "");
+        const { tokens } = new Lexer(expression).lex();
+        for (let i = 0; i < tokens.length; i++) {
+          if (tokens[i].lexeme !== "vars") continue;
+          const next = tokens[i + 1];
+          const field = tokens[i + 2];
+          if (next?.lexeme === "." && /^[A-Za-z_][A-Za-z0-9_]*$/.test(field?.lexeme || ""))
+            found.add(field.lexeme);
+          else if (
+            next?.lexeme === "[" &&
+            typeof field?.value === "string" &&
+            tokens[i + 3]?.lexeme === "]"
+          )
+            found.add(field.value);
+          else throw Error("Unresolved publication variable in workflow condition");
+        }
+      } else visit(entry);
+    }
+  }
+  visit(definitions);
+  assert.deepEqual(
+    [...found].sort(),
+    [...publishControls].sort(),
+    "Unmeasured workflow publication controls",
+  );
+}
+function publicationVariables(optional) {
+  return Object.fromEntries(
+    publishControls.map((name, index) => [name, optional & (1 << index) ? "true" : "false"]),
+  );
+}
+
+test("publication workload reconciles actual workflow condition variables", () => {
+  validatePublishControls();
+  for (const expression of [
+    "vars.EXTRA_PUBLISH == 'true'",
+    "vars['EXTRA_PUBLISH'] == 'true'",
+    "vars[inputs.control] == 'true'",
+  ]) {
+    const definitions = workflows();
+    definitions["release.yml"].jobs["publish-npm"].if = expression;
+    assert.throws(() => validatePublishControls(definitions), /Unmeasured|Unresolved/);
+  }
+});
+
 const fixtureClasses = JSON.parse(read(".github/event-classes.json"));
 const requiredNames = [
   "check (macos-latest)",
@@ -440,13 +509,14 @@ const requiredNames = [
 ];
 
 test("workflow matrices, event fan-out and exact release head model record scheduling telemetry", () => {
+  validatePublishControls();
   const scenarios = [];
   const lifecycles = [];
   const classifications = new Map();
   for (const diff of ["source", "version", "dependency"])
     for (const fork of [false, true])
       for (const entry of fixtureClasses)
-        for (let optional = 0; optional < 8; optional++) {
+        for (let optional = 0; optional < 2 ** publishControls.length; optional++) {
           const payload =
             entry.event === "pull_request"
               ? event(diff === "version" ? "release-plz-123" : "feature", fork)
@@ -458,11 +528,7 @@ test("workflow matrices, event fan-out and exact release head model record sched
             ...entry,
             diff,
             fork,
-            vars: {
-              CARGO_PUBLISH: optional & 1 ? "true" : "false",
-              PYPI_PUBLISH: optional & 2 ? "true" : "false",
-              NPM_PUBLISH: optional & 4 ? "true" : "false",
-            },
+            vars: publicationVariables(optional),
           };
           const runs = graph(scenario, policyResult);
           for (const run of runs) {
@@ -509,7 +575,7 @@ test("workflow matrices, event fan-out and exact release head model record sched
   // event declarations decide which runs exist at each phase.
   for (const diff of ["source", "version", "dependency"])
     for (const fork of [false, true])
-      for (let optional = 0; optional < 8; optional++) {
+      for (let optional = 0; optional < 2 ** publishControls.length; optional++) {
         const sequence = [["pr-synchronize", diff, fork]];
         for (const entry of JSON.parse(read(".github/event-classes.json"))) {
           if (["pull_request", "workflow_dispatch"].includes(entry.event)) continue;
@@ -523,9 +589,9 @@ test("workflow matrices, event fan-out and exact release head model record sched
                 s.id === id &&
                 s.diff === d &&
                 s.fork === f &&
-                s.vars.CARGO_PUBLISH === (optional & 1 ? "true" : "false") &&
-                s.vars.PYPI_PUBLISH === (optional & 2 ? "true" : "false") &&
-                s.vars.NPM_PUBLISH === (optional & 4 ? "true" : "false"),
+                publishControls.every(
+                  (name) => s.vars[name] === publicationVariables(optional)[name],
+                ),
             )
             .runs.map((r) => ({ ...r, phase: id })),
         );
@@ -537,11 +603,7 @@ test("workflow matrices, event fan-out and exact release head model record sched
               event: "pull_request",
               action: "closed",
               fork: phase === "base-push" && fork,
-              vars: {
-                CARGO_PUBLISH: optional & 1 ? "true" : "false",
-                PYPI_PUBLISH: optional & 2 ? "true" : "false",
-                NPM_PUBLISH: optional & 4 ? "true" : "false",
-              },
+              vars: publicationVariables(optional),
             },
             { macosRequired: false, reason: "closed PR has no CI trigger" },
           ))
