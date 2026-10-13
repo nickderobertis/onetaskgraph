@@ -278,3 +278,47 @@ Passed on the repaired tree, with real GitHub credentials removed:
 Dispatch evidence is retained under `$ONEPIPELINE_NODE_SCRATCH_DIR` in
 `offline-tests.log`, `lane-wiring.log`, `format.log`, `clippy-final.log`,
 `selection.log`, `before-{sequence,prices,reported}.json` and `after/`.
+
+## Windows executable resolution repair
+
+Commit `20562737` resolves every collection subprocess executable to an absolute
+path before calling Python's process API. On Windows, Bash candidates come from
+PATH and the Git installation identified by `git.exe`; a candidate must have
+Git Bash's accompanying `msys-2.0.dll` runtime, either beside it in `usr/bin` or
+under the installation's `usr/bin` when launching `bin/bash.exe`. Thus Windows
+never receives the bare name `bash` and cannot substitute `System32\bash.exe`.
+The policy and Nx wrapper run through that selected Git Bash executable. Git
+and Bun also launch by their resolved absolute paths. Linux and macOS use the
+absolute paths resolved from PATH (Linux here: `/usr/bin/bash`, `/usr/bin/git`
+and the installed Bun binary). There is no Windows skip or retry.
+
+The first attempt launched `scripts/nx.sh` directly: Windows does not interpret
+a Bash shebang and returned WinError 193. The next supplied bare `bash`:
+Windows preferred its System32 WSL launcher, which had no installed distribution.
+The current resolution selects Git Bash by its MSYS runtime instead.
+
+The unconditional `lane_wiring` regression drives the dry-run test recipe's
+actual adapter and Nx wrapper with a graph query, and exercises missing-script
+failure propagation. Its outer shell uses the same resolver. It failed against
+the old adapter because that resolver was absent, then all four wiring tests
+passed on Linux. Windows execution belongs to the merge path; no Windows result
+is claimed here.
+
+A detached worktree at `0bc6a76c` under this dispatch's scratch directory was
+built with Cargo run inside it. The actual main and asset entry points ran
+against the loopback board there and on the repaired tree. Captured sequence,
+prices and complete reporter output were byte-identical: 193 HTTP operations,
+174 GraphQL requests, 19 REST requests, and 174 fixture points. Sequence and
+price hashes match the earlier evidence above. The worktree was removed.
+No live GitHub session ran; real credentials were removed from check
+environments, and the comparison used only the local `test-token`.
+
+Workspace format-check (Nx cache skipped), `cargo fmt --all -- --check`, clippy
+with all targets/features and warnings denied over the three changed crates,
+and `scripts/check-live-lane-selection.sh` passed. Logs and before/after captures
+are retained under this dispatch's `$ONEPIPELINE_NODE_SCRATCH_DIR`.
+
+All 620 offline tests across the three changed crates, plus doctests, passed
+with `--test-threads=1` and only the two credentialed entry points excluded,
+using the aggregate command recorded above. The finished resolver also passed
+all four `lane_wiring` tests in a separate invocation.
