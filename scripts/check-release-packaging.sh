@@ -293,7 +293,6 @@ for key, bad in [('name', None), ('version', 1), ('os', 'windows'), ('cpu', [1])
             packed.addfile(info, io.BytesIO(data) if data is not None else None)
     refused(command, 'invalid carrier identity fields' if key in ('name', 'version') else 'invalid carrier platform fields')
 carrier_path.write_bytes(original_carrier)
-# Parse the real public verification result, then reject corrupted result envelopes.
 sys.path.insert(0, str(root / 'scripts'))
 from release_products import VerificationReport
 verified = subprocess.run(command, cwd=tree, capture_output=True, text=True)
@@ -301,7 +300,7 @@ if verified.returncode:
     raise SystemExit(verified.stderr)
 report = json.loads(verified.stdout)
 VerificationReport.parse(verified.stdout)
-for broken in [None, {}, {**report, 'payloadHashes': {}}, {**report, 'payloadHashes': {**report['payloadHashes'], 'binary': 'not-a-digest'}}]:
+for broken in [None, {}, {**report, 'target': '../invalid'}, {**report, 'tag': 'invalid'}, {**report, 'payloadHashes': {}}, {**report, 'payloadHashes': {**report['payloadHashes'], 'binary': 'not-a-digest'}}]:
     try:
         VerificationReport.parse(json.dumps(broken))
     except ValueError:
@@ -310,40 +309,53 @@ for broken in [None, {}, {**report, 'payloadHashes': {}}, {**report, 'payloadHas
 if platform.system() == 'Linux':
     host_arm = platform.machine().lower() in ('aarch64', 'arm64')
     candidate, = [row for row in re.findall(r'target: ([a-z0-9_-]+), ext: ([a-z.]+), npm: ([a-z0-9-]+)', workflow) if row[0].endswith('unknown-linux-gnu') and row[0].startswith('aarch64') != host_arm]
-    arm_target, arm_extension, arm_npm = candidate
-    arm_payload = b'foreign architecture artifact; never executed'
-    arm_binary = tree / f'target/{arm_target}/release/onetaskgraph'
-    arm_binary.parent.mkdir(parents=True, exist_ok=True)
-    arm_binary.write_bytes(arm_payload)
-    with tarfile.open(tree / f'onetaskgraph-{tag}-{arm_target}.tar.gz', 'w:gz') as packed:
+    other_target, other_extension, other_npm = candidate
+    other_payload = b'foreign architecture artifact; never executed'
+    other_binary = tree / f'target/{other_target}/release/onetaskgraph'
+    other_binary.parent.mkdir(parents=True, exist_ok=True)
+    other_binary.write_bytes(other_payload)
+    with tarfile.open(tree / f'onetaskgraph-{tag}-{other_target}.tar.gz', 'w:gz') as packed:
         info = tarfile.TarInfo('onetaskgraph')
-        info.size = len(arm_payload)
-        packed.addfile(info, io.BytesIO(arm_payload))
-    arm_wheels = tree / f'dist/wheels/{arm_target}'
-    arm_wheels.mkdir(parents=True, exist_ok=True)
-    wheel_arch = 'aarch64' if arm_target.startswith('aarch64') else 'x86_64'
+        info.size = len(other_payload)
+        packed.addfile(info, io.BytesIO(other_payload))
+    other_wheels = tree / f'dist/wheels/{other_target}'
+    other_wheels.mkdir(parents=True, exist_ok=True)
+    wheel_arch = 'aarch64' if other_target.startswith('aarch64') else 'x86_64'
     wheel_platform = 'linux_' + wheel_arch
-    with zipfile.ZipFile(arm_wheels / f'onetaskgraph_cli-{version}-py3-none-{wheel_platform}.whl', 'w') as packed:
-        packed.writestr(f'onetaskgraph_cli-{version}.data/scripts/onetaskgraph', arm_payload)
+    with zipfile.ZipFile(other_wheels / f'onetaskgraph_cli-{version}-py3-none-{wheel_platform}.whl', 'w') as packed:
+        packed.writestr(f'onetaskgraph_cli-{version}.data/scripts/onetaskgraph', other_payload)
         packed.writestr(f'onetaskgraph_cli-{version}.dist-info/METADATA', f'Name: onetaskgraph-cli\nVersion: {version}\n')
         packed.writestr(f'onetaskgraph_cli-{version}.dist-info/WHEEL', f'Tag: py3-none-{wheel_platform}\n')
-    arm_carriers = tree / f'dist/carriers/{arm_npm}'
-    arm_carriers.mkdir(parents=True, exist_ok=True)
-    with tarfile.open(arm_carriers / 'fixture.tgz', 'w:gz') as packed:
-        for name, data in [('package/package.json', (root / f'npm/platforms/{arm_npm}/package.json').read_bytes()), ('package/bin/onetaskgraph', arm_payload)]:
+    other_carriers = tree / f'dist/carriers/{other_npm}'
+    other_carriers.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(other_carriers / 'fixture.tgz', 'w:gz') as packed:
+        for name, data in [('package/package.json', (root / f'npm/platforms/{other_npm}/package.json').read_bytes()), ('package/bin/onetaskgraph', other_payload)]:
             info = tarfile.TarInfo(name)
             info.size = len(data)
             packed.addfile(info, io.BytesIO(data))
-    refused([sys.executable, str(root / 'scripts/verify-release-products.py'), '--target', arm_target, '--npm', arm_npm, '--tag', tag, '--install'], 'cannot execute a foreign architecture')
+    refused([sys.executable, str(root / 'scripts/verify-release-products.py'), '--target', other_target, '--npm', other_npm, '--tag', tag, '--install'], 'cannot execute a foreign architecture')
 elif platform.system() == 'Darwin' and platform.machine().lower() == 'x86_64':
     pair = next(pair for pair in re.search(r'^      TARGETS: (.*)$', workflow, re.M)[1].split() if pair.startswith('aarch64'))
-    arm_target, arm_npm = pair.split('=')
-    refused([sys.executable, str(root / 'scripts/verify-release-products.py'), '--target', arm_target, '--npm', arm_npm, '--tag', tag, '--install'], 'cannot execute a foreign architecture')
+    other_target, other_npm = pair.split('=')
+    refused([sys.executable, str(root / 'scripts/verify-release-products.py'), '--target', other_target, '--npm', other_npm, '--tag', tag, '--install'], 'cannot execute a foreign architecture')
+archive_bytes = archive.read_bytes()
+archive.write_bytes(b'corrupt ZIP')
+refused(command, 'File is not a zip file')
+archive.write_bytes(archive_bytes)
 for entries in [[], [binary, 'nested/' + binary]]:
     with zipfile.ZipFile(archive, 'w') as packed:
         for entry in entries:
             packed.writestr(entry, payload)
-    refused(command, 'archive must carry one CLI binary')
+    refused(command, 'expected exactly one archive CLI entry')
+with zipfile.ZipFile(archive, 'w') as packed:
+    packed.writestr('nested/' + binary, payload)
+refused(command, 'archive must contain only the root regular CLI file')
+with zipfile.ZipFile(archive, 'w') as packed:
+    entry = zipfile.ZipInfo(binary)
+    entry.create_system = 3
+    entry.external_attr = 0o120777 << 16
+    packed.writestr(entry, payload)
+refused(command, 'archive must contain only the root regular CLI file')
 PYREFUSALS
 then report "the production verifier accepted an invalid release product input"; fi
 

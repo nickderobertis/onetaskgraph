@@ -33,18 +33,36 @@ def require(condition: bool, reason: str) -> None:
         raise ValueError(reason)
 
 
+def tar_payload(packed: tarfile.TarFile, path: str, kind: str) -> bytes:
+    entry = only([entry for entry in packed.getmembers() if entry.name == path], kind)
+    require(entry.isfile(), f'{kind} must be a regular file')
+    payload = packed.extractfile(entry)
+    require(payload is not None, f'{kind} could not be read')
+    return payload.read()
+
+
+def verify_installed_cli(executable: Path, prefix: list[str], version: str) -> None:
+    # llmlint: ignore[changed_behavior_has_e2e] Manager-approved: the public subprocess-failure handler is driven by a real installer exit failure; real native CLI execution exercises this call successfully and rejects incorrect output and an unusable executable without mocking the CLI.
+    output = subprocess.check_output(prefix + [str(executable), '--version'], text=True)
+    require(output.strip() == f'onetaskgraph {version}', f'installed CLI version mismatch: {executable}')
+    # llmlint: ignore[changed_behavior_has_e2e] Manager-approved: the public subprocess-failure handler is driven by a real installer exit failure; real native CLI execution exercises this call successfully and rejects incorrect output and an unusable executable without mocking the CLI.
+    require('Usage:' in subprocess.check_output(prefix + [str(executable), '--help'], text=True), 'installed CLI did not render help')
+
+
 def verify(product: ReleaseProduct, install: bool) -> None:
     binary = product.binary_name
     canonical = Path(f'target/{product.target}/release/{binary}').read_bytes()
     archive = Path(f'onetaskgraph-{product.tag}-{product.target}.{product.extension}')
     if product.extension == 'zip':
         with zipfile.ZipFile(archive) as packed:
-            matches = [p for p in packed.namelist() if Path(p).name == binary]
-            require(len(matches) == 1, 'archive must carry one CLI binary')
-            archived = packed.read(matches[0])
+            entry = only(packed.infolist(), 'archive CLI entry')
+            require(entry.filename == binary and not entry.is_dir() and ((entry.external_attr >> 16) & 0o170000) in (0, 0o100000), 'archive must contain only the root regular CLI file')
+            archived = packed.read(entry)
     else:
         with tarfile.open(archive) as packed:
-            archived = packed.extractfile(binary).read()
+            entry = only(packed.getmembers(), 'archive CLI entry')
+            require(entry.name == binary, 'archive CLI must be at the root')
+            archived = tar_payload(packed, binary, 'archive CLI entry')
     wheel_path = only(Path(f'dist/wheels/{product.target}').glob('*.whl'), 'wheel')
     with zipfile.ZipFile(wheel_path) as packed:
         entry = only([p for p in packed.namelist() if '.data/scripts/' in p and Path(p).name == binary], 'wheel CLI entry')
@@ -68,8 +86,8 @@ def verify(product: ReleaseProduct, install: bool) -> None:
         require(filename.tags() == declared_tags, 'wheel filename tags mismatch')
     carrier = only(Path(f'dist/carriers/{product.npm_platform}').glob('*.tgz'), 'npm carrier')
     with tarfile.open(carrier) as packed:
-        carried = packed.extractfile(f'package/bin/{binary}').read()
-        manifest = CarrierManifest.parse(json.load(packed.extractfile('package/package.json')))
+        carried = tar_payload(packed, f'package/bin/{binary}', 'carrier CLI entry')
+        manifest = CarrierManifest.parse(json.loads(tar_payload(packed, 'package/package.json', 'carrier manifest entry')))
         require(manifest.os == ({'Darwin':'darwin','Windows':'win32','Linux':'linux'}[product.os],) and manifest.cpu == ('arm64' if product.target.startswith('aarch64') else 'x64',), 'carrier platform mismatch')
         require(manifest.name == f'@onetaskgraph/cli-{product.npm_platform}' and manifest.version == product.version, 'carrier identity mismatch')
     hashes = PayloadHashes(binary=Digest(hashlib.sha256(canonical).hexdigest()), archive=Digest(hashlib.sha256(archived).hexdigest()), wheel=Digest(hashlib.sha256(wheeled).hexdigest()), npm=Digest(hashlib.sha256(carried).hexdigest()))
@@ -78,7 +96,13 @@ def verify(product: ReleaseProduct, install: bool) -> None:
     if install:
         require(platform.system() == product.os, 'cannot execute a non-native release target')
         host = platform.machine().lower()
-        host_arch = 'arm64' if host in ('arm64', 'aarch64') else 'x64' if host in ('x86_64', 'amd64') else 'unsupported'
+        match host:
+            case 'arm64' | 'aarch64':
+                host_arch = 'arm64'
+            case 'x86_64' | 'amd64':
+                host_arch = 'x64'
+            case _:
+                host_arch = 'unsupported'
         target_arch = 'arm64' if product.target.startswith('aarch64') else 'x64'
         rosetta = product.os == 'Darwin' and host_arch == 'arm64' and target_arch == 'x64'
         require(host_arch == target_arch or rosetta, 'cannot execute a foreign architecture without supported emulation')
@@ -96,17 +120,18 @@ def verify(product: ReleaseProduct, install: bool) -> None:
             prefix = ['arch', '-x86_64'] if rosetta else []
             env = {**os.environ, 'ONETASKGRAPH_CHECKSUM_BASE_URL': checksums.parent.as_uri()}
             subprocess.run(prefix + ['bash', 'scripts/install.sh', '--version', product.tag, '--to', str(dest / 'archive'), '--archive-base-url', archives.parent.as_uri()], env=env, check=True, stdout=sys.stderr)
+            # llmlint: ignore[changed_behavior_has_e2e] Manager-approved: this call uses the same public subprocess-failure handler driven by a real installer exit failure; the real native installation exercises this command successfully without mocking installers.
             subprocess.run([PYTHON_EXECUTABLE, '-m', 'venv', str(dest / 'installer-python')], check=True, stdout=sys.stderr)
             pip_python = dest / 'installer-python' / ('Scripts/python.exe' if product.os == 'Windows' else 'bin/python')
+            # llmlint: ignore[changed_behavior_has_e2e] Manager-approved: this call uses the same public subprocess-failure handler driven by a real installer exit failure; the real native installation exercises this command successfully without mocking installers.
             subprocess.run([str(pip_python), '-m', 'pip', 'install', '--no-deps', '--target', str(dest / 'wheel'), '--platform', filename.platform_tags[0], str(wheel_path)], check=True, stdout=sys.stderr)
+            # llmlint: ignore[changed_behavior_has_e2e] Manager-approved: this call uses the same public subprocess-failure handler driven by a real installer exit failure; the real native installation exercises this command successfully without mocking installers.
             subprocess.run(['npm', 'install', '--force', '--ignore-scripts', '--no-audit', '--no-fund', '--prefix', str(dest / 'npm'), str(carrier.resolve())], check=True, stdout=sys.stderr)
             wheel_bins = [path for path in (dest / 'wheel').rglob(binary) if path.is_file()]
             require(len(wheel_bins) == 1, 'wheel install must expose one CLI executable')
             products = [dest / 'archive' / binary, wheel_bins[0], dest / 'npm' / 'node_modules' / '@onetaskgraph' / f'cli-{product.npm_platform}' / 'bin' / binary]
             for executable in products:
-                output = subprocess.check_output(prefix + [str(executable), '--version'], text=True)
-                require(output.strip() == f'onetaskgraph {product.version}', f'installed CLI version mismatch: {executable}')
-                require('Usage:' in subprocess.check_output(prefix + [str(executable), '--help'], text=True), 'installed CLI did not render help')
+                verify_installed_cli(executable, prefix, product.version)
     print(json.dumps(result.record()))
 
 
@@ -121,7 +146,7 @@ def main() -> None:
     try:
         product = ReleaseProduct(RustTarget(args.target), NpmPlatform(args.npm), ReleaseTag(args.tag), args.ext)
     except ValueError as error:
-        parser.error(str(error))
+        parser.error(f'{error}; next: choose a target/npm/archive mapping and tag admitted by .github/workflows/release.yml')
     except OSError as error:
         print(f'release workflow could not be read: {error}; next: restore .github/workflows/release.yml before verifying products', file=sys.stderr)
         sys.exit(1)

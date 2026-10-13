@@ -16,6 +16,16 @@ ReleaseOS = Literal["Darwin", "Windows", "Linux"]
 WheelArchitecture = Literal["arm64", "aarch64", "amd64", "x86_64"]
 
 
+def validate_target(value: str) -> None:
+    if not re.fullmatch(r'[a-z0-9_]+(?:-[a-z0-9_]+)+', value):
+        raise ValueError('invalid Rust target identifier')
+
+
+def validate_npm_platform(value: str) -> None:
+    if not re.fullmatch(r'[a-z0-9]+-[a-z0-9]+', value):
+        raise ValueError('invalid npm platform identifier')
+
+
 @dataclass(frozen=True)
 class TargetMapping:
     npm_platform: NpmPlatform
@@ -41,10 +51,8 @@ class ReleaseProduct:
     extension: ArchiveFormat
 
     def __post_init__(self) -> None:
-        if not re.fullmatch(r'[a-z0-9_]+(?:-[a-z0-9_]+)+', self.target):
-            raise ValueError('invalid Rust target identifier')
-        if not re.fullmatch(r'[a-z0-9]+-[a-z0-9]+', self.npm_platform):
-            raise ValueError('invalid npm platform identifier')
+        validate_target(self.target)
+        validate_npm_platform(self.npm_platform)
 
         if self.extension not in ('tar.gz', 'zip'):
             raise ValueError('invalid release archive extension')
@@ -139,6 +147,8 @@ class WheelFilename:
         if len(parts) != 4:
             raise ValueError('invalid wheel filename tags')
         identity, python, abi, platform = parts
+        if any(not re.fullmatch(r'[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*', value) for value in (python, abi, platform)):
+            raise ValueError('invalid wheel filename tag grammar')
         return cls(identity, tuple(python.split('.')), tuple(abi.split('.')), tuple(platform.split('.')))
 
     def tags(self) -> set[str]:
@@ -156,6 +166,11 @@ class VerificationReport:
         value = json.loads(text)
         if not isinstance(value, dict) or not isinstance(value.get('target'), str) or not isinstance(value.get('tag'), str):
             raise ValueError('invalid verification report')
+        validate_target(value['target'])
+        workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/release.yml').read_text()
+        grammars = set(re.findall(r"grep -Eq '([^']+)'", workflow))
+        if len(grammars) != 1 or re.fullmatch(next(iter(grammars)), value['tag']) is None:
+            raise ValueError('invalid verification report release tag')
         return cls(RustTarget(value['target']), ReleaseTag(value['tag']), PayloadHashes.parse(value.get('payloadHashes')))
 
     def record(self) -> dict[str, object]:

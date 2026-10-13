@@ -18,7 +18,7 @@ import tarfile
 import tempfile
 import tomllib
 import zipfile
-from release_products import RustTarget, NpmPlatform, RunnerLabel, ArchiveFormat, VerificationReport
+from release_products import RustTarget, NpmPlatform, RunnerLabel, ArchiveFormat, VerificationReport, validate_target, validate_npm_platform
 from product_versions import SEMANTIC_VERSION_RE, SemanticVersion
 
 PYTHON_EXECUTABLE = str(Path(sys.executable).resolve())
@@ -26,14 +26,16 @@ PYTHON_EXECUTABLE = str(Path(sys.executable).resolve())
 
 @dataclass(frozen=True)
 class ReleaseTarget:
-    os: RunnerLabel
+    runner_label: RunnerLabel
     target: RustTarget
     extension: ArchiveFormat
     npm_platform: NpmPlatform
 
     def __post_init__(self) -> None:
-        if not re.fullmatch(r'[a-z0-9_]+(?:-[a-z0-9_]+)+', self.target) or not re.fullmatch(r'[a-z0-9]+-[a-z0-9]+', self.npm_platform) or self.extension not in ('tar.gz', 'zip'):
-            raise ValueError('invalid release target mapping; restore its identifiers before packaging')
+        validate_target(self.target)
+        validate_npm_platform(self.npm_platform)
+        if self.extension not in ('tar.gz', 'zip'):
+            raise ValueError('invalid release archive extension')
 
 
 def run(wheel_dir: Path, target: RustTarget) -> None:
@@ -48,23 +50,38 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
     if mac_pairs is None:
         raise ValueError('Darwin TARGETS missing; restore the Rust/npm platform mapping')
     for pair in mac_pairs[1].split():
-        if not re.fullmatch(r'[a-z0-9_]+(?:-[a-z0-9_]+)+=[a-z0-9]+-[a-z0-9]+', pair):
+        if pair.count('=') != 1:
             raise ValueError('invalid Darwin TARGETS pair; restore target=npm-platform before packaging')
         rust_target, npm_platform = pair.split('=')
+        validate_target(rust_target)
+        validate_npm_platform(npm_platform)
         rows.append(ReleaseTarget(RunnerLabel('macos-latest'), RustTarget(rust_target), 'tar.gz', NpmPlatform(npm_platform)))
     candidates = [row for row in rows if row.target == target]
     if len(candidates) != 1:
         raise argparse.ArgumentError(None, 'unsupported --target; choose one declared in release.yml')
     selected = candidates[0]
-    job = mac.group(1) if selected.os == 'macos-latest' else native.group(1)
+    job = mac.group(1) if selected.runner_label == 'macos-latest' else native.group(1)
     step = re.search(r'(?ms)^      - name: Archive, checksum, and stage\n.*?^        run: \|\n(.*?)(?=^      - )', job)
     if step is None:
         raise ValueError('release packaging body missing; retain the drivable run block')
     body = '\n'.join(line[10:] for line in step[1].splitlines())
-    version = tomllib.loads((root / 'pyproject.toml').read_text())['project']['version']
+    manifest = tomllib.loads((root / 'pyproject.toml').read_text())
+    project = manifest.get('project')
+    if not isinstance(project, dict):
+        raise ValueError('invalid manifest project table; restore pyproject.toml project metadata')
+    version = project.get('version')
     if not isinstance(version, str) or not SEMANTIC_VERSION_RE.fullmatch(version):
         raise ValueError('invalid manifest version; restore the version written by scripts/set-version.sh')
     version = SemanticVersion(version)
+    with tempfile.TemporaryDirectory(prefix='release-manifest-refusal-') as malformed:
+        malformed_root = Path(malformed)
+        shutil.copytree(root / 'scripts', malformed_root / 'scripts')
+        (malformed_root / '.github/workflows').mkdir(parents=True)
+        shutil.copy2(root / '.github/workflows/release.yml', malformed_root / '.github/workflows/release.yml')
+        (malformed_root / 'pyproject.toml').write_text('project = "invalid table"\n')
+        rejected = subprocess.run([PYTHON_EXECUTABLE, 'scripts/test-release-products.py', '--wheel-dir', str(wheel_dir.resolve()), '--target', target], cwd=malformed_root, capture_output=True, text=True)
+        if rejected.returncode != 1 or 'invalid manifest project table' not in rejected.stderr:
+            raise ValueError('malformed project table did not produce its boundary diagnostic')
     binary = 'onetaskgraph.exe' if selected.extension == 'zip' else 'onetaskgraph'
     with tempfile.TemporaryDirectory(prefix='release-products-') as scratch:
         tree = Path(scratch)
@@ -115,6 +132,16 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
             if result.returncode == 0 or reason not in result.stderr:
                 raise ValueError(f'tampered staged product did not fail for {reason}: status={result.returncode}, stderr={result.stderr}; repair the production verifier before publishing')
 
+        release_workflow = tree / '.github/workflows/release.yml'
+        workflow_bytes = release_workflow.read_bytes()
+        release_workflow.unlink()
+        refuses('release workflow could not be read')
+        release_workflow.write_bytes(workflow_bytes)
+        for container in [wheel_path, next((tree / f'dist/carriers/{selected.npm_platform}').glob('*.tgz'))]:
+            original = container.read_bytes()
+            container.write_bytes(b'corrupt container')
+            refuses('verification failed')
+            container.write_bytes(original)
         checksum = tree / f'onetaskgraph-v{version}-{target}.{selected.extension}.sha256'
         original_checksum = checksum.read_bytes()
         checksum.write_text('0' * 64 + '  incorrect-archive\n')
@@ -151,6 +178,28 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
                 packed.addfile(info, io.BytesIO(original_binary + b'corrupt'))
         refuses('release binary drift')
         archive.write_bytes(original_archive)
+        if selected.extension == 'tar.gz':
+            archive.write_bytes(b'not a tar archive')
+            refuses('verification failed')
+            for names in [[], [binary, binary], [binary, 'extra']]:
+                with tarfile.open(archive, 'w:gz') as packed:
+                    for name in names:
+                        info = tarfile.TarInfo(name)
+                        info.size = len(original_binary)
+                        packed.addfile(info, io.BytesIO(original_binary))
+                refuses('expected exactly one archive CLI entry')
+            with tarfile.open(archive, 'w:gz') as packed:
+                info = tarfile.TarInfo('nested/' + binary)
+                info.size = len(original_binary)
+                packed.addfile(info, io.BytesIO(original_binary))
+            refuses('archive CLI must be at the root')
+            with tarfile.open(archive, 'w:gz') as packed:
+                info = tarfile.TarInfo(binary)
+                info.type = tarfile.SYMTYPE
+                info.linkname = 'other'
+                packed.addfile(info)
+            refuses('archive CLI entry must be a regular file')
+            archive.write_bytes(original_archive)
         with zipfile.ZipFile(wheel_path) as wheel:
             entry, = [name for name in wheel.namelist() if '.data/scripts/' in name and Path(name).name == binary]
         alter_wheel(entry, original_binary + b'corrupt')
@@ -167,6 +216,37 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
                     info.size = len(contents)
                 packed.addfile(info, io.BytesIO(contents) if contents is not None else None)
         refuses('release binary drift')
+        carrier.write_bytes(original_carrier)
+        with tarfile.open(carrier) as packed:
+            contract_members = [(info, packed.extractfile(info).read() if info.isfile() else None) for info in packed.getmembers()]
+        for path, kind in [(f'package/bin/{binary}', 'carrier CLI entry'), ('package/package.json', 'carrier manifest entry')]:
+            for duplicate in [False, True]:
+                with tarfile.open(carrier, 'w:gz') as packed:
+                    for info, data in contract_members:
+                        if info.name != path or duplicate:
+                            packed.addfile(info, io.BytesIO(data) if data is not None else None)
+                        if info.name == path and duplicate:
+                            packed.addfile(info, io.BytesIO(data) if data is not None else None)
+                refuses('expected exactly one ' + kind)
+            with tarfile.open(carrier, 'w:gz') as packed:
+                for info, data in contract_members:
+                    if info.name == path:
+                        bad = tarfile.TarInfo(path)
+                        bad.type = tarfile.SYMTYPE
+                        bad.linkname = 'other'
+                        packed.addfile(bad)
+                    else:
+                        packed.addfile(info, io.BytesIO(data) if data is not None else None)
+            refuses(kind + ' must be a regular file')
+            carrier.write_bytes(original_carrier)
+        with tarfile.open(carrier, 'w:gz') as packed:
+            for info, data in contract_members:
+                if info.name == 'package/package.json':
+                    info = tarfile.TarInfo(info.name)
+                    data = b'{malformed JSON'
+                    info.size = len(data)
+                packed.addfile(info, io.BytesIO(data) if data is not None else None)
+        refuses('Expecting property name')
         carrier.write_bytes(original_carrier)
         alter_wheel('/METADATA', f'Name: onetaskgraph-cli\nName: foreign-cli\nVersion: {version}\n'.encode())
         refuses('wheel identity or version mismatch')
@@ -189,6 +269,16 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
         wheel_path.rename(foreign_name)
         refuses('wheel filename tags mismatch')
         foreign_name.rename(wheel_path)
+        invalid_tags = wheel_path.with_name('-'.join(wheel_path.stem.rsplit('-', 3)[:3]) + '-bad!tag.whl')
+        wheel_path.rename(invalid_tags)
+        refuses('invalid wheel filename tag grammar')
+        invalid_tags.rename(wheel_path)
+        installer = tree / 'scripts/install.sh'
+        installer_body = installer.read_bytes()
+        installer.write_text('exit 37\n')
+        refuses('returned non-zero exit status 37')
+        installer.write_bytes(installer_body)
+
 
         carrier, = (tree / f'dist/carriers/{selected.npm_platform}').glob('*.tgz')
         original_carrier = carrier.read_bytes()
@@ -219,7 +309,10 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
             carrier.write_bytes(original_carrier)
         # Keep all forms hash-identical while corrupting the real compiled executable's
         # response. This proves that equality alone cannot make an unusable CLI pass.
-        for old, new, reason in [(version.encode(), b'9' * len(version), 'installed CLI version mismatch'), (b'Usage:', b'Ubage:', 'installed CLI did not render help')]:
+        failures = [(version.encode(), b'9' * len(version), 'installed CLI version mismatch'), (b'Usage:', b'Ubage:', 'installed CLI did not render help')]
+        if platform.system() == 'Linux':
+            failures.append((b'\x7fELF', b'BAD!', 'Exec format error'))
+        for old, new, reason in failures:
             if old not in original_binary:
                 raise ValueError('native CLI response marker was absent; update this corruption journey for the compiled product')
             payload = original_binary.replace(old, new)
@@ -256,12 +349,14 @@ def main() -> None:
     parser.add_argument('--wheel-dir', type=Path, required=True)
     parser.add_argument('--target', required=True)
     args = parser.parse_args()
-    if not re.fullmatch(r'[a-z0-9_]+(?:-[a-z0-9_]+)+', args.target):
-        parser.error('invalid Rust target identifier')
+    try:
+        validate_target(args.target)
+    except ValueError as error:
+        parser.error(f'{error}; next: choose a Rust target declared in .github/workflows/release.yml')
     try:
         run(args.wheel_dir, RustTarget(args.target))
     except argparse.ArgumentError as error:
-        parser.error(str(error))
+        parser.error(f'{error}; next: choose a Rust target declared in .github/workflows/release.yml')
     except (ValueError, KeyError, OSError, subprocess.CalledProcessError, zipfile.BadZipFile, tarfile.TarError) as error:
         print(f'release product journey failed: {error}; next: repair the release workflow packaging or its named product verifier, then rerun scripts/test-distribution.sh', file=sys.stderr)
         sys.exit(1)
