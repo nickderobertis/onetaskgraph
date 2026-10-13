@@ -246,7 +246,7 @@ fn budget_adapter_uses_the_real_checker_and_never_substitutes_missing_live_evide
 }
 
 #[test]
-fn the_real_policy_and_nx_graph_give_each_invocation_a_fresh_directory_and_refuse_unsafe_identities() {
+fn the_real_policy_gives_each_invocation_a_fresh_directory_and_refuses_unsafe_identities() {
     let sandbox = Sandbox::new();
     let root = sandbox.subdirectory("session-identity");
     std::fs::create_dir_all(&root).unwrap();
@@ -332,7 +332,10 @@ fn the_real_policy_and_nx_graph_give_each_invocation_a_fresh_directory_and_refus
                 let said = String::from_utf8_lossy(&repeat.stderr);
                 assert!(repeat.status.success(), "{said}");
                 let sibling = root.join(format!("must-be-fresh.{ordinal}"));
-                assert!(said.contains("holds an earlier invocation's records"), "{said}");
+                assert!(
+                    said.contains("holds an earlier invocation's records"),
+                    "{said}"
+                );
                 assert_eq!(
                     std::path::PathBuf::from(std::fs::read_to_string(&recorded).unwrap())
                         .canonicalize()
