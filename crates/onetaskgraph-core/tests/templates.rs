@@ -1814,3 +1814,60 @@ fn real_templates_are_asked_in_the_order_their_variables_are_declared() {
         );
     }
 }
+
+/// A `variables` key is whatever YAML reads it as: a plain `true` is the name `true`, `1` is
+/// the name `1`, which is refused as no variable name, and a null key, a sequence key, a
+/// repeated variable and a non-finite default are refused as YAML, each at its position.
+#[test]
+fn a_variables_key_is_read_as_yaml_reads_it() {
+    let asked = |variables: &str| {
+        let source = format!("---\nonetaskgraph_template: 1\nvariables:\n{variables}---\n");
+        TemplateLoader::new()
+            .with_template("t.md", source)
+            .load_name("t.md")
+            .and_then(|template| template.unanswered(&Answers::new()))
+            .map(|asked| {
+                asked
+                    .iter()
+                    .map(|variable| variable.name().to_owned())
+                    .collect::<Vec<_>>()
+            })
+            .map_err(|error| error.to_string())
+    };
+
+    assert_eq!(
+        asked("  true: {description: d}\n"),
+        Ok(vec!["true".to_owned()])
+    );
+    for (variables, problem) in [
+        (
+            "  1: {description: d}\n",
+            "front matter key `variables.1` is not a variable name",
+        ),
+        (
+            "  ~: {description: d}\n",
+            "its front matter is not YAML: cannot deserialize null into string; use \
+             Option<String> at line 3, column 3",
+        ),
+        (
+            "  [a]: {description: d}\n",
+            "its front matter is not YAML: expected string scalar at line 3, column 3",
+        ),
+        (
+            "  a: {description: d}\n  a: {description: e}\n",
+            "its front matter is not YAML: duplicate mapping key: a, set DuplicateKeyPolicy in \
+             Options if acceptable at line 4, column 3",
+        ),
+        (
+            "  a: {description: d, default: .inf}\n",
+            "its front matter is not YAML: non-finite float `.inf` rejected by \
+             reject_non_finite_typeless_float at line 3, column 32",
+        ),
+    ] {
+        let refused = asked(variables).expect_err(variables);
+        assert!(
+            refused.starts_with("template t.md: ") && refused.contains(problem),
+            "{variables:?}: {refused}"
+        );
+    }
+}

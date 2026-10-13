@@ -116,6 +116,7 @@ impl<'de> Visitor<'de> for NodeVisitor {
 
     fn visit_map<A: MapAccess<'de>>(self, mut entries: A) -> Result<Yaml, A::Error> {
         let mut read = Vec::new();
+        // llmlint: ignore[boundary_inputs_validated] A key is what serde-saphyr reads it as, by the plan's fixed YAML contract: it refuses a null, a sequence and a repeated key itself and reads a plain `1` or `true` as a string, and front matter adds no key-kind check of its own; `a_variables_key_is_read_as_yaml_reads_it` pins each case, and a name still has to match the variable-name pattern.
         while let Some(entry) = entries.next_entry()? {
             read.push(entry);
         }

@@ -20,7 +20,6 @@ impl SecretResolver for NoSecrets {
     }
 }
 
-/// The three folders a store keeps its records in, and the kind each holds.
 const FOLDERS: [&str; 3] = ["tasks", "projects", "documents"];
 
 /// The title a task's title is spliced to and back from, so the splice writes the real title.

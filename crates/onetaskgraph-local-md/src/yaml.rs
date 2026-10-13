@@ -2,7 +2,8 @@
 //!
 //! A read takes serde-saphyr's own behaviour with three options: `yes`, `no`, `on` and `off`
 //! stay strings, because a write leaves them plain; `<<` is an ordinary key; and a refusal is
-//! one line, which a message names its file beside.
+//! one line, which a message names its file beside. The engine reads with the same three, and
+//! `onetaskgraph-core`'s `tests/yaml.rs` holds the two readers to the same readings.
 //!
 //! A write keeps the bytes the files of a store already hold. A store is a long-lived
 //! directory on a user's disk, often under version control, so a record rewritten after the
@@ -42,7 +43,6 @@ impl fmt::Display for Error {
     }
 }
 
-/// `text` read as a `T`.
 pub(crate) fn from_str<T: DeserializeOwned>(text: &str) -> Result<T, Error> {
     let options = serde_saphyr::options! {
         strict_booleans: true,
@@ -80,12 +80,10 @@ fn write_options() -> serde_saphyr::SerializerOptions {
     }
 }
 
-/// How many spaces `line` opens with.
 fn indent_of(line: &str) -> usize {
     line.len() - line.trim_start_matches(' ').len()
 }
 
-/// Whether `line`, less its line break, holds nothing but spaces.
 fn blank(line: &str) -> bool {
     line.trim_end_matches('\n').chars().all(|c| c == ' ')
 }
@@ -275,7 +273,6 @@ fn single_quote(text: &str) -> String {
     out
 }
 
-/// One line of [`single_quote`].
 fn single_quoted_line(content: &str) -> String {
     let bytes = content.as_bytes();
     let mut rewritten = String::with_capacity(content.len());
