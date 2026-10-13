@@ -3,6 +3,67 @@ use onetaskgraph_e2e_support::common::Sandbox;
 use serde_json::{Value, json};
 
 #[test]
+fn test_recipe_launches_the_real_nx_script_through_bash() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .unwrap();
+    let recipe = std::process::Command::new("just")
+        .args(["--dry-run", "test"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(recipe.status.success());
+    let rendered = String::from_utf8(recipe.stderr).unwrap();
+    assert!(
+        rendered.contains("scripts/live-lane-selection.sh bash ./scripts/nx.sh"),
+        "the collection adapter must launch the shell script with its interpreter: {rendered}"
+    );
+    let sandbox = Sandbox::new();
+    let graph = sandbox.subdirectory("recipe-launch").join("graph.json");
+    std::fs::create_dir_all(graph.parent().unwrap()).unwrap();
+    // Keep the recipe's real adapter and launch arguments; ask Nx for its graph
+    // instead of executing targets that could open a hosted session.
+    let query = rendered.replace(
+        "affected -t test budgets",
+        &format!(
+            "run-many -p onetaskgraph-github-projects -t test --graph='{}'",
+            graph.display()
+        ),
+    );
+    assert_ne!(query, rendered);
+    let output = std::process::Command::new("bash")
+        .args(["-uc", &query])
+        .current_dir(root)
+        .env("NX_DAEMON", "false")
+        .env("NX_BASE", "missing-base-for-recipe-launch")
+        .env_remove("GH_PROJECTS_TOKEN")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let parsed: Value = serde_json::from_slice(&std::fs::read(&graph).unwrap()).unwrap();
+    assert!(parsed["tasks"]["tasks"]["onetaskgraph-github-projects:test"].is_object());
+    std::fs::remove_file(&graph).unwrap();
+    let refused = std::process::Command::new("bash")
+        .args([
+            "-uc",
+            &query.replace("./scripts/nx.sh", "./scripts/missing-nx-launch.sh"),
+        ])
+        .current_dir(root)
+        .env("NX_BASE", "missing-base-for-recipe-launch")
+        .env_remove("GH_PROJECTS_TOKEN")
+        .output()
+        .unwrap();
+    assert!(!refused.status.success());
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("missing-nx-launch.sh"));
+    assert!(!graph.exists());
+}
+
+#[test]
 fn real_nx_orders_both_contributions_and_keeps_one_main_task() {
     let sandbox = Sandbox::new();
     let graph = sandbox.subdirectory("nx").join("session-graph.json");
