@@ -103,3 +103,37 @@ SHA-256 of the byte-identical normalized captures:
 
 - `sequence.json`: `195359274c46fab7a6e82451823094093041622692ba6a1bb69d9078e42049b3`.
 - `prices.json`: `f13572f3c753c6377e9e4f658e1aded0e1f3285d7c6b77b2f9c01da26811adb3`.
+
+## Merge-base source provenance recheck
+
+An initial invocation immediately after creating the merge-base worktree accidentally
+retained the ca86536a worktree as its working directory. Its failure at line 572 was
+baseline evidence only; it was not used to classify the merge-base. The subsequent
+correctly located merge-base invocation passed. This was repeated from a newly created
+merge-base worktree after the provenance concern was raised, and passed again:
+
+```text
+working directory: $ONEPIPELINE_NODE_SCRATCH_DIR/merge-base
+HEAD: 14ee32f799a31e6150154ea461487099e2442f41
+source: crates/onetaskgraph-github-projects-e2e/tests/live.rs
+source SHA-256: 5967dafde5b55e4367755eff26891164f3ee2627a80bc5563ee388671ec9e787
+test definition line: 371
+assertion line: 437
+Cargo metadata live src_path: <working directory>/crates/onetaskgraph-github-projects-e2e/tests/live.rs
+Cargo metadata target_directory: <working directory>/target
+compiled package: onetaskgraph-github-projects-e2e (<working directory>/crates/onetaskgraph-github-projects-e2e)
+executed test binary: target/debug/deps/live-3d8c5a197ad42c34
+result: 1 passed; 0 failed; 5 filtered out
+```
+
+The command, run inside that directory, was:
+
+```sh
+env -u GH_PROJECTS_TOKEN -u GH_TOKEN -u GITHUB_TOKEN cargo test --locked --all-features \
+  -p onetaskgraph-github-projects-e2e --test live \
+  board_admission_rejects_non_success_even_with_valid_board_json
+```
+
+The same command was also repeated on the finished tree and passed (10 filtered out).
+Thus this branch introduced the obsolete expectation; commit `661d762d` fixes it.
+No pre-existing admission failure remains to draft as a follow-up.
