@@ -1246,6 +1246,8 @@ name = "onetaskgraph-github-live"
 version = "0.6.0"
 dependencies = [
  "onetaskgraph-live",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
