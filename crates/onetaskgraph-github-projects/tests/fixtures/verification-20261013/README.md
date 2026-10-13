@@ -170,3 +170,67 @@ Passed on the repaired executable tree:
   rendering and board-admission checks listed above.
 - Rust formatting and clippy with warnings denied over `onetaskgraph-github-live`,
   `onetaskgraph-github-projects` and `onetaskgraph-github-projects-e2e`.
+
+## Cleanup and Windows bridge repair
+
+Executable repair `192d1a57` changes two offline test files only:
+
+- `sweep_gate.rs` now expects the specific GraphQL envelope refusal for invalid JSON
+  and the specific invalid-errors-envelope refusal for malformed errors. The remaining
+  presence faults still assert their particular cleanup failures. The targeted test
+  reproduced the invalid-JSON expectation failure before the edit; all 14 sweep tests
+  pass afterwards.
+- `quota_writer.rs` explicitly calls `set_nonblocking(false)` on each accepted stream
+  before reading. The listener remains nonblocking so it can stop when the child exits.
+  Winsock inherits the listener's socket properties on accept, unlike the blocking
+  accepted sockets observed on Linux: the inherited nonblocking stream could return
+  `WouldBlock` immediately at the request parser's read. A read timeout does not turn
+  a nonblocking socket into a blocking one. This fixes the mode itself without adding
+  retries or extending a wait. Both bridge tests pass on Linux. Windows execution was
+  unavailable in this dispatch; the inheritance is documented by
+  [Microsoft's accept contract](https://learn.microsoft.com/en-us/windows/win32/api/winsock2/nf-winsock2-accept).
+
+The actual live main and asset entry points were rebuilt and driven through the capture
+proxy and loopback board at both `192d1a57` and a newly created detached worktree at
+`ca86536a98dfe5a412598e3b4adac1749da228af`. Cargo ran inside the detached worktree, under
+`$ONEPIPELINE_NODE_SCRATCH_DIR/measured`, which was removed after comparison. Sequence,
+prices and complete reporter output were byte-identical: 193 HTTP operations, 174
+GraphQL requests, 19 REST requests, and 174 fixture points. The sequence and prices
+SHA-256 values match those listed above. The repaired reporter also read the retained
+historical records and reported 212 points (146 reported queries plus 66 modelled
+mutations), 87 below 299. No real GitHub session ran; real credentials were removed
+from check environments, and entry-point comparisons used only `test-token` locally.
+
+Offline verification on the repaired tree used:
+
+```sh
+cargo test --locked --all-features -p onetaskgraph-github-live \
+  -p onetaskgraph-github-projects -p onetaskgraph-github-projects-e2e -- \
+  --skip real_projects_v2_contract_writes_and_leaves_no_residue \
+  --skip disposable_task_and_document_asset_copies
+```
+
+That aggregate invocation passed 595 tests but failed two SDK e2e tests during
+concurrent editable Python CLI builds. Both failures report maturin's rename of
+`target/release/onetaskgraph` into `target/maturin/onetaskgraph` failing with ENOENT,
+after successful release compilation. The manager authorized running those two tests
+serially, with no code or configuration change (reply correlation
+`c-60b5719f60d373c61f894ea56fd4d0a2`). Both passed individually with `--exact
+--test-threads=1`:
+
+- `cache::one_sources_cache_is_shared_by_the_command_line_both_sdks_and_a_rust_caller`
+- `copy_cost::detail_and_record_only_reads_reuse_one_issue_resolution_through_cli_and_sdks`
+
+The remaining e2e package `live` executable passed all 10 offline tests, and
+`live_pair` passed all nine tests. Both library doctest suites passed (zero examples).
+Thus every one of the 616 offline tests passed on this tree across these invocations;
+the aggregate parallel invocation itself did not pass. Session accounting, budget
+reporter, admission checks and loopback recovery cases are included. The independent
+parallel build race was left unchanged and drafted as
+`drafts:otg-live-github-under-300-plan/drafts/20261013T151201Z-concurrent-python-sdk-e2e-builds-race-staging-th`.
+Logs are retained under this dispatch's scratch directory as `offline-tests.log`,
+`sdk-cache-recheck.log`, `sdk-copy-recheck.log`, `remaining-tests.log` and `doc-tests.log`.
+
+Also passed: `cargo fmt --all -- --check`; `workspace:format-check` with Nx cache
+skipped; and clippy with all targets/features and `-D warnings` over the three changed
+crates. This documentation changes no serialized contract or live request.
