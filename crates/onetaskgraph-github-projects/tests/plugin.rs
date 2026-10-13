@@ -2147,6 +2147,15 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         draft["projectV2Items"] = item.project_items(&options, asked);
         return json!({ "node": draft });
     }
+    if query == onetaskgraph_github_projects::graphql::LIVE_CHANGE_TOKEN {
+        let id = variables["id"].as_str().expect("a node id");
+        let node = state
+            .items
+            .iter()
+            .find(|item| item.content_id == id)
+            .map(|item| item.as_issue(&state.options(), asked));
+        return json!({"node":node});
+    }
     if query == onetaskgraph_github_projects::graphql::ISSUE {
         let id = variables["id"].as_str().expect("a node id").to_owned();
         let Some(item) = state.items.iter().find(|item| item.content_id == id) else {
@@ -10397,9 +10406,9 @@ async fn a_board_changed_by_something_else_is_seen_by_the_next_source_and_not_by
 /// The change-kind leg's token read, driven against a board whose answers land inside the
 /// token's settling margin.
 ///
-/// `journey::settled_token` is the real one — the code the credentialed lane reads every
-/// token through. A token withheld for a few answers is asked for again; one withheld past
-/// the leg's bound fails naming the moment.
+/// The cold-source drive shares the main lane's bounded polling loop. A token withheld
+/// for a few answers is asked for again; one withheld past the bound fails naming the
+/// moment. The fresh-facts drive is covered separately through its HTTP boundary.
 #[tokio::test]
 async fn the_change_kind_leg_asks_again_while_a_token_is_withheld() {
     let fixture = board(vec![
@@ -19676,4 +19685,71 @@ async fn actual_execution_facts_distinguish_refusals_retries_and_unreadable_resp
     );
     assert_eq!(snapshot.requests()[0].reported_query_cost(), None);
     assert_eq!(snapshot.requests()[1].reported_query_cost(), Some(7));
+}
+
+#[test]
+fn fresh_token_polling_reads_again_after_a_server_date_inside_the_margin() {
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["fresh_token_polling_child", "--exact", "--nocapture"])
+        .env("GITHUB_FRESH_TOKEN_CHILD", "settling")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+// llmlint: ignore[tests_assert_real_behavior] This subprocess helper is driven by fresh_token_polling_reads_again_after_a_server_date_inside_the_margin; ordinary test runs omit its selector and start no fixture.
+#[tokio::test]
+async fn fresh_token_polling_child() {
+    if std::env::var("GITHUB_FRESH_TOKEN_CHILD").as_deref() != Ok("settling") {
+        return;
+    }
+    let fixture = board(vec![
+        Item::issue("I_fresh", "fresh token").tokened("2026-09-01T00:00:00Z", 0),
+    ]);
+    fixture.answer_unsettled(1);
+    fixture.state.lock().unwrap().limits.reported_query_cost = Some(1);
+    journey::against(journey::Endpoints {
+        graphql: fixture.endpoint.clone(),
+        rest_host: fixture.endpoint.clone(),
+        source: None,
+        settle: std::time::Duration::ZERO,
+    });
+    let version = journey::settled_fresh_token(
+        "test-token",
+        "PVT_board",
+        &NativeId("I_fresh".into()),
+        "after deletion",
+    )
+    .await
+    .unwrap();
+    assert!(version.starts_with(onetaskgraph_github_projects::change_token::PREFIX));
+    assert_eq!(fixture.state.lock().unwrap().unsettled_answers, 0);
+    let snapshot = journey::SESSION.snapshot();
+    let calls = snapshot.requests();
+    assert_eq!(
+        calls.len(),
+        2,
+        "the unsettled read must be followed by a fresh request"
+    );
+    assert_eq!(calls[0].attempt(), 1);
+    assert_eq!(calls[1].attempt(), 2);
+    assert!(
+        calls
+            .iter()
+            .all(|call| call.reported_query_cost() == Some(1))
+    );
+    assert!(
+        calls
+            .iter()
+            .all(|call| call.document().unwrap().contains("query LiveChangeToken("))
+    );
+    assert!(
+        !calls
+            .iter()
+            .any(|call| call.document().unwrap().contains("title body"))
+    );
 }

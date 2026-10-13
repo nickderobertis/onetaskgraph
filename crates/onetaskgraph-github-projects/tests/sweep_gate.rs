@@ -862,10 +862,25 @@ async fn an_issue_delete_github_never_answered_is_asked_again_rather_than_failin
     }
     let _in_flight = session_in_flight();
 
+    let before = journey::SESSION.snapshot().total_requests();
     journey::remove_live_state(TOKEN, BOARD, REPOSITORY, &Own::new(RUNS.mine), false)
         .await
         .expect("a delete GitHub never answered is asked again, and the repository settles it");
 
+    let recorded = journey::SESSION.snapshot();
+    let attempts: Vec<_> = recorded.requests()[before..]
+        .iter()
+        .filter(|request| {
+            request
+                .document()
+                .is_some_and(|document| document.contains("deleteIssue(input:"))
+        })
+        .map(onetaskgraph_github_projects::accounting::Request::attempt)
+        .collect();
+    assert_eq!(attempts.iter().filter(|attempt| **attempt == 1).count(), 7);
+    assert_eq!(attempts.iter().filter(|attempt| **attempt == 2).count(), 7);
+    assert_eq!(attempts.iter().filter(|attempt| **attempt == 3).count(), 1);
+    assert_eq!(attempts.len(), 15);
     let (left, _) = drive.left();
     assert!(left.is_empty(), "{left:?}");
     for (_, issue, _, _) in cases {

@@ -877,6 +877,19 @@ pub mod graphql {
         };
     }
 
+    /// Internal live-lane support: fresh token-bearing facts for its own disposable issue.
+    /// Uses the same relationship event defaults as the plugin's issue reads.
+    pub const LIVE_CHANGE_TOKEN: &str = concat!(
+        "query LiveChangeToken($id:ID!,$boardItems:Int!=100",
+        relationship_events_variable!(),
+        r#"){node(id:$id){...on Issue{
+            updatedAt repository{nameWithOwner}
+            commentCount:comments{totalCount}
+            relationshipEvents:timelineItems(itemTypes:$relationshipEvents){totalCount}
+            projectItems(first:$boardItems){nodes{updatedAt project{id}}pageInfo{hasNextPage}}
+        }}}"#,
+    );
+
     /// Everything this source reads about one issue, wherever it reaches that issue.
     ///
     /// A macro rather than a constant so the three documents below can `concat!` it: one

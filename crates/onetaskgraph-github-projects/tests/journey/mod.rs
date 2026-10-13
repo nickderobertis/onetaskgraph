@@ -199,6 +199,16 @@ async fn graphql_answer(
     query_name: &str,
     variables: Value,
 ) -> Result<Value, Refusal> {
+    graphql_answer_at(token, query, query_name, variables, 1).await
+}
+
+async fn graphql_answer_at(
+    token: &str,
+    query: &str,
+    query_name: &str,
+    variables: Value,
+    attempt: u32,
+) -> Result<Value, Refusal> {
     let priced = SESSION.priced_document(query);
     let query = priced.as_ref();
     let sending =
@@ -215,7 +225,15 @@ async fn graphql_answer(
         Err(error) => {
             // A request that never reached GitHub carries no headers to read, and is a
             // refusal rather than a rate limit: nothing said it was one.
-            SESSION.record(sending(None).finished(Outcome::Refused, RateLimit::default()));
+            SESSION.record(
+                sending(None)
+                    .finished(Outcome::Refused, RateLimit::default())
+                    .with_execution(
+                        Some(query.to_owned()),
+                        ResponseOutcome::TransportError,
+                        attempt,
+                    ),
+            );
             return Err(Refusal::Unanswered(format!(
                 "{query_name} query could not reach GitHub: {error}"
             )));
@@ -232,7 +250,15 @@ async fn graphql_answer(
     let body = match response.text().await {
         Ok(body) => body,
         Err(error) => {
-            SESSION.record(sending(None).finished(Outcome::Refused, limits));
+            SESSION.record(
+                sending(None)
+                    .finished(Outcome::Refused, limits)
+                    .with_execution(
+                        Some(query.to_owned()),
+                        ResponseOutcome::TransportError,
+                        attempt,
+                    ),
+            );
             return Err(Refusal::Unanswered(format!(
                 "{query_name} query returned no readable body: {error}"
             )));
@@ -277,7 +303,7 @@ async fn graphql_answer(
     SESSION.record(
         sending(reported_cost)
             .finished(ended, limits)
-            .with_execution(Some(query.to_owned()), protocol, 1),
+            .with_execution(Some(query.to_owned()), protocol, attempt),
     );
     if !status.is_success() {
         let problem = format!("{query_name} query failed: HTTP {status}");
@@ -838,11 +864,12 @@ async fn delete_issue(token: &str, issue_id: &str) -> Result<(), String> {
     let mut unanswered = None;
     let mut answered = None;
     for attempt in 1..=ATTEMPTS {
-        match graphql_answer(
+        match graphql_answer_at(
             token,
             "mutation($input:DeleteIssueInput!){deleteIssue(input:$input){repository{id}}}",
             "live artifact issue cleanup",
             json!({"input":{"issueId":issue_id}}),
+            u32::try_from(attempt).expect("three cleanup attempts fit u32"),
         )
         .await
         {
@@ -2933,7 +2960,6 @@ async fn drive_every_declared_capability(
     quota::phase(onetaskgraph_github_live::quota::Phase::ChangeToken)?;
     every_change_kind_moves_a_tasks_token(
         writer,
-        rebuilt,
         (&run.token, &run.project_id),
         (&second_id, &first_id, &orphan_id),
         (&beta_id, &alpha_id),
@@ -2948,41 +2974,137 @@ async fn drive_every_declared_capability(
 /// past [`Endpoints::settle`] by this machine's clock can still fall inside the plugin's margin.
 const TOKEN_READS: u32 = 30;
 
-/// A task's change token, as a source that has read nothing of the board yet reads it — so a
-/// record this run's own writer kept is not what answers. `None` is the plugin withholding it,
-/// which it does while the task's last change is within `change_token::SETTLED` of the read.
-async fn token_now(
-    rebuilt: &dyn Fn() -> Box<dyn TaskSource>,
-    task: &NativeId,
-    when: &str,
-) -> Result<Option<String>, String> {
-    Ok(rebuilt()
-        .get_task(task)
-        .await
-        .map_err(|error| format!("live read of the task {when} failed: {error}"))?
-        .ok_or_else(|| format!("the task was not there {when}"))?
-        .version)
+/// A cold plugin read retained for its dedicated withholding regression; the main lane
+/// reads only fresh token-bearing facts, without re-hydrating parents and board fields.
+#[derive(Clone, Copy)]
+enum TokenReader<'a> {
+    Source(&'a dyn Fn() -> Box<dyn TaskSource>),
+    Fresh { credential: &'a str, board: &'a str },
 }
 
-/// The task's token once the plugin gives one, asked again a second apart while it withholds
-/// it — failing, naming `when`, only when it is still withheld [`TOKEN_READS`] reads later.
+async fn token_now(
+    reader: TokenReader<'_>,
+    task: &NativeId,
+    when: &str,
+    attempt: u32,
+) -> Result<Option<String>, String> {
+    match reader {
+        TokenReader::Source(rebuilt) => Ok(rebuilt()
+            .get_task(task)
+            .await
+            .map_err(|error| format!("live read of the task {when} failed: {error}"))?
+            .ok_or_else(|| format!("the task was not there {when}"))?
+            .version),
+        TokenReader::Fresh { credential, board } => {
+            use onetaskgraph_github_projects::change_token::{Parts, settled, spell};
+            let answer = graphql_answer_at(
+                credential,
+                graphql::LIVE_CHANGE_TOKEN,
+                "reading fresh token-bearing issue facts",
+                json!({"id":task.0,"boardItems":100}),
+                attempt,
+            )
+            .await
+            .map_err(Refusal::into_message)?;
+            let issue = &answer["data"]["node"];
+            ensure!(!issue.is_null(), "the task was not there {when}");
+            let memberships = issue["projectItems"]["nodes"]
+                .as_array()
+                .ok_or("missing token board memberships")?;
+            let item = memberships
+                .iter()
+                .find(|item| item["project"]["id"] == board)
+                .ok_or("fresh token read did not contain this run's nominated board item")?;
+            let timestamp = |value: &Value| {
+                value
+                    .as_str()
+                    .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+                    .map(|value| value.with_timezone(&chrono::Utc))
+            };
+            let facts = match (
+                timestamp(&issue["updatedAt"]),
+                timestamp(&item["updatedAt"]),
+                issue["commentCount"]["totalCount"].as_u64(),
+                issue["relationshipEvents"]["totalCount"].as_u64(),
+                issue["repository"]["nameWithOwner"].as_str(),
+            ) {
+                (
+                    Some(issue),
+                    Some(item),
+                    Some(comments),
+                    Some(relationships),
+                    Some(repository),
+                ) => Parts {
+                    issue,
+                    item,
+                    comments,
+                    relationships,
+                    repository: onetaskgraph_plugin_api::Repository::try_from(format!(
+                        "github.com/{repository}"
+                    ))?,
+                },
+                _ => return Ok(None),
+            };
+            let served = answer["_served"]
+                .as_str()
+                .and_then(|value| chrono::DateTime::parse_from_rfc2822(value).ok())
+                .map(|value| value.with_timezone(&chrono::Utc));
+            let version = served
+                .filter(|served| settled(facts.issue, facts.item, *served))
+                .map(|_| spell(&facts));
+            say(&format!(
+                "fresh token facts {when}: comments={} issue_updated_at={} item_updated_at={} relationships={} version={version:?}",
+                facts.comments, facts.issue, facts.item, facts.relationships
+            ));
+            Ok(version)
+        }
+    }
+}
+
+/// Dedicated cold-source withholding regression entry; the main journey uses Fresh.
 pub async fn settled_token(
     rebuilt: &dyn Fn() -> Box<dyn TaskSource>,
     task: &NativeId,
     when: &str,
 ) -> Result<String, String> {
+    settled_token_using(TokenReader::Source(rebuilt), task, when).await
+}
+
+/// Fresh token polling used by the main lane, exposed to its HTTP loopback regression.
+pub async fn settled_fresh_token(
+    credential: &str,
+    board: &str,
+    task: &NativeId,
+    when: &str,
+) -> Result<String, String> {
+    settled_token_using(TokenReader::Fresh { credential, board }, task, when).await
+}
+
+async fn settled_token_using(
+    reader: TokenReader<'_>,
+    task: &NativeId,
+    when: &str,
+) -> Result<String, String> {
+    settled_token_with_attempt(reader, task, when, &mut 0).await
+}
+
+async fn settled_token_with_attempt(
+    reader: TokenReader<'_>,
+    task: &NativeId,
+    when: &str,
+    attempt: &mut u32,
+) -> Result<String, String> {
     for read in 0..TOKEN_READS {
         if read > 0 {
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         }
-        if let Some(token) = token_now(rebuilt, task, when).await? {
+        *attempt += 1;
+        if let Some(token) = token_now(reader, task, when, *attempt).await? {
             return Ok(token);
         }
     }
     Err(format!(
-        "GitHub gave the task no change token {when}, though the leg waited {TOKEN_READS} \
-         seconds past the plugin's settling margin; the plugin withholds a token only while \
-         the task's last change is within change_token::SETTLED of the read"
+        "GitHub gave the task no change token {when}, though the leg waited {TOKEN_READS} seconds past the plugin's settling margin; the plugin withholds a token only while the task's last change is within change_token::SETTLED of the read"
     ))
 }
 
@@ -2991,20 +3113,21 @@ pub async fn settled_token(
 /// moment a write returns can be answered from before it, and a token is withheld until the
 /// change has settled.
 async fn moved(
-    rebuilt: &dyn Fn() -> Box<dyn TaskSource>,
+    reader: TokenReader<'_>,
     task: &NativeId,
     kind: &str,
     before: &str,
 ) -> Result<String, String> {
     tokio::time::sleep(endpoints().settle).await;
     let when = format!("after {kind}");
-    let mut after = settled_token(rebuilt, task, &when).await?;
+    let mut attempt = 0;
+    let mut after = settled_token_with_attempt(reader, task, &when, &mut attempt).await?;
     for _ in 1..10 {
         if after != before {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        after = settled_token(rebuilt, task, &when).await?;
+        after = settled_token_with_attempt(reader, task, &when, &mut attempt).await?;
     }
     ensure!(
         after != before,
@@ -3032,7 +3155,6 @@ async fn moved(
 /// the one before, so no two of them share a second.
 async fn every_change_kind_moves_a_tasks_token(
     writer: &dyn TaskSource,
-    rebuilt: &dyn Fn() -> Box<dyn TaskSource>,
     (token, board): (&str, &str),
     (task, first, orphan): (&NativeId, &NativeId, &NativeId),
     (filed_under, other_project): (&NativeId, &NativeId),
@@ -3043,7 +3165,11 @@ async fn every_change_kind_moves_a_tasks_token(
     };
     let pause = || tokio::time::sleep(std::time::Duration::from_millis(1_100));
     tokio::time::sleep(endpoints().settle).await;
-    let mut before = settled_token(rebuilt, task, "before any change").await?;
+    let reader = TokenReader::Fresh {
+        credential: token,
+        board,
+    };
+    let mut before = settled_token_using(reader, task, "before any change").await?;
 
     pause().await;
     let comment = writer
@@ -3057,7 +3183,7 @@ async fn every_change_kind_moves_a_tasks_token(
         .await
         .map_err(|error| format!("live comment write failed: {error}"))?
         .ok_or_else(|| "the task to comment on was not there".to_owned())?;
-    before = moved(rebuilt, task, "a comment added", &before).await?;
+    before = moved(reader, task, "a comment added", &before).await?;
 
     pause().await;
     writer
@@ -3069,7 +3195,7 @@ async fn every_change_kind_moves_a_tasks_token(
         .await
         .map_err(|error| format!("live comment edit failed: {error}"))?
         .ok_or_else(|| "the comment to edit was not there".to_owned())?;
-    before = moved(rebuilt, task, "a comment edited", &before).await?;
+    before = moved(reader, task, "a comment edited", &before).await?;
 
     pause().await;
     writer
@@ -3077,7 +3203,7 @@ async fn every_change_kind_moves_a_tasks_token(
         .await
         .map_err(|error| format!("live comment deletion failed: {error}"))?
         .ok_or_else(|| "the comment to delete was not there".to_owned())?;
-    before = moved(rebuilt, task, "a comment deleted", &before).await?;
+    before = moved(reader, task, "a comment deleted", &before).await?;
 
     pause().await;
     writer
@@ -3085,7 +3211,7 @@ async fn every_change_kind_moves_a_tasks_token(
         .await
         .map_err(|error| format!("live content write failed: {error}"))?
         .ok_or_else(|| "the task to edit was not there".to_owned())?;
-    before = moved(rebuilt, task, "a body edit", &before).await?;
+    before = moved(reader, task, "a body edit", &before).await?;
 
     pause().await;
     let renamed = TaskUpdate {
@@ -3097,11 +3223,11 @@ async fn every_change_kind_moves_a_tasks_token(
         .await
         .map_err(|error| format!("live title write failed: {error}"))?
         .ok_or_else(|| "the task to rename was not there".to_owned())?;
-    before = moved(rebuilt, task, "a title edit", &before).await?;
+    before = moved(reader, task, "a title edit", &before).await?;
 
     pause().await;
     attach_artifact_label(token, &task.0, label_id).await?;
-    before = moved(rebuilt, task, "a label change", &before).await?;
+    before = moved(reader, task, "a label change", &before).await?;
 
     pause().await;
     writer
@@ -3113,13 +3239,13 @@ async fn every_change_kind_moves_a_tasks_token(
         .await
         .map_err(|error| format!("live metadata write failed: {error}"))?
         .ok_or_else(|| "the task to annotate was not there".to_owned())?;
-    before = moved(rebuilt, task, "a metadata change", &before).await?;
+    before = moved(reader, task, "a metadata change", &before).await?;
 
     // A board text field — the origin field, the one this lane's board holds — written as a
     // person editing it would, so nothing else of the issue moves with it.
     pause().await;
     rewrite_origin_field(token, board, &task.0, "live:origin-rewritten").await?;
-    before = moved(rebuilt, task, "a board text field change", &before).await?;
+    before = moved(reader, task, "a board text field change", &before).await?;
 
     pause().await;
     let depends = |on: &[&NativeId]| TaskUpdate {
@@ -3131,7 +3257,7 @@ async fn every_change_kind_moves_a_tasks_token(
         .await
         .map_err(|error| format!("live dependency write failed: {error}"))?
         .ok_or_else(|| "the task to make depend was not there".to_owned())?;
-    before = moved(rebuilt, task, "a dependency added", &before).await?;
+    before = moved(reader, task, "a dependency added", &before).await?;
 
     pause().await;
     writer
@@ -3139,7 +3265,7 @@ async fn every_change_kind_moves_a_tasks_token(
         .await
         .map_err(|error| format!("live dependency removal failed: {error}"))?
         .ok_or_else(|| "the task to unhook was not there".to_owned())?;
-    before = moved(rebuilt, task, "a dependency removed", &before).await?;
+    before = moved(reader, task, "a dependency removed", &before).await?;
 
     // Replaced: one dependency removed and another added in one write, which leaves the count
     // of what the task depends on where it was. GitHub moves neither of the token's times for a
@@ -3150,18 +3276,18 @@ async fn every_change_kind_moves_a_tasks_token(
         .await
         .map_err(|error| format!("live dependency replacement failed: {error}"))?
         .ok_or_else(|| "the task to rewire was not there".to_owned())?;
-    before = moved(rebuilt, task, "a dependency replaced", &before).await?;
+    before = moved(reader, task, "a dependency replaced", &before).await?;
 
     // Project membership, which is a parent issue: taken out of its project, then filed under
     // another, each by the one relationship mutation a person's move sends, so nothing else of
     // the issue moves with it.
     pause().await;
     refile(token, graphql::REMOVE_SUB_ISSUE, filed_under, task).await?;
-    before = moved(rebuilt, task, "taken out of its project", &before).await?;
+    before = moved(reader, task, "taken out of its project", &before).await?;
 
     pause().await;
     refile(token, graphql::ADD_SUB_ISSUE, other_project, task).await?;
-    before = moved(rebuilt, task, "filed under another project", &before).await?;
+    before = moved(reader, task, "filed under another project", &before).await?;
 
     if writer.capabilities().priority.is_native() {
         pause().await;
@@ -3170,7 +3296,7 @@ async fn every_change_kind_moves_a_tasks_token(
             .await
             .map_err(|error| format!("live priority write failed: {error}"))?
             .ok_or_else(|| "the task to prioritise was not there".to_owned())?;
-        before = moved(rebuilt, task, "a priority change", &before).await?;
+        before = moved(reader, task, "a priority change", &before).await?;
     }
 
     // Last, because it closes the issue: the status is a board field, and done is the state
@@ -3181,7 +3307,7 @@ async fn every_change_kind_moves_a_tasks_token(
         .await
         .map_err(|error| format!("live status write failed: {error}"))?
         .ok_or_else(|| "the task to finish was not there".to_owned())?;
-    moved(rebuilt, task, "a status change", &before).await?;
+    moved(reader, task, "a status change", &before).await?;
     Ok(())
 }
 
