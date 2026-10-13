@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { test } from "node:test";
@@ -12,6 +12,7 @@ import {
   jobs,
   matrices,
   read,
+  resolve as resolveValue,
   root,
   workflows,
 } from "../workflow-graph.mjs";
@@ -33,7 +34,16 @@ git("init", "-q");
 git("config", "user.email", "policy@example.invalid");
 git("config", "user.name", "Workflow contract");
 put(".github/macos-result.mjs", read(".github/macos-result.mjs"));
-put(".gitignore", "event.json\ngithub-output\nneeds.json\n");
+put(".gitignore", "event.json\ngithub-output\nneeds.json\n.github/node_modules/\n");
+for (const file of ["macos-policy.mjs", "semantic-release.py", "semantic-json.mjs"])
+  put(`.github/${file}`, read(`.github/${file}`));
+put("scripts/product_versions.py", read("scripts/product_versions.py"));
+symlinkSync(
+  fileURLToPath(new URL(".github/node_modules", root)),
+  resolve(history, ".github/node_modules"),
+  process.platform === "win32" ? "junction" : "dir",
+);
+
 const files = {
   "Cargo.toml":
     '[workspace]\nmembers = ["crates/*"]\n[workspace.package]\nversion = "1.2.3"\n[workspace.dependencies]\nonetaskgraph-core = { path = "crates/onetaskgraph-core", version = "=1.2.3" }\n',
@@ -307,6 +317,39 @@ test("real classification composes with actual workflow routing for forged, mixe
     );
     for (const name of ["check (macos-latest)", "install path (macos-latest)"])
       assert.ok(ci.rows.some((row) => row.name === name));
+  }
+});
+
+test("production classifier step uses its declared event and exact base/head environment", () => {
+  const step = workflows()["ci.yml"].jobs["macos-lanes"].steps.find((step) => step.id === "select");
+  for (const [payload, head] of [
+    [event("feature"), heads.source],
+    [event("release-plz-123"), heads.version],
+    [event("release-plz-123"), heads.dependency],
+    [event("release-plz-123", true), heads.version],
+  ]) {
+    payload.pull_request.base.sha = base;
+    payload.pull_request.head.sha = head;
+    const input = resolve(history, "event.json");
+    writeFileSync(input, JSON.stringify(payload));
+    const output = resolve(history, "github-output");
+    rmSync(output, { force: true });
+    const env = resolveValue(step.env, { github: { event: payload } });
+    const result = spawnSync("bash", ["-c", step.run], {
+      cwd: history,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        ...env,
+        GITHUB_EVENT_NAME: "pull_request",
+        GITHUB_EVENT_PATH: input,
+        GITHUB_OUTPUT: output,
+      },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const actual = readFileSync(output, "utf8");
+    const expected = classify(payload, head);
+    assert.equal(actual, `macosRequired=${expected.macosRequired}\nreason=${expected.reason}\n`);
   }
 });
 

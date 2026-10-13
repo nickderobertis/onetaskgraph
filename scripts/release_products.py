@@ -22,11 +22,13 @@ class TargetMapping:
 
 
 def target_mapping(npm: str, extension: str) -> TargetMapping:
-    if extension == 'tar.gz':
-        return TargetMapping(NpmPlatform(npm), 'tar.gz')
-    if extension == 'zip':
-        return TargetMapping(NpmPlatform(npm), 'zip')
-    raise ValueError('unsupported archive format in the release workflow')
+    match extension:
+        case 'tar.gz':
+            return TargetMapping(NpmPlatform(npm), 'tar.gz')
+        case 'zip':
+            return TargetMapping(NpmPlatform(npm), 'zip')
+        case _:
+            raise ValueError('unsupported archive format in the release workflow')
 
 
 

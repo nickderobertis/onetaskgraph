@@ -64,6 +64,12 @@ test("telemetry boundary refuses malformed shapes, invalid measurements and inco
   absentLifecycle.lifecycles[0].runs = [];
   absentLifecycle.lifecycles[0].macRuns = 0;
   assert.throws(() => validateTelemetry(absentLifecycle), /no lifecycle measurements/);
+  const wrongJobs = structuredClone(current);
+  wrongJobs.scenarios[0].runs[0].macJobs += 1;
+  assert.throws(() => validateTelemetry(wrongJobs), /job total/);
+  const wrongRuns = structuredClone(current);
+  wrongRuns.lifecycles[0].macRuns += 1;
+  assert.throws(() => validateTelemetry(wrongRuns), /lifecycle total/);
   const badPhase = structuredClone(current);
   badPhase.lifecycles[0].runs[0].phase = {};
   assert.throws(() => validateTelemetry(badPhase), /string/);
