@@ -86,8 +86,21 @@
         },
         {
           "env": "GITHUB_RUN_ATTEMPT"
+        },
+        {
+          "env": "GITHUB_LIVE_SELECTION"
+        },
+        {
+          "env": "GITHUB_LIVE_SESSION_ID"
+        },
+        {
+          "env": "GITHUB_LIVE_SESSION_DIR"
+        },
+        {
+          "env": "GITHUB_LIVE_SOURCE_REVISION"
         }
-      ]
+      ],
+      "outputs": ["{workspaceRoot}/target/debug/telemetry/github-live-session"]
     },
     "coverage": {
       "executor": "nx:run-commands",

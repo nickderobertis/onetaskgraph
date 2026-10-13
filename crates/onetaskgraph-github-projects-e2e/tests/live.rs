@@ -5,7 +5,7 @@ use onetaskgraph_core::{
 use onetaskgraph_e2e_support::{common::Sandbox, images};
 use onetaskgraph_github_projects::{
     Plugin,
-    accounting::{Accounting, Outcome, RateLimit, Request},
+    accounting::{Accounting, Endpoint, Method, Outcome, RateLimit, Request, ResponseOutcome},
     graphql,
 };
 use onetaskgraph_live::{Exclusivity, Session};
@@ -53,17 +53,52 @@ async fn read_live_rendering(
     token: &str,
     file: &str,
     retry: RenderingRetry,
+    ledger: &Accounting,
 ) -> Result<(), String> {
     let mut attempt = 0;
     let response = loop {
         attempt += 1;
-        let response = reqwest::Client::new()
+        let sending = reqwest::Client::new()
             .get(url)
             .header("user-agent", "onetaskgraph-live-assets")
             .bearer_auth(token)
             .send()
-            .await
-            .map_err(|error| error.to_string())?;
+            .await;
+        let request = Request::rest(
+            Endpoint::parse(Method::Get, "/user-attachments/assets/{asset}").unwrap(),
+        );
+        let response = match sending {
+            Ok(response) => response,
+            Err(error) => {
+                ledger.record(
+                    request
+                        .finished(Outcome::Refused, RateLimit::default())
+                        .with_execution(None, ResponseOutcome::TransportError, attempt),
+                );
+                return Err(error.to_string());
+            }
+        };
+        let limits = RateLimit::read(|header| {
+            response
+                .headers()
+                .get(header)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned)
+        });
+        let status = response.status();
+        ledger.record(
+            request
+                .finished(Outcome::of_response(status, limits.exhausted(), ""), limits)
+                .with_execution(
+                    None,
+                    if status.is_success() {
+                        ResponseOutcome::Success
+                    } else {
+                        ResponseOutcome::HttpError
+                    },
+                    attempt,
+                ),
+        );
         journey::say(&format!(
             "authenticated live rendering read {file} {url}: HTTP {}",
             response.status()
@@ -79,22 +114,37 @@ async fn read_live_rendering(
     Ok(())
 }
 
-async fn nominated_status_option(
+/// Record each raw asset-lane query before interpreting its response, including refusals.
+async fn asset_graphql(
     endpoint: &str,
     token: &str,
-    owner: &str,
-    number: u32,
+    query: &str,
+    variables: &Value,
     ledger: &Accounting,
-) -> Result<String, String> {
-    let variables = json!({"owner":owner,"number":number,"nestedFirst":100});
-    let response = reqwest::Client::new()
+) -> Result<Value, String> {
+    let document = ledger.priced_document(query);
+    let sending = reqwest::Client::new()
         .post(endpoint)
         .header("user-agent", "onetaskgraph-live-assets")
         .bearer_auth(token)
-        .json(&json!({"query":graphql::BOARD_FIELDS,"variables":variables}))
+        .json(&json!({"query":document,"variables":variables}))
         .send()
-        .await
-        .map_err(|error| error.to_string())?;
+        .await;
+    let response = match sending {
+        Ok(response) => response,
+        Err(error) => {
+            ledger.record(
+                Request::graphql(&document, variables, None, None)
+                    .finished(Outcome::Refused, RateLimit::default())
+                    .with_execution(
+                        Some(document.into_owned()),
+                        ResponseOutcome::TransportError,
+                        1,
+                    ),
+            );
+            return Err(error.to_string());
+        }
+    };
     let limits = RateLimit::read(|header| {
         response
             .headers()
@@ -103,20 +153,45 @@ async fn nominated_status_option(
             .map(str::to_owned)
     });
     let status = response.status();
-    let answer: Value = response.json().await.map_err(|error| error.to_string())?;
-    let outcome = Outcome::of_response(status, limits.exhausted(), &answer.to_string());
+    let parsed = response.json::<Value>().await;
+    let cost = parsed
+        .as_ref()
+        .ok()
+        .and_then(|answer| answer["data"]["rateLimit"]["cost"].as_u64());
+    let response_outcome = ResponseOutcome::of_graphql_reply(status, parsed.as_ref().ok());
+    let graphql_error = response_outcome == ResponseOutcome::GraphqlError;
+    let outcome = if graphql_error {
+        Outcome::Refused
+    } else {
+        Outcome::of_response(status, limits.exhausted(), "")
+    };
     ledger.record(
-        Request::graphql(graphql::BOARD_FIELDS, &variables, None, None).finished(outcome, limits),
+        Request::graphql(&document, variables, None, cost)
+            .finished(outcome, limits)
+            .with_execution(Some(document.into_owned()), response_outcome, 1),
     );
     if !status.is_success() {
         return Err(format!("nominated board read returned HTTP {status}"));
     }
-    if !answer["errors"].is_null() {
-        return Err(format!(
-            "nominated board read refused: {}",
-            answer["errors"]
-        ));
+    let answer = parsed.map_err(|error| error.to_string())?;
+    if graphql_error {
+        return Err("asset query refused by GraphQL".into());
     }
+    if response_outcome == ResponseOutcome::TransportError {
+        return Err("asset query returned an invalid GraphQL envelope".into());
+    }
+    Ok(answer)
+}
+
+async fn nominated_status_option(
+    endpoint: &str,
+    token: &str,
+    owner: &str,
+    number: u32,
+    ledger: &Accounting,
+) -> Result<String, String> {
+    let variables = json!({"owner":owner,"number":number,"nestedFirst":100});
+    let answer = asset_graphql(endpoint, token, graphql::BOARD_FIELDS, &variables, ledger).await?;
     let board = &answer["data"]["boardFields"]["projectV2"];
     board["id"]
         .as_str()
@@ -140,6 +215,17 @@ async fn nominated_status_option(
 
 #[tokio::test]
 async fn disposable_task_and_document_asset_copies() {
+    if !onetaskgraph_github_live::quota::live_selected().unwrap() {
+        journey::say(
+            "live asset journey did not run: existing selection policy did not select the lane",
+        );
+        return;
+    }
+    let endpoints = journey::Endpoints::configured().unwrap();
+    let attachment_prefix = endpoints.attachment_prefix();
+    let graphql_endpoint = endpoints.graphql.clone();
+    let rest_host = endpoints.rest_host.clone();
+    journey::against(endpoints);
     let admission = lane::admit(&|variable| match std::env::var(variable) {
         Ok(value) => Some(value),
         Err(std::env::VarError::NotPresent) => None,
@@ -162,21 +248,48 @@ async fn disposable_task_and_document_asset_copies() {
     let session = Session::open(lane::SESSION_NAME, token, Exclusivity::Shared)
         .unwrap_or_else(|declined| declined.refuse());
     let token = session.credential().expose();
-    let ledger = Arc::new(Accounting::new());
-    let admitted = journey::budget::precondition(token, "https://api.github.com", &ledger)
-        .await
-        .unwrap_or_else(|declined| declined.refuse());
-    let option = nominated_status_option(
-        "https://api.github.com/graphql",
+    let ledger = Arc::new(Accounting::with_query_prices());
+    let _recording = journey::quota::start(
+        onetaskgraph_github_live::quota::EntryPoint::Assets,
+        ledger.clone(),
+        onetaskgraph_github_live::quota::reference_workload(),
+    )
+    .unwrap();
+    if let Some(directory) = std::env::var_os("GITHUB_LIVE_SESSION_DIR") {
+        use onetaskgraph_github_live::quota::{
+            CurrentSession, WORKSPACE_VERSION, reference_workload, require_current_main,
+        };
+        let id = std::env::var("GITHUB_LIVE_SESSION_ID").unwrap();
+        let revision = std::env::var("GITHUB_LIVE_SOURCE_REVISION").unwrap();
+        let workload = reference_workload();
+        let current = CurrentSession::new(&id, &revision, WORKSPACE_VERSION, &workload).unwrap();
+        require_current_main(std::path::Path::new(&directory), &current)
+            .unwrap_or_else(|error| panic!("current main contribution unavailable: {error}"));
+    }
+    let admitted = journey::budget::precondition_session(
         token,
-        &owner,
-        number,
+        &rest_host,
         &ledger,
+        onetaskgraph_github_live::quota::EntryPoint::Assets,
     )
     .await
-    .unwrap();
-    journey::budget::recheck(&admitted, &ledger).unwrap_or_else(|declined| declined.refuse());
-    let config = lane::live_write_config(&owner, number, &repository, &option);
+    .unwrap_or_else(|declined| declined.refuse());
+    journey::quota::phase(onetaskgraph_github_live::quota::Phase::AssetSetup).unwrap();
+    let option = nominated_status_option(&graphql_endpoint, token, &owner, number, &ledger)
+        .await
+        .unwrap();
+    journey::budget::recheck_remaining(
+        &admitted,
+        &ledger,
+        journey::budget::assets_remaining_design_points(),
+    )
+    .unwrap_or_else(|declined| declined.refuse());
+    let config = journey::source_config(lane::live_write_config(
+        &owner,
+        number,
+        &repository,
+        &option,
+    ));
     let secrets = lane::LiveSecret(token.to_owned().into());
     let sandbox = Sandbox::new();
     let root = sandbox.subdirectory("notes");
@@ -187,11 +300,19 @@ async fn disposable_task_and_document_asset_copies() {
         std::fs::create_dir_all(&directory).unwrap();
         let body = "![First written alt](./one.png)\n![Second written alt](./two.png)\n";
         for (index, file, size) in [(0, "one.png", 75_000), (1, "two.png", 480_000)] {
-            std::fs::write(
-                directory.join(file),
-                images::png(stamp + offset + index, size),
-            )
-            .unwrap();
+            let bytes = images::png(stamp + offset + index, size);
+            let workload = onetaskgraph_github_live::quota::reference_workload();
+            let position = usize::try_from(offset * 2 + index).unwrap();
+            assert_eq!(
+                workload.asset_target_bytes[position],
+                u64::try_from(size).unwrap()
+            );
+            assert_eq!(
+                workload.asset_bytes[position],
+                u64::try_from(bytes.len()).unwrap()
+            );
+            assert!(bytes.len().abs_diff(size) <= size * images::PNG_SIZE_TOLERANCE_PERCENT / 100);
+            std::fs::write(directory.join(file), bytes).unwrap();
         }
         std::fs::write(
             root.join(format!("{kind}s/{id}.md")),
@@ -220,6 +341,11 @@ async fn disposable_task_and_document_asset_copies() {
     let mut created = Vec::new();
     let outcome: Result<(), String> = async {
         for (kind, id) in [("task", "T"), ("document", "D")] {
+            journey::quota::phase(if kind == "task" {
+                onetaskgraph_github_live::quota::Phase::AssetTask
+            } else {
+                onetaskgraph_github_live::quota::Phase::AssetDocument
+            })?;
             let request = CopyRequest {
                 items: CopyItems::new(vec![format!("{notes_name}:{id}").parse().unwrap()]).unwrap(),
                 scope: if kind == "task" {
@@ -280,12 +406,12 @@ async fn disposable_task_and_document_asset_copies() {
             ] {
                 let name = onetaskgraph_plugin_api::AssetName::new(file)?;
                 let url = &uploads.0.get(&name).ok_or("missing asset")?.url;
-                if !url.starts_with("https://github.com/user-attachments/assets/")
+                if !url.starts_with(&attachment_prefix)
                     || !content.contains(&format!("![{alt}]({url})"))
                 {
                     return Err(format!("unrewritten or wrong attachment URL {url}"));
                 }
-                read_live_rendering(url, token, file, RENDERING_RETRY).await?;
+                read_live_rendering(url, token, file, RENDERING_RETRY, &ledger).await?;
             }
             // Engine::copy already bound the local record to this disposable destination.
             engine
@@ -331,6 +457,13 @@ async fn disposable_task_and_document_asset_copies() {
             response.status
         ));
     }
+    // Recording failures must not prevent removal of items this invocation created.
+    let cleanup_recording = journey::quota::phase(onetaskgraph_github_live::quota::Phase::Cleanup);
+    let cleanup_budget = journey::budget::recheck_remaining(
+        &admitted,
+        &ledger,
+        journey::budget::assets_remaining_design_points(),
+    );
     let cleanup = Plugin
         .build_recording_into(&name("board"), &config, &secrets, ledger.clone())
         .unwrap();
@@ -338,11 +471,10 @@ async fn disposable_task_and_document_asset_copies() {
     for (kind, id) in &created {
         let native = id.native.clone();
         // Read only this disposable issue's board memberships, to report each created item.
-        let answer=reqwest::Client::new().post("https://api.github.com/graphql").header("user-agent","onetaskgraph-live-assets").bearer_auth(token)
-            .json(&json!({"query":"query($id:ID!){node(id:$id){...on Issue{projectItems(first:100){nodes{id project{id}}}}}}","variables":{"id":native.0}})).send().await;
-        if let Ok(response) = answer
-            && let Ok(answer) = response.json::<Value>().await
-        {
+        let answer = asset_graphql(&graphql_endpoint, token,
+            "query($id:ID!){node(id:$id){...on Issue{projectItems(first:100){nodes{id project{id}}}}}}",
+            &json!({"id":native.0}), &ledger).await;
+        if let Ok(answer) = answer {
             journey::say(&format!(
                 "disposable {id} board memberships before removal: {}",
                 answer["data"]["node"]["projectItems"]["nodes"]
@@ -365,6 +497,9 @@ async fn disposable_task_and_document_asset_copies() {
         "live cleanup failures: {failures:?}; outcome {outcome:?}"
     );
     assert!(outcome.is_ok(), "live asset journey: {outcome:?}");
+    cleanup_recording.unwrap();
+    cleanup_budget.unwrap_or_else(|declined| declined.refuse());
+    journey::quota::complete().unwrap();
 }
 
 #[tokio::test]
@@ -374,7 +509,11 @@ async fn board_admission_rejects_non_success_even_with_valid_board_json() {
     for (status, answer, expected) in [
         (200, complete.clone(), None),
         (503, complete, Some("503")),
-        (200, json!({}), Some("missing nominated board id")),
+        (
+            200,
+            json!({}),
+            Some("asset query returned an invalid GraphQL envelope"),
+        ),
         (
             200,
             json!({"data":{"boardFields":{"projectV2":{"id":"fixture-board"}}}}),
@@ -444,6 +583,129 @@ async fn board_admission_rejects_non_success_even_with_valid_board_json() {
             assert_eq!(snapshot.requests()[0].outcome(), Outcome::Refused);
         }
     }
+}
+
+#[tokio::test]
+async fn raw_asset_queries_retain_actual_prices_and_failure_outcomes() {
+    use std::io::{BufRead, Read, Write};
+    for (status, body, expected_cost, expected_outcome) in [
+        (
+            200,
+            r#"{"data":{"rateLimit":{"cost":7},"node":{"id":"fixture"}}}"#,
+            Some(7),
+            ResponseOutcome::Success,
+        ),
+        (
+            200,
+            r#"{"data":{"rateLimit":{"cost":3}},"errors":[{"message":"refused"}]}"#,
+            Some(3),
+            ResponseOutcome::GraphqlError,
+        ),
+        (
+            503,
+            r#"{"data":{"rateLimit":{"cost":4}}}"#,
+            Some(4),
+            ResponseOutcome::HttpError,
+        ),
+        (200, "unreadable", None, ResponseOutcome::TransportError),
+        (
+            200,
+            r#"{"data":{"node":{"id":"fixture"}}}"#,
+            None,
+            ResponseOutcome::Success,
+        ),
+        (200, "null", None, ResponseOutcome::TransportError),
+        (200, "[]", None, ResponseOutcome::TransportError),
+        (200, "{}", None, ResponseOutcome::TransportError),
+        (
+            200,
+            r#"{"data":null}"#,
+            None,
+            ResponseOutcome::TransportError,
+        ),
+        (
+            200,
+            r#"{"errors":false}"#,
+            None,
+            ResponseOutcome::TransportError,
+        ),
+        (
+            200,
+            r#"{"errors":[{}]}"#,
+            None,
+            ResponseOutcome::TransportError,
+        ),
+    ] {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}/graphql", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = std::io::BufReader::new(&stream);
+            let mut length = 0;
+            loop {
+                let mut line = String::new();
+                assert!(reader.read_line(&mut line).unwrap() > 0);
+                if line == "\r\n" {
+                    break;
+                }
+                if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length: ") {
+                    length = value.trim().parse().unwrap();
+                }
+            }
+            let mut bytes = vec![0; length];
+            reader.read_exact(&mut bytes).unwrap();
+            let request: Value = serde_json::from_slice(&bytes).unwrap();
+            assert!(
+                request["query"]
+                    .as_str()
+                    .unwrap()
+                    .contains("rateLimit{cost}")
+            );
+            assert_eq!(request["variables"], json!({"id":"fixture"}));
+            write!(stream, "HTTP/1.1 {status} Fixture\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            request["query"].as_str().unwrap().to_owned()
+        });
+        let ledger = Accounting::with_query_prices();
+        let result = asset_graphql(
+            &endpoint,
+            "test-token",
+            "query($id:ID!){node(id:$id){id}}",
+            &json!({"id":"fixture"}),
+            &ledger,
+        )
+        .await;
+        let sent = server.join().unwrap();
+        assert_eq!(result.is_ok(), expected_outcome == ResponseOutcome::Success);
+        let snapshot = ledger.snapshot();
+        assert_eq!(snapshot.requests().len(), 1);
+        let record = &snapshot.requests()[0];
+        assert_eq!(record.document(), Some(sent.as_str()));
+        assert_eq!(record.reported_query_cost(), expected_cost);
+        assert_eq!(record.response_outcome(), expected_outcome);
+        assert_eq!(record.attempt(), 1);
+    }
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}/graphql", listener.local_addr().unwrap());
+    drop(listener);
+    let ledger = Accounting::with_query_prices();
+    assert!(
+        asset_graphql(
+            &endpoint,
+            "test-token",
+            "query{viewer{login}}",
+            &json!({}),
+            &ledger
+        )
+        .await
+        .is_err()
+    );
+    let snapshot = ledger.snapshot();
+    assert_eq!(snapshot.requests().len(), 1);
+    assert_eq!(snapshot.requests()[0].reported_query_cost(), None);
+    assert_eq!(
+        snapshot.requests()[0].response_outcome(),
+        ResponseOutcome::TransportError
+    );
 }
 
 #[cfg(unix)]
@@ -522,9 +784,22 @@ const IMMEDIATE_RETRY: RenderingRetry = RenderingRetry {
 async fn a_rendering_read_rides_out_a_gateway_timeout_and_reads_the_image() {
     let (url, reads) = attachment_host(vec![504]);
 
-    let read = read_live_rendering(&url, "test-token", "one.png", IMMEDIATE_RETRY).await;
+    let ledger = Accounting::new();
+    let read = read_live_rendering(&url, "test-token", "one.png", IMMEDIATE_RETRY, &ledger).await;
 
     assert_eq!(read, Ok(()), "a 504 says nothing about the image");
+    let snapshot = ledger.snapshot();
+    assert_eq!(snapshot.requests().len(), 2);
+    assert_eq!(
+        snapshot.requests()[0].response_outcome(),
+        ResponseOutcome::HttpError
+    );
+    assert_eq!(snapshot.requests()[0].attempt(), 1);
+    assert_eq!(
+        snapshot.requests()[1].response_outcome(),
+        ResponseOutcome::Success
+    );
+    assert_eq!(snapshot.requests()[1].attempt(), 2);
     assert_eq!(
         reads.load(std::sync::atomic::Ordering::SeqCst),
         2,
@@ -536,13 +811,20 @@ async fn a_rendering_read_rides_out_a_gateway_timeout_and_reads_the_image() {
 async fn a_rendering_read_that_keeps_meeting_server_errors_fails_after_its_bound() {
     let (url, reads) = attachment_host(vec![502, 503, 504, 500]);
 
-    let read = read_live_rendering(&url, "test-token", "one.png", IMMEDIATE_RETRY).await;
+    let ledger = Accounting::new();
+    let read = read_live_rendering(&url, "test-token", "one.png", IMMEDIATE_RETRY, &ledger).await;
 
     assert_eq!(
         read,
         Err("broken live image one.png: 500 Internal Server Error".to_owned()),
         "it fails naming the last answer"
     );
+    let snapshot = ledger.snapshot();
+    assert_eq!(snapshot.requests().len(), RENDERING_RETRY.attempts as usize);
+    for (index, request) in snapshot.requests().iter().enumerate() {
+        assert_eq!(request.attempt(), u32::try_from(index + 1).unwrap());
+        assert_eq!(request.response_outcome(), ResponseOutcome::HttpError);
+    }
     assert_eq!(
         reads.load(std::sync::atomic::Ordering::SeqCst),
         RENDERING_RETRY.attempts as usize,
@@ -554,16 +836,161 @@ async fn a_rendering_read_that_keeps_meeting_server_errors_fails_after_its_bound
 async fn a_rendering_read_answered_not_found_fails_at_once() {
     let (url, reads) = attachment_host(vec![404]);
 
-    let read = read_live_rendering(&url, "test-token", "one.png", IMMEDIATE_RETRY).await;
+    let ledger = Accounting::new();
+    let read = read_live_rendering(&url, "test-token", "one.png", IMMEDIATE_RETRY, &ledger).await;
 
     assert_eq!(
         read,
         Err("broken live image one.png: 404 Not Found".to_owned()),
         "a missing image is a broken rendering"
     );
+    let snapshot = ledger.snapshot();
+    assert_eq!(snapshot.requests().len(), 1);
+    assert_eq!(snapshot.requests()[0].attempt(), 1);
+    assert_eq!(
+        snapshot.requests()[0].response_outcome(),
+        ResponseOutcome::HttpError
+    );
     assert_eq!(
         reads.load(std::sync::atomic::Ordering::SeqCst),
         1,
         "and is not asked again, although the host would answer 200"
+    );
+}
+
+#[tokio::test]
+async fn a_rendering_transport_failure_retains_its_rest_call() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!(
+        "http://{}/user-attachments/assets/one",
+        listener.local_addr().unwrap()
+    );
+    drop(listener);
+    let ledger = Accounting::new();
+    assert!(
+        read_live_rendering(&url, "test-token", "one.png", IMMEDIATE_RETRY, &ledger)
+            .await
+            .is_err()
+    );
+    let snapshot = ledger.snapshot();
+    assert_eq!(snapshot.requests().len(), 1);
+    let request = &snapshot.requests()[0];
+    assert_eq!(
+        request.budget(),
+        onetaskgraph_github_projects::accounting::Budget::Rest
+    );
+    assert_eq!(request.response_outcome(), ResponseOutcome::TransportError);
+    assert_eq!(request.attempt(), 1);
+    assert_eq!(request.document(), None);
+    assert_eq!(request.name(), "GET /user-attachments/assets/{asset}");
+}
+
+#[test]
+fn credentialless_asset_entry_point_never_writes_live_evidence() {
+    let sandbox = Sandbox::new();
+    let directory = sandbox.subdirectory("session");
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "disposable_task_and_document_asset_copies",
+            "--exact",
+            "--nocapture",
+        ])
+        .env("ONETASKGRAPH_LIVE_REQUIRED", "0")
+        .env("GITHUB_LIVE_SESSION_DIR", &directory)
+        .env("GITHUB_LIVE_SESSION_ID", "credentialless-test")
+        .env("GITHUB_LIVE_SOURCE_REVISION", "a".repeat(40))
+        .env_remove("GH_PROJECTS_OWNER")
+        .env_remove("GH_PROJECTS_NUMBER")
+        .env_remove("GH_PROJECTS_TOKEN")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("live asset journey did not run"));
+    assert!(!directory.join("assets.json").exists());
+}
+
+#[test]
+fn propagated_selection_prevents_the_asset_entry_point_from_opening_a_session() {
+    for (selection, succeeds, message) in [
+        (
+            "not-selected",
+            true,
+            "existing selection policy did not select the lane",
+        ),
+        (
+            "wrong",
+            false,
+            "GITHUB_LIVE_SELECTION must be run or not-selected",
+        ),
+    ] {
+        let sandbox = Sandbox::new();
+        let directory = sandbox.subdirectory("session");
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "disposable_task_and_document_asset_copies",
+                "--exact",
+                "--nocapture",
+            ])
+            .env("GITHUB_LIVE_SELECTION", selection)
+            .env("ONETASKGRAPH_LIVE_REQUIRED", "1")
+            .env("GH_PROJECTS_TOKEN", "test-token")
+            .env("GH_PROJECTS_OWNER", "fixture-owner")
+            .env("GH_PROJECTS_NUMBER", "1")
+            .env("GH_PROJECTS_REPOSITORY", "fixture-owner/repository")
+            .env("GITHUB_LIVE_SESSION_DIR", &directory)
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.success(),
+            succeeds,
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stderr).contains(message));
+        assert!(!directory.join("assets.json").exists());
+    }
+}
+
+#[test]
+fn the_actual_asset_entry_point_refuses_missing_main_before_any_request() {
+    let sandbox = Sandbox::new();
+    let directory = sandbox.subdirectory("session");
+    std::fs::create_dir_all(&directory).unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let host = format!("http://{}", listener.local_addr().unwrap());
+    drop(listener);
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "disposable_task_and_document_asset_copies",
+            "--exact",
+            "--nocapture",
+        ])
+        .env("GITHUB_LIVE_SELECTION", "run")
+        .env("GITHUB_LIVE_TEST_GRAPHQL", format!("{host}/graphql"))
+        .env("GITHUB_LIVE_TEST_REST", &host)
+        .env("ONETASKGRAPH_LIVE_REQUIRED", "1")
+        .env("GH_PROJECTS_TOKEN", "test-token")
+        .env("GH_PROJECTS_OWNER", "fixture-owner")
+        .env("GH_PROJECTS_NUMBER", "1")
+        .env("GH_PROJECTS_REPOSITORY", "fixture-owner/repository")
+        .env("GITHUB_LIVE_SESSION_DIR", &directory)
+        .env("GITHUB_LIVE_SESSION_ID", "missing-main-test")
+        .env("GITHUB_LIVE_SOURCE_REVISION", "a".repeat(40))
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("current main contribution unavailable")
+    );
+    let record: onetaskgraph_github_live::quota::SessionRecord =
+        serde_json::from_slice(&std::fs::read(directory.join("assets.json")).unwrap()).unwrap();
+    assert!(!record.complete);
+    assert!(
+        record.calls.is_empty(),
+        "missing main evidence must not spend another API request"
     );
 }

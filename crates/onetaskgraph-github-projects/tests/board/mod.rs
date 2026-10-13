@@ -91,6 +91,22 @@ pub fn answer_a_stateless_session_call(
     variables: &Value,
     pricing: Pricing,
 ) -> Option<Value> {
+    const EXECUTED: &str = "rateLimit{cost nodeCount limit remaining} ";
+    if query.contains(EXECUTED) {
+        let document = query.replace(EXECUTED, "");
+        let mut answer = probe_answer(&document, pricing);
+        answer.as_object_mut().unwrap().remove("actualCost");
+        return Some(answer);
+    }
+    let unpriced = query.replacen("rateLimit{cost} ", "", 1);
+    let mut answer = stateless_session_call(&unpriced, variables, pricing)?;
+    if query.contains("rateLimit{cost}") {
+        answer["rateLimit"]["cost"] = json!(1);
+    }
+    Some(answer)
+}
+
+fn stateless_session_call(query: &str, variables: &Value, pricing: Pricing) -> Option<Value> {
     if let Some(production) = strip_probe(query) {
         let unbound = unbound_required_variables(&production, variables);
         assert!(
@@ -155,13 +171,18 @@ pub fn probe_answer(production: &str, pricing: Pricing) -> Value {
     json!({"rateLimit":{"cost":pricing.charged(computed),
         "nodeCount":onetaskgraph_github_projects::worst_case_node_count(production)
             .expect("a countable production document"),
-        "limit":FIXTURE_BUDGET_LIMIT,"remaining":FIXTURE_BUDGET_LIMIT}})
+        "limit":FIXTURE_BUDGET_LIMIT,"remaining":FIXTURE_BUDGET_LIMIT},
+        "actualCost":{"cost":1}})
 }
 
 /// The production half of a `rateLimit(dryRun: true)` probe, or `None` when this is not one.
 pub fn strip_probe(query: &str) -> Option<String> {
     const PROBE: &str = "rateLimit(dryRun:true){cost nodeCount limit remaining} ";
-    query.contains(PROBE).then(|| query.replace(PROBE, ""))
+    query.contains(PROBE).then(|| {
+        query
+            .replace(PROBE, "")
+            .replace("actualCost:rateLimit(dryRun:false){cost} ", "")
+    })
 }
 
 /// GitHub's mutation surface, as the journey's own contract tables spell it.

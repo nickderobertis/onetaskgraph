@@ -1046,6 +1046,17 @@ fn attachment_accounting_matches_the_real_http_responses() {
             })
             .unwrap();
         assert_eq!(last.outcome(), outcome);
+        assert_eq!(last.attempt(), 1);
+        assert_eq!(
+            last.response_outcome(),
+            if status == 0 {
+                onetaskgraph_github_projects::accounting::ResponseOutcome::TransportError
+            } else if status == 201 {
+                onetaskgraph_github_projects::accounting::ResponseOutcome::Success
+            } else {
+                onetaskgraph_github_projects::accounting::ResponseOutcome::HttpError
+            }
+        );
         assert_eq!(
             last.mode(),
             if stage == Stage::Upload && status != 201 {
@@ -1780,4 +1791,85 @@ fn github_signed_storage_redirect_reaches_the_proxy_and_refuses_a_transport_fail
             .iter()
             .any(|query| query.contains("createIssue(input:"))
     );
+}
+
+#[test]
+fn attachment_retry_records_both_http_outcomes_and_the_recovered_attempt() {
+    use onetaskgraph_github_projects::{
+        Plugin,
+        accounting::{Accounting, ResponseOutcome},
+    };
+    use onetaskgraph_plugin_api::{
+        AssetName, AssetPayload, AssetWrite, NativeId, SecretResolver, SourceName,
+    };
+    struct Secrets;
+    impl SecretResolver for Secrets {
+        fn get(&self, variable: &str) -> Option<secrecy::SecretString> {
+            (variable == "GITHUB_PROJECTS_FIXTURE_TOKEN").then(|| "test-token".into())
+        }
+    }
+    let clock = SimulatedClock::start(1);
+    let plan = Plan::new(&clock, 0, None);
+    plan.author("document", "D", false, &[], 1);
+    let report = plan.copy("document", "D");
+    let target = NativeId(
+        report["items"][0]["destination"]
+            .as_str()
+            .unwrap()
+            .strip_prefix("board:")
+            .unwrap()
+            .into(),
+    );
+    let mut config = plan.config.clone();
+    config["pacing"] =
+        json!({"min_mutation_interval_ms":0,"retry_backoff_ms":1,"retry_budget_ms":1000});
+    let ledger = std::sync::Arc::new(Accounting::new());
+    let source = Plugin
+        .build_recording_into(
+            &SourceName::new("board").unwrap(),
+            &config,
+            &Secrets,
+            ledger.clone(),
+        )
+        .unwrap();
+    plan.board.refuse(Refusal {
+        stage: Stage::Upload,
+        status: 403,
+        headers: "Retry-After: 0\r\n".into(),
+        body: "You have exceeded a secondary rate limit".into(),
+        remaining: 1,
+    });
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime
+        .block_on(source.set_document_rendering_with_assets(
+            &target,
+            "![Retry image](./retry.png)",
+            &json!({}),
+            &Default::default(),
+            &AssetWrite {
+                assets: vec![AssetPayload::of(
+                    AssetName::new("retry.png").unwrap(),
+                    images::png(151, 480_000),
+                )],
+                recorded_assets: None,
+            },
+        ))
+        .unwrap();
+    let snapshot = ledger.snapshot();
+    let uploads: Vec<_> = snapshot
+        .requests()
+        .iter()
+        .filter(|request| request.name() == "POST /user-attachments/assets")
+        .collect();
+    assert_eq!(uploads.len(), 2);
+    assert_eq!(uploads[0].response_outcome(), ResponseOutcome::HttpError);
+    assert_eq!(uploads[0].attempt(), 1);
+    assert_eq!(uploads[1].response_outcome(), ResponseOutcome::Success);
+    assert_eq!(uploads[1].attempt(), 2);
+    assert!(snapshot.requests().iter().any(|request| request.name()
+        == "GET /user-attachments/assets/{asset}"
+        && request.response_outcome() == ResponseOutcome::Success));
 }

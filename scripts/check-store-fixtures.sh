@@ -228,6 +228,12 @@ NOT_A_STORE = {
         "pinned schema, while `tests/plugin.rs` reads it back through the plugin's own parsing "
         "and drives the walk over two pages whose comments differ in author, times and body."
     ),
+    "crates/onetaskgraph-github-live/tests/fixtures/session-v3.json": (
+        "Not a store: it holds no items and no query is answered from it. It is the wire golden "
+        "of the live lane's versioned session-accounting record, and `tests/quota.rs` holds it "
+        "to `SessionRecord` by an exact round trip and to `SCHEMA_VERSION` by equality, so a "
+        "record that changed shape fails there rather than by two rows differing."
+    ),
 }
 
 root = pathlib.Path(".")
