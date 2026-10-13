@@ -81,7 +81,7 @@ declined_red "the allowance read" "$status" "$output" \
 status=0
 output="$(follow_through recheck_gate a_journey_whose_first_call_carries_less_than_the_endpoint_claimed_does_not_run)" || status=$?
 declined_red "the headers of its first real call" "$status" "$output" \
-  "GET /rate_limit" "claimed" "the headers of the session's first real call" "reported" \
+  "GET /rate_limit" "claimed" "headers of contract schema introspection while retaining" "reported" \
   "estimated to spend" "retained buffer is" "resets at"
 
 if [ "$failures" -ne 0 ]; then
