@@ -18,7 +18,7 @@ import tarfile
 import tempfile
 import tomllib
 import zipfile
-from release_products import RustTarget, NpmPlatform, RunnerLabel, ArchiveFormat
+from release_products import RustTarget, NpmPlatform, RunnerLabel, ArchiveFormat, VerificationReport
 
 PYTHON_EXECUTABLE = str(Path(sys.executable).resolve())
 
@@ -43,7 +43,10 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
     if mac_pairs is None:
         raise ValueError('Darwin TARGETS missing; restore the Rust/npm platform mapping')
     rows.extend(ReleaseTarget('macos-latest', pair.split('=')[0], 'tar.gz', pair.split('=')[1]) for pair in mac_pairs[1].split())
-    selected, = [row for row in rows if row.target == target]
+    candidates = [row for row in rows if row.target == target]
+    if len(candidates) != 1:
+        raise argparse.ArgumentError(None, 'unsupported --target; choose one declared in release.yml')
+    selected = candidates[0]
     job = mac.group(1) if selected.os == 'macos-latest' else native.group(1)
     step = re.search(r'(?ms)^      - name: Archive, checksum, and stage\n.*?^        run: \|\n(.*?)(?=^      - )', job)
     if step is None:
@@ -90,14 +93,15 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
         if installed.returncode:
             print(installed.stderr, file=sys.stderr)
             raise subprocess.CalledProcessError(installed.returncode, command, installed.stdout, installed.stderr)
-        report = json.loads(installed.stdout)
-        if report['target'] != target or report['tag'] != f'v{version}':
+        report = VerificationReport.parse(installed.stdout)
+        expected_hash = hashlib.sha256(canonical.read_bytes()).hexdigest()
+        if report.target != target or report.tag != f'v{version}' or set(report.payload_hashes.values()) != {expected_hash}:
             raise ValueError('installer did not emit the documented single JSON verification result')
 
         def refuses(reason: str) -> None:
             result = subprocess.run(command + ['--install'], cwd=tree, capture_output=True, text=True)
             if result.returncode == 0 or reason not in result.stderr:
-                raise ValueError(f'tampered staged product did not fail for {reason}; repair the production verifier before publishing')
+                raise ValueError(f'tampered staged product did not fail for {reason}: status={result.returncode}, stderr={result.stderr}; repair the production verifier before publishing')
 
         checksum = tree / f'onetaskgraph-v{version}-{target}.{selected.extension}.sha256'
         original_checksum = checksum.read_bytes()
@@ -233,8 +237,12 @@ def main() -> None:
     parser.add_argument('--wheel-dir', type=Path, required=True)
     parser.add_argument('--target', required=True)
     args = parser.parse_args()
+    if not re.fullmatch(r'[a-z0-9_]+(?:-[a-z0-9_]+)+', args.target):
+        parser.error('invalid Rust target identifier')
     try:
         run(args.wheel_dir, RustTarget(args.target))
+    except argparse.ArgumentError as error:
+        parser.error(str(error))
     except (ValueError, KeyError, OSError, subprocess.CalledProcessError, zipfile.BadZipFile, tarfile.TarError) as error:
         print(f'release product journey failed: {error}; next: repair the release workflow packaging or its named product verifier, then rerun scripts/test-distribution.sh', file=sys.stderr)
         sys.exit(1)

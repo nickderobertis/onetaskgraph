@@ -1,9 +1,10 @@
 """Validated identities for the repository's staged release products."""
 from dataclasses import dataclass
+import json
 from typing import Literal, NewType
 import re
 from pathlib import Path
-from product_versions import SEMANTIC_VERSION_RE, SemanticVersion
+from product_versions import SemanticVersion
 
 
 RustTarget = NewType("RustTarget", str)
@@ -44,11 +45,14 @@ class ReleaseProduct:
             raise ValueError('invalid Rust target identifier')
         if not re.fullmatch(r'[a-z0-9]+-[a-z0-9]+', self.npm_platform):
             raise ValueError('invalid npm platform identifier')
-        if not self.tag.startswith('v') or not SEMANTIC_VERSION_RE.fullmatch(self.tag[1:]):
-            raise ValueError('invalid semantic release tag')
+
         if self.extension not in ('tar.gz', 'zip'):
             raise ValueError('invalid release archive extension')
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/release.yml').read_text()
+        grammars = set(re.findall(r"grep -Eq '([^']+)'", workflow))
+        if len(grammars) != 1 or re.fullmatch(next(iter(grammars)), self.tag) is None:
+            raise ValueError('invalid semantic release tag; use the release workflow tag grammar')
+
         mappings = {RustTarget(target): target_mapping(npm, extension) for target, extension, npm in re.findall(r'target: ([a-z0-9_-]+), ext: ([a-z.]+), npm: ([a-z0-9-]+)', workflow)}
         mac_pairs = re.search(r'^      TARGETS: (.*)$', workflow, re.M)
         if mac_pairs:
@@ -80,3 +84,40 @@ class ReleaseProduct:
         if self.target.startswith('aarch64'):
             return 'arm64' if self.os == 'Darwin' else 'aarch64'
         return 'amd64' if self.os == 'Windows' else 'x86_64'
+
+
+@dataclass(frozen=True)
+class CarrierManifest:
+    name: str
+    version: str
+    os: tuple[str, ...]
+    cpu: tuple[str, ...]
+
+    @classmethod
+    def parse(cls, value: object) -> 'CarrierManifest':
+        if not isinstance(value, dict) or not isinstance(value.get('name'), str) or not isinstance(value.get('version'), str):
+            raise ValueError('invalid carrier identity fields')
+        for key in ('os', 'cpu'):
+            if not isinstance(value.get(key), list) or any(not isinstance(item, str) for item in value[key]):
+                raise ValueError('invalid carrier platform fields')
+        return cls(value['name'], value['version'], tuple(value['os']), tuple(value['cpu']))
+
+
+@dataclass(frozen=True)
+class VerificationReport:
+    target: RustTarget
+    tag: ReleaseTag
+    payload_hashes: dict[str, str]
+
+    @classmethod
+    def parse(cls, text: str) -> 'VerificationReport':
+        value = json.loads(text)
+        if not isinstance(value, dict) or not isinstance(value.get('target'), str) or not isinstance(value.get('tag'), str) or not isinstance(value.get('payloadHashes'), dict):
+            raise ValueError('invalid verification report')
+        hashes = value['payloadHashes']
+        if set(hashes) != {'binary', 'archive', 'wheel', 'npm'} or any(not isinstance(digest, str) or re.fullmatch(r'[a-f0-9]{64}', digest) is None for digest in hashes.values()):
+            raise ValueError('invalid verification payload hashes')
+        return cls(RustTarget(value['target']), ReleaseTag(value['tag']), hashes)
+
+    def record(self) -> dict[str, object]:
+        return {'target': self.target, 'tag': self.tag, 'payloadHashes': self.payload_hashes}

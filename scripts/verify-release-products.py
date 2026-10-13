@@ -12,16 +12,19 @@ import sys
 import tarfile
 import tempfile
 import zipfile
-from typing import TypedDict
-from release_products import ReleaseProduct, RustTarget, NpmPlatform, ReleaseTag
+from typing import Iterable, TypeVar
+from release_products import ReleaseProduct, RustTarget, NpmPlatform, ReleaseTag, CarrierManifest, VerificationReport
 
 PYTHON_EXECUTABLE = str(Path(sys.executable).resolve())
 
 
-class VerificationReport(TypedDict):
-    target: RustTarget
-    tag: ReleaseTag
-    payloadHashes: dict[str, str]
+T = TypeVar('T')
+
+
+def only(values: Iterable[T], kind: str) -> T:
+    items = list(values)
+    require(len(items) == 1, f'expected exactly one {kind}')
+    return items[0]
 
 
 def require(condition: bool, reason: str) -> None:
@@ -41,14 +44,14 @@ def verify(product: ReleaseProduct, install: bool) -> None:
     else:
         with tarfile.open(archive) as packed:
             archived = packed.extractfile(binary).read()
-    wheel_path, = Path(f'dist/wheels/{product.target}').glob('*.whl')
+    wheel_path = only(Path(f'dist/wheels/{product.target}').glob('*.whl'), 'wheel')
     with zipfile.ZipFile(wheel_path) as packed:
-        entry, = [p for p in packed.namelist() if '.data/scripts/' in p and Path(p).name == binary]
+        entry = only([p for p in packed.namelist() if '.data/scripts/' in p and Path(p).name == binary], 'wheel CLI entry')
         wheeled = packed.read(entry)
-        metadata, = [p for p in packed.namelist() if p.endswith('.dist-info/METADATA')]
+        metadata = only([p for p in packed.namelist() if p.endswith('.dist-info/METADATA')], 'wheel METADATA entry')
         fields = packed.read(metadata).decode().splitlines()
         require(f'Version: {product.version}' in fields and 'Name: onetaskgraph-cli' in fields, 'wheel identity or version mismatch')
-        wheel_metadata, = [p for p in packed.namelist() if p.endswith('.dist-info/WHEEL')]
+        wheel_metadata = only([p for p in packed.namelist() if p.endswith('.dist-info/WHEEL')], 'wheel WHEEL entry')
         platforms = [line.removeprefix('Tag: ').split('-')[-1] for line in packed.read(wheel_metadata).decode().splitlines() if line.startswith('Tag: ')]
         match product.os:
             case 'Darwin':
@@ -65,17 +68,23 @@ def verify(product: ReleaseProduct, install: bool) -> None:
         filename_tags = {f'{python}-{abi}-{platform}' for python in filename[1].split('.') for abi in filename[2].split('.') for platform in filename[3].split('.')}
         require(filename_tags == declared_tags, 'wheel filename tags mismatch')
 
-    carrier, = Path(f'dist/carriers/{product.npm_platform}').glob('*.tgz')
+    carrier = only(Path(f'dist/carriers/{product.npm_platform}').glob('*.tgz'), 'npm carrier')
     with tarfile.open(carrier) as packed:
         carried = packed.extractfile(f'package/bin/{binary}').read()
-        manifest = json.load(packed.extractfile('package/package.json'))
-        require(manifest.get('os') == [{'Darwin':'darwin','Windows':'win32','Linux':'linux'}[product.os]] and manifest.get('cpu') == ['arm64' if product.target.startswith('aarch64') else 'x64'], 'carrier platform mismatch')
-        require(manifest['name'] == f'@onetaskgraph/cli-{product.npm_platform}' and manifest['version'] == product.version, 'carrier identity mismatch')
+        manifest = CarrierManifest.parse(json.load(packed.extractfile('package/package.json')))
+        require(manifest.os == ({'Darwin':'darwin','Windows':'win32','Linux':'linux'}[product.os],) and manifest.cpu == ('arm64' if product.target.startswith('aarch64') else 'x64',), 'carrier platform mismatch')
+        require(manifest.name == f'@onetaskgraph/cli-{product.npm_platform}' and manifest.version == product.version, 'carrier identity mismatch')
     hashes = {name: hashlib.sha256(payload).hexdigest() for name, payload in [('binary', canonical), ('archive', archived), ('wheel', wheeled), ('npm', carried)]}
     require(len(set(hashes.values())) == 1, f'release binary drift: {hashes}')
-    result: VerificationReport = {'target': product.target, 'tag': product.tag, 'payloadHashes': hashes}
+    result = VerificationReport(product.target, product.tag, hashes)
     if install:
         require(platform.system() == product.os, 'cannot execute a non-native release target')
+        host = platform.machine().lower()
+        host_arch = 'arm64' if host in ('arm64', 'aarch64') else 'x64' if host in ('x86_64', 'amd64') else 'unsupported'
+        target_arch = 'arm64' if product.target.startswith('aarch64') else 'x64'
+        rosetta = product.os == 'Darwin' and host_arch == 'arm64' and target_arch == 'x64'
+        require(host_arch == target_arch or rosetta, 'cannot execute a foreign architecture without supported emulation')
+
         with tempfile.TemporaryDirectory(prefix='release-install-') as scratch:
             dest = Path(scratch)
             # Archive and checksum fixtures retain the installer's separate trust origins.
@@ -86,7 +95,7 @@ def verify(product: ReleaseProduct, install: bool) -> None:
             shutil.copy2(archive, archives / archive.name)
             shutil.copy2(str(archive) + '.sha256', checksums / (archive.name + '.sha256'))
             # llmlint: ignore[changed_behavior_has_e2e] Darwin/Rosetta execution needs an Apple Silicon host unavailable in this dispatch; local native installation and foreign-tag/hash contracts are driven, and this exact command runs in the single release Mac job before Linux publication.
-            prefix = ['arch', '-x86_64'] if product.os == 'Darwin' and product.target.startswith('x86_64') and platform.machine() == 'arm64' else []
+            prefix = ['arch', '-x86_64'] if rosetta else []
             env = {**os.environ, 'ONETASKGRAPH_CHECKSUM_BASE_URL': checksums.parent.as_uri()}
             subprocess.run(prefix + ['bash', 'scripts/install.sh', '--version', product.tag, '--to', str(dest / 'archive'), '--archive-base-url', archives.parent.as_uri()], env=env, check=True, stdout=sys.stderr)
             subprocess.run([PYTHON_EXECUTABLE, '-m', 'venv', str(dest / 'installer-python')], check=True, stdout=sys.stderr)
@@ -100,7 +109,7 @@ def verify(product: ReleaseProduct, install: bool) -> None:
                 output = subprocess.check_output(prefix + [str(executable), '--version'], text=True)
                 require(output.strip() == f'onetaskgraph {product.version}', f'installed CLI version mismatch: {executable}')
                 require('Usage:' in subprocess.check_output(prefix + [str(executable), '--help'], text=True), 'installed CLI did not render help')
-    print(json.dumps(result))
+    print(json.dumps(result.record()))
 
 
 def main() -> None:
@@ -113,6 +122,9 @@ def main() -> None:
     args = parser.parse_args()
     try:
         product = ReleaseProduct(RustTarget(args.target), NpmPlatform(args.npm), ReleaseTag(args.tag), args.ext)
+    except ValueError as error:
+        parser.error(str(error))
+    try:
         verify(product, args.install)
     except (ValueError, KeyError, OSError, subprocess.CalledProcessError, zipfile.BadZipFile, tarfile.TarError, TypeError, AttributeError) as error:
         print(f'release product verification failed: {error}; next: rebuild the named wheel and its archive/carrier from the canonical wheel binary, then rerun this command before publishing', file=sys.stderr)

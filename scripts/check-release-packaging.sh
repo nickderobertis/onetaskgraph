@@ -232,6 +232,85 @@ if platform.system() == 'Windows':
     darwin_target, darwin_npm = pair.split('=')
     foreign = [sys.executable, str(root / 'scripts/verify-release-products.py'), '--target', darwin_target, '--npm', darwin_npm, '--tag', tag]
 refused(foreign + ['--install'], 'cannot execute a non-native release target')
+wheel_path, = wheels.glob('*.whl')
+original_wheel = wheel_path.read_bytes()
+wheel_path.unlink()
+refused(command, 'expected exactly one wheel')
+wheel_path.write_bytes(original_wheel)
+duplicate = wheels / 'duplicate.whl'
+duplicate.write_bytes(original_wheel)
+refused(command, 'expected exactly one wheel')
+duplicate.unlink()
+with zipfile.ZipFile(wheel_path) as packed:
+    original_entries = [(entry, packed.read(entry.filename)) for entry in packed.infolist()]
+for suffix, kind in [('/onetaskgraph.exe', 'wheel CLI entry'), ('/METADATA', 'wheel METADATA entry'), ('/WHEEL', 'wheel WHEEL entry')]:
+    for duplicate_entry in [False, True]:
+        with zipfile.ZipFile(wheel_path, 'w') as packed:
+            for entry, data in original_entries:
+                if not entry.filename.endswith(suffix) or duplicate_entry:
+                    packed.writestr(entry, data)
+                if entry.filename.endswith(suffix) and duplicate_entry:
+                    packed.writestr('duplicate' + entry.filename, data)
+        refused(command, 'expected exactly one ' + kind)
+    wheel_path.write_bytes(original_wheel)
+with zipfile.ZipFile(wheel_path, 'w') as packed:
+    for entry, data in original_entries:
+        packed.writestr(entry, f'Name: foreign-cli\nVersion: {version}\n'.encode() if entry.filename.endswith('/METADATA') else data)
+refused(command, 'wheel identity or version mismatch')
+wheel_path.write_bytes(original_wheel)
+wrong_arch = wheel_path.with_name(wheel_path.name.replace('win_amd64', 'win_arm64'))
+wheel_path.rename(wrong_arch)
+with zipfile.ZipFile(wrong_arch, 'w') as packed:
+    for entry, data in original_entries:
+        packed.writestr(entry, b'Tag: py3-none-win_arm64\n' if entry.filename.endswith('/WHEEL') else data)
+refused(command, 'wheel architecture or OS mismatch')
+wrong_arch.unlink()
+wheel_path.write_bytes(original_wheel)
+malformed_name = wheel_path.with_name(f'onetaskgraph_cli-{version}-broken.whl')
+wheel_path.rename(malformed_name)
+refused(command, 'invalid wheel filename tags')
+malformed_name.rename(wheel_path)
+carrier_path, = carriers.glob('*.tgz')
+original_carrier = carrier_path.read_bytes()
+carrier_path.unlink()
+refused(command, 'expected exactly one npm carrier')
+carrier_path.write_bytes(original_carrier)
+extra_carrier = carriers / 'duplicate.tgz'
+extra_carrier.write_bytes(original_carrier)
+refused(command, 'expected exactly one npm carrier')
+extra_carrier.unlink()
+if platform.system() == 'Linux':
+    host_arm = platform.machine().lower() in ('aarch64', 'arm64')
+    candidate, = [row for row in re.findall(r'target: ([a-z0-9_-]+), ext: ([a-z.]+), npm: ([a-z0-9-]+)', workflow) if row[0].endswith('unknown-linux-gnu') and row[0].startswith('aarch64') != host_arm]
+    arm_target, arm_extension, arm_npm = candidate
+    arm_payload = b'foreign architecture artifact; never executed'
+    arm_binary = tree / f'target/{arm_target}/release/onetaskgraph'
+    arm_binary.parent.mkdir(parents=True, exist_ok=True)
+    arm_binary.write_bytes(arm_payload)
+    with tarfile.open(tree / f'onetaskgraph-{tag}-{arm_target}.tar.gz', 'w:gz') as packed:
+        info = tarfile.TarInfo('onetaskgraph')
+        info.size = len(arm_payload)
+        packed.addfile(info, io.BytesIO(arm_payload))
+    arm_wheels = tree / f'dist/wheels/{arm_target}'
+    arm_wheels.mkdir(parents=True, exist_ok=True)
+    wheel_arch = 'aarch64' if arm_target.startswith('aarch64') else 'x86_64'
+    wheel_platform = 'linux_' + wheel_arch
+    with zipfile.ZipFile(arm_wheels / f'onetaskgraph_cli-{version}-py3-none-{wheel_platform}.whl', 'w') as packed:
+        packed.writestr(f'onetaskgraph_cli-{version}.data/scripts/onetaskgraph', arm_payload)
+        packed.writestr(f'onetaskgraph_cli-{version}.dist-info/METADATA', f'Name: onetaskgraph-cli\nVersion: {version}\n')
+        packed.writestr(f'onetaskgraph_cli-{version}.dist-info/WHEEL', f'Tag: py3-none-{wheel_platform}\n')
+    arm_carriers = tree / f'dist/carriers/{arm_npm}'
+    arm_carriers.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(arm_carriers / 'fixture.tgz', 'w:gz') as packed:
+        for name, data in [('package/package.json', (root / f'npm/platforms/{arm_npm}/package.json').read_bytes()), ('package/bin/onetaskgraph', arm_payload)]:
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            packed.addfile(info, io.BytesIO(data))
+    refused([sys.executable, str(root / 'scripts/verify-release-products.py'), '--target', arm_target, '--npm', arm_npm, '--tag', tag, '--install'], 'cannot execute a foreign architecture')
+elif platform.system() == 'Darwin' and platform.machine().lower() == 'x86_64':
+    pair = next(pair for pair in re.search(r'^      TARGETS: (.*)$', workflow, re.M)[1].split() if pair.startswith('aarch64'))
+    arm_target, arm_npm = pair.split('=')
+    refused([sys.executable, str(root / 'scripts/verify-release-products.py'), '--target', arm_target, '--npm', arm_npm, '--tag', tag, '--install'], 'cannot execute a foreign architecture')
 for entries in [[], [binary, 'nested/' + binary]]:
     with zipfile.ZipFile(archive, 'w') as packed:
         for entry in entries:
