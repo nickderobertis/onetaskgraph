@@ -67,7 +67,13 @@ class ReleaseProduct:
 
     @property
     def os(self) -> ReleaseOS:
-        return 'Darwin' if self.target.endswith('apple-darwin') else 'Windows' if self.extension == 'zip' else 'Linux'
+        match self.target, self.extension:
+            case target, _ if target.endswith('apple-darwin'):
+                return 'Darwin'
+            case _, 'zip':
+                return 'Windows'
+            case _:
+                return 'Linux'
 
     @property
     def wheel_arch(self) -> WheelArchitecture:

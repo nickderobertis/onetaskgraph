@@ -182,6 +182,64 @@ PYWHEEL
 done
 
 
+# The verifier's trust boundary is portable: no foreign executable runs in these cases.
+if ! "$python_bin" - "$ROOT" "$TREE" "$tag" <<'PYREFUSALS'
+from pathlib import Path
+import io
+import json
+import platform
+import re
+import subprocess
+import sys
+import tarfile
+import zipfile
+root, tree, tag = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+version = tag[1:]
+workflow = (root / '.github/workflows/release.yml').read_text()
+windows, = [row for row in re.findall(r'target: ([a-z0-9_-]+), ext: ([a-z.]+), npm: ([a-z0-9-]+)', workflow) if row[1] == 'zip']
+target, extension, npm = windows
+binary = 'onetaskgraph.exe'
+payload = b'foreign artifact contract payload; never executed'
+canonical = tree / f'target/{target}/release/{binary}'
+canonical.parent.mkdir(parents=True, exist_ok=True)
+canonical.write_bytes(payload)
+archive = tree / f'onetaskgraph-{tag}-{target}.zip'
+with zipfile.ZipFile(archive, 'w') as packed:
+    packed.writestr(binary, payload)
+wheels = tree / f'dist/wheels/{target}'
+wheels.mkdir(parents=True, exist_ok=True)
+with zipfile.ZipFile(wheels / f'onetaskgraph_cli-{version}-py3-none-win_amd64.whl', 'w') as wheel:
+    wheel.writestr(f'onetaskgraph_cli-{version}.data/scripts/{binary}', payload)
+    wheel.writestr(f'onetaskgraph_cli-{version}.dist-info/METADATA', f'Name: onetaskgraph-cli\nVersion: {version}\n')
+    wheel.writestr(f'onetaskgraph_cli-{version}.dist-info/WHEEL', 'Tag: py3-none-win_amd64\n')
+carriers = tree / f'dist/carriers/{npm}'
+carriers.mkdir(parents=True, exist_ok=True)
+with tarfile.open(carriers / 'fixture.tgz', 'w:gz') as packed:
+    for name, data in [('package/package.json', (root / f'npm/platforms/{npm}/package.json').read_bytes()), (f'package/bin/{binary}', payload)]:
+        info = tarfile.TarInfo(name)
+        info.size = len(data)
+        packed.addfile(info, io.BytesIO(data))
+command = [sys.executable, str(root / 'scripts/verify-release-products.py'), '--target', target, '--npm', npm, '--tag', tag, '--ext', extension]
+def refused(args, reason):
+    result = subprocess.run(args, cwd=tree, capture_output=True, text=True)
+    if result.returncode == 0 or reason not in result.stderr:
+        raise SystemExit(f'product boundary did not refuse {reason}: {result.stderr}; repair the production verifier')
+for flags, reason in [(['--target', '../invalid'], 'invalid Rust target'), (['--npm', '../invalid'], 'invalid npm platform'), (['--tag', 'invalid'], 'invalid semantic release tag'), (['--ext', 'invalid'], 'invalid choice'), (['--npm', 'darwin-x64'], 'inconsistent target'), (['--ext', 'tar.gz'], 'inconsistent target')]:
+    refused(command + flags, reason)
+foreign = command
+if platform.system() == 'Windows':
+    pair = re.search(r'^      TARGETS: ([^ ]+)', workflow, re.M)[1]
+    darwin_target, darwin_npm = pair.split('=')
+    foreign = [sys.executable, str(root / 'scripts/verify-release-products.py'), '--target', darwin_target, '--npm', darwin_npm, '--tag', tag]
+refused(foreign + ['--install'], 'cannot execute a non-native release target')
+for entries in [[], [binary, 'nested/' + binary]]:
+    with zipfile.ZipFile(archive, 'w') as packed:
+        for entry in entries:
+            packed.writestr(entry, payload)
+    refused(command, 'archive must carry one CLI binary')
+PYREFUSALS
+then report "the production verifier accepted an invalid release product input"; fi
+
 # 2. A tag the installer would refuse is refused here first, before anything is built.
 rm -f "$UPLOADS"
 if (cd "$TREE" && PATH="$scratch/bin:$PATH" TARGETS="$targets" EXT=tar.gz TAG="not-a-release" GH_TOKEN=stand-in \

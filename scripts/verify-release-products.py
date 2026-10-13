@@ -50,9 +50,21 @@ def verify(product: ReleaseProduct, install: bool) -> None:
         require(f'Version: {product.version}' in fields and 'Name: onetaskgraph-cli' in fields, 'wheel identity or version mismatch')
         wheel_metadata, = [p for p in packed.namelist() if p.endswith('.dist-info/WHEEL')]
         platforms = [line.removeprefix('Tag: ').split('-')[-1] for line in packed.read(wheel_metadata).decode().splitlines() if line.startswith('Tag: ')]
-        os_prefix = 'macosx_' if product.os == 'Darwin' else 'win_' if product.os == 'Windows' else ('manylinux_', 'linux_', 'musllinux_')
+        match product.os:
+            case 'Darwin':
+                os_prefix = 'macosx_'
+            case 'Windows':
+                os_prefix = 'win_'
+            case 'Linux':
+                os_prefix = ('manylinux_', 'linux_', 'musllinux_')
         require(bool(platforms) and all(all(part.startswith(os_prefix) and part.endswith('_' + product.wheel_arch) for part in value.split('.')) for value in platforms), 'wheel architecture or OS mismatch')
         require(wheel_path.name.startswith(f'onetaskgraph_cli-{product.version}-'), 'wheel filename version mismatch')
+        filename = wheel_path.stem.rsplit('-', 3)
+        require(len(filename) == 4, 'invalid wheel filename tags')
+        declared_tags = {line.removeprefix('Tag: ') for line in packed.read(wheel_metadata).decode().splitlines() if line.startswith('Tag: ')}
+        filename_tags = {f'{python}-{abi}-{platform}' for python in filename[1].split('.') for abi in filename[2].split('.') for platform in filename[3].split('.')}
+        require(filename_tags == declared_tags, 'wheel filename tags mismatch')
+
     carrier, = Path(f'dist/carriers/{product.npm_platform}').glob('*.tgz')
     with tarfile.open(carrier) as packed:
         carried = packed.extractfile(f'package/bin/{binary}').read()
@@ -79,7 +91,7 @@ def verify(product: ReleaseProduct, install: bool) -> None:
             subprocess.run(prefix + ['bash', 'scripts/install.sh', '--version', product.tag, '--to', str(dest / 'archive'), '--archive-base-url', archives.parent.as_uri()], env=env, check=True, stdout=sys.stderr)
             subprocess.run([PYTHON_EXECUTABLE, '-m', 'venv', str(dest / 'installer-python')], check=True, stdout=sys.stderr)
             pip_python = dest / 'installer-python' / ('Scripts/python.exe' if product.os == 'Windows' else 'bin/python')
-            subprocess.run([str(pip_python), '-m', 'pip', 'install', '--no-deps', '--target', str(dest / 'wheel'), '--platform', wheel_path.stem.rsplit('-',1)[-1], str(wheel_path)], check=True, stdout=sys.stderr)
+            subprocess.run([str(pip_python), '-m', 'pip', 'install', '--no-deps', '--target', str(dest / 'wheel'), '--platform', filename[3].split('.')[0], str(wheel_path)], check=True, stdout=sys.stderr)
             subprocess.run(['npm', 'install', '--force', '--ignore-scripts', '--no-audit', '--no-fund', '--prefix', str(dest / 'npm'), str(carrier.resolve())], check=True, stdout=sys.stderr)
             wheel_bins = list((dest / 'wheel').rglob(binary))
             require(len(wheel_bins) == 1, 'wheel install must expose one CLI executable')

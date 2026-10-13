@@ -86,7 +86,13 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
         env = {**os.environ, 'TARGETS': f'{target}={selected.npm_platform}', 'EXT': selected.extension, 'TAG': f'v{version}'}
         subprocess.run(['bash', '-c', body], cwd=tree, env=env, check=True)
         command = [PYTHON_EXECUTABLE, 'scripts/verify-release-products.py', '--target', target, '--npm', selected.npm_platform, '--tag', f'v{version}', '--ext', selected.extension]
-        subprocess.run(command + ['--install'], cwd=tree, check=True, stdout=subprocess.DEVNULL)
+        installed = subprocess.run(command + ['--install'], cwd=tree, capture_output=True, text=True)
+        if installed.returncode:
+            print(installed.stderr, file=sys.stderr)
+            raise subprocess.CalledProcessError(installed.returncode, command, installed.stdout, installed.stderr)
+        report = json.loads(installed.stdout)
+        if report['target'] != target or report['tag'] != f'v{version}':
+            raise ValueError('installer did not emit the documented single JSON verification result')
 
         def refuses(reason: str) -> None:
             result = subprocess.run(command + ['--install'], cwd=tree, capture_output=True, text=True)
@@ -156,6 +162,11 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
         wheel_path.rename(renamed)
         refuses('wheel filename version mismatch')
         renamed.rename(wheel_path)
+        foreign_name = wheel_path.with_name('-'.join(wheel_path.stem.rsplit('-', 3)[:3]) + '-foreign_arch.whl')
+        wheel_path.rename(foreign_name)
+        refuses('wheel filename tags mismatch')
+        foreign_name.rename(wheel_path)
+
         carrier, = (tree / f'dist/carriers/{selected.npm_platform}').glob('*.tgz')
         original_carrier = carrier.read_bytes()
         with tarfile.open(carrier) as packed:
