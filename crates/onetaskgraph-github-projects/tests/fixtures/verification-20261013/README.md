@@ -466,3 +466,51 @@ SHA-256 `add53edb35a58fccebbdeb8a7e4ada82139508144ac9b03244e3e74d2640bb4a`).
 `prices.json` (`278db40e…e1a3`) and the reporter output (`8aad47d1…0d2f`) were byte-identical.
 Both bills were 174 points: 108 reported query points plus 66 modelled mutation points.
 These are loopback figures, not a real-GitHub measurement.
+
+## A shared board of 51 to 90 items, at 0406e092
+
+The credentialed main journey now runs when the nominated board holds 51 to 90 items
+before setup, with its 14 fields and every fixture fact still exact, and refuses outside
+that range naming the count and both bounds before any fixture is written.
+
+- **90 is the upper bound** because it is the board the registered measurement ran on:
+  ca86536a billed 212 points (146 reported + 66 modelled) against max 299 on 90 items. A
+  larger board is unmeasured, and past 94 items the board and its six fixture items no
+  longer fit one 100-item page of the item reads the journey repeats.
+- **51 is the lower bound** because the read-only half's whole-board cursor walk asks for
+  pages of `BOARD_WALK_PAGE_SIZE` (50) tasks and asserts no task repeats across pages; on
+  50 or fewer it never takes a cursor. Every other assertion over the board's own items
+  needs one at most. A count cannot show how many of those items are tasks, so this is
+  the necessary count rather than a guarantee about the board's composition.
+
+The registered threshold and `reference_workload()` are unchanged. A bill now carries the
+board's item count, and the reporter's detail names it — `initial board items=90 (the
+registered workload)`, or for a smaller board `initial board items=84 (fewer than the
+registered workload's 90; not its measurement)` — so no bill from a smaller board reads
+as the 90-item measurement.
+
+Loopback evidence, with the credentials removed and only `test-token` used (no live GitHub
+session ran):
+
+- `live_pair` drives both actual entry points on real 84-, 91- and 50-item loopback
+  boards. On 84 the pair completes, its bill names 84 items, and onebudgetspec judges it
+  within the registered budget; on 91 and 50 the main journey refuses before writing and
+  no bill is made. With billing reverted to an exact workload match, the 84-item case
+  fails with "incomplete, stale or mismatched live-session record".
+- On the 90-item loopback board, the recording proxy drove both entry points on
+  `d22c0322` (a detached scratch worktree, since removed) and on `0406e092`: the same 193
+  operations (174 GraphQL, 19 REST) in order, sequence SHA-256
+  `6a49fd7b080fa4cb02bcbe11258d11e8fff05bc8ac659360ef8a0f2c0d1669cf`; byte-identical
+  `prices.json` (`278db40e…e1a3`); and a bill of 174 points (108 reported + 66 modelled)
+  on both. The reporter detail differs only by the added board field. On 84 items the
+  loopback sequence and prices were the same, and so was the 174-point bill, because the
+  loopback board prices every query at one point. That is not a real-GitHub figure.
+- `cargo test --locked --all-features -p onetaskgraph-github-live -p
+  onetaskgraph-github-projects -p onetaskgraph-github-projects-e2e`: 625 passed, 0 failed,
+  including `recheck_gate` (9); the credentialed journeys printed their skips.
+- `scripts/check-relative-interpreter.sh`, `scripts/check-live-lane-selection.sh`,
+  `scripts/check-budget-decline.sh`, `scripts/check-store-fixtures.sh`,
+  `scripts/check-selection-line-endings.sh` and `scripts/check-selection-code-page.sh`
+  passed on Linux; so did `cargo fmt --all -- --check`, `workspace:format-check` with the
+  Nx cache skipped, and clippy over all targets and features of the three crates with
+  `-D warnings`.
