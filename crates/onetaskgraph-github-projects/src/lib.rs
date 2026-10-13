@@ -1540,8 +1540,12 @@ pub mod graphql {
     /// `documents_are_all_inventoried` reads this file back and fails naming any `pub
     /// const` here that this list omits, so the two cannot part — which is the same guard
     /// `CATEGORIES` carries, in the one shape available to a set of `&str` constants.
-    pub const DOCUMENTS: [(&str, &str); 40] = [
+    pub const DOCUMENTS: [(&str, &str); 41] = [
         (SEARCH_ISSUES, "searching this board's issues"),
+        (
+            LIVE_CHANGE_TOKEN,
+            "reading fresh change-token facts for the live lane's disposable issue",
+        ),
         (ISSUE, "reading one issue"),
         (
             ISSUE_BOARD_ITEMS,

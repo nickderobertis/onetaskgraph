@@ -665,9 +665,7 @@
     "sha256": "e5f6581d8c577d5a3e8019ec404d002da974965cb28d9869f0a022af82faf356",
     "variables": {
       "input": {
-        "labelIds": [
-          "string"
-        ],
+        "labelIds": ["string"],
         "labelableId": "string"
       }
     }
@@ -1195,9 +1193,7 @@
     "sha256": "e5f6581d8c577d5a3e8019ec404d002da974965cb28d9869f0a022af82faf356",
     "variables": {
       "input": {
-        "labelIds": [
-          "string"
-        ],
+        "labelIds": ["string"],
         "labelableId": "string"
       }
     }

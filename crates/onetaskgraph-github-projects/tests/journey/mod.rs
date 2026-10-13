@@ -492,6 +492,13 @@ async fn reconcile_node_counts_and_point_costs(token: &str) -> Result<(), String
     let mut asked = 0_usize;
     let mut strategy = PricingStrategy::Aliases;
     for (document, doing) in graphql::DOCUMENTS {
+        // This internal document is sent only by the live lane, which bills the actual
+        // cost GitHub reports on every response. Keep its offline schema, node-count and
+        // price pins in the inventory without adding a reconciliation request to the
+        // measured session workload.
+        if document == graphql::LIVE_CHANGE_TOKEN {
+            continue;
+        }
         if Mode::of_document(document) == Mode::Write {
             // A mutation is skipped because `rateLimit` is a field of `Query` and there is
             // no way to ask GitHub about one at all — neither for its node count nor for its
