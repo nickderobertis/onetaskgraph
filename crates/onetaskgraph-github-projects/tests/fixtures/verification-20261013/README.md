@@ -322,3 +322,37 @@ All 620 offline tests across the three changed crates, plus doctests, passed
 with `--test-threads=1` and only the two credentialed entry points excluded,
 using the aggregate command recorded above. The finished resolver also passed
 all four `lane_wiring` tests in a separate invocation.
+
+## Continuation verification at bc53590a
+
+The continued dispatch started with the executable repair already committed in
+`20562737` and its report in `bc53590a`; no additional launcher change was needed.
+The four unconditional `lane_wiring` tests passed again on Linux. Copying the
+finished regression into the detached `0bc6a76c` worktree made its recipe journey
+fail with `KeyError: 'executable'`, at the missing resolver. Windows remains the
+merge path's result, not a result obtained on this Linux host.
+
+Cargo built the detached `0bc6a76c` worktree inside the dispatch scratch directory.
+A local recording HTTP proxy then drove both actual live entry points against
+its loopback board and against the finished tree's board. Both runs issued the
+same 193 operations in order: HTTP methods, paths (ownership nonce normalized),
+and complete GraphQL operation documents. Their operation-sequence SHA-256 was
+`ac01993f647815a08a7d1cf4f2c7d87815fd8bbbba3051f2937de4400406d8e2`.
+The raw request payloads contain wall-clock ownership nonces and generated asset
+contents and are not claimed byte-identical. The recorded phase, operation hash,
+attempt, outcome and charge tuples were byte-identical, as was the complete
+reporter JSON: 174 points, 108 reported query points plus 66 modelled mutation
+points, 174 GraphQL requests and 19 REST requests. The detached worktree was
+removed. Only the local `test-token` was used; no live GitHub session ran.
+
+Clippy over all targets/features of the three changed crates with warnings denied,
+`cargo fmt --all -- --check`, the uncached workspace format check and
+`scripts/check-live-lane-selection.sh` passed again. Evidence for this continuation
+is retained under `$ONEPIPELINE_NODE_SCRATCH_DIR` as `*-current.log`,
+`regression-before.log`, `before-build.log`, `before-capture/` and `after-capture/`.
+
+The aggregate offline command recorded above passed all 620 tests and both
+library doctest suites again, with `--test-threads=1` and only the two credentialed
+entry points excluded. Real GitHub credentials and the live-required flag were
+removed from its environment. The final workspace format check passed after this
+verification note was added.
