@@ -34,13 +34,13 @@ MAPPINGS
 # than rows of the two sequential matrices: the account's macOS runner pool is small and
 # shared, and four macOS jobs in two stages queued a release behind itself for hours. What
 # the downstream jobs consume is held here by name, so the fold cannot rename an artifact.
-macos_job=$(sed -n '/^  macos-assets-carriers-and-wheels:/,/^  build-wheels:/p' .github/workflows/release.yml)
-[[ -n $macos_job ]] || fail "the release workflow has no macos-assets-carriers-and-wheels job ahead of build-wheels"
+macos_job=$(sed -n '/^  macos-assets-carriers-and-wheels:/,/^  collect-wheels:/p' .github/workflows/release.yml)
+[[ -n $macos_job ]] || fail "the release workflow has no macos-assets-carriers-and-wheels job ahead of collect-wheels"
 ! grep -Fq -- '- { os: macos-latest' .github/workflows/release.yml || fail "macOS must not be a row of a sequential matrix; both architectures build in the one macOS job"
 grep -Fq 'runs-on: macos-latest' <<< "$macos_job" || fail "the macOS job must run on macos-latest"
 grep -Fq 'TARGETS: x86_64-apple-darwin=darwin-x64 aarch64-apple-darwin=darwin-arm64' <<< "$macos_job" || fail "the macOS job must package both x86_64-apple-darwin=darwin-x64 and aarch64-apple-darwin=darwin-arm64"
 grep -Fq 'EXT: tar.gz' <<< "$macos_job" || fail "the macOS job must archive as tar.gz, which is what the installer expects"
-grep -Fq -- '--target x86_64-apple-darwin --target aarch64-apple-darwin' <<< "$macos_job" || fail "the macOS job must build both apple targets in one cargo build"
+grep -Fq 'with: { target: "x86_64-apple-darwin,aarch64-apple-darwin" }' <<< "$macos_job" || fail "the macOS job must install both Rust Darwin targets"
 for target in x86_64-apple-darwin aarch64-apple-darwin; do
   grep -Fq "$target; ext=tar.gz" scripts/install.sh || fail "$target is not mapped to tar.gz in the installer"
   grep -Fq "with: { target: \"$target\", args: \"--release --locked --out dist/wheels/$target\" }" <<< "$macos_job" || fail "the macOS job does not build the $target wheel into dist/wheels/$target"
@@ -49,34 +49,29 @@ done
 for npm in darwin-x64 darwin-arm64; do
   grep -Fq "with: { name: \"carrier-$npm\", path: \"dist/carriers/$npm/*.tgz\" }" <<< "$macos_job" || fail "the macOS job does not upload the $npm carrier as carrier-$npm, the name publish-npm downloads"
 done
-# The archives go up before the wheels are built: release-targets.toml says a consumer of
-# the archives waits on `pypi`, which is sound only in this order.
-archive_line=$(grep -Fn 'name: Archive, checksum, and attach' <<< "$macos_job" | head -n1 | cut -d: -f1)
+# Maturin owns the canonical bytes. Every other form is staged from those bytes,
+# and all registry publication waits for the Linux archive attachment after install proofs.
 wheel_line=$(grep -Fn 'PyO3/maturin-action' <<< "$macos_job" | head -n1 | cut -d: -f1)
-[[ -n $archive_line && -n $wheel_line && $archive_line -lt $wheel_line ]] || fail "the macOS job must attach the archives before it builds the wheels"
+archive_line=$(grep -Fn 'name: Archive, checksum, and stage' <<< "$macos_job" | head -n1 | cut -d: -f1)
+[[ -n $archive_line && -n $wheel_line && $wheel_line -lt $archive_line ]] || fail "the macOS job must build its canonical wheels before packaging archives"
+grep -Fq 'python3 scripts/release-wheel-binary.py' <<< "$macos_job" || fail "the macOS job must reuse maturin wheel binaries"
+grep -Fq 'python3 scripts/verify-release-products.py' <<< "$macos_job" || fail "the macOS job must install and run both staged products before publication"
 # One packaging body, in both jobs, byte for byte: a fix to one that left the other behind
 # would ship two releases' worth of archives from two different scripts.
-python3 - <<'PY' || fail "the two 'Archive, checksum, and attach' steps of the release workflow differ; keep their run bodies identical"
+python3 - <<'PY' || fail "the two 'Archive, checksum, and stage' steps of the release workflow differ; keep their run bodies identical"
 import re
 from pathlib import Path
 
 workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
-bodies = re.findall(r"(?ms)^      - name: Archive, checksum, and attach\n.*?^        run: \|\n(.*?)(?=^      - )", workflow)
+bodies = re.findall(r"(?ms)^      - name: Archive, checksum, and stage\n.*?^        run: \|\n(.*?)(?=^      - )", workflow)
 raise SystemExit(0 if len(bodies) == 2 and bodies[0] == bodies[1] else 1)
 PY
-wheel_job=$(sed -n '/^  build-wheels:/,/^  build-distributions:/p' .github/workflows/release.yml)
-grep -Fq 'runs-on: ${{ matrix.os }}' <<< "$wheel_job" || fail "build-wheels must take its runner from matrix.os"
-[[ $(grep -Fc -- '- { os:' <<< "$wheel_job") -eq 3 ]] || fail "build-wheels must contain exactly three target/runner entries; the macOS wheels are the macOS job's"
-while read -r os target; do
-  grep -Fq -- "- { os: $os, target: $target }" <<< "$wheel_job" || fail "build-wheels does not map $target to $os"
-done <<'WHEEL_MAPPINGS'
-ubuntu-latest x86_64-unknown-linux-gnu
-ubuntu-24.04-arm aarch64-unknown-linux-gnu
-windows-latest x86_64-pc-windows-msvc
-WHEEL_MAPPINGS
-grep -Fq 'needs: [build-wheels, macos-assets-carriers-and-wheels, build-distributions]' .github/workflows/release.yml || fail "publish-python must wait on the macOS job as well as build-wheels, or it publishes without the macOS wheels"
-grep -Fq 'needs: [native-assets-and-carriers, macos-assets-carriers-and-wheels, build-distributions]' .github/workflows/release.yml || fail "publish-npm must wait on the macOS job as well as native-assets-and-carriers, or it publishes without the darwin carriers"
-grep -Fq 'gh release upload "$TAG" "$asset" "$asset.sha256" --clobber' .github/workflows/release.yml || fail "release asset uploads must replace assets left by an earlier attempt"
+wheel_job=$(sed -n '/^  collect-wheels:/,/^  build-distributions:/p' .github/workflows/release.yml)
+grep -Fq 'runs-on: ubuntu-latest' <<< "$wheel_job" || fail "wheel fan-in and asset attachment must run on Linux"
+grep -Fq 'pattern: "wheels-*"' <<< "$wheel_job" || fail "wheel fan-in must read every built target"
+grep -Fq 'needs: [collect-wheels, macos-assets-carriers-and-wheels, build-distributions, publish-assets]' .github/workflows/release.yml || fail "publish-python must wait on installed macOS wheels and attached archives"
+grep -Fq 'needs: [native-assets-and-carriers, macos-assets-carriers-and-wheels, build-distributions, publish-assets]' .github/workflows/release.yml || fail "publish-npm must wait on installed Darwin carriers and attached archives"
+grep -Fq 'gh release upload "$TAG" dist/assets/* --clobber --repo "$GITHUB_REPOSITORY"' .github/workflows/release.yml || fail "Linux release asset uploads must replace assets left by an earlier attempt"
 crate_job=$(sed -n '/^  publish-crates:/,/^  publish-python:/p' .github/workflows/release.yml)
 grep -Fq 'publication=$(scripts/crate-publication-status.sh "$crate" "$version") || exit $?' <<< "$crate_job" || fail "crate publication must decide from scripts/crate-publication-status.sh, which identifies the caller to crates.io"
 ! grep -Eq 'curl|wget' <<< "$crate_job" || fail "the crates.io existence query must stay in scripts/crate-publication-status.sh, where the caller is identified to the registry"

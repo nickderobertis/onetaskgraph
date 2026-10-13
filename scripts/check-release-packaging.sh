@@ -31,6 +31,13 @@ if [ ! -r "$ROOT/scripts/scratch-clone.sh" ] || ! source "$ROOT/scripts/scratch-
     "restore it with 'git checkout -- scripts/scratch-clone.sh' and rerun"
 fi
 readonly WORKFLOW=".github/workflows/release.yml"
+python_bin=$(command -v python3 || true)
+[ -n "$python_bin" ] || fatal "python3 is not on PATH" "install Python 3 and rerun this packaging proof"
+case $python_bin in
+  /* | ?:[\\/]*) ;;
+  *) python_bin=$(cd "$(dirname "$python_bin")" && pwd)/$(basename "$python_bin") ;;
+esac
+
 
 for tool in npm python3 tar; do
   command -v "$tool" >/dev/null 2>&1 || fatal \
@@ -55,9 +62,9 @@ job = re.search(r"(?ms)^  macos-assets-carriers-and-wheels:\n(.*?)(?=^  [a-z-]+:
 if not job:
     print("check-release-packaging: the release workflow has no macos-assets-carriers-and-wheels job", file=sys.stderr)
     raise SystemExit(1)
-body = re.search(r"(?ms)^      - name: Archive, checksum, and attach\n.*?^        run: \|\n(.*?)(?=^      - )", job.group(1))
+body = re.search(r"(?ms)^      - name: Archive, checksum, and stage\n.*?^        run: \|\n(.*?)(?=^      - )", job.group(1))
 if not body:
-    print("check-release-packaging: the macOS job has no 'Archive, checksum, and attach' step with a `run: |` body", file=sys.stderr)
+    print("check-release-packaging: the macOS job has no 'Archive, checksum, and stage' step with a `run: |` body", file=sys.stderr)
     raise SystemExit(1)
 lines = body.group(1).splitlines()
 margin = min((len(line) - len(line.lstrip()) for line in lines if line.strip()), default=0)
@@ -80,7 +87,7 @@ for pair in $targets; do
     "restore the job's TARGETS to pairs like x86_64-apple-darwin=darwin-x64"
 done
 
-# A stand-in binary per target, and a `gh` that records each upload rather than making it.
+# A stand-in binary per target, and a `gh` that records any premature upload.
 readonly TREE="$scratch/tree"
 mkdir -p "$TREE" "$scratch/bin" || fatal "could not create $TREE" "check the permissions of \$TMPDIR, then rerun"
 copy_tracked_files "$ROOT" "$TREE" npm/platforms || fatal \
@@ -139,8 +146,8 @@ for pair in $targets; do
     report_unless_archive_lists "$TREE/$asset" onetaskgraph \
       "$asset does not carry a bare 'onetaskgraph' at its root, which is what the installer extracts"
   fi
-  grep -qF -- "release upload $tag $asset $asset.sha256 --clobber" "$UPLOADS" 2>/dev/null || report \
-    "the step never asked gh to upload $asset and its checksum to $tag with --clobber"
+  cmp "$TREE/$asset" "$TREE/dist/assets/$asset" || report "the staged archive differs from $asset"
+  cmp "$TREE/$asset.sha256" "$TREE/dist/assets/$asset.sha256" || report "the staged checksum differs from $asset.sha256"
   carrier="$TREE/dist/carriers/$npm_platform/onetaskgraph-cli-$npm_platform-$version.tgz"
   [ -f "$carrier" ] || report "the step left no carrier at dist/carriers/$npm_platform/onetaskgraph-cli-$npm_platform-$version.tgz, which is the path and name scripts/publish-npm.sh reads after the carrier-$npm_platform artifact is downloaded"
   if [ -f "$carrier" ]; then
@@ -149,10 +156,31 @@ for pair in $targets; do
     [ "$packed_name" = "@onetaskgraph/cli-$npm_platform" ] || report "the $npm_platform carrier's manifest names '$packed_name', expected @onetaskgraph/cli-$npm_platform"
   fi
 done
-if [ -f "$UPLOADS" ] && [ "$(wc -l < "$UPLOADS" | tr -d ' ')" -ne 2 ]; then
-  report "the step made $(wc -l < "$UPLOADS" | tr -d ' ') gh calls over two targets, expected exactly two uploads:"
-  sed 's/^/    /' "$UPLOADS" >&2
-fi
+[ ! -f "$UPLOADS" ] || report "the builder published an asset before install verification"
+
+# Foreign architectures are verified as artifacts; this Linux journey does not execute
+# Darwin payloads. The production verifier compares their wheel/archive/npm byte hashes.
+for pair in $targets; do
+  target="${pair%%=*}"; npm_platform="${pair#*=}"
+  if ! "$python_bin" - "$TREE" "$target" "$version" <<'PYWHEEL'
+from pathlib import Path
+import sys
+import zipfile
+root, target, version = sys.argv[1:]
+root = Path(root)
+arch = "arm64" if target.startswith("aarch64") else "x86_64"
+platform = "macosx_11_0_" + arch
+wheel_dir = root / "dist/wheels" / target
+wheel_dir.mkdir(parents=True, exist_ok=True)
+with zipfile.ZipFile(wheel_dir / f"onetaskgraph_cli-{version}-py3-none-{platform}.whl", "w") as wheel:
+    wheel.writestr(f"onetaskgraph_cli-{version}.data/scripts/onetaskgraph", (root / "target" / target / "release/onetaskgraph").read_bytes())
+    wheel.writestr(f"onetaskgraph_cli-{version}.dist-info/METADATA", f"Name: onetaskgraph-cli\nVersion: {version}\n")
+    wheel.writestr(f"onetaskgraph_cli-{version}.dist-info/WHEEL", f"Tag: py3-none-{platform}\n")
+PYWHEEL
+  then report "could not stage the $target wheel fixture"; fi
+  (cd "$TREE" && "$python_bin" "$ROOT/scripts/verify-release-products.py" --target "$target" --npm "$npm_platform" --tag "$tag" > /dev/null) || report "the production verifier refused the $target artifact contract"
+done
+
 
 # 2. A tag the installer would refuse is refused here first, before anything is built.
 rm -f "$UPLOADS"
@@ -167,6 +195,6 @@ fi
 
 if [ "$failures" -ne 0 ]; then
   echo "check-release-packaging: $failures finding(s)." >&2
-  echo "check-release-packaging: repair the 'Archive, checksum, and attach' step of $WORKFLOW rather than these cases." >&2
+  echo "check-release-packaging: repair the 'Archive, checksum, and stage' step of $WORKFLOW rather than these cases." >&2
   exit 1
 fi

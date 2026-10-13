@@ -1255,30 +1255,21 @@ bar is what it was, plus one refusal that names the gallery to review. The captu
   from a tree-sensitive check would tell the engine to stop retrying a tree it never
   finished checking. `scripts/check-pre-push-provisioning.sh` holds the hook to exactly
   one such line when the tool is missing or wrong and to none when it is there.
-- **Both macOS architectures are one release job, and a push to main schedules no macOS
-  lane the pull request already proved.** The account has one small macOS runner pool,
-  shared by every push to main and every release, and `.github/workflows/release.yml`
-  used to put two macOS rows in the native-asset matrix and two more in `build-wheels`
-  behind it — four sequential jobs that queued a merge-to-PyPI behind itself for hours
-  (#1991). `macos-assets-carriers-and-wheels` now builds both apple targets in one cargo
-  build on the one arm64 runner, attaches both archives, packs both carriers and builds
-  both wheels, under exactly the artifact names the publish jobs download;
-  `scripts/check-distribution-contract.sh` holds that shape and
-  `scripts/check-release-packaging.sh` runs the packaging step, read out of the workflow,
-  over both targets. On the CI side `scripts/macos-lane-selection.sh` is the ONE
-  implementation of whether a push to main needs its macOS lanes: `proven` only when
-  GitHub lists a pull request merged AS that commit, `refs/pull/<n>/head` still names the
-  head it reports and that head's tree is byte-for-byte the pushed tree, and the most
-  recent run of every macOS check on that head concluded success — and **any question it
-  cannot answer is `run`**, because a runner spent is recoverable and a lane skipped is
-  not. `.github/workflows/ci.yml` consults it in a push-only `macos-lanes` job whose
-  output both matrices read through `fromJson(... || <the full list>)` under
-  `if: ${{ !cancelled() }}`, so on every pull request — where that job is skipped — the
-  matrices are the full list and the required check names are exactly what they were, and
-  a decision that fails schedules everything rather than nothing.
-  `scripts/check-macos-lane-selection.sh`, a command in `scripts:test`, drives the decision
-  over real git states and a stand-in GitHub, holds the workflow to that shape, and runs
-  the workflow's own selection step over both answers.
+- **One Mac job per run, and two Mac-spending runs per single-push lifecycle.** CI
+  combines the former Mac check and install assertions sequentially. Linux carriers keep
+  `check (macos-latest)` and `install path (macos-latest)` required on every PR, using
+  `always()` and `.github/macos-result.mjs` to refuse failed, cancelled or missing proofs.
+  Main pushes never schedule Mac. `.github/macos-policy.mjs` admits a release-only PR
+  only from a same-repository `release-plz-` branch with a semantic version/changelog-only
+  diff; an unreadable PR requires coverage. The author is not authority: release-plz
+  uses the owner's PAT. An explicit manual diagnostic is default off.
+  Release builds both Darwin wheels on one Apple Silicon runner, then uses each wheel's
+  binary for its archive and npm carrier. Install/run proofs (Rosetta for x86_64) precede
+  Linux asset attachment and registry publication. The production packaging journey and
+  `.github/tests/` hold payload hashes, required names, event routing and reusable calls;
+  `github-workflows:test` records ignored telemetry and its `budgets` target alone applies
+  the two limits in `.github/budgets.yaml`. No Mac work runs on schedules or downstream
+  automatic triggers.
 - **Registry lag alone never proposes a release.** `scripts/select-release-version.sh`
   recovers a partly failed publish only when `release-plz.toml`'s own `release_commits`
   policy — the single declared one, read rather than restated — accepts a commit since the

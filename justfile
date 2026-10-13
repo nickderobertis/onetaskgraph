@@ -204,3 +204,11 @@ lint-llm-validate *args:
 lint-llm-diff base="origin/main" *args:
     @command -v llmlint >/dev/null 2>&1 || { echo "llmlint not installed — run 'just setup-llmlint'"; exit 1; }
     @llmlint --diff --diff-base "{{base}}" {{args}}
+
+# Private workflow tooling stays isolated from the product SDK workspace.
+github-workflows-bootstrap:
+    @bun install --cwd .github --frozen-lockfile
+
+# Focused workflow graph, required-context and budget proofs.
+github-workflows-check:
+    @{{nx}} run-many -t check --projects github-workflows

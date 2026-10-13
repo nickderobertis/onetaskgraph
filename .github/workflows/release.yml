@@ -7,8 +7,6 @@ permissions:
 # llmlint: ignore-block[changed_behavior_has_e2e] Proving these jobs requires publishing a GitHub Release and registry packages, which a pre-publication dispatch cannot perform.
 jobs:
   native-assets-and-carriers:
-    permissions:
-      contents: write
     strategy:
       matrix:
         include:
@@ -20,12 +18,20 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with: { target: "${{ matrix.target }}" }
-      - run: cargo build --release --locked --target "${{ matrix.target }}" -p onetaskgraph
+      - uses: PyO3/maturin-action@v1
         env: { RUSTFLAGS: "-D warnings" }
+        with: { target: "${{ matrix.target }}", args: "--release --locked --out dist/wheels/${{ matrix.target }}" }
+      - name: Reuse the wheel binary
+        shell: bash
+        env: { TARGET: "${{ matrix.target }}", EXT: "${{ matrix.ext }}" }
+        run: |
+          binary=onetaskgraph
+          [ "$EXT" != zip ] || binary=onetaskgraph.exe
+          python3 scripts/release-wheel-binary.py --wheels "dist/wheels/$TARGET" --binary "target/$TARGET/release/$binary"
       # One packaging body, shared byte for byte with the macOS job below over `TARGETS`
       # pairs of <rust target>=<npm platform>; scripts/check-distribution-contract.sh holds
       # the two copies identical, so a fix to one cannot leave the other behind.
-      - name: Archive, checksum, and attach
+      - name: Archive, checksum, and stage
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -41,26 +47,26 @@ jobs:
             if [ "$EXT" = zip ]; then 7z a "${name}.zip" "$bin"; else tar -czf "${name}.tar.gz" -C "$(dirname "$bin")" "$(basename "$bin")"; fi
             asset="${name}.${EXT}"
             if command -v sha256sum >/dev/null; then sha256sum "$asset" > "$asset.sha256"; else shasum -a 256 "$asset" > "$asset.sha256"; fi
-            gh release upload "$TAG" "$asset" "$asset.sha256" --clobber
+            mkdir -p dist/assets
+            cp "$asset" "$asset.sha256" dist/assets/
             mkdir -p "carrier/${npm_platform}/bin" "dist/carriers/${npm_platform}"
             cp "npm/platforms/${npm_platform}/package.json" "carrier/${npm_platform}/package.json"
             cp "$bin" "carrier/${npm_platform}/bin/$(basename "$bin")"
             npm pack ./carrier/"${npm_platform}" --pack-destination "dist/carriers/${npm_platform}"
           done
+      - name: Verify and install staged products
+        shell: bash
+        env: { TARGET: "${{ matrix.target }}", NPM_PLATFORM: "${{ matrix.npm }}", EXT: "${{ matrix.ext }}", TAG: "${{ github.event.release.tag_name }}" }
+        run: python3 scripts/verify-release-products.py --target "$TARGET" --npm "$NPM_PLATFORM" --ext "$EXT" --tag "$TAG" --install
+      - uses: actions/upload-artifact@v4
+        with: { name: "wheels-${{ matrix.target }}", path: "dist/wheels/${{ matrix.target }}" }
+      - uses: actions/upload-artifact@v4
+        with: { name: "assets-${{ matrix.target }}", path: dist/assets }
       - uses: actions/upload-artifact@v4
         with: { name: "carrier-${{ matrix.npm }}", path: "dist/carriers/${{ matrix.npm }}/*.tgz" }
-  # Both macOS architectures in ONE job, native assets and wheels alike, rather than two
-  # rows of the matrix above and two more of build-wheels below that could only start once
-  # that whole matrix had finished. The account has one small macOS runner pool, shared with
-  # every push to main, and four sequential macOS jobs queued a merge-to-PyPI behind itself
-  # for hours (#1991). The runner is arm64 and cross-compiles the x86_64 target, which cargo
-  # and maturin both do from one host once the target is installed; the artifact names are
-  # the ones build-wheels and the carrier download below expect, so nothing downstream can
-  # tell which job built them. The archives are uploaded before the wheels are built, which
-  # is the order release-targets.toml relies on: a consumer of the archives waits on `pypi`.
+  # One Apple Silicon host builds both Darwin wheels; their payloads are the single
+  # input to archives and npm carriers. Both staged architectures run before publication.
   macos-assets-carriers-and-wheels:
-    permissions:
-      contents: write
     runs-on: macos-latest
     env:
       TARGETS: x86_64-apple-darwin=darwin-x64 aarch64-apple-darwin=darwin-arm64
@@ -68,9 +74,19 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with: { target: "x86_64-apple-darwin,aarch64-apple-darwin" }
-      - run: cargo build --release --locked --target x86_64-apple-darwin --target aarch64-apple-darwin -p onetaskgraph
+      - uses: PyO3/maturin-action@v1
         env: { RUSTFLAGS: "-D warnings" }
-      - name: Archive, checksum, and attach
+        with: { target: "x86_64-apple-darwin", args: "--release --locked --out dist/wheels/x86_64-apple-darwin" }
+      - uses: PyO3/maturin-action@v1
+        env: { RUSTFLAGS: "-D warnings" }
+        with: { target: "aarch64-apple-darwin", args: "--release --locked --out dist/wheels/aarch64-apple-darwin" }
+      - name: Reuse the wheel binaries
+        run: |
+          for pair in $TARGETS; do
+            target="${pair%%=*}"
+            python3 scripts/release-wheel-binary.py --wheels "dist/wheels/$target" --binary "target/$target/release/onetaskgraph"
+          done
+      - name: Archive, checksum, and stage
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -85,42 +101,45 @@ jobs:
             if [ "$EXT" = zip ]; then 7z a "${name}.zip" "$bin"; else tar -czf "${name}.tar.gz" -C "$(dirname "$bin")" "$(basename "$bin")"; fi
             asset="${name}.${EXT}"
             if command -v sha256sum >/dev/null; then sha256sum "$asset" > "$asset.sha256"; else shasum -a 256 "$asset" > "$asset.sha256"; fi
-            gh release upload "$TAG" "$asset" "$asset.sha256" --clobber
+            mkdir -p dist/assets
+            cp "$asset" "$asset.sha256" dist/assets/
             mkdir -p "carrier/${npm_platform}/bin" "dist/carriers/${npm_platform}"
             cp "npm/platforms/${npm_platform}/package.json" "carrier/${npm_platform}/package.json"
             cp "$bin" "carrier/${npm_platform}/bin/$(basename "$bin")"
             npm pack ./carrier/"${npm_platform}" --pack-destination "dist/carriers/${npm_platform}"
           done
+      - name: Install and run both Darwin architectures
+        env: { TAG: "${{ github.event.release.tag_name }}" }
+        run: |
+          softwareupdate --install-rosetta --agree-to-license
+          for pair in $TARGETS; do
+            python3 scripts/verify-release-products.py --target "${pair%%=*}" --npm "${pair#*=}" --tag "$TAG" --install
+          done
+      - uses: actions/upload-artifact@v4
+        with: { name: assets-darwin, path: dist/assets }
       - uses: actions/upload-artifact@v4
         with: { name: "carrier-darwin-x64", path: "dist/carriers/darwin-x64/*.tgz" }
       - uses: actions/upload-artifact@v4
         with: { name: "carrier-darwin-arm64", path: "dist/carriers/darwin-arm64/*.tgz" }
-      - uses: PyO3/maturin-action@v1
-        env: { RUSTFLAGS: "-D warnings" }
-        with: { target: "x86_64-apple-darwin", args: "--release --locked --out dist/wheels/x86_64-apple-darwin" }
-      - uses: PyO3/maturin-action@v1
-        env: { RUSTFLAGS: "-D warnings" }
-        with: { target: "aarch64-apple-darwin", args: "--release --locked --out dist/wheels/aarch64-apple-darwin" }
       - uses: actions/upload-artifact@v4
         with: { name: "wheels-x86_64-apple-darwin", path: dist/wheels/x86_64-apple-darwin }
       - uses: actions/upload-artifact@v4
         with: { name: "wheels-aarch64-apple-darwin", path: dist/wheels/aarch64-apple-darwin }
-  build-wheels:
-    needs: native-assets-and-carriers
-    strategy:
-      matrix:
-        include:
-          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu }
-          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
-          - { os: windows-latest, target: x86_64-pc-windows-msvc }
-    runs-on: ${{ matrix.os }}
+  collect-wheels:
+    needs: [native-assets-and-carriers, macos-assets-carriers-and-wheels]
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: PyO3/maturin-action@v1
-        env: { RUSTFLAGS: "-D warnings" }
-        with: { target: "${{ matrix.target }}", args: "--release --locked --out dist" }
-      - uses: actions/upload-artifact@v4
-        with: { name: "wheels-${{ matrix.target }}", path: dist }
+      - uses: actions/download-artifact@v4
+        with: { pattern: "wheels-*", path: dist/wheels, merge-multiple: true }
+  publish-assets:
+    needs: [native-assets-and-carriers, macos-assets-carriers-and-wheels]
+    runs-on: ubuntu-latest
+    permissions: { contents: write }
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { pattern: "assets-*", path: dist/assets, merge-multiple: true }
+      - env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}", TAG: "${{ github.event.release.tag_name }}" }
+        run: gh release upload "$TAG" dist/assets/* --clobber --repo "$GITHUB_REPOSITORY"
   build-distributions:
     needs: native-assets-and-carriers
     runs-on: ubuntu-latest
@@ -136,7 +155,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: { name: distributions, path: dist }
   publish-crates:
-    needs: native-assets-and-carriers
+    needs: [native-assets-and-carriers, macos-assets-carriers-and-wheels, publish-assets]
     if: ${{ vars.CARGO_PUBLISH == 'true' }}
     runs-on: ubuntu-latest
     steps:
@@ -154,7 +173,7 @@ jobs:
             esac
           done
   publish-python:
-    needs: [build-wheels, macos-assets-carriers-and-wheels, build-distributions]
+    needs: [collect-wheels, macos-assets-carriers-and-wheels, build-distributions, publish-assets]
     if: ${{ vars.PYPI_PUBLISH == 'true' }}
     runs-on: ubuntu-latest
     steps:
@@ -169,7 +188,7 @@ jobs:
           uv publish --check-url https://pypi.org/simple/onetaskgraph-cli/ dist/cli/*
           uv publish --check-url https://pypi.org/simple/onetaskgraph-sdk/ dist/all/python-sdk/*
   publish-npm:
-    needs: [native-assets-and-carriers, macos-assets-carriers-and-wheels, build-distributions]
+    needs: [native-assets-and-carriers, macos-assets-carriers-and-wheels, build-distributions, publish-assets]
     if: ${{ vars.NPM_PUBLISH == 'true' }}
     runs-on: ubuntu-latest
     steps:

@@ -1,0 +1,78 @@
+{
+  "$schema": "../node_modules/nx/schemas/project-schema.json",
+  "name": "github-workflows",
+  "projectType": "library",
+  "tags": ["lang:javascript", "layer:workspace"],
+  "namedInputs": {
+    "default": [
+      "{projectRoot}/**/*",
+      "!{projectRoot}/node_modules/**/*",
+      "!{projectRoot}/.telemetry/**/*",
+      "{workspaceRoot}/release-targets.toml",
+      "{workspaceRoot}/screencomp.toml",
+      "{workspaceRoot}/scripts/product_versions.py"
+    ]
+  },
+  "targets": {
+    "bootstrap": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "just github-workflows-bootstrap"
+      }
+    },
+    "check": {
+      "executor": "nx:noop",
+      "dependsOn": ["format-check", "lint", "typecheck", "coverage", "budgets"]
+    },
+    "format": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bun run biome format --write .github/*.mjs .github/*.ts .github/tests/*.mjs .github/*.json"
+      },
+      "cache": false
+    },
+    "format-check": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bun run biome format .github/*.mjs .github/*.ts .github/tests/*.mjs .github/*.json"
+      }
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "options": {
+        "commands": [
+          "bun run biome lint --error-on-warnings .github/*.mjs .github/*.ts .github/tests/*.mjs .github/*.json"
+        ],
+        "parallel": false
+      }
+    },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bun run tsc -p .github/tsconfig.json"
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["bootstrap"],
+      "options": {
+        "command": "node --test .github/tests/*.test.mjs"
+      },
+      "cache": false,
+      "outputs": ["{projectRoot}/.telemetry/macos-policy.json"]
+    },
+    "budgets": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["test"],
+      "options": {
+        "command": "bun run onebudgetspec check .github/budgets.yaml"
+      },
+      "cache": false
+    },
+    "coverage": {
+      "executor": "nx:noop",
+      "//": "Declared empty to preserve the repository standard target inventory, as scripts:coverage does; this private workflow tooling has executable subprocess and graph contracts but no separate coverage metric or new product coverage threshold."
+    }
+  },
+  "//": "llmlint: ignore-file[projects_stay_in_one_js_workspace] The task requires this private workflow-tooling project and lockfile to stay isolated from public SDK dependency resolution; its bootstrap installs only YAML, Actions expressions and budget reporting in .github."
+}

@@ -1,0 +1,11 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "target": "ES2023",
+    "module": "NodeNext",
+    "skipLibCheck": true,
+    "types": []
+  },
+  "include": ["telemetry.ts"]
+}
