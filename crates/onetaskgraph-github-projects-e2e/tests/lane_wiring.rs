@@ -32,8 +32,14 @@ fn test_recipe_launches_the_real_nx_script_through_bash() {
         ),
     );
     assert_ne!(query, rendered);
-    let output = std::process::Command::new("bash")
-        .args(["-uc", &query])
+    let runner = root.join("crates/onetaskgraph-github-projects-e2e/lane_runner.py");
+    // Use the adapter's real resolver for the outer shell too, so Windows never
+    // resolves System32's WSL launcher before reaching the recipe under test.
+    let launch = "import runpy,subprocess,sys; from pathlib import Path; m=runpy.run_path(sys.argv[1]); b=m['executable']('bash'); assert Path(b).is_absolute(); sys.exit(subprocess.call([b,'-uc',sys.argv[2]]))";
+    let output = std::process::Command::new("python3")
+        .args(["-c", launch])
+        .arg(&runner)
+        .arg(&query)
         .current_dir(root)
         .env("NX_DAEMON", "false")
         .env("NX_BASE", "missing-base-for-recipe-launch")
@@ -48,11 +54,10 @@ fn test_recipe_launches_the_real_nx_script_through_bash() {
     let parsed: Value = serde_json::from_slice(&std::fs::read(&graph).unwrap()).unwrap();
     assert!(parsed["tasks"]["tasks"]["onetaskgraph-github-projects:test"].is_object());
     std::fs::remove_file(&graph).unwrap();
-    let refused = std::process::Command::new("bash")
-        .args([
-            "-uc",
-            &query.replace("./scripts/nx.sh", "./scripts/missing-nx-launch.sh"),
-        ])
+    let refused = std::process::Command::new("python3")
+        .args(["-c", launch])
+        .arg(&runner)
+        .arg(query.replace("./scripts/nx.sh", "./scripts/missing-nx-launch.sh"))
         .current_dir(root)
         .env("NX_BASE", "missing-base-for-recipe-launch")
         .env_remove("GH_PROJECTS_TOKEN")

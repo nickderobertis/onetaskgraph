@@ -7,6 +7,7 @@ import re
 from typing import NewType
 from pathlib import Path
 import shlex
+import shutil
 import sys
 import uuid
 
@@ -32,10 +33,31 @@ class ProcessResult:
     stderr: str
 
 
+def executable(name: str) -> str:
+    if os.name == "nt" and name == "bash":
+        # Search PATH ourselves: CreateProcess otherwise prefers System32's WSL
+        # launcher. Git Bash is identified by its accompanying MSYS runtime.
+        candidates = [Path(directory) / "bash.exe" for directory in os.get_exec_path()]
+        git = shutil.which("git.exe")
+        if git:
+            git_root = Path(git).resolve().parent.parent
+            candidates.extend([git_root / "bin/bash.exe", git_root / "usr/bin/bash.exe"])
+        for candidate in candidates:
+            runtimes = [candidate.parent / "msys-2.0.dll",
+                        candidate.parent.parent / "usr/bin/msys-2.0.dll"]
+            if candidate.is_file() and any(runtime.is_file() for runtime in runtimes):
+                return str(candidate.resolve())
+        raise ValueError("Git for Windows Bash executable with MSYS runtime not found on PATH")
+    resolved = shutil.which(name)
+    if resolved is None:
+        raise ValueError(f"executable not found: {name}")
+    return str(Path(resolved).resolve())
+
+
 async def execute(command: list[str], root: Path, *, capture: bool = False,
                   environment: dict[str, str] | None = None) -> ProcessResult:
     process = await asyncio.create_subprocess_exec(
-        *command, cwd=root, env=environment,
+        executable(command[0]), *command[1:], cwd=root, env=environment,
         stdout=asyncio.subprocess.PIPE if capture else None,
         stderr=asyncio.subprocess.PIPE if capture else None,
     )
