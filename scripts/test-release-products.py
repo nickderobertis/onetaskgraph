@@ -18,7 +18,7 @@ import tarfile
 import tempfile
 import tomllib
 import zipfile
-from release_products import RustTarget, NpmPlatform, RunnerLabel, ArchiveFormat, VerificationReport, validate_target, validate_npm_platform
+from release_products import bash_executable, RustTarget, NpmPlatform, RunnerLabel, ArchiveFormat, VerificationReport, validate_target, validate_npm_platform
 from product_versions import SEMANTIC_VERSION_RE, SemanticVersion
 
 PYTHON_EXECUTABLE = str(Path(sys.executable).resolve())
@@ -116,7 +116,7 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
         canonical = tree / f'target/{target}/release/{binary}'
         subprocess.run([PYTHON_EXECUTABLE, 'scripts/release-wheel-binary.py', '--wheels', str(wheels), '--binary', str(canonical)], cwd=tree, check=True, stdout=subprocess.DEVNULL)
         env = {**os.environ, 'TARGETS': f'{target}={selected.npm_platform}', 'EXT': selected.extension, 'TAG': f'v{version}'}
-        subprocess.run(['bash', '-c', body], cwd=tree, env=env, check=True)
+        subprocess.run([bash_executable(platform.system()), '-c', body], cwd=tree, env=env, check=True)
         command = [PYTHON_EXECUTABLE, 'scripts/verify-release-products.py', '--target', target, '--npm', selected.npm_platform, '--tag', f'v{version}', '--ext', selected.extension]
         installed = subprocess.run(command + ['--install'], cwd=tree, capture_output=True, text=True)
         if installed.returncode:
@@ -336,11 +336,11 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
             with zipfile.ZipFile(wheel_path, 'w') as wheel:
                 for info, data in contents.values():
                     wheel.writestr(info, data)
-            subprocess.run(['bash', '-c', body], cwd=tree, env=env, check=True, stdout=subprocess.DEVNULL)
+            subprocess.run([bash_executable(platform.system()), '-c', body], cwd=tree, env=env, check=True, stdout=subprocess.DEVNULL)
             refuses(reason)
             canonical.write_bytes(original_binary)
             wheel_path.write_bytes(original_wheel)
-            subprocess.run(['bash', '-c', body], cwd=tree, env=env, check=True, stdout=subprocess.DEVNULL)
+            subprocess.run([bash_executable(platform.system()), '-c', body], cwd=tree, env=env, check=True, stdout=subprocess.DEVNULL)
         subprocess.run(command, cwd=tree, check=True, stdout=subprocess.DEVNULL)
 
 

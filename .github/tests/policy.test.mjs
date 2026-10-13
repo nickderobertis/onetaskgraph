@@ -15,7 +15,10 @@ import {
   resolve as resolveValue,
   root,
   workflows,
+  validateEventInventory,
 } from "../workflow-graph.mjs";
+
+validateEventInventory(JSON.parse(read(".github/event-classes.json")));
 
 const policy =
   process.env.MACOS_POLICY_TEST_PROGRAM ||
@@ -507,17 +510,12 @@ test("workflow matrices, event fan-out and exact release head model record sched
   for (const diff of ["source", "version", "dependency"])
     for (const fork of [false, true])
       for (let optional = 0; optional < 8; optional++) {
-        const sequence = [
-          ["pr-synchronize", diff, fork],
-          ["base-push", diff, false],
-          ["pr-opened", "version", false],
-          ["release-pr-merge", "version", false],
-          ["release-tag", "version", false],
-          ["release-published", "version", false],
-          ["downstream", "version", false],
-          ["dispatch", "version", false],
-          ["schedule", "version", false],
-        ];
+        const sequence = [["pr-synchronize", diff, fork]];
+        for (const entry of JSON.parse(read(".github/event-classes.json"))) {
+          if (["pull_request", "workflow_dispatch"].includes(entry.event)) continue;
+          sequence.push([entry.id, entry.id === "base-push" ? diff : "version", false]);
+          if (entry.id === "base-push") sequence.push(["pr-opened", "version", false]);
+        }
         const runs = sequence.flatMap(([id, d, f]) =>
           scenarios
             .find(

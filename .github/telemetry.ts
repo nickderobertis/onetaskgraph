@@ -1,3 +1,7 @@
+export function isMacosRunner(labels: readonly string[]): boolean {
+  return labels.some((label) => /^macos-[a-z0-9.-]+$/i.test(label));
+}
+
 /** Runtime validation narrows the recorded graph before the SDK reporter consumes it. */
 export interface JobRow {
   job: string;
@@ -60,7 +64,7 @@ function job(value: unknown): asserts value is JobRow {
     string(label);
     return label;
   });
-  const macos = labels.some((label) => /^macos-[a-z0-9.-]+$/i.test(label));
+  const macos = isMacosRunner(labels);
   if (
     value.macos !== macos ||
     !labels.some((label) => /^(?:ubuntu|windows|macos)-[a-z0-9.-]+$/i.test(label))

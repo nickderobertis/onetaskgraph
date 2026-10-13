@@ -3,6 +3,7 @@ from dataclasses import dataclass
 import json
 from typing import Literal, NewType
 import re
+import shutil
 from pathlib import Path
 from product_versions import SemanticVersion
 
@@ -14,6 +15,23 @@ RunnerLabel = NewType("RunnerLabel", str)
 ArchiveFormat = Literal["tar.gz", "zip"]
 ReleaseOS = Literal["Darwin", "Windows", "Linux"]
 WheelArchitecture = Literal["arm64", "aarch64", "amd64", "x86_64"]
+
+
+def bash_executable(system: str) -> str:
+    """Select Git Bash on Windows, where PATH may prefer the WSL launcher."""
+    if system == 'Windows':
+        git = shutil.which('git')
+        if git is not None:
+            installation = Path(git).resolve().parent.parent
+            for relative in ('bin/bash.exe', 'usr/bin/bash.exe'):
+                candidate = installation / relative
+                if candidate.is_file():
+                    return str(candidate)
+        raise ValueError('Git Bash could not be found beside git; install Git for Windows before packaging')
+    bash = shutil.which('bash')
+    if bash is None:
+        raise ValueError('bash could not be found; install bash before packaging')
+    return str(Path(bash).resolve())
 
 
 def validate_target(value: str) -> None:

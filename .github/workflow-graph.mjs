@@ -4,15 +4,110 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse } from "yaml";
+import { isMacosRunner } from "./telemetry.ts";
 import { data, Evaluator, Lexer, Parser } from "./actions-expressions.mjs";
 
 export const root = new URL("../", import.meta.url);
 export const read = (path) => readFileSync(new URL(path, root), "utf8");
+function record(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+function validatedJob(job, path) {
+  const scalarMap = (value) =>
+    record(value) &&
+    Object.values(value).every((entry) => ["string", "boolean", "number"].includes(typeof entry));
+  if (
+    !record(job) ||
+    (!job.uses && !job["runs-on"]) ||
+    (job.uses !== undefined && typeof job.uses !== "string") ||
+    (job.name !== undefined && typeof job.name !== "string") ||
+    (job.needs !== undefined &&
+      !(
+        typeof job.needs === "string" ||
+        (Array.isArray(job.needs) && job.needs.every((id) => typeof id === "string" && id))
+      )) ||
+    (job.if !== undefined && typeof job.if !== "string") ||
+    ["outputs", "with", "env"].some(
+      (field) => job[field] !== undefined && !scalarMap(job[field]),
+    ) ||
+    (job.strategy !== undefined && !record(job.strategy)) ||
+    (job.steps !== undefined &&
+      (!Array.isArray(job.steps) ||
+        job.steps.some(
+          (step) =>
+            !record(step) ||
+            ["run", "uses", "id"].some(
+              (field) => step[field] !== undefined && typeof step[field] !== "string",
+            ) ||
+            (step.env !== undefined && !scalarMap(step.env)),
+        )))
+  )
+    throw Error(`Unresolved workflow job: ${path}`);
+}
+function reusableInputs(child, supplied) {
+  const callable =
+    typeof child.on === "string"
+      ? child.on === "workflow_call"
+        ? {}
+        : undefined
+      : Array.isArray(child.on)
+        ? child.on.includes("workflow_call")
+          ? {}
+          : undefined
+        : child.on?.workflow_call;
+  if (callable === undefined || (callable !== null && !record(callable)))
+    throw Error("Unresolved reusable workflow_call declaration");
+  const declarations = callable?.inputs === undefined ? {} : callable.inputs;
+  if (!record(declarations) || !record(supplied)) throw Error("Unresolved reusable inputs");
+  for (const key of Object.keys(supplied))
+    if (!(key in declarations)) throw Error(`Unknown reusable input: ${key}`);
+  const result = {};
+  for (const [key, definition] of Object.entries(declarations)) {
+    if (
+      !record(definition) ||
+      !["string", "boolean", "number"].includes(definition.type) ||
+      (definition.required !== undefined && typeof definition.required !== "boolean")
+    )
+      throw Error(`Unresolved reusable input declaration: ${key}`);
+    const value = supplied[key] ?? definition.default;
+    if (value === undefined) {
+      if (definition.required) throw Error(`Missing required reusable input: ${key}`);
+      result[key] = { string: "", boolean: false, number: 0 }[definition.type];
+    } else {
+      if (typeof value !== definition.type) throw Error(`Invalid reusable input type: ${key}`);
+      result[key] = value;
+    }
+  }
+  return result;
+}
+function resolvedCron(value) {
+  if (typeof value !== "string") return false;
+  const fields = value.trim().split(/\s+/);
+  const bounds = [
+    [0, 59],
+    [0, 23],
+    [1, 31],
+    [1, 12],
+    [0, 6],
+  ];
+  // These workflows use literal fields or wildcards; other cron forms remain explicit errors.
+  return (
+    fields.length === bounds.length &&
+    fields.every(
+      (field, index) =>
+        field === "*" ||
+        (/^\d+$/.test(field) &&
+          Number(field) >= bounds[index][0] &&
+          Number(field) <= bounds[index][1]),
+    )
+  );
+}
 function validatedWorkflow(value, path) {
   if (
     !value ||
     typeof value !== "object" ||
     Array.isArray(value) ||
+    (value.name !== undefined && (typeof value.name !== "string" || !value.name.trim())) ||
     !value.jobs ||
     typeof value.jobs !== "object" ||
     Array.isArray(value.jobs) ||
@@ -24,6 +119,12 @@ function validatedWorkflow(value, path) {
     )
   )
     throw Error(`Unresolved workflow declaration: ${path}`);
+  if (
+    (Array.isArray(value.on) &&
+      (!value.on.length || value.on.some((event) => typeof event !== "string" || !event))) ||
+    (record(value.on) && !Object.keys(value.on).length)
+  )
+    throw Error(`Unresolved workflow trigger list: ${path}`);
   const events =
     typeof value.on === "string"
       ? { [value.on]: null }
@@ -42,19 +143,28 @@ function validatedWorkflow(value, path) {
   ]);
   for (const [event, spec] of Object.entries(events)) {
     if (
+      spec?.inputs !== undefined &&
+      (!record(spec.inputs) ||
+        Object.values(spec.inputs).some(
+          (definition) =>
+            !record(definition) ||
+            !["string", "boolean", "number"].includes(definition.type) ||
+            (definition.required !== undefined && typeof definition.required !== "boolean") ||
+            (definition.default !== undefined && typeof definition.default !== definition.type),
+        ))
+    )
+      throw Error(`Unresolved workflow inputs: ${path}/${event}`);
+    if (
       !known.has(event) ||
       (event === "schedule"
         ? !Array.isArray(spec) ||
           !spec.length ||
-          spec.some((row) => !row || typeof row.cron !== "string")
+          spec.some((row) => !row || !resolvedCron(row.cron))
         : spec !== null && (typeof spec !== "object" || Array.isArray(spec)))
     )
       throw Error(`Unresolved workflow trigger: ${path}/${event}`);
   }
-  for (const [id, job] of Object.entries(value.jobs)) {
-    if (!job || typeof job !== "object" || Array.isArray(job) || (!job.uses && !job["runs-on"]))
-      throw Error(`Unresolved workflow job: ${path}/${id}`);
-  }
+  for (const [id, job] of Object.entries(value.jobs)) validatedJob(job, `${path}/${id}`);
   return value;
 }
 export const workflows = () =>
@@ -63,11 +173,72 @@ export const workflows = () =>
       .filter((p) => /\.ya?ml$/.test(p))
       .map((p) => [p, validatedWorkflow(parse(read(`.github/workflows/${p}`)), p)]),
   );
+export function validateEventInventory(inventory, definitions = workflows()) {
+  if (!Array.isArray(inventory) || !inventory.length)
+    throw Error("Invalid event inventory: expected nonempty array");
+  const identifiers = new Set();
+  for (const entry of inventory) {
+    if (
+      !entry ||
+      typeof entry !== "object" ||
+      Array.isArray(entry) ||
+      typeof entry.id !== "string" ||
+      !/^[a-z][a-z0-9-]*$/.test(entry.id) ||
+      identifiers.has(entry.id) ||
+      typeof entry.event !== "string" ||
+      !/^[a-z][a-z_]*$/.test(entry.event) ||
+      ["action", "branch", "tag"].some(
+        (field) =>
+          entry[field] !== undefined && (typeof entry[field] !== "string" || !entry[field]),
+      ) ||
+      (entry.fork !== undefined && typeof entry.fork !== "boolean") ||
+      (entry.inputs !== undefined &&
+        (!entry.inputs ||
+          typeof entry.inputs !== "object" ||
+          Array.isArray(entry.inputs) ||
+          Object.entries(entry.inputs).some(
+            ([key, value]) => !/^[a-z][a-z0-9_-]*$/.test(key) || typeof value !== "boolean",
+          )))
+    )
+      throw Error("Invalid event inventory entry");
+    identifiers.add(entry.id);
+  }
+  // Closed PRs are the merge phases driven separately by the lifecycle journey.
+  const cases = [...inventory, { event: "pull_request", action: "closed" }];
+  for (const [name, workflow] of Object.entries(definitions)) {
+    const declarations =
+      typeof workflow.on === "string"
+        ? { [workflow.on]: null }
+        : Array.isArray(workflow.on)
+          ? Object.fromEntries(workflow.on.map((event) => [event, null]))
+          : workflow.on;
+    for (const [event, options] of Object.entries(declarations)) {
+      if (event === "workflow_call") continue;
+      const matching = cases.filter((entry) => entry.event === event);
+      if (!matching.length) throw Error(`Unmeasured workflow event: ${name}: ${event}`);
+      const actions =
+        options?.types || (event === "pull_request" ? ["opened", "synchronize", "reopened"] : []);
+      for (const action of actions)
+        if (!matching.some((entry) => entry.action === action))
+          throw Error(`Unmeasured workflow action: ${name}: ${event}/${action}`);
+      if (options?.inputs !== undefined && !record(options.inputs))
+        throw Error(`Unmeasured workflow input declaration: ${name}`);
+      for (const [input, definition] of Object.entries(options?.inputs ?? {})) {
+        if (!record(definition) || definition.type !== "boolean")
+          throw Error(`Unmeasured workflow input type: ${name}: ${input}`);
+        for (const value of [false, true])
+          if (!matching.some((entry) => entry.inputs?.[input] === value))
+            throw Error(`Unmeasured workflow input: ${name}: ${input}=${value}`);
+      }
+    }
+  }
+}
 export function digest() {
   const files = [
     "release-targets.toml",
     "screencomp.toml",
     "scripts/product_versions.py",
+    "scripts/release_products.py",
     ...readdirSync(new URL(".github/", root))
       .filter((p) => /\.(mjs|py|json|lock|ts)$/.test(p))
       .map((p) => `.github/${p}`),
@@ -110,7 +281,7 @@ export function evaluate(expression, context) {
 }
 export function resolve(value, context) {
   if (typeof value === "string") {
-    if (/^\s*\$\{\{[\s\S]*\}\}\s*$/.test(value)) return evaluate(value, context);
+    if (/^\s*\$\{\{(?:(?!\$\{\{)[\s\S])*\}\}\s*$/.test(value)) return evaluate(value, context);
     return value.replace(/\$\{\{(.*?)\}\}/g, (_, expr) => String(evaluate(expr, context)));
   }
   if (Array.isArray(value)) return value.map((v) => resolve(v, context));
@@ -119,7 +290,7 @@ export function resolve(value, context) {
   return value;
 }
 export function matrices(matrix, context) {
-  if (!matrix) return [{}];
+  if (matrix === undefined || matrix === null) return [{}];
   const resolved = resolve(matrix, context);
   if (!resolved || typeof resolved !== "object" || Array.isArray(resolved))
     throw Error("Unresolved matrix");
@@ -130,10 +301,11 @@ export function matrices(matrix, context) {
         resolved[key].some((row) => !row || typeof row !== "object" || Array.isArray(row)))
     )
       throw Error(`Unresolved matrix ${key} entries`);
+  if (!Object.keys(resolved).length) throw Error("Unresolved matrix: empty declaration");
   const axes = Object.entries(resolved).filter(([k]) => !["include", "exclude"].includes(k));
   let rows = axes.length ? [{}] : [];
   for (const [key, values] of axes) {
-    if (!Array.isArray(values)) throw Error(`Unresolved matrix axis ${key}`);
+    if (!Array.isArray(values) || !values.length) throw Error(`Unresolved matrix axis ${key}`);
     rows = rows.flatMap((row) => values.map((v) => ({ ...row, [key]: v })));
   }
   rows = rows.filter(
@@ -195,7 +367,7 @@ export function triggered(workflow, scenario) {
 }
 function reusable(call) {
   if (call.startsWith("./")) {
-    if (!call.startsWith("./.github/workflows/") || call.split("/").includes(".."))
+    if (!/^\.\/\.github\/workflows\/[A-Za-z0-9_.-]+\.ya?ml$/.test(call))
       throw Error(`Unresolved local reusable call: ${call}`);
     return validatedWorkflow(parse(read(call.slice(2))), call);
   }
@@ -203,17 +375,17 @@ function reusable(call) {
   if (!lock) throw Error(`Unresolved reusable workflow: ${call}`);
   if (
     typeof lock.path !== "string" ||
-    !lock.path.startsWith(".github/reusable/") ||
-    lock.path.split("/").some((part) => part === ".." || !part) ||
+    !/^\.github\/reusable\/[A-Za-z0-9_.-]+\.ya?ml$/.test(lock.path) ||
     typeof lock.sha256 !== "string" ||
-    !/^[a-f0-9]{64}$/.test(lock.sha256)
+    !/^[a-f0-9]{64}$/.test(lock.sha256) ||
+    typeof lock.upstreamSha256 !== "string" ||
+    !/^[a-f0-9]{64}$/.test(lock.upstreamSha256)
   )
     throw Error(`Unresolved reusable lock entry: ${call}`);
   const source = read(lock.path);
   if (createHash("sha256").update(source).digest("hex") !== lock.sha256)
     throw Error(`Reusable source digest mismatch: ${call}`);
   if (
-    lock.upstreamSha256 &&
     createHash("sha256")
       .update(source.slice(source.indexOf("\n") + 1))
       .digest("hex") !== lock.upstreamSha256
@@ -227,6 +399,7 @@ export function jobs(workflow, scenario, policy, prefix = "", inputs = {}, ances
   const rows = [];
   const needs = {};
   const pending = new Map(Object.entries(workflow.jobs));
+  for (const [id, job] of pending) validatedJob(job, `${prefix}${id}`);
   while (pending.size) {
     let advanced = false;
     for (const [id, job] of pending) {
@@ -257,6 +430,7 @@ export function jobs(workflow, scenario, policy, prefix = "", inputs = {}, ances
       const enabled =
         (implicitSuccess || statusOverride) && (!job.if || Boolean(evaluate(job.if, context)));
       needs[id] = { result: enabled ? "success" : "skipped", outputs: {} };
+      if (!enabled) continue;
       if (id === "macos-lanes") {
         context.steps = {
           select: {
@@ -283,22 +457,24 @@ export function jobs(workflow, scenario, policy, prefix = "", inputs = {}, ances
           arches.some((arch) => !["x86_64", "arm64", "aarch64"].includes(arch))
         )
           throw Error("Unresolved capture architecture list");
-        const key = JSON.stringify([arches, inputs]);
+        const step = job.steps.find((candidate) => candidate.id === "read");
+        if (!step?.run) throw Error("Unresolved reusable arches command");
+        const stepEnvironment = resolve(step.env || {}, {
+          ...context,
+          inputs: { ...context.inputs, arches: JSON.stringify(arches) },
+        });
+        const key = JSON.stringify([step.run, stepEnvironment]);
         if (!archMatrices.has(key)) {
           const scratch = mkdtempSync(
             join(process.env.ONEPIPELINE_NODE_SCRATCH_DIR || tmpdir(), "workflow-arches-"),
           );
           try {
             const output = join(scratch, "output");
-            const step = job.steps.find((s) => s.id === "read");
-            if (!step?.run) throw Error("Unresolved reusable arches command");
             execFileSync("bash", ["-c", step.run], {
               cwd: root,
               env: {
                 ...process.env,
-                ARCHES_OVERRIDE: JSON.stringify(arches),
-                PROJECTS_INPUT: inputs.projects || "",
-                DEFAULT_TITLE: inputs["gallery-title"] || "",
+                ...stepEnvironment,
                 GITHUB_OUTPUT: output,
               },
             });
@@ -314,24 +490,17 @@ export function jobs(workflow, scenario, policy, prefix = "", inputs = {}, ances
         }
         needs[id].outputs.matrix = archMatrices.get(key);
       }
-      if (!enabled) continue;
       for (const matrix of matrices(job.strategy?.matrix, context)) {
         const rowContext = { ...context, matrix };
         if (job.uses) {
           if (ancestry.includes(job.uses)) throw Error("Recursive reusable workflow");
           const child = reusable(job.uses);
-          const defaults = Object.fromEntries(
-            Object.entries(child.on?.workflow_call?.inputs || {}).map(([k, v]) => [k, v.default]),
-          );
+          const supplied = reusableInputs(child, resolve(job.with || {}, rowContext));
           rows.push(
-            ...jobs(
-              child,
-              scenario,
-              policy,
-              `${prefix}${id} / `,
-              { ...defaults, ...resolve(job.with || {}, rowContext) },
-              [...ancestry, job.uses],
-            ),
+            ...jobs(child, scenario, policy, `${prefix}${id} / `, supplied, [
+              ...ancestry,
+              job.uses,
+            ]),
           );
           continue;
         }
@@ -355,6 +524,24 @@ export function jobs(workflow, scenario, policy, prefix = "", inputs = {}, ances
           )
         )
           throw Error(`Unresolved runner OS: ${prefix}${id}`);
+        let declaredTargets = "";
+        if (job.env?.TARGETS !== undefined) {
+          const pairs = resolve(job.env.TARGETS, rowContext);
+          if (
+            typeof pairs !== "string" ||
+            !pairs.trim() ||
+            pairs
+              .trim()
+              .split(/\s+/)
+              .some((pair) => !/^[a-z0-9_]+(?:-[a-z0-9_]+)+=[a-z0-9]+-[a-z0-9]+$/.test(pair))
+          )
+            throw Error(`Unresolved release TARGETS: ${id}`);
+          declaredTargets = pairs
+            .trim()
+            .split(/\s+/)
+            .map((pair) => pair.split("=")[0])
+            .join(",");
+        }
         rows.push({
           job: `${prefix}${id}`,
           name: `${prefix}${resolve(job.name || id, rowContext)}${
@@ -365,16 +552,8 @@ export function jobs(workflow, scenario, policy, prefix = "", inputs = {}, ances
               : ""
           }`,
           runner: labels,
-          target:
-            matrix.target ||
-            matrix.arch ||
-            (job.env?.TARGETS
-              ? resolve(job.env.TARGETS, rowContext)
-                  .split(" ")
-                  .map((pair) => pair.split("=")[0])
-                  .join(",")
-              : ""),
-          macos: labels.some((x) => /macos/i.test(x)),
+          target: matrix.target || matrix.arch || declaredTargets,
+          macos: isMacosRunner(labels),
           matrix,
         });
       }

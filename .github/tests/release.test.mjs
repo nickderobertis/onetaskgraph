@@ -158,3 +158,58 @@ test("telemetry retains both compiled Darwin architectures on the single runner 
   );
   assert.deepEqual(row.target.split(",").sort(), declared.sort());
 });
+
+test("release subprocesses choose Git Bash over a WSL launcher and refuse missing Git Bash", () => {
+  execFileSync(
+    "python3",
+    [
+      "-c",
+      `import os, platform, shutil, subprocess, sys, tempfile
+from pathlib import Path
+sys.path.insert(0, 'scripts')
+from release_products import bash_executable
+if platform.system() == 'Windows':
+    subprocess.run([bash_executable('Windows'), '-c', 'exit 0'], check=True)
+else:
+    actual_bash = shutil.which('bash')
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        (root / 'Git/cmd').mkdir(parents=True)
+        (root / 'Git/bin').mkdir()
+        (root / 'launchers').mkdir()
+        git = root / 'Git/cmd/git'
+        git.write_text('#!/bin/sh\\nexit 0\\n')
+        git.chmod(0o755)
+        wsl = root / 'launchers/bash'
+        wsl.write_text('#!/bin/sh\\necho unexpected-WSL >&2\\nexit 91\\n')
+        wsl.chmod(0o755)
+        selected = root / 'Git/bin/bash.exe'
+        shutil.copy2(actual_bash, selected)
+        os.environ['PATH'] = str(wsl.parent) + os.pathsep + str(git.parent)
+        resolved = bash_executable('Windows')
+        assert resolved == str(selected)
+        subprocess.run([resolved, '-c', 'printf Git-Bash-selected'], check=True)
+        assert subprocess.run([resolved, '-c', 'exit 37'], check=False).returncode == 37
+        selected.unlink()
+        try:
+            bash_executable('Windows')
+        except ValueError as error:
+            assert 'install Git for Windows' in str(error)
+        else:
+            raise AssertionError('missing Git Bash fell back to WSL')
+`,
+    ],
+    { cwd: root, stdio: "pipe" },
+  );
+});
+
+test("workflow tooling format and lint commands run without shell glob expansion", () => {
+  const project = JSON.parse(read(".github/project.json"));
+  for (const name of ["format-check", "lint"]) {
+    const options = project.targets[name].options;
+    for (const command of options.commands || [options.command]) {
+      assert.match(command, /^bun run biome [a-z .*/-]+$/);
+      execFileSync("bun", command.split(" ").slice(1), { cwd: root, stdio: "pipe" });
+    }
+  }
+});

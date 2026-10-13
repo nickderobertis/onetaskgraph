@@ -10,7 +10,8 @@
       "!{projectRoot}/.telemetry/**/*",
       "{workspaceRoot}/release-targets.toml",
       "{workspaceRoot}/screencomp.toml",
-      "{workspaceRoot}/scripts/product_versions.py"
+      "{workspaceRoot}/scripts/product_versions.py",
+      "{workspaceRoot}/scripts/release_products.py"
     ]
   },
   "targets": {
@@ -27,22 +28,20 @@
     "format": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "bun run biome format --write .github/*.mjs .github/*.ts .github/tests/*.mjs .github/*.json"
+        "command": "bun run biome format --write .github"
       },
       "cache": false
     },
     "format-check": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "bun run biome format .github/*.mjs .github/*.ts .github/tests/*.mjs .github/*.json"
+        "command": "bun run biome format .github"
       }
     },
     "lint": {
       "executor": "nx:run-commands",
       "options": {
-        "commands": [
-          "bun run biome lint --error-on-warnings .github/*.mjs .github/*.ts .github/tests/*.mjs .github/*.json"
-        ],
+        "commands": ["bun run biome lint --error-on-warnings .github"],
         "parallel": false
       }
     },

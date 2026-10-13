@@ -1,12 +1,32 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+  readdirSync,
+  cpSync,
+  mkdirSync,
+  symlinkSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { validateTelemetry } from "../telemetry.ts";
-import { digest, graph, jobs, matrices, triggered } from "../workflow-graph.mjs";
+import {
+  digest,
+  evaluate,
+  graph,
+  jobs,
+  matrices,
+  triggered,
+  validateEventInventory,
+  read,
+  root,
+  workflows,
+} from "../workflow-graph.mjs";
 
 function recording() {
   const scenario = {
@@ -30,7 +50,7 @@ function recording() {
         diff: scenario.diff,
         fork: false,
         optional: 0,
-        runs,
+        runs: structuredClone(runs),
         macRuns: runs.filter((run) => run.macJobs > 0).length,
       },
     ],
@@ -111,6 +131,14 @@ test("real reporters write both measurements through the SDK result boundary", (
   );
   try {
     const current = recording();
+    const lifecycleRun = current.lifecycles[0].runs.find((run) => run.macJobs > 0);
+    const macRow = lifecycleRun.rows.find((row) => row.macos);
+    lifecycleRun.rows.push({
+      ...macRow,
+      job: `${macRow.job}-additional`,
+      name: "additional Mac proof",
+    });
+    lifecycleRun.macJobs += 1;
     const path = join(scratch, "recording.json");
     writeFileSync(path, JSON.stringify(current));
     for (const metric of ["jobs-per-run", "runs-per-change"]) {
@@ -129,7 +157,7 @@ test("real reporters write both measurements through the SDK result boundary", (
       const result = JSON.parse(readFileSync(resultPath, "utf8"));
       const expected =
         metric === "jobs-per-run"
-          ? Math.max(...current.scenarios.flatMap((s) => s.runs.map((r) => r.macJobs)))
+          ? Math.max(...current.lifecycles.flatMap((l) => l.runs.map((r) => r.macJobs)))
           : Math.max(...current.lifecycles.map((l) => l.macRuns));
       assert.equal(result.value, expected);
       assert.ok(JSON.parse(result.detail).runs.some((r) => r.workflow === "ci.yml"));
@@ -206,10 +234,11 @@ test("workflow_run fan-out follows actual declarations and rejects cycles", () =
     graph({ event: "push", branch: "main" }, { macosRequired: false }, declared).map((run) => [
       run.workflow,
       run.event,
+      run.triggeredBy || null,
     ]),
     [
-      ["source.yml", "push"],
-      ["smoke.yml", "workflow_run"],
+      ["source.yml", "push", null],
+      ["smoke.yml", "workflow_run", "source"],
     ],
   );
   declared["source.yml"].on.workflow_run = { workflows: ["smoke"] };
@@ -327,5 +356,355 @@ test("reporter rejects invalid invocations and an unwritable SDK result destinat
     assert.match(result.stderr, /next:/);
   } finally {
     rmSync(scratch, { recursive: true, force: true });
+  }
+});
+
+test("event workload rejects new workflow triggers, actions and diagnostic inputs", () => {
+  const inventory = JSON.parse(read(".github/event-classes.json"));
+  validateEventInventory(inventory);
+  for (const mutation of [
+    (workflow) => {
+      workflow.on.issue_comment = null;
+    },
+    (workflow) => {
+      workflow.on.pull_request = { types: ["edited"] };
+    },
+    (workflow) => {
+      workflow.on.workflow_dispatch.inputs.extra = { type: "boolean", default: false };
+    },
+    (workflow) => {
+      workflow.on.workflow_dispatch.inputs.macos.type = "string";
+    },
+  ]) {
+    const definitions = workflows();
+    mutation(definitions["ci.yml"]);
+    assert.throws(() => validateEventInventory(inventory, definitions), /Unmeasured workflow/);
+  }
+});
+
+test("workflow boundary accepts declared shorthand, matrix and runner forms and refuses malformed ones", () => {
+  const runnerJob = { proof: { "runs-on": "ubuntu-latest" } };
+  for (const on of ["push", ["push", "release"]]) {
+    assert.equal(triggered({ on, jobs: runnerJob }, { event: "push" }), true);
+    assert.equal(triggered({ on, jobs: runnerJob }, { event: "schedule" }), false);
+  }
+  const tagged = { on: { push: { tags: ["v1.2.4"] } }, jobs: runnerJob };
+  assert.equal(triggered(tagged, { event: "push", tag: "v1.2.4" }), true);
+  assert.equal(triggered(tagged, { event: "push", tag: "v1.2.5" }), false);
+  for (const invalid of [false, 0, "", "invalid", [], { os: "macos-latest" }])
+    assert.throws(() => matrices(invalid, {}), /Unresolved matrix/);
+  assert.deepEqual(matrices({ include: [{ os: "macos-latest" }] }, {}), [{ os: "macos-latest" }]);
+  for (const invalid of [null, [], {}])
+    assert.throws(
+      () => triggered({ on: "push", jobs: { proof: invalid } }, { event: "push" }),
+      /Unresolved workflow job/,
+    );
+  const scenario = { event: "pull_request", action: "opened" };
+  const policy = { macosRequired: true, reason: "ordinary" };
+  assert.equal(
+    jobs({ jobs: { proof: { "runs-on": { labels: ["macos-latest"] } } } }, scenario, policy)[0]
+      .macos,
+    true,
+  );
+  assert.throws(
+    () => jobs({ jobs: { proof: { "runs-on": ["self-hosted", "custom"] } } }, scenario, policy),
+    /Unknown self-hosted OS/,
+  );
+  for (const result of ["success", "failure", "cancelled", "skipped"]) {
+    const context = { needs: { prerequisite: { result } } };
+    assert.equal(evaluate("success()", context), result === "success");
+    assert.equal(evaluate("failure()", context), result === "failure");
+    assert.equal(evaluate("cancelled()", context), result === "cancelled");
+    assert.equal(evaluate("always()", context), true);
+  }
+});
+
+test("event inventory validates serialized identities, ownership and inputs before routing", () => {
+  for (const inventory of [
+    null,
+    {},
+    [],
+    [null],
+    [{ id: "bad!", event: "push" }],
+    [{ id: "entry", event: 0 }],
+    [{ id: "entry", event: "push", action: false }],
+    [{ id: "entry", event: "push", fork: "false" }],
+    [{ id: "entry", event: "workflow_dispatch", inputs: [] }],
+    [{ id: "entry", event: "workflow_dispatch", inputs: { macos: "true" } }],
+    [
+      { id: "entry", event: "push" },
+      { id: "entry", event: "push" },
+    ],
+  ])
+    assert.throws(() => validateEventInventory(inventory), /Invalid event inventory/);
+});
+
+test("real reporter invalidates previously valid telemetry when workflow source changes", () => {
+  const scratch = mkdtempSync(
+    join(process.env.ONEPIPELINE_NODE_SCRATCH_DIR || tmpdir(), "freshness-proof-"),
+  );
+  try {
+    cpSync(fileURLToPath(new URL(".github/", root)), join(scratch, ".github"), {
+      recursive: true,
+      filter: (path) => !/[\\/]node_modules(?:[\\/]|$)|[\\/]\.telemetry(?:[\\/]|$)/.test(path),
+    });
+    symlinkSync(
+      fileURLToPath(new URL(".github/node_modules", root)),
+      join(scratch, ".github/node_modules"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    mkdirSync(join(scratch, "scripts"));
+    for (const path of [
+      "release-targets.toml",
+      "screencomp.toml",
+      "scripts/product_versions.py",
+      "scripts/release_products.py",
+    ])
+      writeFileSync(join(scratch, path), read(path));
+    const telemetry = join(scratch, "recording.json");
+    writeFileSync(telemetry, JSON.stringify(recording()));
+    const command = [
+      join(scratch, ".github/macos-budget.mjs"),
+      "--metric",
+      "jobs-per-run",
+      "--telemetry",
+      telemetry,
+    ];
+    execFileSync(process.execPath, command, { cwd: scratch });
+    const source = join(scratch, ".github/workflows/ci.yml");
+    writeFileSync(source, `${readFileSync(source, "utf8")}\n# changed source\n`);
+    const stale = spawnSync(process.execPath, command, { cwd: scratch, encoding: "utf8" });
+    assert.notEqual(stale.status, 0);
+    assert.match(stale.stderr, /stale/);
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+});
+
+test("workflow parser refuses empty trigger and scheduling declarations and malformed consumed job fields", () => {
+  for (const on of [[], {}, [null], [""]])
+    assert.throws(
+      () => triggered({ on, jobs: { proof: { "runs-on": "ubuntu-latest" } } }, { event: "push" }),
+      /Unresolved workflow/,
+    );
+  for (const matrix of [{}, { os: [] }])
+    assert.throws(() => matrices(matrix, {}), /Unresolved matrix/);
+  for (const fields of [
+    { needs: {} },
+    { if: [] },
+    { outputs: [] },
+    { with: false },
+    { env: [] },
+    { steps: {} },
+    { steps: [{ run: 0 }] },
+    { steps: [{ env: [] }] },
+    { strategy: [] },
+    { uses: 0 },
+  ])
+    assert.throws(
+      () =>
+        triggered(
+          { on: "push", jobs: { proof: { "runs-on": "ubuntu-latest", ...fields } } },
+          { event: "push" },
+        ),
+      /Unresolved workflow job/,
+    );
+});
+
+test("schedule, display-name and release target boundaries refuse unresolved telemetry", () => {
+  for (const cron of ["", "99 * * * *", "0 0 * *", "0 0 32 * *", "0 0 * 13 *"])
+    assert.throws(
+      () =>
+        triggered(
+          { on: { schedule: [{ cron }] }, jobs: { proof: { "runs-on": "ubuntu-latest" } } },
+          { event: "schedule" },
+        ),
+      /Unresolved workflow trigger/,
+    );
+  for (const name of [{}, []])
+    assert.throws(
+      () =>
+        triggered(
+          { on: "push", jobs: { proof: { name, "runs-on": "ubuntu-latest" } } },
+          { event: "push" },
+        ),
+      /Unresolved workflow job/,
+    );
+  for (const TARGETS of [
+    true,
+    1,
+    "",
+    "invalid",
+    "aarch64-apple-darwin=invalid",
+    "aarch64-apple-darwin=darwin-arm64=extra",
+  ])
+    assert.throws(
+      () =>
+        jobs(
+          { jobs: { proof: { "runs-on": "macos-latest", env: { TARGETS } } } },
+          { event: "release" },
+          { macosRequired: false },
+        ),
+      /Unresolved release TARGETS/,
+    );
+});
+
+test("arches subprocess cache distinguishes actual command bodies and resolved step environments", () => {
+  const body = `printf 'matrix={"include":[{"arch":"x86_64","label":"%s"}]}\\n' "$TITLE" > "$GITHUB_OUTPUT"`;
+  const workflow = (run, title) => ({
+    jobs: {
+      arches: { "runs-on": "ubuntu-latest", steps: [{ id: "read", run, env: { TITLE: title } }] },
+      capture: {
+        "runs-on": "ubuntu-latest",
+        needs: ["arches"],
+        strategy: { matrix: `\${{ fromJson(needs.arches.outputs.matrix) }}` },
+        name: `\${{ matrix.label }}`,
+      },
+    },
+  });
+  const scenario = { event: "pull_request", action: "opened" };
+  const policy = { macosRequired: true };
+  const label = (run, title) =>
+    jobs(workflow(run, title), scenario, policy).find((row) => row.job === "capture").matrix.label;
+  assert.equal(label(body, "first"), "first");
+  assert.equal(label(body, "second"), "second");
+  assert.equal(label(body.replace('"$TITLE"', '"third"'), "second"), "third");
+});
+
+test("excluded matrices and disabled arches contribute no jobs and never execute skipped discovery", () => {
+  const scenario = { event: "pull_request", action: "opened" };
+  const policy = { macosRequired: true };
+  assert.deepEqual(
+    jobs(
+      {
+        jobs: {
+          proof: {
+            "runs-on": `\${{ matrix.os }}`,
+            strategy: { matrix: { os: ["macos-latest"], exclude: [{ os: "macos-latest" }] } },
+          },
+        },
+      },
+      scenario,
+      policy,
+    ),
+    [],
+  );
+  assert.deepEqual(
+    jobs(
+      {
+        jobs: {
+          arches: {
+            "runs-on": "ubuntu-latest",
+            if: "false",
+            steps: [{ id: "read", run: "exit 89" }],
+          },
+          capture: { "runs-on": "ubuntu-latest", needs: ["arches"] },
+        },
+      },
+      scenario,
+      policy,
+    ),
+    [],
+  );
+  for (const inputs of [
+    false,
+    [],
+    "",
+    { enabled: false },
+    { enabled: { type: "boolean", default: "false" } },
+  ])
+    assert.throws(
+      () =>
+        triggered(
+          {
+            on: { workflow_dispatch: { inputs } },
+            jobs: { proof: { "runs-on": "ubuntu-latest" } },
+          },
+          { event: "workflow_dispatch" },
+        ),
+      /Unresolved workflow inputs/,
+    );
+});
+
+test("workflow names are validated and status overrides preserve dependent-job scheduling after skips", () => {
+  for (const name of ["", {}, []])
+    assert.throws(
+      () =>
+        triggered(
+          { name, on: "push", jobs: { proof: { "runs-on": "ubuntu-latest" } } },
+          { event: "push" },
+        ),
+      /Unresolved workflow declaration/,
+    );
+  for (const condition of ["always()", "!cancelled()", "success()", "failure()", "cancelled()"]) {
+    const rows = jobs(
+      {
+        jobs: {
+          prerequisite: { "runs-on": "ubuntu-latest", if: "false" },
+          report: { "runs-on": "ubuntu-latest", needs: ["prerequisite"], if: condition },
+        },
+      },
+      { event: "pull_request", action: "opened" },
+      { macosRequired: true },
+    );
+    assert.deepEqual(
+      rows.map((row) => row.job),
+      ["always()", "!cancelled()"].includes(condition) ? ["report"] : [],
+    );
+  }
+});
+
+test("failing architecture discovery propagates the real shell exit and removes its scratch directory", () => {
+  const scratch = mkdtempSync(
+    join(process.env.ONEPIPELINE_NODE_SCRATCH_DIR || tmpdir(), "discovery-failure-"),
+  );
+  try {
+    const module = new URL("../workflow-graph.mjs", import.meta.url).href;
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `import {jobs} from ${JSON.stringify(module)}; jobs({jobs:{arches:{"runs-on":"ubuntu-latest",steps:[{id:"read",run:"exit 37"}]}}},{event:"pull_request",action:"opened"},{macosRequired:true});`,
+      ],
+      {
+        encoding: "utf8",
+        env: { ...process.env, ONEPIPELINE_NODE_SCRATCH_DIR: scratch },
+      },
+    );
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /status: 37/);
+    assert.deepEqual(readdirSync(scratch), []);
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+});
+
+test("graph and telemetry share Mac classification for supported and custom runner labels", () => {
+  for (const runner of [
+    ["macos-latest"],
+    ["ubuntu-latest", "custom-macos-label"],
+    ["windows-latest"],
+    ["self-hosted", "macos-15"],
+  ]) {
+    const rows = jobs(
+      { jobs: { proof: { "runs-on": runner } } },
+      { event: "pull_request", action: "opened" },
+      { macosRequired: true },
+    );
+    const current = recording();
+    current.scenarios[0].runs = [
+      {
+        workflow: "labels.yml",
+        event: "pull_request",
+        rows,
+        macJobs: rows.filter((row) => row.macos).length,
+      },
+    ];
+    current.lifecycles[0].runs = structuredClone(current.scenarios[0].runs);
+    current.lifecycles[0].macRuns = current.lifecycles[0].runs.filter(
+      (run) => run.macJobs > 0,
+    ).length;
+    validateTelemetry(current);
   }
 });

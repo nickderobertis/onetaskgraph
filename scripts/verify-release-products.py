@@ -14,7 +14,7 @@ import tarfile
 import tempfile
 import zipfile
 from typing import Iterable, TypeVar
-from release_products import ReleaseProduct, RustTarget, NpmPlatform, ReleaseTag, CarrierManifest, VerificationReport, PayloadHashes, Digest, WheelFilename
+from release_products import bash_executable, ReleaseProduct, RustTarget, NpmPlatform, ReleaseTag, CarrierManifest, VerificationReport, PayloadHashes, Digest, WheelFilename
 
 PYTHON_EXECUTABLE = str(Path(sys.executable).resolve())
 
@@ -119,14 +119,14 @@ def verify(product: ReleaseProduct, install: bool) -> None:
             # llmlint: ignore[changed_behavior_has_e2e] Darwin/Rosetta execution needs an Apple Silicon host unavailable in this dispatch; local native installation and foreign-tag/hash contracts are driven, and this exact command runs in the single release Mac job before Linux publication.
             prefix = ['arch', '-x86_64'] if rosetta else []
             env = {**os.environ, 'ONETASKGRAPH_CHECKSUM_BASE_URL': checksums.parent.as_uri()}
-            subprocess.run(prefix + ['bash', 'scripts/install.sh', '--version', product.tag, '--to', str(dest / 'archive'), '--archive-base-url', archives.parent.as_uri()], env=env, check=True, stdout=sys.stderr)
+            subprocess.run(prefix + [bash_executable(platform.system()), 'scripts/install.sh', '--version', product.tag, '--to', str(dest / 'archive'), '--archive-base-url', archives.parent.as_uri()], env=env, check=True, stdout=sys.stderr)
             # llmlint: ignore[changed_behavior_has_e2e] Manager-approved: this call uses the same public subprocess-failure handler driven by a real installer exit failure; the real native installation exercises this command successfully without mocking installers.
             subprocess.run([PYTHON_EXECUTABLE, '-m', 'venv', str(dest / 'installer-python')], check=True, stdout=sys.stderr)
             pip_python = dest / 'installer-python' / ('Scripts/python.exe' if product.os == 'Windows' else 'bin/python')
             # llmlint: ignore[changed_behavior_has_e2e] Manager-approved: this call uses the same public subprocess-failure handler driven by a real installer exit failure; the real native installation exercises this command successfully without mocking installers.
             subprocess.run([str(pip_python), '-m', 'pip', 'install', '--no-deps', '--target', str(dest / 'wheel'), '--platform', filename.platform_tags[0], str(wheel_path)], check=True, stdout=sys.stderr)
             # llmlint: ignore[changed_behavior_has_e2e] Manager-approved: this call uses the same public subprocess-failure handler driven by a real installer exit failure; the real native installation exercises this command successfully without mocking installers.
-            subprocess.run(['npm', 'install', '--force', '--ignore-scripts', '--no-audit', '--no-fund', '--prefix', str(dest / 'npm'), str(carrier.resolve())], check=True, stdout=sys.stderr)
+            subprocess.run([bash_executable(platform.system()), '-c', 'exec npm "$@"', 'npm', 'install', '--force', '--ignore-scripts', '--no-audit', '--no-fund', '--prefix', str(dest / 'npm'), str(carrier.resolve())], check=True, stdout=sys.stderr)
             wheel_bins = [path for path in (dest / 'wheel').rglob(binary) if path.is_file()]
             require(len(wheel_bins) == 1, 'wheel install must expose one CLI executable')
             products = [dest / 'archive' / binary, wheel_bins[0], dest / 'npm' / 'node_modules' / '@onetaskgraph' / f'cli-{product.npm_platform}' / 'bin' / binary]
