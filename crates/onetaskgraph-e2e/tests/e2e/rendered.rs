@@ -234,6 +234,65 @@ impl Plan {
     }
 }
 
+/// A `--var` value that reads as one YAML value with more text after it is refused before a
+/// task is created, naming the variable and that text, and nothing is written; a value that
+/// is wholly one YAML value creates the task as it always did.
+#[test]
+fn a_var_with_text_after_its_value_creates_nothing() {
+    let plan = Plan::new();
+    let template = plan.template();
+    let search_path = plan.search_path();
+    let records = || {
+        std::fs::read_dir(plan.notes.join("tasks"))
+            .map(|entries| entries.count())
+            .unwrap_or(0)
+    };
+
+    let output = plan.run(&[
+        "task",
+        "create",
+        "notes",
+        "--project",
+        "P-1",
+        "--title",
+        "Refused",
+        "--template",
+        &template,
+        "--search-path",
+        &search_path,
+        "--no-interactive",
+        "--var",
+        "goal=Ship it",
+        "--var",
+        "steps=[bracketed] title",
+    ]);
+    let problem = stderr(&output);
+    assert_eq!(output.status.code(), Some(2), "{problem}");
+    assert!(
+        problem.contains("\"steps\" is not a list")
+            && problem.contains("`title` follows the value")
+            && problem.contains("line 1, column 13")
+            && problem.contains("next:"),
+        "{problem}"
+    );
+    assert_eq!(records(), 0, "a refused create writes nothing");
+
+    let id = plan.create(
+        "notes",
+        "Created",
+        &["--var", "goal=Ship it", "--var", "steps=[a, b]"],
+    );
+    let content = plan.task(&id)["content"]
+        .as_str()
+        .expect("a body")
+        .to_owned();
+    assert!(
+        content.contains("- a\n") && content.contains("- b\n"),
+        "{content}"
+    );
+    assert_eq!(records(), 1);
+}
+
 fn path(path: &Path) -> String {
     path.to_str().expect("a UTF-8 path").to_owned()
 }

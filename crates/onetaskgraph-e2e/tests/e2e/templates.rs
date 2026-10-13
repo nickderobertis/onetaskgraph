@@ -384,6 +384,63 @@ fn a_variable_given_by_several_vars_takes_the_last_one_typed() {
     assert_eq!(rendered["body"], "# Second (nobody)\nSECOND x3\n1. a\n");
 }
 
+/// A `--var` value that reads as one YAML value with more text after it is refused, naming the
+/// variable and the text that would otherwise be dropped without a word; a value that is
+/// wholly one YAML value is read as it always was.
+#[test]
+fn a_var_with_text_after_its_value_is_refused_naming_that_text() {
+    let sandbox = Sandbox::new();
+    let (task, library) = chain(&sandbox);
+    let render = |steps: &str| {
+        run(
+            &sandbox,
+            &[
+                "template",
+                "render",
+                path(&task),
+                "--search-path",
+                path(&library),
+                "--no-interactive",
+                "--var",
+                "title=Ship it",
+                "--var",
+                "count=2",
+                "--var",
+                steps,
+            ],
+        )
+    };
+
+    for (steps, after, position) in [
+        ("steps=[bracketed] title", "title", "line 1, column 13"),
+        (
+            "steps=[build,\n release] then deploy",
+            "then deploy",
+            "line 2, column 11",
+        ),
+    ] {
+        let output = render(steps);
+        let problem = stderr(&output);
+        assert_eq!(output.status.code(), Some(2), "{steps:?}: {problem}");
+        assert!(output.stdout.is_empty(), "{steps:?} rendered something");
+        for needle in [
+            "\"steps\" is not a list",
+            &format!("`{after}` follows the value"),
+            position,
+            "next:",
+        ] {
+            assert!(
+                problem.contains(needle),
+                "{steps:?} does not say {needle:?}:\n{problem}"
+            );
+        }
+    }
+
+    let output = render("steps=[build, release]");
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(stdout(&output), RENDERED);
+}
+
 /// Every C2 refusal: exit 2, the problem named on standard error, nothing rendered.
 #[test]
 fn every_answer_refusal_exits_two_naming_what_it_refuses() {
