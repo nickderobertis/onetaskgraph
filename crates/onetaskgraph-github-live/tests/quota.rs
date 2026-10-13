@@ -144,35 +144,6 @@ fn partial_stale_duplicate_missing_price_and_missing_cleanup_records_refuse_a_bi
 }
 
 #[test]
-fn a_shared_board_smaller_than_the_registered_one_is_billed_and_a_larger_one_is_not() {
-    let good = completed_pair();
-    for (items, fields, billed) in [
-        (84, 14, true),
-        (90, 13, true),
-        (0, 0, true),
-        (91, 14, false),
-        (90, 15, false),
-        (84, 15, false),
-    ] {
-        let mut pair = good.clone();
-        pair[0].workload.initial_items = items;
-        pair[0].workload.initial_fields = fields;
-        assert_eq!(
-            read_pair(&pair).is_ok(),
-            billed,
-            "{items} items and {fields} fields"
-        );
-    }
-    let mut pair = good;
-    pair[0].workload.initial_items = 84;
-    pair[0].workload.fixture_tasks += 1;
-    assert!(
-        read_pair(&pair).is_err(),
-        "a smaller board excuses no other fact"
-    );
-}
-
-#[test]
 fn reader_refuses_malformed_request_and_allowance_facts() {
     use onetaskgraph_github_live::quota::{Charge, CurrentSession, MutationBasis, RequestKind};
     let good = completed_pair();

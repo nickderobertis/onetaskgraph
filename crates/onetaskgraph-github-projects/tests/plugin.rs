@@ -721,7 +721,6 @@ enum WorkloadFault {
     MissingItems,
     MissingFields,
     WrongDimensions,
-    SmallerBoard,
 }
 
 /// What this board refuses for going too fast, and what it counts while it does.
@@ -2441,9 +2440,6 @@ fn answer_a_session_call(
             }
             Some(WorkloadFault::WrongDimensions) => {
                 result["repositoryOwner"]["projectV2"]["items"]["totalCount"] = json!(91);
-            }
-            Some(WorkloadFault::SmallerBoard) => {
-                result["repositoryOwner"]["projectV2"]["items"]["totalCount"] = json!(84);
             }
             None => (),
         }
@@ -19886,7 +19882,6 @@ fn live_pair_fixture_child() {
         "missing-items" => Some(WorkloadFault::MissingItems),
         "missing-fields" => Some(WorkloadFault::MissingFields),
         "wrong-workload" => Some(WorkloadFault::WrongDimensions),
-        "smaller-board" => Some(WorkloadFault::SmallerBoard),
         _ => None,
     };
     fixture.items_connection_falls_behind();

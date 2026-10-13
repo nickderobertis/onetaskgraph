@@ -68,25 +68,6 @@ pub struct Workload {
     pub initial_orphans: Option<u64>,
 }
 
-impl Workload {
-    /// Whether this recorded workload is `reference` on a board no larger than it.
-    ///
-    /// The nominated board is shared, and residue cleanup and other sessions move its counts
-    /// between runs, so its items and fields may be fewer than the registered workload's but
-    /// never more: a larger board could cost more than the budget was measured against.
-    /// Every other fact is this lane's own fixture and must match exactly.
-    #[must_use]
-    pub fn fits(&self, reference: &Self) -> bool {
-        self.initial_items <= reference.initial_items
-            && self.initial_fields <= reference.initial_fields
-            && Self {
-                initial_items: reference.initial_items,
-                initial_fields: reference.initial_fields,
-                ..self.clone()
-            } == *reference
-    }
-}
-
 /// Facts about one executed request, without variables or bodies.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CallRecord {
@@ -470,7 +451,7 @@ fn validate_record(record: &SessionRecord, current: &CurrentSession<'_>) -> Resu
         || record.session_id != current.session_id.0
         || record.source_revision != current.source_revision.0
         || record.workspace_version != current.workspace_version.0
-        || !record.workload.fits(current.workload)
+        || record.workload != *current.workload
         || !record.complete
         || record.calls.is_empty()
     {
@@ -687,8 +668,7 @@ pub fn operation_sha256(document: &str) -> String {
     format!("{:x}", Sha256::digest(document.as_bytes()))
 }
 
-/// The nominated workload the whole-lane budget was measured on, with unknown initial orphans.
-/// Its board facts are an upper bound a recorded session must [`Workload::fits`] within.
+/// The nominated workload required for the whole-lane budget, with unknown initial orphans.
 #[must_use]
 pub fn reference_workload() -> Workload {
     Workload {
