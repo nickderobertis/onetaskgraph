@@ -436,6 +436,17 @@ fn a_var_with_text_after_its_value_is_refused_naming_that_text() {
         }
     }
 
+    // Two whole documents are not one value either.
+    let output = render("steps=[build]\n---\n[release]");
+    let problem = stderr(&output);
+    assert_eq!(output.status.code(), Some(2), "{problem}");
+    assert!(output.stdout.is_empty(), "two documents rendered something");
+    assert!(
+        problem.contains("\"steps\" is not a list")
+            && problem.contains("it holds 2 YAML documents where one value was expected"),
+        "{problem}"
+    );
+
     let output = render("steps=[build, release]");
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(stdout(&output), RENDERED);
