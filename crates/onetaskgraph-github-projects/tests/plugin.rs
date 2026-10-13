@@ -2343,13 +2343,15 @@ fn answer_a_session_call(
     {
         return Some(answered);
     }
-    // Narrowed to the lane's own board lookup, which selects the id and nothing else:
+    // The lane's own board metadata lookup, distinct from the production item walk:
     // `graphql::BOARD` reaches `repositoryOwner` too, and answering it here would hand the
     // source a board with no items.
-    if query.contains("projectV2(number:$number){id}}") {
+    if query.contains("query LiveBoardWorkload(") {
         assert_eq!(variables["owner"], json!("octo-org"));
         assert_eq!(variables["number"], json!(7));
-        return Some(json!({"repositoryOwner":{"projectV2":{"id":"PVT_board"}}}));
+        return Some(json!({"repositoryOwner":{"projectV2":{"id":"PVT_board",
+            "items":{"totalCount":state.items.len()},
+            "fields":{"totalCount":state.fields()["nodes"].as_array().unwrap().len()}}}}));
     }
     if query.contains("on ProjectV2{fields(first:100") {
         return Some(json!({"node":{"fields":state.fields()}}));

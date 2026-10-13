@@ -37,10 +37,24 @@ async fn real_projects_v2_contract_writes_and_leaves_no_residue() {
     // budget one, inside `journey::run`, which `scripts/check-budget-decline.sh` drives
     // through to a red check without a credential. A session that is refused did not run and
     // did not pass, and says so.
+    let mut recording = None;
     journey::enter(&|variable| env::var(variable).ok(), |token| {
-        Session::open(SESSION_NAME, token, Exclusivity::Shared)
-            .unwrap_or_else(|declined| declined.refuse())
+        let session = Session::open(SESSION_NAME, token, Exclusivity::Shared)
+            .unwrap_or_else(|declined| declined.refuse());
+        recording = Some(
+            journey::quota::start(
+                onetaskgraph_github_live::quota::EntryPoint::Main,
+                std::sync::Arc::clone(&journey::SESSION),
+                onetaskgraph_github_live::quota::reference_workload(),
+            )
+            .unwrap_or_else(|error| panic!("live-session telemetry cannot start: {error}")),
+        );
+        session
     })
     .await
     .unwrap_or_else(|error| panic!("the GitHub Projects live lane cannot run: {error}"));
+    if recording.is_some() {
+        journey::quota::complete()
+            .unwrap_or_else(|error| panic!("live-session telemetry incomplete: {error}"));
+    }
 }

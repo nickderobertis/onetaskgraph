@@ -30,6 +30,7 @@ async fn bridge_child() {
     };
     let ledger = Arc::new(Accounting::with_query_prices());
     let _scope = quota::start(EntryPoint::Main, Arc::clone(&ledger), reference_workload()).unwrap();
+    quota::observe_initial_board(Some(90), Some(14)).unwrap();
     let source = Plugin
         .build_recording_into(
             &SourceName::new("work").unwrap(),

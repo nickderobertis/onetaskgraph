@@ -925,8 +925,24 @@ impl Accounting {
             ..Self::default()
         }
     }
-    pub(crate) const fn prices_queries(&self) -> bool {
-        self.query_prices
+    /// Select a read's actual cost, preserving mutation documents and existing probe aliases.
+    #[must_use]
+    pub fn priced_document<'a>(&self, document: &'a str) -> std::borrow::Cow<'a, str> {
+        if !self.query_prices
+            || Mode::of_document(document) == Mode::Write
+            || document.contains("dryRun:true")
+            || document.contains("rateLimit{cost")
+        {
+            return std::borrow::Cow::Borrowed(document);
+        }
+        match document.find('{') {
+            Some(root) => std::borrow::Cow::Owned(format!(
+                "{}rateLimit{{cost}} {}",
+                &document[..=root],
+                &document[root + 1..]
+            )),
+            None => std::borrow::Cow::Borrowed(document),
+        }
     }
     /// Record what a caller estimated this session would spend against `budget`, before
     /// it started.

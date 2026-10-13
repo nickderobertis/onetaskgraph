@@ -27,7 +27,7 @@ use std::{
 };
 
 use onetaskgraph_github_projects::accounting::{
-    Accounting, Endpoint, Method, Mode, Outcome, RateLimit, Request,
+    Accounting, Endpoint, Method, Mode, Outcome, RateLimit, Request, ResponseOutcome,
 };
 use onetaskgraph_github_projects::{
     graphql, largest_page_sizes, worst_case_node_count, worst_case_point_cost,
@@ -59,7 +59,8 @@ use crate::lane::{
 /// residue sweep and the cleanup below, and every request
 /// [`Plugin::build_recording_into`](onetaskgraph_github_projects::Plugin) has the source
 /// send.
-pub static SESSION: LazyLock<Arc<Accounting>> = LazyLock::new(|| Arc::new(Accounting::new()));
+pub static SESSION: LazyLock<Arc<Accounting>> =
+    LazyLock::new(|| Arc::new(Accounting::with_query_prices()));
 
 /// Which API this journey's own calls go to, and which one the source it builds does.
 ///
@@ -198,6 +199,8 @@ async fn graphql_answer(
     query_name: &str,
     variables: Value,
 ) -> Result<Value, Refusal> {
+    let priced = SESSION.priced_document(query);
+    let query = priced.as_ref();
     let sending =
         |reported_cost| Request::graphql(query, &variables, Some(query_name), reported_cost);
     let response = match reqwest::Client::new()
@@ -221,19 +224,62 @@ async fn graphql_answer(
     let status = response.status();
     let limits = rate_limit_headers(&response);
     let exhausted = budget_exhausted(&response);
-    let outcome = |outcome: Outcome| sending(None).finished(outcome, limits.clone());
+    let served = response
+        .headers()
+        .get(reqwest::header::DATE)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
     let body = match response.text().await {
         Ok(body) => body,
         Err(error) => {
-            SESSION.record(outcome(Outcome::Refused));
+            SESSION.record(sending(None).finished(Outcome::Refused, limits));
             return Err(Refusal::Unanswered(format!(
                 "{query_name} query returned no readable body: {error}"
             )));
         }
     };
-    let ended = Outcome::of_response(status, exhausted, &body);
+    let parsed = serde_json::from_str::<Value>(&body);
+    // An actual alias is selected separately from the hypothetical reconciliation price.
+    let reported_cost = parsed.as_ref().ok().and_then(|response| {
+        if query.contains("actualCost:rateLimit(dryRun:false)") {
+            response
+                .pointer("/data/actualCost/cost")
+                .and_then(Value::as_u64)
+        } else if !query.contains("dryRun:true") {
+            response
+                .pointer("/data/rateLimit/cost")
+                .and_then(Value::as_u64)
+        } else {
+            None
+        }
+    });
+    let errors = parsed
+        .as_ref()
+        .ok()
+        .and_then(|response| response.get("errors"))
+        .filter(|errors| {
+            !errors.is_null() && errors.as_array().is_none_or(|errors| !errors.is_empty())
+        });
+    let protocol = if !status.is_success() {
+        ResponseOutcome::HttpError
+    } else if parsed.is_err() {
+        ResponseOutcome::TransportError
+    } else if errors.is_some() {
+        ResponseOutcome::GraphqlError
+    } else {
+        ResponseOutcome::Success
+    };
+    let ended = if errors.is_some() {
+        Outcome::Refused
+    } else {
+        Outcome::of_response(status, exhausted, &body)
+    };
+    SESSION.record(
+        sending(reported_cost)
+            .finished(ended, limits)
+            .with_execution(Some(query.to_owned()), protocol, 1),
+    );
     if !status.is_success() {
-        SESSION.record(outcome(ended));
         let problem = format!("{query_name} query failed: HTTP {status}");
         return Err(if status.is_server_error() {
             Refusal::Unanswered(problem)
@@ -241,48 +287,22 @@ async fn graphql_answer(
             Refusal::Answered(problem, None)
         });
     }
-    let response: Value = match serde_json::from_str(&body) {
-        Ok(response) => response,
-        Err(error) => {
-            SESSION.record(outcome(Outcome::Refused));
-            return Err(Refusal::Answered(
-                format!("{query_name} query returned invalid JSON: {error}"),
-                None,
-            ));
-        }
-    };
-    // The alias probe was accepted by GitHub in the isolated strategy diagnostic.
-    // Hypothetical dryRun prices remain reconciliation evidence only.
-    let reported_cost = response
-        .pointer("/data/actualCost/cost")
-        .and_then(Value::as_u64)
-        .or_else(|| {
-            (!query.contains("dryRun:true"))
-                .then(|| {
-                    response
-                        .pointer("/data/rateLimit/cost")
-                        .and_then(Value::as_u64)
-                })
-                .flatten()
-        });
-    if let Some(errors) = response.get("errors").filter(|errors| {
-        !errors.is_null() && errors.as_array().is_none_or(|errors| !errors.is_empty())
-    }) {
-        SESSION.record(
-            sending(reported_cost)
-                .finished(Outcome::Refused, limits)
-                .with_execution(
-                    Some(query.to_owned()),
-                    onetaskgraph_github_projects::accounting::ResponseOutcome::GraphqlError,
-                    1,
-                ),
-        );
+    if let Some(errors) = errors {
         return Err(Refusal::Answered(
             format!("{query_name} query was rejected by GitHub: {errors}"),
-            Some(response.clone()),
+            parsed.ok(),
         ));
     }
-    SESSION.record(sending(reported_cost).finished(ended, limits));
+    let mut response = parsed.map_err(|error| {
+        Refusal::Answered(
+            format!("{query_name} query returned invalid JSON: {error}"),
+            None,
+        )
+    })?;
+    if let Some(served) = served {
+        response["_served"] = json!(served);
+    }
+
     Ok(response)
 }
 
@@ -1378,11 +1398,19 @@ async fn nominated_project_id(
 ) -> Result<String, String> {
     let response = graphql_variables(
         token,
-        "query($owner:String!,$number:Int!){repositoryOwner(login:$owner){... on ProjectV2Owner{projectV2(number:$number){id}}}}",
+        "query LiveBoardWorkload($owner:String!,$number:Int!){repositoryOwner(login:$owner){... on ProjectV2Owner{projectV2(number:$number){id items(first:1){totalCount} fields(first:1){totalCount}}}}}",
         "nominated board lookup",
         json!({"owner":owner,"number":project_number}),
     )
     .await?;
+    quota::observe_initial_board(
+        response
+            .pointer("/data/repositoryOwner/projectV2/items/totalCount")
+            .and_then(Value::as_u64),
+        response
+            .pointer("/data/repositoryOwner/projectV2/fields/totalCount")
+            .and_then(Value::as_u64),
+    )?;
     response
         .pointer("/data/repositoryOwner/projectV2/id")
         .and_then(Value::as_str)
@@ -2892,6 +2920,7 @@ async fn drive_every_declared_capability(
             ),
         "cancelled did not read back as Status=Cancelled, state=CLOSED, reason=NOT_PLANNED"
     );
+    quota::phase(onetaskgraph_github_live::quota::Phase::CommentActivity)?;
     an_edited_comment_moves_its_issue_and_is_selected_since(
         writer,
         (&first_id, &first),
@@ -2901,6 +2930,7 @@ async fn drive_every_declared_capability(
     )
     .await?;
     // Renamed to another of this run's own titles, so the artifact cleanup still knows it.
+    quota::phase(onetaskgraph_github_live::quota::Phase::ChangeToken)?;
     every_change_kind_moves_a_tasks_token(
         writer,
         rebuilt,
@@ -3451,6 +3481,7 @@ pub async fn run(nomination: Nomination) {
     // have been observed to disagree, and a session the headers cannot afford is DECLINED
     // on them here — after that one call, before anything is written — rather than left to
     // fail on its next one.
+    quota::phase(onetaskgraph_github_live::quota::Phase::Schema).unwrap();
     verify_contract_schema(&token, || {
         budget::recheck(&admitted, &SESSION).unwrap_or_else(|declined| declined.refuse());
     })
@@ -3461,6 +3492,7 @@ pub async fn run(nomination: Nomination) {
     // in the offline gate because it needs the credential this lane already has, and it runs
     // unconditionally once that credential is present: behind no flag, and not skipped
     // because the setup above went well.
+    quota::phase(onetaskgraph_github_live::quota::Phase::Reconciliation).unwrap();
     reconcile_node_counts_and_point_costs(&token)
         .await
         .unwrap_or_else(|error| {
@@ -3470,6 +3502,7 @@ pub async fn run(nomination: Nomination) {
     // grammar and the project number's range — before either reaches GitHub. It is built
     // recording into this run's own accounting, so the session total covers the source's
     // requests and this lane's alike rather than either one on its own.
+    quota::phase(onetaskgraph_github_live::quota::Phase::Setup).unwrap();
     let source = onetaskgraph_github_projects::Plugin
         .build_recording_into(
             &SourceName::new("github-live").unwrap(),
@@ -3633,7 +3666,10 @@ pub async fn run(nomination: Nomination) {
     };
     let writer = rebuild();
     run_then_cleanup(
-        || drive_every_declared_capability(&run, writer.as_ref(), &rebuild),
+        || async {
+            quota::phase(onetaskgraph_github_live::quota::Phase::Capabilities)?;
+            drive_every_declared_capability(&run, writer.as_ref(), &rebuild).await
+        },
         || async {
             // This run's own, first: everything it wrote goes whether the journey passed or
             // failed. Then what an interrupted EARLIER run left, which is a different
@@ -3642,6 +3678,7 @@ pub async fn run(nomination: Nomination) {
             // deleted the in-flight items of any session that happened to be running
             // beside this one; a sweep after it recovers exactly the same orphans and can
             // reach nothing a live run owns.
+            let cleanup_telemetry = quota::phase(onetaskgraph_github_live::quota::Phase::Cleanup);
             let mine = remove_live_state(
                 &token,
                 &project_id,
@@ -3653,6 +3690,8 @@ pub async fn run(nomination: Nomination) {
             // Made as this process's machine run whichever stamp it wrote: what it can
             // recover is a machine-stamped orphan of THIS machine, and on a fresh hosted
             // runner that is none.
+            let orphan_telemetry =
+                quota::phase(onetaskgraph_github_live::quota::Phase::OrphanRecovery);
             let orphans = sweep_orphans(
                 &token,
                 &project_id,
@@ -3660,6 +3699,7 @@ pub async fn run(nomination: Nomination) {
                 &Sweep::of(Run::current(), now_micros()),
             )
             .await;
+            let mine = mine.and(cleanup_telemetry).and(orphan_telemetry);
             match (mine, orphans) {
                 (Ok(()), Ok(())) => Ok(()),
                 (Err(mine), Ok(())) => Err(mine),

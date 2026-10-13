@@ -190,6 +190,9 @@ pub struct Allowance {
     pub reset_epoch_seconds: u64,
 }
 
+/// Workspace source version, independent of each publishable crate's release version.
+pub const WORKSPACE_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 /// GitHub's primary and secondary pricing documentation, kept with the mutation model.
 pub const PRICING_URL: &str =
     "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api";
@@ -466,6 +469,19 @@ impl InvocationWriter {
             return Err("invocation already completed".into());
         }
         self.record.complete = true;
+        self.persist()
+    }
+
+    /// Retain the initial board facts observed before creating the invocation's fixtures.
+    ///
+    /// # Errors
+    /// Refuses an observation after completion or a failed telemetry write.
+    pub fn observe_initial_board(&mut self, items: u64, fields: u64) -> Result<(), String> {
+        if self.record.complete {
+            return Err("cannot change a completed invocation's workload".into());
+        }
+        self.record.workload.initial_items = items;
+        self.record.workload.initial_fields = fields;
         self.persist()
     }
 

@@ -411,6 +411,17 @@ fn file_backed_invocations_and_reader_refuse_partial_stale_duplicate_and_corrupt
         let mut initial = record.clone();
         initial.calls.clear();
         let mut writer = InvocationWriter::start(directory.path(), initial.clone()).unwrap();
+        writer.observe_initial_board(91, 15).unwrap();
+        let filename = match record.invocation {
+            onetaskgraph_github_live::quota::EntryPoint::Main => "main.json",
+            onetaskgraph_github_live::quota::EntryPoint::Assets => "assets.json",
+        };
+        let observed: SessionRecord =
+            serde_json::from_slice(&std::fs::read(directory.path().join(filename)).unwrap())
+                .unwrap();
+        assert_eq!(observed.workload.initial_items, 91);
+        assert_eq!(observed.workload.initial_fields, 15);
+        writer.observe_initial_board(90, 14).unwrap();
         assert!(InvocationWriter::start(directory.path(), initial).is_err());
         for call in &record.calls {
             let mut call = call.clone();
@@ -428,6 +439,7 @@ fn file_backed_invocations_and_reader_refuse_partial_stale_duplicate_and_corrupt
         read_pair(&pair).unwrap()
     );
     assert!(writers[0].complete().is_err());
+    assert!(writers[0].observe_initial_board(91, 15).is_err());
     assert!(writers[0].record(pair[0].calls[0].clone()).is_err());
     let stale = CurrentSession::new(
         "other-job",

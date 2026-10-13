@@ -91,6 +91,15 @@ pub fn answer_a_stateless_session_call(
     variables: &Value,
     pricing: Pricing,
 ) -> Option<Value> {
+    let unpriced = query.replacen("rateLimit{cost} ", "", 1);
+    let mut answer = stateless_session_call(&unpriced, variables, pricing)?;
+    if query.contains("rateLimit{cost}") {
+        answer["rateLimit"]["cost"] = json!(1);
+    }
+    Some(answer)
+}
+
+fn stateless_session_call(query: &str, variables: &Value, pricing: Pricing) -> Option<Value> {
     if let Some(production) = strip_probe(query) {
         let unbound = unbound_required_variables(&production, variables);
         assert!(

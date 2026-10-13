@@ -4454,26 +4454,13 @@ impl GitHubProjectsSource {
         variables: &Value,
         number: u32,
     ) -> Result<Value, Attempt> {
-        let priced;
-        let executed = if self.ledger.prices_queries() && !is_mutation(query) {
-            // Insert in the operation's root selection, before any appended fragments.
-            // The inventory contains generated documents, never caller-supplied text.
-            let root = query.find('{').expect("a query has a root selection");
-            priced = format!(
-                "{}rateLimit{{cost}} {}",
-                &query[..=root],
-                &query[root + 1..]
-            );
-            priced.as_str()
-        } else {
-            query
-        };
+        let executed = self.ledger.priced_document(query);
         let Attempted {
             result,
             limits,
             reported_cost,
             response_outcome,
-        } = self.attempt(executed, variables).await;
+        } = self.attempt(executed.as_ref(), variables).await;
         // No `otherwise` name: every document this source sends is one of its own, and the
         // inventory gate on `graphql::DOCUMENTS` is what keeps that true.
         let sending = accounting::Request::graphql(query, variables, None, reported_cost);
@@ -4484,7 +4471,7 @@ impl GitHubProjectsSource {
         };
         self.ledger
             .record(sending.finished(outcome, limits).with_execution(
-                Some(executed.to_owned()),
+                Some(executed.into_owned()),
                 response_outcome,
                 number,
             ));
