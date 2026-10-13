@@ -39,6 +39,21 @@ case $python_bin in
 esac
 
 
+# The installer journey must use the build backend requirement declared by the product.
+if ! "$python_bin" - "$ROOT" <<'PYREQUIREMENT'
+import pathlib, re, sys, tomllib
+root = pathlib.Path(sys.argv[1])
+requires = tomllib.loads((root / 'pyproject.toml').read_text())['build-system']['requires']
+script = (root / 'scripts/test-distribution.sh').read_text()
+selected = re.findall(r"uv tool run --from '([^']+)' maturin build", script)
+if selected != requires:
+    sys.exit('distribution maturin requirement disagrees with pyproject.toml')
+PYREQUIREMENT
+then
+  fatal "distribution maturin requirement disagrees with pyproject.toml" "use the manifest build-system requirement in scripts/test-distribution.sh"
+fi
+
+
 for tool in npm python3 tar; do
   command -v "$tool" >/dev/null 2>&1 || fatal \
     "$tool is not on PATH, and the packaging step needs it" \
@@ -158,8 +173,8 @@ for pair in $targets; do
 done
 [ ! -f "$UPLOADS" ] || report "the builder published an asset before install verification"
 
-# Foreign architectures are verified as artifacts; this Linux journey does not execute
-# Darwin payloads. The production verifier compares their wheel/archive/npm byte hashes.
+# Foreign payloads are compared by wheel/archive/npm hashes; only the native
+# product journey installs and executes the host-compatible target.
 for pair in $targets; do
   target="${pair%%=*}"; npm_platform="${pair#*=}"
   if ! "$python_bin" - "$TREE" "$target" "$version" <<'PYWHEEL'

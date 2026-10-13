@@ -610,3 +610,29 @@ test("unresolved expressions, runners, calls and needs fail explicitly; actual m
 });
 
 test.after(() => rmSync(history, { recursive: true, force: true }));
+
+test("malformed lock records and Bun inventory disagreement require coverage through the classifier", () => {
+  const malformed = [];
+  for (const path of ["Cargo.lock", "uv.lock"]) {
+    for (const packages of ["package = []", 'package = "invalid"', "package = [1]"])
+      malformed.push({ [path]: `version = 1\n${packages}\n` });
+    const prefix = files[path];
+    for (const record of [
+      'dependencies = "invalid"',
+      'metadata = "invalid"',
+      'metadata = { requires-dist = "invalid" }',
+      "metadata = { requires-dist = [1] }",
+      path === "Cargo.lock" ? "dependencies = [1]" : 'dependencies = ["invalid"]',
+    ])
+      malformed.push({ [path]: `${prefix}${record}\n` });
+  }
+  // Valid Bun syntax, but the updater's registered line patterns cannot mask
+  // compact fields; this must reach the inventory disagreement refusal.
+  malformed.push({ "bun.lock": files["bun.lock"].replace(/\n\s*/g, "") });
+  for (const changes of malformed) {
+    const result = classify(event("release-plz-123"), revision(changes));
+    assert.equal(result.isReleaseOnly, false);
+    assert.equal(result.macosRequired, true);
+    assert.equal(result.reason, "Unreadable release diff requires coverage");
+  }
+});

@@ -185,6 +185,15 @@ test("trigger filters discriminate event types, branches and tags and refuse uns
   assert.equal(triggered(workflow, { event: "release", action: "created" }), false);
   assert.equal(triggered(workflow, { event: "release", action: "published" }), true);
   assert.equal(triggered(workflow, { event: "workflow_run", workflow: "other" }), false);
+  const combined = { ...workflow, on: { push: { branches: ["main"], tags: ["v1.2.4"] } } };
+  for (const [scenario, expected] of [
+    [{ event: "push", branch: "main" }, true],
+    [{ event: "push", tag: "v1.2.4" }, true],
+    [{ event: "push", branch: "other" }, false],
+    [{ event: "push", tag: "v9.0.0" }, false],
+  ])
+    assert.equal(triggered(combined, scenario), expected);
+
   for (const on of [null, 42, { push: [] }, { push: "bad" }, { schedule: [{}] }, { unknown: null }])
     assert.throws(
       () => triggered({ on, jobs: { proof: { "runs-on": "ubuntu-latest" } } }, { event: "push" }),
@@ -363,6 +372,15 @@ test("event workload rejects new workflow triggers, actions and diagnostic input
   const inventory = JSON.parse(read(".github/event-classes.json"));
   validateEventInventory(inventory);
   for (const mutation of [
+    (workflow) => {
+      workflow.on.push = { branches: ["unmeasured"] };
+    },
+    (workflow) => {
+      workflow.on.push = { tags: ["v99.0.0"] };
+    },
+    (workflow) => {
+      workflow.on.workflow_run = { workflows: ["unknown-upstream"] };
+    },
     (workflow) => {
       workflow.on.issue_comment = null;
     },
@@ -681,17 +699,19 @@ test("failing architecture discovery propagates the real shell exit and removes 
 });
 
 test("graph and telemetry share Mac classification for supported and custom runner labels", () => {
-  for (const runner of [
-    ["macos-latest"],
-    ["ubuntu-latest", "custom-macos-label"],
-    ["windows-latest"],
-    ["self-hosted", "macos-15"],
+  for (const [runner, expectedMacos] of [
+    [["macos-latest"], true],
+    [["ubuntu-latest", "custom-macos-label"], false],
+    [["windows-latest"], false],
+    [["self-hosted", "macos-15"], true],
   ]) {
     const rows = jobs(
       { jobs: { proof: { "runs-on": runner } } },
       { event: "pull_request", action: "opened" },
       { macosRequired: true },
     );
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].macos, expectedMacos);
     const current = recording();
     current.scenarios[0].runs = [
       {
@@ -705,6 +725,8 @@ test("graph and telemetry share Mac classification for supported and custom runn
     current.lifecycles[0].macRuns = current.lifecycles[0].runs.filter(
       (run) => run.macJobs > 0,
     ).length;
-    validateTelemetry(current);
+    assert.doesNotThrow(() => validateTelemetry(current));
+    current.scenarios[0].runs[0].rows[0].macos = !expectedMacos;
+    assert.throws(() => validateTelemetry(current), /Mac|macos|runner/);
   }
 });

@@ -22,7 +22,13 @@ def bash_executable(system: str) -> str:
     if system == 'Windows':
         git = shutil.which('git')
         if git is not None:
-            installation = Path(git).resolve().parent.parent
+            directory = Path(git).resolve().parent
+            # Git Bash exposes git from usr/bin or mingw*/bin; native PATH
+            # commonly exposes the same installation from cmd or bin.
+            if directory.name == 'bin' and directory.parent.name in ('usr', 'mingw64', 'mingw32'):
+                installation = directory.parent.parent
+            else:
+                installation = directory.parent
             for relative in ('bin/bash.exe', 'usr/bin/bash.exe'):
                 candidate = installation / relative
                 if candidate.is_file():

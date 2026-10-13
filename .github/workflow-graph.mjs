@@ -221,6 +221,24 @@ export function validateEventInventory(inventory, definitions = workflows()) {
       for (const action of actions)
         if (!matching.some((entry) => entry.action === action))
           throw Error(`Unmeasured workflow action: ${name}: ${event}/${action}`);
+      for (const [filter, field] of [
+        ["branches", "branch"],
+        ["tags", "tag"],
+      ])
+        for (const selection of options?.[filter] ?? [])
+          if (
+            !matching.some((entry) =>
+              field === "branch"
+                ? !entry.tag && (entry.branch || "main") === selection
+                : entry.tag === selection,
+            )
+          )
+            throw Error(`Unmeasured workflow ${filter}: ${name}: ${selection}`);
+      // graph() fans out every measured upstream run through workflow_run.
+      // Refuse names outside that graph rather than assuming no downstream run.
+      for (const upstream of options?.workflows ?? [])
+        if (!Object.values(definitions).some((definition) => definition.name === upstream))
+          throw Error(`Unmeasured workflow upstream: ${name}: ${upstream}`);
       if (options?.inputs !== undefined && !record(options.inputs))
         throw Error(`Unmeasured workflow input declaration: ${name}`);
       for (const [input, definition] of Object.entries(options?.inputs ?? {})) {
@@ -360,9 +378,12 @@ export function triggered(workflow, scenario) {
   )
     return false;
   if (spec?.types && !spec.types.includes(scenario.action)) return false;
-  if (spec?.branches && !spec.branches.includes(scenario.branch || "main")) return false;
-  if (spec?.tags && !spec.tags.includes(scenario.tag)) return false;
-  if (scenario.tag && spec?.branches && !spec.tags) return false;
+  if (scenario.event === "push") {
+    if (scenario.tag) {
+      if (spec?.tags ? !spec.tags.includes(scenario.tag) : spec?.branches) return false;
+    } else if (spec?.branches ? !spec.branches.includes(scenario.branch || "main") : spec?.tags)
+      return false;
+  } else if (spec?.branches && !spec.branches.includes(scenario.branch || "main")) return false;
   return true;
 }
 function reusable(call) {

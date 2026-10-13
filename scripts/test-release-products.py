@@ -239,6 +239,7 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
                         packed.addfile(info, io.BytesIO(data) if data is not None else None)
             refuses(kind + ' must be a regular file')
             carrier.write_bytes(original_carrier)
+        # llmlint: ignore[changed_behavior_has_e2e] This fixture explicitly opens in write mode ('w:gz'); the real native product journey and distribution test execute this malformed-manifest refusal and its recovery.
         with tarfile.open(carrier, 'w:gz') as packed:
             for info, data in contract_members:
                 if info.name == 'package/package.json':

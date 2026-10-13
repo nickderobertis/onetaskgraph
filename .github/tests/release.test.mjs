@@ -177,19 +177,21 @@ else:
         (root / 'Git/cmd').mkdir(parents=True)
         (root / 'Git/bin').mkdir()
         (root / 'launchers').mkdir()
-        git = root / 'Git/cmd/git'
-        git.write_text('#!/bin/sh\\nexit 0\\n')
-        git.chmod(0o755)
         wsl = root / 'launchers/bash'
-        wsl.write_text('#!/bin/sh\\necho unexpected-WSL >&2\\nexit 91\\n')
+        wsl.write_text('#!/bin/sh\\n echo unexpected-WSL >&2\\nexit 91\\n')
         wsl.chmod(0o755)
         selected = root / 'Git/bin/bash.exe'
         shutil.copy2(actual_bash, selected)
-        os.environ['PATH'] = str(wsl.parent) + os.pathsep + str(git.parent)
-        resolved = bash_executable('Windows')
-        assert resolved == str(selected)
-        subprocess.run([resolved, '-c', 'printf Git-Bash-selected'], check=True)
-        assert subprocess.run([resolved, '-c', 'exit 37'], check=False).returncode == 37
+        for directory in ['cmd', 'bin', 'usr/bin', 'mingw64/bin', 'mingw32/bin']:
+            git = root / 'Git' / directory / 'git'
+            git.parent.mkdir(parents=True, exist_ok=True)
+            git.write_text('#!/bin/sh\\nexit 0\\n')
+            git.chmod(0o755)
+            os.environ['PATH'] = str(wsl.parent) + os.pathsep + str(git.parent)
+            resolved = bash_executable('Windows')
+            assert resolved == str(selected), directory
+            subprocess.run([resolved, '-c', 'printf Git-Bash-selected'], check=True)
+            assert subprocess.run([resolved, '-c', 'exit 37'], check=False).returncode == 37
         selected.unlink()
         try:
             bash_executable('Windows')
@@ -212,4 +214,60 @@ test("workflow tooling format and lint commands run without shell glob expansion
       execFileSync("bun", command.split(" ").slice(1), { cwd: root, stdio: "pipe" });
     }
   }
+});
+
+test("wheel extraction reports corrupt archives and destination IO failures through its CLI", () => {
+  execFileSync(
+    "python3",
+    [
+      "-c",
+      `import subprocess, sys, tempfile, zipfile
+from pathlib import Path
+with tempfile.TemporaryDirectory() as temporary:
+    tree = Path(temporary)
+    wheel = tree / 'cli.whl'
+    binary = tree / 'output/onetaskgraph'
+    command = [sys.executable, 'scripts/release-wheel-binary.py', '--wheels', str(tree), '--binary', str(binary)]
+    wheel.write_bytes(b'corrupt ZIP')
+    rejected = subprocess.run(command, capture_output=True, text=True)
+    assert rejected.returncode == 1
+    assert 'wheel extraction failed:' in rejected.stderr and 'next:' in rejected.stderr
+    assert not binary.exists()
+    with zipfile.ZipFile(wheel, 'w') as archive:
+        archive.writestr('cli.data/scripts/onetaskgraph', b'payload')
+    binary.parent.write_text('parent is a file')
+    rejected = subprocess.run(command, capture_output=True, text=True)
+    assert rejected.returncode == 1
+    assert 'wheel extraction failed:' in rejected.stderr and 'next:' in rejected.stderr
+    binary.parent.unlink()
+    installed = subprocess.run(command, capture_output=True, text=True)
+    assert installed.returncode == 0, installed.stderr
+    assert binary.read_bytes() == b'payload'
+`,
+    ],
+    { cwd: root, stdio: "pipe" },
+  );
+});
+
+test("packaging guard rejects build-backend requirement drift before staging products", () => {
+  execFileSync(
+    "python3",
+    [
+      "-c",
+      `import shutil, subprocess, tempfile
+from pathlib import Path
+with tempfile.TemporaryDirectory() as temporary:
+    tree = Path(temporary)
+    shutil.copytree('scripts', tree / 'scripts')
+    manifest = Path('pyproject.toml').read_text()
+    (tree / 'pyproject.toml').write_text(manifest.replace('maturin>=1.9,<2', 'maturin>=1.10,<2'))
+    rejected = subprocess.run(['bash', 'scripts/check-release-packaging.sh'], cwd=tree, capture_output=True, text=True)
+    assert rejected.returncode == 2, rejected.stderr
+    assert 'distribution maturin requirement disagrees with pyproject.toml' in rejected.stderr
+    assert 'next:' in rejected.stderr
+    assert not (tree / 'dist').exists()
+`,
+    ],
+    { cwd: root, stdio: "pipe" },
+  );
 });
