@@ -103,21 +103,60 @@ class CarrierManifest:
         return cls(value['name'], value['version'], tuple(value['os']), tuple(value['cpu']))
 
 
+Digest = NewType('Digest', str)
+
+
+@dataclass(frozen=True)
+class PayloadHashes:
+    binary: Digest
+    archive: Digest
+    wheel: Digest
+    npm: Digest
+
+    @classmethod
+    def parse(cls, value: object) -> 'PayloadHashes':
+        if not isinstance(value, dict) or set(value) != {'binary', 'archive', 'wheel', 'npm'} or any(not isinstance(digest, str) or re.fullmatch(r'[a-f0-9]{64}', digest) is None for digest in value.values()):
+            raise ValueError('invalid verification payload hashes')
+        return cls(Digest(value['binary']), Digest(value['archive']), Digest(value['wheel']), Digest(value['npm']))
+
+    def digests(self) -> tuple[Digest, ...]:
+        return self.binary, self.archive, self.wheel, self.npm
+
+    def record(self) -> dict[str, str]:
+        return {'binary': self.binary, 'archive': self.archive, 'wheel': self.wheel, 'npm': self.npm}
+
+
+@dataclass(frozen=True)
+class WheelFilename:
+    distribution_version: str
+    python_tags: tuple[str, ...]
+    abi_tags: tuple[str, ...]
+    platform_tags: tuple[str, ...]
+
+    @classmethod
+    def parse(cls, path: Path) -> 'WheelFilename':
+        parts = path.stem.rsplit('-', 3)
+        if len(parts) != 4:
+            raise ValueError('invalid wheel filename tags')
+        identity, python, abi, platform = parts
+        return cls(identity, tuple(python.split('.')), tuple(abi.split('.')), tuple(platform.split('.')))
+
+    def tags(self) -> set[str]:
+        return {f'{python}-{abi}-{platform}' for python in self.python_tags for abi in self.abi_tags for platform in self.platform_tags}
+
+
 @dataclass(frozen=True)
 class VerificationReport:
     target: RustTarget
     tag: ReleaseTag
-    payload_hashes: dict[str, str]
+    payload_hashes: PayloadHashes
 
     @classmethod
     def parse(cls, text: str) -> 'VerificationReport':
         value = json.loads(text)
-        if not isinstance(value, dict) or not isinstance(value.get('target'), str) or not isinstance(value.get('tag'), str) or not isinstance(value.get('payloadHashes'), dict):
+        if not isinstance(value, dict) or not isinstance(value.get('target'), str) or not isinstance(value.get('tag'), str):
             raise ValueError('invalid verification report')
-        hashes = value['payloadHashes']
-        if set(hashes) != {'binary', 'archive', 'wheel', 'npm'} or any(not isinstance(digest, str) or re.fullmatch(r'[a-f0-9]{64}', digest) is None for digest in hashes.values()):
-            raise ValueError('invalid verification payload hashes')
-        return cls(RustTarget(value['target']), ReleaseTag(value['tag']), hashes)
+        return cls(RustTarget(value['target']), ReleaseTag(value['tag']), PayloadHashes.parse(value.get('payloadHashes')))
 
     def record(self) -> dict[str, object]:
-        return {'target': self.target, 'tag': self.tag, 'payloadHashes': self.payload_hashes}
+        return {'target': self.target, 'tag': self.tag, 'payloadHashes': self.payload_hashes.record()}

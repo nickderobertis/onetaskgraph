@@ -19,6 +19,7 @@ import tempfile
 import tomllib
 import zipfile
 from release_products import RustTarget, NpmPlatform, RunnerLabel, ArchiveFormat, VerificationReport
+from product_versions import SEMANTIC_VERSION_RE, SemanticVersion
 
 PYTHON_EXECUTABLE = str(Path(sys.executable).resolve())
 
@@ -29,6 +30,10 @@ class ReleaseTarget:
     target: RustTarget
     extension: ArchiveFormat
     npm_platform: NpmPlatform
+
+    def __post_init__(self) -> None:
+        if not re.fullmatch(r'[a-z0-9_]+(?:-[a-z0-9_]+)+', self.target) or not re.fullmatch(r'[a-z0-9]+-[a-z0-9]+', self.npm_platform) or self.extension not in ('tar.gz', 'zip'):
+            raise ValueError('invalid release target mapping; restore its identifiers before packaging')
 
 
 def run(wheel_dir: Path, target: RustTarget) -> None:
@@ -42,7 +47,11 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
     mac_pairs = re.search(r'^      TARGETS: (.*)$', mac.group(1), re.M)
     if mac_pairs is None:
         raise ValueError('Darwin TARGETS missing; restore the Rust/npm platform mapping')
-    rows.extend(ReleaseTarget('macos-latest', pair.split('=')[0], 'tar.gz', pair.split('=')[1]) for pair in mac_pairs[1].split())
+    for pair in mac_pairs[1].split():
+        if not re.fullmatch(r'[a-z0-9_]+(?:-[a-z0-9_]+)+=[a-z0-9]+-[a-z0-9]+', pair):
+            raise ValueError('invalid Darwin TARGETS pair; restore target=npm-platform before packaging')
+        rust_target, npm_platform = pair.split('=')
+        rows.append(ReleaseTarget(RunnerLabel('macos-latest'), RustTarget(rust_target), 'tar.gz', NpmPlatform(npm_platform)))
     candidates = [row for row in rows if row.target == target]
     if len(candidates) != 1:
         raise argparse.ArgumentError(None, 'unsupported --target; choose one declared in release.yml')
@@ -53,6 +62,9 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
         raise ValueError('release packaging body missing; retain the drivable run block')
     body = '\n'.join(line[10:] for line in step[1].splitlines())
     version = tomllib.loads((root / 'pyproject.toml').read_text())['project']['version']
+    if not isinstance(version, str) or not SEMANTIC_VERSION_RE.fullmatch(version):
+        raise ValueError('invalid manifest version; restore the version written by scripts/set-version.sh')
+    version = SemanticVersion(version)
     binary = 'onetaskgraph.exe' if selected.extension == 'zip' else 'onetaskgraph'
     with tempfile.TemporaryDirectory(prefix='release-products-') as scratch:
         tree = Path(scratch)
@@ -95,7 +107,7 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
             raise subprocess.CalledProcessError(installed.returncode, command, installed.stdout, installed.stderr)
         report = VerificationReport.parse(installed.stdout)
         expected_hash = hashlib.sha256(canonical.read_bytes()).hexdigest()
-        if report.target != target or report.tag != f'v{version}' or set(report.payload_hashes.values()) != {expected_hash}:
+        if report.target != target or report.tag != f'v{version}' or set(report.payload_hashes.digests()) != {expected_hash}:
             raise ValueError('installer did not emit the documented single JSON verification result')
 
         def refuses(reason: str) -> None:
@@ -156,6 +168,13 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
                 packed.addfile(info, io.BytesIO(contents) if contents is not None else None)
         refuses('release binary drift')
         carrier.write_bytes(original_carrier)
+        alter_wheel('/METADATA', f'Name: onetaskgraph-cli\nName: foreign-cli\nVersion: {version}\n'.encode())
+        refuses('wheel identity or version mismatch')
+        wheel_path.write_bytes(original_wheel)
+        with zipfile.ZipFile(wheel_path, 'a') as packed:
+            packed.writestr(f'foreign-package/{binary}', original_binary)
+        refuses('wheel install must expose one CLI executable')
+        wheel_path.write_bytes(original_wheel)
         alter_wheel('/METADATA', b'Name: onetaskgraph-cli\nVersion: 999.0.0\n')
         refuses('wheel identity or version mismatch')
         wheel_path.write_bytes(original_wheel)

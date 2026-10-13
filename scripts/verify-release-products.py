@@ -1,6 +1,7 @@
 # llmlint: ignore-file[async_typed_clients_at_boundaries] Staged installers and CLI subprocesses must run sequentially before publication; these are local executable boundaries, not hosted services with a reusable typed SDK client.
 """Verify identical staged payloads and install/run the host's release products."""
 import argparse
+from email.parser import Parser
 import hashlib
 import json
 import os
@@ -13,7 +14,7 @@ import tarfile
 import tempfile
 import zipfile
 from typing import Iterable, TypeVar
-from release_products import ReleaseProduct, RustTarget, NpmPlatform, ReleaseTag, CarrierManifest, VerificationReport
+from release_products import ReleaseProduct, RustTarget, NpmPlatform, ReleaseTag, CarrierManifest, VerificationReport, PayloadHashes, Digest, WheelFilename
 
 PYTHON_EXECUTABLE = str(Path(sys.executable).resolve())
 
@@ -49,8 +50,8 @@ def verify(product: ReleaseProduct, install: bool) -> None:
         entry = only([p for p in packed.namelist() if '.data/scripts/' in p and Path(p).name == binary], 'wheel CLI entry')
         wheeled = packed.read(entry)
         metadata = only([p for p in packed.namelist() if p.endswith('.dist-info/METADATA')], 'wheel METADATA entry')
-        fields = packed.read(metadata).decode().splitlines()
-        require(f'Version: {product.version}' in fields and 'Name: onetaskgraph-cli' in fields, 'wheel identity or version mismatch')
+        fields = Parser().parsestr(packed.read(metadata).decode(), headersonly=True)
+        require(fields.get_all('Version', []) == [product.version] and fields.get_all('Name', []) == ['onetaskgraph-cli'], 'wheel identity or version mismatch')
         wheel_metadata = only([p for p in packed.namelist() if p.endswith('.dist-info/WHEEL')], 'wheel WHEEL entry')
         platforms = [line.removeprefix('Tag: ').split('-')[-1] for line in packed.read(wheel_metadata).decode().splitlines() if line.startswith('Tag: ')]
         match product.os:
@@ -62,20 +63,17 @@ def verify(product: ReleaseProduct, install: bool) -> None:
                 os_prefix = ('manylinux_', 'linux_', 'musllinux_')
         require(bool(platforms) and all(all(part.startswith(os_prefix) and part.endswith('_' + product.wheel_arch) for part in value.split('.')) for value in platforms), 'wheel architecture or OS mismatch')
         require(wheel_path.name.startswith(f'onetaskgraph_cli-{product.version}-'), 'wheel filename version mismatch')
-        filename = wheel_path.stem.rsplit('-', 3)
-        require(len(filename) == 4, 'invalid wheel filename tags')
+        filename = WheelFilename.parse(wheel_path)
         declared_tags = {line.removeprefix('Tag: ') for line in packed.read(wheel_metadata).decode().splitlines() if line.startswith('Tag: ')}
-        filename_tags = {f'{python}-{abi}-{platform}' for python in filename[1].split('.') for abi in filename[2].split('.') for platform in filename[3].split('.')}
-        require(filename_tags == declared_tags, 'wheel filename tags mismatch')
-
+        require(filename.tags() == declared_tags, 'wheel filename tags mismatch')
     carrier = only(Path(f'dist/carriers/{product.npm_platform}').glob('*.tgz'), 'npm carrier')
     with tarfile.open(carrier) as packed:
         carried = packed.extractfile(f'package/bin/{binary}').read()
         manifest = CarrierManifest.parse(json.load(packed.extractfile('package/package.json')))
         require(manifest.os == ({'Darwin':'darwin','Windows':'win32','Linux':'linux'}[product.os],) and manifest.cpu == ('arm64' if product.target.startswith('aarch64') else 'x64',), 'carrier platform mismatch')
         require(manifest.name == f'@onetaskgraph/cli-{product.npm_platform}' and manifest.version == product.version, 'carrier identity mismatch')
-    hashes = {name: hashlib.sha256(payload).hexdigest() for name, payload in [('binary', canonical), ('archive', archived), ('wheel', wheeled), ('npm', carried)]}
-    require(len(set(hashes.values())) == 1, f'release binary drift: {hashes}')
+    hashes = PayloadHashes(binary=Digest(hashlib.sha256(canonical).hexdigest()), archive=Digest(hashlib.sha256(archived).hexdigest()), wheel=Digest(hashlib.sha256(wheeled).hexdigest()), npm=Digest(hashlib.sha256(carried).hexdigest()))
+    require(len(set(hashes.digests())) == 1, f'release binary drift: {hashes.record()}')
     result = VerificationReport(product.target, product.tag, hashes)
     if install:
         require(platform.system() == product.os, 'cannot execute a non-native release target')
@@ -100,9 +98,9 @@ def verify(product: ReleaseProduct, install: bool) -> None:
             subprocess.run(prefix + ['bash', 'scripts/install.sh', '--version', product.tag, '--to', str(dest / 'archive'), '--archive-base-url', archives.parent.as_uri()], env=env, check=True, stdout=sys.stderr)
             subprocess.run([PYTHON_EXECUTABLE, '-m', 'venv', str(dest / 'installer-python')], check=True, stdout=sys.stderr)
             pip_python = dest / 'installer-python' / ('Scripts/python.exe' if product.os == 'Windows' else 'bin/python')
-            subprocess.run([str(pip_python), '-m', 'pip', 'install', '--no-deps', '--target', str(dest / 'wheel'), '--platform', filename[3].split('.')[0], str(wheel_path)], check=True, stdout=sys.stderr)
+            subprocess.run([str(pip_python), '-m', 'pip', 'install', '--no-deps', '--target', str(dest / 'wheel'), '--platform', filename.platform_tags[0], str(wheel_path)], check=True, stdout=sys.stderr)
             subprocess.run(['npm', 'install', '--force', '--ignore-scripts', '--no-audit', '--no-fund', '--prefix', str(dest / 'npm'), str(carrier.resolve())], check=True, stdout=sys.stderr)
-            wheel_bins = list((dest / 'wheel').rglob(binary))
+            wheel_bins = [path for path in (dest / 'wheel').rglob(binary) if path.is_file()]
             require(len(wheel_bins) == 1, 'wheel install must expose one CLI executable')
             products = [dest / 'archive' / binary, wheel_bins[0], dest / 'npm' / 'node_modules' / '@onetaskgraph' / f'cli-{product.npm_platform}' / 'bin' / binary]
             for executable in products:
@@ -124,6 +122,9 @@ def main() -> None:
         product = ReleaseProduct(RustTarget(args.target), NpmPlatform(args.npm), ReleaseTag(args.tag), args.ext)
     except ValueError as error:
         parser.error(str(error))
+    except OSError as error:
+        print(f'release workflow could not be read: {error}; next: restore .github/workflows/release.yml before verifying products', file=sys.stderr)
+        sys.exit(1)
     try:
         verify(product, args.install)
     except (ValueError, KeyError, OSError, subprocess.CalledProcessError, zipfile.BadZipFile, tarfile.TarError, TypeError, AttributeError) as error:
