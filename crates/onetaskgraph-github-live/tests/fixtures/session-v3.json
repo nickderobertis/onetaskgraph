@@ -10,18 +10,8 @@
     "fixture_projects": 2,
     "fixture_tasks": 3,
     "fixture_documents": 1,
-    "asset_bytes": [
-      74666,
-      479959,
-      74666,
-      479959
-    ],
-    "asset_target_bytes": [
-      75000,
-      480000,
-      75000,
-      480000
-    ]
+    "asset_bytes": [74666, 479959, 74666, 479959],
+    "asset_target_bytes": [75000, 480000, 75000, 480000]
   },
   "complete": false,
   "calls": [

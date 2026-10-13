@@ -1,1 +1,517 @@
-{"schema_version":3,"session_id":"implementation-s-b0f666475f66-1791893895","source_revision":"ca86536a98dfe5a412598e3b4adac1749da228af","workspace_version":"0.6.0","invocation":"Assets","workload":{"initial_items":90,"initial_fields":14,"fixture_projects":2,"fixture_tasks":3,"fixture_documents":1,"asset_bytes":[74666,479959,74666,479959],"asset_target_bytes":[75000,480000,75000,480000]},"complete":true,"calls":[{"sequence":1,"phase":"Admission","operation_sha256":"7cfb8f1f9c7d442ace7ecf4036f51902d838f704790acff455ec3e2a9b92561c","attempt":1,"kind":"Rest","outcome":"Success","charge":"Rest","allowance":{"limit":5000,"remaining":4512,"used":488,"reset_epoch_seconds":1791895538}},{"sequence":2,"phase":"AssetSetup","operation_sha256":"83f2d3b0d30101113800ebd5597d087a425a799f81815664af62d647c0599dda","attempt":1,"kind":"Query","outcome":"Success","charge":{"ReportedQuery":{"points":1}},"allowance":{"limit":5000,"remaining":1716,"used":3284,"reset_epoch_seconds":1791896089}},{"sequence":3,"phase":"AssetTask","operation_sha256":"a86f3f0ff79aaa6e9d30a0f06702ac412cbba76192ff5d89430a91210b4ed2e0","attempt":1,"kind":"Query","outcome":"Success","charge":{"ReportedQuery":{"points":1}},"allowance":{"limit":5000,"remaining":1714,"used":3286,"reset_epoch_seconds":1791896089}},{"sequence":4,"phase":"AssetTask","operation_sha256":"068c258372bd50b422ec437d659e17c5265d0170f873eb0f5d09ea6a180ee96c","attempt":1,"kind":"Rest","outcome":"Success","charge":"Rest","allowance":{"limit":5000,"remaining":3336,"used":1664,"reset_epoch_seconds":1791897725}},{"sequence":5,"phase":"AssetTask","operation_sha256":"7f347d9f36b8e409ade36707719a11977dbf5f46ae62a7f81b1e635cfaafd5d0","attempt":1,"kind":"Rest","outcome":"Success","charge":"Rest"},{"sequence":6,"phase":"AssetTask","operation_sha256":"8239faf11d79b816b829b57da78367f8493cdb3ad4f90efa5986b04d93ff9857","attempt":1,"kind":"Rest","outcome":"Success","charge":"Rest"},{"sequence":7,"phase":"AssetTask","operation_sha256":"7f347d9f36b8e409ade36707719a11977dbf5f46ae62a7f81b1e635cfaafd5d0","attempt":1,"kind":"Rest","outcome":"Success","charge":"Rest"},{"sequence":8,"phase":"AssetTask","operation_sha256":"8239faf11d79b816b829b57da78367f8493cdb3ad4f90efa5986b04d93ff9857","attempt":1,"kind":"Rest","outcome":"Success","charge":"Rest"},{"sequence":9,"phase":"AssetTask","operation_sha256":"843536d64bbfedd88b957aa9d0a1ffcf9054f31e64e311d20b95169085dcfaa5","attempt":1,"kind":"Mutation","outcome":"Success","charge":{"Mutation":{"points":1,"basis":{"Modelled":{"url":"https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api","points_per_request":1}}}},"allowance":{"limit":5000,"remaining":1713,"used":3287,"reset_epoch_seconds":1791896089}},{"sequence":10,"phase":"AssetTask","operation_sha256":"eb74272ca2fc11aa731ca9103eebf7e4c41cace3fcd855e7e7066aa02139b3bd","attempt":1,"kind":"Mutation","outcome":"Success","charge":{"Mutation":{"points":1,"basis":{"Modelled":{"url":"https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api","points_per_request":1}}}},"allowance":{"limit":5000,"remaining":1712,"used":3288,"reset_epoch_seconds":1791896089}},{"sequence":11,"phase":"AssetTask","operation_sha256":"1f0f808d6864737f6c10d3519fa111a6d4b39b8b256967af9b9fcc94d7dd66ee","attempt":1,"kind":"Mutation","outcome":"Success","charge":{"Mutation":{"points":1,"basis":{"Modelled":{"url":"https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api","points_per_request":1}}}},"allowance":{"limit":5000,"remaining":1711,"used":3289,"reset_epoch_seconds":1791896089}},{"sequence":12,"phase":"AssetTask","operation_sha256":"8239faf11d79b816b829b57da78367f8493cdb3ad4f90efa5986b04d93ff9857","attempt":1,"kind":"Rest","outcome":"Success","charge":"Rest"},{"sequence":13,"phase":"AssetTask","operation_sha256":"8239faf11d79b816b829b57da78367f8493cdb3ad4f90efa5986b04d93ff9857","attempt":1,"kind":"Rest","outcome":"Success","charge":"Rest"},{"sequence":14,"phase":"AssetTask","operation_sha256":"4418eecba0026f38ea7d200371c673586f289b213fd5a364a252cf761081e8b5","attempt":1,"kind":"Query","outcome":"Success","charge":{"ReportedQuery":{"points":1}},"allowance":{"limit":5000,"remaining":1710,"used":3290,"reset_epoch_seconds":1791896089}},{"sequence":15,"phase":"AssetTask","operation_sha256":"9553cc7717c561597d2fd547f5f70893422476d372cf0d52022d2edbe7a43982","attempt":1,"kind":"Mutation","outcome":"Success","charge":{"Mutation":{"points":1,"basis":{"Modelled":{"url":"https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api","points_per_request":1}}}},"allowance":{"limit":5000,"remaining":1709,"used":3291,"reset_epoch_seconds":1791896089}},{"sequence":16,"phase":"AssetDocument","operation_sha256":"83f2d3b0d30101113800ebd5597d087a425a799f81815664af62d647c0599dda","attempt":1,"kind":"Query","outcome":"Success","charge":{"ReportedQuery":{"points":1}},"allowance":{"limit":5000,"remaining":1708,"used":3292,"reset_epoch_seconds":1791896089}},{"sequence":17,"phase":"AssetDocument","operation_sha256":"7f347d9f36b8e409ade36707719a11977dbf5f46ae62a7f81b1e635cfaafd5d0","attempt":1,"kind":"Rest","outcome":"Success","charge":"Rest"},{"sequence":18,"phase":"AssetDocument","operation_sha256":"8239faf11d79b816b829b57da78367f8493cdb3ad4f90efa5986b04d93ff9857","attempt":1,"kind":"Rest","outcome":"Success","charge":"Rest"},{"sequence":19,"phase":"AssetDocument","operation_sha256":"7f347d9f36b8e409ade36707719a11977dbf5f46ae62a7f81b1e635cfaafd5d0","attempt":1,"kind":"Rest","outcome":"Success","charge":"Rest"},{"sequence":20,"phase":"AssetDocument","operation_sha256":"8239faf11d79b816b829b57da78367f8493cdb3ad4f90efa5986b04d93ff9857","attempt":1,"kind":"Rest","outcome":"Success","charge":"Rest"},{"sequence":21,"phase":"AssetDocument","operation_sha256":"843536d64bbfedd88b957aa9d0a1ffcf9054f31e64e311d20b95169085dcfaa5","attempt":1,"kind":"Mutation","outcome":"Success","charge":{"Mutation":{"points":1,"basis":{"Modelled":{"url":"https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api","points_per_request":1}}}},"allowance":{"limit":5000,"remaining":1706,"used":3294,"reset_epoch_seconds":1791896089}},{"sequence":22,"phase":"AssetDocument","operation_sha256":"eb74272ca2fc11aa731ca9103eebf7e4c41cace3fcd855e7e7066aa02139b3bd","attempt":1,"kind":"Mutation","outcome":"Success","charge":{"Mutation":{"points":1,"basis":{"Modelled":{"url":"https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api","points_per_request":1}}}},"allowance":{"limit":5000,"remaining":1703,"used":3297,"reset_epoch_seconds":1791896089}},{"sequence":23,"phase":"AssetDocument","operation_sha256":"0513b01e9c72761fd555386b18ed2f9a3ecf156f547a7fe093938bf8a4484ba6","attempt":1,"kind":"Mutation","outcome":"Success","charge":{"Mutation":{"points":1,"basis":{"Modelled":{"url":"https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api","points_per_request":1}}}},"allowance":{"limit":5000,"remaining":1700,"used":3300,"reset_epoch_seconds":1791896089}},{"sequence":24,"phase":"AssetDocument","operation_sha256":"8239faf11d79b816b829b57da78367f8493cdb3ad4f90efa5986b04d93ff9857","attempt":1,"kind":"Rest","outcome":"Success","charge":"Rest"},{"sequence":25,"phase":"AssetDocument","operation_sha256":"8239faf11d79b816b829b57da78367f8493cdb3ad4f90efa5986b04d93ff9857","attempt":1,"kind":"Rest","outcome":"Success","charge":"Rest"},{"sequence":26,"phase":"AssetDocument","operation_sha256":"4418eecba0026f38ea7d200371c673586f289b213fd5a364a252cf761081e8b5","attempt":1,"kind":"Query","outcome":"Success","charge":{"ReportedQuery":{"points":1}},"allowance":{"limit":5000,"remaining":1699,"used":3301,"reset_epoch_seconds":1791896089}},{"sequence":27,"phase":"Cleanup","operation_sha256":"48109d7300590f0a61394cb0359c8084ab2d3f4f4ed2a00917bdb0d869a67410","attempt":1,"kind":"Query","outcome":"Success","charge":{"ReportedQuery":{"points":1}},"allowance":{"limit":5000,"remaining":1698,"used":3302,"reset_epoch_seconds":1791896089}},{"sequence":28,"phase":"Cleanup","operation_sha256":"4418eecba0026f38ea7d200371c673586f289b213fd5a364a252cf761081e8b5","attempt":1,"kind":"Query","outcome":"Success","charge":{"ReportedQuery":{"points":1}},"allowance":{"limit":5000,"remaining":1696,"used":3304,"reset_epoch_seconds":1791896089}},{"sequence":29,"phase":"Cleanup","operation_sha256":"f416c6c12d297febd40644f41640efe3602edf111fee8d2be28d066573f3d570","attempt":1,"kind":"Mutation","outcome":"Success","charge":{"Mutation":{"points":1,"basis":{"Modelled":{"url":"https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api","points_per_request":1}}}},"allowance":{"limit":5000,"remaining":1694,"used":3306,"reset_epoch_seconds":1791896089}},{"sequence":30,"phase":"Cleanup","operation_sha256":"48109d7300590f0a61394cb0359c8084ab2d3f4f4ed2a00917bdb0d869a67410","attempt":1,"kind":"Query","outcome":"Success","charge":{"ReportedQuery":{"points":1}},"allowance":{"limit":5000,"remaining":1693,"used":3307,"reset_epoch_seconds":1791896089}},{"sequence":31,"phase":"Cleanup","operation_sha256":"4418eecba0026f38ea7d200371c673586f289b213fd5a364a252cf761081e8b5","attempt":1,"kind":"Query","outcome":"Success","charge":{"ReportedQuery":{"points":1}},"allowance":{"limit":5000,"remaining":1692,"used":3308,"reset_epoch_seconds":1791896089}},{"sequence":32,"phase":"Cleanup","operation_sha256":"f416c6c12d297febd40644f41640efe3602edf111fee8d2be28d066573f3d570","attempt":1,"kind":"Mutation","outcome":"Success","charge":{"Mutation":{"points":1,"basis":{"Modelled":{"url":"https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api","points_per_request":1}}}},"allowance":{"limit":5000,"remaining":1691,"used":3309,"reset_epoch_seconds":1791896089}}]}
+{
+  "schema_version": 3,
+  "session_id": "implementation-s-b0f666475f66-1791893895",
+  "source_revision": "ca86536a98dfe5a412598e3b4adac1749da228af",
+  "workspace_version": "0.6.0",
+  "invocation": "Assets",
+  "workload": {
+    "initial_items": 90,
+    "initial_fields": 14,
+    "fixture_projects": 2,
+    "fixture_tasks": 3,
+    "fixture_documents": 1,
+    "asset_bytes": [74666, 479959, 74666, 479959],
+    "asset_target_bytes": [75000, 480000, 75000, 480000]
+  },
+  "complete": true,
+  "calls": [
+    {
+      "sequence": 1,
+      "phase": "Admission",
+      "operation_sha256": "7cfb8f1f9c7d442ace7ecf4036f51902d838f704790acff455ec3e2a9b92561c",
+      "attempt": 1,
+      "kind": "Rest",
+      "outcome": "Success",
+      "charge": "Rest",
+      "allowance": {
+        "limit": 5000,
+        "remaining": 4512,
+        "used": 488,
+        "reset_epoch_seconds": 1791895538
+      }
+    },
+    {
+      "sequence": 2,
+      "phase": "AssetSetup",
+      "operation_sha256": "83f2d3b0d30101113800ebd5597d087a425a799f81815664af62d647c0599dda",
+      "attempt": 1,
+      "kind": "Query",
+      "outcome": "Success",
+      "charge": { "ReportedQuery": { "points": 1 } },
+      "allowance": {
+        "limit": 5000,
+        "remaining": 1716,
+        "used": 3284,
+        "reset_epoch_seconds": 1791896089
+      }
+    },
+    {
+      "sequence": 3,
+      "phase": "AssetTask",
+      "operation_sha256": "a86f3f0ff79aaa6e9d30a0f06702ac412cbba76192ff5d89430a91210b4ed2e0",
+      "attempt": 1,
+      "kind": "Query",
+      "outcome": "Success",
+      "charge": { "ReportedQuery": { "points": 1 } },
+      "allowance": {
+        "limit": 5000,
+        "remaining": 1714,
+        "used": 3286,
+        "reset_epoch_seconds": 1791896089
+      }
+    },
+    {
+      "sequence": 4,
+      "phase": "AssetTask",
+      "operation_sha256": "068c258372bd50b422ec437d659e17c5265d0170f873eb0f5d09ea6a180ee96c",
+      "attempt": 1,
+      "kind": "Rest",
+      "outcome": "Success",
+      "charge": "Rest",
+      "allowance": {
+        "limit": 5000,
+        "remaining": 3336,
+        "used": 1664,
+        "reset_epoch_seconds": 1791897725
+      }
+    },
+    {
+      "sequence": 5,
+      "phase": "AssetTask",
+      "operation_sha256": "7f347d9f36b8e409ade36707719a11977dbf5f46ae62a7f81b1e635cfaafd5d0",
+      "attempt": 1,
+      "kind": "Rest",
+      "outcome": "Success",
+      "charge": "Rest"
+    },
+    {
+      "sequence": 6,
+      "phase": "AssetTask",
+      "operation_sha256": "8239faf11d79b816b829b57da78367f8493cdb3ad4f90efa5986b04d93ff9857",
+      "attempt": 1,
+      "kind": "Rest",
+      "outcome": "Success",
+      "charge": "Rest"
+    },
+    {
+      "sequence": 7,
+      "phase": "AssetTask",
+      "operation_sha256": "7f347d9f36b8e409ade36707719a11977dbf5f46ae62a7f81b1e635cfaafd5d0",
+      "attempt": 1,
+      "kind": "Rest",
+      "outcome": "Success",
+      "charge": "Rest"
+    },
+    {
+      "sequence": 8,
+      "phase": "AssetTask",
+      "operation_sha256": "8239faf11d79b816b829b57da78367f8493cdb3ad4f90efa5986b04d93ff9857",
+      "attempt": 1,
+      "kind": "Rest",
+      "outcome": "Success",
+      "charge": "Rest"
+    },
+    {
+      "sequence": 9,
+      "phase": "AssetTask",
+      "operation_sha256": "843536d64bbfedd88b957aa9d0a1ffcf9054f31e64e311d20b95169085dcfaa5",
+      "attempt": 1,
+      "kind": "Mutation",
+      "outcome": "Success",
+      "charge": {
+        "Mutation": {
+          "points": 1,
+          "basis": {
+            "Modelled": {
+              "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+              "points_per_request": 1
+            }
+          }
+        }
+      },
+      "allowance": {
+        "limit": 5000,
+        "remaining": 1713,
+        "used": 3287,
+        "reset_epoch_seconds": 1791896089
+      }
+    },
+    {
+      "sequence": 10,
+      "phase": "AssetTask",
+      "operation_sha256": "eb74272ca2fc11aa731ca9103eebf7e4c41cace3fcd855e7e7066aa02139b3bd",
+      "attempt": 1,
+      "kind": "Mutation",
+      "outcome": "Success",
+      "charge": {
+        "Mutation": {
+          "points": 1,
+          "basis": {
+            "Modelled": {
+              "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+              "points_per_request": 1
+            }
+          }
+        }
+      },
+      "allowance": {
+        "limit": 5000,
+        "remaining": 1712,
+        "used": 3288,
+        "reset_epoch_seconds": 1791896089
+      }
+    },
+    {
+      "sequence": 11,
+      "phase": "AssetTask",
+      "operation_sha256": "1f0f808d6864737f6c10d3519fa111a6d4b39b8b256967af9b9fcc94d7dd66ee",
+      "attempt": 1,
+      "kind": "Mutation",
+      "outcome": "Success",
+      "charge": {
+        "Mutation": {
+          "points": 1,
+          "basis": {
+            "Modelled": {
+              "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+              "points_per_request": 1
+            }
+          }
+        }
+      },
+      "allowance": {
+        "limit": 5000,
+        "remaining": 1711,
+        "used": 3289,
+        "reset_epoch_seconds": 1791896089
+      }
+    },
+    {
+      "sequence": 12,
+      "phase": "AssetTask",
+      "operation_sha256": "8239faf11d79b816b829b57da78367f8493cdb3ad4f90efa5986b04d93ff9857",
+      "attempt": 1,
+      "kind": "Rest",
+      "outcome": "Success",
+      "charge": "Rest"
+    },
+    {
+      "sequence": 13,
+      "phase": "AssetTask",
+      "operation_sha256": "8239faf11d79b816b829b57da78367f8493cdb3ad4f90efa5986b04d93ff9857",
+      "attempt": 1,
+      "kind": "Rest",
+      "outcome": "Success",
+      "charge": "Rest"
+    },
+    {
+      "sequence": 14,
+      "phase": "AssetTask",
+      "operation_sha256": "4418eecba0026f38ea7d200371c673586f289b213fd5a364a252cf761081e8b5",
+      "attempt": 1,
+      "kind": "Query",
+      "outcome": "Success",
+      "charge": { "ReportedQuery": { "points": 1 } },
+      "allowance": {
+        "limit": 5000,
+        "remaining": 1710,
+        "used": 3290,
+        "reset_epoch_seconds": 1791896089
+      }
+    },
+    {
+      "sequence": 15,
+      "phase": "AssetTask",
+      "operation_sha256": "9553cc7717c561597d2fd547f5f70893422476d372cf0d52022d2edbe7a43982",
+      "attempt": 1,
+      "kind": "Mutation",
+      "outcome": "Success",
+      "charge": {
+        "Mutation": {
+          "points": 1,
+          "basis": {
+            "Modelled": {
+              "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+              "points_per_request": 1
+            }
+          }
+        }
+      },
+      "allowance": {
+        "limit": 5000,
+        "remaining": 1709,
+        "used": 3291,
+        "reset_epoch_seconds": 1791896089
+      }
+    },
+    {
+      "sequence": 16,
+      "phase": "AssetDocument",
+      "operation_sha256": "83f2d3b0d30101113800ebd5597d087a425a799f81815664af62d647c0599dda",
+      "attempt": 1,
+      "kind": "Query",
+      "outcome": "Success",
+      "charge": { "ReportedQuery": { "points": 1 } },
+      "allowance": {
+        "limit": 5000,
+        "remaining": 1708,
+        "used": 3292,
+        "reset_epoch_seconds": 1791896089
+      }
+    },
+    {
+      "sequence": 17,
+      "phase": "AssetDocument",
+      "operation_sha256": "7f347d9f36b8e409ade36707719a11977dbf5f46ae62a7f81b1e635cfaafd5d0",
+      "attempt": 1,
+      "kind": "Rest",
+      "outcome": "Success",
+      "charge": "Rest"
+    },
+    {
+      "sequence": 18,
+      "phase": "AssetDocument",
+      "operation_sha256": "8239faf11d79b816b829b57da78367f8493cdb3ad4f90efa5986b04d93ff9857",
+      "attempt": 1,
+      "kind": "Rest",
+      "outcome": "Success",
+      "charge": "Rest"
+    },
+    {
+      "sequence": 19,
+      "phase": "AssetDocument",
+      "operation_sha256": "7f347d9f36b8e409ade36707719a11977dbf5f46ae62a7f81b1e635cfaafd5d0",
+      "attempt": 1,
+      "kind": "Rest",
+      "outcome": "Success",
+      "charge": "Rest"
+    },
+    {
+      "sequence": 20,
+      "phase": "AssetDocument",
+      "operation_sha256": "8239faf11d79b816b829b57da78367f8493cdb3ad4f90efa5986b04d93ff9857",
+      "attempt": 1,
+      "kind": "Rest",
+      "outcome": "Success",
+      "charge": "Rest"
+    },
+    {
+      "sequence": 21,
+      "phase": "AssetDocument",
+      "operation_sha256": "843536d64bbfedd88b957aa9d0a1ffcf9054f31e64e311d20b95169085dcfaa5",
+      "attempt": 1,
+      "kind": "Mutation",
+      "outcome": "Success",
+      "charge": {
+        "Mutation": {
+          "points": 1,
+          "basis": {
+            "Modelled": {
+              "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+              "points_per_request": 1
+            }
+          }
+        }
+      },
+      "allowance": {
+        "limit": 5000,
+        "remaining": 1706,
+        "used": 3294,
+        "reset_epoch_seconds": 1791896089
+      }
+    },
+    {
+      "sequence": 22,
+      "phase": "AssetDocument",
+      "operation_sha256": "eb74272ca2fc11aa731ca9103eebf7e4c41cace3fcd855e7e7066aa02139b3bd",
+      "attempt": 1,
+      "kind": "Mutation",
+      "outcome": "Success",
+      "charge": {
+        "Mutation": {
+          "points": 1,
+          "basis": {
+            "Modelled": {
+              "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+              "points_per_request": 1
+            }
+          }
+        }
+      },
+      "allowance": {
+        "limit": 5000,
+        "remaining": 1703,
+        "used": 3297,
+        "reset_epoch_seconds": 1791896089
+      }
+    },
+    {
+      "sequence": 23,
+      "phase": "AssetDocument",
+      "operation_sha256": "0513b01e9c72761fd555386b18ed2f9a3ecf156f547a7fe093938bf8a4484ba6",
+      "attempt": 1,
+      "kind": "Mutation",
+      "outcome": "Success",
+      "charge": {
+        "Mutation": {
+          "points": 1,
+          "basis": {
+            "Modelled": {
+              "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+              "points_per_request": 1
+            }
+          }
+        }
+      },
+      "allowance": {
+        "limit": 5000,
+        "remaining": 1700,
+        "used": 3300,
+        "reset_epoch_seconds": 1791896089
+      }
+    },
+    {
+      "sequence": 24,
+      "phase": "AssetDocument",
+      "operation_sha256": "8239faf11d79b816b829b57da78367f8493cdb3ad4f90efa5986b04d93ff9857",
+      "attempt": 1,
+      "kind": "Rest",
+      "outcome": "Success",
+      "charge": "Rest"
+    },
+    {
+      "sequence": 25,
+      "phase": "AssetDocument",
+      "operation_sha256": "8239faf11d79b816b829b57da78367f8493cdb3ad4f90efa5986b04d93ff9857",
+      "attempt": 1,
+      "kind": "Rest",
+      "outcome": "Success",
+      "charge": "Rest"
+    },
+    {
+      "sequence": 26,
+      "phase": "AssetDocument",
+      "operation_sha256": "4418eecba0026f38ea7d200371c673586f289b213fd5a364a252cf761081e8b5",
+      "attempt": 1,
+      "kind": "Query",
+      "outcome": "Success",
+      "charge": { "ReportedQuery": { "points": 1 } },
+      "allowance": {
+        "limit": 5000,
+        "remaining": 1699,
+        "used": 3301,
+        "reset_epoch_seconds": 1791896089
+      }
+    },
+    {
+      "sequence": 27,
+      "phase": "Cleanup",
+      "operation_sha256": "48109d7300590f0a61394cb0359c8084ab2d3f4f4ed2a00917bdb0d869a67410",
+      "attempt": 1,
+      "kind": "Query",
+      "outcome": "Success",
+      "charge": { "ReportedQuery": { "points": 1 } },
+      "allowance": {
+        "limit": 5000,
+        "remaining": 1698,
+        "used": 3302,
+        "reset_epoch_seconds": 1791896089
+      }
+    },
+    {
+      "sequence": 28,
+      "phase": "Cleanup",
+      "operation_sha256": "4418eecba0026f38ea7d200371c673586f289b213fd5a364a252cf761081e8b5",
+      "attempt": 1,
+      "kind": "Query",
+      "outcome": "Success",
+      "charge": { "ReportedQuery": { "points": 1 } },
+      "allowance": {
+        "limit": 5000,
+        "remaining": 1696,
+        "used": 3304,
+        "reset_epoch_seconds": 1791896089
+      }
+    },
+    {
+      "sequence": 29,
+      "phase": "Cleanup",
+      "operation_sha256": "f416c6c12d297febd40644f41640efe3602edf111fee8d2be28d066573f3d570",
+      "attempt": 1,
+      "kind": "Mutation",
+      "outcome": "Success",
+      "charge": {
+        "Mutation": {
+          "points": 1,
+          "basis": {
+            "Modelled": {
+              "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+              "points_per_request": 1
+            }
+          }
+        }
+      },
+      "allowance": {
+        "limit": 5000,
+        "remaining": 1694,
+        "used": 3306,
+        "reset_epoch_seconds": 1791896089
+      }
+    },
+    {
+      "sequence": 30,
+      "phase": "Cleanup",
+      "operation_sha256": "48109d7300590f0a61394cb0359c8084ab2d3f4f4ed2a00917bdb0d869a67410",
+      "attempt": 1,
+      "kind": "Query",
+      "outcome": "Success",
+      "charge": { "ReportedQuery": { "points": 1 } },
+      "allowance": {
+        "limit": 5000,
+        "remaining": 1693,
+        "used": 3307,
+        "reset_epoch_seconds": 1791896089
+      }
+    },
+    {
+      "sequence": 31,
+      "phase": "Cleanup",
+      "operation_sha256": "4418eecba0026f38ea7d200371c673586f289b213fd5a364a252cf761081e8b5",
+      "attempt": 1,
+      "kind": "Query",
+      "outcome": "Success",
+      "charge": { "ReportedQuery": { "points": 1 } },
+      "allowance": {
+        "limit": 5000,
+        "remaining": 1692,
+        "used": 3308,
+        "reset_epoch_seconds": 1791896089
+      }
+    },
+    {
+      "sequence": 32,
+      "phase": "Cleanup",
+      "operation_sha256": "f416c6c12d297febd40644f41640efe3602edf111fee8d2be28d066573f3d570",
+      "attempt": 1,
+      "kind": "Mutation",
+      "outcome": "Success",
+      "charge": {
+        "Mutation": {
+          "points": 1,
+          "basis": {
+            "Modelled": {
+              "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+              "points_per_request": 1
+            }
+          }
+        }
+      },
+      "allowance": {
+        "limit": 5000,
+        "remaining": 1691,
+        "used": 3309,
+        "reset_epoch_seconds": 1791896089
+      }
+    }
+  ]
+}

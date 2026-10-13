@@ -4,10 +4,7 @@
     {
       "id": "github-live-session-points",
       "file": "crates/onetaskgraph-github-projects-e2e/budgets.yaml",
-      "labels": [
-        "github",
-        "live-session"
-      ],
+      "labels": ["github", "live-session"],
       "unit": "points",
       "direction": "max",
       "threshold": 299.0,
