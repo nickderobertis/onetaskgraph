@@ -406,3 +406,63 @@ identical 193-operation sequences (174 GraphQL, 19 REST; methods, paths with the
 ownership nonce normalized, and GraphQL documents), byte-identical `prices.json`, and a
 byte-identical bill of 174 points (108 reported + 66 modelled). Only `test-token` was
 used; no live GitHub session ran.
+
+## The 84-item board, and verification of the reverted tree at 4839f622
+
+The merge path at `0f70890a` (CI run 38465257225) passed `scripts:test` on Linux and
+refused only `onetaskgraph-github-projects:test`: the credentialed main journey stopped
+before setup with "initial board workload is 84 items and 14 fields; registered workload
+requires 90 items and 14 fields". `031f7650` briefly accepted any board no larger than the
+registered one; by the planner's ruling the measured workload stays exactly 90 items and
+14 fields, so `4839f622` and `2f41f536` revert it and its note. The tree at `4839f622` is
+byte-identical to `0f70890a`; nothing about workload acceptance or preparation changed.
+
+What the CI and janitor logs show, without any read of the board itself:
+
+- At `615d7019` (CI run 38449060700, finished about 19:25 UTC on 2026-10-13) the live main
+  journey passed, which its exact workload check permits only on 90 items and 14 fields.
+- The scheduled janitor run 38463250113 at 20:29 UTC reported "4 REST reads, 1 GraphQL
+  queries, 13 content writes". Every other janitor run after the 12:18 measurement either
+  reported 0 content writes or failed on GitHub's rate limit before writing.
+- At 20:59 UTC the main journey observed 84 items and 14 fields.
+
+**Inference, not item-level evidence.** No log names the items deleted or the run that
+owned them, and the account's other credentialed work is not visible here, so these logs do
+not show that the janitor was the only writer to the board. The aggregate figures are
+consistent with the janitor deleting six board items, their six scratch issues and one
+label: thirteen writes, the shape of one main journey's fixture (two projects, three tasks,
+one document) left behind by one run. The janitor deletes CI-stamped residue only once it is
+24 hours old, and the 19:25 run wrote nothing while the 20:29 run wrote 13, which places the
+residue's creation on 2026-10-12 between about 19:25 and 20:30 UTC. One run in that window
+had the board credential and stopped without reaching end-of-run cleanup: CI run
+38297505307 on `nick/3581/otg-source-cache`, inside `nx affected -t test budgets` from
+19:38 until it was cancelled at 19:54. Its log stops at the cancellation and shows no
+journey output, so its ownership is inferred from timing alone. If the inference holds,
+the 90 recorded by the 12:18 measurement included that residue. Restoring the board is a
+decision outside this branch.
+
+Focused verification on `4839f622`, with `GH_PROJECTS_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`,
+`LINEAR_API_KEY` and `ONETASKGRAPH_LIVE_REQUIRED` removed (no live GitHub session ran):
+
+- `cargo test --locked --all-features -p onetaskgraph-github-live -p onetaskgraph-github-projects
+  -p onetaskgraph-github-projects-e2e`: 623 passed, 0 failed; the credentialed journey
+  printed its skip for the missing token.
+- `recheck_gate`: 9 passed, including
+  `a_journey_whose_first_call_carries_less_than_the_endpoint_claimed_does_not_run`.
+- `scripts/check-relative-interpreter.sh`, which drives `scripts/check-live-lane-selection.sh`.
+  Its `expect_unconditional_targets` requires the gate to run every target the justfile runs
+  by name, including `scripts:distribution-check` and `scripts:distribution-test`.
+- `scripts/check-live-lane-selection.sh`, `scripts/check-budget-decline.sh`,
+  `scripts/check-store-fixtures.sh`, `scripts/check-selection-line-endings.sh` and
+  `scripts/check-selection-code-page.sh`.
+- `cargo fmt --all -- --check`, `workspace:format-check` with the Nx cache skipped, and
+  clippy over all targets and features of the three changed crates with `-D warnings`.
+
+With the same recording proxy, both actual live entry points ran against the loopback board
+in a detached scratch worktree at `615d7019`, with Cargo run inside it (the worktree has
+since been removed), and on `4839f622`. The 193 operations (174 GraphQL, 19 REST) matched in
+order: methods, paths with the ownership nonce normalized, and GraphQL documents (sequence
+SHA-256 `add53edb35a58fccebbdeb8a7e4ada82139508144ac9b03244e3e74d2640bb4a`).
+`prices.json` (`278db40e…e1a3`) and the reporter output (`8aad47d1…0d2f`) were byte-identical.
+Both bills were 174 points: 108 reported query points plus 66 modelled mutation points.
+These are loopback figures, not a real-GitHub measurement.
