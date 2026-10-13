@@ -234,3 +234,47 @@ Logs are retained under this dispatch's scratch directory as `offline-tests.log`
 Also passed: `cargo fmt --all -- --check`; `workspace:format-check` with Nx cache
 skipped; and clippy with all targets/features and `-D warnings` over the three changed
 crates. This documentation changes no serialized contract or live request.
+
+
+## Windows collection launch repair
+
+Executable repair `6f219e54` changes the `test` recipe's launch from
+`lane_runner.py select scripts/live-lane-selection.sh ./scripts/nx.sh …` to
+`lane_runner.py select scripts/live-lane-selection.sh bash ./scripts/nx.sh …`.
+The file Python's `asyncio.create_subprocess_exec` previously launched was
+`./scripts/nx.sh`, a Bash script rather than a Windows executable. Windows process
+creation does not interpret its shebang, so it refused that file with WinError 193.
+The adapter now launches Bash explicitly, which reads the script. No Windows skip,
+retry, live request, pricing rule or serialized contract changed.
+
+The portable `test_recipe_launches_the_real_nx_script_through_bash` regression
+reads `just --dry-run test` and drives its actual Python adapter and Nx wrapper,
+substituting a graph query for target execution. It failed before the recipe fix
+at the missing-interpreter assertion, then passed on Linux. It also checks that
+Bash's missing-script failure propagates and produces no graph. It is an ordinary
+unconditional test in the merge path; its Windows execution belongs to that path
+and was not run in this Linux dispatch.
+
+The actual main and asset entry points ran against the loopback board at
+`757195dc` in a separate detached worktree under the dispatch scratch directory,
+and on the repaired tree. Cargo ran inside the detached worktree. Sequence,
+prices and the complete reporter output were byte-identical: 193 HTTP operations,
+174 GraphQL requests, 19 REST requests, and 174 fixture points (108 reported query
+points plus 66 modelled mutation points). These are offline figures; no real
+GitHub session ran. The detached worktree was removed after comparison.
+
+Passed on the repaired tree, with real GitHub credentials removed:
+
+- All 620 offline tests across `onetaskgraph-github-live`,
+  `onetaskgraph-github-projects` and `onetaskgraph-github-projects-e2e`, plus
+  doctests, using the aggregate command above with `--test-threads=1` and only
+  the two credentialed entry points excluded. Serial execution avoids the
+  previously recorded independent concurrent SDK packaging race.
+- The four `lane_wiring` tests after the final regression-test edit.
+- `cargo fmt --all -- --check` and `workspace:format-check` with Nx cache skipped.
+- Clippy over the same three crates with all targets/features and `-D warnings`.
+- `bash scripts/check-live-lane-selection.sh`.
+
+Dispatch evidence is retained under `$ONEPIPELINE_NODE_SCRATCH_DIR` in
+`offline-tests.log`, `lane-wiring.log`, `format.log`, `clippy-final.log`,
+`selection.log`, `before-{sequence,prices,reported}.json` and `after/`.
