@@ -503,3 +503,24 @@ pub fn read_bill(
     }
     bill(&records, current)
 }
+
+/// Digest of an operation document alone, without retaining it or its variable values.
+#[must_use]
+pub fn operation_sha256(document: &str) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(document.as_bytes()))
+}
+
+/// The nominated workload required for the whole-lane budget, with unknown initial orphans.
+#[must_use]
+pub fn reference_workload() -> Workload {
+    Workload {
+        initial_items: 90,
+        initial_fields: 14,
+        fixture_projects: 2,
+        fixture_tasks: 3,
+        fixture_documents: 1,
+        asset_bytes: vec![75_000, 480_000, 75_000, 480_000],
+        initial_orphans: None,
+    }
+}

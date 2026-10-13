@@ -1248,6 +1248,7 @@ dependencies = [
  "onetaskgraph-live",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
 ]
 
@@ -1267,6 +1268,7 @@ dependencies = [
  "secrecy",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
 ]
 

@@ -18,6 +18,7 @@
 //! credential therefore needs to be able to delete an issue in `GH_PROJECTS_REPOSITORY`.
 
 pub mod budget;
+pub mod quota;
 
 use std::{
     collections::BTreeMap,
