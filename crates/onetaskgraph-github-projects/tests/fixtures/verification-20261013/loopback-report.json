@@ -1,0 +1,4 @@
+{
+  "detail": "session_id=comparison-pair; source_revision=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; workspace_version=0.6.0; reported query points=108; Modelled mutation points=66 (66 requests); Documented mutation points=0 (0 requests); mutation count=66; pricing URL=https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api; GraphQL requests=174; REST requests=19 (excluded from points); phases: Admission=0, Schema=10, Reconciliation=20, Setup=34, Capabilities=24, CommentActivity=12, ChangeToken=41, Cleanup=20, OrphanRecovery=1, AssetSetup=1, AssetTask=6, AssetDocument=5; corroborating account movement=None; concurrent movement flagged=false; actual asset bytes=[74666, 479959, 74666, 479959]; requested PNG bytes=[75000, 480000, 75000, 480000]; Modelled deliberate page-size refusal points=0 (0 requests)",
+  "value": 174.0
+}

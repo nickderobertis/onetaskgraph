@@ -877,6 +877,19 @@ pub mod graphql {
         };
     }
 
+    /// Internal live-lane support: fresh token-bearing facts for its own disposable issue.
+    /// Uses the same relationship event defaults as the plugin's issue reads.
+    pub const LIVE_CHANGE_TOKEN: &str = concat!(
+        "query LiveChangeToken($id:ID!,$boardItems:Int!=100",
+        relationship_events_variable!(),
+        r#"){node(id:$id){...on Issue{
+            updatedAt repository{nameWithOwner}
+            commentCount:comments{totalCount}
+            relationshipEvents:timelineItems(itemTypes:$relationshipEvents){totalCount}
+            projectItems(first:$boardItems){nodes{updatedAt project{id}}pageInfo{hasNextPage}}
+        }}}"#,
+    );
+
     /// Everything this source reads about one issue, wherever it reaches that issue.
     ///
     /// A macro rather than a constant so the three documents below can `concat!` it: one
@@ -1527,8 +1540,12 @@ pub mod graphql {
     /// `documents_are_all_inventoried` reads this file back and fails naming any `pub
     /// const` here that this list omits, so the two cannot part — which is the same guard
     /// `CATEGORIES` carries, in the one shape available to a set of `&str` constants.
-    pub const DOCUMENTS: [(&str, &str); 40] = [
+    pub const DOCUMENTS: [(&str, &str); 41] = [
         (SEARCH_ISSUES, "searching this board's issues"),
+        (
+            LIVE_CHANGE_TOKEN,
+            "reading fresh change-token facts for the live lane's disposable issue",
+        ),
         (ISSUE, "reading one issue"),
         (
             ISSUE_BOARD_ITEMS,
@@ -1891,6 +1908,7 @@ struct Attempted {
     limits: accounting::RateLimit,
     /// GitHub's own reported cost for this call, for a document that asked for it.
     reported_cost: Option<u64>,
+    response_outcome: accounting::ResponseOutcome,
 }
 
 /// One attempt's outcome: an error to report, or a rate limit to wait out.
@@ -4334,7 +4352,7 @@ impl GitHubProjectsSource {
                     self.clock.sleep(spacing).await;
                 }
             }
-            let attempt = self.send_once(query, &variables).await;
+            let attempt = self.send_once(query, &variables, waits + 1).await;
             if is_mutation(query) {
                 self.finish_mutation();
             }
@@ -4447,12 +4465,19 @@ impl GitHubProjectsSource {
     /// anybody remembering to count it, and
     /// `the_session_report_counts_every_request_the_board_served_and_what_each_cost` fails
     /// when one is not.
-    async fn send_once(&self, query: &str, variables: &Value) -> Result<Value, Attempt> {
+    async fn send_once(
+        &self,
+        query: &str,
+        variables: &Value,
+        number: u32,
+    ) -> Result<Value, Attempt> {
+        let executed = self.ledger.priced_document(query);
         let Attempted {
             result,
             limits,
             reported_cost,
-        } = self.attempt(query, variables).await;
+            response_outcome,
+        } = self.attempt(executed.as_ref(), variables).await;
         // No `otherwise` name: every document this source sends is one of its own, and the
         // inventory gate on `graphql::DOCUMENTS` is what keeps that true.
         let sending = accounting::Request::graphql(query, variables, None, reported_cost);
@@ -4461,7 +4486,12 @@ impl GitHubProjectsSource {
             Err(Attempt::Limited(_)) => accounting::Outcome::RateLimited,
             Err(Attempt::Failed(_)) => accounting::Outcome::Refused,
         };
-        self.ledger.record(sending.finished(outcome, limits));
+        self.ledger
+            .record(sending.finished(outcome, limits).with_execution(
+                Some(executed.into_owned()),
+                response_outcome,
+                number,
+            ));
         result
     }
 
@@ -4473,13 +4503,21 @@ impl GitHubProjectsSource {
     async fn attempt(&self, query: &str, variables: &Value) -> Attempted {
         let mut limits = accounting::RateLimit::default();
         let mut reported_cost = None;
+        let mut response_outcome = accounting::ResponseOutcome::TransportError;
         let result = self
-            .attempted(query, variables, &mut limits, &mut reported_cost)
+            .attempted(
+                query,
+                variables,
+                &mut limits,
+                &mut reported_cost,
+                &mut response_outcome,
+            )
             .await;
         Attempted {
             result,
             limits,
             reported_cost,
+            response_outcome,
         }
     }
 
@@ -4490,6 +4528,7 @@ impl GitHubProjectsSource {
         variables: &Value,
         limits: &mut accounting::RateLimit,
         reported_cost: &mut Option<u64>,
+        response_outcome: &mut accounting::ResponseOutcome,
     ) -> Result<Value, Attempt> {
         let response = self
             .client
@@ -4504,6 +4543,9 @@ impl GitHubProjectsSource {
                 })
             })?;
         let status = response.status();
+        if !status.is_success() {
+            *response_outcome = accounting::ResponseOutcome::HttpError;
+        }
         let header = |name: &str| whole_seconds(response.headers().get(name));
         let served = response
             .headers()
@@ -4546,6 +4588,13 @@ impl GitHubProjectsSource {
                 message: format!("GitHub GraphQL response could not be read: {e}"),
             })
         })?;
+        *reported_cost = serde_json::from_str::<Value>(&body)
+            .ok()
+            .as_ref()
+            .and_then(|body| body.pointer("/data/rateLimit/cost"))
+            .and_then(Value::as_u64);
+        let parsed = serde_json::from_str::<Value>(&body).ok();
+        *response_outcome = accounting::ResponseOutcome::of_graphql_reply(status, parsed.as_ref());
         if let Some(limiter) = Limiter::classify(status, exhausted, &body) {
             return Err(Attempt::Limited(Limited { limiter, hint }));
         }
@@ -4561,15 +4610,6 @@ impl GitHubProjectsSource {
                 message: format!("GitHub GraphQL returned HTTP {status}"),
             }));
         }
-        // GitHub reports what a call cost only when the document asked it to, and no
-        // document this source sends does — so this is `None` here and carries the figure
-        // for a caller whose own document selects `rateLimit { cost }`. What it must never
-        // pick up is a `dryRun` probe's cost, which is some other document's.
-        *reported_cost = serde_json::from_str::<Value>(&body)
-            .ok()
-            .as_ref()
-            .and_then(|body| body.pointer("/data/rateLimit/cost"))
-            .and_then(Value::as_u64);
         let mut data = self.answer(&body).map_err(Attempt::Failed)?;
         if let Some(served) = served {
             stamp_served(&mut data, &served.to_rfc3339());

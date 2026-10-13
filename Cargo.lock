@@ -1304,6 +1304,10 @@ name = "onetaskgraph-github-live"
 version = "0.6.0"
 dependencies = [
  "onetaskgraph-live",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
 ]
 
 [[package]]
@@ -1322,6 +1326,7 @@ dependencies = [
  "secrecy",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
 ]
 

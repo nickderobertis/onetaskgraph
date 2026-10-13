@@ -275,7 +275,8 @@ fn a_journey_whose_first_call_carries_less_than_the_endpoint_claimed_does_not_ru
     // The observed shape: the endpoint claimed the whole allowance, and the headers on the
     // session's own first real call reported one point short of the session and its buffer.
     let buffer = RETAINED_BUFFER.of(LIMIT);
-    let remaining = estimated() + buffer - 1;
+    let estimate = budget::remaining_design_points(onetaskgraph_github_live::quota::Phase::Schema);
+    let remaining = estimate + buffer - 1;
     let (drive, _turn) = drive(FirstCall::reporting(remaining));
 
     // Declined, not failed: the line leads with the run not having happened, and it is
@@ -291,9 +292,11 @@ fn a_journey_whose_first_call_carries_less_than_the_endpoint_claimed_does_not_ru
     for figure in [
         "the allowance read GET /rate_limit".to_owned(),
         format!("claimed {LIMIT} of {LIMIT} points remaining"),
-        budget::first_call_headers("contract schema introspection"),
+        format!(
+            "headers of contract schema introspection while retaining {estimate} points of remaining design demand"
+        ),
         format!("reported {remaining} of {LIMIT} remaining"),
-        format!("estimated to spend {}", estimated()),
+        format!("estimated to spend {estimate}"),
         format!("retained buffer is {buffer}"),
         // The second reading's own reset, which is the window that reading was about.
         format!("resets at {HEADERS_RESET_AT}"),
@@ -566,4 +569,34 @@ fn a_first_call_refused_for_something_other_than_a_rate_limit_is_decided_on_its_
     into.record(recorded_first_call(Outcome::Refused, &[]));
     budget::recheck(&admitted, &into)
         .expect("a refusal that says nothing about the budget does not decline on it");
+}
+
+#[test]
+fn a_reported_first_query_price_retires_demand_before_the_header_recheck() {
+    let buffer = RETAINED_BUFFER.of(LIMIT);
+    let initial = budget::remaining_design_points(onetaskgraph_github_live::quota::Phase::Schema);
+    for (remaining, declined) in [(buffer + initial - 1, false), (buffer + initial - 2, true)] {
+        let (drive, _turn) = drive(FirstCall::Answer {
+            status: "200 OK",
+            headers: graphql_headers(remaining, LIMIT - remaining),
+            // The price is real response data; the absent schema fields deliberately make
+            // an affordable run continue to the next schema request, before any fixture write.
+            body: json!({"data":{"rateLimit":{"cost":1}}}).to_string(),
+        });
+        let message = drive.message();
+        assert_eq!(message.contains("DID NOT RUN"), declined, "{message}");
+        if declined {
+            assert!(message.contains(&format!("estimated to spend {}", initial - 1)));
+        } else {
+            assert!(
+                message.contains("GitHub contract schema drifted"),
+                "{message}"
+            );
+        }
+        let mut expected = the_free_read_and_one_real_call();
+        if !declined {
+            expected.push("POST /graphql".into());
+        }
+        assert_eq!(drive.asked, expected);
+    }
 }

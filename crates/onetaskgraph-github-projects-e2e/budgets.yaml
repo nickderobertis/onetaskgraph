@@ -73,3 +73,13 @@ budgets:
     unit: points
     direction: max
     threshold: 0
+  - id: github-live-session-points
+    description: >-
+      Whole credentialed GitHub lane primary points, attributed from complete current telemetry with explicit modelled prices, protecting shared-account headroom.
+    labels: [github, live-session]
+    measure: reported
+    # llmlint: ignore[budget_commands_measure_directly] This task fixes the report-only report_live_session command: it reads current main/assets telemetry and uses the existing SDK; onebudgetspec alone judges the threshold.
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_live_session", "--exact", "--nocapture"]
+    unit: points
+    direction: max
+    threshold: 299

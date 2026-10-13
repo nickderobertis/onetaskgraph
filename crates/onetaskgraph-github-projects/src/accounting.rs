@@ -619,6 +619,56 @@ pub struct Sending {
     call: Call,
     mode: Mode,
     drawn: Drawn,
+    document: Option<String>,
+}
+
+/// Result at the protocol boundary, independent of the legacy retry classification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResponseOutcome {
+    /// A successful HTTP and GraphQL response.
+    Success,
+    /// A GraphQL error, including one carried by HTTP 200.
+    GraphqlError,
+    /// An unsuccessful HTTP status.
+    HttpError,
+    /// No readable protocol response.
+    TransportError,
+}
+
+impl ResponseOutcome {
+    /// Classify the real HTTP response and GraphQL envelope before recording success.
+    #[must_use]
+    pub fn of_graphql_reply(
+        status: reqwest::StatusCode,
+        reply: Option<&serde_json::Value>,
+    ) -> Self {
+        use serde_json::Value;
+        if !status.is_success() {
+            return Self::HttpError;
+        }
+        let Some(reply) = reply.filter(|reply| reply.is_object()) else {
+            return Self::TransportError;
+        };
+        if let Some(errors) = reply.get("errors")
+            && !errors.is_null()
+            && !errors.as_array().is_some_and(Vec::is_empty)
+        {
+            return if errors.as_array().is_some_and(|errors| {
+                errors
+                    .iter()
+                    .all(|error| error.get("message").is_some_and(Value::is_string))
+            }) {
+                Self::GraphqlError
+            } else {
+                Self::TransportError
+            };
+        }
+        if reply.get("data").is_some_and(Value::is_object) {
+            Self::Success
+        } else {
+            Self::TransportError
+        }
+    }
 }
 
 /// What a request draws on, and what only that kind of request can carry.
@@ -666,6 +716,17 @@ impl Sending {
             outcome,
             limits,
             spend,
+            document: self.document,
+            reported_query_cost: match self.drawn {
+                Drawn::Graphql { reported_cost } => reported_cost,
+                Drawn::Rest => None,
+            },
+            response_outcome: if outcome == Outcome::Answered {
+                ResponseOutcome::Success
+            } else {
+                ResponseOutcome::TransportError
+            },
+            attempt: 1,
         }
     }
 }
@@ -681,6 +742,10 @@ pub struct Request {
     outcome: Outcome,
     limits: RateLimit,
     spend: Spend,
+    document: Option<String>,
+    reported_query_cost: Option<u64>,
+    response_outcome: ResponseOutcome,
+    attempt: u32,
 }
 
 impl Request {
@@ -721,6 +786,7 @@ impl Request {
             },
             mode: Mode::of_document(document),
             drawn: Drawn::Graphql { reported_cost },
+            document: Some(document.to_owned()),
         }
     }
     /// Begin recording one REST request against `endpoint`.
@@ -736,6 +802,7 @@ impl Request {
             mode: endpoint.method().mode(),
             call: Call::Endpoint { endpoint },
             drawn: Drawn::Rest,
+            document: None,
         }
     }
     /// What was called.
@@ -777,6 +844,39 @@ impl Request {
     #[must_use]
     pub const fn rate_limit(&self) -> &RateLimit {
         &self.limits
+    }
+    /// Operation document alone; variables and response bodies are never retained here.
+    #[must_use]
+    pub fn document(&self) -> Option<&str> {
+        self.document.as_deref()
+    }
+    /// The actual response cost, without substituting the legacy ledger's model.
+    #[must_use]
+    pub const fn reported_query_cost(&self) -> Option<u64> {
+        self.reported_query_cost
+    }
+    /// Exact protocol result for live-session accounting.
+    #[must_use]
+    pub const fn response_outcome(&self) -> ResponseOutcome {
+        self.response_outcome
+    }
+    /// Attempt number for this dispatch.
+    #[must_use]
+    pub const fn attempt(&self) -> u32 {
+        self.attempt
+    }
+    /// Attach facts known only to the actual transport, preserving legacy ledger readers.
+    #[must_use]
+    pub fn with_execution(
+        mut self,
+        document: Option<String>,
+        outcome: ResponseOutcome,
+        attempt: u32,
+    ) -> Self {
+        self.document = document;
+        self.response_outcome = outcome;
+        self.attempt = attempt;
+        self
     }
 }
 
@@ -843,6 +943,7 @@ pub struct Accounting {
     requests: Mutex<Vec<Request>>,
     attachment_responses: Mutex<Vec<AttachmentResponse>>,
     estimates: Mutex<BTreeMap<Budget, u64>>,
+    query_prices: bool,
 }
 
 impl Accounting {
@@ -850,6 +951,34 @@ impl Accounting {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+    /// Record actual query prices by selecting `rateLimit { cost }` on outgoing reads.
+    /// Existing ledger readers and default request documents retain their behavior.
+    #[must_use]
+    pub fn with_query_prices() -> Self {
+        Self {
+            query_prices: true,
+            ..Self::default()
+        }
+    }
+    /// Select a read's actual cost, preserving mutation documents and existing probe aliases.
+    #[must_use]
+    pub fn priced_document<'a>(&self, document: &'a str) -> std::borrow::Cow<'a, str> {
+        if !self.query_prices
+            || Mode::of_document(document) == Mode::Write
+            || document.contains("dryRun:true")
+            || document.contains("rateLimit{cost")
+        {
+            return std::borrow::Cow::Borrowed(document);
+        }
+        match document.find('{') {
+            Some(root) => std::borrow::Cow::Owned(format!(
+                "{}rateLimit{{cost}} {}",
+                &document[..=root],
+                &document[root + 1..]
+            )),
+            None => std::borrow::Cow::Borrowed(document),
+        }
     }
     /// Record what a caller estimated this session would spend against `budget`, before
     /// it started.

@@ -716,6 +716,12 @@ impl Refusal {
     }
 }
 
+#[derive(Clone, Copy)]
+enum WorkloadFault {
+    MissingItems,
+    MissingFields,
+}
+
 /// What this board refuses for going too fast, and what it counts while it does.
 #[derive(Default)]
 struct Limits {
@@ -751,6 +757,14 @@ struct Limits {
     /// difference — which is the whole distinction between measuring a session and
     /// differencing a counter somebody else is also spending.
     other_traffic_per_request: u64,
+    /// Actual cost this double reports when a query selects its price.
+    reported_query_cost: Option<u64>,
+    reported_refusal_cost: Option<u64>,
+    after_setup_remaining: Option<u64>,
+    refuse_pricing_aliases: bool,
+    ignore_pricing_aliases: bool,
+    malformed_ceiling_error: bool,
+    workload_fault: Option<WorkloadFault>,
     /// When each request arrived, which operation it carried, and whether that operation
     /// creates content.
     arrivals: Vec<(Instant, String, bool)>,
@@ -1312,6 +1326,19 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
             // faster than one per request is how a shared account behaves.
             let used = {
                 let mut state = served.lock().unwrap();
+                if state
+                    .seen
+                    .iter()
+                    .filter(|call| call[0] == "createIssue")
+                    .count()
+                    >= 5
+                    && let Some(remaining) = state.limits.after_setup_remaining
+                {
+                    state.limits.budget_used = state
+                        .limits
+                        .budget_used
+                        .max(FIXTURE_BUDGET_LIMIT - remaining);
+                }
                 state.limits.budget_used += 1 + state.limits.other_traffic_per_request;
                 state.limits.budget_used
             };
@@ -1351,8 +1378,45 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
                     match unbound_refusal(&served, query, variables)
                         .or_else(|| refused(&served, query, variables))
                     {
-                        Some(message) => json!({"errors":[{"message":message}]}).to_string(),
-                        None => json!({ "data": answer(&served, query, variables) }).to_string(),
+                        Some(message) => {
+                            let mut response = json!({"errors":[{"message":message}]});
+                            if query.contains("rateLimit{cost}")
+                                && let Some(cost) =
+                                    served.lock().unwrap().limits.reported_refusal_cost
+                            {
+                                response["data"] = json!({"rateLimit":{"cost":cost}});
+                            }
+                            if query.contains("rateLimit{cost nodeCount limit remaining}") {
+                                response["data"] = board::answer_a_stateless_session_call(
+                                    query,
+                                    variables,
+                                    Pricing::AsComputed,
+                                )
+                                .unwrap();
+                            }
+                            if variables["first"].as_u64() == Some(101)
+                                && served.lock().unwrap().limits.malformed_ceiling_error
+                            {
+                                response["errors"] = json!(false);
+                                response["data"] = Value::Null;
+                            }
+                            response.to_string()
+                        }
+                        None => {
+                            let mut data = answer(&served, query, variables);
+                            if query.contains("rateLimit{cost}")
+                                && let Some(cost) =
+                                    served.lock().unwrap().limits.reported_query_cost
+                            {
+                                data["rateLimit"] = json!({"cost":cost});
+                            }
+                            if query.contains("actualCost:rateLimit")
+                                && served.lock().unwrap().limits.ignore_pricing_aliases
+                            {
+                                data.as_object_mut().unwrap().remove("actualCost");
+                            }
+                            json!({"data":data}).to_string()
+                        }
                     },
                 ),
             };
@@ -1396,6 +1460,10 @@ fn unbound_refusal(state: &Arc<Mutex<State>>, query: &str, variables: &Value) ->
 /// A refused call is still recorded as seen and still changes nothing: that is what GitHub
 /// failing one mutation of a write looks like from here.
 fn refused(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Option<String> {
+    if query.contains("actualCost:rateLimit") && state.lock().unwrap().limits.refuse_pricing_aliases
+    {
+        return Some("rateLimit aliases with different dryRun arguments are not supported".into());
+    }
     // A connection asked for more rows than GitHub's own maximum is refused before it runs,
     // which is what `max_page_size` claims to describe and what the journey's page-size
     // probe asks this board to prove one row either side of.
@@ -1469,6 +1537,12 @@ fn repository_node_id(slug: &str) -> String {
 }
 
 fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
+    if query.contains("rateLimit{cost nodeCount limit remaining}") {
+        return board::answer_a_stateless_session_call(query, variables, Pricing::AsComputed)
+            .unwrap();
+    }
+    let unpriced = query.replacen("rateLimit{cost} ", "", 1);
+    let query = unpriced.as_str();
     if query == onetaskgraph_github_projects::graphql::UPDATE_FIELDS {
         let mut result = serde_json::Map::new();
         let writes = onetaskgraph_github_projects::FIELD_WRITE_SLOTS.map(|slot| {
@@ -2075,7 +2149,9 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         let page = membership_page(&item.memberships(&options), offset, first, asked);
         return json!({"node":{"projectItems":page}});
     }
-    if query.contains("query LiveBoardItem") {
+    if query.contains("query LiveBoardItem")
+        || query.contains("projectItems(first:100){nodes{id project{id}}}")
+    {
         let id = variables["id"].as_str().expect("an issue id");
         let item = state
             .items
@@ -2133,6 +2209,15 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         let mut draft = item.content(asked);
         draft["projectV2Items"] = item.project_items(&options, asked);
         return json!({ "node": draft });
+    }
+    if query == onetaskgraph_github_projects::graphql::LIVE_CHANGE_TOKEN {
+        let id = variables["id"].as_str().expect("a node id");
+        let node = state
+            .items
+            .iter()
+            .find(|item| item.content_id == id)
+            .map(|item| item.as_issue(&state.options(), asked));
+        return json!({"node":node});
     }
     if query == onetaskgraph_github_projects::graphql::ISSUE {
         let id = variables["id"].as_str().expect("a node id").to_owned();
@@ -2330,13 +2415,31 @@ fn answer_a_session_call(
     {
         return Some(answered);
     }
-    // Narrowed to the lane's own board lookup, which selects the id and nothing else:
+    // The lane's own board metadata lookup, distinct from the production item walk:
     // `graphql::BOARD` reaches `repositoryOwner` too, and answering it here would hand the
     // source a board with no items.
-    if query.contains("projectV2(number:$number){id}}") {
+    if query.contains("query LiveBoardWorkload(") {
         assert_eq!(variables["owner"], json!("octo-org"));
         assert_eq!(variables["number"], json!(7));
-        return Some(json!({"repositoryOwner":{"projectV2":{"id":"PVT_board"}}}));
+        let mut result = json!({"repositoryOwner":{"projectV2":{"id":"PVT_board",
+            "items":{"totalCount":state.items.len()},
+            "fields":{"totalCount":state.fields()["nodes"].as_array().unwrap().len()}}}});
+        match state.limits.workload_fault {
+            Some(WorkloadFault::MissingItems) => {
+                result["repositoryOwner"]["projectV2"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("items");
+            }
+            Some(WorkloadFault::MissingFields) => {
+                result["repositoryOwner"]["projectV2"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("fields");
+            }
+            None => (),
+        }
+        return Some(result);
     }
     if query.contains("on ProjectV2{fields(first:100") {
         return Some(json!({"node":{"fields":state.fields()}}));
@@ -2607,6 +2710,10 @@ fn operation_name(query: &str) -> &str {
     let body = query
         .split_once('{')
         .map_or(query, |(_, rest)| rest)
+        .trim_start();
+    let body = body
+        .strip_prefix("rateLimit{cost} ")
+        .unwrap_or(body)
         .trim_start();
     let root = &body[..body
         .find(|c: char| !c.is_alphanumeric() && c != '_')
@@ -10378,9 +10485,9 @@ async fn a_board_changed_by_something_else_is_seen_by_the_next_source_and_not_by
 /// The change-kind leg's token read, driven against a board whose answers land inside the
 /// token's settling margin.
 ///
-/// `journey::settled_token` is the real one — the code the credentialed lane reads every
-/// token through. A token withheld for a few answers is asked for again; one withheld past
-/// the leg's bound fails naming the moment.
+/// The cold-source drive shares the main lane's bounded polling loop. A token withheld
+/// for a few answers is asked for again; one withheld past the bound fails naming the
+/// moment. The fresh-facts drive is covered separately through its HTTP boundary.
 #[tokio::test]
 async fn the_change_kind_leg_asks_again_while_a_token_is_withheld() {
     let fixture = board(vec![
@@ -19523,4 +19630,410 @@ async fn a_projected_value_follows_a_copy_over_a_board_draft() {
         .unwrap()
         .unwrap();
     assert_eq!(read.metadata["orchestrator.follow-up"]["host"], Value::Null);
+}
+
+#[tokio::test]
+async fn opted_in_actual_query_prices_reach_the_ledger_through_the_real_source() {
+    let fixture = comment_board();
+    fixture.state.lock().unwrap().limits.reported_query_cost = Some(7);
+    let ledger = Arc::new(Accounting::with_query_prices());
+    let source = recording(&fixture.endpoint, &ledger);
+    assert!(source.health().await.unwrap().reachable);
+    assert!(source.get_task(&native("I_task")).await.unwrap().is_some());
+    let snapshot = ledger.snapshot();
+    assert!(!snapshot.requests().is_empty());
+    assert!(
+        snapshot
+            .requests()
+            .iter()
+            .all(|request| request.spend().basis() == Basis::Reported)
+    );
+    assert!(
+        snapshot
+            .requests()
+            .iter()
+            .all(|request| request.spend().amount() == 7)
+    );
+    assert!(
+        fixture
+            .documents()
+            .iter()
+            .all(|query| query.contains("rateLimit{cost}"))
+    );
+    // Unknown prices are retained as unknown response facts by the live reader, rather
+    // than inferred from account movement; the legacy ledger retains its model.
+    fixture.state.lock().unwrap().limits.reported_query_cost = None;
+    assert!(source.health().await.unwrap().reachable);
+    assert_eq!(
+        ledger.snapshot().requests().last().unwrap().spend().basis(),
+        Basis::Modelled
+    );
+    fixture.refuse("deleteIssueComment");
+    let id = fixture.commented("I_task", Some("octocat"), "retain after refusal");
+    assert!(matches!(
+        source.delete_comment(&native("I_task"), &native(&id)).await,
+        Err(SourceError::Refused { .. })
+    ));
+    assert!(
+        fixture
+            .documents()
+            .iter()
+            .filter(|query| query.starts_with("mutation"))
+            .all(|query| !query.contains("rateLimit"))
+    );
+    assert_eq!(fixture.comments_on("I_task").len(), 1);
+}
+
+#[tokio::test]
+async fn actual_execution_facts_distinguish_refusals_retries_and_unreadable_responses() {
+    use onetaskgraph_github_projects::accounting::ResponseOutcome;
+    for (status, body, expected) in [
+        (
+            "200 OK",
+            json!({"errors":[{"message":"not permitted"}],"data":{"rateLimit":{"cost":3}}})
+                .to_string(),
+            ResponseOutcome::GraphqlError,
+        ),
+        (
+            "503 Service Unavailable",
+            json!({"data":{"rateLimit":{"cost":4}}}).to_string(),
+            ResponseOutcome::HttpError,
+        ),
+        (
+            "200 OK",
+            "{ truncated".to_owned(),
+            ResponseOutcome::TransportError,
+        ),
+        ("200 OK", "null".into(), ResponseOutcome::TransportError),
+        ("200 OK", "[]".into(), ResponseOutcome::TransportError),
+        ("200 OK", "{}".into(), ResponseOutcome::TransportError),
+        (
+            "200 OK",
+            r#"{"data":null}"#.into(),
+            ResponseOutcome::TransportError,
+        ),
+        (
+            "200 OK",
+            r#"{"errors":false}"#.into(),
+            ResponseOutcome::TransportError,
+        ),
+        (
+            "200 OK",
+            r#"{"errors":[{}]}"#.into(),
+            ResponseOutcome::TransportError,
+        ),
+    ] {
+        let fixture = comment_board();
+        fixture.script_for(
+            "board",
+            vec![Refusal {
+                status,
+                headers: String::new(),
+                body,
+            }],
+        );
+        let ledger = Arc::new(Accounting::with_query_prices());
+        let source = recording(&fixture.endpoint, &ledger);
+        assert!(source.health().await.is_err());
+        let snapshot = ledger.snapshot();
+        assert_eq!(snapshot.requests().len(), 1);
+        let call = &snapshot.requests()[0];
+        assert_eq!(call.response_outcome(), expected);
+        assert_eq!(call.document(), Some(fixture.documents()[0].as_str()));
+        assert_eq!(call.attempt(), 1);
+        assert_eq!(
+            call.reported_query_cost(),
+            match expected {
+                ResponseOutcome::GraphqlError => Some(3),
+                ResponseOutcome::HttpError => Some(4),
+                _ => None,
+            }
+        );
+    }
+    let fixture = comment_board();
+    fixture.state.lock().unwrap().limits.reported_query_cost = Some(7);
+    fixture.script_for("board", vec![Refusal::secondary_forbidden().after(0)]);
+    let ledger = Arc::new(Accounting::with_query_prices());
+    let retrying = Plugin
+        .build_recording_into(
+            &SourceName::new("work").unwrap(),
+            &fixture_config(
+                &fixture.endpoint,
+                &json!({"pacing":{
+                    "min_mutation_interval_ms":0,"retry_backoff_ms":1,"retry_budget_ms":1000
+                }}),
+            ),
+            &Secrets,
+            Arc::clone(&ledger),
+        )
+        .unwrap();
+    assert!(retrying.health().await.unwrap().reachable);
+    let snapshot = ledger.snapshot();
+    assert_eq!(snapshot.requests().len(), 2);
+    assert_eq!(snapshot.requests()[0].attempt(), 1);
+    assert_eq!(snapshot.requests()[1].attempt(), 2);
+    assert_eq!(
+        snapshot.requests()[0].response_outcome(),
+        ResponseOutcome::HttpError
+    );
+    assert_eq!(
+        snapshot.requests()[1].response_outcome(),
+        ResponseOutcome::Success
+    );
+    assert_eq!(snapshot.requests()[0].reported_query_cost(), None);
+    assert_eq!(snapshot.requests()[1].reported_query_cost(), Some(7));
+}
+
+#[test]
+fn fresh_token_polling_reads_again_after_a_server_date_inside_the_margin() {
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["fresh_token_polling_child", "--exact", "--nocapture"])
+        .env("GITHUB_FRESH_TOKEN_CHILD", "settling")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+// llmlint: ignore[tests_assert_real_behavior] This subprocess helper is driven by fresh_token_polling_reads_again_after_a_server_date_inside_the_margin; ordinary test runs omit its selector and start no fixture.
+#[tokio::test]
+async fn fresh_token_polling_child() {
+    if std::env::var("GITHUB_FRESH_TOKEN_CHILD").as_deref() != Ok("settling") {
+        return;
+    }
+    let fixture = board(vec![
+        Item::issue("I_fresh", "fresh token").tokened("2026-09-01T00:00:00Z", 0),
+    ]);
+    fixture.answer_unsettled(1);
+    fixture.state.lock().unwrap().limits.reported_query_cost = Some(1);
+    journey::against(journey::Endpoints {
+        graphql: fixture.endpoint.clone(),
+        rest_host: fixture.endpoint.clone(),
+        source: None,
+        settle: std::time::Duration::ZERO,
+    });
+    let version = journey::settled_fresh_token(
+        "test-token",
+        "PVT_board",
+        &NativeId("I_fresh".into()),
+        "after deletion",
+    )
+    .await
+    .unwrap();
+    assert!(version.starts_with(onetaskgraph_github_projects::change_token::PREFIX));
+    assert_eq!(fixture.state.lock().unwrap().unsettled_answers, 0);
+    let snapshot = journey::SESSION.snapshot();
+    let calls = snapshot.requests();
+    assert_eq!(
+        calls.len(),
+        2,
+        "the unsettled read must be followed by a fresh request"
+    );
+    assert_eq!(calls[0].attempt(), 1);
+    assert_eq!(calls[1].attempt(), 2);
+    assert!(
+        calls
+            .iter()
+            .all(|call| call.reported_query_cost() == Some(1))
+    );
+    assert!(
+        calls
+            .iter()
+            .all(|call| call.document().unwrap().contains("query LiveChangeToken("))
+    );
+    assert!(
+        !calls
+            .iter()
+            .any(|call| call.document().unwrap().contains("title body"))
+    );
+}
+
+// The entry-point pair in the e2e live target starts this child and owns its stdin.
+// llmlint: ignore[tests_assert_real_behavior] This subprocess fixture is asserted by actual_entry_points_complete_one_loopback_session; an ordinary test invocation has no readiness path and serves nothing.
+#[test]
+fn live_pair_fixture_child() {
+    let Ok(ready) = std::env::var("GITHUB_LIVE_FIXTURE_READY") else {
+        return;
+    };
+    let decline = std::env::var("GITHUB_LIVE_FIXTURE_DECLINE").as_deref() == Ok("setup");
+    let scenario = std::env::var("GITHUB_LIVE_FIXTURE_DECLINE").unwrap_or_default();
+    let aliases = matches!(scenario.as_str(), "aliases" | "ignored-aliases");
+    let scalar = scenario == "scalar";
+    let malformed_ceiling = scenario == "malformed-ceiling";
+    let declared_core = scenario == "attachment-core-unread";
+    // The shared board's own population: the registered measurement's 90 unless a scenario
+    // names another, as `board-84` does for the CI board after its residue was cleared.
+    let population: usize = scenario
+        .strip_prefix("board-")
+        .map_or(90, |items| items.parse().unwrap());
+    let refused_population = !(onetaskgraph_github_live::quota::MINIMUM_INITIAL_ITEMS
+        ..=onetaskgraph_github_live::quota::reference_workload().initial_items)
+        .contains(&u64::try_from(population).unwrap());
+    let fixture = board_with(
+        (0..population)
+            .map(|index| Item::draft(&format!("DI_existing_{index}"), "existing board note"))
+            .collect(),
+        true,
+        true,
+    );
+    for index in 0..12 {
+        fixture.state.lock().unwrap().extra_fields.push(json!({"__typename":"ProjectV2Field","id":format!("FIELD_existing_{index}"),"name":format!("existing {index}"),"dataType":"TEXT"}));
+    }
+    fixture.state.lock().unwrap().limits.workload_fault = match scenario.as_str() {
+        "missing-items" => Some(WorkloadFault::MissingItems),
+        "missing-fields" => Some(WorkloadFault::MissingFields),
+        _ => None,
+    };
+    fixture.items_connection_falls_behind();
+    fixture.state.lock().unwrap().limits.malformed_ceiling_error = malformed_ceiling;
+    fixture.state.lock().unwrap().limits.reported_query_cost = Some(1);
+    fixture.state.lock().unwrap().limits.refuse_pricing_aliases = scenario == "aliases";
+    fixture.state.lock().unwrap().limits.ignore_pricing_aliases = scenario == "ignored-aliases";
+    fixture.state.lock().unwrap().limits.reported_refusal_cost = if scenario == "page-refusal" {
+        None
+    } else {
+        Some(1)
+    };
+    if decline {
+        fixture.state.lock().unwrap().limits.after_setup_remaining = Some(
+            journey::budget::remaining_design_points(
+                onetaskgraph_github_live::quota::Phase::Capabilities,
+            ) + onetaskgraph_live::RETAINED_BUFFER.of(FIXTURE_BUDGET_LIMIT)
+                - 1,
+        );
+    }
+    let labels = label_endpoints(&fixture.state);
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let host = format!("http://{}", listener.local_addr().unwrap());
+    let endpoint = format!("{host}/graphql");
+    let graphql = fixture
+        .endpoint
+        .trim_start_matches("http://")
+        .split('/')
+        .next()
+        .unwrap()
+        .to_owned();
+    let rest = labels.trim_start_matches("http://").to_owned();
+    let upload_sizes = Arc::new(Mutex::new(Vec::new()));
+    let uploaded = Arc::clone(&upload_sizes);
+    let rendering_reads = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let read = Arc::clone(&rendering_reads);
+    thread::spawn(move || {
+        let mut assets = BTreeMap::<String, Vec<u8>>::new();
+        for stream in listener.incoming() {
+            let mut stream = stream.unwrap();
+            let mut bytes = Vec::new();
+            let mut chunk = [0; 4096];
+            let end = loop {
+                let n = stream.read(&mut chunk).unwrap();
+                assert!(n > 0);
+                bytes.extend_from_slice(&chunk[..n]);
+                if let Some(end) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                    break end + 4;
+                }
+            };
+            let headers = String::from_utf8(bytes[..end].to_vec()).unwrap();
+            let length = headers
+                .lines()
+                .find_map(|line| {
+                    line.to_ascii_lowercase()
+                        .strip_prefix("content-length: ")?
+                        .parse::<usize>()
+                        .ok()
+                })
+                .unwrap_or(0);
+            while bytes.len() < end + length {
+                let n = stream.read(&mut chunk).unwrap();
+                assert!(n > 0);
+                bytes.extend_from_slice(&chunk[..n]);
+            }
+            let line = headers.lines().next().unwrap();
+            let path = line.split_whitespace().nth(1).unwrap();
+            let answer = if scalar && path == "/graphql" {
+                Some((200, b"[]".to_vec()))
+            } else if line.starts_with("POST /user-attachments/assets?") {
+                let path = format!("/user-attachments/assets/{}", assets.len() + 1);
+                uploaded
+                    .lock()
+                    .unwrap()
+                    .push(u64::try_from(bytes.len() - end).unwrap());
+                assets.insert(path.clone(), bytes[end..].to_vec());
+                Some((
+                    201,
+                    serde_json::to_vec(&json!({"url":format!("{host}{path}")})).unwrap(),
+                ))
+            } else if line.starts_with("GET /user-attachments/assets/") {
+                assert!(
+                    headers
+                        .to_ascii_lowercase()
+                        .contains("authorization: bearer test-token")
+                );
+                read.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Some((200, assets.get(path).unwrap().clone()))
+            } else if path == "/repos/acme/work" {
+                Some((200, br#"{"id":123456}"#.to_vec()))
+            } else {
+                None
+            };
+            if let Some((status, body)) = answer {
+                let allowance = if path == "/graphql" {
+                    "x-ratelimit-limit: 4321\r\nx-ratelimit-remaining: 4320\r\nx-ratelimit-used: 1\r\nx-ratelimit-resource: graphql\r\nx-ratelimit-reset: 1775000000\r\n"
+                } else if path == "/repos/acme/work" {
+                    "x-ratelimit-limit: 4321\r\nx-ratelimit-remaining: 4320\r\nx-ratelimit-used: 1\r\nx-ratelimit-resource: core\r\nx-ratelimit-reset: 1775000000\r\n"
+                } else if declared_core {
+                    "x-ratelimit-resource: core\r\n"
+                } else {
+                    ""
+                };
+                write!(
+                    stream,
+                    "HTTP/1.1 {status} Fixture\r\nContent-Length: {}\r\n{allowance}Date: Tue, 01 Sep 2026 01:00:00 GMT\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .unwrap();
+                stream.write_all(&body).unwrap();
+            } else {
+                let mut upstream =
+                    std::net::TcpStream::connect(if path == "/graphql" { &graphql } else { &rest })
+                        .unwrap();
+                upstream.write_all(&bytes).unwrap();
+                let mut response = Vec::new();
+                upstream.read_to_end(&mut response).unwrap();
+                stream.write_all(&response).unwrap();
+            }
+        }
+    });
+    // The pair polls for the file and reads it at once, so it appears whole or not at all.
+    let staged = format!("{ready}.partial");
+    std::fs::write(&staged, endpoint).unwrap();
+    std::fs::rename(&staged, &ready).unwrap();
+    let mut done = String::new();
+    std::io::stdin().read_to_string(&mut done).unwrap();
+    if decline
+        || aliases
+        || scalar
+        || malformed_ceiling
+        || scenario.starts_with("missing-")
+        || refused_population
+    {
+        assert!(upload_sizes.lock().unwrap().is_empty());
+        assert_eq!(rendering_reads.load(std::sync::atomic::Ordering::SeqCst), 0);
+    } else {
+        assert_eq!(
+            *upload_sizes.lock().unwrap(),
+            onetaskgraph_github_live::quota::reference_workload().asset_bytes
+        );
+        assert_eq!(rendering_reads.load(std::sync::atomic::Ordering::SeqCst), 8);
+    }
+    assert!(
+        fixture.state.lock().unwrap().items.len() == population,
+        "both entry points cleaned up their items"
+    );
+    assert!(
+        fixture.state.lock().unwrap().labels.is_empty(),
+        "main cleaned up its label"
+    );
 }
