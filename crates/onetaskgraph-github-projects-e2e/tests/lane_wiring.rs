@@ -36,6 +36,10 @@ fn test_recipe_launches_the_real_nx_script_through_bash() {
     // Use the adapter's real resolver for the outer shell too, so Windows never
     // resolves System32's WSL launcher before reaching the recipe under test.
     let launch = "import runpy,subprocess,sys; from pathlib import Path; m=runpy.run_path(sys.argv[1]); b=m['executable']('bash'); assert Path(b).is_absolute(); sys.exit(subprocess.call([b,'-uc',sys.argv[2]]))";
+    // Windows pipes carry the ANSI code page unless a producer names its encoding;
+    // forcing it everywhere makes every platform write what that runner writes. The
+    // unresolvable base makes the selection helper explain itself with an em dash
+    // (cp1252 byte 0x97), which the collection step decodes and passes on.
     let output = std::process::Command::new("python3")
         .args(["-c", launch])
         .arg(&runner)
@@ -43,12 +47,22 @@ fn test_recipe_launches_the_real_nx_script_through_bash() {
         .current_dir(root)
         .env("NX_DAEMON", "false")
         .env("NX_BASE", "missing-base-for-recipe-launch")
+        .env("PYTHONIOENCODING", "cp1252")
         .env_remove("GH_PROJECTS_TOKEN")
         .output()
         .unwrap();
     assert!(
         output.status.success(),
         "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let explained = "cannot be read — answering `run`".as_bytes();
+    assert!(
+        output
+            .stderr
+            .windows(explained.len())
+            .any(|window| window == explained),
+        "the helper's em dash must arrive as the UTF-8 it was written in: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     let parsed: Value = serde_json::from_slice(&std::fs::read(&graph).unwrap()).unwrap();

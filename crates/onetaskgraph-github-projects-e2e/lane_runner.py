@@ -12,6 +12,11 @@ import sys
 import uuid
 
 LIVE_LABEL = "live-session"
+# Every text this step decodes, in the encoding its producer is made to write on every
+# platform. Left to the default, Windows pipes carry the ANSI code page, where the selection
+# helper's em dash is byte 0x97 and refuses to decode as UTF-8.
+SELECTION_ENCODING = "utf-8"  # live-lane-selection.sh reconfigures both its streams to this
+OBJECT_NAME_ENCODING = "ascii"  # `git rev-parse` prints a hexadecimal object name
 SessionId = NewType("SessionId", str)
 
 
@@ -54,22 +59,35 @@ def executable(name: str) -> str:
     return str(Path(resolved).resolve())
 
 
-async def execute(command: list[str], root: Path, *, capture: bool = False,
+def decoded(raw: bytes | None, encoding: str | None) -> str:
+    """Strictly decoded: a byte outside the producer's encoding refuses the step."""
+    return raw.decode(encoding) if raw is not None and encoding is not None else ""
+
+
+async def execute(command: list[str], root: Path, *, stdout_encoding: str | None = None,
+                  stderr_encoding: str | None = None,
                   environment: dict[str, str] | None = None) -> ProcessResult:
+    """Run a command; a stream is captured only when its producer's encoding is named."""
     process = await asyncio.create_subprocess_exec(
         executable(command[0]), *command[1:], cwd=root, env=environment,
-        stdout=asyncio.subprocess.PIPE if capture else None,
-        stderr=asyncio.subprocess.PIPE if capture else None,
+        stdout=asyncio.subprocess.PIPE if stdout_encoding else None,
+        stderr=asyncio.subprocess.PIPE if stderr_encoding else None,
     )
     stdout, stderr = await process.communicate()
     if process.returncode is None:
         raise RuntimeError("completed process has no exit status")
-    return ProcessResult(process.returncode, (stdout or b"").decode(), (stderr or b"").decode())
+    return ProcessResult(process.returncode, decoded(stdout, stdout_encoding),
+                         decoded(stderr, stderr_encoding))
 
 
 async def select(policy: str, command: list[str], root: Path) -> int:
-    result = await execute(["bash", policy, "--nx-exclusions"], root, capture=True)
-    sys.stderr.write(result.stderr)
+    result = await execute(["bash", policy, "--nx-exclusions"], root,
+                           stdout_encoding=SELECTION_ENCODING,
+                           stderr_encoding=SELECTION_ENCODING)
+    # Re-emitted in the encoding it was written in, whatever this platform's stderr uses.
+    sys.stderr.flush()
+    sys.stderr.buffer.write(result.stderr.encode(SELECTION_ENCODING))
+    sys.stderr.buffer.flush()
     exclusions = shlex.split(result.stdout) if result.status == 0 else []
     if len(exclusions) > 1 or any(not value.startswith("--exclude=") for value in exclusions):
         raise ValueError("selection helper returned malformed Nx exclusions")
@@ -85,10 +103,14 @@ async def select(policy: str, command: list[str], root: Path) -> int:
         environment["GITHUB_LIVE_SESSION_ID"] = identity
         environment["GITHUB_LIVE_SESSION_DIR"] = str(await asyncio.to_thread(directory.resolve))
         if not environment.get("GITHUB_LIVE_SOURCE_REVISION"):
-            revision = await execute(["git", "rev-parse", "HEAD"], root, capture=True)
-            if revision.status:
-                raise ValueError(f"source revision unavailable: {revision.stderr.strip()}")
-            environment["GITHUB_LIVE_SOURCE_REVISION"] = revision.stdout.strip()
+            # git's own diagnostics reach stderr directly; only the object name is decoded.
+            revision = await execute(["git", "rev-parse", "HEAD"], root,
+                                     stdout_encoding=OBJECT_NAME_ENCODING)
+            name = revision.stdout.strip()
+            if revision.status or not re.fullmatch(r"[0-9a-f]{40,64}", name):
+                raise ValueError(f"source revision unavailable: git rev-parse HEAD exited "
+                                 f"{revision.status} printing {name!r}")
+            environment["GITHUB_LIVE_SOURCE_REVISION"] = name
     return (await execute([*command, *exclusions], root, environment=environment)).status
 
 
