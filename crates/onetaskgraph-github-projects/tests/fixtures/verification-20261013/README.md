@@ -406,3 +406,23 @@ identical 193-operation sequences (174 GraphQL, 19 REST; methods, paths with the
 ownership nonce normalized, and GraphQL documents), byte-identical `prices.json`, and a
 byte-identical bill of 174 points (108 reported + 66 modelled). Only `test-token` was
 used; no live GitHub session ran.
+
+## A shared board smaller than the registered one, at 031f7650
+
+The merge path at `0f70890a` passed `scripts:test` on Linux (so
+`scripts/check-live-lane-selection.sh` through `scripts/check-relative-interpreter.sh`)
+and refused only `onetaskgraph-github-projects:test`: the credentialed main journey
+stopped before setup with "initial board workload is 84 items and 14 fields; registered
+workload requires 90 items and 14 fields". The nominated board is shared and its counts
+move between runs, so an exact count could not hold. `031f7650` makes the registered
+board facts an upper bound (`Workload::fits`): a smaller board runs and its record keeps
+what it held, a larger one is still refused, and every fixture fact still matches
+exactly. The new `smaller-board` loopback pair reports 84 items, completes, and bills;
+under the old exact rule it fails with the CI refusal. `wrong-workload` (91 items) is
+still refused.
+
+With the same recording proxy, both actual live entry points ran against the loopback
+board at `615d7019` (a detached scratch worktree, since removed) and at `031f7650`:
+identical 193-operation sequences (174 GraphQL, 19 REST; methods, paths and GraphQL
+documents), byte-identical `prices.json`, and a byte-identical bill of 174 points (108
+reported + 66 modelled). Only `test-token` was used; no live GitHub session ran.
