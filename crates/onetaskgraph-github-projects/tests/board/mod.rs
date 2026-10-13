@@ -155,13 +155,18 @@ pub fn probe_answer(production: &str, pricing: Pricing) -> Value {
     json!({"rateLimit":{"cost":pricing.charged(computed),
         "nodeCount":onetaskgraph_github_projects::worst_case_node_count(production)
             .expect("a countable production document"),
-        "limit":FIXTURE_BUDGET_LIMIT,"remaining":FIXTURE_BUDGET_LIMIT}})
+        "limit":FIXTURE_BUDGET_LIMIT,"remaining":FIXTURE_BUDGET_LIMIT},
+        "actualCost":{"cost":1}})
 }
 
 /// The production half of a `rateLimit(dryRun: true)` probe, or `None` when this is not one.
 pub fn strip_probe(query: &str) -> Option<String> {
     const PROBE: &str = "rateLimit(dryRun:true){cost nodeCount limit remaining} ";
-    query.contains(PROBE).then(|| query.replace(PROBE, ""))
+    query.contains(PROBE).then(|| {
+        query
+            .replace(PROBE, "")
+            .replace("actualCost:rateLimit(dryRun:false){cost} ", "")
+    })
 }
 
 /// GitHub's mutation surface, as the journey's own contract tables spell it.

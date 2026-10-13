@@ -250,23 +250,37 @@ async fn graphql_answer(
             ));
         }
     };
-    if let Some(errors) = response.get("errors") {
-        SESSION.record(outcome(Outcome::Refused));
+    // The alias probe was accepted by GitHub in the isolated strategy diagnostic.
+    // Hypothetical dryRun prices remain reconciliation evidence only.
+    let reported_cost = response
+        .pointer("/data/actualCost/cost")
+        .and_then(Value::as_u64)
+        .or_else(|| {
+            (!query.contains("dryRun:true"))
+                .then(|| {
+                    response
+                        .pointer("/data/rateLimit/cost")
+                        .and_then(Value::as_u64)
+                })
+                .flatten()
+        });
+    if let Some(errors) = response.get("errors").filter(|errors| {
+        !errors.is_null() && errors.as_array().is_none_or(|errors| !errors.is_empty())
+    }) {
+        SESSION.record(
+            sending(reported_cost)
+                .finished(Outcome::Refused, limits)
+                .with_execution(
+                    Some(query.to_owned()),
+                    onetaskgraph_github_projects::accounting::ResponseOutcome::GraphqlError,
+                    1,
+                ),
+        );
         return Err(Refusal::Answered(
             format!("{query_name} query was rejected by GitHub: {errors}"),
             Some(response.clone()),
         ));
     }
-    // GitHub reports what a call cost only when the document asked it to, and the allowance
-    // probe below does. A `dryRun` probe's `cost` is what some *other* document would spend
-    // and never what this call spent, so it is deliberately not picked up here.
-    let reported_cost = (!query.contains("dryRun"))
-        .then(|| {
-            response
-                .pointer("/data/rateLimit/cost")
-                .and_then(Value::as_u64)
-        })
-        .flatten();
     SESSION.record(sending(reported_cost).finished(ended, limits));
     Ok(response)
 }
@@ -457,7 +471,7 @@ fn with_rate_limit_probe(document: &str) -> Result<String, String> {
         .find('{')
         .ok_or_else(|| format!("this document has no selection set to probe: {document}"))?;
     Ok(format!(
-        "{}rateLimit(dryRun:true){{cost nodeCount limit remaining}} {}",
+        "{}rateLimit(dryRun:true){{cost nodeCount limit remaining}} actualCost:rateLimit(dryRun:false){{cost}} {}",
         &document[..=opening],
         &document[opening + 1..]
     ))
