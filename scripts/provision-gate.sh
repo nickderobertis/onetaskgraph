@@ -1,12 +1,9 @@
 #!/usr/bin/env bash
 # Make this worktree able to run `just gate`, or say exactly what is missing.
 #
-# The pre-push hook runs the complete gate, and a fresh worktree has none of what that
-# gate needs: no node_modules, so Nx is absent; no synced Python environment, so the SDK's
-# targets have no interpreter. Discovering that from the hook reads as a *push rejection* —
-# the person sees "the gate failed" and goes looking at their change, when nothing about
-# their change is wrong. Every publication from one orchestration host was refused for
-# twenty-nine minutes on exactly that.
+# Run independently when a worktree needs provisioning for manual checks. A fresh
+# worktree has no node_modules or synced Python environment. Git pushes do not invoke
+# this helper; CI provisions its own checks.
 #
 # So the rule this script exists to keep: a step that requires provisioning provisions it,
 # or declines out loud naming what is missing. The two halves are deliberately different.

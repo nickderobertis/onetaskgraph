@@ -80,11 +80,12 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       "schedule",
       "workflow_dispatch",
     ]);
-    const suppliedEvent = process.env.GITHUB_EVENT_NAME || event?.event_name;
+    const suppliedEvent = event?.event_name;
     const eventName =
-      typeof suppliedEvent === "string" && knownEvents.has(suppliedEvent)
+      process.env.GITHUB_EVENT_NAME ||
+      (typeof suppliedEvent === "string" && knownEvents.has(suppliedEvent)
         ? suppliedEvent
-        : "pull_request";
+        : "pull_request");
     const result =
       eventName === "pull_request"
         ? classify(event, args[4], args[6])

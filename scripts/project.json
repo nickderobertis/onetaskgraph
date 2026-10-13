@@ -3,7 +3,7 @@
   "name": "scripts",
   "projectType": "library",
   "tags": ["lang:bash", "layer:workspace"],
-  "//": "The guards and the release plumbing are a project like everything else, so a change to one is selected by the graph rather than escaping it, and the two targets whose inputs this tree can enumerate \u2014 `lint` and `format-check` \u2014 are cached with it. llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] JSON has no comment to scope this to the two distribution targets below, which is what it is about: what they read is the whole publishable surface, and several of them clone this repository and drive the real release tool over its git history, so there is no input glob and no narrower project to put them behind. They ran unconditionally from the justfile before this project existed, and selecting them instead would silently stop checking a release. It depends on no other project ON PURPOSE: nothing here is reachable from a crate, so a crate change must never drag these targets in \u2014 the edge that exists runs the other way, from `workspace`, which invokes a dozen of these scripts and so has to re-run when one of them changes.",
+  "//": "The guards and the release plumbing are a project like everything else, so a change to one is selected by the graph rather than escaping it, and the two targets whose inputs this tree can enumerate — `lint` and `format-check` — are cached with it. llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] JSON has no comment to scope this to the two distribution targets below, which is what it is about: what they read is the whole publishable surface, and several of them clone this repository and drive the real release tool over its git history, so there is no input glob and no narrower project to put them behind. They ran unconditionally from the justfile before this project existed, and selecting them instead would silently stop checking a release. It depends on no other project ON PURPOSE: nothing here is reachable from a crate, so a crate change must never drag these targets in — the edge that exists runs the other way, from `workspace`, which invokes a dozen of these scripts and so has to re-run when one of them changes.",
   "targets": {
     "bootstrap": {
       "executor": "nx:noop",
@@ -18,7 +18,7 @@
         "command": "bun run biome format --write scripts"
       },
       "cache": false,
-      "//": "Uncached: it rewrites the tree in place. Only this project's own JSON is formatted \u2014 biome has no formatter for a shell script, and the scripts' own shape is what the lint target below reads."
+      "//": "Uncached: it rewrites the tree in place. Only this project's own JSON is formatted — biome has no formatter for a shell script, and the scripts' own shape is what the lint target below reads."
     },
     "format-check": {
       "executor": "nx:run-commands",
@@ -36,11 +36,11 @@
         ],
         "parallel": false
       },
-      "//": "The bash 3.2 scan and the undrained-tar scan, which read only this project's own files \u2014 so `default` describes them exactly and a cache hit is sound. They are the cheap half of each pair: the checks that watch them refuse are tests, and live in the target below."
+      "//": "The bash 3.2 scan and the undrained-tar scan, which read only this project's own files — so `default` describes them exactly and a cache hit is sound. They are the cheap half of each pair: the checks that watch them refuse are tests, and live in the target below."
     },
     "typecheck": {
       "executor": "nx:noop",
-      "//": "Declared and empty. Target names are uniform because `nx affected` fans out by name, and a shell script has no type-checking step between reading it and running it \u2014 what would be static analysis here is the lint target's scan and the tests that drive the real scripts."
+      "//": "Declared and empty. Target names are uniform because `nx affected` fans out by name, and a shell script has no type-checking step between reading it and running it — what would be static analysis here is the lint target's scan and the tests that drive the real scripts."
     },
     "test": {
       "executor": "nx:run-commands",
@@ -75,12 +75,11 @@
         "{workspaceRoot}/workspace/project.json",
         "{workspaceRoot}/justfile",
         "{workspaceRoot}/nx.json",
-        "{workspaceRoot}/.githooks/pre-push",
         "{workspaceRoot}/.github/workflows/ci.yml",
         "{workspaceRoot}/.github/workflows/live-janitor.yml",
         "{workspaceRoot}/.github/workflows/release-plz.yml"
       ],
-      "//": "Uncached for the reason the workspace project's own test target is: these drive the real guards inside scratch clones of this repository and read git history there, which no input glob in this tree describes. The workspaceRoot inputs above are what SELECTS this project rather than what hashes it \u2014 the path-spelling check drives check-store-fixtures.sh over the crate fixtures, and the line-read check drives check-affected-selection.sh and check-plugin-isolation.sh over the project graph, so a change to either has to re-run these. The live-lane check is here rather than beside a crate for the same reason as the rest: what it drives is a script, and the workflow and the journey it breaks in its scratch clone are fixtures of the case rather than inputs of this project \u2014 an edge from a crate to these targets is what this project's own note refuses. The credential-free check is here for that reason too, and for one of its own: it drives scripts/check-fixture-discrimination.sh \u2014 a command of distribution-test below \u2014 behind a stand-in cargo that records what each invocation received, so what it reads is a script of this project rather than the crate whose package that step names. The selection check is the reason the justfile, nx.json, the pre-push hook and the workflow are named above: it drives the real recipes and enumerates the paths those two files declare, so a change to any of them has to re-run it. The release-plz workflow is named for the scoped-tool check, which holds every `run:` step of it to the resolver. Serial because each clones a tree and one nests a whole Nx invocation inside it. It depends on onetaskgraph:build for the reason distribution-test does and by the same kind of edge \u2014 a task dependency, not a project-graph edge, so it selects nothing this project's own note refuses: check-relative-interpreter.sh drives the real scripts/test-distribution.sh, which packages target/debug/onetaskgraph. Without it the two targets are unordered, and the binary is either absent \u2014 which is what refused the macOS lane while the other two won the race \u2014 or being relinked while the journey packages it."
+      "//": "Uncached for the reason the workspace project's own test target is: these drive the real guards inside scratch clones of this repository and read git history there, which no input glob in this tree describes. The workspaceRoot inputs above are what SELECTS this project rather than what hashes it — the path-spelling check drives check-store-fixtures.sh over the crate fixtures, and the line-read check drives check-affected-selection.sh and check-plugin-isolation.sh over the project graph, so a change to either has to re-run these. The live-lane check is here rather than beside a crate for the same reason as the rest: what it drives is a script, and the workflow and the journey it breaks in its scratch clone are fixtures of the case rather than inputs of this project — an edge from a crate to these targets is what this project's own note refuses. The credential-free check is here for that reason too, and for one of its own: it drives scripts/check-fixture-discrimination.sh — a command of distribution-test below — behind a stand-in cargo that records what each invocation received, so what it reads is a script of this project rather than the crate whose package that step names. The selection check is the reason the justfile, nx.json, the workflow are named above: it drives the real recipes and enumerates the paths that file declares, so a change to any of them has to re-run it. The release-plz workflow is named for the scoped-tool check, which holds every `run:` step of it to the resolver. Serial because each clones a tree and one nests a whole Nx invocation inside it. It depends on onetaskgraph:build for the reason distribution-test does and by the same kind of edge — a task dependency, not a project-graph edge, so it selects nothing this project's own note refuses: check-relative-interpreter.sh drives the real scripts/test-distribution.sh, which packages target/debug/onetaskgraph. Without it the two targets are unordered, and the binary is either absent — which is what refused the macOS lane while the other two won the race — or being relinked while the journey packages it."
     },
     "coverage": {
       "executor": "nx:noop",
@@ -107,7 +106,7 @@
         "parallel": false
       },
       "cache": false,
-      "//": "Outside the `check` fan-out and invoked by name from `just distribution-check`, for the same reason `workspace:deny` is: what these read is the whole publishable surface \u2014 every manifest, the release workflows, release-targets.toml, config/registry-interfaces.toml, the crate fixtures \u2014 and several of them clone this repository and drive the real release tool over its git history. No input glob describes that, so a cache hit would be a claim about a tree that has since changed and an affected-selection miss would silently stop checking a release. It runs on every gate, exactly as it did before it was a target."
+      "//": "Outside the `check` fan-out and invoked by name from `just distribution-check`, for the same reason `workspace:deny` is: what these read is the whole publishable surface — every manifest, the release workflows, release-targets.toml, config/registry-interfaces.toml, the crate fixtures — and several of them clone this repository and drive the real release tool over its git history. No input glob describes that, so a cache hit would be a claim about a tree that has since changed and an affected-selection miss would silently stop checking a release. It runs on every gate, exactly as it did before it was a target."
     },
     "distribution-test": {
       "executor": "nx:run-commands",
@@ -121,7 +120,7 @@
         "parallel": false
       },
       "cache": false,
-      "//": "Uncached and unconditional for the same reason as distribution-check above, and one more of its own: check-npm-publish stands a registry up and publishes into it, and check-fixture-discrimination mutates a crate in a scratch copy and re-runs its real tests \u2014 neither is a function of files this tree can enumerate. test-distribution packages target/debug/onetaskgraph, so it depends on onetaskgraph:build \u2014 a task dependency, not a project-graph edge, so it selects nothing the note above refuses."
+      "//": "Uncached and unconditional for the same reason as distribution-check above, and one more of its own: check-npm-publish stands a registry up and publishes into it, and check-fixture-discrimination mutates a crate in a scratch copy and re-runs its real tests — neither is a function of files this tree can enumerate. test-distribution packages target/debug/onetaskgraph, so it depends on onetaskgraph:build — a task dependency, not a project-graph edge, so it selects nothing the note above refuses."
     }
   }
 }

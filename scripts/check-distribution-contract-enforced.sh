@@ -28,7 +28,7 @@ scratch="$(mktemp -d)" || fatal \
 trap 'rm -rf "$scratch"' EXIT
 
 # Git exports GIT_DIR to every hook and GIT_DIR overrides `git -C`; the gate runs from
-# .githooks/pre-push, so `git ls-files` below has to be asked in a stripped environment or
+# a caller's Git hook, so `git ls-files` below has to be asked in a stripped environment or
 # it answers about whatever repository the hook was invoked for.
 #
 # The path below is built from $ROOT at run time, so ShellCheck cannot follow it to decide

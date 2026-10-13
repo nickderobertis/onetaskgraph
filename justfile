@@ -18,7 +18,7 @@ nx := "./scripts/nx.sh"
 default:
     @just --list
 
-# Set up from a clean clone: every toolchain, the git hooks, and the judged-lint tier.
+# Set up from a clean clone: every toolchain and the judged-lint tier.
 bootstrap:
     @{{nx}} run-many -t bootstrap --all
 
@@ -32,12 +32,8 @@ bootstrap:
 # Everyday gate: format, lint, types, tests and coverage over the affected projects.
 check: format-check lint typecheck test coverage distribution-check distribution-test
 
-# What .githooks/pre-push and the default branch run. It SELECTS rather than sweeps, which
-# reverses an earlier decision: a sweep ran every plugin's live tests whatever the diff
-# touched, and that is how a release commit exhausted the account's GraphQL budget. Both
-# callers export NX_BASE, as the pull-request lane does; scripts/pre-push-base.sh is the
-# hook's half. `deny` and the two distribution stages sit outside affected selection and
-# are dependencies here, so nothing the sweep checked goes unchecked. AGENTS.md records why.
+# CI runs this on the default branch; contributors can also run it manually.
+# CI derives NX_BASE explicitly. Supply-chain and distribution stages remain unconditional.
 
 # Full quality gate over the affected projects, plus the supply chain. Fails on any issue.
 gate: deny check

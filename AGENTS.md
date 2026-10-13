@@ -225,8 +225,8 @@ the wrapper restriction is what actually stands between a dev-dependency and a m
 watched fail is a guard nobody knows works, and two of this one's cases exist because it
 was wrong in exactly those ways. Keep its cases; extend them when the rule grows.
 
-`scripts/check-hook-safety.sh` guards the guards: they clone, the gate runs from a hook,
-and git exports `GIT_DIR` to hooks, where it overrides `git -C`. Both clone through
+`scripts/check-hook-safety.sh` guards the guards: they clone, and callers may run checks
+from a Git hook, where `GIT_DIR` overrides `git -C`. Both clone through
 `scripts/scratch-clone.sh` for that reason.
 
 ## The four selections the project graph owes
@@ -406,17 +406,15 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   it has, so a defect in this decision cannot make an absent credential read as an
   unselected lane.
   **Every path that can open a session reaches it through `just test`**, which is why there
-  is one consultation point rather than three: the change-request path runs `just check`,
-  and the default branch and `.githooks/pre-push` run `just gate`, which is now `deny` plus
-  that same `check`. Each derives its base explicitly — `.github/workflows/ci.yml` from the
-  merge base or from `github.event.before`, the hook from the records git feeds it on stdin
-  through `scripts/pre-push-base.sh` — because an implicit base is how affected selection
-  quietly starts comparing against the wrong commit, and on the default branch it compares
-  against this very commit and selects nothing at all.
+  is one consultation point: the change-request path runs `just check`,
+  and the default branch runs `just gate`, which is `deny` plus that same `check`.
+  CI derives its base explicitly from the merge base or `github.event.before`, because
+  an implicit base can select the wrong changes. Pushes run no repository checks;
+  contributors can run `NX_BASE=<ref> just check` or `just gate` manually.
   `scripts/check-live-lane-selection.sh`, a command in `scripts:test`, holds all of that:
   it puts the five diffs to the real decision over real git states, drives the real recipes
-  for each of the three paths, puts three diffs to real Nx, and ENUMERATES the paths from
-  the workflow and the hook rather than listing them — so a path added or rewired later
+  for both CI paths, puts three diffs to real Nx, and ENUMERATES the paths from
+  the workflow rather than listing them — so a path added or rewired later
   cannot silently bypass the decision. Nothing it runs has a credential and nothing it runs
   reaches an API.
 - **One gate, because the next precondition has to govern every path.** A live test cannot
@@ -1155,11 +1153,9 @@ statement of the surface and a hash-gated capture is not: the binary stays the o
 and the baseline is the drift gate.
 
 **It is informational and outside every gate.** No Nx target captures, `just check` and
-`just gate` cannot reach the capture, and the visual workflow is its own. The one local
-half is the screencomp guard that `.githooks/pre-push` runs **after** the complete gate
-that hook already ran, only when what is being pushed can change a shot — so the pre-push
-bar is what it was, plus one refusal that names the gallery to review. The capture drives
-`local-md` and `in-memory` only: no credential, no socket, not even a loopback one.
+`just gate` cannot reach the capture, and the visual workflow is its own. Contributors capture and review changes manually with `just screenshots` and
+`just screenshots-bless`. Pushes neither capture nor refresh baselines or galleries.
+The capture drives `local-md` and `in-memory` only: no credential or socket.
 
 ## Recorded decisions
 
@@ -1243,18 +1239,8 @@ bar is what it was, plus one refusal that names the gallery to review. The captu
   command in `scripts:test`, drives the provisioning against a stand-in tool location and
   installer, and refuses any invocation in `scripts/`, the justfile, the hooks or the
   workflows that goes around the resolver.
-  **When the scoped binary is missing or at the wrong version where the `pre-push` gate
-  needs it, `scripts/provision-gate.sh` prints exactly one line `onevcs: host-prerequisite:
-  <what is missing and how to install it>` before refusing.** That spelling is the marker
-  onevcs's `docs/contract.md` states for a merge-path hook refusing on a missing host tool,
-  which is how the engine on this host settles it as a host problem rather than spending a
-  worker's retries on a tree that was never checked
-  (https://github.com/nickderobertis/onepipeline/issues/360). It is that tool's alone: a
-  check that reads the candidate tree — `scripts/check-real-release-preparation.sh` among
-  them — refuses an empty location in its own words and never prints it, because a marker
-  from a tree-sensitive check would tell the engine to stop retrying a tree it never
-  finished checking. `scripts/check-pre-push-provisioning.sh` holds the hook to exactly
-  one such line when the tool is missing or wrong and to none when it is there.
+  The independently usable `scripts/provision-gate.sh` reports a missing or wrong
+  scoped binary with the host-prerequisite marker. Pushes do not invoke provisioning.
 - **One Mac job per run, and two Mac-spending runs per single-push lifecycle.** CI
   combines the former Mac check and install assertions sequentially. Linux carriers keep
   `check (macos-latest)` and `install path (macos-latest)` required on every PR, using

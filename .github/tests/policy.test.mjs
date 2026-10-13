@@ -225,6 +225,10 @@ test("Actions event environment overrides payload kinds and unreadable kinds req
     classify(event("release-plz-123"), heads.version, base, "push").macosRequired,
     false,
   );
+  assert.equal(
+    classify({ event_name: "unknown" }, heads.source, base, "merge_group").macosRequired,
+    false,
+  );
   for (const event_name of ["unknown", {}, 42])
     assert.equal(classify({ event_name }).macosRequired, true);
 });

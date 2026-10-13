@@ -10,7 +10,7 @@
 #   1. the location is namespaced by tool and version under the cache home, is the same
 #      from every checkout, and is never inside one;
 #   2. an empty location is refused naming the tool, the version, the path and the install
-#      command — and never with the host-prerequisite marker, which is the hook's alone;
+#      command — and never with the host-prerequisite marker, which is the provisioner's alone;
 #   3. `ensure` provisions through cargo-binstall when it is there and `cargo install` when
 #      it is not — or when binstall could not fetch the binary — into that location and
 #      nowhere else, and proves the result by asking it;
@@ -469,14 +469,10 @@ if problems:
         print(f"    {problem}", file=sys.stderr)
     print(f"check-scoped-release-plz: next: resolve it through {resolver} instead, so it runs the scoped pinned binary", file=sys.stderr)
     raise SystemExit(1)
-# The provisioner that emits the marker, and the checks that read it: two that drive the
-# hook and assert it is printed exactly once when the pinned tool is missing, and
-# check-visual-guard.sh, which asserts the screenshot guard NEVER prints it — a missing
-# renderer is not a host problem the engine should stop retrying on.
+# Only the provisioner and checks of its marker may spell the host diagnostic.
 expected = {
     "scripts/provision-gate.sh",
     "scripts/check-scoped-release-plz.sh",
-    "scripts/check-pre-push-provisioning.sh",
     "scripts/check-visual-guard.sh",
 }
 stray = sorted(set(marker_sites) - expected)
@@ -487,7 +483,7 @@ if stray:
     print("check-scoped-release-plz: next: only scripts/provision-gate.sh emits that line, because a check that reads the tree must never claim a host problem", file=sys.stderr)
     raise SystemExit(1)
 if "scripts/provision-gate.sh" not in marker_sites:
-    print("check-scoped-release-plz: scripts/provision-gate.sh no longer spells the host-prerequisite marker, so the pre-push gate cannot report a missing release-plz as a host problem", file=sys.stderr)
+    print("check-scoped-release-plz: scripts/provision-gate.sh no longer spells the host-prerequisite marker, so the manual provisioner cannot report a missing release-plz as a host problem", file=sys.stderr)
     raise SystemExit(1)
 PY
 ); then
