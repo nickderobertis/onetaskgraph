@@ -356,3 +356,23 @@ library doctest suites again, with `--test-threads=1` and only the two credentia
 entry points excluded. Real GitHub credentials and the live-required flag were
 removed from its environment. The final workspace format check passed after this
 verification note was added.
+
+## Windows code-page repair at 03b0d228
+
+The merge path at `2f23f8f6` refused `scripts:test` on Windows: the "GitHub live
+collection" step (`lane_runner.py select`, which the `test` recipe runs) decoded the
+selection helper's stderr as UTF-8, while the helper's python, writing to a pipe on
+Windows, used cp1252, where its em dash is byte 0x97. The helper
+(`scripts/live-lane-selection.sh`) now reconfigures both its streams to UTF-8; the step
+captures and strictly decodes text from exactly two producers — that helper's stdout and stderr as
+UTF-8, re-emitting the stderr as UTF-8 bytes — and `git rev-parse HEAD`'s stdout as an
+ASCII hexadecimal object name, leaving git's stderr uncaptured. Forcing
+`PYTHONIOENCODING=cp1252` on Linux reproduced the CI error exactly; the recipe-launch
+test in `tests/lane_wiring.rs` now forces it on every platform and asserts the em dash
+arrives as UTF-8, and fails with either half of the repair reverted.
+
+With the same recording proxy, both actual live entry points ran against the loopback
+board at `2f23f8f6` (a detached scratch worktree, since removed) and on the finished
+tree: identical 193-operation sequences, byte-identical `prices.json`, and a
+byte-identical bill of 174 points (108 reported + 66 modelled). Only `test-token` was
+used; no live GitHub session ran.
