@@ -514,17 +514,43 @@ fn each_absolute_linear_budget_is_reported_as_the_recorded_hour_holds_it_and_ref
             figure.as_u64().map(|figure| figure as f64),
             "{budget}"
         );
-        let mut another = valid.clone();
-        another["workload"] = json!("one host, one pass");
-        let mut other_figure = valid.clone();
-        other_figure["value"] = json!(1);
+        let with = |pointer: &str, value: Value| {
+            let mut changed = valid.clone();
+            *changed.pointer_mut(pointer).expect("the member") = value;
+            changed
+        };
+        let without = |pointer: &str, key: &str| {
+            let mut changed = valid.clone();
+            changed
+                .pointer_mut(pointer)
+                .and_then(Value::as_object_mut)
+                .expect("the parent")
+                .remove(key);
+            changed
+        };
+        let whole = "a whole, non-negative number";
+        let (parent, member_key) = member.rsplit_once('/').expect("a nested member");
         for (name, recording, reason) in [
             (
                 "another-workload",
-                another,
+                with("/workload", json!("one host, one pass")),
                 "not of the workload the budget states",
             ),
-            ("another-figure", other_figure, "is not the"),
+            ("another-figure", with("/value", json!(1)), "is not the"),
+            ("no-figure", without("", "value"), whole),
+            ("negative", with("/value", json!(-1)), whole),
+            ("fractional", with("/value", json!(1.5)), whole),
+            ("text", with("/value", json!("207")), whole),
+            (
+                "malformed-measure",
+                with(&format!("/scales/{scale}{member}"), json!("207")),
+                "is not the",
+            ),
+            (
+                "no-measure",
+                without(&format!("/scales/{scale}{parent}"), member_key),
+                "is not the",
+            ),
         ] {
             let (refused, _) = report(name, &recording);
             let stderr = String::from_utf8_lossy(&refused.stderr);

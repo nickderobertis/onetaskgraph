@@ -734,6 +734,7 @@ mod tests {
             crate::graphql::INVERSE_RELATIONS_PAGE,
             crate::graphql::COMMENTS_PAGE,
             crate::graphql::PROJECT_RELATIONS_PAGE,
+            crate::graphql::PROJECT_INVERSE_RELATIONS_PAGE,
         ] {
             assert!(
                 selected.contains(&format!("(first:{PAGE})")),

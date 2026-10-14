@@ -1318,3 +1318,77 @@ fn a_copy_whose_projects_page_is_refused_reads_each_project_by_id_and_answers_th
     let [_, off] = cached.on_and_off(&strs(&filing_copy("many")));
     assert_eq!(bare(refused), off.0.1, "what an uncached copy answers");
 }
+
+#[test]
+fn a_relation_write_retires_only_this_stores_edges_entries_and_is_refused_when_it_cannot_list_them()
+{
+    let write = [
+        "task",
+        "update",
+        "linear:L-3",
+        "--depends-on",
+        "linear:L-2",
+        "--json",
+    ];
+    // A file in the directory that is not one of this store's entries stays where it is.
+    let cached = Cached::new(held());
+    filled(&cached, &REVERSE_EDGES);
+    let directory = cached.dir().expect("a cache").join("reverse-edges-v2");
+    let foreign = directory.join("not-ours.json");
+    std::fs::write(&foreign, b"{\"kind\": \"something else\"}").expect("a foreign file");
+    cached.ok(&write);
+    assert_eq!(
+        walk(&directory),
+        [foreign],
+        "this store's entry is retired, and nothing else"
+    );
+
+    // A directory this process cannot list refuses the write before anything is sent.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let cached = Cached::new(held());
+        filled(&cached, &REVERSE_EDGES);
+        let directory = cached.dir().expect("a cache").join("reverse-edges-v2");
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o000))
+            .expect("unlistable");
+        if std::fs::read_dir(&directory).is_ok() {
+            // Running as a user no directory mode stops — nothing to prove here.
+            std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o755)).ok();
+            return;
+        }
+        let before = cached.workspace.served().len();
+        let output = cached.run(&write);
+        let sent: Vec<String> = cached.workspace.served()[before..]
+            .iter()
+            .map(|(document, _)| document.clone())
+            .collect();
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o755))
+            .expect("listable");
+        assert_ne!(output.status.code(), Some(0), "the write is refused");
+        assert!(
+            !sent.iter().any(|document| document.starts_with("mutation")),
+            "nothing was written: {sent:?}"
+        );
+        cached.ok(&write);
+    }
+}
+
+#[test]
+fn an_edges_entry_under_another_kinds_path_is_never_served() {
+    let cached = Cached::new(held());
+    let pin = filled(&cached, &PROJECT_EDGES);
+    let dir = cached.dir().expect("a cache");
+    // P-1's forward edges, put where P-1's reverse edges would be kept.
+    std::fs::create_dir_all(dir.join("project-reverse-edges-v2")).expect("a directory");
+    std::fs::copy(
+        entry(&dir, "project-edges-v2", "P-1"),
+        entry(&dir, "project-reverse-edges-v2", "P-1"),
+    )
+    .expect("copied");
+    let reverse = words("project deps linear:P-1 --direction depended-on-by", &pin);
+    let (_, sent) = cached.ok(&strs(&reverse));
+    assert_eq!(sent.len(), 1, "read from Linear, never the misplaced entry");
+    let [on, off] = cached.on_and_off(&strs(&reverse));
+    assert_eq!(on.0, off.0, "what an uncached read answers");
+}
