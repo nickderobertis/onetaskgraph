@@ -173,7 +173,8 @@ if platform.system() == 'Windows':
 else:
     actual_bash = shutil.which('bash')
     with tempfile.TemporaryDirectory() as temporary:
-        root = Path(temporary)
+        # macOS hands out /var/folders, which the resolver reads as /private/var.
+        root = Path(temporary).resolve()
         (root / 'Git/cmd').mkdir(parents=True)
         (root / 'Git/bin').mkdir()
         (root / 'launchers').mkdir()
@@ -254,14 +255,18 @@ test("packaging guard rejects build-backend requirement drift before staging pro
     "python3",
     [
       "-c",
-      `import shutil, subprocess, tempfile
+      `import platform, shutil, subprocess, sys, tempfile
 from pathlib import Path
+sys.path.insert(0, 'scripts')
+from release_products import bash_executable
+# A bare 'bash' from Python on Windows is System32's WSL launcher, not Git Bash.
+bash = bash_executable(platform.system())
 with tempfile.TemporaryDirectory() as temporary:
     tree = Path(temporary)
     shutil.copytree('scripts', tree / 'scripts')
-    manifest = Path('pyproject.toml').read_text()
-    (tree / 'pyproject.toml').write_text(manifest.replace('maturin>=1.9,<2', 'maturin>=1.10,<2'))
-    rejected = subprocess.run(['bash', 'scripts/check-release-packaging.sh'], cwd=tree, capture_output=True, text=True)
+    manifest = Path('pyproject.toml').read_text(encoding='utf-8')
+    (tree / 'pyproject.toml').write_text(manifest.replace('maturin>=1.9,<2', 'maturin>=1.10,<2'), encoding='utf-8')
+    rejected = subprocess.run([bash, 'scripts/check-release-packaging.sh'], cwd=tree, capture_output=True, text=True, encoding='utf-8')
     assert rejected.returncode == 2, rejected.stderr
     assert 'distribution maturin requirement disagrees with pyproject.toml' in rejected.stderr
     assert 'next:' in rejected.stderr

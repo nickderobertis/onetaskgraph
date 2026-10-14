@@ -43,8 +43,8 @@ esac
 if ! "$python_bin" - "$ROOT" <<'PYREQUIREMENT'
 import pathlib, re, sys, tomllib
 root = pathlib.Path(sys.argv[1])
-requires = tomllib.loads((root / 'pyproject.toml').read_text())['build-system']['requires']
-script = (root / 'scripts/test-distribution.sh').read_text()
+requires = tomllib.loads((root / 'pyproject.toml').read_text(encoding='utf-8'))['build-system']['requires']
+script = (root / 'scripts/test-distribution.sh').read_text(encoding='utf-8')
 selected = re.findall(r"uv tool run --from '([^']+)' maturin build", script)
 if selected != requires:
     sys.exit('distribution maturin requirement disagrees with pyproject.toml')
