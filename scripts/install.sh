@@ -16,7 +16,15 @@ source_identity() {
     *) die 64 "download base must use https://, http://, or file://";;
   esac
 }
-download() { case "$1" in file://*) cp "${1#file://}" "$2";; *) curl -fsSL "$1" -o "$2";; esac; }
+# file:///C:/dir names a Windows drive; Git Bash and Cygwin read it as C:/dir, not /C:/dir.
+local_path() {
+  path=${1#file://}
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) case "$path" in /[A-Za-z]:/*) path=${path#/};; esac;;
+  esac
+  printf '%s\n' "$path"
+}
+download() { case "$1" in file://*) cp "$(local_path "$1")" "$2";; *) curl -fsSL "$1" -o "$2";; esac; }
 
 while [ "$#" -gt 0 ]; do
   case "$1" in

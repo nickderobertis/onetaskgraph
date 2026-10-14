@@ -164,6 +164,26 @@ printf '#!/bin/sh\nprintf '\''Unsupported\\n'\''\n' > "$tmp/shims/uname"
 chmod +x "$tmp/shims/uname"
 if PATH="$tmp/shims:$PATH" ONETASKGRAPH_VERSION="$tag" "$root/scripts/install.sh" 2>"$tmp/error"; then echo "unsupported installer platform was accepted; next: inspect platform selection" >&2; exit 1; fi
 grep -q 'no prebuilt binary' "$tmp/error" || { cat "$tmp/error" >&2; echo "unsupported-installer-platform failure omitted its reason; next: inspect platform diagnostics" >&2; exit 1; }
+# A Windows host names a local archive base file:///C:/..., which Git Bash reads only as
+# C:/... — the hosted install-path lane failed `cp: cannot stat '/C:/...'`. Off Windows a
+# MINGW uname and a relative directory literally named `C:` reproduce it: the archive is
+# found only if the installer converted the URL. Windows itself installs from a real drive
+# URL in scripts/verify-release-products.py, so the simulation would only write to C:\ there.
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) ;;
+  *)
+    drive="$tmp/drive"
+    windows_name="onetaskgraph-${tag}-x86_64-pc-windows-msvc.zip"
+    mkdir -p "$drive/C:/releases/$tag" "$drive/C:/canonical/$tag" "$drive/payload"
+    printf 'windows payload\n' > "$drive/payload/onetaskgraph.exe"
+    (cd "$drive/payload" && "$python_bin" -m zipfile -c "$drive/C:/releases/$tag/$windows_name" onetaskgraph.exe)
+    (cd "$drive/C:/releases/$tag" && if command -v sha256sum >/dev/null; then sha256sum "$windows_name"; else shasum -a 256 "$windows_name"; fi) > "$drive/C:/canonical/$tag/$windows_name.sha256"
+    printf '#!/bin/sh\ncase "$1" in -s) echo MINGW64_NT-10.0-26100;; -m) echo x86_64;; esac\n' > "$tmp/shims/uname"
+    chmod +x "$tmp/shims/uname"
+    (cd "$drive" && PATH="$tmp/shims:$PATH" ONETASKGRAPH_CHECKSUM_BASE_URL="file:///C:/canonical" "$root/scripts/install.sh" --version "$tag" --to "$drive/bin" --archive-base-url "file:///C:/releases" >/dev/null 2>"$tmp/error") || { cat "$tmp/error" >&2; echo "a file:///C:/ archive URL was not read as its drive path on Windows bash; next: inspect local_path in scripts/install.sh" >&2; exit 1; }
+    cmp -s "$drive/payload/onetaskgraph.exe" "$drive/bin/onetaskgraph.exe" || { echo "the drive-letter install did not install the archived payload; next: inspect local_path in scripts/install.sh" >&2; exit 1; }
+    ;;
+esac
 rm "$tmp/shims/uname" "$tmp/shims/curl"
 printf 'not a directory' > "$tmp/not-a-directory"
 if ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL="file://$tmp/releases" ONETASKGRAPH_CHECKSUM_BASE_URL="file://$tmp/canonical" ONETASKGRAPH_INSTALL_DIR="$tmp/not-a-directory/child" "$root/scripts/install.sh" 2>"$tmp/error"; then echo "uncreatable installation directory was accepted; next: inspect directory creation" >&2; exit 1; fi
