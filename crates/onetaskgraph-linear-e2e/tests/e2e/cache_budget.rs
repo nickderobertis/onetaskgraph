@@ -30,6 +30,7 @@ pub(crate) const WORKLOAD: &str =
 /// scored them in three live sessions — each with the page it was scored at, because Linear
 /// prices some connections by the rows a response returns and others by the `first` a request
 /// names.
+// llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The documents these prices are keyed on are gated: `cache_documents.rs` holds every one byte for byte to 0.6.0's or to exactly the cache's widening, so a changed query fails there before it could carry a stale price. The prices themselves are Linear's own scores from three live sessions; re-taking them needs a Linear credential, which this suite runs without by design, and the spec fixes this table as its source.
 pub(crate) mod price {
     /// `VIEWER`.
     pub(crate) const VIEWER: u64 = 1;

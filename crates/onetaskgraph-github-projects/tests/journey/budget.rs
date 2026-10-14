@@ -489,11 +489,10 @@ struct Design {
     capabilities: u64,
     comments: u64,
     tokens: u64,
-    /// The six `gh3` legs after the task-token leg, in the same phase: about 26 points on the
-    /// loopback, allocated 46 for the settle-margin re-reads real GitHub adds. With it the
-    /// admission estimate is 327, above the 299-point measured ceiling by design — the manager's
-    /// ruling: admission reserves against the shared allowance, and `github-live-session-points`
-    /// still fails a measured session above 299.
+    /// The six `gh3` legs after the task-token leg, in the same phase. Like every allocation
+    /// here, a reservation against the shared allowance rather than the measured ceiling
+    /// `github-live-session-points` holds a session to; `tests/fixtures/session-cost.md` states
+    /// what the legs measure and why this reserves more.
     facets: u64,
     cleanup: u64,
     orphans: u64,

@@ -1407,9 +1407,10 @@ as `spike-linear-coverage` priced them, against its per-query cap of 10,000:
 | `ISSUE_RELATIONS`, at `first:100` | 522 | 525 |
 
 So a widened query costs more than the one it replaces, and the cache earns it back by the
-reads it answers: over the `linear-cache-cost-not-above-uncached` budget's hour — three hosts,
-each a cold and a warm pass over 10 projects, 40 documents and 60 issues — the cache spends
-5,811 less complexity than no cache at 1x and 58,110 less at 10x. On GitHub nothing is widened:
+reads it answers: the `linear-cache-cost-not-above-uncached` budget holds it to spending no more
+complexity than no cache over an hour of three hosts, each a cold and a warm pass over 10
+projects, 40 documents and 60 issues, and at ten times that, and records by how much it spends
+less. On GitHub nothing is widened:
 `github-cache-points-not-above-uncached` holds every kind, sequence and scale to adding no
 point.
 

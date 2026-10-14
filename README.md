@@ -1251,10 +1251,12 @@ each remote one is remote.
 **Turning the cache on widens four Linear queries.** `ISSUES`, `ISSUE` and `ISSUE_DETAIL` gain
 the relations page the token is read from, and `ISSUE_RELATIONS` gains the token's other parts,
 so a dependency read can fill an entry; at 100 rows `ISSUES` is about 3,108 of the 10,000 cap.
-With the cache off every query is the one 0.6.0 sent. Over the Linear cache budget's hour —
-three hosts, each a cold and a warm pass over 10 projects, 40 documents and 60 issues — the
-cache spends 5,811 less complexity than no cache, and 58,110 less at ten times the size. On
-GitHub nothing is widened and the cache adds no point at any kind, sequence or scale.
+With the cache off every query is the one 0.6.0 sent. The `linear-cache-cost-not-above-uncached`
+budget holds the cache to spending no more complexity than no cache over an hour of three hosts,
+each a cold and a warm pass over 10 projects, 40 documents and 60 issues, and at ten times that,
+and records the difference. On GitHub nothing is widened, and
+`github-cache-points-not-above-uncached` holds the cache to adding no point at any kind, sequence
+or scale.
 
 Every read from a caching source carries `cache: {"served": "cache" | "remote", "bypassed":
 null | "<reason>"}` in its JSON, and a source keeping no cache carries no such member. A
