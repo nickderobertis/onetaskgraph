@@ -408,19 +408,25 @@ impl SourceCache {
                     && reads_whole(kind, value)
             }),
         };
-        match std::fs::read_dir(self.dir.join(kind.directory())) {
-            Ok(listed) => Ok(listed
-                .filter_map(Result::ok)
-                .map(|file| file.path())
-                .filter(|path| {
-                    path.extension()
-                        .is_some_and(|extension| extension == "json")
-                        && ours(path)
-                })
-                .collect()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-            Err(error) => Err(error),
+        let listed = match std::fs::read_dir(self.dir.join(kind.directory())) {
+            Ok(listed) => listed,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error),
+        };
+        // An entry of the directory that cannot be read is an error, not a file to pass over: a
+        // write retiring every entry has to have seen every one.
+        let mut files = Vec::new();
+        for file in listed {
+            let path = file?.path();
+            if path
+                .extension()
+                .is_some_and(|extension| extension == "json")
+                && ours(&path)
+            {
+                files.push(path);
+            }
         }
+        Ok(files)
     }
 
     /// Forget every entry of `id` beside its task's, after a write that could change them.
