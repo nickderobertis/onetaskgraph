@@ -5881,7 +5881,6 @@ fn linear_widen(operation: &str, answer: &mut Value, data: &Value, vars: &Value)
                 .collect(),
         )
     };
-    // Both relations pages, which every widened issue read adds.
     let widen_relations = |issue: &mut Value| {
         if let Some(id) = issue.get("id").and_then(Value::as_str).map(str::to_owned) {
             issue["relations"] = relations("task_dependencies", "Issue", &id, "relations");
