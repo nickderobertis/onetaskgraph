@@ -15,6 +15,7 @@
 
 use std::path::Path;
 
+use onetaskgraph_e2e_support::sdk::Sdk;
 use onetaskgraph_linear::graphql;
 use serde_json::{Value, json};
 
@@ -1420,7 +1421,7 @@ fn python(cached: &Cached, script: &str, pin: Option<&str>) -> Value {
     onetaskgraph_e2e_support::sdk::run(
         &cached.sandbox,
         &cached.cache_home,
-        false,
+        Sdk::Python,
         script,
         "linear:L-1",
         pin,
@@ -1431,7 +1432,7 @@ fn typescript(cached: &Cached, script: &str, pin: Option<&str>) -> Value {
     onetaskgraph_e2e_support::sdk::run(
         &cached.sandbox,
         &cached.cache_home,
-        true,
+        Sdk::TypeScript,
         script,
         "linear:L-1",
         pin,

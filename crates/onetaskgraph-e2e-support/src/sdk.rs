@@ -7,8 +7,17 @@ use serde_json::Value;
 
 use crate::common::{Sandbox, stderr, stdout};
 
-/// Run `script` through the TypeScript SDK when `typescript`, else the Python one, in
-/// `sandbox`'s project with `cache_home` as its cache home, answering the JSON it printed.
+/// Which SDK a script is run through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sdk {
+    /// `sdks/python`, run with `uv`.
+    Python,
+    /// `sdks/typescript`, run with `bun`.
+    TypeScript,
+}
+
+/// Run `script` through `sdk` in `sandbox`'s project with `cache_home` as its cache home,
+/// answering the JSON it printed.
 ///
 /// The script sees a client over the binary — `client` in TypeScript, `c` in Python — the task
 /// `task` as `id` and `task` respectively, and `pin`, absent unless given.
@@ -20,13 +29,13 @@ use crate::common::{Sandbox, stderr, stdout};
 pub fn run(
     sandbox: &Sandbox,
     cache_home: &Path,
-    typescript: bool,
+    sdk: Sdk,
     script: &str,
     task: &str,
     pin: Option<&str>,
 ) -> Value {
     let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let mut command = if typescript {
+    let mut command = if sdk == Sdk::TypeScript {
         let mut command = std::process::Command::new("bun");
         command.args([
             "-e",

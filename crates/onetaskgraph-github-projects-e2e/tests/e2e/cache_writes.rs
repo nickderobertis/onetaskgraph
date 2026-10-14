@@ -17,6 +17,7 @@ use serde_json::{Value, json};
 
 use crate::cache::{Cached, sdk};
 use crate::cache_kinds::{kind_entries, listed, show, version};
+use onetaskgraph_e2e_support::sdk::Sdk;
 
 /// Where the cache keeps the `directory` entry of the native id `native`.
 fn entry_path(cached: &Cached, directory: &str, native: &str) -> PathBuf {
@@ -370,18 +371,13 @@ fn a_pin_reaches_the_cache_through_both_sdks_and_a_rust_caller() {
         );
         let typescript =
             format!("console.log(JSON.stringify(await client.{method}Show(id, {{pin}})));");
-        for (on_typescript, script) in [(false, python), (true, typescript)] {
+        for (which, script) in [(Sdk::Python, python), (Sdk::TypeScript, typescript)] {
             let before = cached.board.served().len();
-            let shown = sdk(&cached, on_typescript, &script, id, Some(pin));
+            let shown = sdk(&cached, which, &script, id, Some(pin));
             assert_eq!(
                 cached.board.served().len(),
                 before,
-                "{id} through the {} SDK sends nothing",
-                if on_typescript {
-                    "TypeScript"
-                } else {
-                    "Python"
-                }
+                "{id} through the {which:?} SDK sends nothing"
             );
             assert_eq!(shown["items"][0]["item"]["version"], json!(pin));
         }
