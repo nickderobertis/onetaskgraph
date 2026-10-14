@@ -93,13 +93,37 @@ pub fn recorded(budget: &str) -> Result<(f64, Option<String>), String> {
                 crate::cache_budget::WORKLOAD
             ));
         }
-        recorded["value"].as_i64().ok_or_else(|| {
+        let figure = recorded["value"].as_i64().ok_or_else(|| {
             format!(
                 "{budget}: {} records no `value` that is a whole number of complexity points: \
                  {text}",
                 path.display()
             )
-        })? as f64
+        })?;
+        // The figure is the larger of the two scales' hours, cache on minus cache off: each
+        // measured in both modes as whole complexity points, and the figure their maximum.
+        let mut largest = i64::MIN;
+        for scale in ["1x", "10x"] {
+            let hour = &recorded["scales"][scale]["hour"];
+            let complexity = |mode: &str| {
+                hour[mode]["complexity"]
+                    .as_u64()
+                    .and_then(|complexity| i64::try_from(complexity).ok())
+            };
+            let (Some(on), Some(off)) = (complexity("on"), complexity("off")) else {
+                return Err(format!(
+                    "{budget}: the {scale} hour is not measured in both modes as whole \
+                     complexity points"
+                ));
+            };
+            largest = largest.max(on - off);
+        }
+        if largest != figure {
+            return Err(format!(
+                "{budget}: the figure {figure} is not the larger hour's difference, {largest}"
+            ));
+        }
+        figure as f64
     } else if budget.starts_with("linear-asset-") || budget.starts_with("linear-concurrent-") {
         let concurrent = budget.ends_with("copies-refused");
         let large = concurrent || budget.ends_with("copy-seconds");

@@ -493,7 +493,6 @@ impl Workload {
     /// The four sequences of `kind` on this board: what each spent.
     fn sequences(&self, kind: &str) -> Vec<Spent> {
         if kind == "asset-bytes" {
-            // [`RENDER_SEQUENCES`], in order.
             let cold = self.render("cold");
             let unchanged = self.render("unchanged");
             self.edit("imaged");

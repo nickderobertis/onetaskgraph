@@ -270,10 +270,16 @@ fn the_cache_budget_is_reported_signed_at_its_workload_and_refused_at_another_or
         (output, std::fs::read_to_string(&result).unwrap_or_default())
     };
 
-    let (saved, result) = report(
-        "saved",
-        &json!({"value": -5811, "detail": "the cache saves", "workload": WORKLOAD}),
-    );
+    let hour =
+        |on: u64, off: u64| json!({"hour": {"on": {"complexity": on}, "off": {"complexity": off}}});
+    let valid = json!({"value": -5811, "detail": "the cache saves", "workload": WORKLOAD,
+                       "scales": {"1x": hour(60_003, 65_814), "10x": hour(600_222, 658_332)}});
+    let with = |pointer: &str, value: Value| {
+        let mut changed = valid.clone();
+        *changed.pointer_mut(pointer).expect("the member") = value;
+        changed
+    };
+    let (saved, result) = report("saved", &valid);
     assert!(
         saved.status.success(),
         "{}",
@@ -289,18 +295,33 @@ fn the_cache_budget_is_reported_signed_at_its_workload_and_refused_at_another_or
     for (name, recording, reason) in [
         (
             "another-workload",
-            json!({"value": 0, "detail": "d", "workload": "one host, one pass"}),
+            with("/workload", json!("one host, one pass")),
             "not of the workload the budget states",
         ),
         (
             "no-figure",
-            json!({"detail": "d", "workload": WORKLOAD}),
+            with("/value", json!(null)),
             "a whole number of complexity points",
         ),
         (
             "fractional",
-            json!({"value": -0.5, "detail": "d", "workload": WORKLOAD}),
+            with("/value", json!(-0.5)),
             "a whole number of complexity points",
+        ),
+        (
+            "no-ten-times-hour",
+            with("/scales/10x", json!({})),
+            "the 10x hour is not measured in both modes",
+        ),
+        (
+            "fractional-complexity",
+            with("/scales/1x/hour/off/complexity", json!(1.5)),
+            "the 1x hour is not measured in both modes",
+        ),
+        (
+            "another-figure",
+            with("/value", json!(0)),
+            "is not the larger hour's difference, -5811",
         ),
     ] {
         let (refused, _) = report(name, &recording);
