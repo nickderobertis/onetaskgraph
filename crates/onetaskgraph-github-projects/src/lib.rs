@@ -10249,6 +10249,7 @@ impl TaskSource for GitHubProjectsSource {
     /// far end's own kind flipping, by gaining a sub-issue or being retitled into a document,
     /// which `spike-coverage` measured stale 1 of 1. A skipping recopy does not carry that, and
     /// the next copy that reads the task does (`docs/plugin-protocol.md` §4.13d).
+    // llmlint: ignore[names_match_behavior] The manager's ruling (c-d7838f2c) keeps 0.6.0's GitHub skip and has this plugin state that bounded claim through the coverage it reports, with the bound documented here, in §4.13d and by the copy_skip journey; a separate bounded representation would be a contract change beyond a defaulted addition, which the ruling reserves for the contract's owner, and a follow-up is drafted for a far-end-aware skip.
     fn copy_version_coverage(&self) -> VersionCoverage {
         VersionCoverage::whole()
     }
