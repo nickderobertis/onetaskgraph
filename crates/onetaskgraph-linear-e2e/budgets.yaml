@@ -110,10 +110,10 @@ budgets:
   # llmlint: ignore-block[budget_descriptions_durable_and_terse] The manager's ruling of 2026-10-14 sets this threshold at its measured figure plus 20%, rounded up, within the user's ceiling, and requires the description to state the measured figure, the headroom and the ceiling, so a reader can tell a tightened threshold from the share it protects.
   - id: linear-hourly-requests-1x
     description: >-
-      The requests one hour of the assumed workload at 1x sends Linear with the cache on, each
-      host's first pass cold and its second warm: 207 measured, plus 20% headroom, rounded up to
-      a multiple of 10, within the ceiling of 250 (10% of the key's 2,500 an hour). It protects
-      the share of the key this workload may take from people and other tools.
+      The requests one hour of the assumed workload at 1x sends Linear with the cache on, the
+      first pass of each host cold and its second warm: 207 measured, plus 20% headroom, rounded
+      up to a multiple of 10, within the ceiling of 250 (10% of the 2,500 an hour the key allows).
+      It protects the share of the key this workload may take from people and other tools.
     # llmlint: ignore-end[budget_descriptions_durable_and_terse]
     labels: [linear]
     measure: reported
@@ -127,8 +127,8 @@ budgets:
     description: >-
       The requests the same cold-then-warm hour sends Linear with the cache on at 10x: 1,944
       measured, plus 20% headroom, rounded up to a multiple of 50, within the ceiling of 2,500
-      (the key's whole hour). It protects the key's requests from this workload at its largest
-      scale.
+      (the whole hour the key allows). It protects the requests of the key from this workload at
+      its largest scale.
     # llmlint: ignore-end[budget_descriptions_durable_and_terse]
     labels: [linear]
     measure: reported
@@ -142,8 +142,8 @@ budgets:
     description: >-
       The requests an hour at 10x sends Linear with the cache on when every pass is warm, as on a
       host whose cache an earlier hour filled: 612 measured, plus 20% headroom, rounded up to a
-      multiple of 50, within the ceiling of 1,250 (50% of the key's 2,500 an hour). It protects
-      the share of the key a settled host may take.
+      multiple of 50, within the ceiling of 1,250 (50% of the 2,500 an hour the key allows). It
+      protects the share of the key a settled host may take.
     # llmlint: ignore-end[budget_descriptions_durable_and_terse]
     labels: [linear]
     measure: reported
@@ -158,8 +158,8 @@ budgets:
     description: >-
       The complexity the cold-then-warm hour at 10x spends with the Linear cache on, each request
       priced as the cache cost budget prices it: 546,504 measured, plus 20% headroom, rounded up
-      to a multiple of 25,000, within the ceiling of 750,000 (25% of the key's 3,000,000 an
-      hour). It protects the share of the key this workload may take from people and other
+      to a multiple of 25,000, within the ceiling of 750,000 (25% of the 3,000,000 an hour the
+      key allows). It protects the share of the key this workload may take from people and other
       tools.
     # llmlint: ignore-end[budget_descriptions_durable_and_terse]
     labels: [linear]
