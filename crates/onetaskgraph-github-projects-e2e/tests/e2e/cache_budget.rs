@@ -256,9 +256,35 @@ impl Workload {
         workload
     }
 
-    /// One command that had to succeed: what it printed and what it spent.
+    /// Where the board's and the attachment host's ledgers stand now.
+    fn mark(&self) -> (usize, usize) {
+        (self.github.served().len(), self.board.calls().len())
+    }
+
+    /// Every GraphQL request and attachment read the ledgers took since `mark`, each once.
+    fn spent_since(&self, (documents, calls): (usize, usize)) -> Spent {
+        let served = &self.github.served()[documents..];
+        Spent {
+            requests: served.len() as u64,
+            points: served
+                .iter()
+                .map(|(document, _)| {
+                    worst_case_point_cost(document)
+                        .expect("every document this source sends prices")
+                })
+                .sum(),
+            hits: 0,
+            rest: self.board.calls()[calls..]
+                .iter()
+                .filter(|call| call.path.starts_with("/user-attachments/assets/"))
+                .count() as u64,
+        }
+    }
+
+    /// One command that had to succeed: what it printed and what the ledgers took while it ran
+    /// — its own spend, as long as no other command runs beside it.
     fn run(&self, arguments: &[&str]) -> (Value, Spent) {
-        let (documents, calls) = (self.github.served().len(), self.board.calls().len());
+        let mark = self.mark();
         let output = self
             .sandbox
             .command()
@@ -275,25 +301,9 @@ impl Workload {
             arguments.join(" "),
             stderr(&output)
         );
-        let served = &self.github.served()[documents..];
-        let spent = Spent {
-            requests: served.len() as u64,
-            points: served
-                .iter()
-                .map(|(document, _)| {
-                    worst_case_point_cost(document)
-                        .expect("every document this source sends prices")
-                })
-                .sum(),
-            hits: 0,
-            rest: self.board.calls()[calls..]
-                .iter()
-                .filter(|call| call.path.starts_with("/user-attachments/assets/"))
-                .count() as u64,
-        };
         (
             serde_json::from_str(&stdout(&output)).unwrap_or(Value::Null),
-            spent,
+            self.spent_since(mark),
         )
     }
 
@@ -365,7 +375,8 @@ impl Workload {
             arguments.push("--json".to_owned());
             let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
             let (read, cost) = self.run(&arguments);
-            if cost.requests == 0 {
+            // Said by the answer itself, so it holds while another pass runs beside this one.
+            if read["cache"]["served"] == "cache" {
                 spent.hits += 1;
             }
             spent.add(cost);
@@ -503,17 +514,23 @@ impl Workload {
         }
         let loads = if kind == "manifests" { "imaged" } else { kind };
         let (cold, held) = self.load(loads, None);
-        // Two passes at once, each pinned to what the cold load returned.
-        let unchanged = std::thread::scope(|scope| {
+        // Two passes at once, each pinned to what the cold load returned. Each command's slice
+        // of the ledgers would hold the other's requests too, so the two are measured as one
+        // span, every request once; the hits are what each answer said of itself.
+        let mark = self.mark();
+        let hits: u64 = std::thread::scope(|scope| {
             let passes: Vec<_> = (0..2)
-                .map(|_| scope.spawn(|| self.load(loads, Some(&held)).0))
+                .map(|_| scope.spawn(|| self.load(loads, Some(&held)).0.hits))
                 .collect();
-            let mut spent = Spent::default();
-            for pass in passes {
-                spent.add(pass.join().expect("a pass"));
-            }
-            spent
+            passes
+                .into_iter()
+                .map(|pass| pass.join().expect("a pass"))
+                .sum()
         });
+        let unchanged = Spent {
+            hits,
+            ..self.spent_since(mark)
+        };
         self.edit(loads);
         let listing_kind = match kind {
             "tasks" | "projects" => kind,
@@ -533,7 +550,23 @@ impl Workload {
 /// cold sequence reads none of the entries another kind's sequences kept.
 fn measured(scale: Scale, cache: bool) -> Vec<Vec<Spent>> {
     let workload = Workload::new(scale, cache);
-    KINDS.iter().map(|kind| workload.sequences(kind)).collect()
+    let measured: Vec<Vec<Spent>> = KINDS.iter().map(|kind| workload.sequences(kind)).collect();
+    if !cache {
+        // With nothing kept, each of the two concurrent passes makes exactly the cold load's
+        // reads, so a span that counted any request twice — or missed one — reads otherwise.
+        for (kind, sequences) in KINDS.iter().zip(&measured) {
+            if *kind == "asset-bytes" {
+                continue;
+            }
+            let (cold, unchanged) = (sequences[0], sequences[1]);
+            assert_eq!(
+                (unchanged.requests, unchanged.points),
+                (2 * cold.requests, 2 * cold.points),
+                "{kind}: two concurrent passes are counted once each"
+            );
+        }
+    }
+    measured
 }
 
 /// The stale-option fallback, with the cache on and off: a priority write after the option it
