@@ -145,23 +145,35 @@ pub fn kind_entry_shapes() -> Value {
     })
 }
 
-/// The lower-case hex SHA-256 of `bytes`.
-pub(crate) fn sha256(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-    let mut hex = String::with_capacity(64);
-    for byte in Sha256::digest(bytes) {
-        // Writing to a `String` never fails.
-        let _ = write!(hex, "{byte:02x}");
-    }
-    hex
-}
+/// A lower-case hex SHA-256, which is all a byte entry may be called: made by hashing bytes, or
+/// read from a manifest or a file name and refused when it is not one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ByteDigest(String);
 
-/// Whether `name` is a lower-case hex SHA-256, which is all a byte entry may be called.
-fn is_digest(name: &str) -> bool {
-    name.len() == 64
-        && name
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+impl ByteDigest {
+    /// The digest of `bytes`.
+    pub(crate) fn of(bytes: &[u8]) -> Self {
+        use std::fmt::Write as _;
+        let mut hex = String::with_capacity(64);
+        for byte in Sha256::digest(bytes) {
+            // Writing to a `String` never fails.
+            let _ = write!(hex, "{byte:02x}");
+        }
+        Self(hex)
+    }
+
+    /// The digest `text` spells, when it spells one.
+    pub(crate) fn parse(text: &str) -> Option<Self> {
+        (text.len() == 64
+            && text
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
+        .then(|| Self(text.to_owned()))
+    }
+
+    fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 impl SourceCache {
@@ -266,23 +278,17 @@ impl SourceCache {
         );
     }
 
-    /// The bytes whose SHA-256 is `sha256`, when they are kept and still hash to it.
-    pub(crate) fn read_bytes(&self, sha256: &str) -> Option<Vec<u8>> {
-        if !is_digest(sha256) {
-            return None;
-        }
-        let bytes = self.read_file(&self.bytes_dir().join(sha256))?;
-        (self::sha256(&bytes) == sha256).then_some(bytes)
+    /// The bytes whose SHA-256 is `digest`, when they are kept and still hash to it.
+    pub(crate) fn read_bytes(&self, digest: &ByteDigest) -> Option<Vec<u8>> {
+        let bytes = self.read_file(&self.bytes_dir().join(digest.as_str()))?;
+        (ByteDigest::of(&bytes) == *digest).then_some(bytes)
     }
 
-    /// Keep `bytes`, under their own SHA-256 — only when that is `expected`, the digest the
-    /// manifest naming them gives.
-    pub(crate) fn write_bytes(&self, expected: &str, bytes: &[u8]) {
-        if !is_digest(expected) || sha256(bytes) != expected {
-            return;
-        }
-        let path = self.bytes_dir().join(expected);
-        if self.read_bytes(expected).is_some() {
+    /// Keep `bytes`, under their own SHA-256.
+    pub(crate) fn write_bytes(&self, bytes: &[u8]) {
+        let digest = ByteDigest::of(bytes);
+        let path = self.bytes_dir().join(digest.as_str());
+        if self.read_bytes(&digest).is_some() {
             return;
         }
         if self.write_atomically(&path, bytes).is_err() {
@@ -375,7 +381,7 @@ pub(super) fn empty_kinds(dir: &Path, remote: &str) -> std::io::Result<u64> {
     // or not its bytes still hash to its name: a corrupted one is reclaimed with the rest.
     for path in listed(&bytes_dir(dir, remote))? {
         let name = path.file_name().unwrap_or_default().to_string_lossy();
-        if name.starts_with(&staged) || is_digest(&name) {
+        if name.starts_with(&staged) || ByteDigest::parse(&name).is_some() {
             gone(std::fs::remove_file(&path))?;
         }
     }

@@ -60,29 +60,47 @@ struct ProjectFacets<'a> {
     status: NamedType<'a>,
 }
 
-/// The lowercase hex SHA-256 of a document's content, made only by hashing it.
-#[derive(Serialize)]
+/// A lowercase hex SHA-256 — of a document's content, of a facets part's canonical JSON, of a
+/// relations page — made only by hashing, or read back out of a token and refused when it is not
+/// one.
+#[derive(Debug, PartialEq, Eq, Serialize)]
 #[serde(transparent)]
-struct ContentDigest(String);
+struct Sha256Hex(String);
 
-impl ContentDigest {
-    fn of(content: &str) -> Self {
-        Self(asset_sha256(content.as_bytes()))
+impl Sha256Hex {
+    fn of(bytes: &[u8]) -> Self {
+        Self(asset_sha256(bytes))
+    }
+
+    fn parse(text: &str) -> Option<Self> {
+        (text.len() == 64
+            && text
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
+        .then(|| Self(text.to_owned()))
+    }
+}
+
+impl std::fmt::Display for Sha256Hex {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
     }
 }
 
 /// A document's facets.
 #[derive(Serialize)]
 struct DocumentFacets<'a> {
-    content: ContentDigest,
+    content: Sha256Hex,
     project: Option<&'a str>,
     title: &'a str,
     url: &'a str,
 }
 
 /// The lowercase hex SHA-256 of `facets`' canonical JSON.
-fn digest(facets: &impl Serialize) -> Option<String> {
-    Some(asset_sha256(serde_json::to_string(facets).ok()?.as_bytes()))
+fn digest(facets: &impl Serialize) -> Option<Sha256Hex> {
+    Some(Sha256Hex::of(
+        serde_json::to_string(facets).ok()?.as_bytes(),
+    ))
 }
 
 /// `key` of `item` when it is a string — and `None`, so no token, when it is missing or anything
@@ -145,7 +163,7 @@ fn updated(item: &Value) -> Option<String> {
 
 /// The digest of a task's first page of relations, or `None` when the page reports another or
 /// holds more than [`RELATIONS_PAGE`] rows, or is missing.
-pub fn relations(issue: &Value) -> Option<String> {
+fn relations(issue: &Value) -> Option<Sha256Hex> {
     let page = issue.get("relations")?;
     if page.pointer("/pageInfo/hasNextPage") != Some(&Value::Bool(false)) {
         return None;
@@ -165,7 +183,7 @@ pub fn relations(issue: &Value) -> Option<String> {
         })
         .collect::<Option<Vec<_>>>()?;
     rows.sort_unstable();
-    Some(asset_sha256(serde_json::to_string(&rows).ok()?.as_bytes()))
+    Some(Sha256Hex::of(serde_json::to_string(&rows).ok()?.as_bytes()))
 }
 
 /// The token of the issue `issue`, as one response answered it — with the digest of its first
@@ -207,7 +225,11 @@ pub fn project_token(project: &Value) -> Option<String> {
 #[must_use]
 pub fn document_token(document: &Value) -> Option<String> {
     let facets = DocumentFacets {
-        content: ContentDigest::of(nullable_text(document, "content")?.unwrap_or_default()),
+        content: Sha256Hex::of(
+            nullable_text(document, "content")?
+                .unwrap_or_default()
+                .as_bytes(),
+        ),
         project: project(document)?,
         title: text(document, "title")?,
         url: text(document, "url")?,
@@ -229,37 +251,27 @@ pub fn without_relations(token: &str) -> &str {
 }
 
 /// What one token of this plugin is made of.
-struct Parts<'a> {
+struct Parts {
     updated: DateTime<Utc>,
-    facets: &'a str,
-    relations: Option<&'a str>,
+    facets: Sha256Hex,
+    relations: Option<Sha256Hex>,
 }
 
-fn parts(token: &str) -> Option<Parts<'_>> {
+fn parts(token: &str) -> Option<Parts> {
     let mut parts = token.strip_prefix(PREFIX)?.split('|');
     let updated = DateTime::parse_from_rfc3339(parts.next()?)
         .ok()?
         .with_timezone(&Utc);
-    let facets = parts.next().filter(|facets| is_digest(facets))?;
+    let facets = Sha256Hex::parse(parts.next()?)?;
     let relations = match parts.next() {
         None => None,
-        Some(part) => Some(
-            part.strip_prefix(RELATIONS)
-                .filter(|part| is_digest(part))?,
-        ),
+        Some(part) => Some(Sha256Hex::parse(part.strip_prefix(RELATIONS)?)?),
     };
     parts.next().is_none().then_some(Parts {
         updated,
         facets,
         relations,
     })
-}
-
-fn is_digest(text: &str) -> bool {
-    text.len() == 64
-        && text
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 /// How the version `a` of one item stands to its version `b`: by `updatedAt` as an instant when

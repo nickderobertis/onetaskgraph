@@ -38,7 +38,7 @@ use onetaskgraph_plugin_api::{
 };
 use serde_json::Value;
 
-use super::kinds::{DocumentEntry, KIND_ENTRY_SCHEMA, sha256};
+use super::kinds::{ByteDigest, DocumentEntry, KIND_ENTRY_SCHEMA};
 use super::{
     CacheLocation, CacheUse, ENTRY_SCHEMA, Entry, ExpectedWrite, Priming, SourceCache,
     WriteFallback, WritePart, WriteResult,
@@ -744,7 +744,7 @@ impl CachedSource {
     /// source's token covers the manifest that will name them.
     fn keep_bytes(&self, covered: bool, bytes: Option<&Vec<u8>>) {
         if let Some(bytes) = bytes.filter(|_| covered) {
-            self.cache.write_bytes(&sha256(bytes), bytes);
+            self.cache.write_bytes(bytes);
         }
     }
 }
@@ -757,7 +757,7 @@ fn kept_bytes(
 ) -> Option<Vec<u8>> {
     let manifest = manifest?;
     let asset = manifest.iter().find(|asset| asset.name == *name)?;
-    cache.read_bytes(&asset.sha256)
+    cache.read_bytes(&ByteDigest::parse(&asset.sha256)?)
 }
 
 #[async_trait::async_trait]
