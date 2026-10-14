@@ -983,3 +983,55 @@ fn cache_clear_reclaims_reverse_and_project_edge_entries_and_counts_them() {
         "only this store's entries are removed"
     );
 }
+
+#[test]
+fn a_reverse_edge_read_a_page_at_a_time_is_never_served_or_kept_as_the_whole() {
+    let mut workspace = held();
+    workspace["task_dependencies"]
+        .as_array_mut()
+        .expect("relations")
+        .push(json!({"from": "L-3", "to": "L-2", "kind": "blocks"}));
+    let cached = Cached::new(workspace);
+    let pin = filled(&cached, &REVERSE_EDGES);
+    let (whole, _) = cached.ok(&strs(&REVERSE_EDGES.with(&pin)));
+    assert_eq!(whole["items"].as_array().map(Vec::len), Some(2), "{whole}");
+
+    // A limit below what is kept reads Linear a page at a time, never the entry.
+    let mut first = REVERSE_EDGES.with(&pin);
+    first.extend(["--limit".to_owned(), "1".to_owned()]);
+    let (page, sent) = cached.ok(&strs(&first));
+    assert_eq!(
+        sent,
+        [graphql::ISSUE_RELATIONS_CACHED],
+        "a smaller page is Linear's"
+    );
+    assert_eq!(page["items"].as_array().map(Vec::len), Some(1), "{page}");
+    let token = page["next"].as_str().expect("a second page").to_owned();
+    let mut second = first.clone();
+    second.extend(["--page".to_owned(), token]);
+    let (rest, sent) = cached.ok(&strs(&second));
+    assert_eq!(
+        sent,
+        [graphql::ISSUE_RELATIONS_CACHED],
+        "a resumed page is Linear's"
+    );
+    let mut paged: Vec<Value> = page["items"]
+        .as_array()
+        .into_iter()
+        .chain(rest["items"].as_array())
+        .flatten()
+        .cloned()
+        .collect();
+    let mut kept: Vec<Value> = whole["items"].as_array().expect("edges").clone();
+    let key = |edge: &Value| edge.to_string();
+    paged.sort_by_key(key);
+    kept.sort_by_key(key);
+    assert_eq!(paged, kept, "the pages hold exactly the edges");
+    let [on, off] = cached.on_and_off(&strs(&second));
+    assert_eq!(on.0, off.0, "what an uncached resumed page answers");
+
+    // Neither page replaced the whole entry: the next whole read is still served from it.
+    let (again, sent) = cached.ok(&strs(&REVERSE_EDGES.with(&pin)));
+    assert_eq!(sent, Vec::<String>::new());
+    assert_eq!(again["items"], whole["items"]);
+}
