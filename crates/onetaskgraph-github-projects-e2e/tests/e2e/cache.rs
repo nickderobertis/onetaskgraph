@@ -1424,7 +1424,13 @@ fn a_bound_copy_with_expect_reports_each_part_landed_rejected_or_unknown_and_ret
 
 /// Run one SDK script — Python's or TypeScript's — against the sandbox, with the cache home and
 /// the task named, answering what it printed.
-fn sdk(cached: &Cached, typescript: bool, script: &str, task: &str, pin: Option<&str>) -> Value {
+pub(crate) fn sdk(
+    cached: &Cached,
+    typescript: bool,
+    script: &str,
+    task: &str,
+    pin: Option<&str>,
+) -> Value {
     let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut command = if typescript {
         let mut command = std::process::Command::new("bun");

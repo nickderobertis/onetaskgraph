@@ -1526,6 +1526,9 @@ mod tests {
         writes: Vec<(bool, bool)>,
         primed: std::collections::HashSet<NativeId>,
         primings: usize,
+        /// For each project or document write that reached it, in order: whether another
+        /// process could read that item's entry at that moment.
+        kind_writes: Vec<bool>,
     }
 
     #[async_trait::async_trait]
@@ -1552,6 +1555,34 @@ mod tests {
             let primed = probe.primed.contains(id);
             probe.writes.push((primed, visible));
             Ok(Some(priority))
+        }
+        async fn set_project_metadata(
+            &self,
+            id: &NativeId,
+            _key: &MetadataKey,
+            _value: &Value,
+        ) -> Result<Option<Project>, SourceError> {
+            let visible = self.watching.read_project(id).is_some();
+            self.probe
+                .lock()
+                .expect("the probe")
+                .kind_writes
+                .push(visible);
+            Ok(None)
+        }
+        async fn set_document_metadata(
+            &self,
+            id: &NativeId,
+            _key: &MetadataKey,
+            _value: &Value,
+        ) -> Result<Option<Document>, SourceError> {
+            let visible = self.watching.read_document(id).is_some();
+            self.probe
+                .lock()
+                .expect("the probe")
+                .kind_writes
+                .push(visible);
+            Ok(None)
         }
         fn prime_write(&self, id: &NativeId, _context: &Value, _board: Option<&Value>) -> bool {
             let mut probe = self.probe.lock().expect("the probe");
@@ -2245,5 +2276,135 @@ mod tests {
                  (expected: {expected})"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn a_project_or_document_write_is_sent_only_once_no_other_process_can_read_its_entry() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let (source, cache, probe) = counting(dir.path(), task("T-1", "v1"));
+        let project = Project {
+            version: Some("v1".to_owned()),
+            id: id("P-1"),
+            title: "Plan".to_owned(),
+            content: None,
+            status: Status {
+                category: StatusCategory::Todo,
+                name: "Todo".to_owned(),
+            },
+            labels: Vec::new(),
+            url: None,
+            location: None,
+            created_at: None,
+            updated_at: None,
+            metadata: BTreeMap::new(),
+            repositories: Vec::new(),
+            classification: Default::default(),
+        };
+        cache.write_project(&project);
+        let document = Document {
+            version: Some("v1".to_owned()),
+            id: id("D-1"),
+            title: "Design".to_owned(),
+            content: None,
+            project: None,
+            labels: Vec::new(),
+            url: None,
+            location: None,
+            created_at: None,
+            updated_at: None,
+            metadata: BTreeMap::new(),
+            repositories: Vec::new(),
+            classification: Default::default(),
+        };
+        cache.write_document(&super::DocumentEntry {
+            schema: KIND_ENTRY_SCHEMA,
+            kind: super::super::kinds::EntryKind::Document,
+            remote: "remote".to_owned(),
+            document,
+            assets: None,
+        });
+        assert!(
+            another_process(dir.path())
+                .read_project(&id("P-1"))
+                .is_some()
+        );
+        assert!(
+            another_process(dir.path())
+                .read_document(&id("D-1"))
+                .is_some()
+        );
+        let key = MetadataKey::new("caller.note").expect("a key");
+        source
+            .set_project_metadata(&id("P-1"), &key, &serde_json::json!("noted"))
+            .await
+            .expect("the write is sent");
+        source
+            .set_document_metadata(&id("D-1"), &key, &serde_json::json!("noted"))
+            .await
+            .expect("the write is sent");
+        assert_eq!(
+            probe.lock().expect("the probe").kind_writes,
+            [false, false],
+            "at the moment each write was sent, another process could not read its entry"
+        );
+        // And neither entry is served afterwards: the write's own response vouches for nothing.
+        assert!(cache.read_project(&id("P-1")).is_none());
+        assert!(cache.read_document(&id("D-1")).is_none());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_project_write_whose_entry_cannot_be_retired_is_refused_unsent() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let (source, cache, probe) = counting(dir.path(), task("T-1", "v1"));
+        cache.write_project(&Project {
+            version: Some("v1".to_owned()),
+            id: id("P-1"),
+            title: "Plan".to_owned(),
+            content: None,
+            status: Status {
+                category: StatusCategory::Todo,
+                name: "Todo".to_owned(),
+            },
+            labels: Vec::new(),
+            url: None,
+            location: None,
+            created_at: None,
+            updated_at: None,
+            metadata: BTreeMap::new(),
+            repositories: Vec::new(),
+            classification: Default::default(),
+        });
+        let Some(_refusing) = refusing_in(&dir.path().join("projects-v1")) else {
+            return;
+        };
+        let _read_only = Mode::set(
+            &dir.path()
+                .join("projects-v1")
+                .join(format!("{}.json", super::super::digest("P-1"))),
+            0o444,
+        );
+        let refused = source
+            .set_project_metadata(
+                &id("P-1"),
+                &MetadataKey::new("caller.note").expect("a key"),
+                &serde_json::json!("noted"),
+            )
+            .await;
+        // Emptied in place where its directory refuses the removal: a miss for every process,
+        // so the write is sent; refused only where even that is refused.
+        match refused {
+            Ok(_) => assert_eq!(probe.lock().expect("the probe").kind_writes, [false]),
+            Err(error) => {
+                assert!(error.to_string().contains("was not sent"), "{error}");
+                assert!(probe.lock().expect("the probe").kind_writes.is_empty());
+            }
+        }
+        assert!(
+            another_process(dir.path())
+                .read_project(&id("P-1"))
+                .is_none(),
+            "no other process is served the entry"
+        );
     }
 }
