@@ -1730,6 +1730,16 @@ fn with_caching_on_the_cache_directory_is_the_only_place_a_file_changes() {
         &v,
         "--json",
     ]);
+    // Projects and documents, read cold and pinned, and the listings that pin them.
+    for (kind, id) in [("project", "board:P-1"), ("document", "board:D-1")] {
+        let (read, _) = cached.ok(&[kind, "show", id, "--json"]);
+        let pin = read["items"][0]["item"]["version"]
+            .as_str()
+            .expect("a version")
+            .to_owned();
+        cached.ok(&[kind, "show", id, "--pin", &pin, "--json"]);
+        cached.ok(&[kind, "list", "--source", "board", "--json"]);
+    }
     let after = tree(&root);
     let cache = cached.cache_home.join("onetaskgraph");
     let changed: Vec<&PathBuf> = after
