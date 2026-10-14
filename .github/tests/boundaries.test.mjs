@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { stripVTControlCharacters } from "node:util";
 import { validateTelemetry } from "../telemetry.ts";
 import {
   digest,
@@ -673,28 +674,33 @@ test("workflow names are validated and status overrides preserve dependent-job s
 });
 
 test("failing architecture discovery propagates the real shell exit and removes its scratch directory", () => {
-  const scratch = mkdtempSync(
-    join(process.env.ONEPIPELINE_NODE_SCRATCH_DIR || tmpdir(), "discovery-failure-"),
-  );
-  try {
-    const module = new URL("../workflow-graph.mjs", import.meta.url).href;
-    const result = spawnSync(
-      process.execPath,
-      [
-        "--input-type=module",
-        "-e",
-        `import {jobs} from ${JSON.stringify(module)}; jobs({jobs:{arches:{"runs-on":"ubuntu-latest",steps:[{id:"read",run:"exit 37"}]}}},{event:"pull_request",action:"opened"},{macosRequired:true});`,
-      ],
-      {
-        encoding: "utf8",
-        env: { ...process.env, ONEPIPELINE_NODE_SCRATCH_DIR: scratch },
-      },
+  const module = new URL("../workflow-graph.mjs", import.meta.url).href;
+  const { FORCE_COLOR, NO_COLOR, ...inherited } = process.env;
+  // Hosted runners force colour, so Node's error dump carries ANSI codes
+  // around the status; the assertion must read the same either way.
+  for (const colour of [{ FORCE_COLOR: "1" }, { NO_COLOR: "1" }]) {
+    const scratch = mkdtempSync(
+      join(process.env.ONEPIPELINE_NODE_SCRATCH_DIR || tmpdir(), "discovery-failure-"),
     );
-    assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /status: 37/);
-    assert.deepEqual(readdirSync(scratch), []);
-  } finally {
-    rmSync(scratch, { recursive: true, force: true });
+    try {
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          `import {jobs} from ${JSON.stringify(module)}; jobs({jobs:{arches:{"runs-on":"ubuntu-latest",steps:[{id:"read",run:"exit 37"}]}}},{event:"pull_request",action:"opened"},{macosRequired:true});`,
+        ],
+        {
+          encoding: "utf8",
+          env: { ...inherited, ...colour, ONEPIPELINE_NODE_SCRATCH_DIR: scratch },
+        },
+      );
+      assert.notEqual(result.status, 0);
+      assert.match(stripVTControlCharacters(result.stderr), /status: 37\b/, JSON.stringify(colour));
+      assert.deepEqual(readdirSync(scratch), []);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
   }
 });
 

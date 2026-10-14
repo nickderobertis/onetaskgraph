@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { test } from "node:test";
@@ -150,7 +158,13 @@ function event(ref = "feature", fork = false, author = "nickderobertis") {
     },
   };
 }
-function classify(payload, head = heads.version, baseRef = base, authoritativeEvent = "") {
+function classify(
+  payload,
+  head = heads.version,
+  baseRef = base,
+  authoritativeEvent = "",
+  extraEnv = {},
+) {
   const path = resolve(history, "event.json");
   writeFileSync(path, typeof payload === "string" ? payload : JSON.stringify(payload));
   const output = resolve(history, "github-output");
@@ -161,7 +175,12 @@ function classify(payload, head = heads.version, baseRef = base, authoritativeEv
     {
       cwd: history,
       encoding: "utf8",
-      env: { ...process.env, GITHUB_EVENT_NAME: authoritativeEvent, GITHUB_OUTPUT: output },
+      env: {
+        ...process.env,
+        ...extraEnv,
+        GITHUB_EVENT_NAME: authoritativeEvent,
+        GITHUB_OUTPUT: output,
+      },
     },
   );
   assert.equal(result.status, 0, result.stderr);
@@ -199,6 +218,52 @@ test("classifier runs on real histories: version-only authority is branch, owner
     classify(event("release-plz-123"), heads.version, "missing-ref").macosRequired,
     true,
   );
+});
+
+test("classifier keeps version-only authority when the host spells paths with backslashes", () => {
+  // The Windows runner's pathlib renders the registered version files as
+  // `sdks\python\pyproject.toml`; git names them with forward slashes. This
+  // python keeps the real files and real comparison, and spells only str() the
+  // Windows way, as that runner does.
+  const shim = mkdtempSync(resolve(scratchRoot, "windows-paths-"));
+  try {
+    writeFileSync(
+      resolve(shim, "sitecustomize.py"),
+      [
+        "import sys",
+        `sys.path.insert(0, ${JSON.stringify(resolve(history, "scripts"))})`,
+        "import product_versions",
+        "class WindowsSpelledPath:",
+        "    def __init__(self, real): self._real = real",
+        "    def __str__(self): return str(self._real).replace('/', '\\\\')",
+        "    def __fspath__(self): return str(self._real)",
+        "    def __getattr__(self, name): return getattr(self._real, name)",
+        "for entry in product_versions.RECONCILED_VERSION_FILES:",
+        "    object.__setattr__(entry, 'path', WindowsSpelledPath(entry.path))",
+        // Python reports a failing sitecustomize and carries on, so the shim
+        // proves it took by leaving a marker only once paths spell the Windows way.
+        "if '\\\\' in str(product_versions.RECONCILED_VERSION_FILES[-1].path):",
+        `    open(${JSON.stringify(resolve(shim, "took"))}, 'w').close()`,
+        "",
+      ].join("\n"),
+    );
+    const decision = classify(event("release-plz-123"), heads.version, base, "", {
+      PYTHONPATH: shim,
+    });
+    assert.deepEqual(
+      [decision.isReleaseOnly, decision.macosRequired],
+      [true, false],
+      decision.reason,
+    );
+    assert.ok(existsSync(resolve(shim, "took")), "Windows path simulation did not take");
+    assert.equal(
+      classify(event("release-plz-123"), heads.source, base, "", { PYTHONPATH: shim })
+        .macosRequired,
+      true,
+    );
+  } finally {
+    rmSync(shim, { recursive: true, force: true });
+  }
 });
 
 test("semantic comparison refuses mixed fields, dependency lock versions and unrelated changelogs", () => {

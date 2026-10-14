@@ -33,7 +33,7 @@ def version(value: object, prefix: str = '') -> str:
     return prefix + '<version>'
 
 def blob(ref, path):
-    return subprocess.check_output(['git', 'show', f'{ref}:{path}'], text=True)
+    return subprocess.check_output(['git', 'show', f'{ref}:{path}'], text=True, encoding='utf-8')
 
 @dataclass(frozen=True)
 class LockIdentity:
@@ -125,11 +125,12 @@ def normalize(text, entry):
     return text
 
 def main():
-    base, head = [subprocess.check_output(['git', 'rev-parse', '--verify', '--end-of-options', ref + '^{commit}'], text=True).strip() for ref in sys.argv[1:]]
-    entries = {str(entry.path): entry for entry in RECONCILED_VERSION_FILES}
+    base, head = [subprocess.check_output(['git', 'rev-parse', '--verify', '--end-of-options', ref + '^{commit}'], text=True, encoding='utf-8').strip() for ref in sys.argv[1:]]
+    # Git names paths with forward slashes; str() of a Windows path would not match.
+    entries = {entry.path.as_posix(): entry for entry in RECONCILED_VERSION_FILES}
     root = tomllib.loads(blob(base, 'Cargo.toml'))
     members = root['workspace']['members']
-    paths = subprocess.check_output(['git', 'ls-tree', '-r', '--name-only', base], text=True).splitlines()
+    paths = subprocess.check_output(['git', 'ls-tree', '-r', '--name-only', base], text=True, encoding='utf-8').splitlines()
     import fnmatch
     if not isinstance(members, list) or any(not isinstance(member, str) or '**' in member for member in members):
         raise ValueError('unresolved workspace member patterns')
@@ -139,7 +140,7 @@ def main():
     crates = {p.removesuffix('/Cargo.toml') for p in paths if p.endswith('/Cargo.toml') and workspace_member(p.removesuffix('/Cargo.toml'))}
     products = {tomllib.loads(blob(base, p + '/Cargo.toml'))['package']['name'] for p in crates} | {tomllib.loads(blob(base, path))['project']['name'] for path in ('pyproject.toml', 'sdks/python/pyproject.toml')}
     changelogs = {'CHANGELOG.md', *(p + '/CHANGELOG.md' for p in crates)}
-    changed = subprocess.check_output(['git', 'diff', '--name-only', '--no-renames', base, head], text=True).splitlines()
+    changed = subprocess.check_output(['git', 'diff', '--name-only', '--no-renames', base, head], text=True, encoding='utf-8').splitlines()
     if not changed:
         return False
     for path in changed:
@@ -153,14 +154,14 @@ def main():
                 left, right = normalize_lock(before, path, products), normalize_lock(after, path, products)
             case 'bun.lock':
                 helper = str(Path(__file__).with_name('semantic-json.mjs'))
-                comparisons = [BunComparison.parse(subprocess.check_output(['node', helper], input=text, text=True)) for text in (before, after)]
+                comparisons = [BunComparison.parse(subprocess.check_output(['node', helper], input=text, text=True, encoding='utf-8')) for text in (before, after)]
                 # Drift gate: the helper may mask exactly the values the production
                 # updater registers, and no field it does not own.
                 for text, comparison in zip((before, after), comparisons):
                     masked = text
                     for pattern in entries[path].patterns:
                         masked = pattern.sub(lambda match: match[1] + '<version>' + match[3], masked)
-                    registered = json.loads(subprocess.check_output(['node', helper, '--parse-only'], input=masked, text=True))
+                    registered = json.loads(subprocess.check_output(['node', helper, '--parse-only'], input=masked, text=True, encoding='utf-8'))
                     if registered != comparison.normalized:
                         raise ValueError('Bun masked fields disagree with product_versions.py; reconcile the release inventory and classifier')
                 left, right = [comparison.normalized for comparison in comparisons]
