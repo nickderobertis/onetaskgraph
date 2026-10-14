@@ -223,6 +223,44 @@ struct Workload {
     sandbox: Sandbox,
     workspace: LinearWorkspace,
     scale: Scale,
+    /// The hour now being driven, which [`Self::by_read`] files each request under.
+    hour: std::sync::Mutex<&'static str>,
+    /// What each hour spent, by the read — the query document — that spent it.
+    by_read: std::sync::Mutex<ByRead>,
+}
+
+/// What each hour spent by read: requests and complexity under the query document's name.
+type ByRead =
+    std::collections::BTreeMap<&'static str, std::collections::BTreeMap<&'static str, (u64, u64)>>;
+
+/// The name of the `graphql` constant `document` is, for a breakdown by read.
+fn read_name(document: &str) -> &'static str {
+    use onetaskgraph_linear::graphql as g;
+    [
+        ("VIEWER", g::VIEWER),
+        ("ISSUE", g::ISSUE),
+        ("ISSUE_CACHED", g::ISSUE_CACHED),
+        ("ISSUE_DETAIL", g::ISSUE_DETAIL),
+        ("ISSUE_DETAIL_CACHED", g::ISSUE_DETAIL_CACHED),
+        ("ISSUE_COMMENTS", g::ISSUE_COMMENTS),
+        ("ISSUES", g::ISSUES),
+        ("ISSUES_CACHED", g::ISSUES_CACHED),
+        ("ISSUE_RELATIONS", g::ISSUE_RELATIONS),
+        ("ISSUE_RELATIONS_CACHED", g::ISSUE_RELATIONS_CACHED),
+        ("PROJECT", g::PROJECT),
+        ("PROJECT_CACHED", g::PROJECT_CACHED),
+        ("PROJECTS", g::PROJECTS),
+        ("PROJECTS_CACHED", g::PROJECTS_CACHED),
+        ("PROJECT_RELATIONS", g::PROJECT_RELATIONS),
+        ("PROJECT_RELATIONS_CACHED", g::PROJECT_RELATIONS_CACHED),
+        ("DOCUMENT", g::DOCUMENT),
+        ("DOCUMENTS", g::DOCUMENTS),
+        ("LABELS", g::LABELS),
+        ("RESOLUTION", g::RESOLUTION),
+    ]
+    .into_iter()
+    .find(|(_, known)| *known == document)
+    .map_or("another", |(name, _)| name)
 }
 
 fn issue_id(n: usize) -> String {
@@ -294,6 +332,8 @@ impl Workload {
             sandbox,
             workspace,
             scale,
+            hour: std::sync::Mutex::new("hour"),
+            by_read: std::sync::Mutex::new(ByRead::new()),
         }
     }
 
@@ -323,6 +363,15 @@ impl Workload {
         let mut spent = Spent::default();
         for ((document, variables), answer) in served[before..].iter().zip(&answered[before..]) {
             let cost = complexity(document, variables, answer);
+            let hour = *self.hour.lock().expect("the hour");
+            let mut by_read = self.by_read.lock().expect("the breakdown");
+            let read = by_read
+                .entry(hour)
+                .or_default()
+                .entry(read_name(document))
+                .or_default();
+            *read = (read.0 + 1, read.1 + cost);
+            drop(by_read);
             spent.add(Spent {
                 requests: 1,
                 complexity: cost,
@@ -438,7 +487,7 @@ impl Workload {
 
     /// The hour — each host's cold pass, then its warm pass after the changes between them —
     /// and the all-warm hour after it, each host's two passes each after the same changes.
-    fn hours(&self) -> (Hour, Hour) {
+    fn hours(&self) -> (Hour, Hour, ByRead) {
         let first = (0..3)
             .map(|host| {
                 let cold = self.pass(host);
@@ -447,6 +496,7 @@ impl Workload {
                 [cold, warm]
             })
             .collect();
+        *self.hour.lock().expect("the hour") = "all_warm_hour";
         let warm = (0..3)
             .map(|host| {
                 self.change("all-warm", host, 0);
@@ -456,7 +506,8 @@ impl Workload {
                 [one, two]
             })
             .collect();
-        (first, warm)
+        let by_read = std::mem::take(&mut *self.by_read.lock().expect("the breakdown"));
+        (first, warm, by_read)
     }
 }
 
@@ -479,7 +530,7 @@ fn summed(hour: &[[Vec<Spent>; 2]]) -> (Vec<[Spent; 2]>, Spent) {
 #[test]
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Its functional run is this crate's own `test` target, selected only by the Linear plugin's, the engine's and the binary's edge; that `workspace:coverage` re-runs every crate's tests instrumented on any affected change is the repository's recorded decision (AGENTS.md, Tests, "Coverage"), and this journey is the only producer of the two cache budgets' figures, which its task fixes as an ordinary test of this crate.
 fn the_cache_sends_fewer_of_the_linear_keys_requests_in_an_hour_than_no_cache() {
-    let runs: Vec<(usize, bool, (Hour, Hour))> = std::thread::scope(|scope| {
+    let runs: Vec<(usize, bool, (Hour, Hour, ByRead))> = std::thread::scope(|scope| {
         let handles: Vec<_> = [1, 10]
             .into_iter()
             .flat_map(|factor| {
@@ -538,6 +589,19 @@ fn the_cache_sends_fewer_of_the_linear_keys_requests_in_an_hour_than_no_cache() 
                     "requests_against_2500": {"on": on_warm.requests, "off": off_warm.requests},
                     "complexity": {"on": on_warm.complexity, "off": off_warm.complexity},
                 },
+                "by_read_on": of(true).2.iter().map(|(hour, reads)| {
+                    (
+                        (*hour).to_owned(),
+                        reads
+                            .iter()
+                            .map(|(read, (requests, complexity))| {
+                                ((*read).to_owned(), json!({"requests": requests,
+                                                            "complexity": complexity}))
+                            })
+                            .collect::<serde_json::Map<_, _>>()
+                            .into(),
+                    )
+                }).collect::<serde_json::Map<String, Value>>(),
                 "largest_single_query": {"on": dearest,
                                           "off": off.dearest.max(off_warm.dearest),
                                           "cap": price::CAP, "guard": price::GUARD},
