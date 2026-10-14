@@ -522,6 +522,7 @@ async fn documents_store_answers_and_take_a_rendering_on_the_same_terms() {
     let (root, source) = folder(&[]);
     let written = answers(json!({"summary":"Why"}));
     let document = Document {
+        version: None,
         id: id("design"),
         title: "Design".to_owned(),
         content: Some("Why.\n".to_owned()),
@@ -597,6 +598,7 @@ const PROJECT_BLOCK: &str = "<!-- onetaskgraph:template-answers\ngoal: x\n-->\n"
 
 fn project(title: &str, content: &str, category: StatusCategory, metadata: Value) -> Project {
     Project {
+        version: None,
         id: id("launch"),
         title: title.to_owned(),
         content: Some(content.to_owned()),

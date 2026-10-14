@@ -931,6 +931,7 @@ impl LocalMdSource {
             })?;
         let common = self.common(Kind::Document, path, content_of(body, false), front.into())?;
         Ok(Document {
+            version: None,
             id: common.id,
             title: common.title,
             content: common.body,
@@ -1109,6 +1110,11 @@ impl TaskSource for LocalMdSource {
     }
     fn order_versions(&self, a: &str, b: &str) -> Option<std::cmp::Ordering> {
         change_token::order(a, b)
+    }
+    /// Every part: `md1` is the digest of the task's one file, which holds its fields, its
+    /// comments and its forward edges alike.
+    fn version_coverage(&self) -> onetaskgraph_plugin_api::VersionCoverage {
+        onetaskgraph_plugin_api::VersionCoverage::whole()
     }
     fn capabilities(&self) -> Capabilities {
         Capabilities {
@@ -2983,6 +2989,7 @@ fn task(d: Entry) -> Task {
 }
 fn project(d: Entry) -> Project {
     Project {
+        version: None,
         id: d.common.id,
         title: d.common.title,
         content: d.common.body,

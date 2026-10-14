@@ -795,6 +795,7 @@ impl Engine {
         let write = ItemWrite {
             target,
             item: Document {
+                version: None,
                 id: request
                     .id
                     .clone()
@@ -951,6 +952,7 @@ impl Engine {
         let write = ItemWrite {
             target,
             item: Project {
+                version: None,
                 id: request.id.clone(),
                 title: request.title.clone(),
                 content: Some(content),

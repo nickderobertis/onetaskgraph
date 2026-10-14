@@ -398,6 +398,12 @@ class Project(BaseModel):
         Field(description="When the source says the project last changed."),
     ] = None
     url: Annotated[str | None, Field(description="Where a human can open this project.")] = None
+    version: Annotated[
+        str | None,
+        Field(
+            description="The project's change token, on exactly the terms of [`Task::version`]: two equal\nversions of one project from one source mean nothing its source's\n[`ProjectVersionCoverage`](crate::ProjectVersionCoverage) covers has changed, and a\nsource that cannot promise that leaves it absent, which means *always read it*.\nAbsent by default and left out of the wire when absent."
+        ),
+    ] = None
 
 
 class SearchHitTask(BaseModel):

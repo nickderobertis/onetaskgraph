@@ -7,11 +7,25 @@ The initial-board lookup now selects item and field totals from two connections 
 at one. The observed loopback total changed from 272,519 to 272,521 nodes, with the same
 163 requests. Selecting actual prices and the reconciliation alias adds no dispatches.
 
-Fresh token-bearing queries replace 15 full issue hydrations in the main token leg.
-The observed loopback ledger remains 163 requests, with 267,181 worst-case nodes.
-This payload change earns no point savings: the replaced ISSUE request already costs
-one point. The lane still reads a fresh settled token after every mutation, and logs
-comment count and both timestamps from those existing responses around deletion.
+The main token leg reads every token through the plugin's own read by id — a source built
+afresh, sending `ISSUE` — since the token became `gh3`, whose facets (the item's kind, its
+board field values and its labels) a separate token-spelling query could only spell by
+restating the plugin's rules. Those 15 reads replace the 15 `LiveChangeToken` queries that
+had replaced them before, so the ledger is again 163 requests, now with 272,521 worst-case
+nodes. No point moves: `ISSUE` costs one point, as `LiveChangeToken` did. The lane still
+reads a fresh settled token after every mutation.
+
+The six `gh3` legs that follow the task-token leg — the run's label renamed and recoloured on a
+project and a document, a stamped scratch single-select field's option renamed, the run's first
+project deleted under its dependent project and its document, and the orphan task given a
+sub-issue — add 27 requests, to 190, and 278,469 worst-case nodes: 13 more reads by id (one
+point each) for the tokens they hold, 12 modelled one-point mutations (the scratch field's
+creation, value, rename and removal, two label attachments, the deletion, the sub-issue's
+creation, filing and board item, and one board item lookup's write path) beside one more board
+item lookup, and two REST label changes, which spend no GraphQL point. Against GitHub, each
+token read waits out the settling margin and may be asked again, so the session pays somewhat
+more there than on the loopback; the credentialed lane's own session-points accounting is what
+measures it.
 
 ## Whole credentialed lane
 
@@ -32,8 +46,13 @@ hydration payload, not that call's point price. The main fixture, source and boa
 metadata are reused only where freshness does not matter. There is no board/schema cache.
 
 Design allocations are admission 3, schema 10, reconciliation 20, setup 14,
-capabilities 42, comments 12, remaining token cases 60, cleanup 15, orphan recovery 2,
-assets 85, observations/retries 18: 281 total, with 18 points to the 299 budget.
+capabilities 42, comments 12, remaining token cases 60, the six `gh3` facet legs 46, cleanup
+15, orphan recovery 2, assets 85, observations/retries 18: 327 total. The facet legs measure 27
+requests and about 26 points on the loopback; their 46 is the higher figure because, against
+GitHub, every token read waits out the settling margin and may be asked again. So the admission
+estimate sits above the 299 budget by design: it is a reservation against the shared allowance,
+and the 299 is the measured ceiling `github-live-session-points` holds a session's actual spend
+to, unchanged. Before those legs the total was 281.
 These are admission allocations, not measured savings or phase gates. The spike's
 schema 10 and setup 14 are reported figures; capability 42/39 and comments 12 exclude
 unknown prices. Assets 85 is an unvalidated reachable-document envelope; token 60 and

@@ -352,7 +352,7 @@ export const runtimeSchemas = {
             "type": "string"
           },
           "entries": {
-            "description": "How many task entries it held.",
+            "description": "How many item entries it held — tasks', projects', documents' and the forward edges kept\non their own. The verified bytes of their image assets are removed with them and not\ncounted.",
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -4012,6 +4012,13 @@ export const runtimeSchemas = {
           "string",
           "null"
         ]
+      },
+      "version": {
+        "description": "The document's change token, on exactly the terms of [`Task::version`] and of what its\nsource's [`DocumentVersionCoverage`](crate::DocumentVersionCoverage) covers. Absent by\ndefault and left out of the wire when absent.",
+        "type": [
+          "string",
+          "null"
+        ]
       }
     },
     "required": [
@@ -4183,6 +4190,13 @@ export const runtimeSchemas = {
           },
           "url": {
             "description": "Where a person can open it, on the same terms as a [`Task`]'s.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "description": "The document's change token, on exactly the terms of [`Task::version`] and of what its\nsource's [`DocumentVersionCoverage`](crate::DocumentVersionCoverage) covers. Absent by\ndefault and left out of the wire when absent.",
             "type": [
               "string",
               "null"
@@ -6901,6 +6915,13 @@ export const runtimeSchemas = {
               "string",
               "null"
             ]
+          },
+          "version": {
+            "description": "The document's change token, on exactly the terms of [`Task::version`] and of what its\nsource's [`DocumentVersionCoverage`](crate::DocumentVersionCoverage) covers. Absent by\ndefault and left out of the wire when absent.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -7226,6 +7247,13 @@ export const runtimeSchemas = {
           },
           "url": {
             "description": "Where a human can open this project.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "description": "The project's change token, on exactly the terms of [`Task::version`]: two equal\nversions of one project from one source mean nothing its source's\n[`ProjectVersionCoverage`](crate::ProjectVersionCoverage) covers has changed, and a\nsource that cannot promise that leaves it absent, which means *always read it*.\nAbsent by default and left out of the wire when absent.",
             "type": [
               "string",
               "null"
@@ -8078,6 +8106,13 @@ export const runtimeSchemas = {
           "string",
           "null"
         ]
+      },
+      "version": {
+        "description": "The project's change token, on exactly the terms of [`Task::version`]: two equal\nversions of one project from one source mean nothing its source's\n[`ProjectVersionCoverage`](crate::ProjectVersionCoverage) covers has changed, and a\nsource that cannot promise that leaves it absent, which means *always read it*.\nAbsent by default and left out of the wire when absent.",
+        "type": [
+          "string",
+          "null"
+        ]
       }
     },
     "required": [
@@ -8551,6 +8586,13 @@ export const runtimeSchemas = {
               "string",
               "null"
             ]
+          },
+          "version": {
+            "description": "The document's change token, on exactly the terms of [`Task::version`] and of what its\nsource's [`DocumentVersionCoverage`](crate::DocumentVersionCoverage) covers. Absent by\ndefault and left out of the wire when absent.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -8982,6 +9024,13 @@ export const runtimeSchemas = {
           },
           "url": {
             "description": "Where a human can open this project.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "description": "The project's change token, on exactly the terms of [`Task::version`]: two equal\nversions of one project from one source mean nothing its source's\n[`ProjectVersionCoverage`](crate::ProjectVersionCoverage) covers has changed, and a\nsource that cannot promise that leaves it absent, which means *always read it*.\nAbsent by default and left out of the wire when absent.",
             "type": [
               "string",
               "null"
@@ -9668,6 +9717,13 @@ export const runtimeSchemas = {
           },
           "url": {
             "description": "Where a person can open it, on the same terms as a [`Task`]'s.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "description": "The document's change token, on exactly the terms of [`Task::version`] and of what its\nsource's [`DocumentVersionCoverage`](crate::DocumentVersionCoverage) covers. Absent by\ndefault and left out of the wire when absent.",
             "type": [
               "string",
               "null"
@@ -11177,6 +11233,13 @@ export const runtimeSchemas = {
               "string",
               "null"
             ]
+          },
+          "version": {
+            "description": "The project's change token, on exactly the terms of [`Task::version`]: two equal\nversions of one project from one source mean nothing its source's\n[`ProjectVersionCoverage`](crate::ProjectVersionCoverage) covers has changed, and a\nsource that cannot promise that leaves it absent, which means *always read it*.\nAbsent by default and left out of the wire when absent.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -12496,6 +12559,13 @@ export const runtimeSchemas = {
               "string",
               "null"
             ]
+          },
+          "version": {
+            "description": "The project's change token, on exactly the terms of [`Task::version`]: two equal\nversions of one project from one source mean nothing its source's\n[`ProjectVersionCoverage`](crate::ProjectVersionCoverage) covers has changed, and a\nsource that cannot promise that leaves it absent, which means *always read it*.\nAbsent by default and left out of the wire when absent.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -13382,6 +13452,13 @@ export const runtimeSchemas = {
           },
           "url": {
             "description": "Where a human can open this project.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "description": "The project's change token, on exactly the terms of [`Task::version`]: two equal\nversions of one project from one source mean nothing its source's\n[`ProjectVersionCoverage`](crate::ProjectVersionCoverage) covers has changed, and a\nsource that cannot promise that leaves it absent, which means *always read it*.\nAbsent by default and left out of the wire when absent.",
             "type": [
               "string",
               "null"

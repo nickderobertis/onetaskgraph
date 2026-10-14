@@ -366,6 +366,7 @@ async fn a_project_and_a_document_ending_in_a_block_scalar_read_back_as_written(
             .write_project(&ItemWrite {
                 target: None,
                 item: Project {
+                    version: None,
                     id: NativeId::from("launch"),
                     title: "Launch".to_owned(),
                     content: None,
@@ -390,6 +391,7 @@ async fn a_project_and_a_document_ending_in_a_block_scalar_read_back_as_written(
             .write_document(&ItemWrite {
                 target: None,
                 item: Document {
+                    version: None,
                     id: NativeId::from("design"),
                     title: "Design".to_owned(),
                     content: None,

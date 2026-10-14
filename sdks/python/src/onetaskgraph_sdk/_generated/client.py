@@ -457,6 +457,7 @@ class GeneratedClient:
         default_sources: list[str] | tuple[str, ...] | None = None,
         explain: bool | None = None,
         page_size: int | None = None,
+        pin: VersionToken | None = None,
         set: list[str] | tuple[str, ...] | None = None,
     ) -> DocumentDetail:
         """Run ``onetaskgraph document show``."""
@@ -468,6 +469,7 @@ class GeneratedClient:
             default_sources=default_sources,
             explain=explain,
             page_size=page_size,
+            pin=pin,
             set=set,
         )
 
@@ -774,6 +776,7 @@ class GeneratedClient:
         default_sources: list[str] | tuple[str, ...] | None = None,
         explain: bool | None = None,
         page_size: int | None = None,
+        pin: VersionToken | None = None,
         set: list[str] | tuple[str, ...] | None = None,
     ) -> QueryResponseOfQualifiedProject:
         """Run ``onetaskgraph project show``."""
@@ -785,6 +788,7 @@ class GeneratedClient:
             default_sources=default_sources,
             explain=explain,
             page_size=page_size,
+            pin=pin,
             set=set,
         )
 

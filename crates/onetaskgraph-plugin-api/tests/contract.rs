@@ -865,6 +865,7 @@ fn a_task_round_trips_through_json_with_every_field_populated() {
 #[test]
 fn a_project_and_an_orphan_task_round_trip_through_json() {
     let project = Project {
+        version: None,
         id: NativeId::from("P-1"),
         title: "Foundation".to_owned(),
         content: None,
@@ -1486,6 +1487,7 @@ async fn a_source_that_implements_only_the_read_methods_declares_no_write_side()
             .write_project(&ItemWrite {
                 target: Some(NativeId::from("P-1")),
                 item: Project {
+                    version: None,
                     id: NativeId::from("P-1"),
                     title: "Engine".to_owned(),
                     content: None,
@@ -1663,6 +1665,7 @@ fn an_item_write_round_trips_through_json_with_its_edges_and_an_absent_target() 
 /// The document a read test hands back, with every field the contract gives it populated.
 fn filed() -> Document {
     Document {
+        version: None,
         id: NativeId::from("D-1"),
         title: "Why the store holds a document".to_owned(),
         content: Some("A person cannot review a plan node by node.".to_owned()),
@@ -1721,6 +1724,7 @@ fn a_location_is_told_apart_by_which_key_is_present_on_all_three_entities() {
         ..outgoing()
     };
     let project = Project {
+        version: None,
         id: NativeId::from("P-1"),
         title: "Foundation".to_owned(),
         content: None,

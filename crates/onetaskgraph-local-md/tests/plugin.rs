@@ -1008,6 +1008,7 @@ async fn a_project_write_carries_its_own_fields_and_an_id_no_path_can_be_made_of
         .write_project(&ItemWrite {
             target: None,
             item: Project {
+                version: None,
                 id: NativeId("P/../../escape".into()),
                 title: "Engine".into(),
                 content: None,
@@ -1912,6 +1913,7 @@ async fn a_delete_naming_a_path_out_of_the_root_is_refused_rather_than_followed(
 /// One document on its way into this folder, with a caller-defined key of every JSON type.
 fn outgoing_document(id: &str, title: &str) -> Document {
     Document {
+        version: None,
         id: NativeId(id.into()),
         title: title.into(),
         content: Some("the design, reviewed".into()),

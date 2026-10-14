@@ -1354,14 +1354,12 @@ impl Engine {
             .into_iter()
             .map(|source| match located.get(source.name()) {
                 Some(location) => {
-                    let cache = crate::cache::SourceCache::new(
-                        location.clone(),
-                        source.source().version_coverage(),
-                    );
-                    caches.insert(source.name().clone(), cache.clone());
+                    let name = source.name().clone();
                     source.wrapped(|inner| {
-                        Box::new(crate::cache::CachedSource::new(inner, cache))
-                            as Box<dyn onetaskgraph_plugin_api::TaskSource>
+                        let (cached, cache) =
+                            crate::cache::CachedSource::new(inner, location.clone());
+                        caches.insert(name, cache);
+                        Box::new(cached) as Box<dyn onetaskgraph_plugin_api::TaskSource>
                     })
                 }
                 None => source,

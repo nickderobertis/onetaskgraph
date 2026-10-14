@@ -492,13 +492,6 @@ async fn reconcile_node_counts_and_point_costs(token: &str) -> Result<(), String
     let mut asked = 0_usize;
     let mut strategy = PricingStrategy::Aliases;
     for (document, doing) in graphql::DOCUMENTS {
-        // This internal document is sent only by the live lane, which bills the actual
-        // cost GitHub reports on every response. Keep its offline schema, node-count and
-        // price pins in the inventory without adding a reconciliation request to the
-        // measured session workload.
-        if document == graphql::LIVE_CHANGE_TOKEN {
-            continue;
-        }
         if Mode::of_document(document) == Mode::Write {
             // A mutation is skipped because `rateLimit` is a field of `Query` and there is
             // no way to ask GitHub about one at all — neither for its node count nor for its
@@ -2168,6 +2161,7 @@ impl LiveRun {
 
 fn artifact_project(title: &str, status: &Status) -> Project {
     Project {
+        version: None,
         id: NativeId("live-source-item".into()),
         title: title.to_owned(),
         content: Some("temporary credentialed write; the live lane removes this".into()),
@@ -2190,6 +2184,7 @@ fn artifact_project(title: &str, status: &Status) -> Project {
 /// is the round trip this leg of the lane is for.
 fn artifact_document(title: &str, project: Option<NativeId>) -> Document {
     Document {
+        version: None,
         id: NativeId("live-source-item".into()),
         title: title.to_owned(),
         content: Some("temporary credentialed write; the live lane removes this".into()),
@@ -3202,10 +3197,19 @@ async fn drive_every_declared_capability(
     .map_err(|declined| declined.to_string())?;
     every_change_kind_moves_a_tasks_token(
         writer,
+        rebuilt,
         (&run.token, &run.project_id),
         (&second_id, &first_id, &orphan_id),
         (&beta_id, &alpha_id),
-        (&label_id, &run.title(LAST_TITLE_OFFSET)),
+        (&label_id, &run.title(6)),
+    )
+    .await?;
+    every_facet_change_moves_a_projects_and_a_documents_token(
+        run,
+        writer,
+        rebuilt,
+        (&alpha_id, &beta_id, &design_id, &orphan_id),
+        (&label_id, &label_name),
     )
     .await
 }
@@ -3216,173 +3220,155 @@ async fn drive_every_declared_capability(
 /// past [`Endpoints::settle`] by this machine's clock can still fall inside the plugin's margin.
 const TOKEN_READS: u32 = 30;
 
-/// A cold plugin read retained for its dedicated withholding regression; the main lane
-/// reads only fresh token-bearing facts, without re-hydrating parents and board fields.
+/// Which kind of item a token is read of: which of the plugin's own reads by id answers it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Observed {
+    /// `get_task`.
+    Task,
+    /// `get_project`.
+    Project,
+    /// `get_document`.
+    Document,
+}
+
+impl std::fmt::Display for Observed {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Task => "task",
+            Self::Project => "project",
+            Self::Document => "document",
+        })
+    }
+}
+
+/// A token as the plugin's own product read gives it: one read by id, of a source built afresh
+/// so nothing this run wrote or read before answers it — never a read of this lane's own that
+/// spells a token beside the plugin's.
 #[derive(Clone, Copy)]
-enum TokenReader<'a> {
-    Source(&'a dyn Fn() -> Box<dyn TaskSource>),
-    Fresh { credential: &'a str, board: &'a str },
+struct TokenReader<'a> {
+    rebuilt: &'a dyn Fn() -> Box<dyn TaskSource>,
+    kind: Observed,
 }
 
 async fn token_now(
     reader: TokenReader<'_>,
-    task: &NativeId,
+    item: &NativeId,
     when: &str,
-    attempt: u32,
 ) -> Result<Option<String>, String> {
-    match reader {
-        TokenReader::Source(rebuilt) => Ok(rebuilt()
-            .get_task(task)
+    let source = (reader.rebuilt)();
+    let kind = reader.kind;
+    let failed = |error: onetaskgraph_plugin_api::SourceError| {
+        format!("live read of the {kind} {when} failed: {error}")
+    };
+    let version = match kind {
+        Observed::Task => source
+            .get_task(item)
             .await
-            .map_err(|error| format!("live read of the task {when} failed: {error}"))?
-            .ok_or_else(|| format!("the task was not there {when}"))?
-            .version),
-        TokenReader::Fresh { credential, board } => {
-            use onetaskgraph_github_projects::change_token::{Parts, settled, spell};
-            let answer = graphql_answer_at(
-                credential,
-                graphql::LIVE_CHANGE_TOKEN,
-                "reading fresh token-bearing issue facts",
-                json!({"id":task.0,"boardItems":100}),
-                attempt,
-            )
+            .map_err(failed)?
+            .map(|task| task.version),
+        Observed::Project => source
+            .get_project(item)
             .await
-            .map_err(Refusal::into_message)?;
-            let issue = &answer["data"]["node"];
-            ensure!(!issue.is_null(), "the task was not there {when}");
-            let memberships = issue["projectItems"]["nodes"]
-                .as_array()
-                .ok_or("missing token board memberships")?;
-            let item = memberships
-                .iter()
-                .find(|item| item["project"]["id"] == board)
-                .ok_or("fresh token read did not contain this run's nominated board item")?;
-            let timestamp = |value: &Value| {
-                value
-                    .as_str()
-                    .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
-                    .map(|value| value.with_timezone(&chrono::Utc))
-            };
-            let facts = match (
-                timestamp(&issue["updatedAt"]),
-                timestamp(&item["updatedAt"]),
-                issue["commentCount"]["totalCount"].as_u64(),
-                issue["relationshipEvents"]["totalCount"].as_u64(),
-                issue["repository"]["nameWithOwner"].as_str(),
-            ) {
-                (
-                    Some(issue),
-                    Some(item),
-                    Some(comments),
-                    Some(relationships),
-                    Some(repository),
-                ) => Parts {
-                    issue,
-                    item,
-                    comments,
-                    relationships,
-                    repository: onetaskgraph_plugin_api::Repository::try_from(format!(
-                        "github.com/{repository}"
-                    ))?,
-                },
-                _ => return Ok(None),
-            };
-            let served = answer["_served"]
-                .as_str()
-                .and_then(|value| chrono::DateTime::parse_from_rfc2822(value).ok())
-                .map(|value| value.with_timezone(&chrono::Utc));
-            let version = served
-                .filter(|served| settled(facts.issue, facts.item, *served))
-                .map(|_| spell(&facts));
-            say(&format!(
-                "fresh token facts {when}: comments={} issue_updated_at={} item_updated_at={} relationships={} version={version:?}",
-                facts.comments, facts.issue, facts.item, facts.relationships
-            ));
-            Ok(version)
-        }
-    }
+            .map_err(failed)?
+            .map(|project| project.version),
+        Observed::Document => source
+            .get_document(item)
+            .await
+            .map_err(failed)?
+            .map(|document| document.version),
+    };
+    version.ok_or_else(|| format!("the {kind} was not there {when}"))
 }
 
-/// Dedicated cold-source withholding regression entry; the main journey uses Fresh.
+/// The settled token of task `task`, read through a source `rebuilt` builds afresh.
 pub async fn settled_token(
     rebuilt: &dyn Fn() -> Box<dyn TaskSource>,
     task: &NativeId,
     when: &str,
 ) -> Result<String, String> {
-    settled_token_using(TokenReader::Source(rebuilt), task, when).await
+    settled_token_of(
+        TokenReader {
+            rebuilt,
+            kind: Observed::Task,
+        },
+        task,
+        when,
+    )
+    .await
 }
 
-/// Fresh token polling used by the main lane, exposed to its HTTP loopback regression.
-pub async fn settled_fresh_token(
-    credential: &str,
-    board: &str,
-    task: &NativeId,
+/// The settled token of the `kind` `item`, read through a source `rebuilt` builds afresh.
+pub async fn settled_token_of_kind(
+    rebuilt: &dyn Fn() -> Box<dyn TaskSource>,
+    kind: Observed,
+    item: &NativeId,
     when: &str,
 ) -> Result<String, String> {
-    settled_token_using(TokenReader::Fresh { credential, board }, task, when).await
+    settled_token_of(TokenReader { rebuilt, kind }, item, when).await
 }
 
-async fn settled_token_using(
+async fn settled_token_of(
     reader: TokenReader<'_>,
-    task: &NativeId,
+    item: &NativeId,
     when: &str,
-) -> Result<String, String> {
-    settled_token_with_attempt(reader, task, when, &mut 0).await
-}
-
-async fn settled_token_with_attempt(
-    reader: TokenReader<'_>,
-    task: &NativeId,
-    when: &str,
-    attempt: &mut u32,
 ) -> Result<String, String> {
     for read in 0..TOKEN_READS {
         if read > 0 {
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         }
-        *attempt += 1;
-        if let Some(token) = token_now(reader, task, when, *attempt).await? {
+        if let Some(token) = token_now(reader, item, when).await? {
             return Ok(token);
         }
     }
     Err(format!(
-        "GitHub gave the task no change token {when}, though the leg waited {TOKEN_READS} seconds past the plugin's settling margin; the plugin withholds a token only while the task's last change is within change_token::SETTLED of the read"
+        "GitHub gave the {} no change token {when}, though the leg waited {TOKEN_READS} seconds past the plugin's settling margin; the plugin withholds a token only while the item's last change is within change_token::SETTLED of the read",
+        reader.kind
     ))
 }
 
-/// Wait for the token to move off `before` after `kind`, and hold it to being the later one
-/// by the plugin's own ordering — asked again for a bounded while, because a read made the
-/// moment a write returns can be answered from before it, and a token is withheld until the
-/// change has settled.
+/// Wait for the token to move off `before` after `kind`, and hold it to the property the
+/// store's cache rests on — an entry kept at `before` is never served to a reader pinned to the
+/// new token, because the plugin's own ordering never puts `before` at or after it — asked again
+/// for a bounded while, because a read made the moment a write returns can be answered from
+/// before it, and a token is withheld until the change has settled.
+///
+/// A change the token's times carry orders the new token after `before`; one that moves its
+/// facets or its relationship count leaves the two unordered. Either holds the property; only
+/// `before` ordered at or after the new token breaks it.
 async fn moved(
     reader: TokenReader<'_>,
-    task: &NativeId,
+    item: &NativeId,
     kind: &str,
     before: &str,
 ) -> Result<String, String> {
     tokio::time::sleep(endpoints().settle).await;
     let when = format!("after {kind}");
-    let mut attempt = 0;
-    let mut after = settled_token_with_attempt(reader, task, &when, &mut attempt).await?;
+    let mut after = settled_token_of(reader, item, &when).await?;
     for _ in 1..10 {
         if after != before {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        after = settled_token_with_attempt(reader, task, &when, &mut attempt).await?;
+        after = settled_token_of(reader, item, &when).await?;
     }
     ensure!(
         after != before,
-        "{kind} left the task's change token at {before}, ten seconds after it; the token is \
-         what a copy skips by, so the plugin's statement of what it covers \
-         (docs/plugin-protocol.md §4.13d) no longer holds; next: tell the owner of the \
-         github-projects plugin that GitHub's behaviour changed, rather than re-running"
+        "{kind} left the {}'s change token at {before}, ten seconds after it; the token is \
+         what a copy skips by and the cache serves by, so the plugin's statement of what it \
+         covers (docs/plugin-protocol.md §4.13d) no longer holds; next: tell the owner of the \
+         github-projects plugin that GitHub's behaviour changed, rather than re-running",
+        reader.kind
     );
+    let held = onetaskgraph_github_projects::change_token::order(before, &after);
     ensure!(
-        onetaskgraph_github_projects::change_token::order(&after, before)
-            == Some(std::cmp::Ordering::Greater),
-        "{kind} moved the task's change token from {before} to {after}, which the plugin's own \
-         ordering does not put after it"
+        !matches!(
+            held,
+            Some(std::cmp::Ordering::Equal | std::cmp::Ordering::Greater)
+        ),
+        "{kind} moved the {}'s change token from {before} to {after}, and the plugin's own \
+         ordering puts the held token {held:?} against the new one, so a cache holding it would \
+         be served to a reader pinned to the new one",
+        reader.kind
     );
     Ok(after)
 }
@@ -3397,6 +3383,7 @@ async fn moved(
 /// the one before, so no two of them share a second.
 async fn every_change_kind_moves_a_tasks_token(
     writer: &dyn TaskSource,
+    rebuilt: &dyn Fn() -> Box<dyn TaskSource>,
     (token, board): (&str, &str),
     (task, first, orphan): (&NativeId, &NativeId, &NativeId),
     (filed_under, other_project): (&NativeId, &NativeId),
@@ -3407,11 +3394,11 @@ async fn every_change_kind_moves_a_tasks_token(
     };
     let pause = || tokio::time::sleep(std::time::Duration::from_millis(1_100));
     tokio::time::sleep(endpoints().settle).await;
-    let reader = TokenReader::Fresh {
-        credential: token,
-        board,
+    let reader = TokenReader {
+        rebuilt,
+        kind: Observed::Task,
     };
-    let mut before = settled_token_using(reader, task, "before any change").await?;
+    let mut before = settled_token_of(reader, task, "before any change").await?;
 
     pause().await;
     let comment = writer
@@ -3551,6 +3538,260 @@ async fn every_change_kind_moves_a_tasks_token(
         .ok_or_else(|| "the task to finish was not there".to_owned())?;
     moved(reader, task, "a status change", &before).await?;
     Ok(())
+}
+
+/// The six legs `spike-coverage` drafted for the `gh3` token, each a change a person makes on
+/// GitHub that moved no part of a `gh2` token, made to this run's own stamped items and held to
+/// moving the token of the item it reaches — every token read through the plugin's own read by id
+/// of a source built afresh, never a read of this lane's own that spells a token beside it:
+///
+/// 1. the run's label **renamed** moves the token of the project `beta` and of the document
+///    `design`, which carry it;
+/// 2. the same label **recoloured** moves both again;
+/// 3. an option of a stamped scratch single-select field **renamed** moves the token of `beta`,
+///    whose board item holds it — the board's own `Status` options are never touched;
+/// 4. `alpha` **deleted** leaves the new token of `beta`, which depended on it, unordered against
+///    the one held;
+/// 5. the same deletion leaves the new token of `design`, filed under it, unordered too;
+/// 6. the task `orphan` **gaining a sub-issue** moves its own token, so a read pinned to the new
+///    one reports the project it became.
+///
+/// Last of the journey, because two of them delete or reshape items the legs above read.
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] The six legs join this repository's existing credentialed GitHub lane, which it deliberately keeps in the plugin's own test target so only a change to the plugin or what it links selects it; the manager's ruling keeps the legs in that lane, and moving the lane is outside this plan.
+async fn every_facet_change_moves_a_projects_and_a_documents_token(
+    run: &LiveRun,
+    writer: &dyn TaskSource,
+    rebuilt: &dyn Fn() -> Box<dyn TaskSource>,
+    (alpha, beta, design, orphan): (&NativeId, &NativeId, &NativeId, &NativeId),
+    (label_id, label_name): (&str, &str),
+) -> Result<(), String> {
+    use onetaskgraph_github_projects::change_token::order;
+    let project = TokenReader {
+        rebuilt,
+        kind: Observed::Project,
+    };
+    let document = TokenReader {
+        rebuilt,
+        kind: Observed::Document,
+    };
+    attach_artifact_label(&run.token, &beta.0, label_id).await?;
+    attach_artifact_label(&run.token, &design.0, label_id).await?;
+    tokio::time::sleep(endpoints().settle).await;
+    let mut held_project = settled_token_of(project, beta, "before the label legs").await?;
+    let mut held_document = settled_token_of(document, design, "before the label legs").await?;
+
+    // Renamed to another of this run's own label names, so its cleanup still finds it.
+    let renamed = run.own.label(run.stamp_micros + 1);
+    change_artifact_label(run, label_name, json!({"new_name": renamed})).await?;
+    held_project = moved(project, beta, "its label renamed", &held_project).await?;
+    held_document = moved(document, design, "its label renamed", &held_document).await?;
+
+    change_artifact_label(run, &renamed, json!({"color": "5319e7"})).await?;
+    // The scratch leg reads its own token before its change, so this one is not held on.
+    moved(project, beta, "its label recoloured", &held_project).await?;
+    held_document = moved(document, design, "its label recoloured", &held_document).await?;
+
+    // The scratch field is removed whether or not the leg holds.
+    let scratch = create_scratch_field(run).await?;
+    let renamed_option = async {
+        set_scratch_value(run, beta, &scratch).await?;
+        tokio::time::sleep(endpoints().settle).await;
+        let before = settled_token_of(project, beta, "with a scratch option set").await?;
+        rename_scratch_option(run, &scratch).await?;
+        moved(project, beta, "a scratch field option renamed", &before).await
+    }
+    .await;
+    let removed = delete_scratch_field(run, &scratch).await;
+    held_project = renamed_option?;
+    removed?;
+
+    writer
+        .delete_project(alpha)
+        .await
+        .map_err(|error| format!("live project deletion failed: {error}"))?;
+    let after = moved(project, beta, "its native far end deleted", &held_project).await?;
+    ensure!(
+        order(&held_project, &after).is_none(),
+        "deleting beta's far end left its token {after} ordered against the one held, \
+         {held_project}; a cache would have served it"
+    );
+    let after = moved(document, design, "its project deleted", &held_document).await?;
+    ensure!(
+        order(&held_document, &after).is_none(),
+        "deleting the document's project left its token {after} ordered against the one held, \
+         {held_document}; a cache would have served it"
+    );
+
+    // A sub-issue makes the task a project.
+    let task = TokenReader {
+        rebuilt,
+        kind: Observed::Task,
+    };
+    let before = settled_token_of(task, orphan, "before it gains a sub-issue").await?;
+    let open = Status {
+        category: StatusCategory::Todo,
+        name: run.status_option.clone(),
+    };
+    let child = writer
+        .write_task(&ItemWrite {
+            target: None,
+            item: artifact_task(
+                &run.title(LAST_TITLE_OFFSET),
+                "temporary credentialed write; the live lane removes this".into(),
+                &open,
+                None,
+                BTreeMap::new(),
+            ),
+            depends_on: vec![],
+        })
+        .await
+        .map_err(|error| format!("live sub-issue write failed: {error}"))?;
+    refile(&run.token, graphql::ADD_SUB_ISSUE, orphan, &child).await?;
+    tokio::time::sleep(endpoints().settle).await;
+    let became = settled_token_of(
+        TokenReader {
+            rebuilt,
+            kind: Observed::Project,
+        },
+        orphan,
+        "after it gained a sub-issue",
+    )
+    .await?;
+    ensure!(
+        !matches!(
+            order(&before, &became),
+            Some(std::cmp::Ordering::Equal | std::cmp::Ordering::Greater)
+        ),
+        "a task gaining a sub-issue left its token {became} at or after {before}"
+    );
+    let as_task = rebuilt()
+        .get_task(orphan)
+        .await
+        .map_err(|error| format!("live read of the task after its flip failed: {error}"))?;
+    ensure!(
+        as_task.is_none(),
+        "the task that gained a sub-issue still reads as a task: {as_task:?}"
+    );
+    Ok(())
+}
+
+/// Change the run's label `name` over GitHub's REST API, as a person editing it would.
+async fn change_artifact_label(run: &LiveRun, name: &str, change: Value) -> Result<(), String> {
+    let mut parameters = repository_parameters(&run.repository);
+    parameters.push(("name", name));
+    rest(
+        &run.token,
+        Method::Patch,
+        "/repos/{owner}/{repo}/labels/{name}",
+        &parameters,
+        "",
+        Some(change),
+        "live label change",
+    )
+    .await
+    .map(|_| ())
+}
+
+/// A stamped single-select field this run created on the board, with its options.
+struct ScratchField {
+    id: String,
+    options: Vec<Value>,
+}
+
+/// Create a stamped single-select field of two options on the board.
+async fn create_scratch_field(run: &LiveRun) -> Result<ScratchField, String> {
+    let answer = graphql_variables(
+        &run.token,
+        graphql::CREATE_FIELD,
+        "live scratch field creation",
+        json!({"input": {"projectId": run.project_id, "dataType": "SINGLE_SELECT",
+                         "name": run.own.label(run.stamp_micros + 2),
+                         "singleSelectOptions": [
+                             {"name": "live-a", "color": "GRAY", "description": ""},
+                             {"name": "live-b", "color": "BLUE", "description": ""}]}}),
+    )
+    .await?;
+    let created = &answer["data"]["createProjectV2Field"]["projectV2Field"];
+    Ok(ScratchField {
+        id: created["id"]
+            .as_str()
+            .ok_or_else(|| format!("the scratch field came back without an id: {answer}"))?
+            .to_owned(),
+        options: created["options"]
+            .as_array()
+            .cloned()
+            .ok_or_else(|| format!("the scratch field came back without options: {answer}"))?,
+    })
+}
+
+/// Set `issue`'s value of the scratch field to its first option, as a person would.
+async fn set_scratch_value(
+    run: &LiveRun,
+    issue: &NativeId,
+    scratch: &ScratchField,
+) -> Result<(), String> {
+    let items = graphql_variables(
+        &run.token,
+        "query LiveBoardItem($id:ID!){node(id:$id){... on Issue{projectItems(first:20){nodes{id project{id}}}}}}",
+        "live board item lookup",
+        json!({"id": issue.0}),
+    )
+    .await?;
+    let item = items
+        .pointer("/data/node/projectItems/nodes")
+        .and_then(Value::as_array)
+        .and_then(|nodes| {
+            nodes.iter().find(|node| {
+                node.pointer("/project/id").and_then(Value::as_str) == Some(&run.project_id)
+            })
+        })
+        .and_then(|node| node.get("id").and_then(Value::as_str))
+        .ok_or_else(|| format!("issue {} has no item on the live board", issue.0))?
+        .to_owned();
+    graphql_variables(
+        &run.token,
+        "mutation($input:UpdateProjectV2ItemFieldValueInput!){updateProjectV2ItemFieldValue(input:$input){projectV2Item{id}}}",
+        "live scratch field value",
+        json!({"input": {"projectId": run.project_id, "itemId": item, "fieldId": scratch.id,
+                         "value": {"singleSelectOptionId": scratch.options[0]["id"]}}}),
+    )
+    .await
+    .map(|_| ())
+}
+
+/// Rename the scratch field's first option, keeping every option's id.
+async fn rename_scratch_option(run: &LiveRun, scratch: &ScratchField) -> Result<(), String> {
+    let options: Vec<Value> = scratch
+        .options
+        .iter()
+        .enumerate()
+        .map(|(index, option)| {
+            json!({"id": option["id"],
+                   "name": if index == 0 { json!("live-a-renamed") } else { option["name"].clone() },
+                   "color": option.get("color").cloned().unwrap_or(json!("GRAY")),
+                   "description": option.get("description").cloned().unwrap_or(json!(""))})
+        })
+        .collect();
+    graphql_variables(
+        &run.token,
+        graphql::STATUS_OPTIONS_UPDATE,
+        "live scratch option rename",
+        json!({"input": {"fieldId": scratch.id, "singleSelectOptions": options}}),
+    )
+    .await
+    .map(|_| ())
+}
+
+/// Remove the scratch field from the board.
+async fn delete_scratch_field(run: &LiveRun, scratch: &ScratchField) -> Result<(), String> {
+    graphql_variables(
+        &run.token,
+        "mutation($input:DeleteProjectV2FieldInput!){deleteProjectV2Field(input:$input){projectV2Field{... on ProjectV2SingleSelectField{id}}}}",
+        "live scratch field removal",
+        json!({"input": {"fieldId": scratch.id}}),
+    )
+    .await
+    .map(|_| ())
 }
 
 /// `filter_by_comment_activity`, and the GitHub fact it rests on, re-taken on every run.
@@ -3757,7 +3998,7 @@ pub struct Nomination {
 
 /// The highest offset [`LiveRun::title`] is asked for, so a run checks before it writes
 /// anything that every stamp it will write can be spelled.
-const LAST_TITLE_OFFSET: u64 = 6;
+const LAST_TITLE_OFFSET: u64 = 7;
 
 /// The credentialed lane's whole entry: admit it, open its one session, and run it.
 ///

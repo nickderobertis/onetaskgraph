@@ -459,19 +459,17 @@ fn read_visibility(budget: &str) -> Result<(f64, String), String> {
 /// its workload with every sequence measured in both modes, and its figure the largest
 /// difference among them.
 fn read_cache_points(budget: &str) -> Result<(f64, String), String> {
-    use super::cache_budget::{SEQUENCES, WORKLOAD};
+    use super::cache_budget::{KINDS, SCALES, WORKLOAD, sequences_of};
     let value = recorded(budget)?;
     if value["workload"].as_str() != Some(WORKLOAD) {
-        return Err("workload does not match the four-sequence board workload".into());
+        return Err("workload does not match the board workload at 1x and 10x".into());
     }
     let figure = value["value"]
         .as_i64()
         .ok_or("missing whole-number figure")?;
-    let mut largest = i64::MIN;
-    for sequence in SEQUENCES {
-        let measured = &value["sequences"][sequence];
-        // A point count is a whole number of points spent, never negative, and small enough
-        // that the difference of two cannot overflow.
+    // A point count is a whole number of points spent, never negative, and small enough that
+    // the difference of two cannot overflow.
+    let difference = |measured: &Value, what: &str| -> Result<i64, String> {
         let points = |mode: &str| {
             measured[mode]["points"]
                 .as_u64()
@@ -479,16 +477,27 @@ fn read_cache_points(budget: &str) -> Result<(f64, String), String> {
         };
         let (Some(on), Some(off)) = (points("on"), points("off")) else {
             return Err(format!(
-                "sequence {sequence} is not measured in both modes as whole point counts"
+                "{what} is not measured in both modes as whole point counts"
             ));
         };
-        let difference = on
-            .checked_sub(off)
-            .ok_or("a sequence's point counts are out of range")?;
-        largest = largest.max(difference);
+        on.checked_sub(off)
+            .ok_or_else(|| format!("{what}'s point counts are out of range"))
+    };
+    let mut largest = i64::MIN;
+    for (scale, _) in SCALES {
+        let at = &value["scales"][scale];
+        for kind in KINDS {
+            for sequence in sequences_of(kind) {
+                largest = largest.max(difference(
+                    &at["kinds"][kind][sequence],
+                    &format!("{scale} {kind} {sequence}"),
+                )?);
+            }
+        }
+        largest = largest.max(difference(&at["total"], &format!("the {scale} total"))?);
     }
     if largest != figure {
-        return Err("the figure is not the largest difference the sequences record".into());
+        return Err("the figure is not the largest difference the recording holds".into());
     }
     let detail = value["detail"].as_str().ok_or("missing detail")?.to_owned();
     let figure = i32::try_from(figure).map_err(|_| "the figure is out of range")?;
@@ -796,6 +805,129 @@ fn the_visibility_report_refuses_a_missing_or_foreign_recording_without_a_figure
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(written, "a valid recording is reported");
+}
+
+#[test]
+fn the_cache_report_takes_the_whole_matrix_and_refuses_any_cell_or_figure_it_cannot_vouch_for() {
+    use super::cache_budget::{BUDGET, KINDS, SCALES, WORKLOAD, sequences_of};
+    use onetaskgraph_e2e_support::common::Sandbox;
+    use serde_json::json;
+    let sandbox = Sandbox::new();
+    let directory = sandbox.subdirectory("cache-points");
+    // Every cell spends 10 points off and 7 on, so the largest difference is a 3-point saving
+    // — except each scale's total, which sums them and saves more.
+    let cell = |on: u64, off: u64| json!({"on": {"points": on}, "off": {"points": off}});
+    let mut scales = serde_json::Map::new();
+    for (scale, _) in SCALES {
+        let mut kinds = serde_json::Map::new();
+        for kind in KINDS {
+            let cells: serde_json::Map<String, Value> = sequences_of(kind)
+                .iter()
+                .map(|sequence| ((*sequence).to_owned(), cell(7, 10)))
+                .collect();
+            kinds.insert(kind.to_owned(), Value::Object(cells));
+        }
+        scales.insert(
+            scale.to_owned(),
+            json!({"kinds": kinds, "total": cell(140, 200)}),
+        );
+    }
+    let valid = json!({"budget": BUDGET, "value": -3, "detail": "recorded", "workload": WORKLOAD,
+                       "scales": scales});
+    let run = |recorded: Option<Value>| {
+        let path = onetaskgraph_e2e_support::telemetry::file_in(&directory, BUDGET);
+        let _ = std::fs::remove_file(&path);
+        if let Some(recorded) = recorded {
+            std::fs::write(&path, recorded.to_string()).unwrap();
+        }
+        let result = directory.join("result.json");
+        let _ = std::fs::remove_file(&result);
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "budget_runner::report_cache_points",
+                "--exact",
+                "--nocapture",
+            ])
+            .env("GITHUB_ASSET_TELEMETRY_DIR", &directory)
+            .env("ONEBUDGETSPEC_BUDGET_ID", BUDGET)
+            .env("ONEBUDGETSPEC_RESULT", &result)
+            .output()
+            .unwrap();
+        (output, std::fs::read_to_string(&result).ok())
+    };
+    let with = |pointer: &str, value: Value| {
+        let mut changed = valid.clone();
+        *changed.pointer_mut(pointer).expect("the member") = value;
+        Some(changed)
+    };
+    let without = |pointer: &str, member: &str| {
+        let mut changed = valid.clone();
+        changed
+            .pointer_mut(pointer)
+            .and_then(Value::as_object_mut)
+            .expect("the object")
+            .remove(member);
+        Some(changed)
+    };
+    // A cell spending past what one budget can report, its figure made the largest so the range
+    // is what refuses it.
+    let mut huge = valid.clone();
+    huge["scales"]["10x"]["kinds"]["tasks"]["cold"] = cell(u64::from(u32::MAX) + 10, 10);
+    huge["value"] = json!(u64::from(u32::MAX));
+    for (recorded, message) in [
+        (None, "no telemetry"),
+        (
+            with("/budget", json!("github-copy-recopy-unchanged")),
+            "a different budget",
+        ),
+        (
+            with("/workload", json!("board-1-task")),
+            "workload does not match",
+        ),
+        (
+            without("/scales/1x/kinds/asset-bytes", "render-after-render"),
+            "1x asset-bytes render-after-render is not measured in both modes",
+        ),
+        (
+            without("/scales/10x", "total"),
+            "the 10x total is not measured in both modes",
+        ),
+        (
+            with("/scales/1x/kinds/documents/cold/on/points", json!(-1)),
+            "1x documents cold is not measured in both modes",
+        ),
+        (
+            with("/scales/1x/kinds/documents/cold/off/points", json!(2.5)),
+            "1x documents cold is not measured in both modes",
+        ),
+        (with("/value", json!(0)), "not the largest difference"),
+        (with("/value", json!(null)), "missing whole-number figure"),
+        (with("/value", json!(-3.5)), "missing whole-number figure"),
+        (with("/detail", json!(null)), "missing detail"),
+        (Some(huge), "the figure is out of range"),
+    ] {
+        let (output, written) = run(recorded);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "accepted: {message}");
+        assert!(stderr.contains(message), "{message}: {stderr}");
+        assert_eq!(
+            written.as_deref().unwrap_or_default(),
+            "",
+            "reported a figure over {message}"
+        );
+    }
+    let (output, written) = run(Some(valid));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result: Value = serde_json::from_str(&written.expect("a result")).expect("JSON");
+    assert_eq!(
+        result["value"],
+        json!(-3.0),
+        "a saving is the negative figure it is"
+    );
 }
 
 /// Report the current complete live pair without making any GitHub request.

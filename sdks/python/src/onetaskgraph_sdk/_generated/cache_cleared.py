@@ -21,7 +21,13 @@ class SourceName(RootModel[str]):
 
 class ClearedCache(BaseModel):
     dir: Annotated[str, Field(description="The directory it lives in.")]
-    entries: Annotated[int, Field(description="How many task entries it held.", ge=0)]
+    entries: Annotated[
+        int,
+        Field(
+            description="How many item entries it held — tasks', projects', documents' and the forward edges kept\non their own. The verified bytes of their image assets are removed with them and not\ncounted.",
+            ge=0,
+        ),
+    ]
     source: Annotated[SourceName, Field(description="The source whose cache it is.")]
 
 

@@ -489,6 +489,11 @@ struct Design {
     capabilities: u64,
     comments: u64,
     tokens: u64,
+    /// The six `gh3` legs after the task-token leg, in the same phase. Like every allocation
+    /// here, a reservation against the shared allowance rather than the measured ceiling
+    /// `github-live-session-points` holds a session to; `tests/fixtures/session-cost.md` states
+    /// what the legs measure and why this reserves more.
+    facets: u64,
     cleanup: u64,
     orphans: u64,
     assets: u64,
@@ -502,6 +507,7 @@ const DESIGN: Design = Design {
     capabilities: 42,
     comments: 12,
     tokens: 60,
+    facets: 46,
     cleanup: 15,
     orphans: 2,
     assets: 85,
@@ -527,6 +533,7 @@ pub const fn session_design_points(invocation: onetaskgraph_github_live::quota::
                 + DESIGN.capabilities
                 + DESIGN.comments
                 + DESIGN.tokens
+                + DESIGN.facets
                 + DESIGN.cleanup
                 + DESIGN.orphans
         }
@@ -771,6 +778,7 @@ pub fn remaining_design_points(phase: onetaskgraph_github_live::quota::Phase) ->
                 + DESIGN.capabilities
                 + DESIGN.comments
                 + DESIGN.tokens
+                + DESIGN.facets
         }
         Phase::OrphanRecovery => {
             DESIGN.schema
@@ -779,6 +787,7 @@ pub fn remaining_design_points(phase: onetaskgraph_github_live::quota::Phase) ->
                 + DESIGN.capabilities
                 + DESIGN.comments
                 + DESIGN.tokens
+                + DESIGN.facets
                 + DESIGN.cleanup
         }
         Phase::AssetSetup | Phase::AssetTask | Phase::AssetDocument => {

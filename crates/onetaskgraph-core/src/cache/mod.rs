@@ -2,8 +2,10 @@
 //!
 //! **Opt-in, one source at a time, and keyed on nothing but the change token a source gives.**
 //! A source configured with `cache.enabled` has its tasks — each one's fields, metadata,
-//! comments, assets and forward edges — kept on this host, one file per task, under a directory
-//! named for the remote it reads. Every process that configures the same remote shares it: the
+//! comments, assets and forward edges — its projects, its documents with the manifest of their
+//! image assets, and the verified bytes of those assets kept on this host, one file per item,
+//! under a directory named for the remote it reads; `kinds` says how each kind beside a task's
+//! is laid out. Every process that configures the same remote shares it: the
 //! command line, both SDKs and a Rust caller of the engine.
 //!
 //! The rule it may never break is that **it never adds a request and never serves stale data**.
@@ -22,6 +24,7 @@
 //! only because a configuration asked it to; `AGENTS.md` names it as that invariant's one
 //! exception.
 
+mod kinds;
 mod source;
 
 use std::collections::{HashMap, HashSet};
@@ -32,8 +35,8 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use onetaskgraph_plugin_api::{
-    Asset, Comment, DependencyEdge, NativeId, PartOutcome, SourceError, SourceName, Task,
-    VersionCoverage,
+    Asset, Comment, Cursor, DependencyEdge, DocumentVersionCoverage, NativeId, PartOutcome,
+    ProjectVersionCoverage, SourceError, SourceName, Task, VersionCoverage,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -43,6 +46,7 @@ use sha2::{Digest, Sha256};
 use crate::config::{Config, SourceConfig};
 use crate::engine::Spent;
 
+pub use kinds::{KIND_ENTRY_SCHEMA, kind_entry_shapes};
 pub(crate) use source::CachedSource;
 
 /// The schema every entry this build writes is spelled in.
@@ -118,14 +122,17 @@ pub struct ClearedCache {
     /// The directory it lives in.
     // llmlint: ignore[invalid_states_unrepresentable] A filesystem path reported back as the place a cache lives; it is never parsed or acted on by a reader, and a path is not a value a narrower type describes.
     pub dir: String,
-    /// How many task entries it held.
+    /// How many item entries it held — tasks', projects', documents' and the forward edges kept
+    /// on their own. The verified bytes of their image assets are removed with them and not
+    /// counted.
     pub entries: u64,
 }
 
 /// Empty the cache of `only`, or of every source the configuration caches.
 ///
-/// Only what this store writes there is removed — the task entries and the board entry — so a
-/// `cache.dir` pointed at a directory holding anything else loses nothing else.
+/// Only what this store writes there is removed — the item entries, the verified bytes of their
+/// image assets, and the board entry — so a `cache.dir` pointed at a directory holding anything
+/// else loses nothing else.
 ///
 /// # Errors
 ///
@@ -339,9 +346,25 @@ impl Priming {
     }
 }
 
-/// Everything one command has learnt about a caching source's tasks, dropped when it ends.
+/// Everything one command has learnt about a caching source's items, dropped when it ends.
 #[derive(Debug, Default)]
 struct Command {
+    /// Versions callers pinned project reads to.
+    project_pins: HashMap<NativeId, String>,
+    /// Versions a project listing in this command carried.
+    project_listed: HashMap<NativeId, String>,
+    /// Versions callers pinned document reads to.
+    document_pins: HashMap<NativeId, String>,
+    /// Versions a document listing in this command carried.
+    document_listed: HashMap<NativeId, String>,
+    /// Versions documents were read from the source at in this command, which the manifest read
+    /// next is recorded under.
+    document_read: HashMap<NativeId, String>,
+    /// Document entries served in this command, whose manifest is served with them.
+    document_served: HashMap<NativeId, kinds::DocumentEntry>,
+    /// A forward-edge walk of a task under way at the source: the edges it has answered so far,
+    /// and the cursor that continues it.
+    walking: HashMap<NativeId, (Vec<DependencyEdge>, Cursor)>,
     /// Versions callers pinned reads to.
     pins: HashMap<NativeId, String>,
     /// Versions a listing in this command carried.
@@ -368,6 +391,8 @@ pub struct SourceCache {
     dir: PathBuf,
     remote: String,
     coverage: VersionCoverage,
+    project_coverage: ProjectVersionCoverage,
+    document_coverage: DocumentVersionCoverage,
     command: Mutex<Command>,
     /// Files this process could neither replace nor take out of service, which it never reads
     /// again until a write of its own lands there.
@@ -381,12 +406,20 @@ static STAGED: AtomicU64 = AtomicU64::new(0);
 static REPORTED: AtomicU64 = AtomicU64::new(0);
 
 impl SourceCache {
-    /// The cache at `location`, for a source whose token covers `coverage`.
-    pub(crate) fn new(location: CacheLocation, coverage: VersionCoverage) -> Arc<Self> {
+    /// The cache at `location`, for a source whose token covers `coverage` of a task,
+    /// `project_coverage` of a project and `document_coverage` of a document.
+    pub(crate) fn new(
+        location: CacheLocation,
+        coverage: VersionCoverage,
+        project_coverage: ProjectVersionCoverage,
+        document_coverage: DocumentVersionCoverage,
+    ) -> Arc<Self> {
         Arc::new(Self {
             dir: location.dir,
             remote: location.remote,
             coverage,
+            project_coverage,
+            document_coverage,
             command: Mutex::new(Command::default()),
             withheld: Mutex::new(HashSet::new()),
         })
@@ -409,6 +442,20 @@ impl SourceCache {
     /// Pin the next reads of `id` in this command to `version`.
     pub(crate) fn pin(&self, id: &NativeId, version: &str) {
         self.command().pins.insert(id.clone(), version.to_owned());
+    }
+
+    /// Pin the next reads of project `id` in this command to `version`.
+    pub(crate) fn pin_project(&self, id: &NativeId, version: &str) {
+        self.command()
+            .project_pins
+            .insert(id.clone(), version.to_owned());
+    }
+
+    /// Pin the next reads of document `id` in this command to `version`.
+    pub(crate) fn pin_document(&self, id: &NativeId, version: &str) {
+        self.command()
+            .document_pins
+            .insert(id.clone(), version.to_owned());
     }
 
     /// How the last read of `id` in this command used the cache.
@@ -513,9 +560,11 @@ impl SourceCache {
     /// the task now holds.
     pub(crate) fn invalidate(&self, id: &NativeId) {
         let _ = self.retire(&self.task_path(id));
+        self.invalidate_kinds(id);
         let mut command = self.command();
         command.served.remove(id);
         command.read.remove(id);
+        command.walking.remove(id);
     }
 
     /// Take the entry for `id` out of service for every process before a write of it is
@@ -527,9 +576,15 @@ impl SourceCache {
     /// version it holds. Only a removal, or the entry shown absent, counts: that this process
     /// cannot open the file says nothing about another — it may have descriptors to spare, or
     /// other permissions — so a file still there refuses the write.
+    ///
+    /// Every entry naming `id` is retired, not only its task's: a write can change a project or
+    /// a document of that id, or turn one kind into another.
     pub(crate) fn retire_before_write(&self, id: &NativeId) -> Result<(), SourceError> {
         let path = self.task_path(id);
-        match self.retire(&path) {
+        match self
+            .retire(&path)
+            .and_then(|()| self.retire_kinds_before_write(id))
+        {
             Ok(()) => Ok(()),
             Err(error) => Err(SourceError::Config {
                 message: format!(
@@ -647,11 +702,12 @@ impl SourceCache {
         written
     }
 
-    /// Remove every entry this store wrote under `dir` for `remote`, answering how many task
+    /// Remove every entry this store wrote under `dir` for `remote`, answering how many item
     /// entries there were.
     ///
     /// A file is removed only when it reads as one of this store's entries for that remote — a
-    /// task entry under `tasks/`, the board entry, or a staging file this store left — so a
+    /// task entry under `tasks/`, an entry of another kind or a verified byte entry
+    /// (`kinds::empty_kinds`), the board entry, or a staging file this store left — so a
     /// `cache.dir` pointed at a directory holding anything else, another remote's cache
     /// included, loses nothing else. An entry of a schema this build does not know is another
     /// release's, and is left for that release to clear.
@@ -695,7 +751,7 @@ impl SourceCache {
         if board_entry(&board) {
             gone(std::fs::remove_file(&board))?;
         }
-        Ok(entries)
+        Ok(entries + kinds::empty_kinds(dir, remote)?)
     }
 }
 
