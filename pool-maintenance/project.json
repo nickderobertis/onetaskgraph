@@ -3,7 +3,7 @@
   "name": "pool-maintenance",
   "projectType": "library",
   "tags": ["lang:bash", "layer:host"],
-  "//": "The budget domain of the pool maintenance onevcs.toml declares: its budgets.yaml and the measurement that exists only for it. That measurement builds the workspace twice and times a real prune, so it is `budgets-host` alone, which no per-change path reaches: neither this project's `check` nor `just check`, `just test` or `just gate` names it, and the release pull request runs it by name after its gate (`just pool-maintenance-budget`, .github/workflows/ci.yml). It depends on no other project; the only edge is the one `workspace` has to every project.",
+  "//": "The budget domain of the pool maintenance onevcs.toml declares: its budgets.yaml and the measurement that exists only for it. That measurement builds the workspace twice and times a real prune, so it is `budgets-host` alone, which no per-change path reaches: neither this project's `check` nor `just check`, `just test` or `just gate` names it, and the release pull request runs the same check after its gate (`just pool-maintenance-budget`, which runs this command directly, in .github/workflows/ci.yml). It depends on no other project; the only edge is the one `workspace` has to every project.",
   "targets": {
     "bootstrap": {
       "executor": "nx:noop",

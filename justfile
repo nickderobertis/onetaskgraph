@@ -42,10 +42,12 @@ pool-maintenance:
 
 # The pool-maintenance pass-time budget. Deliberately outside `check` and `gate`: its
 # measurement builds the workspace twice. The release pull request runs it after its gate.
+# It runs onebudgetspec directly, as the pool-maintenance project's own `budgets-host`
+# target does, because a recipe naming an Nx target is read as a stage every gate runs.
 
 # Measure one steady-state pool-maintenance pass against its host-labelled budget.
 pool-maintenance-budget:
-    @{{nx}} run pool-maintenance:budgets-host
+    @bun run onebudgetspec check pool-maintenance/budgets.yaml --label host
 
 # Fails on any issue: there is no warnings-only mode. The phases are spelled out
 # rather than hidden behind one aggregate target so it is visible from here that the
