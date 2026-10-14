@@ -12,7 +12,7 @@
 
 use std::path::{Path, PathBuf};
 
-use onetaskgraph_github_projects::graphql;
+use onetaskgraph_github_projects::{DESIGN_TITLE_PREFIX, graphql};
 use serde_json::{Value, json};
 
 use crate::cache::Cached;
@@ -473,7 +473,11 @@ fn an_items_own_kind_change_is_never_answered_with_the_entry_of_its_old_kind() {
             "a task retitled into a document",
             "task",
             "document",
-            Box::new(|cached: &Cached| cached.board.edit_title("T-3", "DESIGN: Gamma")),
+            Box::new(|cached: &Cached| {
+                cached
+                    .board
+                    .edit_title("T-3", &format!("{DESIGN_TITLE_PREFIX}Gamma"))
+            }),
         ),
     ];
     for (change, was, becomes, make) in flips {
@@ -520,13 +524,21 @@ fn a_far_ends_kind_flip_or_retitle_into_a_document_is_read_from_the_board_in_eve
             "task",
             "board:T-4",
             "its far end T-2 retitled into a document",
-            Box::new(|cached: &Cached| cached.board.edit_title("T-2", "DESIGN: Beta")),
+            Box::new(|cached: &Cached| {
+                cached
+                    .board
+                    .edit_title("T-2", &format!("{DESIGN_TITLE_PREFIX}Beta"))
+            }),
         ),
         (
             "project",
             "board:P-1",
             "its far end P-2 retitled into a document",
-            Box::new(|cached: &Cached| cached.board.edit_title("P-2", "DESIGN: Docs")),
+            Box::new(|cached: &Cached| {
+                cached
+                    .board
+                    .edit_title("P-2", &format!("{DESIGN_TITLE_PREFIX}Docs"))
+            }),
         ),
     ];
     for (kind, id, change, make) in cases {

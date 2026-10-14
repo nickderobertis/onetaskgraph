@@ -26,7 +26,7 @@ use onetaskgraph_e2e_support::{
     fixtures::{GitHubBoardFields, document, github_projects_with_items},
     images,
 };
-use onetaskgraph_github_projects::worst_case_point_cost;
+use onetaskgraph_github_projects::{DESIGN_TITLE_PREFIX, worst_case_point_cost};
 use serde_json::{Value, json};
 
 use super::asset_board::Board;
@@ -162,7 +162,7 @@ impl Workload {
         for n in 0..scale.documents() - scale.images() {
             items.push(item(
                 &document_id(n),
-                &format!("DESIGN: Budget document {n}"),
+                &format!("{DESIGN_TITLE_PREFIX}Budget document {n}"),
                 &json!({}),
             ));
         }
@@ -432,9 +432,10 @@ impl Workload {
                 "projects" => self
                     .github
                     .edit_title(native, &format!("{native}, changed by a person")),
-                _ => self
-                    .github
-                    .edit_title(native, &format!("DESIGN: {native}, changed by a person")),
+                _ => self.github.edit_title(
+                    native,
+                    &format!("{DESIGN_TITLE_PREFIX}{native}, changed by a person"),
+                ),
             }
         }
     }
