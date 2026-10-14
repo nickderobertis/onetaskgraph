@@ -4378,6 +4378,7 @@ impl LinearWorkspace {
         });
     }
 
+    // llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] The shared e2e harness is where the agreed e2e layout puts every loopback server, `linear_workspace` above among them, so no suite copies one: the engine's own suite and the Linear suite both drive this loopback Linear, so its controls — a person changing what the workspace holds — can only be methods of its handle, as `edit_description` and `add_comment` already are.
     /// Change the held `collection` row `id` through `change`, as a person editing it in
     /// Linear would — moving its `updatedAt` when `moves` says Linear moves it for that change.
     fn change(&self, collection: &str, id: &str, moves: bool, change: impl FnOnce(&mut Value)) {
@@ -4586,6 +4587,7 @@ impl LinearWorkspace {
             );
         });
     }
+    // llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 
     /// Add one comment to an issue, as a person writing it in Linear would, answering with its
     /// id.
@@ -5728,6 +5730,7 @@ fn linear_response(
 /// `item`'s relations and inverse relations, each cut to the page a dependency read's `first` and
 /// `after` ask for, as Linear pages a connection: at most `first` rows after the cursor `after`,
 /// with `hasNextPage` saying whether more follow and `endCursor` where they resume.
+// llmlint: ignore[code_lands_in_the_domain_that_owns_it] The shared e2e harness is where the agreed e2e layout puts every loopback server, `linear_workspace` above among them, so no suite copies one: the engine's own suite and the Linear suite both drive this loopback Linear, so its answers are its own: how it pages a relations connection is part of answering a request, beside every other answer it gives here.
 fn linear_relation_page(mut item: Value, vars: &Value) -> Value {
     let first = vars["first"]
         .as_u64()
@@ -5753,6 +5756,7 @@ fn linear_relation_page(mut item: Value, vars: &Value) -> Value {
     item
 }
 
+// llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] The shared e2e harness is where the agreed e2e layout puts every loopback server, `linear_workspace` above among them, so no suite copies one: the engine's own suite and the Linear suite both drive this loopback Linear, so its answers are its own: recognising the documents an attached cache sends, and answering them, is part of answering a request, beside every other answer it gives here.
 /// The document the store's cache sends `operation` in place of, when it sends it in place of one.
 fn linear_uncached(operation: &str) -> Option<&'static str> {
     use onetaskgraph_linear::graphql;
@@ -5827,6 +5831,7 @@ fn linear_widen(operation: &str, answer: &mut Value, data: &Value, vars: &Value)
         }
     }
 }
+// llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 
 fn linear_write_item(
     data: &mut Value,
@@ -6655,6 +6660,7 @@ fn linear_project(v: &Value, data: &Value) -> Value {
     json!({"id":v["id"],"name":v["title"],"content":linear_description(v,"project_dependencies",data),"status":linear_project_status(&v["status"]),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"url":linear_web_address(v,"project"),"createdAt":null,"updatedAt":linear_updated(v),"archivedAt":null})
 }
 
+// llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] The shared e2e harness is where the agreed e2e layout puts every loopback server, `linear_workspace` above among them, so no suite copies one: the engine's own suite and the Linear suite both drive this loopback Linear, so its answers are its own: the `updatedAt` every answer above carries is part of answering a request.
 /// When this workspace last changed one item, as Linear's `updatedAt` answers it: the
 /// workspace's epoch until something Linear moves that time for changes it.
 fn linear_updated(v: &Value) -> Value {
@@ -6667,6 +6673,7 @@ fn linear_updated(v: &Value) -> Value {
 /// When every item of a loopback Linear workspace last changed before anything changed it —
 /// the day its fixtures were recorded.
 const LINEAR_EPOCH: &str = "2026-08-24T00:00:00Z";
+// llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 
 /// One Linear document. It has no `labels` field and no `state`, because Linear's own
 /// published `Document` has neither — which is what the `linear` row of the table above
