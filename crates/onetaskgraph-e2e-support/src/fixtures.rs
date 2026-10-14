@@ -4311,6 +4311,7 @@ pub fn linear_workspace(sandbox: &Sandbox, held: Value) -> (Value, LinearWorkspa
     let workspace = LinearWorkspace {
         state: Arc::new(Mutex::new(linear_with_comments(held))),
         ledger: Arc::new(Mutex::new(Vec::new())),
+        answers: Arc::new(Mutex::new(Vec::new())),
         hooks: Arc::new(Mutex::new(Vec::new())),
     };
     let config = linear_serve(sandbox, workspace.clone(), None, &[]);
@@ -4346,6 +4347,8 @@ pub fn linear_workspace_with(
 pub struct LinearWorkspace {
     state: Arc<Mutex<Value>>,
     ledger: Arc<Mutex<Vec<(String, Value)>>>,
+    /// What this workspace answered each of those requests with, at the same index.
+    answers: Arc<Mutex<Vec<Value>>>,
     hooks: Arc<Mutex<Vec<LinearHook>>>,
 }
 
@@ -4617,6 +4620,12 @@ impl LinearWorkspace {
         self.ledger.lock().unwrap().clone()
     }
 
+    /// What this workspace answered each request [`served`](Self::served) names with, at the
+    /// same index: the response body, `data` or `errors`.
+    pub fn answered(&self) -> Vec<Value> {
+        self.answers.lock().unwrap().clone()
+    }
+
     /// The raw long-form field one held item carries — an issue's or a project's
     /// `description`, a document's `content` — exactly as this workspace would hand it back.
     pub fn long_form(&self, kind: &str, id: &str) -> Option<String> {
@@ -4751,6 +4760,7 @@ fn linear_server_over(
     let workspace = LinearWorkspace {
         state: Arc::new(Mutex::new(linear_with_comments(held))),
         ledger: Arc::new(Mutex::new(Vec::new())),
+        answers: Arc::new(Mutex::new(Vec::new())),
         hooks: Arc::new(Mutex::new(Vec::new())),
     };
     linear_serve(sandbox, workspace, recorded, failing)
@@ -4770,7 +4780,11 @@ fn linear_serve(
     recorded: Option<Value>,
     failing: &[&str],
 ) -> Value {
-    let (state, ledger) = (workspace.state.clone(), workspace.ledger.clone());
+    let (state, ledger, answers) = (
+        workspace.state.clone(),
+        workspace.ledger.clone(),
+        workspace.answers.clone(),
+    );
     sandbox.secrets_file("LINEAR_API_KEY=fixture-key\n");
     let listener = TcpListener::bind("127.0.0.1:0").expect("fixture listener");
     let endpoint = format!("http://{}/graphql", listener.local_addr().unwrap());
@@ -4882,6 +4896,10 @@ fn linear_serve(
             };
             if refused {
                 let text = json!({"errors":[{"message":LINEAR_REFUSED_WRITE}]}).to_string();
+                answers
+                    .lock()
+                    .unwrap()
+                    .push(json!({"errors":[{"message":LINEAR_REFUSED_WRITE}]}));
                 let _ = write!(
                     stream,
                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}",
@@ -4894,6 +4912,7 @@ fn linear_serve(
                     Ok(body) => ("200 OK", json!({"data":body})),
                     Err(message) => ("400 Bad Request", json!({"errors":[{"message":message}]})),
                 };
+            answers.lock().unwrap().push(response.clone());
             // Answered, and not yet sent: a change made here is one the next request sees and
             // this one did not.
             let due: Vec<LinearHook> = {

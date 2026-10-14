@@ -81,3 +81,18 @@ budgets:
     unit: copies
     direction: max
     threshold: 0
+  - id: linear-cache-cost-not-above-uncached
+    description: >-
+      An inner measure of the shared Linear key's allowance that no check may spend: one hour of
+      the assumed workload — three hosts, each a cold and a warm pass over 10 projects, 40
+      documents and 60 issues — driven through the binary against the loopback Linear with the
+      cache on and off, each request priced from the complexity table spike-linear-coverage-report
+      measured, the larger of 1x and 10x of cache on minus cache off. It protects every manager's
+      share of that key from complexity the cache adds.
+    labels: [linear]
+    measure: reported
+    # llmlint: ignore[budget_commands_measure_directly] Every budget of this file names the crate's one shared report-only runner, budget_runner::report, which reads the record ONEBUDGETSPEC_BUDGET_ID selects; this one follows that convention, as its task fixes. The runner reads only the telemetry the journey recorded and hands it to onebudgetspec, which alone judges it.
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
+    unit: points
+    direction: max
+    threshold: 0

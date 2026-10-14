@@ -84,7 +84,23 @@ pub fn recorded(budget: &str) -> Result<(f64, Option<String>), String> {
     })?;
     let recorded: serde_json::Value = serde_json::from_str(&text)
         .map_err(|error| format!("{budget}: {} is not JSON ({error})", path.display()))?;
-    let value = if budget.starts_with("linear-asset-") || budget.starts_with("linear-concurrent-") {
+    let value = if budget == crate::cache_budget::BUDGET {
+        // Cache on minus cache off: a whole number of complexity points, negative where the cache
+        // saves, recorded only for the workload the budget states.
+        if recorded["workload"].as_str() != Some(crate::cache_budget::WORKLOAD) {
+            return Err(format!(
+                "{budget}: the recording is not of the workload the budget states, {}",
+                crate::cache_budget::WORKLOAD
+            ));
+        }
+        recorded["value"].as_i64().ok_or_else(|| {
+            format!(
+                "{budget}: {} records no `value` that is a whole number of complexity points: \
+                 {text}",
+                path.display()
+            )
+        })? as f64
+    } else if budget.starts_with("linear-asset-") || budget.starts_with("linear-concurrent-") {
         let concurrent = budget.ends_with("copies-refused");
         let large = concurrent || budget.ends_with("copy-seconds");
         let expected = if concurrent {

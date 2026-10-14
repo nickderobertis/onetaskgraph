@@ -459,19 +459,17 @@ fn read_visibility(budget: &str) -> Result<(f64, String), String> {
 /// its workload with every sequence measured in both modes, and its figure the largest
 /// difference among them.
 fn read_cache_points(budget: &str) -> Result<(f64, String), String> {
-    use super::cache_budget::{SEQUENCES, WORKLOAD};
+    use super::cache_budget::{KINDS, SCALES, SEQUENCES, WORKLOAD};
     let value = recorded(budget)?;
     if value["workload"].as_str() != Some(WORKLOAD) {
-        return Err("workload does not match the four-sequence board workload".into());
+        return Err("workload does not match the board workload at 1x and 10x".into());
     }
     let figure = value["value"]
         .as_i64()
         .ok_or("missing whole-number figure")?;
-    let mut largest = i64::MIN;
-    for sequence in SEQUENCES {
-        let measured = &value["sequences"][sequence];
-        // A point count is a whole number of points spent, never negative, and small enough
-        // that the difference of two cannot overflow.
+    // A point count is a whole number of points spent, never negative, and small enough that
+    // the difference of two cannot overflow.
+    let difference = |measured: &Value, what: &str| -> Result<i64, String> {
         let points = |mode: &str| {
             measured[mode]["points"]
                 .as_u64()
@@ -479,16 +477,27 @@ fn read_cache_points(budget: &str) -> Result<(f64, String), String> {
         };
         let (Some(on), Some(off)) = (points("on"), points("off")) else {
             return Err(format!(
-                "sequence {sequence} is not measured in both modes as whole point counts"
+                "{what} is not measured in both modes as whole point counts"
             ));
         };
-        let difference = on
-            .checked_sub(off)
-            .ok_or("a sequence's point counts are out of range")?;
-        largest = largest.max(difference);
+        on.checked_sub(off)
+            .ok_or_else(|| format!("{what}'s point counts are out of range"))
+    };
+    let mut largest = i64::MIN;
+    for (scale, _) in SCALES {
+        let at = &value["scales"][scale];
+        for kind in KINDS {
+            for sequence in SEQUENCES {
+                largest = largest.max(difference(
+                    &at["kinds"][kind][sequence],
+                    &format!("{scale} {kind} {sequence}"),
+                )?);
+            }
+        }
+        largest = largest.max(difference(&at["total"], &format!("the {scale} total"))?);
     }
     if largest != figure {
-        return Err("the figure is not the largest difference the sequences record".into());
+        return Err("the figure is not the largest difference the recording holds".into());
     }
     let detail = value["detail"].as_str().ok_or("missing detail")?.to_owned();
     let figure = i32::try_from(figure).map_err(|_| "the figure is out of range")?;
