@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.6.1...onetaskgraph-github-projects-v0.7.0) - 2026-10-14
+
+### Added
+
+- *(cache)* [**breaking**] cache every vouched project and document read ([#3609](https://github.com/nickderobertis/onetaskgraph/pull/3609))
+
 ## [0.6.1](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.6.0...onetaskgraph-github-projects-v0.6.1) - 2026-10-14
 
 ### Performance
