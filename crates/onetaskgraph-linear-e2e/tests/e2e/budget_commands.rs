@@ -172,3 +172,21 @@ fn the_telemetry_the_journeys_write_is_what_test_declares_and_budgets_hashes() {
         );
     }
 }
+
+#[test]
+fn the_query_guard_the_cache_journey_reports_is_the_threshold_onebudgetspec_enforces() {
+    let file: Value = serde_saphyr::from_str(&manifest("budgets.yaml")).expect("budgets.yaml");
+    let guard = file["budgets"]
+        .as_array()
+        .expect("a list of budgets")
+        .iter()
+        .find(|budget| budget["id"] == crate::cache_budget::GUARD)
+        .expect("the guard is declared");
+    assert_eq!(
+        guard["threshold"].as_u64(),
+        Some(crate::cache_budget::price::GUARD),
+        "cache_budget::price::GUARD is what {} enforces",
+        crate::cache_budget::GUARD
+    );
+    assert_eq!(guard["direction"], "max");
+}

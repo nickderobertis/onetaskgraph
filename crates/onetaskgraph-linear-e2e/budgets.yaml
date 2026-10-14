@@ -83,14 +83,10 @@ budgets:
     threshold: 0
   - id: linear-cache-cost-not-above-uncached
     description: >-
-      An inner measure of the shared Linear key's allowance that no check may spend: one hour of
-      the assumed workload — three hosts, each a cold and a warm pass over 10 projects, 40
-      documents and 60 issues — driven through the binary against the loopback Linear with the
-      cache on and off. The figure is requests saved: the smaller of 1x and 10x of the hour's
-      requests with the cache off minus with it on, so it passes only when the cache sends
-      strictly fewer requests than no cache at both scales. Requests are what the key's 2,500 an
-      hour per user runs out of first; it protects every manager's share of that key from
-      requests the cache adds.
+      The requests one hour of the assumed workload saves with the Linear cache on — three hosts,
+      each a cold and a warm pass over 10 projects, 40 documents and 60 issues against the
+      loopback Linear — the smaller of 1x and 10x of cache off minus cache on. It protects the
+      shared key's 2,500 requests an hour from what the cache adds.
     labels: [linear]
     measure: reported
     # llmlint: ignore[budget_commands_measure_directly] Every budget of this file names the crate's one shared report-only runner, budget_runner::report, which reads the record ONEBUDGETSPEC_BUDGET_ID selects; this one follows that convention, as its task fixes. The runner reads only the telemetry the journey recorded and hands it to onebudgetspec, which alone judges it.
@@ -100,11 +96,9 @@ budgets:
     threshold: 1
   - id: linear-cache-largest-query-complexity
     description: >-
-      An inner measure of Linear's per-query complexity cap of 10,000, which refuses a query
-      outright: the dearest single query any cached or remote Linear read sends with the cache
-      on, over the same hour of the assumed workload at 1x and 10x, each request priced from the
-      complexity table spike-linear-coverage-report measured. It protects every widened read from
-      coming within 10% of that cap.
+      The dearest single query any Linear read sends with the cache on over the same hour at 1x
+      and 10x. It protects every widened read from Linear's per-query complexity cap of 10,000,
+      which refuses a query outright.
     labels: [linear]
     measure: reported
     # llmlint: ignore[budget_commands_measure_directly] As the cache cost budget above: the crate's one shared report-only runner reads the record ONEBUDGETSPEC_BUDGET_ID selects and hands it to onebudgetspec, which alone judges it.

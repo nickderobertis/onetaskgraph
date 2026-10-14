@@ -4311,6 +4311,7 @@ pub fn linear_workspace(sandbox: &Sandbox, held: Value) -> (Value, LinearWorkspa
     linear_workspace_failing(sandbox, held, &[])
 }
 
+// llmlint: ignore[code_lands_in_the_domain_that_owns_it] As `linear_workspace` above: the shared e2e harness is where the agreed e2e layout puts every loopback server and its constructors, so no suite copies one, and the Linear suite's rollback journey needs this one's refusal beside the handle the engine's own suite drives too.
 /// [`linear_workspace`], refusing each operation `failing` names once, as
 /// [`linear_failing_a_relation_write_once`] refuses one: a copy whose last write is refused,
 /// and which takes back what it wrote.
@@ -4627,6 +4628,7 @@ impl LinearWorkspace {
         row["updatedAt"] = json!(stamp);
     }
 
+    // llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] The shared e2e harness is where the agreed e2e layout puts every loopback server, `linear_workspace` above among them, so no suite copies one: the engine's own suite and the Linear suite both drive this loopback Linear, so its controls — a person changing what the workspace holds — can only be methods of its handle, as `edit_description` and `add_comment` already are.
     /// Delete one comment, as its author would in Linear: no issue's `updatedAt` moves for it, as
     /// `spike-linear-coverage` measured.
     pub fn delete_comment(&self, comment: &str) {
@@ -4681,6 +4683,7 @@ impl LinearWorkspace {
             .expect("the projects")
             .retain(|row| row["id"] != id);
     }
+    // llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 
     /// Every request this workspace answered, as its GraphQL document and its variables, in
     /// the order they arrived.

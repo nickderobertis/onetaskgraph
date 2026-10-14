@@ -383,8 +383,20 @@ impl SourceCache {
         }
     }
 
-    /// Every entry file of `kind` this cache's directory holds.
+    /// Every entry file of `kind` this cache's directory holds: each `.json` file there that reads
+    /// whole as one of this store's entries of that kind, schema and remote — and each this
+    /// process cannot read at all, which another process may still read as one. A file that
+    /// reads as anything else is not this store's, and is never touched.
     fn kind_files(&self, kind: EntryKind) -> std::io::Result<Vec<PathBuf>> {
+        let ours = |path: &Path| match std::fs::read(path) {
+            Err(_) => true,
+            Ok(bytes) => serde_json::from_slice::<Value>(&bytes).is_ok_and(|value| {
+                value.get("schema").and_then(Value::as_u64) == Some(u64::from(KIND_ENTRY_SCHEMA))
+                    && value.get("kind") == serde_json::to_value(kind).ok().as_ref()
+                    && value.get("remote").and_then(Value::as_str) == Some(self.remote.as_str())
+                    && reads_whole(kind, value)
+            }),
+        };
         match std::fs::read_dir(self.dir.join(kind.directory())) {
             Ok(listed) => Ok(listed
                 .filter_map(Result::ok)
@@ -392,6 +404,7 @@ impl SourceCache {
                 .filter(|path| {
                     path.extension()
                         .is_some_and(|extension| extension == "json")
+                        && ours(path)
                 })
                 .collect()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),

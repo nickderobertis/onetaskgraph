@@ -3023,7 +3023,7 @@ impl TaskSource for LinearSource {
         query: &TaskQuery,
         page: &PageRequest,
     ) -> Result<Page<Task>, SourceError> {
-        let d=self.send(self.issue_document(ISSUES),json!({"first":page.limit.min(MAX_PAGE_SIZE),"after":page.cursor.as_ref().map(|c|&c.0),"filter":self.issue_filter(query)?})).await?;
+        let d=self.send(self.read_document(ISSUES),json!({"first":page.limit.min(MAX_PAGE_SIZE),"after":page.cursor.as_ref().map(|c|&c.0),"filter":self.issue_filter(query)?})).await?;
         let page = connection(&d, "issues", |v| {
             map_task(v, &self.name, &self.statuses, self.attached())
         })?;
@@ -3042,7 +3042,7 @@ impl TaskSource for LinearSource {
         page: &PageRequest,
     ) -> Result<Page<Project>, SourceError> {
         // llmlint: ignore[changed_behavior_has_e2e] The shared CLI journey `every_complete_dataset_source_filters_projects_by_label_status_and_text` asserts that Linear status filtering returns only P-2 and reports native pushdown; `item_reads_and_transport_error_boundaries_are_exercised` separately asserts the serialized `status:{name:{eqIgnoreCase:…}}` predicate the mapping names.
-        let d=self.send(self.issue_document(PROJECTS),json!({"first":page.limit.min(self.projects_page()),"after":page.cursor.as_ref().map(|c|&c.0),"filter":self.project_filter(&query.labels,&query.statuses)})).await?;
+        let d=self.send(self.read_document(PROJECTS),json!({"first":page.limit.min(self.projects_page()),"after":page.cursor.as_ref().map(|c|&c.0),"filter":self.project_filter(&query.labels,&query.statuses)})).await?;
         let page = connection(&d, "projects", |v| {
             map_project(v, &self.statuses, self.attached())
         })?;
@@ -3079,7 +3079,7 @@ impl TaskSource for LinearSource {
         page: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
         self.dependencies(
-            self.issue_document(ISSUE_RELATIONS),
+            self.read_document(ISSUE_RELATIONS),
             DependencyRoot::Issue,
             id,
             direction,
@@ -3094,7 +3094,7 @@ impl TaskSource for LinearSource {
         page: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
         self.dependencies(
-            self.issue_document(PROJECT_RELATIONS),
+            self.read_document(PROJECT_RELATIONS),
             DependencyRoot::Project,
             id,
             direction,
@@ -4078,7 +4078,7 @@ impl LinearSource {
 
     /// The document a read sends: `plain`, or — while the cache stands in front of this source
     /// — its counterpart carrying what a `lin1` token's parts are read from.
-    fn issue_document(&self, plain: &'static str) -> &'static str {
+    fn read_document(&self, plain: &'static str) -> &'static str {
         if !self.attached() {
             return plain;
         }
@@ -4219,7 +4219,7 @@ impl LinearSource {
         read: Read,
     ) -> Result<Option<(Task, Option<String>)>, SourceError> {
         let document = match read {
-            Read::Load => self.issue_document(ISSUE),
+            Read::Load => self.read_document(ISSUE),
             Read::ForWrite => ISSUE,
         };
         let data = self.send(document, json!({"id":id.0})).await?;
@@ -4246,7 +4246,7 @@ impl LinearSource {
         }
         let data = self
             .send(
-                self.issue_document(graphql::ISSUE_DETAIL),
+                self.read_document(graphql::ISSUE_DETAIL),
                 json!({"id":id.0,"last":page.limit.min(MAX_PAGE_SIZE),"before":page.cursor.as_ref().map(|c|&c.0)}),
             )
             .await?;
@@ -4274,7 +4274,7 @@ impl LinearSource {
         read: Read,
     ) -> Result<Option<(Project, Option<String>)>, SourceError> {
         let document = match read {
-            Read::Load => self.issue_document(PROJECT),
+            Read::Load => self.read_document(PROJECT),
             Read::ForWrite => PROJECT,
         };
         let data = self.send(document, json!({"id":id.0})).await?;

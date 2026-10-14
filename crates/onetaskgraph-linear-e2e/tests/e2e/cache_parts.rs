@@ -368,7 +368,7 @@ fn a_comment_or_edge_read_its_token_cannot_vouch_for_is_never_kept_or_served() {
         let cached = Cached::new(held());
         let pin = filled(&cached, &read);
         let other = cached.listed(read.kind, other).expect("a token");
-        let earlier = earlier_spelling(&pin);
+        let earlier = earlier_spelling(read.kind, &pin);
         for unordered in [other.as_str(), earlier.as_str(), "not-a-token", "gh3|x"] {
             let (_, sent) = cached.ok(&strs(&read.with(unordered)));
             assert_eq!(sent.len(), 1, "{}: {unordered} reads Linear", read.name);
@@ -383,16 +383,21 @@ fn a_comment_or_edge_read_its_token_cannot_vouch_for_is_never_kept_or_served() {
     }
 }
 
-/// `token` as the release before this one spelled an attached token: its time and facets, and a
-/// relations part alone.
-fn earlier_spelling(token: &str) -> String {
+/// `token`, of an item of `kind`, as the release before this one spelled an attached token: its
+/// time and facets, and — for a task — a relations part alone, where a project had none.
+fn earlier_spelling(kind: &str, token: &str) -> String {
     let mut parts = token.split('|');
     let (prefix, updated, facets) = (
         parts.next().expect("lin1"),
         parts.next().expect("a time"),
         parts.next().expect("the facets"),
     );
-    format!("{prefix}|{updated}|{facets}|r:{}", "0".repeat(64))
+    let base = format!("{prefix}|{updated}|{facets}");
+    if kind == "task" {
+        format!("{base}|r:{}", "0".repeat(64))
+    } else {
+        base
+    }
 }
 
 /// Whether the entry file at `path` names the native id `native`.
@@ -814,4 +819,167 @@ fn a_copy_taken_back_takes_every_edges_entry_its_deletes_can_change_out_of_servi
     );
     let (_, sent) = cached.ok(&strs(&PROJECT_EDGES.with(&project_pin)));
     assert_eq!(sent.len(), 1, "the next read is Linear's");
+}
+
+#[test]
+fn a_copy_reading_a_later_page_of_comments_answers_what_an_uncached_copy_does() {
+    let cached = Cached::new(held());
+    for n in 0..104 {
+        cached.workspace.add_comment("L-1", &format!("Word {n}."));
+    }
+    let copy = [
+        "task",
+        "copy",
+        "linear:L-1",
+        "--to",
+        "notes",
+        "--comments",
+        "--dry-run",
+        "--no-link",
+        "--json",
+    ];
+    for _ in 0..2 {
+        let (_, sent) = cached.ok(&copy);
+        let pages = sent
+            .iter()
+            .filter(|document| *document == graphql::ISSUE_DETAIL_CACHED)
+            .count();
+        assert!(pages >= 2, "every copy walks past the first page: {sent:?}");
+    }
+    let [on, off] = cached.on_and_off(&copy);
+    assert_eq!(on.0, off.0, "what an uncached copy reads");
+    let kept = cached
+        .dir()
+        .map(|dir| walk(&dir.join("tasks")))
+        .unwrap_or_default();
+    assert!(
+        !kept.iter().any(|path| holds(path, "L-1")),
+        "a task whose comments run past a page gives no token, and no page is kept: {kept:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_relation_write_whose_far_edges_entry_cannot_be_retired_is_refused_unsent() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let cached = Cached::new(held());
+    filled(&cached, &REVERSE_EDGES);
+    let dir = cached.dir().expect("a cache").join("reverse-edges-v2");
+    let path = entry(&cached.dir().expect("a cache"), "reverse-edges-v2", "L-2");
+    // The entry as a symlink to its own bytes, in a directory that will not let it go: it can be
+    // neither removed nor emptied, and every process still reads it.
+    let held_bytes = dir.join("held-elsewhere");
+    std::fs::rename(&path, &held_bytes).expect("moved aside");
+    std::os::unix::fs::symlink(&held_bytes, &path).expect("a symlink");
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).expect("read-only");
+    if std::fs::remove_file(&path).is_ok() {
+        // Running as a user no directory mode stops — nothing to prove here.
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).ok();
+        return;
+    }
+    let write = [
+        "task",
+        "update",
+        "linear:L-3",
+        "--depends-on",
+        "linear:L-2",
+        "--json",
+    ];
+    let before = cached.workspace.served().len();
+    let output = cached.run(&write);
+    let sent: Vec<String> = cached.workspace.served()[before..]
+        .iter()
+        .map(|(document, _)| document.clone())
+        .collect();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).expect("writable");
+    assert_ne!(output.status.code(), Some(0), "the write is refused");
+    let stderr = crate::common::stderr(&output);
+    assert!(
+        stderr.contains(&dir.parent().unwrap().display().to_string()),
+        "{stderr}"
+    );
+    assert!(
+        !sent.iter().any(|document| document.starts_with("mutation")),
+        "nothing was written: {sent:?}"
+    );
+    // With the directory writable again, the same write lands and the entry goes.
+    cached.ok(&write);
+    assert!(
+        std::fs::symlink_metadata(&path).is_err(),
+        "the entry is retired"
+    );
+}
+
+#[test]
+fn a_project_edge_walk_is_kept_only_when_read_whole_in_one_command() {
+    let mut workspace = held();
+    workspace["project_dependencies"]
+        .as_array_mut()
+        .expect("project relations")
+        .push(
+            json!({"from": {"id": "P-1"}, "to": {"id": "notes:NP-1", "kind": "project"},
+                     "kind": "blocks"}),
+        );
+    let relations = |sent: &[String]| {
+        sent.iter()
+            .filter(|document| *document == graphql::PROJECT_RELATIONS_CACHED)
+            .count()
+    };
+    // Its relations page, then its recorded far end's page: kept, and served next time.
+    let cached = Cached::new(workspace.clone());
+    let pin = cached.listed("project", "linear:P-1").expect("a token");
+    let (cold, sent) = cached.ok(&strs(&PROJECT_EDGES.with(&pin)));
+    assert_eq!(relations(&sent), 2, "a two-page walk: {sent:?}");
+    assert!(cold.to_string().contains("notes:NP-1"), "{cold}");
+    let (hit, sent) = cached.ok(&strs(&PROJECT_EDGES.with(&pin)));
+    assert_eq!(sent, Vec::<String>::new(), "kept whole");
+    assert_eq!(hit["items"], cold["items"], "every edge of both pages");
+
+    // The same walk a page a command resumes a walk the process never began: nothing is kept.
+    let cached = Cached::new(workspace);
+    let pin = cached.listed("project", "linear:P-1").expect("a token");
+    let mut first = PROJECT_EDGES.with(&pin);
+    first.extend(["--limit".to_owned(), "1".to_owned()]);
+    let (page, _) = cached.ok(&strs(&first));
+    let token = page["next"].as_str().expect("a second page").to_owned();
+    let mut second = first.clone();
+    second.extend(["--page".to_owned(), token]);
+    let (rest, _) = cached.ok(&strs(&second));
+    assert!(rest.to_string().contains("notes:NP-1"), "{rest}");
+    let kept = cached
+        .dir()
+        .map(|dir| walk(&dir.join("project-edges-v2")))
+        .unwrap_or_default();
+    assert!(
+        kept.is_empty(),
+        "a walk split across commands is not kept: {kept:?}"
+    );
+    let (_, sent) = cached.ok(&strs(&PROJECT_EDGES.with(&pin)));
+    assert_eq!(relations(&sent), 2, "the next command reads it from Linear");
+}
+
+#[test]
+fn cache_clear_reclaims_reverse_and_project_edge_entries_and_counts_them() {
+    let cached = Cached::new(held());
+    filled(&cached, &REVERSE_EDGES);
+    filled(&cached, &PROJECT_EDGES);
+    let dir = cached.dir().expect("a cache");
+    let entries = |directory: &str| walk(&dir.join(directory)).len();
+    assert_eq!(
+        (entries("reverse-edges-v2"), entries("project-edges-v2")),
+        (1, 1)
+    );
+    let foreign = dir.join("reverse-edges-v2/not-ours.json");
+    std::fs::write(&foreign, b"{\"kind\": \"something else\"}").expect("a foreign file");
+    let (cleared, _) = cached.ok(&["cache", "clear", "linear", "--json"]);
+    assert!(
+        cleared["cleared"][0]["entries"].as_u64() >= Some(2),
+        "both are counted: {cleared}"
+    );
+    assert_eq!(entries("project-edges-v2"), 0);
+    assert_eq!(
+        walk(&dir.join("reverse-edges-v2")),
+        [foreign],
+        "only this store's entries are removed"
+    );
 }

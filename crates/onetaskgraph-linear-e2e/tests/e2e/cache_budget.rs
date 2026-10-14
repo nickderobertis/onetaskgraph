@@ -86,7 +86,8 @@ pub(crate) mod price {
     pub(crate) const PROJECT_RELATIONS_PAGE: u64 = 25;
     /// Linear's per-query complexity cap.
     pub(crate) const CAP: u64 = 10_000;
-    /// The guard on any one query this workload sends with the cache on: 90% of [`CAP`].
+    /// The guard on any one query this workload sends with the cache on: 90% of [`CAP`], the
+    /// threshold `budgets.yaml` gives the guard's budget, which `budget_commands.rs` holds it to.
     pub(crate) const GUARD: u64 = 9_000;
 }
 
