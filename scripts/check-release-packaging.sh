@@ -4,11 +4,12 @@
 # The step is a `run: |` block inside .github/workflows/release.yml, and a release is the
 # only thing that runs it — so a defect in it was discoverable only by cutting a version.
 # Folding macOS into one job (#1991) turned that block into a loop over `TARGETS` pairs —
-# Apple Silicon alone now that Intel macOS is no longer released — and this reads the block out of the workflow and runs it here, against a
-# stand-in binary per target and a `gh` that records what it was asked to upload, so what
-# the fold packages is proven rather than read: one archive and one checksum uploaded per
-# target, under the names scripts/install.sh downloads, and one carrier tarball per npm
-# platform, in the directory and under the name scripts/publish-npm.sh reads.
+# Apple Silicon alone now that Intel macOS is no longer released — and this reads the
+# block out of the workflow and runs it here, against a stand-in binary per target and a
+# `gh` that records any upload, so what the fold packages is proven rather than read: one
+# archive and one checksum staged per target under the names scripts/install.sh
+# downloads, one carrier tarball per npm platform in the directory and under the name
+# scripts/publish-npm.sh reads, and nothing uploaded before the install proof.
 set -euo pipefail
 
 fatal() {
@@ -146,7 +147,6 @@ report_unless_archive_lists() {
   grep -qx -- "$2" <<<"$listing" || report "$3"
 }
 
-# 1. The step over every target, exactly as the job runs it.
 if ! (cd "$TREE" && PATH="$scratch/bin:$PATH" TARGETS="$targets" EXT=tar.gz TAG="$tag" GH_TOKEN=stand-in \
   bash "$scratch/package.sh") > "$scratch/package.log" 2>&1; then
   sed 's/^/    /' "$scratch/package.log" >&2
