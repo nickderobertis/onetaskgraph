@@ -1379,6 +1379,16 @@ subprocess-hosted plugin has no remote identity, so the engine keeps no cache of
   `DependsOn` read of a task spelled, so a dependency read can fill an entry when nothing else
   in the command read the task. Those edges are served only to a pin that version is at or
   after, and never vouch for the task's own fields. Defaulted to none.
+- `edges_version` — the same, for any item kind and either direction: the token the response
+  that answered the source's last first-page dependency read of that item in that direction
+  spelled. A project's forward edges and a task's reverse ones are kept only at a version it
+  gives, and served only to a pin that version is at or after. Defaulted to
+  `forward_edges_version` for a task's forward edges and none otherwise.
+- `reverse_edges_coverage` — whether the task token vouches for a task's reverse edges, which
+  are recorded on the tasks that depend on it. Defaulted to not covering them, with a reason.
+- `comments_version` — the token the response that answered the source's last read of a task's
+  comments from their first page spelled, so a comment listing can fill an entry when nothing
+  else in the command read the task. Defaulted to none.
 - `remote_identity`, on `SourcePlugin` — what names the remote it reads, which the cache
   directory is a digest of.
 - `write_context`, `board_context`, `prime_write` and `unprime` — opaque records the cache

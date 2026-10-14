@@ -168,6 +168,61 @@ pub trait TaskSource: Send + Sync {
         None
     }
 
+    /// The change token the response that answered this source's last dependency read of the
+    /// `kind` item `id` in `direction`, from its first page, spelled — or `None` when it spelled
+    /// none — on the terms of [`forward_edges_version`](Self::forward_edges_version), which is
+    /// what it answers for a task's [`Direction::DependsOn`].
+    ///
+    /// What lets the store's cache keep a project's forward edges, and a task's reverse ones, by
+    /// the version they were read at: a project's are served only where
+    /// [`project_version_coverage`](Self::project_version_coverage) covers its forward edges, a
+    /// task's reverse ones only where [`reverse_edges_coverage`](Self::reverse_edges_coverage)
+    /// covers them, and each only to a pin that version is at or after. Synchronous, and never
+    /// carried over the plugin protocol.
+    ///
+    /// Defaulted to [`forward_edges_version`](Self::forward_edges_version) for a task's forward
+    /// edges and to `None` for every other read, which keeps those remote.
+    fn edges_version(&self, kind: ItemKind, id: &NativeId, direction: Direction) -> Option<String> {
+        match (kind, direction) {
+            (ItemKind::Task, Direction::DependsOn) => self.forward_edges_version(id),
+            _ => None,
+        }
+    }
+
+    /// Whether this source's [`Task::version`] vouches for a task's reverse edges — what a
+    /// [`Direction::DependedOnBy`] read answers — so the store's cache may serve them.
+    ///
+    /// A reverse edge is recorded on another item, so a token vouches for one only where it
+    /// carries a part that moves whenever one is added to or removed from that other item —
+    /// which no part of a task's own fields does. Never carried over the plugin protocol.
+    ///
+    /// Defaulted to not covering them, with that reason.
+    fn reverse_edges_coverage(&self) -> crate::Coverage {
+        crate::Coverage::Uncovered {
+            reason: format!(
+                "the {} plugin does not declare that its change token covers a task's reverse \
+                 edges, which are recorded on the tasks that depend on it",
+                self.kind()
+            ),
+        }
+    }
+
+    /// The change token the response that answered this source's last read of task `id`'s
+    /// comments from their first page — [`task_comments`](Self::task_comments) — spelled, or
+    /// `None` when it spelled none.
+    ///
+    /// What lets the store's cache keep a task's comments by the version they were read at when
+    /// nothing else in the command read the task: they are served only where
+    /// [`version_coverage`](Self::version_coverage) covers comments, and only to a pin that
+    /// version is at or after. Synchronous, and never carried over the plugin protocol.
+    ///
+    /// Defaulted to `None`, which keeps a comment read the cache did not answer from filling
+    /// anything.
+    fn comments_version(&self, id: &NativeId) -> Option<String> {
+        let _ = id;
+        None
+    }
+
     /// What this source holds about task `id` — the item it read last in this process — that
     /// a later write expecting that version of it could take instead of reading it again, or
     /// `None` when it holds nothing of the kind.
