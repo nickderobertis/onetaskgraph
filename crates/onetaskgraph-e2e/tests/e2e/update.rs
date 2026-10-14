@@ -1070,7 +1070,7 @@ fn removing_the_only_metadata_key_takes_the_block_with_it_and_a_doubled_key_is_r
     // YAML refuses the file before any removal is tried, naming the key it repeats and where.
     let said = stderr(&refused);
     assert!(
-        said.contains("tasks/D.md: metadata.?: duplicate mapping key: a.b")
+        said.contains("D.md: metadata.?: duplicate mapping key: a.b")
             && said.contains("at line 5, column 3")
             && said.contains("next:"),
         "{said}"

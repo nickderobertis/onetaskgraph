@@ -102,7 +102,8 @@ fn shown<T: serde::Serialize, E: std::fmt::Display>(result: Result<T, E>) -> Val
 }
 
 /// What a read of the record answers: the item, its stored answers and, for a task, its
-/// forward edges — with the store's own path spelled `<store>`, so two copies compare.
+/// forward edges — with the store's own path spelled `<store>` and its separators `/`, so
+/// two copies compare.
 pub async fn read(source: &dyn TaskSource, root: &Path, relative: &str, folder: &str) -> Value {
     let id = id_of(relative, folder);
     let (item, answers) = match folder {
@@ -137,7 +138,19 @@ pub async fn read(source: &dyn TaskSource, root: &Path, relative: &str, folder: 
     let spelled = serde_json::to_string(&observed).expect("renders");
     let root = serde_json::to_string(&root.to_string_lossy()).expect("renders");
     let root = &root[1..root.len() - 1];
-    serde_json::from_str(&spelled.replace(root, "<store>")).expect("still JSON")
+    let mut observed = serde_json::from_str(&spelled.replace(root, "<store>")).expect("still JSON");
+    separated_by_slashes(&mut observed);
+    observed
+}
+
+/// Spells every path under `<store>` with `/`, so a store read on Windows compares too.
+fn separated_by_slashes(value: &mut Value) {
+    match value {
+        Value::String(text) if text.starts_with("<store>") => *text = text.replace('\\', "/"),
+        Value::Array(items) => items.iter_mut().for_each(separated_by_slashes),
+        Value::Object(fields) => fields.values_mut().for_each(separated_by_slashes),
+        _ => {}
+    }
 }
 
 /// What every record of the store at `root` reads as.
