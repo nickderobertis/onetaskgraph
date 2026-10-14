@@ -238,9 +238,11 @@ test("wheel extraction reports corrupt archives and destination IO failures thro
       `import subprocess, sys, tempfile, zipfile
 from pathlib import Path
 with tempfile.TemporaryDirectory() as temporary:
-    tree = Path(temporary)
+    tree = Path(temporary) / 'dist/wheels/aarch64-apple-darwin'
+    tree.mkdir(parents=True)
     wheel = tree / 'cli.whl'
-    binary = tree / 'output/onetaskgraph'
+    binary = Path(temporary) / 'target/aarch64-apple-darwin/release/onetaskgraph'
+    binary.parent.parent.mkdir(parents=True)
     command = [sys.executable, 'scripts/release-wheel-binary.py', '--wheels', str(tree), '--binary', str(binary)]
     wheel.write_bytes(b'corrupt ZIP')
     rejected = subprocess.run(command, capture_output=True, text=True)
@@ -257,6 +259,35 @@ with tempfile.TemporaryDirectory() as temporary:
     installed = subprocess.run(command, capture_output=True, text=True)
     assert installed.returncode == 0, installed.stderr
     assert binary.read_bytes() == b'payload'
+`,
+    ],
+    { cwd: root, stdio: "pipe" },
+  );
+});
+
+test("wheel extraction refuses paths outside the release layout before writing", () => {
+  execFileSync(
+    "python3",
+    [
+      "-c",
+      `import subprocess, sys, tempfile, zipfile
+from pathlib import Path
+with tempfile.TemporaryDirectory() as temporary:
+    root = Path(temporary)
+    wheels = root / 'dist/wheels/aarch64-apple-darwin'
+    wheels.mkdir(parents=True)
+    with zipfile.ZipFile(wheels / 'cli.whl', 'w') as archive:
+        archive.writestr('cli.data/scripts/onetaskgraph', b'payload')
+    stray = root / 'elsewhere/onetaskgraph'
+    for wheel_dir, binary, flag in [
+        (root / 'dist', root / 'target/aarch64-apple-darwin/release/onetaskgraph', '--wheels'),
+        (wheels, stray, '--binary'),
+        (wheels, root / 'target/x86_64-unknown-linux-gnu/release/onetaskgraph', '--binary'),
+    ]:
+        rejected = subprocess.run([sys.executable, 'scripts/release-wheel-binary.py', '--wheels', str(wheel_dir), '--binary', str(binary)], capture_output=True, text=True)
+        assert rejected.returncode == 2, rejected.stderr
+        assert flag + ' must be' in rejected.stderr and 'next:' in rejected.stderr, rejected.stderr
+        assert not binary.exists()
 `,
     ],
     { cwd: root, stdio: "pipe" },

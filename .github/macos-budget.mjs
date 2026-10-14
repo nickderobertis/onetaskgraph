@@ -5,6 +5,7 @@ import { digest } from "./workflow-graph.mjs";
 
 try {
   const args = process.argv.slice(2);
+  // llmlint: ignore[budget_commands_measure_directly] The two metrics are the task's fixed command surface over one recorded telemetry file; validating them here refuses any other figure rather than adding a per-budget measurement.
   if (
     args.length !== 4 ||
     args[0] !== "--metric" ||

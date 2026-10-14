@@ -1,6 +1,7 @@
 """Use maturin's wheel binary as the single payload of the other release forms."""
 import argparse
 import os
+import re
 import sys
 from pathlib import Path
 import zipfile
@@ -9,10 +10,19 @@ parser = argparse.ArgumentParser(description=__doc__, epilog='Exit codes: 0 extr
 parser.add_argument('--wheels', type=Path, required=True)
 parser.add_argument('--binary', type=Path, required=True)
 args = parser.parse_args()
+# Both callers in release.yml name dist/wheels/<target> and target/<target>/release/<cli>;
+# anything else would write a binary the archive, carrier and wheel forms never read.
+target = args.wheels.name
+if not re.fullmatch(r'[a-z0-9_]+(?:-[a-z0-9_]+)+', target) or args.wheels.parent.name != 'wheels':
+    parser.error(f'--wheels must be a wheels/<rust target> directory, got {args.wheels}; next: pass dist/wheels/<target> as release.yml does')
+if args.binary.name not in ('onetaskgraph', 'onetaskgraph.exe') or args.binary.parent.name != 'release' or args.binary.parent.parent.name != target or args.binary.parent.parent.parent.name != 'target':
+    parser.error(f'--binary must be target/{target}/release/onetaskgraph[.exe], got {args.binary}; next: name the release binary of the same target as --wheels')
 try:
+    # llmlint: ignore[async_typed_clients_at_boundaries] One synchronous local extraction step inside an ordered release job; there is no service client and no concurrent work.
     wheels = list(args.wheels.glob('*.whl'))
     if len(wheels) != 1:
         parser.error(f'expected one wheel in {args.wheels}, found {len(wheels)}; next: clean that target wheel directory and rebuild it with maturin')
+    # llmlint: ignore[async_typed_clients_at_boundaries] One synchronous local extraction step inside an ordered release job; there is no service client and no concurrent work.
     with zipfile.ZipFile(wheels[0]) as wheel:
         scripts = [p for p in wheel.namelist() if '.data/scripts/' in p and Path(p).name in ('onetaskgraph', 'onetaskgraph.exe')]
         if len(scripts) != 1:

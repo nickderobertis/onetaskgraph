@@ -83,8 +83,9 @@ jobs:
         shell: bash
         run: just distribution-test
 
-  # The three required OS lanes. All three are required because this ships a
-  # cross-platform command-line tool whose install path CI has to prove on the real
+  # The Linux and Windows required lanes; macOS runs in the one combined job below and
+  # reaches `check (macos-latest)` through its carrier. All three are required because this
+  # ships a cross-platform command-line tool whose install path CI has to prove on the real
   # matrix; affected selection is what keeps that affordable.
   check:
     name: check (${{ matrix.os }})

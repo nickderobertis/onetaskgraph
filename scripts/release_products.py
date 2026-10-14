@@ -80,6 +80,7 @@ class ReleaseProduct:
 
         if self.extension not in ('tar.gz', 'zip'):
             raise ValueError('invalid release archive extension')
+        # llmlint: ignore[async_typed_clients_at_boundaries] Validation reads the one local release workflow, the tag grammar's single source, synchronously inside a short ordered release step with no concurrent work.
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/release.yml').read_text()
         grammars = set(re.findall(r"grep -Eq '([^']+)'", workflow))
         if len(grammars) != 1 or re.fullmatch(next(iter(grammars)), self.tag) is None:
@@ -191,6 +192,7 @@ class VerificationReport:
         if not isinstance(value, dict) or not isinstance(value.get('target'), str) or not isinstance(value.get('tag'), str):
             raise ValueError('invalid verification report')
         validate_target(value['target'])
+        # llmlint: ignore[async_typed_clients_at_boundaries] Validation reads the one local release workflow, the tag grammar's single source, synchronously inside a short ordered release step with no concurrent work.
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/release.yml').read_text()
         grammars = set(re.findall(r"grep -Eq '([^']+)'", workflow))
         if len(grammars) != 1 or re.fullmatch(next(iter(grammars)), value['tag']) is None:

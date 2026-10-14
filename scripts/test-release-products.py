@@ -91,7 +91,8 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
         shutil.copytree(root / 'npm/platforms', tree / 'npm/platforms')
         wheels = tree / 'dist/wheels' / target
         shutil.copytree(wheel_dir.resolve(), wheels)
-        extraction = [PYTHON_EXECUTABLE, 'scripts/release-wheel-binary.py', '--wheels', str(wheels), '--binary', str(tree / 'rejected-binary')]
+        canonical = tree / f'target/{target}/release/{binary}'
+        extraction = [PYTHON_EXECUTABLE, 'scripts/release-wheel-binary.py', '--wheels', str(wheels), '--binary', str(canonical)]
         wheel_path, = wheels.glob('*.whl')
         original_wheel = wheel_path.read_bytes()
         wheel_path.unlink()
@@ -110,10 +111,9 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
                 for entry in entries:
                     malformed.writestr(entry, b'invalid')
             rejected = subprocess.run(extraction, cwd=tree, capture_output=True, text=True)
-            if rejected.returncode == 0 or 'exactly one CLI' not in rejected.stderr or (tree / 'rejected-binary').exists():
+            if rejected.returncode == 0 or 'exactly one CLI' not in rejected.stderr or canonical.exists():
                 raise ValueError('malformed wheel scripts were accepted by extraction')
         wheel_path.write_bytes(original_wheel)
-        canonical = tree / f'target/{target}/release/{binary}'
         subprocess.run([PYTHON_EXECUTABLE, 'scripts/release-wheel-binary.py', '--wheels', str(wheels), '--binary', str(canonical)], cwd=tree, check=True, stdout=subprocess.DEVNULL)
         env = {**os.environ, 'TARGETS': f'{target}={selected.npm_platform}', 'EXT': selected.extension, 'TAG': f'v{version}'}
         subprocess.run([bash_executable(platform.system()), '-c', body], cwd=tree, env=env, check=True)
