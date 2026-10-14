@@ -68,7 +68,7 @@ wheel_job=$(sed -n '/^  collect-wheels:/,/^  build-distributions:/p' .github/wor
 grep -Fq 'runs-on: ubuntu-latest' <<< "$wheel_job" || fail "wheel fan-in and asset attachment must run on Linux"
 grep -Fq 'pattern: "wheels-*"' <<< "$wheel_job" || fail "wheel fan-in must read every built target"
 grep -Fq 'needs: [collect-wheels, macos-assets-carriers-and-wheels, build-distributions, publish-assets]' .github/workflows/release.yml || fail "publish-python must wait on installed macOS wheels and attached archives"
-grep -Fq 'needs: [native-assets-and-carriers, macos-assets-carriers-and-wheels, build-distributions, publish-assets]' .github/workflows/release.yml || fail "publish-npm must wait on installed Darwin carriers and attached archives"
+grep -Fq 'needs: [native-assets-carriers-and-wheels, macos-assets-carriers-and-wheels, build-distributions, publish-assets]' .github/workflows/release.yml || fail "publish-npm must wait on installed Darwin carriers and attached archives"
 grep -Fq 'gh release upload "$TAG" dist/assets/* --clobber --repo "$GITHUB_REPOSITORY"' .github/workflows/release.yml || fail "Linux release asset uploads must replace assets left by an earlier attempt"
 crate_job=$(sed -n '/^  publish-crates:/,/^  publish-python:/p' .github/workflows/release.yml)
 grep -Fq 'publication=$(scripts/crate-publication-status.sh "$crate" "$version") || exit $?' <<< "$crate_job" || fail "crate publication must decide from scripts/crate-publication-status.sh, which identifies the caller to crates.io"

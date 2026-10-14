@@ -41,7 +41,7 @@ class ReleaseTarget:
 def run(wheel_dir: Path, target: RustTarget) -> None:
     root = Path(__file__).resolve().parents[1]
     workflow = (root / '.github/workflows/release.yml').read_text()
-    native = re.search(r'(?ms)^  native-assets-and-carriers:\n(.*?)(?=^  [a-z-]+:)', workflow)
+    native = re.search(r'(?ms)^  native-assets-carriers-and-wheels:\n(.*?)(?=^  [a-z-]+:)', workflow)
     mac = re.search(r'(?ms)^  macos-assets-carriers-and-wheels:\n(.*?)(?=^  [a-z-]+:)', workflow)
     if native is None or mac is None:
         raise ValueError('release build jobs missing; restore their declared packaging paths')
@@ -148,7 +148,7 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
         refuses('checksum mismatch')
         checksum.write_bytes(original_checksum)
         checksum.unlink()
-        refuses('No such file')
+        refuses(f'missing archive checksum {checksum.name}')
         checksum.write_bytes(original_checksum)
         original_binary = canonical.read_bytes()
         canonical.write_bytes(original_binary + b'corrupt')

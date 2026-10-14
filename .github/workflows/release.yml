@@ -6,7 +6,7 @@ permissions:
   contents: read
 # llmlint: ignore-block[changed_behavior_has_e2e] Proving these jobs requires publishing a GitHub Release and registry packages, which a pre-publication dispatch cannot perform.
 jobs:
-  native-assets-and-carriers:
+  native-assets-carriers-and-wheels:
     strategy:
       matrix:
         include:
@@ -119,13 +119,13 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: { name: "wheels-aarch64-apple-darwin", path: dist/wheels/aarch64-apple-darwin }
   collect-wheels:
-    needs: [native-assets-and-carriers, macos-assets-carriers-and-wheels]
+    needs: [native-assets-carriers-and-wheels, macos-assets-carriers-and-wheels]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with: { pattern: "wheels-*", path: dist/wheels, merge-multiple: true }
   publish-assets:
-    needs: [native-assets-and-carriers, macos-assets-carriers-and-wheels]
+    needs: [native-assets-carriers-and-wheels, macos-assets-carriers-and-wheels]
     runs-on: ubuntu-latest
     permissions: { contents: write }
     steps:
@@ -134,7 +134,7 @@ jobs:
       - env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}", TAG: "${{ github.event.release.tag_name }}" }
         run: gh release upload "$TAG" dist/assets/* --clobber --repo "$GITHUB_REPOSITORY"
   build-distributions:
-    needs: native-assets-and-carriers
+    needs: native-assets-carriers-and-wheels
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -148,7 +148,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: { name: distributions, path: dist }
   publish-crates:
-    needs: [native-assets-and-carriers, macos-assets-carriers-and-wheels, publish-assets]
+    needs: [native-assets-carriers-and-wheels, macos-assets-carriers-and-wheels, publish-assets]
     if: ${{ vars.CARGO_PUBLISH == 'true' }}
     runs-on: ubuntu-latest
     steps:
@@ -181,7 +181,7 @@ jobs:
           uv publish --check-url https://pypi.org/simple/onetaskgraph-cli/ dist/cli/*
           uv publish --check-url https://pypi.org/simple/onetaskgraph-sdk/ dist/all/python-sdk/*
   publish-npm:
-    needs: [native-assets-and-carriers, macos-assets-carriers-and-wheels, build-distributions, publish-assets]
+    needs: [native-assets-carriers-and-wheels, macos-assets-carriers-and-wheels, build-distributions, publish-assets]
     if: ${{ vars.NPM_PUBLISH == 'true' }}
     runs-on: ubuntu-latest
     steps:

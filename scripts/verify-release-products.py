@@ -115,8 +115,11 @@ def verify(product: ReleaseProduct, install: bool) -> None:
             checksums = dest / 'canonical' / product.tag
             archives.mkdir(parents=True)
             checksums.mkdir(parents=True)
+            checksum = Path(str(archive) + '.sha256')
+            # Named here because the OS's own missing-file text differs between hosts.
+            require(checksum.is_file(), f'missing archive checksum {checksum.name}')
             shutil.copy2(archive, archives / archive.name)
-            shutil.copy2(str(archive) + '.sha256', checksums / (archive.name + '.sha256'))
+            shutil.copy2(checksum, checksums / checksum.name)
             env = {**os.environ, 'ONETASKGRAPH_CHECKSUM_BASE_URL': checksums.parent.as_uri()}
             subprocess.run([bash_executable(platform.system()), 'scripts/install.sh', '--version', product.tag, '--to', str(dest / 'archive'), '--archive-base-url', archives.parent.as_uri()], env=env, check=True, stdout=sys.stderr)
             # llmlint: ignore[changed_behavior_has_e2e] Manager-approved: this call uses the same public subprocess-failure handler driven by a real installer exit failure; the real native installation exercises this command successfully without mocking installers.

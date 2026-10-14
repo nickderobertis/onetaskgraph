@@ -214,7 +214,7 @@ canonical = tree / f'target/{target}/release/{binary}'
 canonical.parent.mkdir(parents=True, exist_ok=True)
 canonical.write_bytes(payload)
 archive = tree / f'onetaskgraph-{tag}-{target}.zip'
-native = re.search(r'(?ms)^  native-assets-and-carriers:\n(.*?)(?=^  [a-z-]+:)', workflow)
+native = re.search(r'(?ms)^  native-assets-carriers-and-wheels:\n(.*?)(?=^  [a-z-]+:)', workflow)
 step = re.search(r'(?ms)^      - name: Archive, checksum, and stage\n.*?^        run: \|\n(.*?)(?=^      - )', native[1])
 body = '\n'.join(line[10:] for line in step[1].splitlines())
 sys.path.insert(0, str(root / 'scripts'))

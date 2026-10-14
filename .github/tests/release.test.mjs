@@ -16,7 +16,7 @@ function ancestors(jobs, id, seen = new Set()) {
 }
 test("actual release declarations retain every released platform, package and independent crate tag", () => {
   const release = workflows()["release.yml"];
-  const native = release.jobs["native-assets-and-carriers"];
+  const native = release.jobs["native-assets-carriers-and-wheels"];
   const mac = release.jobs["macos-assets-carriers-and-wheels"];
   const targets = [
     ...matrices(native.strategy.matrix, {}),
@@ -71,7 +71,7 @@ test("actual release declarations retain every released platform, package and in
     assert.equal(job["runs-on"], "ubuntu-latest", id);
     const needs = ancestors(release.jobs, id);
     assert.ok(needs.has("macos-assets-carriers-and-wheels"), id);
-    assert.ok(needs.has("native-assets-and-carriers"), id);
+    assert.ok(needs.has("native-assets-carriers-and-wheels"), id);
   }
   for (const id of ["publish-python", "publish-npm", "publish-crates"])
     assert.ok(ancestors(release.jobs, id).has("publish-assets"), id);
