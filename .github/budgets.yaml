@@ -4,8 +4,8 @@ budgets:
   - id: onetaskgraph-macos-jobs-per-run
     description: >-
       Records Mac job instances from resolved workflow telemetry to protect the shared
-      five-runner pool. inner_measure_reason: one run can occupy several shared Mac slots
-      while lifecycle run count stays within its bound.
+      five-runner pool. It is bounded inside each run because one run can occupy several
+      shared Mac slots while the lifecycle run count stays within its bound.
     measure: reported
     # llmlint: ignore[budget_commands_measure_directly] The task fixes this exact `node .github/macos-budget.mjs --metric ... --telemetry ...` surface; it reads the one telemetry file the github-workflows:test journey records and reports one figure through the SDK, re-running nothing.
     command: [node, macos-budget.mjs, --metric, jobs-per-run, --telemetry, .telemetry/macos-policy.json]
