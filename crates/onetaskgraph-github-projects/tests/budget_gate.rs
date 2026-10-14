@@ -655,7 +655,9 @@ fn a_journey_the_account_cannot_afford_does_not_run_and_says_which_budget_was_sh
 async fn the_combined_design_admits_both_roles_and_keeps_the_whole_retained_buffer() {
     use onetaskgraph_github_live::quota::EntryPoint;
     let retained = RETAINED_BUFFER.of(LIMIT);
-    for (role, estimate) in [(EntryPoint::Main, 281), (EntryPoint::Assets, 106)] {
+    // 327 since the six `gh3` legs' 46-point allocation: above the measured 299 ceiling by
+    // design, which `github-live-session-points` still holds the spend to.
+    for (role, estimate) in [(EntryPoint::Main, 327), (EntryPoint::Assets, 106)] {
         for (remaining, succeeds) in [
             (retained + estimate, true),
             (retained + estimate - 1, false),

@@ -257,6 +257,12 @@ struct Item {
     /// What this item holds in each of the board's own text fields other than the origin's,
     /// by field id — a field holding nothing is absent, as GitHub answers it.
     texts: BTreeMap<String, String>,
+    /// Each label's colour, by its node id, once a person set one; a label holding none is
+    /// answered with no colour.
+    label_colors: BTreeMap<String, String>,
+    /// What this item holds in each scratch single-select field, by field id: the option's id,
+    /// and the value node a read of it answers with.
+    selects: BTreeMap<String, (String, Value)>,
 }
 
 /// What the document that just arrived asked for, as far as rendering an item needs it.
@@ -307,6 +313,8 @@ impl Item {
             relationship_events: None,
             path_labels: BTreeMap::new(),
             texts: BTreeMap::new(),
+            label_colors: BTreeMap::new(),
+            selects: BTreeMap::new(),
         }
     }
     /// Hold `text` in the text field `field_id`. See [`Item::texts`].
@@ -433,7 +441,8 @@ impl Item {
     /// One label connection, as every one of them comes back.
     fn label_nodes(&self, path: &str) -> Value {
         json!({"nodes":self.labels_seen_on(path).iter()
-                   .map(|(id,name)| json!({"id":id,"name":name,"color":null}))
+                   .map(|(id,name)| json!({"id":id,"name":name,
+                                           "color":self.label_colors.get(*id)}))
                    .collect::<Vec<_>>(),
                "pageInfo":{"hasNextPage":false}})
     }
@@ -459,6 +468,7 @@ impl Item {
                 json!({"text":self.origin.clone().unwrap_or_default(),"field":{"id":"FIELD_origin","name":"onetaskgraph.origin"}}),
             );
         }
+        nodes.extend(self.selects.values().map(|(_, node)| node.clone()));
         json!({"nodes":nodes,"pageInfo":{"hasNextPage":false}})
     }
 
@@ -608,6 +618,9 @@ struct State {
     /// of what it did — a response the source must refuse to read as landed.
     answers_alias_with: Option<(&'static str, Value)>,
     blocked_by: BTreeMap<String, Vec<String>>,
+    /// Single-select fields a person created on the board beside its own, each as the board's
+    /// field list answers it, options and all.
+    scratch_fields: Vec<Value>,
     /// Mutations this board answers with a GraphQL error rather than performing. GitHub
     /// fails one call of the several a write is, and what the source does about the calls
     /// that already landed is only readable if one of them can be made to fail.
@@ -1277,6 +1290,7 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
         extra_fields: Vec::new(),
         answers_alias_with: None,
         blocked_by: BTreeMap::new(),
+        scratch_fields: Vec::new(),
         refuses: BTreeSet::new(),
         refuse_after: BTreeMap::new(),
         lagging_reads: 0,
@@ -1596,6 +1610,34 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
             .seen
             .push(json!([operation_name(query), input.clone()]));
     }
+    if query.contains("updateProjectV2Field(input:$input)")
+        && let Some(field) = input["fieldId"]
+            .as_str()
+            .filter(|field| field.starts_with("FIELD_scratch_"))
+            .map(str::to_owned)
+    {
+        // A person renaming a scratch field's option: every option keeps its id, and every item
+        // holding one now reads under the new name — with no item's time moved.
+        let options = input["singleSelectOptions"].clone();
+        let held = state
+            .scratch_fields
+            .iter_mut()
+            .find(|held| held["id"] == field.as_str())
+            .expect("a scratch field this board holds");
+        held["options"] = options.clone();
+        let name = held["name"].clone();
+        for item in &mut state.items {
+            if let Some((option, node)) = item.selects.get_mut(&field) {
+                let renamed = options
+                    .as_array()
+                    .and_then(|options| options.iter().find(|held| held["id"] == option.as_str()))
+                    .map(|held| held["name"].clone())
+                    .unwrap_or(Value::Null);
+                *node = json!({"name":renamed,"field":{"id":field,"name":name,"options":options}});
+            }
+        }
+        return json!({"updateProjectV2Field":{"projectV2Field":{"id":field,"options":options}}});
+    }
     if query.contains("updateProjectV2Field(input:$input)") && board::strip_probe(query).is_none() {
         let supplied = input["singleSelectOptions"]
             .as_array()
@@ -1827,6 +1869,32 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
             .unwrap_or_else(|| "acme/work".to_owned());
         state.items.retain(|item| item.content_id != id);
         state.pending.retain(|item| item.content_id != id);
+        // Every relationship naming the deleted issue goes, and so does the event recording it
+        // on the other end's timeline — which is how a far end's deletion lowers a count.
+        let blocking = state.blocked_by.remove(&id).unwrap_or_default();
+        let mut lowered: Vec<String> = blocking;
+        for (near, blockers) in &mut state.blocked_by {
+            if blockers.contains(&id) {
+                blockers.retain(|blocker| *blocker != id);
+                lowered.push(near.clone());
+            }
+        }
+        for item in &mut state.items {
+            if item.parent.as_deref() == Some(id.as_str()) {
+                item.parent = None;
+                lowered.push(item.content_id.clone());
+            }
+        }
+        for end in lowered {
+            if let Some(count) = state
+                .items
+                .iter_mut()
+                .find(|item| item.content_id == end)
+                .and_then(|item| item.relationship_events.as_mut())
+            {
+                *count = count.saturating_sub(1);
+            }
+        }
         return json!({"deleteIssue":{"repository":{"id":repository_node_id(&repository)}}});
     }
     if query.contains("createIssue(input:$input)") {
@@ -1923,6 +1991,40 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
             item.body = input["body"].as_str().map(str::to_owned);
         }
         return json!({"updateProjectV2DraftIssue":{"draftIssue":{"id":input["draftIssueId"]}}});
+    }
+    if query.contains("updateProjectV2ItemFieldValue(input:$input)")
+        && let Some(field) = input["fieldId"]
+            .as_str()
+            .filter(|field| field.starts_with("FIELD_scratch_"))
+            .map(str::to_owned)
+    {
+        let item_id = input["itemId"].as_str().unwrap().to_owned();
+        let option = input["value"]["singleSelectOptionId"]
+            .as_str()
+            .expect("a scratch option id")
+            .to_owned();
+        let held = state
+            .scratch_fields
+            .iter()
+            .find(|held| held["id"] == field.as_str())
+            .cloned()
+            .expect("a scratch field this board holds");
+        let name = held["options"]
+            .as_array()
+            .and_then(|options| options.iter().find(|held| held["id"] == option.as_str()))
+            .map(|held| held["name"].clone())
+            .expect("an option of the scratch field");
+        let node = json!({"name":name,"field":{"id":field,"name":held["name"],
+                                               "options":held["options"]}});
+        state
+            .items
+            .iter_mut()
+            .find(|item| item.item_id == item_id)
+            .expect("a field update names a board item")
+            .selects
+            .insert(field, (option, node));
+        state.touch_item(&item_id);
+        return json!({"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":item_id}}});
     }
     if query.contains("updateProjectV2ItemFieldValue(input:$input)") {
         let item_id = input["itemId"].as_str().unwrap().to_owned();
@@ -2435,11 +2537,40 @@ fn answer_a_session_call(
     if query.contains("on ProjectV2{fields(first:100") {
         return Some(json!({"node":{"fields":state.fields()}}));
     }
+    if query.contains("createProjectV2Field(input:$input)") && input["dataType"] == "SINGLE_SELECT"
+    {
+        let id = format!("FIELD_scratch_{}", state.scratch_fields.len() + 1);
+        let options: Vec<Value> = input["singleSelectOptions"]
+            .as_array()
+            .expect("a single-select field's options")
+            .iter()
+            .enumerate()
+            .map(|(index, option)| {
+                json!({"id": format!("{id}_option_{index}"), "name": option["name"],
+                       "color": option["color"], "description": option["description"]})
+            })
+            .collect();
+        let field = json!({"__typename":"ProjectV2SingleSelectField","id":id,
+                           "name":input["name"],"options":options});
+        state.scratch_fields.push(field.clone());
+        return Some(json!({"createProjectV2Field":{"projectV2Field":field}}));
+    }
     if query.contains("createProjectV2Field(input:$input)") {
         let name = input["name"].as_str().expect("a field name").to_owned();
         state.origin_field = true;
         return Some(json!({"createProjectV2Field":{"projectV2Field":
             {"id":"FIELD_origin","name":name}}}));
+    }
+    if query.contains("deleteProjectV2Field(input:$input)")
+        && let Some(field) = input["fieldId"]
+            .as_str()
+            .filter(|field| field.starts_with("FIELD_scratch_"))
+    {
+        state.scratch_fields.retain(|held| held["id"] != field);
+        for item in &mut state.items {
+            item.selects.remove(field);
+        }
+        return Some(json!({"deleteProjectV2Field":{"projectV2Field":{"id":field}}}));
     }
     if query.contains("deleteProjectV2Field(input:$input)") {
         state.origin_field = false;
@@ -13101,6 +13232,46 @@ fn answer_a_label_call(
             let name = named.trim_start_matches('/').to_owned();
             state.labels.retain(|(held, _)| *held != name);
             ("204 No Content", String::new())
+        }
+        ("PATCH", named) => {
+            // A person renaming or recolouring the label: every issue carrying it reads it so,
+            // and no issue's time moves.
+            let name = named.trim_start_matches('/').to_owned();
+            let change = body.expect("a label change");
+            let node_id = state
+                .labels
+                .iter()
+                .find(|(held, _)| *held == name)
+                .map(|(_, node_id)| node_id.clone())
+                .unwrap_or_else(|| panic!("the fixture repository holds no label {name}"));
+            state.seen.push(json!(["changeLiveLabel", change.clone()]));
+            let renamed = change["new_name"].as_str().map(str::to_owned);
+            if let Some(renamed) = &renamed {
+                for (held, id) in &mut state.labels {
+                    if *id == node_id {
+                        held.clone_from(renamed);
+                    }
+                }
+            }
+            let color = change["color"].as_str().map(str::to_owned);
+            for item in &mut state.items {
+                for (id, held) in &mut item.labels {
+                    if *id == node_id.as_str()
+                        && let Some(renamed) = &renamed
+                    {
+                        *held = leaked(renamed);
+                    }
+                }
+                if let Some(color) = &color
+                    && item.labels.iter().any(|(id, _)| *id == node_id.as_str())
+                {
+                    item.label_colors.insert(node_id.clone(), color.clone());
+                }
+            }
+            (
+                "200 OK",
+                json!({"name":renamed.unwrap_or(name),"node_id":node_id,"color":color}).to_string(),
+            )
         }
         _ => panic!("the fixture repository received an unknown call: {method} {path}"),
     }

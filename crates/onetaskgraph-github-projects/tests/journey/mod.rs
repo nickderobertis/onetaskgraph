@@ -3201,7 +3201,15 @@ async fn drive_every_declared_capability(
         (&run.token, &run.project_id),
         (&second_id, &first_id, &orphan_id),
         (&beta_id, &alpha_id),
-        (&label_id, &run.title(LAST_TITLE_OFFSET)),
+        (&label_id, &run.title(6)),
+    )
+    .await?;
+    every_facet_change_moves_a_projects_and_a_documents_token(
+        run,
+        writer,
+        rebuilt,
+        (&alpha_id, &beta_id, &design_id, &orphan_id),
+        (&label_id, &label_name),
     )
     .await
 }
@@ -3532,6 +3540,262 @@ async fn every_change_kind_moves_a_tasks_token(
     Ok(())
 }
 
+/// The six legs `spike-coverage` drafted for the `gh3` token, each a change a person makes on
+/// GitHub that moved no part of a `gh2` token, made to this run's own stamped items and held to
+/// moving the token of the item it reaches — every token read through the plugin's own read by id
+/// of a source built afresh, never a read of this lane's own that spells a token beside it:
+///
+/// 1. the run's label **renamed** moves the token of the project `beta` and of the document
+///    `design`, which carry it;
+/// 2. the same label **recoloured** moves both again;
+/// 3. an option of a stamped scratch single-select field **renamed** moves the token of `beta`,
+///    whose board item holds it — the board's own `Status` options are never touched;
+/// 4. `alpha` **deleted** leaves the new token of `beta`, which depended on it, unordered against
+///    the one held;
+/// 5. the same deletion leaves the new token of `design`, filed under it, unordered too;
+/// 6. the task `orphan` **gaining a sub-issue** moves its own token, so a read pinned to the new
+///    one reports the project it became.
+///
+/// Last of the journey, because two of them delete or reshape items the legs above read.
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] The six legs join this repository's existing credentialed GitHub lane, which it deliberately keeps in the plugin's own test target so only a change to the plugin or what it links selects it; the manager's ruling keeps the legs in that lane, and moving the lane is outside this plan.
+async fn every_facet_change_moves_a_projects_and_a_documents_token(
+    run: &LiveRun,
+    writer: &dyn TaskSource,
+    rebuilt: &dyn Fn() -> Box<dyn TaskSource>,
+    (alpha, beta, design, orphan): (&NativeId, &NativeId, &NativeId, &NativeId),
+    (label_id, label_name): (&str, &str),
+) -> Result<(), String> {
+    use onetaskgraph_github_projects::change_token::order;
+    let project = TokenReader {
+        rebuilt,
+        kind: Observed::Project,
+    };
+    let document = TokenReader {
+        rebuilt,
+        kind: Observed::Document,
+    };
+    attach_artifact_label(&run.token, &beta.0, label_id).await?;
+    attach_artifact_label(&run.token, &design.0, label_id).await?;
+    tokio::time::sleep(endpoints().settle).await;
+    let mut held_project = settled_token_of(project, beta, "before the label legs").await?;
+    let mut held_document = settled_token_of(document, design, "before the label legs").await?;
+
+    // 1. Renamed — to another of this run's own label names, so its cleanup still finds it.
+    let renamed = run.own.label(run.stamp_micros + 1);
+    change_artifact_label(run, label_name, json!({"new_name": renamed})).await?;
+    held_project = moved(project, beta, "its label renamed", &held_project).await?;
+    held_document = moved(document, design, "its label renamed", &held_document).await?;
+
+    // 2. Recoloured.
+    change_artifact_label(run, &renamed, json!({"color": "5319e7"})).await?;
+    // The scratch leg reads its own token before its change, so this one is not held on.
+    moved(project, beta, "its label recoloured", &held_project).await?;
+    held_document = moved(document, design, "its label recoloured", &held_document).await?;
+
+    // 3. A scratch field's option renamed, the field removed whether or not the leg holds.
+    let scratch = create_scratch_field(run).await?;
+    let renamed_option = async {
+        set_scratch_value(run, beta, &scratch).await?;
+        tokio::time::sleep(endpoints().settle).await;
+        let before = settled_token_of(project, beta, "with a scratch option set").await?;
+        rename_scratch_option(run, &scratch).await?;
+        moved(project, beta, "a scratch field option renamed", &before).await
+    }
+    .await;
+    let removed = delete_scratch_field(run, &scratch).await;
+    held_project = renamed_option?;
+    removed?;
+
+    // 4 and 5. `alpha` deleted, through the plugin's own delete.
+    writer
+        .delete_project(alpha)
+        .await
+        .map_err(|error| format!("live project deletion failed: {error}"))?;
+    let after = moved(project, beta, "its native far end deleted", &held_project).await?;
+    ensure!(
+        order(&held_project, &after).is_none(),
+        "deleting beta's far end left its token {after} ordered against the one held, \
+         {held_project}; a cache would have served it"
+    );
+    let after = moved(document, design, "its project deleted", &held_document).await?;
+    ensure!(
+        order(&held_document, &after).is_none(),
+        "deleting the document's project left its token {after} ordered against the one held, \
+         {held_document}; a cache would have served it"
+    );
+
+    // 6. A task gaining a sub-issue, which makes it a project.
+    let task = TokenReader {
+        rebuilt,
+        kind: Observed::Task,
+    };
+    let before = settled_token_of(task, orphan, "before it gains a sub-issue").await?;
+    let open = Status {
+        category: StatusCategory::Todo,
+        name: run.status_option.clone(),
+    };
+    let child = writer
+        .write_task(&ItemWrite {
+            target: None,
+            item: artifact_task(
+                &run.title(LAST_TITLE_OFFSET),
+                "temporary credentialed write; the live lane removes this".into(),
+                &open,
+                None,
+                BTreeMap::new(),
+            ),
+            depends_on: vec![],
+        })
+        .await
+        .map_err(|error| format!("live sub-issue write failed: {error}"))?;
+    refile(&run.token, graphql::ADD_SUB_ISSUE, orphan, &child).await?;
+    tokio::time::sleep(endpoints().settle).await;
+    let became = settled_token_of(
+        TokenReader {
+            rebuilt,
+            kind: Observed::Project,
+        },
+        orphan,
+        "after it gained a sub-issue",
+    )
+    .await?;
+    ensure!(
+        !matches!(
+            order(&before, &became),
+            Some(std::cmp::Ordering::Equal | std::cmp::Ordering::Greater)
+        ),
+        "a task gaining a sub-issue left its token {became} at or after {before}"
+    );
+    let as_task = rebuilt()
+        .get_task(orphan)
+        .await
+        .map_err(|error| format!("live read of the task after its flip failed: {error}"))?;
+    ensure!(
+        as_task.is_none(),
+        "the task that gained a sub-issue still reads as a task: {as_task:?}"
+    );
+    Ok(())
+}
+
+/// Change the run's label `name` over GitHub's REST API, as a person editing it would.
+async fn change_artifact_label(run: &LiveRun, name: &str, change: Value) -> Result<(), String> {
+    let mut parameters = repository_parameters(&run.repository);
+    parameters.push(("name", name));
+    rest(
+        &run.token,
+        Method::Patch,
+        "/repos/{owner}/{repo}/labels/{name}",
+        &parameters,
+        "",
+        Some(change),
+        "live label change",
+    )
+    .await
+    .map(|_| ())
+}
+
+/// A stamped single-select field this run created on the board, with its options.
+struct ScratchField {
+    id: String,
+    options: Vec<Value>,
+}
+
+/// Create a stamped single-select field of two options on the board.
+async fn create_scratch_field(run: &LiveRun) -> Result<ScratchField, String> {
+    let answer = graphql_variables(
+        &run.token,
+        graphql::CREATE_FIELD,
+        "live scratch field creation",
+        json!({"input": {"projectId": run.project_id, "dataType": "SINGLE_SELECT",
+                         "name": run.own.label(run.stamp_micros + 2),
+                         "singleSelectOptions": [
+                             {"name": "live-a", "color": "GRAY", "description": ""},
+                             {"name": "live-b", "color": "BLUE", "description": ""}]}}),
+    )
+    .await?;
+    let created = &answer["data"]["createProjectV2Field"]["projectV2Field"];
+    Ok(ScratchField {
+        id: created["id"]
+            .as_str()
+            .ok_or_else(|| format!("the scratch field came back without an id: {answer}"))?
+            .to_owned(),
+        options: created["options"]
+            .as_array()
+            .cloned()
+            .ok_or_else(|| format!("the scratch field came back without options: {answer}"))?,
+    })
+}
+
+/// Set `issue`'s value of the scratch field to its first option, as a person would.
+async fn set_scratch_value(
+    run: &LiveRun,
+    issue: &NativeId,
+    scratch: &ScratchField,
+) -> Result<(), String> {
+    let items = graphql_variables(
+        &run.token,
+        "query LiveBoardItem($id:ID!){node(id:$id){... on Issue{projectItems(first:20){nodes{id project{id}}}}}}",
+        "live board item lookup",
+        json!({"id": issue.0}),
+    )
+    .await?;
+    let item = items
+        .pointer("/data/node/projectItems/nodes")
+        .and_then(Value::as_array)
+        .and_then(|nodes| {
+            nodes.iter().find(|node| {
+                node.pointer("/project/id").and_then(Value::as_str) == Some(&run.project_id)
+            })
+        })
+        .and_then(|node| node.get("id").and_then(Value::as_str))
+        .ok_or_else(|| format!("issue {} has no item on the live board", issue.0))?
+        .to_owned();
+    graphql_variables(
+        &run.token,
+        "mutation($input:UpdateProjectV2ItemFieldValueInput!){updateProjectV2ItemFieldValue(input:$input){projectV2Item{id}}}",
+        "live scratch field value",
+        json!({"input": {"projectId": run.project_id, "itemId": item, "fieldId": scratch.id,
+                         "value": {"singleSelectOptionId": scratch.options[0]["id"]}}}),
+    )
+    .await
+    .map(|_| ())
+}
+
+/// Rename the scratch field's first option, keeping every option's id.
+async fn rename_scratch_option(run: &LiveRun, scratch: &ScratchField) -> Result<(), String> {
+    let options: Vec<Value> = scratch
+        .options
+        .iter()
+        .enumerate()
+        .map(|(index, option)| {
+            json!({"id": option["id"],
+                   "name": if index == 0 { json!("live-a-renamed") } else { option["name"].clone() },
+                   "color": option.get("color").cloned().unwrap_or(json!("GRAY")),
+                   "description": option.get("description").cloned().unwrap_or(json!(""))})
+        })
+        .collect();
+    graphql_variables(
+        &run.token,
+        graphql::STATUS_OPTIONS_UPDATE,
+        "live scratch option rename",
+        json!({"input": {"fieldId": scratch.id, "singleSelectOptions": options}}),
+    )
+    .await
+    .map(|_| ())
+}
+
+/// Remove the scratch field from the board.
+async fn delete_scratch_field(run: &LiveRun, scratch: &ScratchField) -> Result<(), String> {
+    graphql_variables(
+        &run.token,
+        "mutation($input:DeleteProjectV2FieldInput!){deleteProjectV2Field(input:$input){projectV2Field{... on ProjectV2SingleSelectField{id}}}}",
+        "live scratch field removal",
+        json!({"input": {"fieldId": scratch.id}}),
+    )
+    .await
+    .map(|_| ())
+}
+
 /// `filter_by_comment_activity`, and the GitHub fact it rests on, re-taken on every run.
 ///
 /// The plugin narrows a comment-activity read with the board-scoped issue search's `updated:`
@@ -3736,7 +4000,7 @@ pub struct Nomination {
 
 /// The highest offset [`LiveRun::title`] is asked for, so a run checks before it writes
 /// anything that every stamp it will write can be spelled.
-const LAST_TITLE_OFFSET: u64 = 6;
+const LAST_TITLE_OFFSET: u64 = 7;
 
 /// The credentialed lane's whole entry: admit it, open its one session, and run it.
 ///

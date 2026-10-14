@@ -489,6 +489,12 @@ struct Design {
     capabilities: u64,
     comments: u64,
     tokens: u64,
+    /// The six `gh3` legs after the task-token leg, in the same phase: about 26 points on the
+    /// loopback, allocated 46 for the settle-margin re-reads real GitHub adds. With it the
+    /// admission estimate is 327, above the 299-point measured ceiling by design — the manager's
+    /// ruling: admission reserves against the shared allowance, and `github-live-session-points`
+    /// still fails a measured session above 299.
+    facets: u64,
     cleanup: u64,
     orphans: u64,
     assets: u64,
@@ -502,6 +508,7 @@ const DESIGN: Design = Design {
     capabilities: 42,
     comments: 12,
     tokens: 60,
+    facets: 46,
     cleanup: 15,
     orphans: 2,
     assets: 85,
@@ -527,6 +534,7 @@ pub const fn session_design_points(invocation: onetaskgraph_github_live::quota::
                 + DESIGN.capabilities
                 + DESIGN.comments
                 + DESIGN.tokens
+                + DESIGN.facets
                 + DESIGN.cleanup
                 + DESIGN.orphans
         }
@@ -771,6 +779,7 @@ pub fn remaining_design_points(phase: onetaskgraph_github_live::quota::Phase) ->
                 + DESIGN.capabilities
                 + DESIGN.comments
                 + DESIGN.tokens
+                + DESIGN.facets
         }
         Phase::OrphanRecovery => {
             DESIGN.schema
@@ -779,6 +788,7 @@ pub fn remaining_design_points(phase: onetaskgraph_github_live::quota::Phase) ->
                 + DESIGN.capabilities
                 + DESIGN.comments
                 + DESIGN.tokens
+                + DESIGN.facets
                 + DESIGN.cleanup
         }
         Phase::AssetSetup | Phase::AssetTask | Phase::AssetDocument => {
