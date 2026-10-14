@@ -1078,3 +1078,47 @@ fn a_task_created_from_a_template_retires_the_far_ends_reverse_edges() {
         "L-1's edge and the new task's: {edges}"
     );
 }
+
+#[test]
+fn a_project_edge_walk_read_across_a_change_between_its_pages_is_never_kept() {
+    let mut workspace = held();
+    workspace["project_dependencies"]
+        .as_array_mut()
+        .expect("project relations")
+        .push(
+            json!({"from": {"id": "P-1"}, "to": {"id": "notes:NP-1", "kind": "project"},
+                     "kind": "blocks"}),
+        );
+    let cached = Cached::new(workspace);
+    let pin = cached.listed("project", "linear:P-1").expect("a token");
+    // P-1 renamed after its relations page and before its recorded far end's page.
+    cached.workspace.after_request(
+        |document, variables| {
+            document == graphql::PROJECT_RELATIONS_CACHED && variables["id"] == "P-1"
+        },
+        0,
+        |workspace| workspace.retitle("projects", "P-1", "Renamed between the pages"),
+    );
+    let (_, sent) = cached.ok(&strs(&PROJECT_EDGES.with(&pin)));
+    assert_eq!(
+        sent.iter()
+            .filter(|document| *document == graphql::PROJECT_RELATIONS_CACHED)
+            .count(),
+        2,
+        "the walk read both pages: {sent:?}"
+    );
+    let kept = cached
+        .dir()
+        .map(|dir| walk(&dir.join("project-edges-v2")))
+        .unwrap_or_default();
+    assert!(
+        !kept.iter().any(|path| holds(path, "P-1")),
+        "a walk read at two versions is not kept: {kept:?}"
+    );
+    let (_, sent) = cached.ok(&strs(&PROJECT_EDGES.with(&pin)));
+    assert_eq!(
+        sent.len(),
+        2,
+        "the next command reads both pages from Linear again"
+    );
+}

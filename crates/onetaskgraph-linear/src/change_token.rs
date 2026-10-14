@@ -368,12 +368,30 @@ pub fn without_relations(token: &str) -> &str {
         .map_or(token, |(base, _)| base)
 }
 
+/// The parts a token carries beside its time and its facets: none, as every plain token and a
+/// document's; a relations part alone, as an attached project's; or, as an attached task's, a
+/// comments, a relations and an inverse relations part, in that order. Nothing else is a token.
+#[derive(Debug, PartialEq, Eq)]
+enum Extra {
+    None,
+    Relations(Sha256Hex),
+    Task {
+        comments: Sha256Hex,
+        relations: Sha256Hex,
+        inverse: Sha256Hex,
+    },
+}
+
 /// What one token of this plugin is made of.
 struct Parts {
     updated: DateTime<Utc>,
     facets: Sha256Hex,
-    /// Each part beside those two, in the one order a token spells them.
-    extra: Vec<(Part, Sha256Hex)>,
+    extra: Extra,
+}
+
+/// The digest `text` spells after `part`'s tag, when it spells one.
+fn tagged(text: &str, part: Part) -> Option<Sha256Hex> {
+    Sha256Hex::parse(text.strip_prefix(part.tag())?)
 }
 
 fn parts(token: &str) -> Option<Parts> {
@@ -382,20 +400,17 @@ fn parts(token: &str) -> Option<Parts> {
         .ok()?
         .with_timezone(&Utc);
     let facets = Sha256Hex::parse(parts.next()?)?;
-    let mut extra: Vec<(Part, Sha256Hex)> = Vec::new();
-    for text in parts {
-        let part = Part::ALL
-            .into_iter()
-            .find(|part| text.starts_with(part.tag()))?;
-        // In the one order, each at most once.
-        if extra.last().is_some_and(|(last, _)| {
-            Part::ALL.iter().position(|known| known == last)
-                >= Part::ALL.iter().position(|known| *known == part)
-        }) {
-            return None;
-        }
-        extra.push((part, Sha256Hex::parse(&text[part.tag().len()..])?));
-    }
+    let rest: Vec<&str> = parts.collect();
+    let extra = match rest.as_slice() {
+        [] => Extra::None,
+        [relations] => Extra::Relations(tagged(relations, Part::Relations)?),
+        [comments, relations, inverse] => Extra::Task {
+            comments: tagged(comments, Part::Comments)?,
+            relations: tagged(relations, Part::Relations)?,
+            inverse: tagged(inverse, Part::Inverse)?,
+        },
+        _ => return None,
+    };
     Some(Parts {
         updated,
         facets,
@@ -550,6 +565,16 @@ mod tests {
         );
         assert!(parts(&format!("{base}|r:{relations}|c:{comments_part}")).is_none());
         assert!(parts(&format!("{base}|c:{comments_part}|c:{comments_part}")).is_none());
+        // Nor is any incomplete combination of a task's three parts.
+        for incomplete in [
+            format!("{base}|c:{comments_part}"),
+            format!("{base}|c:{comments_part}|r:{relations}"),
+            format!("{base}|r:{relations}|i:{relations}"),
+            format!("{base}|i:{relations}"),
+        ] {
+            assert!(parts(&incomplete).is_none(), "{incomplete}");
+            assert_eq!(order(&incomplete, &incomplete), None, "{incomplete}");
+        }
     }
 
     #[test]
