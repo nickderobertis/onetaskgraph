@@ -43,6 +43,8 @@ const SURFACE: &[(&[&str], &[&str])] = &[
     (&["help", "task", "show"], &["--pin", "--no-comments"]),
     (&["help", "task", "show-many"], &["--pin", "--no-comments"]),
     (&["help", "task", "comment", "list"], &["--pin"]),
+    (&["help", "task", "deps"], &["--pin", "--direction"]),
+    (&["help", "project", "deps"], &["--pin", "--direction"]),
     (&["help", "task", "comment", "add"], &["--expect"]),
     (&["help", "task", "priority", "set"], &["--expect"]),
     (&["help", "task", "copy"], &["--expect"]),

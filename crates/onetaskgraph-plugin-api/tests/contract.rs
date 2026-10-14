@@ -2686,16 +2686,17 @@ impl TaskSource for Spelling {
 }
 
 #[test]
-fn a_source_that_declares_nothing_more_keeps_comments_reverse_and_project_edges_remote() {
+fn a_source_that_declares_nothing_more_keeps_reverse_and_project_edges_remote() {
     let id = NativeId::from("t-1");
     for source in [
         Box::new(Silent("silent")) as Box<dyn TaskSource>,
         Box::new(Spelling),
     ] {
-        assert_eq!(source.comments_version(&id), None, "{}", source.kind());
         assert_eq!(
             source.edges_version(ItemKind::Project, &id, Direction::DependsOn),
-            None
+            None,
+            "{}",
+            source.kind()
         );
         assert_eq!(
             source.edges_version(ItemKind::Task, &id, Direction::DependedOnBy),

@@ -80,7 +80,7 @@ onetaskgraph task list [--source S]... [--label L]... [--not-label L]...
                        [--limit N] [--page TOKEN] [--explain] [--allow-partial] [--json]
 onetaskgraph task show <ID> [--no-comments] [--pin VERSION]
 onetaskgraph task show-many <ID>... [--no-comments] [--pin ID=VERSION]...
-onetaskgraph task deps <ID> [--direction depends-on|depended-on-by]
+onetaskgraph task deps <ID> [--direction depends-on|depended-on-by] [--pin VERSION]
 onetaskgraph task copy <ID>... --to <SOURCE> [--match-by KEY] [--recreate] [--create] [--dry-run]
                        [--expect VERSION]        # one task, bound to a caching destination
 onetaskgraph task comment add    <ID> [--body-file PATH] [--author NAME] [--expect VERSION]
@@ -1177,8 +1177,8 @@ later layer over an earlier one. Without `dir` the cache lives under
 remote — the board's endpoint, owner and number, or Linear's endpoint and team — so every
 process on the host configuring the same remote shares one cache: the command line, both
 SDKs, and a Rust caller of the engine. A source with no remote, such as a folder of Markdown,
-ignores the setting. Each task, project and document is one file, and so is a task's forward
-edges read on their own, each written whole to a staging file and renamed into place, with no
+ignores the setting. Each task, project and document is one file, and so are a task's forward
+and reverse edges and a project's forward edges read on their own, each written whole to a staging file and renamed into place, with no
 lock; each holds the record's `version` and what it was read with under an entry schema
 version, every kind in a directory of its own named with its schema, and a reader that does
 not know that schema version, or cannot parse the entry, reads the record from its source
@@ -1197,9 +1197,11 @@ empties one source's cache, or every source's, reclaiming its item and byte entr
 removing only the files this store wrote there.
 
 **The freshness rule.** The cache is keyed on the change token a task's `version` carries
-(`docs/plugin-protocol.md` §4.13d), and it **never adds a request and never serves stale
-data**: a served entry is never older than the version the caller pinned, and never a version
-the store cannot vouch for. Freshness comes only from a token the store already holds — the
+(`docs/plugin-protocol.md` §4.13d), and it **never serves stale data**: a served entry is never
+older than the version the caller pinned, and never a version the store cannot vouch for — with
+one member named below, a comment author's display name. Its cost is held over an hour rather
+than per read: one read may cost more than it did, and the hour sends fewer requests than no
+cache. Freshness comes only from a token the store already holds — the
 cache never asks a source whether something changed:
 
 - **Within one command**, the version a listing, a search or a `--commented-since` result
@@ -1208,8 +1210,8 @@ cache never asks a source whether something changed:
   whose listed version is not already cached.
 - **Across commands**, a caller pins a read with a version it already holds: `task show <ID>
   --pin VERSION`, `task comment list <ID> --pin VERSION`, `task show-many <ID>... --pin
-  <ID>=VERSION` (repeatable), `project show <ID> --pin VERSION` and `document show <ID> --pin
-  VERSION` — and a Rust caller with `Engine::pin`, `Engine::pin_project` and
+  <ID>=VERSION` (repeatable), `task deps <ID> --pin VERSION`, `project show <ID> --pin VERSION`,
+  `project deps <ID> --pin VERSION` and `document show <ID> --pin VERSION` — and a Rust caller with `Engine::pin`, `Engine::pin_project` and
   `Engine::pin_document`. A pinned read of a record the cache holds at that version or a later
   one sends **no request**; otherwise it makes the one read it always made, and refreshes the
   entry. **A pin means "at least as fresh as the version I hold", not "current"**: a pinned
@@ -1222,7 +1224,9 @@ cache never asks a source whether something changed:
   an entry. Nothing is pre-warmed.
 - A part of a record the source's token does not cover is never served, and neither is a
   record with no token — a GitHub item changed within the minute before its read, a draft, or a
-  Linear item whose labels or relations came back as only a first page. The read goes to the
+  Linear item whose labels, comments, relations or inverse relations came back as only a first
+  page, which with the cache on is a task with more than ten comments, relations or dependents
+  and a project with more than ten relations. The read goes to the
   source and says why.
 
 **What each source's token is, and what it covers.** `docs/plugin-protocol.md` §4.13d states
@@ -1239,34 +1243,45 @@ each remote one is remote.
   far end become a document or be deleted, so every dependency read goes to GitHub.
 - A **Linear** item's token is `lin1`: its `updatedAt` and a digest of its facets — for a task its
   identifier, labels, project, state and url; for a project its labels and status; for a document
-  its content's digest, project, title and url — and, for a task with the cache on, a digest of
-  its first page of relations. Each part is what `updatedAt` was measured missing on a real team:
-  a label renamed or recoloured and a workflow state renamed (3 of 3), a relation added (3 of 3),
-  and a document's content edited (4 of 4). It covers a task's fields and forward edges, a
-  project's fields and a document's fields. A task's comments (no time moved for any of 3
-  changes, and a digest of them fails the cost test) and a project's forward edges (0 of 2, and a
-  digest would bring the projects listing to about 9,491 of Linear's 10,000 per-query complexity)
-  are always read from Linear.
+  its content's digest, project, title and url — and, with the cache on, digests of first pages:
+  a task's comments (each one's id and update time), relations and inverse relations, and a
+  project's relations. Each part is what `updatedAt` was measured missing on a real team: a label
+  renamed or recoloured and a workflow state renamed (3 of 3), a relation added (3 of 3), a
+  comment added, edited or deleted (0 of 3 moved it), a project relation added or removed (0 of
+  2), and a document's content edited (4 of 4). With the cache on it covers a task's fields,
+  comments and edges both ways, a project's fields and forward edges, and a document's fields. A
+  project's reverse edges are always read from Linear: the far project's time moved for neither
+  of 2 relation changes, and its token spells no part of its inverse relations.
+- **A Linear comment's author is the one member served older than its token.** A person renaming
+  themselves moves no part of any token, so a comment served from the cache names its author as
+  they were named when the entry was filled; its id, body, times and the set of comments are
+  never older than the pin. Renames are rare, and the name labels a person rather than work, which
+  is the user's ruling of 2026-10-14.
 
 **What a plugin tells the cache, and how a dependency read fills it.** Through `TaskSource`, and
 never over the stdio plugin protocol: `attach_cache`, called once when the cache wraps the source
-and before any read, which is what lets Linear widen the queries below; and
-`forward_edges_version`, defaulted to none, the token the response that answered a task's last
-`DependsOn` read spelled. A Linear task's forward edges are kept in an entry of their own keyed by
-that version, served only to a pin at that version or a later one — so `project graph` lists a
-project's tasks and the next run answers their dependencies from the cache, sending no
-dependency request while the listed tokens are unchanged — and never vouch for the task's own
-fields. A GitHub board keeps the default: its forward edges are always read.
+and before any read, which is what lets Linear widen the queries below; `forward_edges_version`
+and `edges_version`, defaulted to none, the token the response that answered an item's last
+dependency read in a direction spelled; and `reverse_edges_coverage`, defaulted to uncovered. A
+Linear task's forward and reverse edges, and a project's forward edges, are each kept in an entry
+of their own keyed by that version, served only to a pin at that version or a later one — so
+`project graph` lists a project's tasks and the next run answers their dependencies from the
+cache, sending no dependency request while the listed tokens are unchanged — and never vouch for
+the item's own fields. A GitHub board keeps the defaults: its edges are always read.
 
-**Turning the cache on widens four Linear queries.** `ISSUES`, `ISSUE` and `ISSUE_DETAIL` gain
-the relations page the token is read from, and `ISSUE_RELATIONS` gains the token's other parts,
-so a dependency read can fill an entry; at 100 rows `ISSUES` is about 3,108 of the 10,000 cap.
-With the cache off every query is the one 0.6.0 sent. The `linear-cache-cost-not-above-uncached`
-budget holds the cache to spending no more complexity than no cache over an hour of three hosts,
-each a cold and a warm pass over 10 projects, 40 documents and 60 issues, and at ten times that,
-and records the difference. On GitHub nothing is widened, and
-`github-cache-points-not-above-uncached` holds the cache to adding no point at any kind, sequence
-or scale.
+**Turning the cache on widens seven Linear queries.** `ISSUES`, `ISSUE` and `ISSUE_DETAIL` gain
+the comments, relations and inverse relations pages the token is read from, `PROJECTS` and
+`PROJECT` the project relations page, and `ISSUE_RELATIONS` and `PROJECT_RELATIONS` the token's
+other parts, so a dependency read can fill an entry; a write's own read of its target sends the
+plain query. At 100 rows `ISSUES` is about 5,908 of the 10,000 cap, and `PROJECTS` asks for at most
+90 rows, about 8,550, so a listing of more than 90 projects takes one more page. With the cache
+off every query is the one 0.6.0 sent. The `linear-cache-cost-not-above-uncached` budget holds
+the cache to sending strictly fewer requests than no cache — the key's 2,500 an hour per user is
+what runs out first — over an hour of three hosts, each a cold and a warm pass over 10 projects,
+40 documents and 60 issues, and at ten times that; `linear-cache-largest-query-complexity` holds
+the dearest single query any read sends with the cache on to 9,000. On GitHub nothing is widened,
+and `github-cache-points-not-above-uncached` holds the cache to adding no point at any kind,
+sequence or scale.
 
 Every read from a caching source carries `cache: {"served": "cache" | "remote", "bypassed":
 null | "<reason>"}` in its JSON, and a source keeping no cache carries no such member. A

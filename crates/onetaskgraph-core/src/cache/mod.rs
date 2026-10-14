@@ -35,8 +35,8 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use onetaskgraph_plugin_api::{
-    Asset, Comment, Cursor, DependencyEdge, DocumentVersionCoverage, NativeId, PartOutcome,
-    ProjectVersionCoverage, SourceError, SourceName, Task, VersionCoverage,
+    Asset, Comment, Cursor, DependencyEdge, DocumentVersionCoverage, ItemKind, NativeId,
+    PartOutcome, ProjectVersionCoverage, SourceError, SourceName, Task, VersionCoverage,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -362,9 +362,9 @@ struct Command {
     document_read: HashMap<NativeId, String>,
     /// Document entries served in this command, whose manifest is served with them.
     document_served: HashMap<NativeId, kinds::DocumentEntry>,
-    /// A forward-edge walk of a task under way at the source: the edges it has answered so far,
-    /// and the cursor that continues it.
-    walking: HashMap<NativeId, (Vec<DependencyEdge>, Cursor)>,
+    /// A forward-edge walk of a task or a project under way at the source: the edges it has
+    /// answered so far, and the cursor that continues it.
+    walking: HashMap<(ItemKind, NativeId), (Vec<DependencyEdge>, Cursor)>,
     /// Versions callers pinned reads to.
     pins: HashMap<NativeId, String>,
     /// Versions a listing in this command carried.
@@ -564,7 +564,8 @@ impl SourceCache {
         let mut command = self.command();
         command.served.remove(id);
         command.read.remove(id);
-        command.walking.remove(id);
+        command.walking.remove(&(ItemKind::Task, id.clone()));
+        command.walking.remove(&(ItemKind::Project, id.clone()));
     }
 
     /// Take the entry for `id` out of service for every process before a write of it is
@@ -597,6 +598,27 @@ impl SourceCache {
                 ),
             }),
         }
+    }
+
+    /// Take every `kind` edges entry out of service for every process before a write that can
+    /// change edges recorded on other items than the one it names is sent — a relation is
+    /// recorded at both of its ends, and a deleted item takes its relations with it — or refuse
+    /// the write, on the terms of [`Self::retire_before_write`].
+    pub(crate) fn retire_edges_before_write(
+        &self,
+        kind: kinds::EdgeKind,
+    ) -> Result<(), SourceError> {
+        self.retire_every_before_write(kind)
+            .map_err(|error| SourceError::Config {
+                message: format!(
+                    "a cache entry of another item's edges under {} could not be removed, \
+                     emptied or made writable ({error}), so the write was not sent: it can \
+                     change those edges, and another process pinned to the entry's version \
+                     would be served them. Make the cache directory writable, then run the \
+                     command again",
+                    self.dir.display()
+                ),
+            })
     }
 
     /// The board context, when one is kept.

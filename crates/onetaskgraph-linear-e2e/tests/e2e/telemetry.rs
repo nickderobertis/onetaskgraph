@@ -10,7 +10,7 @@
 //! recorded. [`DIRECTORY`] names another, so a test can drive the runner over telemetry of its
 //! own without touching what the journeys recorded.
 
-use serde_json::json;
+use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
 pub use onetaskgraph_e2e_support::telemetry::{file_in, record_in};
@@ -84,9 +84,16 @@ pub fn recorded(budget: &str) -> Result<(f64, Option<String>), String> {
     })?;
     let recorded: serde_json::Value = serde_json::from_str(&text)
         .map_err(|error| format!("{budget}: {} is not JSON ({error})", path.display()))?;
-    let value = if budget == crate::cache_budget::BUDGET {
-        // Cache on minus cache off: a whole number of complexity points, negative where the cache
-        // saves, recorded only for the workload the budget states.
+    let value = if budget == crate::cache_budget::BUDGET || budget == crate::cache_budget::GUARD {
+        // The requests the cache saves, cache off minus cache on — or, for the guard, the
+        // dearest single query the cache-on hours sent — a whole number, recorded only for the
+        // workload the budget states.
+        let guard = budget == crate::cache_budget::GUARD;
+        let (unit, member) = if guard {
+            ("complexity points", "largest_single_query")
+        } else {
+            ("requests", "hour")
+        };
         if recorded["workload"].as_str() != Some(crate::cache_budget::WORKLOAD) {
             return Err(format!(
                 "{budget}: the recording is not of the workload the budget states, {}",
@@ -95,32 +102,40 @@ pub fn recorded(budget: &str) -> Result<(f64, Option<String>), String> {
         }
         let figure = recorded["value"].as_i64().ok_or_else(|| {
             format!(
-                "{budget}: {} records no `value` that is a whole number of complexity points: \
-                 {text}",
+                "{budget}: {} records no `value` that is a whole number of {unit}: {text}",
                 path.display()
             )
         })?;
-        // The figure is the larger of the two scales' hours, cache on minus cache off: each
-        // measured in both modes as whole complexity points, and the figure their maximum.
-        let mut largest = i64::MIN;
+        // The figure is the smaller over the two scales of each hour's requests cache off minus
+        // cache on, each measured in both modes as a whole number — or, for the guard, the larger
+        // of each scale's dearest query with the cache on.
+        let mut expected: Option<i64> = None;
         for scale in ["1x", "10x"] {
-            let hour = &recorded["scales"][scale]["hour"];
-            let complexity = |mode: &str| {
-                hour[mode]["complexity"]
-                    .as_u64()
-                    .and_then(|complexity| i64::try_from(complexity).ok())
+            let measured = &recorded["scales"][scale][member];
+            let whole = |value: &Value| value.as_u64().and_then(|value| i64::try_from(value).ok());
+            let at_scale = if guard {
+                whole(&measured["on"])
+            } else {
+                whole(&measured["on"]["requests"])
+                    .zip(whole(&measured["off"]["requests"]))
+                    .map(|(on, off)| off - on)
             };
-            let (Some(on), Some(off)) = (complexity("on"), complexity("off")) else {
+            let Some(at_scale) = at_scale else {
                 return Err(format!(
-                    "{budget}: the {scale} hour is not measured in both modes as whole \
-                     complexity points"
+                    "{budget}: the {scale} {member} is not measured in both modes as whole {unit}"
                 ));
             };
-            largest = largest.max(on - off);
+            expected = Some(match expected {
+                None => at_scale,
+                Some(held) if guard => held.max(at_scale),
+                Some(held) => held.min(at_scale),
+            });
         }
-        if largest != figure {
+        let which = if guard { "larger" } else { "smaller" };
+        let expected = expected.unwrap_or_default();
+        if expected != figure {
             return Err(format!(
-                "{budget}: the figure {figure} is not the larger hour's difference, {largest}"
+                "{budget}: the figure {figure} is not the {which} scale's {member}, {expected}"
             ));
         }
         figure as f64

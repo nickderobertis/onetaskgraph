@@ -1074,12 +1074,25 @@ them do; this is the inventory of what is owed, not a status board.
     document's fields are a cold load, a hit on an unchanged pin and a miss on a newer one; every
     change `spike-linear-coverage` measured or the facets cover by construction is read again
     pinned to the new `lin1` token; a token Linear cannot vouch for — 50 labels, a relations page
-    past 10 rows or reporting another — is never kept or served; comments, project edges and every
-    listing reach Linear every time; and with the cache off every document sent is 0.6.0's.
+    past 10 rows or reporting another — is never kept or served; a project's reverse edges, every
+    listing, `labels`, `health`, `visibility` and `status_names` reach Linear every time; with the
+    cache off every document sent is 0.6.0's, and with it on every document that differs adds only
+    what a token reads.
 102. A repeat copy skips a task only when its source's token covers every part the copy writes:
     a comment added in Linear, and a relation added to a Linear source with no cache, are each
     carried by the next copy; and a board's far end turned into a project is kept as it was by a
-    skipping recopy and carried by the next copy that reads the task depending on it.
+    skipping recopy and carried by the next copy that reads the task depending on it; with a
+    Linear source's cache on, a comment added is carried by the next `--comments` copy and an
+    unchanged one is skipped.
+103. On a loopback Linear with the cache on, a task's comments — listed, and read beside the task
+    by `task show` and a copy — its reverse edges and a project's forward edges are a cold load, a
+    hit on an unchanged pin and a miss on a newer one; a comment added, edited or deleted, a
+    project relation added or removed, and a relation another issue adds or removes with the task
+    are each read again pinned to the new token as an uncached read answers them, and a trashed
+    far end reads as an uncached read does; more than ten comments, relations or inverse
+    relations, an unordered pin and the earlier spelling are never kept or served; a comment
+    author renamed is the one member served as it was; and every comment write, relation write
+    and copy taken back takes the entries it can change out of service.
 
 ## The public boundary
 

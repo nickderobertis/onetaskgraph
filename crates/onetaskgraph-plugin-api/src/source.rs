@@ -207,22 +207,6 @@ pub trait TaskSource: Send + Sync {
         }
     }
 
-    /// The change token the response that answered this source's last read of task `id`'s
-    /// comments from their first page — [`task_comments`](Self::task_comments) — spelled, or
-    /// `None` when it spelled none.
-    ///
-    /// What lets the store's cache keep a task's comments by the version they were read at when
-    /// nothing else in the command read the task: they are served only where
-    /// [`version_coverage`](Self::version_coverage) covers comments, and only to a pin that
-    /// version is at or after. Synchronous, and never carried over the plugin protocol.
-    ///
-    /// Defaulted to `None`, which keeps a comment read the cache did not answer from filling
-    /// anything.
-    fn comments_version(&self, id: &NativeId) -> Option<String> {
-        let _ = id;
-        None
-    }
-
     /// What this source holds about task `id` — the item it read last in this process — that
     /// a later write expecting that version of it could take instead of reading it again, or
     /// `None` when it holds nothing of the kind.

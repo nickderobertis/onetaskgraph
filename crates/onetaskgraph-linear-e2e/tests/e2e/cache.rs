@@ -2,12 +2,14 @@
 //! Linear, doubling only Linear.
 //!
 //! Linear's `lin1` token — an item's `updatedAt`, the digest of its facets and, with the cache
-//! attached, the digest of a task's first page of relations — covers a task's fields and forward
-//! edges, a project's fields and a document's fields, so a read pinned to a token the entry is at
-//! or after sends nothing. Every change `spike-linear-coverage` measured `updatedAt` alone missing,
-//! and every member the facets embed, moves the token: a read pinned to the new listing token
-//! reads Linear and answers what an uncached read does. A comment, a project's forward edges and
-//! every reverse edge are always read from Linear.
+//! attached, the digests of a task's first page of comments, relations and inverse relations and
+//! of a project's first page of relations — covers a task's fields and forward edges, a project's
+//! fields and a document's fields, so a read pinned to a token the entry is at or after sends
+//! nothing. Every change `spike-linear-coverage` measured `updatedAt` alone missing, and every
+//! member the facets embed, moves the token: a read pinned to the new listing token reads Linear
+//! and answers what an uncached read does. `cache_parts.rs` holds comments, reverse edges and a
+//! project's forward edges to the same; a project's reverse edges and every listing are always
+//! read from Linear.
 
 use std::path::{Path, PathBuf};
 use std::process::Output;
@@ -321,14 +323,15 @@ fn a_projects_tasks_listed_then_their_forward_edges_are_answered_from_the_cache_
     );
     assert_eq!(warm, cold, "what the cache answers is what Linear answered");
 
-    // A relation added moves nothing Linear's `updatedAt` can see — but the relations digest:
-    // L-1's listed token is newer, so L-1's edges alone are read again.
+    // A relation added moves nothing Linear's `updatedAt` can see — but the relations digest of
+    // L-1, which holds it, and the inverse relations digest of L-4, which it names: those two
+    // tasks' listed tokens are newer, so their edges alone are read again.
     cached.workspace.relate("L-1", "L-4", "related");
     let (changed, sent) = cached.ok(&graph);
     assert_eq!(
         relations(&sent),
-        1,
-        "only the task whose relations moved: {sent:?}"
+        3,
+        "L-1's relations, and L-4's relations and its recorded far end, and no other: {sent:?}"
     );
     let [on, off] = cached.on_and_off(&graph);
     assert_eq!(on.0, off.0, "what an uncached graph answers");
@@ -340,7 +343,7 @@ fn a_projects_tasks_listed_then_their_forward_edges_are_answered_from_the_cache_
 fn edges_kept(cached: &Cached) -> Vec<String> {
     let mut kept: Vec<String> = cached
         .dir()
-        .map(|dir| walk(&dir.join("edges-v1")))
+        .map(|dir| walk(&dir.join("edges-v2")))
         .unwrap_or_default()
         .iter()
         .filter_map(|path| std::fs::read(path).ok())
@@ -778,46 +781,75 @@ fn a_listing_alone_fills_no_entry() {
 
 #[test]
 fn every_linear_read_kept_remote_reaches_linear_every_time_and_costs_what_it_did() {
-    let cached = Cached::new(dataset());
-    let comment = cached
+    let mut held = dataset();
+    held["project_dependencies"] = json!([{"from": "P-1", "to": "P-2", "kind": "blocks"}]);
+    let cached = Cached::new(held);
+    cached
         .workspace
-        .add_comment("L-1", "a comment only Linear holds");
-    // Fill every entry a read can fill, so each remote read below has one present beside it.
-    let pins: Vec<(&str, &str, String)> = [
-        ("task", "linear:L-1"),
-        ("project", "linear:P-1"),
-        ("document", "linear:D-1"),
-    ]
-    .iter()
-    .map(|(kind, id)| (*kind, *id, cached.listed(kind, id).expect("a token")))
-    .collect();
-    for (kind, id, pin) in &pins {
-        cached.ok(&strs(&pinned(kind, id, pin)));
-    }
-    cached.ok(&["project", "graph", "linear:P-1", "--format", "json"]);
-    let task_pin = pins[0].2.clone();
-    let remote: Vec<Vec<&str>> = vec![
+        .add_comment("L-1", "a comment the task entry keeps");
+    // Fill every entry a read can fill — a task's fields, comments and edges both ways, a
+    // project's fields and forward edges, a document's fields — so each remote read below has
+    // one present beside it.
+    let task_pin = cached.listed("task", "linear:L-2").expect("a token");
+    let project_pin = cached.listed("project", "linear:P-2").expect("a token");
+    let document_pin = cached.listed("document", "linear:D-1").expect("a token");
+    for fill in [
+        vec!["task", "show", "linear:L-2", "--pin", &task_pin, "--json"],
+        vec!["task", "deps", "linear:L-2", "--pin", &task_pin, "--json"],
         vec![
             "task",
-            "comment",
-            "list",
-            "linear:L-1",
+            "deps",
+            "linear:L-2",
+            "--direction",
+            "depended-on-by",
             "--pin",
             &task_pin,
             "--json",
         ],
-        vec!["task", "show", "linear:L-1", "--pin", &task_pin, "--json"],
         vec![
-            "task",
-            "copy",
-            "linear:L-1",
-            "--to",
-            "notes",
-            "--comments",
-            "--no-link",
+            "project",
+            "show",
+            "linear:P-2",
+            "--pin",
+            &project_pin,
             "--json",
         ],
-        vec!["project", "deps", "linear:P-1", "--json"],
+        vec![
+            "project",
+            "deps",
+            "linear:P-2",
+            "--pin",
+            &project_pin,
+            "--json",
+        ],
+        vec![
+            "document",
+            "show",
+            "linear:D-1",
+            "--pin",
+            &document_pin,
+            "--json",
+        ],
+    ] {
+        cached.ok(&fill);
+        let (_, sent) = cached.ok(&fill);
+        assert_eq!(sent, Vec::<String>::new(), "`{}` is filled", fill.join(" "));
+    }
+    let dir = cached.dir().expect("a cache");
+    let filled = walk(&dir);
+    let remote: Vec<Vec<&str>> = vec![
+        // A project's reverse edges, pinned or not: no part of a project's token moves for a
+        // relation another project records with it (0 of 2 in spike-linear-coverage).
+        vec![
+            "project",
+            "deps",
+            "linear:P-2",
+            "--direction",
+            "depended-on-by",
+            "--pin",
+            &project_pin,
+            "--json",
+        ],
         vec![
             "project",
             "deps",
@@ -826,18 +858,11 @@ fn every_linear_read_kept_remote_reaches_linear_every_time_and_costs_what_it_did
             "depended-on-by",
             "--json",
         ],
-        vec![
-            "task",
-            "deps",
-            "linear:L-2",
-            "--direction",
-            "depended-on-by",
-            "--json",
-        ],
         vec!["task", "list", "--source", "linear", "--json"],
         vec!["project", "list", "--source", "linear", "--json"],
         vec!["document", "list", "--source", "linear", "--json"],
         vec!["label", "list", "--source", "linear", "--json"],
+        // A status write's names, `status_names`, read as `sources fields` reports them.
         vec!["sources", "fields", "linear", "--json"],
     ];
     for arguments in &remote {
@@ -854,19 +879,19 @@ fn every_linear_read_kept_remote_reaches_linear_every_time_and_costs_what_it_did
                 "`{}` sends exactly what it sends with no cache",
                 arguments.join(" ")
             );
+            assert_eq!(
+                on.0,
+                off.0,
+                "`{}` answers what it answers with no cache",
+                arguments.join(" ")
+            );
         }
     }
-    // No comment and no author's name is ever written where an entry is kept.
-    let dir = cached.dir().expect("a cache");
-    for path in walk(&dir) {
-        let text = std::fs::read_to_string(&path).unwrap_or_default();
-        assert!(
-            !text.contains("a comment only Linear holds") && !text.contains("a person"),
-            "{} keeps a comment",
-            path.display()
-        );
-    }
-    assert!(!comment.is_empty());
+    assert_eq!(
+        walk(&dir),
+        filled,
+        "no remote read fills or retires an entry"
+    );
 }
 
 /// Where the cache keeps the `directory` entry of the native id `native`, under `dir`.
@@ -940,14 +965,14 @@ fn every_linear_write_takes_the_entries_naming_its_item_out_of_service() {
             (
                 "project",
                 "linear:P-1",
-                "projects-v1",
+                "projects-v2",
                 words("project metadata set linear:P-1 caller.note \"noted\""),
                 "noted",
             ),
             (
                 "document",
                 "linear:D-1",
-                "documents-v1",
+                "documents-v2",
                 words("document metadata set linear:D-1 caller.note \"noted\""),
                 "noted",
             ),

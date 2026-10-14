@@ -541,7 +541,11 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
             command: TaskCommand::Deps(args),
         } => {
             let request = dependency_request(loaded, args)?;
-            let response = engine(loaded)
+            let engine = engine(loaded);
+            if let Some(pin) = &args.pin {
+                engine.pin(&request.id, pin);
+            }
+            let response = engine
                 .task_dependencies(&request)
                 .await
                 .map_err(|error| Failure::from(&error))?;
@@ -653,7 +657,11 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
             command: ProjectCommand::Deps(args),
         } => {
             let request = dependency_request(loaded, args)?;
-            let response = engine(loaded)
+            let engine = engine(loaded);
+            if let Some(pin) = &args.pin {
+                engine.pin_project(&request.id, pin);
+            }
+            let response = engine
                 .project_dependencies(&request)
                 .await
                 .map_err(|error| Failure::from(&error))?;

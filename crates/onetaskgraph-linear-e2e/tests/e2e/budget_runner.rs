@@ -249,86 +249,101 @@ fn the_runner_refuses_a_budget_with_nowhere_to_report_and_a_result_it_cannot_wri
 }
 
 #[test]
-fn the_cache_budget_is_reported_signed_at_its_workload_and_refused_at_another_or_without_a_figure()
-{
-    use crate::cache_budget::{BUDGET, WORKLOAD};
+fn the_cache_budgets_are_reported_at_their_workload_and_refused_at_another_or_without_a_figure() {
+    use crate::cache_budget::{BUDGET, GUARD, WORKLOAD};
     let sandbox = Sandbox::new();
     // Each recording in a telemetry directory of its own, since they share the budget's id.
-    let report = |name: &str, recording: &Value| {
-        let recorded = sandbox.subdirectory(&format!("telemetry-{name}"));
-        std::fs::write(telemetry::file_in(&recorded, BUDGET), recording.to_string())
+    let report = |budget: &str, name: &str, recording: &Value| {
+        let recorded = sandbox.subdirectory(&format!("telemetry-{budget}-{name}"));
+        std::fs::write(telemetry::file_in(&recorded, budget), recording.to_string())
             .expect("writable");
         let result = sandbox
-            .subdirectory(&format!("result-{name}"))
+            .subdirectory(&format!("result-{budget}-{name}"))
             .join("result.json");
         std::fs::write(&result, "").expect("an empty result file, as onebudgetspec makes one");
         let output = run_report(&recorded, |command| {
             command
-                .env("ONEBUDGETSPEC_BUDGET_ID", BUDGET)
+                .env("ONEBUDGETSPEC_BUDGET_ID", budget)
                 .env("ONEBUDGETSPEC_RESULT", &result);
         });
         (output, std::fs::read_to_string(&result).unwrap_or_default())
     };
 
-    let hour =
-        |on: u64, off: u64| json!({"hour": {"on": {"complexity": on}, "off": {"complexity": off}}});
-    let valid = json!({"value": -5811, "detail": "the cache saves", "workload": WORKLOAD,
-                       "scales": {"1x": hour(60_003, 65_814), "10x": hour(600_222, 658_332)}});
-    let with = |pointer: &str, value: Value| {
-        let mut changed = valid.clone();
-        *changed.pointer_mut(pointer).expect("the member") = value;
-        changed
+    let scale = |on: u64, off: u64, dearest: u64| {
+        json!({"hour": {"on": {"requests": on}, "off": {"requests": off}},
+               "largest_single_query": {"on": dearest}})
     };
-    let (saved, result) = report("saved", &valid);
-    assert!(
-        saved.status.success(),
-        "{}",
-        String::from_utf8_lossy(&saved.stderr)
-    );
-    let result: Value = serde_json::from_str(&result).expect("the result");
-    assert_eq!(
-        result,
-        json!({"value": -5811.0, "detail": "the cache saves"}),
-        "a saving is reported as the negative figure it is"
-    );
-
-    for (name, recording, reason) in [
+    let scales = json!({"1x": scale(180, 300, 5_908), "10x": scale(1_811, 3_000, 8_550)});
+    // (budget, the figure a valid recording carries — the smaller scale's requests saved, and
+    // the larger scale's dearest query — the unit a refusal names, the member it is read from,
+    // and which of the scales the figure is)
+    for (budget, figure, unit, member, which) in [
+        (BUDGET, 120, "a whole number of requests", "hour", "smaller"),
         (
-            "another-workload",
-            with("/workload", json!("one host, one pass")),
-            "not of the workload the budget states",
-        ),
-        (
-            "no-figure",
-            with("/value", json!(null)),
+            GUARD,
+            8_550,
             "a whole number of complexity points",
-        ),
-        (
-            "fractional",
-            with("/value", json!(-0.5)),
-            "a whole number of complexity points",
-        ),
-        (
-            "no-ten-times-hour",
-            with("/scales/10x", json!({})),
-            "the 10x hour is not measured in both modes",
-        ),
-        (
-            "fractional-complexity",
-            with("/scales/1x/hour/off/complexity", json!(1.5)),
-            "the 1x hour is not measured in both modes",
-        ),
-        (
-            "another-figure",
-            with("/value", json!(0)),
-            "is not the larger hour's difference, -5811",
+            "largest_single_query",
+            "larger",
         ),
     ] {
-        let (refused, _) = report(name, &recording);
-        let stderr = String::from_utf8_lossy(&refused.stderr);
-        assert!(!refused.status.success(), "{name}: {stderr}");
-        assert!(stderr.contains(&format!("{BUDGET}: ")), "{name}: {stderr}");
-        assert!(stderr.contains(reason), "{name}: {stderr}");
+        let valid = json!({"value": figure, "detail": "the cache saves", "workload": WORKLOAD,
+                           "scales": scales});
+        let with = |pointer: &str, value: Value| {
+            let mut changed = valid.clone();
+            *changed.pointer_mut(pointer).expect("the member") = value;
+            changed
+        };
+        let (reported, result) = report(budget, "valid", &valid);
+        assert!(
+            reported.status.success(),
+            "{budget}: {}",
+            String::from_utf8_lossy(&reported.stderr)
+        );
+        let result: Value = serde_json::from_str(&result).expect("the result");
+        assert_eq!(
+            result,
+            json!({"value": f64::from(figure), "detail": "the cache saves"}),
+            "{budget}: the figure is reported as the number it is"
+        );
+        let measured = if budget == BUDGET {
+            "/scales/1x/hour/off/requests"
+        } else {
+            "/scales/1x/largest_single_query/on"
+        };
+        for (name, recording, reason) in [
+            (
+                "another-workload",
+                with("/workload", json!("one host, one pass")),
+                "not of the workload the budget states".to_owned(),
+            ),
+            ("no-figure", with("/value", json!(null)), unit.to_owned()),
+            ("fractional", with("/value", json!(-0.5)), unit.to_owned()),
+            (
+                "no-ten-times-hour",
+                with("/scales/10x", json!({})),
+                format!("the 10x {member} is not measured in both modes"),
+            ),
+            (
+                "fractional-measure",
+                with(measured, json!(1.5)),
+                format!("the 1x {member} is not measured in both modes"),
+            ),
+            (
+                "another-figure",
+                with("/value", json!(0)),
+                format!("is not the {which} scale's {member}, {figure}"),
+            ),
+        ] {
+            let (refused, _) = report(budget, name, &recording);
+            let stderr = String::from_utf8_lossy(&refused.stderr);
+            assert!(!refused.status.success(), "{budget} {name}: {stderr}");
+            assert!(
+                stderr.contains(&format!("{budget}: ")),
+                "{budget} {name}: {stderr}"
+            );
+            assert!(stderr.contains(&reason), "{budget} {name}: {stderr}");
+        }
     }
 }
 

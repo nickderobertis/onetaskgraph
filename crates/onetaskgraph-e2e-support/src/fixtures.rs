@@ -4308,13 +4308,24 @@ fn linear_server(sandbox: &Sandbox, recorded: Option<Value>, failing: &[&str]) -
 /// about it: an issue's raw description byte for byte, and which mutations a command sent.
 // llmlint: ignore[code_lands_in_the_domain_that_owns_it] The shared e2e harness is where the agreed e2e layout puts every loopback server, so no suite copies one: the journey-matrix table in this file builds each of its rows through both hosted plugins' loopbacks, and the engine's own suite drives both, so neither can live in one plugin's suite. Editing it re-selects every suite, as editing any shared harness does.
 pub fn linear_workspace(sandbox: &Sandbox, held: Value) -> (Value, LinearWorkspace) {
+    linear_workspace_failing(sandbox, held, &[])
+}
+
+/// [`linear_workspace`], refusing each operation `failing` names once, as
+/// [`linear_failing_a_relation_write_once`] refuses one: a copy whose last write is refused,
+/// and which takes back what it wrote.
+pub fn linear_workspace_failing(
+    sandbox: &Sandbox,
+    held: Value,
+    failing: &[&str],
+) -> (Value, LinearWorkspace) {
     let workspace = LinearWorkspace {
         state: Arc::new(Mutex::new(linear_with_comments(held))),
         ledger: Arc::new(Mutex::new(Vec::new())),
         answers: Arc::new(Mutex::new(Vec::new())),
         hooks: Arc::new(Mutex::new(Vec::new())),
     };
-    let config = linear_serve(sandbox, workspace.clone(), None, &[]);
+    let config = linear_serve(sandbox, workspace.clone(), None, failing);
     (config, workspace)
 }
 
@@ -4614,6 +4625,61 @@ impl LinearWorkspace {
             .expect("the comment to edit");
         row["body"] = json!(body);
         row["updatedAt"] = json!(stamp);
+    }
+
+    /// Delete one comment, as its author would in Linear: no issue's `updatedAt` moves for it, as
+    /// `spike-linear-coverage` measured.
+    pub fn delete_comment(&self, comment: &str) {
+        let mut data = self.state.lock().unwrap();
+        let rows = data["_linear_comments"].as_array_mut().expect("comments");
+        let before = rows.len();
+        rows.retain(|row| row["id"] != comment);
+        assert_eq!(rows.len() + 1, before, "the comment to delete");
+    }
+
+    /// Rename the person every comment `from` wrote names, as a person changing their display
+    /// name in Linear would: their comments read under the new name, and neither a comment's nor
+    /// an issue's `updatedAt` moves for it.
+    pub fn rename_comment_author(&self, from: &str, to: &str) {
+        let mut data = self.state.lock().unwrap();
+        for row in data["_linear_comments"]
+            .as_array_mut()
+            .into_iter()
+            .flatten()
+        {
+            if row["user"]["displayName"] == from {
+                row["user"]["displayName"] = json!(to);
+            }
+        }
+    }
+
+    /// Relate the project `from` to depend on the project `to`, as a person would: no project's
+    /// `updatedAt` moves for it, as `spike-linear-coverage` measured (0 of 2).
+    pub fn relate_projects(&self, from: &str, to: &str) {
+        let mut data = self.state.lock().unwrap();
+        data["project_dependencies"]
+            .as_array_mut()
+            .expect("the project relations")
+            .push(json!({"from": from, "to": to, "kind": "blocks"}));
+    }
+
+    /// Remove every relation from the project `from` to the project `to`, as a person would.
+    pub fn unrelate_projects(&self, from: &str, to: &str) {
+        let mut data = self.state.lock().unwrap();
+        data["project_dependencies"]
+            .as_array_mut()
+            .expect("the project relations")
+            .retain(|edge| !(edge["from"] == from && edge["to"] == to));
+    }
+
+    /// Delete the project `id`, as a person would: it is read nowhere, and the relations naming
+    /// it stay where they were.
+    pub fn remove_project(&self, id: &str) {
+        let mut data = self.state.lock().unwrap();
+        data["projects"]
+            .as_array_mut()
+            .expect("the projects")
+            .retain(|row| row["id"] != id);
     }
 
     /// Every request this workspace answered, as its GraphQL document and its variables, in
@@ -5438,13 +5504,16 @@ fn linear_response(
         graphql::ISSUE_CACHED,
         graphql::ISSUE_DETAIL_CACHED,
         graphql::ISSUE_RELATIONS_CACHED,
+        graphql::PROJECTS_CACHED,
+        graphql::PROJECT_CACHED,
+        graphql::PROJECT_RELATIONS_CACHED,
     ]
     .contains(&operation)
     {
         return Err("unknown GraphQL operation");
     }
     let vars = Value::Object(request.variables);
-    // What the store's cache sends in place of four documents: the plain one's answer, with
+    // What the store's cache sends in place of seven documents: the plain one's answer, with
     // exactly what the cache's document adds to it.
     if let Some(plain) = linear_uncached(operation) {
         let mut answer =
@@ -5765,31 +5834,69 @@ fn linear_uncached(operation: &str) -> Option<&'static str> {
         graphql::ISSUE_CACHED => Some(graphql::ISSUE),
         graphql::ISSUE_DETAIL_CACHED => Some(graphql::ISSUE_DETAIL),
         graphql::ISSUE_RELATIONS_CACHED => Some(graphql::ISSUE_RELATIONS),
+        graphql::PROJECTS_CACHED => Some(graphql::PROJECTS),
+        graphql::PROJECT_CACHED => Some(graphql::PROJECT),
+        graphql::PROJECT_RELATIONS_CACHED => Some(graphql::PROJECT_RELATIONS),
         _ => None,
     }
 }
 
+/// `nodes` as the first page of a `first:` connection the cache's documents select answers it:
+/// at most that page's rows, and whether more follow.
+fn linear_first_page(nodes: Vec<Value>) -> Value {
+    // The page the cache's documents select, which the plugin's own test holds them to.
+    let first = onetaskgraph_linear::change_token::PAGE;
+    let more = nodes.len() > first;
+    json!({"nodes": nodes.into_iter().take(first).collect::<Vec<_>>(),
+           "pageInfo": {"hasNextPage": more}})
+}
+
 /// Add to `answer`, the plain document's, what the cache's `operation` selects beside it: each
-/// issue's first page of relations, or — for a dependency read — every other part of its
-/// token.
+/// issue's first page of comments, relations and inverse relations, each project's first page
+/// of relations, or — for a dependency read — every other part of its token.
 fn linear_widen(operation: &str, answer: &mut Value, data: &Value, vars: &Value) {
     use onetaskgraph_linear::graphql;
-    let page = |id: &str| {
-        let relations = linear_relations(data, "task_dependencies", id, "Issue", None);
-        let nodes = relations["relations"]["nodes"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default();
-        // The page the cache's documents select, which the plugin's own test holds them to.
-        let first = onetaskgraph_linear::change_token::RELATIONS_PAGE;
-        let more = nodes.len() > first;
-        json!({"nodes": nodes.into_iter().take(first).collect::<Vec<_>>(),
-               "pageInfo": {"hasNextPage": more}})
+    let relations = |key: &str, suffix: &str, id: &str, connection: &str| {
+        let held = linear_relations(data, key, id, suffix, None);
+        linear_first_page(
+            held[connection]["nodes"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default(),
+        )
     };
-    let widen = |issue: &mut Value| {
+    // Newest first, as the comment page read lists them.
+    let comments = |id: &str| {
+        linear_first_page(
+            data["_linear_comments"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .rev()
+                .filter(|row| row["issue"] == id)
+                .map(|row| json!({"id": row["id"], "updatedAt": row["updatedAt"]}))
+                .collect(),
+        )
+    };
+    let widen_issue = |issue: &mut Value, with_comments: bool| {
         if let Some(id) = issue.get("id").and_then(Value::as_str).map(str::to_owned) {
-            issue["relations"] = page(&id);
+            if with_comments {
+                issue["comments"] = comments(&id);
+            }
+            issue["relations"] = relations("task_dependencies", "Issue", &id, "relations");
+            issue["inverseRelations"] =
+                relations("task_dependencies", "Issue", &id, "inverseRelations");
         }
+    };
+    let widen_project = |project: &mut Value| {
+        if let Some(id) = project.get("id").and_then(Value::as_str).map(str::to_owned) {
+            project["relations"] = relations("project_dependencies", "Project", &id, "relations");
+        }
+    };
+    let row = |collection: &str| {
+        data[collection]
+            .as_array()
+            .and_then(|rows| rows.iter().find(|row| row["id"] == vars["id"]))
     };
     match operation {
         graphql::ISSUES_CACHED => {
@@ -5799,20 +5906,50 @@ fn linear_widen(operation: &str, answer: &mut Value, data: &Value, vars: &Value)
                 .into_iter()
                 .flatten()
             {
-                widen(issue);
+                widen_issue(issue, true);
             }
         }
         graphql::ISSUE_CACHED | graphql::ISSUE_DETAIL_CACHED => {
             if let Some(issue) = answer.get_mut("issue").filter(|issue| !issue.is_null()) {
-                widen(issue);
+                widen_issue(issue, operation == graphql::ISSUE_CACHED);
             }
         }
+        graphql::PROJECTS_CACHED => {
+            for project in answer
+                .pointer_mut("/projects/nodes")
+                .and_then(Value::as_array_mut)
+                .into_iter()
+                .flatten()
+            {
+                widen_project(project);
+            }
+        }
+        graphql::PROJECT_CACHED => {
+            if let Some(project) = answer
+                .get_mut("project")
+                .filter(|project| !project.is_null())
+            {
+                widen_project(project);
+            }
+        }
+        graphql::PROJECT_RELATIONS_CACHED => {
+            let (Some(row), Some(project)) = (
+                row("projects"),
+                answer
+                    .get_mut("project")
+                    .filter(|project| project.is_object()),
+            ) else {
+                return;
+            };
+            let read = linear_project(row, data);
+            for part in ["updatedAt", "status", "labels"] {
+                project[part] = read[part].clone();
+            }
+        }
+        // A dependency read: the issue's token parts beside the relations pages it reads.
         _ => {
-            let row = data["tasks"]
-                .as_array()
-                .and_then(|tasks| tasks.iter().find(|task| task["id"] == vars["id"]));
             let (Some(row), Some(issue)) = (
-                row,
+                row("tasks"),
                 answer.get_mut("issue").filter(|issue| issue.is_object()),
             ) else {
                 return;
@@ -5828,6 +5965,7 @@ fn linear_widen(operation: &str, answer: &mut Value, data: &Value, vars: &Value)
             ] {
                 issue[part] = read[part].clone();
             }
+            issue["comments"] = comments(row["id"].as_str().unwrap_or_default());
         }
     }
 }

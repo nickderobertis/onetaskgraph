@@ -1,0 +1,769 @@
+//! A Linear task's comments and reverse edges, and a project's forward edges, answered from the
+//! store's cache, driven through the binary against the loopback Linear, doubling only Linear.
+//!
+//! With the cache attached a task's `lin1` token carries the digests of its first page of
+//! comments, relations and inverse relations, and a project's the digest of its first page of
+//! relations, so a read of any of those pinned to a token the entry is at or after sends
+//! nothing. Every change to them moves the token — a comment added, edited or deleted, a project
+//! relation added or removed, a relation another issue records with this one — and a read pinned
+//! to the new listing token reads Linear and answers what an uncached read does. The one member
+//! served older than its token is a comment author's display name, which no part covers.
+
+use std::path::Path;
+
+use onetaskgraph_linear::graphql;
+use serde_json::{Value, json};
+
+use crate::cache::{Cached, dataset, walk};
+use crate::fixtures::{LinearWorkspace, document, linear_workspace_failing};
+use crate::linear::{eng_mapping, linear};
+
+/// A change a person makes in Linear.
+type Edit = Box<dyn Fn(&LinearWorkspace)>;
+
+/// The workspace every journey here starts from: the shared one, with `L-1` carrying a comment,
+/// a third project, and `P-1` depending on `P-2`.
+fn held() -> Value {
+    let mut held = dataset();
+    held["projects"].as_array_mut().expect("projects").push(
+        json!({"id": "P-3", "title": "Ops", "content": "About operations.",
+                     "status": {"category": "todo", "name": "Todo"}, "labels": []}),
+    );
+    held["project_dependencies"] = json!([{"from": "P-1", "to": "P-2", "kind": "blocks"}]);
+    held["comments"] = json!([{"task": "L-1", "comment": {
+        "id": "C-1", "body": "The first word.", "author": "Ada",
+        "created_at": "2026-08-24T00:00:00Z", "updated_at": "2026-08-24T00:00:00Z"}}]);
+    held
+}
+
+/// One of the reads this file holds to the cache: what it is called, the kind of item it pins,
+/// that item, and its arguments for a pin.
+struct Read {
+    name: &'static str,
+    kind: &'static str,
+    id: &'static str,
+    arguments: fn(&str) -> Vec<String>,
+}
+
+impl Read {
+    fn with(&self, pin: &str) -> Vec<String> {
+        (self.arguments)(pin)
+    }
+}
+
+fn words(line: &str, pin: &str) -> Vec<String> {
+    let mut arguments: Vec<String> = line.split(' ').map(str::to_owned).collect();
+    arguments.extend(["--pin".to_owned(), pin.to_owned(), "--json".to_owned()]);
+    arguments
+}
+
+/// A task's comments, as `task comment list` reads them.
+const COMMENTS: Read = Read {
+    name: "comment list",
+    kind: "task",
+    id: "linear:L-1",
+    arguments: |pin| words("task comment list linear:L-1", pin),
+};
+
+/// A task's fields with its comments, as `task show` reads them.
+const DETAIL: Read = Read {
+    name: "show with comments",
+    kind: "task",
+    id: "linear:L-1",
+    arguments: |pin| words("task show linear:L-1", pin),
+};
+
+/// A project's forward edges.
+const PROJECT_EDGES: Read = Read {
+    name: "project deps",
+    kind: "project",
+    id: "linear:P-1",
+    arguments: |pin| words("project deps linear:P-1", pin),
+};
+
+/// A task's reverse edges.
+const REVERSE_EDGES: Read = Read {
+    name: "reverse task deps",
+    kind: "task",
+    id: "linear:L-2",
+    arguments: |pin| words("task deps linear:L-2 --direction depended-on-by", pin),
+};
+
+fn strs(arguments: &[String]) -> Vec<&str> {
+    arguments.iter().map(String::as_str).collect()
+}
+
+/// The JSON a read printed, without its `cache` member and without any `version`, which the
+/// cache-on and cache-off spellings of a token differ in.
+fn bare(mut printed: Value) -> Value {
+    if let Some(object) = printed.as_object_mut() {
+        object.remove("cache");
+    }
+    strip_versions(&mut printed);
+    printed
+}
+
+fn strip_versions(value: &mut Value) {
+    match value {
+        Value::Object(object) => {
+            object.remove("version");
+            object.values_mut().for_each(strip_versions);
+        }
+        Value::Array(values) => values.iter_mut().for_each(strip_versions),
+        _ => {}
+    }
+}
+
+/// Fill the entry `read` answers from at the token its item lists at, and hold the next read of
+/// it to sending nothing: what the journeys below start from.
+fn filled(cached: &Cached, read: &Read) -> String {
+    let pin = cached.listed(read.kind, read.id).expect("a token");
+    cached.ok(&strs(&read.with(&pin)));
+    let (_, sent) = cached.ok(&strs(&read.with(&pin)));
+    assert_eq!(sent, Vec::<String>::new(), "{}: filled", read.name);
+    pin
+}
+
+#[test]
+fn every_comment_and_edge_read_is_a_cold_load_a_hit_on_an_unchanged_pin_and_a_miss_on_a_newer_one()
+{
+    // (the read, the one document a cold read of it sends, how a person changes it)
+    let reads: Vec<(Read, &str, Edit)> = vec![
+        (
+            COMMENTS,
+            graphql::ISSUE_DETAIL_CACHED,
+            Box::new(|w| {
+                w.add_comment("L-1", "A second word.");
+            }),
+        ),
+        (
+            DETAIL,
+            graphql::ISSUE_DETAIL_CACHED,
+            Box::new(|w| w.edit_comment("C-1", "The first word, edited.")),
+        ),
+        (
+            PROJECT_EDGES,
+            graphql::PROJECT_RELATIONS_CACHED,
+            Box::new(|w| w.relate_projects("P-1", "P-3")),
+        ),
+        (
+            REVERSE_EDGES,
+            graphql::ISSUE_RELATIONS_CACHED,
+            Box::new(|w| w.relate("L-3", "L-2", "blocks")),
+        ),
+    ];
+    for (read, cold, change) in reads {
+        let cached = Cached::new(held());
+        let pin = cached.listed(read.kind, read.id).expect("a token");
+        let (loaded, sent) = cached.ok(&strs(&read.with(&pin)));
+        assert_eq!(sent, [cold], "{}: a cold read is one request", read.name);
+        let (hit, sent) = cached.ok(&strs(&read.with(&pin)));
+        assert_eq!(
+            sent,
+            Vec::<String>::new(),
+            "{}: a hit sends nothing",
+            read.name
+        );
+        assert_eq!(
+            bare(hit),
+            bare(loaded),
+            "{}: the hit answers the load",
+            read.name
+        );
+
+        change(&cached.workspace);
+        let newer = cached.listed(read.kind, read.id).expect("a token");
+        assert_ne!(newer, pin, "{}: the token moves", read.name);
+        let (_, sent) = cached.ok(&strs(&read.with(&newer)));
+        assert_eq!(sent, [cold], "{}: a newer pin misses", read.name);
+        let [on, off] = cached.on_and_off(&strs(&read.with(&newer)));
+        assert_eq!(on.0, off.0, "{}: what an uncached read answers", read.name);
+        // And the newer entry is served to that pin from here on.
+        let (_, sent) = cached.ok(&strs(&read.with(&newer)));
+        assert_eq!(sent, Vec::<String>::new(), "{}: refilled", read.name);
+    }
+}
+
+#[test]
+fn a_comments_copy_by_query_reads_only_the_task_whose_comments_moved() {
+    let cached = Cached::new(held());
+    let copy = [
+        "task",
+        "copy",
+        "--to",
+        "notes",
+        "--source",
+        "linear",
+        "--comments",
+        "--dry-run",
+        "--no-link",
+        "--json",
+    ];
+    let details = |sent: &[String]| {
+        sent.iter()
+            .filter(|document| *document == graphql::ISSUE_DETAIL_CACHED)
+            .count()
+    };
+    let (cold, sent) = cached.ok(&copy);
+    assert_eq!(details(&sent), 4, "a cold copy loads each task: {sent:?}");
+    let (warm, sent) = cached.ok(&copy);
+    assert!(
+        !sent.iter().any(|document| {
+            document == graphql::ISSUE_DETAIL_CACHED || document == graphql::ISSUE_RELATIONS_CACHED
+        }),
+        "a warm copy reads no task's comments or edges: {sent:?}"
+    );
+    assert_eq!(bare(warm), bare(cold.clone()));
+
+    cached.workspace.add_comment("L-3", "A word on L-3.");
+    let before = cached.workspace.served().len();
+    let (moved, _) = cached.ok(&copy);
+    let loaded: Vec<Value> = cached.workspace.served()[before..]
+        .iter()
+        .filter(|(document, _)| document == graphql::ISSUE_DETAIL_CACHED)
+        .map(|(_, variables)| variables["id"].clone())
+        .collect();
+    assert_eq!(loaded, [json!("L-3")], "only the task whose comments moved");
+    let [on, off] = cached.on_and_off(&copy);
+    assert_eq!(on.0, off.0, "what an uncached copy reads");
+    assert_eq!(bare(moved), on.0.1);
+}
+
+#[test]
+fn a_comment_or_edge_read_its_token_cannot_vouch_for_is_never_kept_or_served() {
+    // (the case, how it is made, the read, the entry directory nothing may be kept in, and the
+    // connection whose first page reported another page)
+    let cases: Vec<(&str, Edit, Read, &str, &str)> = vec![
+        (
+            "eleven comments",
+            Box::new(|w| {
+                for n in 0..10 {
+                    w.add_comment("L-1", &format!("Word {n}."));
+                }
+            }),
+            COMMENTS,
+            "tasks",
+            "/comments/pageInfo/hasNextPage",
+        ),
+        (
+            "eleven inverse relations",
+            Box::new(|w| {
+                for n in 0..10 {
+                    w.relate(["L-3", "L-4"][n % 2], "L-2", "related");
+                }
+            }),
+            REVERSE_EDGES,
+            "reverse-edges-v2",
+            "/inverseRelations/pageInfo/hasNextPage",
+        ),
+        (
+            "eleven project relations",
+            Box::new(|w| {
+                for n in 0..10 {
+                    w.relate_projects("P-1", ["P-2", "P-3"][n % 2]);
+                }
+            }),
+            PROJECT_EDGES,
+            "project-edges-v2",
+            "/relations/pageInfo/hasNextPage",
+        ),
+    ];
+    for (case, make, read, directory, more) in cases {
+        let cached = Cached::new(held());
+        make(&cached.workspace);
+        assert_eq!(
+            cached.listed(read.kind, read.id),
+            None,
+            "{case}: no token from part of a connection"
+        );
+        // The listing's first page said there was more.
+        let listing = cached
+            .workspace
+            .answered()
+            .into_iter()
+            .rev()
+            .find(|answer| {
+                answer.pointer("/data/issues").is_some()
+                    || answer.pointer("/data/projects").is_some()
+            })
+            .expect("a listing answered");
+        let native = read.id.strip_prefix("linear:").unwrap();
+        let row = ["/data/issues/nodes", "/data/projects/nodes"]
+            .iter()
+            .filter_map(|pointer| listing.pointer(pointer).and_then(Value::as_array))
+            .flatten()
+            .find(|row| row["id"] == native)
+            .expect("the item is listed");
+        assert_eq!(row.pointer(more), Some(&json!(true)), "{case}: {row}");
+        for _ in 0..2 {
+            let (_, sent) = cached.ok(&strs(&read.with("lin1|anything")));
+            assert_eq!(sent.len(), 1, "{case}: always read from Linear");
+        }
+        let kept = cached
+            .dir()
+            .map(|dir| walk(&dir.join(directory)))
+            .unwrap_or_default();
+        assert!(
+            !kept.iter().any(|path| holds(path, native)),
+            "{case}: nothing is kept without a token: {kept:?}"
+        );
+    }
+
+    // An unordered pin — another item's token, an earlier release's spelling of this one, and a
+    // value that is no token at all — reads Linear every time, and the held pin is still a hit.
+    for (read, other) in [
+        (COMMENTS, "linear:L-3"),
+        (DETAIL, "linear:L-3"),
+        (REVERSE_EDGES, "linear:L-3"),
+        (PROJECT_EDGES, "linear:P-3"),
+    ] {
+        let cached = Cached::new(held());
+        let pin = filled(&cached, &read);
+        let other = cached.listed(read.kind, other).expect("a token");
+        let earlier = earlier_spelling(&pin);
+        for unordered in [other.as_str(), earlier.as_str(), "not-a-token", "gh3|x"] {
+            let (_, sent) = cached.ok(&strs(&read.with(unordered)));
+            assert_eq!(sent.len(), 1, "{}: {unordered} reads Linear", read.name);
+        }
+        let (_, sent) = cached.ok(&strs(&read.with(&pin)));
+        assert_eq!(
+            sent,
+            Vec::<String>::new(),
+            "{}: the held pin is a hit",
+            read.name
+        );
+    }
+}
+
+/// `token` as the release before this one spelled an attached token: its time and facets, and a
+/// relations part alone.
+fn earlier_spelling(token: &str) -> String {
+    let mut parts = token.split('|');
+    let (prefix, updated, facets) = (
+        parts.next().expect("lin1"),
+        parts.next().expect("a time"),
+        parts.next().expect("the facets"),
+    );
+    format!("{prefix}|{updated}|{facets}|r:{}", "0".repeat(64))
+}
+
+/// Whether the entry file at `path` names the native id `native`.
+fn holds(path: &Path, native: &str) -> bool {
+    std::fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .is_some_and(|entry| entry["id"] == native || entry["task"]["id"] == native)
+}
+
+#[test]
+fn every_comment_and_relation_change_is_read_again_pinned_to_the_new_token() {
+    // (the change, how a person makes it, the read it reaches, whether it moves the token)
+    let changes: Vec<(&str, Edit, Read, bool)> = vec![
+        (
+            "a comment added",
+            Box::new(|w| {
+                w.add_comment("L-1", "A second word.");
+            }),
+            COMMENTS,
+            true,
+        ),
+        (
+            "a comment's body edited",
+            Box::new(|w| w.edit_comment("C-1", "The first word, edited.")),
+            COMMENTS,
+            true,
+        ),
+        (
+            "a comment deleted",
+            Box::new(|w| w.delete_comment("C-1")),
+            COMMENTS,
+            true,
+        ),
+        (
+            "a comment added, read beside the task",
+            Box::new(|w| {
+                w.add_comment("L-1", "A second word.");
+            }),
+            DETAIL,
+            true,
+        ),
+        (
+            "a comment deleted, read beside the task",
+            Box::new(|w| w.delete_comment("C-1")),
+            DETAIL,
+            true,
+        ),
+        (
+            "a project relation added on the near project",
+            Box::new(|w| w.relate_projects("P-1", "P-3")),
+            PROJECT_EDGES,
+            true,
+        ),
+        (
+            "a project relation removed on the near project",
+            Box::new(|w| w.unrelate_projects("P-1", "P-2")),
+            PROJECT_EDGES,
+            true,
+        ),
+        (
+            "a project far end deleted",
+            Box::new(|w| w.remove_project("P-2")),
+            PROJECT_EDGES,
+            false,
+        ),
+        (
+            "a blocks relation added by the far issue",
+            Box::new(|w| w.relate("L-3", "L-2", "blocks")),
+            REVERSE_EDGES,
+            true,
+        ),
+        (
+            "a related relation added by the far issue",
+            Box::new(|w| w.relate("L-3", "L-2", "related")),
+            REVERSE_EDGES,
+            true,
+        ),
+        (
+            "a blocks relation removed by the far issue",
+            Box::new(|w| w.unrelate("L-1", "L-2")),
+            REVERSE_EDGES,
+            true,
+        ),
+        (
+            "a related relation removed by the far issue",
+            Box::new(|w| w.unrelate("L-4", "L-2")),
+            REVERSE_EDGES,
+            true,
+        ),
+        (
+            "the far issue trashed",
+            Box::new(|w| w.trash_issue("L-1")),
+            REVERSE_EDGES,
+            false,
+        ),
+    ];
+    for (change, make, read, moves) in changes {
+        let mut workspace = held();
+        if change == "a related relation removed by the far issue" {
+            workspace["task_dependencies"]
+                .as_array_mut()
+                .expect("relations")
+                .push(json!({"from": "L-4", "to": "L-2", "kind": "related"}));
+        }
+        let cached = Cached::new(workspace);
+        let pin = filled(&cached, &read);
+        make(&cached.workspace);
+        let current = cached.listed(read.kind, read.id).expect("a token");
+        assert_eq!(current != pin, moves, "{change}: whether the token moves");
+        let (_, sent) = cached.ok(&strs(&read.with(&current)));
+        assert_eq!(
+            sent.len(),
+            usize::from(moves),
+            "{change}: a moved token is never the entry"
+        );
+        let [on, off] = cached.on_and_off(&strs(&read.with(&current)));
+        assert_eq!(on.0, off.0, "{change}: what an uncached read answers");
+    }
+}
+
+#[test]
+fn a_comment_authors_renamed_display_name_is_the_one_member_served_older_than_its_token() {
+    let cached = Cached::new(held());
+    let pin = filled(&cached, &COMMENTS);
+    cached
+        .workspace
+        .rename_comment_author("Ada", "Ada Lovelace");
+    assert_eq!(
+        cached.listed("task", "linear:L-1").as_deref(),
+        Some(pin.as_str()),
+        "a display name moves no part of the token"
+    );
+    for read in [COMMENTS, DETAIL] {
+        let (served, sent) = cached.ok(&strs(&read.with(&pin)));
+        let [_, off] = cached.on_and_off(&strs(&read.with(&pin)));
+        if read.name == DETAIL.name {
+            // The detail read fills on its first pinned read, here, after the rename.
+            continue;
+        }
+        assert_eq!(
+            sent,
+            Vec::<String>::new(),
+            "{}: served from the entry",
+            read.name
+        );
+        let comment = |printed: &Value| printed["comments"][0].clone();
+        let (cached_comment, uncached_comment) = (comment(&served), comment(&off.0.1));
+        assert_eq!(
+            cached_comment["author"], "Ada",
+            "the name recorded when it was filled"
+        );
+        assert_eq!(uncached_comment["author"], "Ada Lovelace");
+        let without_author = |mut comment: Value| {
+            comment.as_object_mut().expect("a comment").remove("author");
+            comment
+        };
+        assert_eq!(
+            without_author(cached_comment),
+            without_author(uncached_comment),
+            "every other member is the uncached read's"
+        );
+    }
+}
+
+/// Where the cache keeps the `directory` entry of the native id `native`, under `dir`.
+fn entry(dir: &Path, directory: &str, native: &str) -> std::path::PathBuf {
+    dir.join(directory).join(format!(
+        "{}.json",
+        onetaskgraph_plugin_api::asset_sha256(native.as_bytes())
+    ))
+}
+
+/// A comment write's arguments, given the journey's workspace and how to write a body file.
+type CommentWrite = fn(&Cached, &dyn Fn(&Cached, &str) -> String) -> Vec<String>;
+
+#[test]
+fn every_comment_write_takes_the_entry_its_comments_are_kept_in_out_of_service() {
+    let body = |cached: &Cached, text: &str| {
+        let path = cached.sandbox.project().join("comment.md");
+        std::fs::write(&path, text).expect("a body");
+        path.display().to_string()
+    };
+    // (the write, what the next read shows)
+    let writes: Vec<(CommentWrite, &str)> = vec![
+        (
+            |cached, body| {
+                vec![
+                    "task".into(),
+                    "comment".into(),
+                    "add".into(),
+                    "linear:L-1".into(),
+                    "--body-file".into(),
+                    body(cached, "Added through the binary."),
+                ]
+            },
+            "Added through the binary.",
+        ),
+        (
+            |cached, body| {
+                vec![
+                    "task".into(),
+                    "comment".into(),
+                    "edit".into(),
+                    "linear:L-1".into(),
+                    "C-1".into(),
+                    "--body-file".into(),
+                    body(cached, "Edited through the binary."),
+                ]
+            },
+            "Edited through the binary.",
+        ),
+        (
+            |_, _| {
+                ["task", "comment", "delete", "linear:L-1", "C-1"]
+                    .map(str::to_owned)
+                    .to_vec()
+            },
+            "\"comments\":[]",
+        ),
+    ];
+    for (write, shows) in writes {
+        let cached = Cached::new(held());
+        let pin = filled(&cached, &COMMENTS);
+        let dir = cached.dir().expect("a cache");
+        assert!(entry(&dir, "tasks", "L-1").exists());
+        let mut arguments = write(&cached, &body);
+        arguments.push("--json".into());
+        cached.ok(&strs(&arguments));
+        assert!(
+            !entry(&dir, "tasks", "L-1").exists(),
+            "`{}` takes the entry out of service",
+            arguments.join(" ")
+        );
+        let (shown, sent) = cached.ok(&strs(&COMMENTS.with(&pin)));
+        assert_eq!(
+            sent.len(),
+            1,
+            "the read after `{}` is Linear's",
+            arguments.join(" ")
+        );
+        assert!(shown.to_string().contains(shows), "{shown}");
+    }
+}
+
+#[test]
+fn every_relation_write_takes_the_edges_entries_it_can_change_out_of_service() {
+    // A task's dependencies written: the relation lands on the far issue's inverse relations.
+    for (write, shows) in [
+        (
+            [
+                "task",
+                "update",
+                "linear:L-3",
+                "--depends-on",
+                "linear:L-2",
+                "--json",
+            ]
+            .to_vec(),
+            true,
+        ),
+        (
+            ["task", "update", "linear:L-1", "--no-depends-on", "--json"].to_vec(),
+            false,
+        ),
+    ] {
+        let cached = Cached::new(held());
+        let pin = filled(&cached, &REVERSE_EDGES);
+        let dir = cached.dir().expect("a cache");
+        assert!(entry(&dir, "reverse-edges-v2", "L-2").exists());
+        cached.ok(&write);
+        assert!(
+            !entry(&dir, "reverse-edges-v2", "L-2").exists(),
+            "`{}` takes L-2's reverse edges out of service",
+            write.join(" ")
+        );
+        let (edges, sent) = cached.ok(&strs(&REVERSE_EDGES.with(&pin)));
+        assert_eq!(
+            sent.len(),
+            1,
+            "the read after `{}` is Linear's",
+            write.join(" ")
+        );
+        let from_l3 = edges["items"]
+            .as_array()
+            .expect("edges")
+            .iter()
+            .any(|edge| edge["from"]["id"] == "linear:L-3");
+        assert_eq!(from_l3, shows, "{edges}");
+        let from_l1 = edges.to_string().contains("linear:L-1");
+        assert_eq!(from_l1, shows, "{edges}");
+    }
+
+    // A project's dependencies written: a copy of P-1 out to the folder, with its dependency on
+    // P-2 removed there, and back over P-1.
+    let cached = Cached::new(held());
+    let (copied, _) = cached.ok(&[
+        "project",
+        "copy",
+        "linear:P-1",
+        "--to",
+        "notes",
+        "--no-tasks",
+        "--no-link",
+        "--json",
+    ]);
+    let copy = copied["items"][0]["destination"]
+        .as_str()
+        .expect("a destination")
+        .to_owned();
+    let file = cached
+        .sandbox
+        .project()
+        .join("notes/projects")
+        .join(format!("{}.md", copy.split_once(':').expect("qualified").1));
+    let text = std::fs::read_to_string(&file).expect("the copy");
+    assert!(
+        text.contains("linear:P-2"),
+        "the copy records P-1's dependency: {text}"
+    );
+    std::fs::write(
+        &file,
+        text.lines()
+            .filter(|line| !line.contains("linear:P-2") && !line.starts_with("depends_on"))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n",
+    )
+    .expect("the edit");
+    let pin = filled(&cached, &PROJECT_EDGES);
+    let dir = cached.dir().expect("a cache");
+    assert!(entry(&dir, "project-edges-v2", "P-1").exists());
+    let (back, _) = cached.ok(&[
+        "project",
+        "copy",
+        &copy,
+        "--to",
+        "linear",
+        "--no-tasks",
+        "--json",
+    ]);
+    assert_eq!(back["items"][0]["destination"], "linear:P-1", "{back}");
+    assert!(
+        !entry(&dir, "project-edges-v2", "P-1").exists(),
+        "the project write takes P-1's forward edges out of service"
+    );
+    let (edges, sent) = cached.ok(&strs(&PROJECT_EDGES.with(&pin)));
+    assert_eq!(sent.len(), 1, "the read after the write is Linear's");
+    assert_eq!(edges["items"], json!([]), "{edges}");
+}
+
+#[test]
+fn a_copy_taken_back_takes_every_edges_entry_its_deletes_can_change_out_of_service() {
+    let sandbox = crate::common::Sandbox::new();
+    let (config, workspace) =
+        linear_workspace_failing(&sandbox, held(), &[graphql::ISSUE_RELATION_CREATE]);
+    let mut source = linear(&config, json!({"status_mapping": eng_mapping()}));
+    source["cache"] = json!({"enabled": true});
+    let notes = sandbox.subdirectory("notes");
+    for kind in ["tasks", "projects", "documents"] {
+        std::fs::create_dir_all(notes.join(kind)).expect("a folder");
+    }
+    std::fs::write(
+        notes.join("projects/NP.md"),
+        "---\ntitle: A plan\nstatus: todo\n---\nThe plan.\n",
+    )
+    .expect("a project");
+    std::fs::write(
+        notes.join("tasks/NT-1.md"),
+        "---\ntitle: First\nstatus: todo\nproject: NP\n---\nFirst.\n",
+    )
+    .expect("a task");
+    std::fs::write(
+        notes.join("tasks/NT-2.md"),
+        "---\ntitle: Second\nstatus: todo\nproject: NP\ndepends_on: [NT-1]\n---\nSecond.\n",
+    )
+    .expect("a task");
+    sandbox.project_document(&document(&json!({
+        "linear": source,
+        "notes": {"plugin": "local-md", "config": {"root": notes}},
+    })));
+    let cached = Cached {
+        cache_home: sandbox.subdirectory("cache-home"),
+        sandbox,
+        workspace,
+    };
+    filled(&cached, &REVERSE_EDGES);
+    let project_pin = filled(&cached, &PROJECT_EDGES);
+    let dir = cached.dir().expect("a cache");
+    assert!(entry(&dir, "reverse-edges-v2", "L-2").exists());
+    assert!(entry(&dir, "project-edges-v2", "P-1").exists());
+
+    let output = cached.run(&["project", "copy", "notes:NP", "--to", "linear", "--json"]);
+    assert_ne!(
+        output.status.code(),
+        Some(0),
+        "the relation write is refused"
+    );
+    let sent: Vec<String> = cached
+        .workspace
+        .served()
+        .into_iter()
+        .map(|(document, _)| document)
+        .collect();
+    for taken_back in [graphql::ISSUE_DELETE, graphql::PROJECT_DELETE] {
+        assert!(
+            sent.iter().any(|document| document == taken_back),
+            "the copy takes back what it made: {taken_back} in {sent:#?}"
+        );
+    }
+    assert!(
+        !entry(&dir, "project-edges-v2", "P-1").exists(),
+        "a project deleted can be another project's far end, so every project's forward edges \
+         are taken out of service"
+    );
+    assert!(
+        !entry(&dir, "reverse-edges-v2", "L-2").exists(),
+        "and every task's reverse edges"
+    );
+    let (_, sent) = cached.ok(&strs(&PROJECT_EDGES.with(&project_pin)));
+    assert_eq!(sent.len(), 1, "the next read is Linear's");
+}

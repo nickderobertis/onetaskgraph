@@ -1,8 +1,9 @@
 //! The entries the cache keeps beside a task's: a project's, a document's, a task's forward
-//! edges read on their own, and the verified bytes of an image asset.
+//! and reverse edges each read on their own, a project's forward edges, and the verified bytes
+//! of an image asset.
 //!
-//! **Each kind lives in a directory of its own, named with its schema** — `projects-v1/`,
-//! `documents-v1/`, `edges-v1/`, `bytes-v1/` — so an id cannot name one kind's entry for
+//! **Each kind lives in a directory of its own, named with its schema** — `projects-v2/`,
+//! `documents-v2/`, `edges-v2/`, `reverse-edges-v2/`, `project-edges-v2/`, `bytes-v2/` — so an id cannot name one kind's entry for
 //! another's, and a release writing this schema never writes over a file a release of another
 //! schema wrote: that one lives in its own directory. Each entry still carries its schema, its
 //! kind and the remote it is from, and a reader holds it to all three, so a file another release
@@ -30,7 +31,10 @@ use super::{SourceCache, digest};
 /// Held apart from [`super::ENTRY_SCHEMA`], which a task's entries carry, so a change to these
 /// kinds' shapes moves their directories — every one of them, since they share this number —
 /// and leaves a task's entries served.
-pub const KIND_ENTRY_SCHEMA: u32 = 1;
+///
+/// Version 2 added a task's reverse edges and a project's forward edges as kinds of their own; what version 1 kept is left in its own directories, unread, for
+/// `cache clear` of that release.
+pub const KIND_ENTRY_SCHEMA: u32 = 2;
 
 /// Which kind an entry is: written into it and held to the directory it is read from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -42,17 +46,61 @@ pub(crate) enum EntryKind {
     Document,
     /// A task's forward dependency edges, read on their own.
     Edges,
+    /// A task's reverse dependency edges — what depends on it — read on their own.
+    ReverseEdges,
+    /// A project's forward dependency edges, read on their own.
+    ProjectEdges,
 }
 
 impl EntryKind {
+    /// Every kind, in the order `cache clear` walks them.
+    const ALL: [Self; 5] = [
+        Self::Project,
+        Self::Document,
+        Self::Edges,
+        Self::ReverseEdges,
+        Self::ProjectEdges,
+    ];
+
     /// The directory this kind's entries live in.
     fn directory(self) -> String {
         let name = match self {
             Self::Project => "projects",
             Self::Document => "documents",
             Self::Edges => "edges",
+            Self::ReverseEdges => "reverse-edges",
+            Self::ProjectEdges => "project-edges",
         };
         format!("{name}-v{KIND_ENTRY_SCHEMA}")
+    }
+}
+
+/// Which edges an edges entry holds: one of the three edge kinds of [`EntryKind`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EdgeKind {
+    /// A task's forward edges.
+    TaskForward,
+    /// A task's reverse edges.
+    TaskReverse,
+    /// A project's forward edges.
+    ProjectForward,
+}
+
+impl EdgeKind {
+    fn entry(self) -> EntryKind {
+        match self {
+            Self::TaskForward => EntryKind::Edges,
+            Self::TaskReverse => EntryKind::ReverseEdges,
+            Self::ProjectForward => EntryKind::ProjectEdges,
+        }
+    }
+
+    fn tag(self) -> EdgesTag {
+        match self {
+            Self::TaskForward => EdgesTag::Edges,
+            Self::TaskReverse => EdgesTag::ReverseEdges,
+            Self::ProjectForward => EdgesTag::ProjectEdges,
+        }
     }
 }
 
@@ -72,12 +120,16 @@ pub(crate) enum DocumentTag {
     Document,
 }
 
-/// The one `kind` an edges entry can carry.
+/// The `kind` an edges entry can carry: one of the three edge kinds, and never another.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum EdgesTag {
     /// [`EntryKind::Edges`].
     Edges,
+    /// [`EntryKind::ReverseEdges`].
+    ReverseEdges,
+    /// [`EntryKind::ProjectEdges`].
+    ProjectEdges,
 }
 
 /// One project as the cache keeps it, at its own `version`.
@@ -111,24 +163,25 @@ pub(crate) struct DocumentEntry {
     pub(crate) assets: Option<Vec<Asset>>,
 }
 
-/// One task's forward edges as a dependency read answered them, at the version that read's own
-/// response spelled.
+/// One item's edges in one direction as a dependency read answered them — a task's forward or
+/// reverse edges, or a project's forward edges — at the version that read's own response
+/// spelled.
 ///
-/// Never vouches for the task's fields: it holds nothing but the edges.
+/// Never vouches for the item's fields: it holds nothing but the edges.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub(crate) struct EdgesEntry {
     /// [`KIND_ENTRY_SCHEMA`].
     pub(crate) schema: u32,
-    /// [`EntryKind::Edges`], the only kind it can carry.
+    /// Which edges it holds, and the directory it is read from.
     pub(crate) kind: EdgesTag,
     /// The digest of the remote it is from.
     // llmlint: ignore[invalid_states_unrepresentable] An equality key and nothing more: every read compares it byte for byte with this store's own `CacheLocation::remote`, the public `String` a task's entry carries too, so any other value is a miss and never misread; a digest type here alone would validate a value no reader interprets.
     pub(crate) remote: String,
-    /// The task they are the forward edges of.
+    /// The item they are the edges of.
     pub(crate) id: NativeId,
     /// The version the read that answered them spelled.
     pub(crate) version: String,
-    /// Every forward edge, in the order the source answered them.
+    /// Every edge, in the order the source answered them.
     pub(crate) edges: Vec<DependencyEdge>,
 }
 
@@ -256,20 +309,26 @@ impl SourceCache {
         );
     }
 
-    /// The forward edges kept for task `id`, or `None` when there are none this build can read.
-    pub(crate) fn read_edges(&self, id: &NativeId) -> Option<EdgesEntry> {
-        let value = self.read_kind(EntryKind::Edges, &self.kind_path(EntryKind::Edges, id))?;
+    /// The `kind` edges kept for `id`, or `None` when there are none this build can read.
+    pub(crate) fn read_edges(&self, kind: EdgeKind, id: &NativeId) -> Option<EdgesEntry> {
+        let value = self.read_kind(kind.entry(), &self.kind_path(kind.entry(), id))?;
         let entry: EdgesEntry = serde_json::from_value(value).ok()?;
-        (entry.id == *id).then_some(entry)
+        (entry.id == *id && entry.kind == kind.tag()).then_some(entry)
     }
 
-    /// Keep `edges` as task `id`'s forward edges at `version`.
-    pub(crate) fn write_edges(&self, id: &NativeId, version: &str, edges: &[DependencyEdge]) {
+    /// Keep `edges` as `id`'s `kind` edges at `version`.
+    pub(crate) fn write_edges(
+        &self,
+        kind: EdgeKind,
+        id: &NativeId,
+        version: &str,
+        edges: &[DependencyEdge],
+    ) {
         self.write_kind(
-            &self.kind_path(EntryKind::Edges, id),
+            &self.kind_path(kind.entry(), id),
             &EdgesEntry {
                 schema: KIND_ENTRY_SCHEMA,
-                kind: EdgesTag::Edges,
+                kind: kind.tag(),
                 remote: self.remote.clone(),
                 id: id.clone(),
                 version: version.to_owned(),
@@ -297,19 +356,52 @@ impl SourceCache {
     }
 
     /// Take every entry naming `id` — its task's, its project's, its document's and its edges'
-    /// — out of service for every process before a write naming it is sent, or refuse the
-    /// write: what the write sends can change any of them, a task becoming a project or a
-    /// document included.
+    /// of each kind — out of service for every process before a write naming it
+    /// is sent, or refuse the write: what the write sends can change any of them, a task
+    /// becoming a project or a document included.
     pub(crate) fn retire_kinds_before_write(&self, id: &NativeId) -> std::io::Result<()> {
-        for kind in [EntryKind::Project, EntryKind::Document, EntryKind::Edges] {
+        for kind in EntryKind::ALL {
             self.retire(&self.kind_path(kind, id))?;
         }
         Ok(())
     }
 
+    /// Take every `kind` edges entry, whichever item it names, out of service for every process
+    /// before a write that can change edges recorded on items it does not name is sent — a
+    /// relation is recorded at both of its ends — or refuse the write.
+    pub(crate) fn retire_every_before_write(&self, kind: EdgeKind) -> std::io::Result<()> {
+        for path in self.kind_files(kind.entry())? {
+            self.retire(&path)?;
+        }
+        Ok(())
+    }
+
+    /// Forget every `kind` edges entry, after a write that could change any of them.
+    pub(crate) fn invalidate_every(&self, kind: EdgeKind) {
+        for path in self.kind_files(kind.entry()).unwrap_or_default() {
+            let _ = self.retire(&path);
+        }
+    }
+
+    /// Every entry file of `kind` this cache's directory holds.
+    fn kind_files(&self, kind: EntryKind) -> std::io::Result<Vec<PathBuf>> {
+        match std::fs::read_dir(self.dir.join(kind.directory())) {
+            Ok(listed) => Ok(listed
+                .filter_map(Result::ok)
+                .map(|file| file.path())
+                .filter(|path| {
+                    path.extension()
+                        .is_some_and(|extension| extension == "json")
+                })
+                .collect()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(error) => Err(error),
+        }
+    }
+
     /// Forget every entry of `id` beside its task's, after a write that could change them.
     pub(crate) fn invalidate_kinds(&self, id: &NativeId) {
-        for kind in [EntryKind::Project, EntryKind::Document, EntryKind::Edges] {
+        for kind in EntryKind::ALL {
             let _ = self.retire(&self.kind_path(kind, id));
         }
         let mut command = self.command();
@@ -323,7 +415,9 @@ fn reads_whole(kind: EntryKind, value: Value) -> bool {
     match kind {
         EntryKind::Project => serde_json::from_value::<ProjectEntry>(value).is_ok(),
         EntryKind::Document => serde_json::from_value::<DocumentEntry>(value).is_ok(),
-        EntryKind::Edges => serde_json::from_value::<EdgesEntry>(value).is_ok(),
+        EntryKind::Edges | EntryKind::ReverseEdges | EntryKind::ProjectEdges => {
+            serde_json::from_value::<EdgesEntry>(value).is_ok()
+        }
     }
 }
 
@@ -354,7 +448,7 @@ pub(super) fn empty_kinds(dir: &Path, remote: &str) -> std::io::Result<u64> {
     };
     let staged = format!(".staged-{remote}-");
     let mut entries = 0;
-    for kind in [EntryKind::Project, EntryKind::Document, EntryKind::Edges] {
+    for kind in EntryKind::ALL {
         for path in listed(&dir.join(kind.directory()))? {
             let name = path.file_name().unwrap_or_default().to_string_lossy();
             if name.starts_with(&staged) {
