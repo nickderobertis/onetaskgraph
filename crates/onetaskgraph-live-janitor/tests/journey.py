@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 import threading
+import time
 import unittest
 from enum import StrEnum
 from typing import NamedTuple, NewType, TypedDict, cast
@@ -167,6 +168,10 @@ def unpinned_fields(shape: RestShape | None, value: object, where: str = 'respon
     return None
 
 NOW = 1_800_000_000_000_000
+
+def seconds_ago(seconds: int) -> int:
+    """A stamp's microseconds, written `seconds` before the pass by the wall clock it runs on."""
+    return time.time_ns() // 1_000 - seconds * 1_000_000
 
 class Github:
     def __init__(self):
@@ -404,14 +409,14 @@ class Github:
         thread.start()
         return server, thread
 
-    def run(self, now=NOW, overrides=None, arguments=None):
+    def run(self, overrides=None, arguments=None):
         server, thread = self.serve()
         environment = dict(os.environ, GH_PROJECTS_OWNER='nickderobertis', GH_PROJECTS_NUMBER='1', GH_PROJECTS_REPOSITORY=SCRATCH, GH_PROJECTS_TOKEN='offline-write', GITHUB_TOKEN='offline-actions')
         environment.update(overrides or {})
         for name, value in list(environment.items()):
             if value is None:
                 del environment[name]
-        command = [BINARY] + (arguments if arguments is not None else [ '--loopback', f'http://127.0.0.1:{server.server_port}', str(now), '--virtual-clock'])
+        command = [BINARY] + (arguments if arguments is not None else ['--loopback', f'http://127.0.0.1:{server.server_port}', '--virtual-clock'])
         command = [argument.replace('{origin}', f'http://127.0.0.1:{server.server_port}').replace('{host}', f'127.0.0.1:{server.server_port}') for argument in command]
         try:
             result = subprocess.run(command, env=environment, capture_output=True, text=True, timeout=30)
@@ -466,10 +471,10 @@ class Journeys(unittest.TestCase):
                        'http://user:secret@{host}/', 'http://{host}/?q=1',
                        'http://{host}/#fragment', 'http://{host}/api/', 'not a url'):
             state = Github()
-            result = state.run(arguments=['--loopback', origin, str(NOW)])
+            result = state.run(arguments=['--loopback', origin])
             self.assertEqual(result.returncode, REFUSED, (origin, result.stderr))
             self.assertFalse(state.requests, origin)
-        for arguments in (['--wrong'], ['--loopback', '{origin}', 'bad-clock'], ['--loopback', '{origin}', str(NOW), '--other']):
+        for arguments in (['--wrong'], ['--loopback'], ['--loopback', '{origin}', 'bad-clock'], ['--loopback', '{origin}', '--virtual-clock', '--other'], ['--loopback', '{origin}', str(NOW), '--virtual-clock']):
             state = Github()
             self.assertEqual(state.run(arguments=arguments).returncode, REFUSED)
             self.assertFalse(state.requests)
@@ -511,29 +516,33 @@ class Journeys(unittest.TestCase):
     def test_real_clock_paces_writes(self):
         state = Github()
         state.artifact(SCRATCH, f'ci-123-1-{NOW - DAY}', run=123)
-        result = state.run(arguments=['--loopback', '{origin}', str(NOW)])
+        result = state.run(arguments=['--loopback', '{origin}'])
         self.assert_success(result)
         times = json.loads(result.stdout.split('write times (monotonic micros): ')[1].splitlines()[0])
         self.assertEqual(len(times), 3)
         self.assertTrue(all(b - a >= 1_000_000 for a, b in zip(times, times[1:])))
 
-    def test_completed_plain_and_design_artifacts_age_and_machine_ownership(self):
+    def test_completed_run_is_cleaned_on_the_next_pass_whatever_its_age(self):
+        # Seconds old by the wall clock the pass runs on: no waiting period holds it back.
         for design in (False, True):
             state = Github()
-            stamp = f'ci-123-2-{NOW - DAY}'
-            state.artifact(SCRATCH, stamp, design, run=123)
-            state.artifact(SCRATCH, f'1-2-{NOW - 3 * DAY}')
-            self.assert_success(state.run(NOW - 1))
-            self.assertEqual(len(state.writes), 0)
+            state.artifact(SCRATCH, f'ci-123-2-{seconds_ago(5)}', design, run=123)
+            state.status[RunId(123)] = Status.IN_PROGRESS
+            # A machine stamp is the writing machine's lock sweep's, however old.
+            machine = state.artifact(SCRATCH, f'1-2-{NOW - 3 * DAY}')
+            self.assert_success(state.run())
+            self.assertFalse(state.writes)
+            self.assertEqual(state.status_reads, {123: 1})
+            state.status[RunId(123)] = Status.COMPLETED
             self.assert_success(state.run())
             self.assertEqual(len(state.writes), 3)
-            self.assertEqual(len(state.issues[SCRATCH]), 1)
-            self.assertEqual(state.status_reads, {123: 1})
+            self.assertEqual([issue['node_id'] for issue in state.issues[SCRATCH]], [machine])
+            self.assertEqual(state.status_reads, {123: 2})
 
     def test_status_and_read_failures_protect_artifacts(self):
         for status in (*(s for s in Status if s is not Status.COMPLETED), None, 42, 'cancelled', 'Completed', ''):
             state = Github()
-            state.artifact(SCRATCH, f'ci-123-1-{NOW - DAY}', run=123)
+            state.artifact(SCRATCH, f'ci-123-1-{seconds_ago(5)}', run=123)
             state.status[123] = status
             result = state.run()
             if isinstance(status, Status):
@@ -897,20 +906,18 @@ class Journeys(unittest.TestCase):
         self.assertFalse(state.status_reads)
         self.assertIn('pull', [issue['node_id'] for issue in state.issues[SCRATCH]])
 
-    def test_future_stamps_survive(self):
+    def test_completed_run_takes_stamps_ahead_of_the_clock(self):
+        # A stamp's time is never consulted: a writer's clock ahead of the janitor's does
+        # not keep a finished run's residue on the board.
         state = Github()
         state.status[RunId(123)] = Status.COMPLETED
         for design in (False, True):
-            state.artifact(SCRATCH, f'ci-123-1-{NOW + DAY}', design=design)
-        issues = copy.deepcopy(state.issues)
-        labels = copy.deepcopy(state.labels)
-        items = copy.deepcopy(state.items)
+            state.artifact(SCRATCH, f'ci-123-1-{seconds_ago(-DAY // 1_000_000)}', design=design)
         self.assert_success(state.run())
-        self.assertFalse(state.writes)
-        self.assertFalse(state.status_reads)
-        self.assertEqual(state.issues, issues)
-        self.assertEqual(state.labels, labels)
-        self.assertEqual(state.items, items)
+        self.assertFalse(state.issues[SCRATCH])
+        self.assertFalse(state.items)
+        self.assertFalse(state.labels[SCRATCH])
+        self.assertEqual(state.status_reads, {123: 1})
 
     def test_cleanup_preserves_origin_field_and_retained_item_values(self):
         state = workload()

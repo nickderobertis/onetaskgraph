@@ -486,7 +486,9 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   run in this repository reads back as `completed` immediately before each delete batch.
   A re-run in progress protects every attempt; failed, missing or undecodable reads
   protect the artifacts. A batch contains only artifacts listed before that read.
-  A 24-hour waiting period is a margin, never the ownership authorisation.
+  There is no waiting period: that read alone decides, so a finished run's artifacts go
+  on the next pass whatever their age, rather than filling the board the live lane
+  refuses when it is too full for a day.
   Machine stamps remain the owning machine's lock sweep's. Cleanup never touches
   `onetaskgraph.origin`, draft items or other repositories' items; shared-board
   enumeration skips non-scratch issues before inspecting their titles. Only scratch
