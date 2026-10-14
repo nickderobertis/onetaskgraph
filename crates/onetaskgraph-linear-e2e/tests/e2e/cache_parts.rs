@@ -306,8 +306,14 @@ fn a_comment_or_edge_read_its_token_cannot_vouch_for_is_never_kept_or_served() {
             .expect("the item is listed");
         assert_eq!(row.pointer(more), Some(&json!(true)), "{case}: {row}");
         for _ in 0..2 {
-            let (_, sent) = cached.ok(&strs(&read.with("lin1|anything")));
-            assert_eq!(sent.len(), 1, "{case}: always read from Linear");
+            let [on, off] = cached.on_and_off(&strs(&read.with("lin1|anything")));
+            assert!(on.1 >= 1, "{case}: always read from Linear");
+            // The same answer: a smaller page walks there in one request more.
+            assert_eq!(on.0.0, off.0.0, "{case}: exit code");
+            assert_eq!(
+                on.0.1["items"], off.0.1["items"],
+                "{case}: what an uncached read answers"
+            );
         }
         let kept = cached
             .dir()

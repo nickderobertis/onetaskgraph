@@ -1464,7 +1464,9 @@ every response that fills or pins an item carries the same parts. `ISSUE_RELATIO
 `updatedAt`, `identifier`, `url`, `state{name type}`, `labels{nodes{id name color}}`,
 `project{id}` and the comments page, and `PROJECT_RELATIONS` exactly `updatedAt`,
 `status{name type}` and `labels{nodes{id name color}}`, the tokens' other parts, so a dependency
-read in either direction can fill. `PROJECTS` then asks for at most 90 rows a page. Every other
+read in either direction can fill; each asks for at most 10 rows a page, the most a token
+vouches for, so an item with more takes a request a page. `PROJECTS` asks for at most 90 rows a
+page. Every other
 document is unchanged — `ISSUE_COMMENTS` among them, since a caching source's comment listing is
 the detail read, which already fills the comments and the fields together — and so is the read a
 write makes of its own target, whose answer fills nothing. With no cache attached each is byte
@@ -1480,10 +1482,10 @@ comments page as the same 3 wherever it is added, a project's relations page on 
 | `ISSUES`, at 100 rows | 8 + 6 a row: 608 | 8 + 59 a row: **5,908** |
 | `ISSUE` | 6 | 59 |
 | `ISSUE_DETAIL`, at `last:100` | 11 | 61 |
-| `ISSUE_RELATIONS`, at `first:100` | 522 | 528 |
+| `ISSUE_RELATIONS` | 522, at `first:100` | 56, at `first:10` |
 | `PROJECTS` | 70 a row asked for: 7,000 at 100 | 95 a row asked for, at most 90: **8,550** |
 | `PROJECT` | 69 | 94 |
-| `PROJECT_RELATIONS`, at `first:100` | 522 | 525 |
+| `PROJECT_RELATIONS` | 522, at `first:100` | 53, at `first:10` |
 
 So a widened query costs more than the one it replaces, and one listing of more than 90 projects
 takes one request more; the cache earns both back by the reads it answers. The
@@ -1491,7 +1493,10 @@ takes one request more; the cache earns both back by the reads it answers. The
 cache — what Linear's key runs out of first, at 2,500 an hour per user — over an hour of three
 hosts, each a cold and a warm pass over 10 projects, 40 documents and 60 issues, and at ten times
 that; and `linear-cache-largest-query-complexity` holds the dearest single query any read sends
-with the cache on to 9,000, 90% of the cap. On GitHub nothing is widened:
+with the cache on to 9,000, 90% of the cap. Four more hold the cache-on hour to absolute shares
+of the key, each a share of its hourly limits: `linear-hourly-requests-1x` (250 requests),
+`linear-hourly-requests-10x` (2,500), `linear-hourly-requests-10x-warm` (1,250, every pass
+warm) and `linear-hourly-complexity-10x` (750,000 of its 3,000,000 complexity). On GitHub nothing is widened:
 `github-cache-points-not-above-uncached` holds every kind, sequence and scale to adding no
 point.
 

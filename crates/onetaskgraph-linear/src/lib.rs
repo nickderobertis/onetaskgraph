@@ -4643,7 +4643,19 @@ impl LinearSource {
         direction: Direction,
         page: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
-        let limit = page.limit.min(MAX_PAGE_SIZE);
+        // A cached document's token vouches only for a first page of at most
+        // `change_token::PAGE` rows, and Linear prices a relations connection by the rows it is
+        // asked for, so a cached read asks for that many: a wider page buys the cache nothing.
+        // An item with more takes another request per page, which the hour budget counts.
+        let ceiling = if matches!(
+            query,
+            graphql::ISSUE_RELATIONS_CACHED | graphql::PROJECT_RELATIONS_CACHED
+        ) {
+            u32::try_from(change_token::PAGE).unwrap_or(MAX_PAGE_SIZE)
+        } else {
+            MAX_PAGE_SIZE
+        };
+        let limit = page.limit.min(ceiling);
         let cursor = page.cursor.as_ref().map(|c| c.0.as_str());
         if let Some(offset) = cursor.and_then(|c| c.strip_prefix(RECORDED_CURSOR)) {
             // This cursor resumes the *forward* tail and only a forward walk ever issues

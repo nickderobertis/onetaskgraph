@@ -473,3 +473,63 @@ fn asset_reports_require_the_full_recorded_workload_before_reporting() {
         }
     }
 }
+
+#[test]
+fn each_absolute_linear_budget_is_reported_as_the_recorded_hour_holds_it_and_refused_otherwise() {
+    use crate::cache_budget::{ABSOLUTE, WORKLOAD};
+    let sandbox = Sandbox::new();
+    let hour = |requests: u64, complexity: u64, warm: u64| {
+        json!({"hour": {"on": {"requests": requests, "complexity": complexity}},
+               "all_warm_hour": {"on": {"requests": warm}}})
+    };
+    let scales = json!({"1x": hour(240, 93_087, 120), "10x": hour(2_250, 509_142, 1_050)});
+    for (budget, scale, member) in ABSOLUTE {
+        let figure = scales[scale].pointer(member).cloned().expect("a figure");
+        let report = |name: &str, recording: &Value| {
+            let recorded = sandbox.subdirectory(&format!("telemetry-{budget}-{name}"));
+            std::fs::write(telemetry::file_in(&recorded, budget), recording.to_string())
+                .expect("writable");
+            let result = sandbox
+                .subdirectory(&format!("result-{budget}-{name}"))
+                .join("result.json");
+            std::fs::write(&result, "").expect("an empty result file");
+            let output = run_report(&recorded, |command| {
+                command
+                    .env("ONEBUDGETSPEC_BUDGET_ID", budget)
+                    .env("ONEBUDGETSPEC_RESULT", &result);
+            });
+            (output, std::fs::read_to_string(&result).unwrap_or_default())
+        };
+        let valid = json!({"value": figure, "detail": "measured", "workload": WORKLOAD,
+                           "scales": scales});
+        let (reported, result) = report("valid", &valid);
+        assert!(
+            reported.status.success(),
+            "{budget}: {}",
+            String::from_utf8_lossy(&reported.stderr)
+        );
+        let result: Value = serde_json::from_str(&result).expect("the result");
+        assert_eq!(
+            result["value"].as_f64(),
+            figure.as_u64().map(|figure| figure as f64),
+            "{budget}"
+        );
+        let mut another = valid.clone();
+        another["workload"] = json!("one host, one pass");
+        let mut other_figure = valid.clone();
+        other_figure["value"] = json!(1);
+        for (name, recording, reason) in [
+            (
+                "another-workload",
+                another,
+                "not of the workload the budget states",
+            ),
+            ("another-figure", other_figure, "is not the"),
+        ] {
+            let (refused, _) = report(name, &recording);
+            let stderr = String::from_utf8_lossy(&refused.stderr);
+            assert!(!refused.status.success(), "{budget} {name}: {stderr}");
+            assert!(stderr.contains(reason), "{budget} {name}: {stderr}");
+        }
+    }
+}

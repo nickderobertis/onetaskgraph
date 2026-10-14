@@ -84,7 +84,34 @@ pub fn recorded(budget: &str) -> Result<(f64, Option<String>), String> {
     })?;
     let recorded: serde_json::Value = serde_json::from_str(&text)
         .map_err(|error| format!("{budget}: {} is not JSON ({error})", path.display()))?;
-    let value = if budget == crate::cache_budget::BUDGET || budget == crate::cache_budget::GUARD {
+    let absolute = crate::cache_budget::ABSOLUTE
+        .iter()
+        .find(|(id, _, _)| *id == budget);
+    let value = if let Some((_, scale, member)) = absolute {
+        // A whole number the cache-on hour spent, recorded only for the workload the budget
+        // states, and the very figure the recording's own scale holds at that member.
+        if recorded["workload"].as_str() != Some(crate::cache_budget::WORKLOAD) {
+            return Err(format!(
+                "{budget}: the recording is not of the workload the budget states, {}",
+                crate::cache_budget::WORKLOAD
+            ));
+        }
+        let figure = recorded["value"].as_u64().ok_or_else(|| {
+            format!(
+                "{budget}: {} records no `value` that is a whole, non-negative number: {text}",
+                path.display()
+            )
+        })?;
+        let measured = recorded["scales"][*scale]
+            .pointer(member)
+            .and_then(Value::as_u64);
+        if measured != Some(figure) {
+            return Err(format!(
+                "{budget}: the figure {figure} is not the {scale} recording's {member}, {measured:?}"
+            ));
+        }
+        figure as f64
+    } else if budget == crate::cache_budget::BUDGET || budget == crate::cache_budget::GUARD {
         // The requests the cache saves, cache off minus cache on — or, for the guard, the
         // dearest single query the cache-on hours sent — a whole number, recorded only for the
         // workload the budget states.

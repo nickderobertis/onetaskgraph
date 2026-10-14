@@ -32,6 +32,20 @@ use crate::telemetry;
 pub(crate) const BUDGET: &str = "linear-cache-cost-not-above-uncached";
 /// The guard it records beside it: the dearest single query any read sent with the cache on.
 pub(crate) const GUARD: &str = "linear-cache-largest-query-complexity";
+/// The absolute budgets on the Linear key it records beside them, each with the scale and the
+/// member of that scale's recording its figure is — every one with the cache on: the cold-then-
+/// warm hour's requests at 1x and 10x, the all-warm hour's requests at 10x, and the cold-then-warm
+/// hour's complexity at 10x.
+pub(crate) const ABSOLUTE: [(&str, &str, &str); 4] = [
+    ("linear-hourly-requests-1x", "1x", "/hour/on/requests"),
+    ("linear-hourly-requests-10x", "10x", "/hour/on/requests"),
+    (
+        "linear-hourly-requests-10x-warm",
+        "10x",
+        "/all_warm_hour/on/requests",
+    ),
+    ("linear-hourly-complexity-10x", "10x", "/hour/on/complexity"),
+];
 /// The workload it records, which the reader holds the recording to.
 pub(crate) const WORKLOAD: &str =
     "three-hosts-two-passes-10-projects-40-documents-60-issues-at-1x-and-10x";
@@ -577,6 +591,24 @@ fn the_cache_sends_fewer_of_the_linear_keys_requests_in_an_hour_than_no_cache() 
         std::fs::write(
             telemetry::file_in(&directory, budget),
             json!({"budget": budget, "value": value, "detail": detail, "workload": WORKLOAD,
+                   "scales": Value::Object(scales.clone())})
+            .to_string(),
+        )
+        .expect("the telemetry is written");
+    }
+    for (budget, scale, member) in ABSOLUTE {
+        let value = scales[scale]
+            .pointer(member)
+            .cloned()
+            .expect("every absolute figure is measured");
+        std::fs::write(
+            telemetry::file_in(&directory, budget),
+            json!({"budget": budget, "value": value, "workload": WORKLOAD,
+                   "detail": format!(
+                       "the {scale} {} with the Linear cache on — three hosts on the shared key, \
+                        priced from spike-linear-coverage-report's table: {value}",
+                       member.trim_start_matches('/').replace('/', " ").replace("_", " ")
+                   ),
                    "scales": Value::Object(scales.clone())})
             .to_string(),
         )

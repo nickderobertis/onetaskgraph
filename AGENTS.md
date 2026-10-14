@@ -949,7 +949,8 @@ them do; this is the inventory of what is owed, not a status board.
 79. A Linear source reads its team, workflow states and project statuses once per instance,
     reads them once more on a miss, and holds nothing a failed call answered; a status write is
     one mutation and no read once they are held, a settlement-shaped update one read and one
-    mutation, and `crates/onetaskgraph-linear-e2e/budgets.yaml` holds each of those figures.
+    mutation, and `crates/onetaskgraph-linear-e2e/budgets.yaml` holds each of those figures —
+    beside the cache-on hour's absolute shares of the key's hourly requests and complexity.
 80. `Engine::end_command`, called between two units of work on one engine, makes every source
     drop what a person can change: a GitHub board settlement after it keeps a body a person
     edited and moves a card from where they left it — in process and over the stdio plugin
