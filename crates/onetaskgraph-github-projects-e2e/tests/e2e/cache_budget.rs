@@ -28,7 +28,7 @@ use onetaskgraph_e2e_support::{
     fixtures::{GitHubBoardFields, document, github_projects_with_items},
     images,
 };
-use onetaskgraph_github_projects::{DESIGN_TITLE_PREFIX, worst_case_point_cost};
+use onetaskgraph_github_projects::{DESIGN_TITLE_PREFIX, DETAIL_BATCH, worst_case_point_cost};
 use serde_json::{Value, json};
 
 use super::asset_board::Board;
@@ -339,26 +339,31 @@ impl Workload {
         let mut spent = Spent::default();
         let mut versions = Vec::new();
         if kind == "tasks" {
-            let mut arguments = vec!["task".to_owned(), "show-many".to_owned()];
-            arguments.extend(ids.iter().cloned());
-            for id in &ids {
-                if let Some(version) = pin_of(id) {
-                    arguments.extend(["--pin".to_owned(), format!("{id}={version}")]);
+            // Whole detail batches per invocation, so the batched requests are the ones a single
+            // invocation sends, and the 10x pass's pinned ids stay under Windows' 32,767-character
+            // command line (`os error 206`).
+            for chunk in ids.chunks(2 * DETAIL_BATCH) {
+                let mut arguments = vec!["task".to_owned(), "show-many".to_owned()];
+                arguments.extend(chunk.iter().cloned());
+                for id in chunk {
+                    if let Some(version) = pin_of(id) {
+                        arguments.extend(["--pin".to_owned(), format!("{id}={version}")]);
+                    }
                 }
-            }
-            arguments.push("--json".to_owned());
-            let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
-            let (read, cost) = self.run(&arguments);
-            spent.add(cost);
-            for detail in read["details"].as_array().expect("details") {
-                let task = &detail["items"][0];
-                if detail["cache"]["served"] == "cache" {
-                    spent.hits += 1;
+                arguments.push("--json".to_owned());
+                let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
+                let (read, cost) = self.run(&arguments);
+                spent.add(cost);
+                for detail in read["details"].as_array().expect("details") {
+                    let task = &detail["items"][0];
+                    if detail["cache"]["served"] == "cache" {
+                        spent.hits += 1;
+                    }
+                    versions.push((
+                        task["id"].as_str().unwrap().to_owned(),
+                        task["item"]["version"].as_str().unwrap().to_owned(),
+                    ));
                 }
-                versions.push((
-                    task["id"].as_str().unwrap().to_owned(),
-                    task["item"]["version"].as_str().unwrap().to_owned(),
-                ));
             }
             return (spent, versions);
         }
