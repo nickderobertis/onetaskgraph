@@ -18,9 +18,34 @@ nx := "./scripts/nx.sh"
 default:
     @just --list
 
-# Set up from a clean clone: every toolchain and the judged-lint tier.
+# The cargo-prune-superseded release `pool-maintenance` runs, pinned once: `bootstrap`
+# installs exactly this version, and onevcs.toml names that recipe for idle pool slots.
+prune_superseded_version := "0.1.1"
+
+# Set up from a clean clone: every toolchain, the judged-lint tier and the pool pruner.
+# The pruner is a host's maintenance tool, so a GitHub Actions run skips it rather than
+# compiling it on every leg; the release pull request's budget step installs it itself.
 bootstrap:
     @{{nx}} run-many -t bootstrap --all
+    @[ "${GITHUB_ACTIONS:-}" = true ] || just pool-maintenance-tool
+
+# Install the pinned cargo-prune-superseded, unless that version is the one on PATH.
+pool-maintenance-tool:
+    @[ "$(cargo-prune-superseded --version 2>/dev/null)" = "cargo-prune-superseded {{prune_superseded_version}}" ] \
+        || cargo install --locked --quiet cargo-prune-superseded --version "={{prune_superseded_version}}"
+
+# The maintenance onevcs.toml declares for this repository's idle pool slots: remove each
+# unit's superseded builds older than 2 days from every target directory cargo builds
+# into here — `target`, the one .cargo/config.toml names — keeping each unit's newest build.
+pool-maintenance:
+    @cargo-prune-superseded --keep-within 2d target
+
+# The pool-maintenance pass-time budget. Deliberately outside `check` and `gate`: its
+# measurement builds the workspace twice. The release pull request runs it after its gate.
+
+# Measure one steady-state pool-maintenance pass against its host-labelled budget.
+pool-maintenance-budget:
+    @{{nx}} run pool-maintenance:budgets-host
 
 # Fails on any issue: there is no warnings-only mode. The phases are spelled out
 # rather than hidden behind one aggregate target so it is visible from here that the

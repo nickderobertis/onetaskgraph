@@ -24,7 +24,8 @@
     "sdk-python",
     "sdk-typescript",
     "onetaskgraph-live-janitor",
-    "onetaskgraph-github-live"
+    "onetaskgraph-github-live",
+    "pool-maintenance"
   ],
   "targets": {
     "bootstrap": {
