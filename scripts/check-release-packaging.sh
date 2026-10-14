@@ -1,15 +1,9 @@
 #!/usr/bin/env bash
 # Drive the release workflow's packaging step, as written, over the macOS job's targets.
 #
-# The step is a `run: |` block inside .github/workflows/release.yml, and a release is the
-# only thing that runs it — so a defect in it was discoverable only by cutting a version.
-# Folding macOS into one job (#1991) turned that block into a loop over `TARGETS` pairs —
-# Apple Silicon alone now that Intel macOS is no longer released — and this reads the
-# block out of the workflow and runs it here, against a stand-in binary per target and a
-# `gh` that records any upload, so what the fold packages is proven rather than read: one
-# archive and one checksum staged per target under the names scripts/install.sh
-# downloads, one carrier tarball per npm platform in the directory and under the name
-# scripts/publish-npm.sh reads, and nothing uploaded before the install proof.
+# Only a release runs that `run: |` block in .github/workflows/release.yml, so this runs
+# the production body offline, against stand-in binaries, to find a packaging defect
+# without cutting a version.
 set -euo pipefail
 
 fatal() {

@@ -30,12 +30,9 @@ ubuntu-latest x86_64-unknown-linux-gnu tar.gz linux-x64
 ubuntu-24.04-arm aarch64-unknown-linux-gnu tar.gz linux-arm64
 windows-latest x86_64-pc-windows-msvc zip win32-x64
 MAPPINGS
-# macOS is ONE job — native assets, carriers and wheels alike — rather than rows of the two
-# sequential matrices: the account's macOS runner pool is small and shared, and four macOS
-# jobs in two stages queued a release behind itself for hours. Apple Silicon is the only
-# Darwin target; Intel macOS is no longer released, so nothing names x86_64-apple-darwin or
-# darwin-x64, and the installer refuses that host by name rather than fetch a missing asset.
-# What the downstream jobs consume is held here by name, so the fold cannot rename an artifact.
+# macOS is ONE job on the small shared Mac pool, building Apple Silicon artifacts only; the
+# installer refuses Intel macOS by name. Downstream artifact names are held here so the job
+# cannot rename one.
 macos_job=$(sed -n '/^  macos-assets-carriers-and-wheels:/,/^  collect-wheels:/p' .github/workflows/release.yml)
 [[ -n $macos_job ]] || fail "the release workflow has no macos-assets-carriers-and-wheels job ahead of collect-wheels"
 ! grep -Fq -- '- { os: macos-latest' .github/workflows/release.yml || fail "macOS must not be a row of a sequential matrix; Apple Silicon builds in the one macOS job"
