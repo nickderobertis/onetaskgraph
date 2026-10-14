@@ -396,8 +396,32 @@ fn cache_clear_reclaims_a_sources_items_and_bytes_and_leaves_another_sources_alo
     )
     .unwrap();
 
+    // Every item entry the store wrote, of every kind — and no byte entry, which is not an item.
+    let items: usize = ["tasks", "projects-v1", "documents-v1", "edges-v1"]
+        .iter()
+        .map(|directory| {
+            walk(&board.join(directory))
+                .iter()
+                .filter(|path| {
+                    path.extension()
+                        .is_some_and(|extension| extension == "json")
+                        && path.file_name().is_some_and(|name| name != "foreign.json")
+                })
+                .count()
+        })
+        .sum();
+    assert!(
+        items >= 1,
+        "the document's entry at least: {:?}",
+        walk(&board)
+    );
     let (cleared, _, _) = assets.ok(&["cache", "clear", "board", "--json"]);
     assert_eq!(cleared["cleared"][0]["source"], "board", "{cleared}");
+    assert_eq!(
+        cleared["cleared"][0]["entries"],
+        json!(items),
+        "every item entry of every kind is counted, and no byte entry: {cleared}"
+    );
     assert!(
         foreign.exists(),
         "a file that is no whole entry is left alone"
