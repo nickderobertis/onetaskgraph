@@ -5503,17 +5503,10 @@ fn linear_response(
         graphql::COMMENT_CREATE,
         graphql::COMMENT_UPDATE,
         graphql::COMMENT_DELETE,
-        graphql::ISSUES_CACHED,
-        graphql::ISSUE_CACHED,
-        graphql::ISSUE_DETAIL_CACHED,
-        graphql::ISSUE_RELATIONS_CACHED,
-        // llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] The operations the loopback Linear answers, which the engine's own suite and the Linear suite both drive, so the list lives with that server in the shared harness, as `linear_uncached` below records for the answers it gives them.
-        graphql::PROJECTS_CACHED,
-        graphql::PROJECT_CACHED,
-        graphql::PROJECT_RELATIONS_CACHED,
-        // llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
     ]
     .contains(&operation)
+        // The documents an attached cache sends are the ones `linear_uncached` answers.
+        && linear_uncached(operation).is_none()
     {
         return Err("unknown GraphQL operation");
     }
