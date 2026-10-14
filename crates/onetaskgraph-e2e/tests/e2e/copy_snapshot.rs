@@ -620,3 +620,34 @@ fn a_markdown_task_rewritten_at_each_point_a_copy_reads_it_lands_as_the_revision
         );
     }
 }
+
+#[test]
+fn a_linear_task_whose_comments_change_on_two_pages_between_its_page_reads_lands_as_one_state() {
+    // With no cache attached, a Linear token says nothing of a task's comments, so it cannot
+    // tell the copy that two page reads saw one state: here the newest comment, on the page
+    // already read, and the oldest, on the page still to read, are both edited in between.
+    let (sandbox, workspace) = linear();
+    let newest = format!("C-{}", BEYOND_A_PAGE - 1);
+    workspace.after_request(
+        |document: &str, variables: &Value| {
+            document == onetaskgraph_linear::graphql::ISSUE_DETAIL
+                && variables["id"] == "T-3"
+                && variables["before"].is_null()
+        },
+        0,
+        move |workspace| {
+            workspace.edit_comment(&newest, "the newest, edited");
+            workspace.edit_comment("C-0", "the oldest, edited");
+        },
+    );
+    let report = snapshot(&sandbox, "linear", 0);
+    let copy = landed(&report, "linear:T-3");
+    let (_, now) = revision(&sandbox, "linear:T-3");
+    assert_eq!(now.first(), Some(&json!("the oldest, edited")));
+    assert_eq!(now.last(), Some(&json!("the newest, edited")));
+    assert_eq!(
+        revision(&sandbox, &copy),
+        revision(&sandbox, "linear:T-3"),
+        "the copy settled on the comments as Linear now holds them, never one page of each"
+    );
+}

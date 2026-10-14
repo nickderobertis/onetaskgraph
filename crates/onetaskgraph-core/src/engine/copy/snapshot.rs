@@ -6,14 +6,19 @@
 //! detail read that names it — and is one revision by construction. One whose comments run
 //! longer is read a page at a time, each further page through the same detail read, so every
 //! request carries the task beside the page it answers. The pages are one revision when every
-//! request carried the same task: the same change token where the source gives one, and
-//! otherwise the same task in every member it reports.
+//! request carried the same task: the same change token where the source's version coverage
+//! says its token covers a task's comments, and otherwise the same task in every member it
+//! reports.
 //!
-//! Where the source gives no token — Linear, and a GitHub task changed within the minute before
-//! the read — the task's own members are all two page reads can be compared by, and a comment
-//! edited alone between two pages moves none of them. So such a task whose comments run past
-//! one page is read again in full until two consecutive passes agree on every comment, at most
-//! [`FULL_PASSES`] of them; one that never settles is left unwritten and reported failed.
+//! Where no token covering comments is given — a task with no token, such as a GitHub task
+//! changed within the minute before the read, and a task whose source's token does not cover
+//! its comments, such as Linear's without its cache attached — the task's own members are all
+//! two page reads can be compared by, and a comment edited alone between two pages moves none
+//! of them. So such a task whose comments run past one page is read again in full until two
+//! consecutive passes agree on every comment, at most [`FULL_PASSES`] of them; one that never
+//! settles is left unwritten and reported failed. Whether a token covers comments is the
+//! source's [`version_coverage`](onetaskgraph_plugin_api::TaskSource::version_coverage), never
+//! the token's presence.
 //!
 //! When they disagree the task is read again from its first page, once. A second
 //! disagreement is not chased further: the task is left unwritten and the copy reports it as
@@ -44,8 +49,8 @@ pub(super) enum Taken {
     Gone,
     /// A later request carried another revision of the task than the first.
     Changed,
-    /// A task with no token whose comments run past one page, read in [`FULL_PASSES`] full
-    /// passes no two consecutive of which agreed.
+    /// A task with no token covering its comments whose comments run past one page, read in
+    /// [`FULL_PASSES`] full passes no two consecutive of which agreed.
     Unsettled,
 }
 
@@ -106,11 +111,11 @@ fn about(id: &NativeId, read: Option<&TaskDetailRead>) -> Result<(), SourceError
     }
 }
 
-/// How many full passes over a token-less task's comments a copy makes, at most, looking for
-/// two consecutive ones that agree.
+/// How many full passes over a task's comments a copy makes, at most, looking for two
+/// consecutive ones that agree, when no token covering comments vouches for them.
 ///
-/// A source that gives no token for a task leaves nothing a page read carries that moves when a
-/// comment alone is edited, so a task whose comments run past one page is read again in full
+/// A task with no token covering its comments leaves nothing a page read carries that moves when
+/// a comment alone is edited, so a task whose comments run past one page is read again in full
 /// until two passes in a row agree on every comment. Three is two passes and one more for a
 /// person who was mid-edit during the first: a task still changing after that is left unwritten
 /// and reported failed rather than chased.
@@ -118,7 +123,7 @@ pub(super) const FULL_PASSES: usize = 3;
 
 /// Finish reading `id` from the detail read `read` answered with: every further page of its
 /// comments, each held to the task the first request carried — and, for a task with no change
-/// token whose comments run past one page, further full passes until two consecutive ones agree
+/// token covering its comments whose comments run past one page, further full passes until two consecutive ones agree
 /// (see [`FULL_PASSES`]).
 ///
 /// # Errors
@@ -140,12 +145,13 @@ pub(super) async fn take(
         None => return Ok(Taken::Gone),
     };
     let paged = page.next.is_some();
-    let mut held = match walk(source, id, &task, page).await? {
+    let vouched = covers_comments(source);
+    let mut held = match walk(source, id, &task, page, vouched).await? {
         Walked::All(comments) => comments,
         Walked::Gone => return Ok(Taken::Gone),
         Walked::Changed => return Ok(Taken::Changed),
     };
-    if task.version.is_none() && paged {
+    if !(vouched && task.version.is_some()) && paged {
         let mut settled = false;
         for _ in 1..FULL_PASSES {
             let start = PageRequest {
@@ -162,13 +168,13 @@ pub(super) async fn take(
             let Some(again) = again else {
                 return Ok(Taken::Gone);
             };
-            if !reads_alike(&task, &again.task) {
+            if !reads_alike(&task, &again.task, vouched) {
                 return Ok(Taken::Changed);
             }
             let Some(page) = first_page(id, again.comments)? else {
                 return Ok(Taken::Gone);
             };
-            let pass = match walk(source, id, &task, page).await? {
+            let pass = match walk(source, id, &task, page, vouched).await? {
                 Walked::All(comments) => comments,
                 Walked::Gone => return Ok(Taken::Gone),
                 Walked::Changed => return Ok(Taken::Changed),
@@ -217,12 +223,13 @@ fn first_page(
 }
 
 /// Every comment of `id`, from `page` — its first — through every further page, each request
-/// held to `task`.
+/// held to `task` — by its token alone when `vouched` says the token covers comments.
 async fn walk(
     source: &ResolvedSource,
     id: &NativeId,
     task: &Task,
     page: Page<Comment>,
+    vouched: bool,
 ) -> Result<Walked, SourceError> {
     let limit = comment_page(source).limit;
     fits(page.items.len(), limit)?;
@@ -245,7 +252,7 @@ async fn walk(
         let Some(later) = answer else {
             return Ok(Walked::Gone);
         };
-        if !reads_alike(task, &later.task) {
+        if !reads_alike(task, &later.task, vouched) {
             return Ok(Walked::Changed);
         }
         let Some(page) = first_page(id, later.comments)? else {
@@ -275,11 +282,22 @@ fn commentless(id: &NativeId) -> SourceError {
     }
 }
 
-/// Whether two reads of one task agree on it: the same change token when both gave one — which
-/// covers its comments — and otherwise the same task in every member but the token, which says
-/// nothing of a change to a comment alone.
-fn reads_alike(first: &Task, later: &Task) -> bool {
-    if let (Some(first), Some(later)) = (&first.version, &later.version) {
+/// Whether `source` declares that its change token covers a task's comments — the one thing
+/// that lets two equal tokens stand for one state of them.
+fn covers_comments(source: &ResolvedSource) -> bool {
+    source
+        .source()
+        .version_coverage()
+        .comments
+        .reason()
+        .is_none()
+}
+
+/// Whether two reads of one task agree on it: the same change token when both gave one and
+/// `vouched` says it covers comments, and otherwise the same task in every member but the
+/// token, which says nothing of a change to a comment alone.
+fn reads_alike(first: &Task, later: &Task, vouched: bool) -> bool {
+    if let (true, Some(first), Some(later)) = (vouched, &first.version, &later.version) {
         return first == later;
     }
     let untokened = |task: &Task| Task {
