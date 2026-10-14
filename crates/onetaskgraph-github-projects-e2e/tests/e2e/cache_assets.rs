@@ -378,8 +378,31 @@ fn cache_clear_reclaims_a_sources_items_and_bytes_and_leaves_another_sources_alo
         "the mirror keeps its own bytes: {mirrored:?}"
     );
 
+    // A file carrying the board's schema, kind and remote but not the rest of an entry is not
+    // one this store wrote, and is left where it is.
+    let documents = board.join("documents-v1");
+    let remote = walk(&documents)
+        .iter()
+        .find_map(|path| {
+            serde_json::from_slice::<Value>(&std::fs::read(path).ok()?).ok()?["remote"]
+                .as_str()
+                .map(str::to_owned)
+        })
+        .expect("an entry names its remote");
+    let foreign = documents.join("foreign.json");
+    std::fs::write(
+        &foreign,
+        json!({"schema": 1, "kind": "document", "remote": remote}).to_string(),
+    )
+    .unwrap();
+
     let (cleared, _, _) = assets.ok(&["cache", "clear", "board", "--json"]);
     assert_eq!(cleared["cleared"][0]["source"], "board", "{cleared}");
+    assert!(
+        foreign.exists(),
+        "a file that is no whole entry is left alone"
+    );
+    std::fs::remove_file(&foreign).unwrap();
     assert_eq!(held(&board), (0, 0), "the board's items and bytes are gone");
     assert_eq!(
         walk(&assets.mirror_cache),

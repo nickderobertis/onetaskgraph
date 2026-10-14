@@ -309,6 +309,15 @@ impl SourceCache {
     }
 }
 
+/// Whether `value` reads whole as an entry of `kind` — every member its type holds, of that type.
+fn reads_whole(kind: EntryKind, value: Value) -> bool {
+    match kind {
+        EntryKind::Project => serde_json::from_value::<ProjectEntry>(value).is_ok(),
+        EntryKind::Document => serde_json::from_value::<DocumentEntry>(value).is_ok(),
+        EntryKind::Edges => serde_json::from_value::<EdgesEntry>(value).is_ok(),
+    }
+}
+
 /// The directory `remote`'s verified bytes live in under `dir`.
 fn bytes_dir(dir: &Path, remote: &str) -> PathBuf {
     dir.join(format!("bytes-v{KIND_ENTRY_SCHEMA}")).join(remote)
@@ -351,6 +360,7 @@ pub(super) fn empty_kinds(dir: &Path, remote: &str) -> std::io::Result<u64> {
                         == Some(u64::from(KIND_ENTRY_SCHEMA))
                         && value.get("kind") == serde_json::to_value(kind).ok().as_ref()
                         && value.get("remote").and_then(Value::as_str) == Some(remote)
+                        && reads_whole(kind, value)
                 });
             if name.ends_with(".json") && ours {
                 gone(std::fs::remove_file(&path))?;
