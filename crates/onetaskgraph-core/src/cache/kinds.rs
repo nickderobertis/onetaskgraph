@@ -56,13 +56,37 @@ impl EntryKind {
     }
 }
 
+/// The one `kind` a project entry can carry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum ProjectTag {
+    /// [`EntryKind::Project`].
+    Project,
+}
+
+/// The one `kind` a document entry can carry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum DocumentTag {
+    /// [`EntryKind::Document`].
+    Document,
+}
+
+/// The one `kind` an edges entry can carry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum EdgesTag {
+    /// [`EntryKind::Edges`].
+    Edges,
+}
+
 /// One project as the cache keeps it, at its own `version`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub(crate) struct ProjectEntry {
     /// [`KIND_ENTRY_SCHEMA`].
     pub(crate) schema: u32,
-    /// Always [`EntryKind::Project`].
-    pub(crate) kind: EntryKind,
+    /// [`EntryKind::Project`], the only kind it can carry.
+    pub(crate) kind: ProjectTag,
     /// The digest of the remote it is from.
     pub(crate) remote: String,
     /// The project, its `id` the entry's own and its `version` the token it was read at.
@@ -74,8 +98,8 @@ pub(crate) struct ProjectEntry {
 pub(crate) struct DocumentEntry {
     /// [`KIND_ENTRY_SCHEMA`].
     pub(crate) schema: u32,
-    /// Always [`EntryKind::Document`].
-    pub(crate) kind: EntryKind,
+    /// [`EntryKind::Document`], the only kind it can carry.
+    pub(crate) kind: DocumentTag,
     /// The digest of the remote it is from.
     pub(crate) remote: String,
     /// The document, its `id` the entry's own and its `version` the token it was read at.
@@ -93,8 +117,8 @@ pub(crate) struct DocumentEntry {
 pub(crate) struct EdgesEntry {
     /// [`KIND_ENTRY_SCHEMA`].
     pub(crate) schema: u32,
-    /// Always [`EntryKind::Edges`].
-    pub(crate) kind: EntryKind,
+    /// [`EntryKind::Edges`], the only kind it can carry.
+    pub(crate) kind: EdgesTag,
     /// The digest of the remote it is from.
     pub(crate) remote: String,
     /// The task they are the forward edges of.
@@ -188,7 +212,7 @@ impl SourceCache {
             &self.kind_path(EntryKind::Project, &project.id),
             &ProjectEntry {
                 schema: KIND_ENTRY_SCHEMA,
-                kind: EntryKind::Project,
+                kind: ProjectTag::Project,
                 remote: self.remote.clone(),
                 project: project.clone(),
             },
@@ -229,7 +253,7 @@ impl SourceCache {
             &self.kind_path(EntryKind::Edges, id),
             &EdgesEntry {
                 schema: KIND_ENTRY_SCHEMA,
-                kind: EntryKind::Edges,
+                kind: EdgesTag::Edges,
                 remote: self.remote.clone(),
                 id: id.clone(),
                 version: version.to_owned(),

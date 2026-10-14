@@ -1156,7 +1156,7 @@ impl TaskSource for CachedSource {
                 .and_then(|held| held.assets);
             self.cache.write_document(&DocumentEntry {
                 schema: KIND_ENTRY_SCHEMA,
-                kind: super::kinds::EntryKind::Document,
+                kind: super::kinds::DocumentTag::Document,
                 remote: self.cache.remote.clone(),
                 document: document.clone(),
                 assets,
@@ -2464,7 +2464,7 @@ mod tests {
         };
         cache.write_document(&super::DocumentEntry {
             schema: KIND_ENTRY_SCHEMA,
-            kind: super::super::kinds::EntryKind::Document,
+            kind: super::super::kinds::DocumentTag::Document,
             remote: "remote".to_owned(),
             document,
             assets: None,
