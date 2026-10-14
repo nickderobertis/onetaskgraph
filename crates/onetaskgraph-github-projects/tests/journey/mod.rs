@@ -3580,19 +3580,18 @@ async fn every_facet_change_moves_a_projects_and_a_documents_token(
     let mut held_project = settled_token_of(project, beta, "before the label legs").await?;
     let mut held_document = settled_token_of(document, design, "before the label legs").await?;
 
-    // 1. Renamed — to another of this run's own label names, so its cleanup still finds it.
+    // Renamed to another of this run's own label names, so its cleanup still finds it.
     let renamed = run.own.label(run.stamp_micros + 1);
     change_artifact_label(run, label_name, json!({"new_name": renamed})).await?;
     held_project = moved(project, beta, "its label renamed", &held_project).await?;
     held_document = moved(document, design, "its label renamed", &held_document).await?;
 
-    // 2. Recoloured.
     change_artifact_label(run, &renamed, json!({"color": "5319e7"})).await?;
     // The scratch leg reads its own token before its change, so this one is not held on.
     moved(project, beta, "its label recoloured", &held_project).await?;
     held_document = moved(document, design, "its label recoloured", &held_document).await?;
 
-    // 3. A scratch field's option renamed, the field removed whether or not the leg holds.
+    // The scratch field is removed whether or not the leg holds.
     let scratch = create_scratch_field(run).await?;
     let renamed_option = async {
         set_scratch_value(run, beta, &scratch).await?;
@@ -3606,7 +3605,6 @@ async fn every_facet_change_moves_a_projects_and_a_documents_token(
     held_project = renamed_option?;
     removed?;
 
-    // 4 and 5. `alpha` deleted, through the plugin's own delete.
     writer
         .delete_project(alpha)
         .await
@@ -3624,7 +3622,7 @@ async fn every_facet_change_moves_a_projects_and_a_documents_token(
          {held_document}; a cache would have served it"
     );
 
-    // 6. A task gaining a sub-issue, which makes it a project.
+    // A sub-issue makes the task a project.
     let task = TokenReader {
         rebuilt,
         kind: Observed::Task,

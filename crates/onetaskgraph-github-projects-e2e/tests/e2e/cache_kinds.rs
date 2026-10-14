@@ -213,7 +213,7 @@ fn an_item_read_too_soon_after_its_change_gives_no_token_and_fills_no_entry() {
 }
 
 #[test]
-fn a_listing_pins_the_reads_after_it_and_fills_no_entry_of_its_own() {
+fn a_listing_of_any_kind_fills_no_entry() {
     let cached = Cached::new();
     for kind in ["task", "project", "document"] {
         cached.ok(&[
