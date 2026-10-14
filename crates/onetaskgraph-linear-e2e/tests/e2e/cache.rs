@@ -714,3 +714,147 @@ fn every_linear_read_kept_remote_reaches_linear_every_time_and_costs_what_it_did
     }
     assert!(!comment.is_empty());
 }
+
+/// Where the cache keeps the `directory` entry of the native id `native`, under `dir`.
+fn entry(dir: &Path, directory: &str, native: &str) -> PathBuf {
+    dir.join(directory).join(format!(
+        "{}.json",
+        onetaskgraph_plugin_api::asset_sha256(native.as_bytes())
+    ))
+}
+
+#[test]
+fn every_linear_write_takes_the_entries_naming_its_item_out_of_service() {
+    let body = |cached: &Cached| {
+        let path = cached.sandbox.project().join("body.md");
+        std::fs::write(&path, "A body written whole.").expect("a body");
+        path.display().to_string()
+    };
+    // (kind, id, its entries' directory, the write, what the next read shows)
+    type Write = (
+        &'static str,
+        &'static str,
+        &'static str,
+        Vec<String>,
+        &'static str,
+    );
+    let writes = |cached: &Cached| -> Vec<Write> {
+        let words = |line: &str| line.split(' ').map(str::to_owned).collect::<Vec<_>>();
+        vec![
+            (
+                "task",
+                "linear:L-1",
+                "tasks",
+                words("task status set linear:L-1 done"),
+                "\"done\"",
+            ),
+            (
+                "task",
+                "linear:L-1",
+                "tasks",
+                words("task priority set linear:L-1 low"),
+                "\"low\"",
+            ),
+            (
+                "task",
+                "linear:L-1",
+                "tasks",
+                words("task update linear:L-1 --title Updated"),
+                "Updated",
+            ),
+            (
+                "task",
+                "linear:L-1",
+                "tasks",
+                words("task metadata set linear:L-1 caller.note \"noted\""),
+                "noted",
+            ),
+            (
+                "task",
+                "linear:L-1",
+                "tasks",
+                vec![
+                    "task".to_owned(),
+                    "content".to_owned(),
+                    "set".to_owned(),
+                    "linear:L-1".to_owned(),
+                    "--file".to_owned(),
+                    body(cached),
+                ],
+                "A body written whole.",
+            ),
+            (
+                "project",
+                "linear:P-1",
+                "projects-v1",
+                words("project metadata set linear:P-1 caller.note \"noted\""),
+                "noted",
+            ),
+            (
+                "document",
+                "linear:D-1",
+                "documents-v1",
+                words("document metadata set linear:D-1 caller.note \"noted\""),
+                "noted",
+            ),
+        ]
+    };
+    let probe = Cached::new(dataset());
+    for (kind, id, directory, write, shows) in writes(&probe) {
+        let cached = Cached::new(dataset());
+        let held = cached.listed(kind, id).expect("a token");
+        cached.ok(&strs(&pinned(kind, id, &held)));
+        let (_, sent) = cached.ok(&strs(&pinned(kind, id, &held)));
+        assert_eq!(sent, Vec::<String>::new(), "{id} is filled");
+        let native = id.strip_prefix("linear:").unwrap();
+        let dir = cached.dir().expect("a cache");
+        assert!(entry(&dir, directory, native).exists());
+        let mut arguments = strs(&write);
+        arguments.push("--json");
+        cached.ok(&arguments);
+        assert!(
+            !entry(&dir, directory, native).exists(),
+            "`{}` takes {id}'s entry out of service",
+            write.join(" ")
+        );
+        let (shown, sent) = cached.ok(&strs(&pinned(kind, id, &held)));
+        assert_eq!(
+            sent.len(),
+            1,
+            "{id}: the read after `{}` is Linear's",
+            write.join(" ")
+        );
+        assert!(
+            shown.to_string().contains(shows),
+            "{id} answers what `{}` left: {shown}",
+            write.join(" ")
+        );
+    }
+
+    // A copy into Linear over an issue it copied before takes that issue's entry out of service.
+    let cached = Cached::new(dataset());
+    let notes = cached.sandbox.project().join("notes");
+    std::fs::write(
+        notes.join("tasks/N-2.md"),
+        "---\ntitle: Copied in\nstatus: todo\n---\nFrom the folder.\n",
+    )
+    .expect("a task");
+    let (copied, _) = cached.ok(&["task", "copy", "notes:N-2", "--to", "linear", "--json"]);
+    let landed = copied["items"][0]["destination"]
+        .as_str()
+        .expect("a destination")
+        .to_owned();
+    let held = cached.listed("task", &landed).expect("a token");
+    cached.ok(&strs(&pinned("task", &landed, &held)));
+    std::fs::write(
+        notes.join("tasks/N-2.md"),
+        std::fs::read_to_string(notes.join("tasks/N-2.md"))
+            .unwrap()
+            .replace("title: Copied in", "title: Copied in again"),
+    )
+    .expect("a task");
+    cached.ok(&["task", "copy", "notes:N-2", "--to", "linear", "--json"]);
+    let (shown, sent) = cached.ok(&strs(&pinned("task", &landed, &held)));
+    assert_eq!(sent.len(), 1, "the copied-over issue is read from Linear");
+    assert_eq!(shown["items"][0]["item"]["title"], "Copied in again");
+}

@@ -15,6 +15,7 @@ use onetaskgraph_e2e_support::{common, fixtures, linear_vocabulary};
 mod budget_commands;
 mod budget_runner;
 mod cache;
+mod cache_documents;
 mod linear;
 mod linear_assets;
 mod linear_boundary;

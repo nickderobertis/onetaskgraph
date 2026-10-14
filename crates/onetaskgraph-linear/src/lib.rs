@@ -2745,6 +2745,8 @@ impl LinearSource {
                 };
                 let mut cursor: Option<Cursor> = None;
                 loop {
+                    // The plain document even with the cache attached: this scan neither fills
+                    // an entry nor pins a read, so the relations page would only add complexity.
                     let data = self.send(if matches!(kind, WriteKind::Project) { PROJECTS } else { ISSUES }, json!({"first":MAX_PAGE_SIZE,"after":cursor.as_ref().map(|cursor|&cursor.0),"filter":filter})).await?;
                     let (items, next) = if matches!(kind, WriteKind::Project) {
                         let page =

@@ -1541,6 +1541,8 @@ mod tests {
         /// For each project or document write that reached it, in order: whether another
         /// process could read that item's entry at that moment.
         kind_writes: Vec<bool>,
+        /// How many times it was asked whether it is answering.
+        healths: usize,
     }
 
     #[async_trait::async_trait]
@@ -1552,6 +1554,7 @@ mod tests {
             self.inner.capabilities()
         }
         async fn health(&self) -> Result<Health, SourceError> {
+            self.probe.lock().expect("the probe").healths += 1;
             self.inner.health().await
         }
         async fn get_task(&self, _id: &NativeId) -> Result<Option<Task>, SourceError> {
@@ -2418,5 +2421,19 @@ mod tests {
                 .is_none(),
             "no other process is served the entry"
         );
+    }
+
+    /// No command line verb and no engine path asks a source whether it is answering, so this is
+    /// the one place it can be held to: the cache answers it never, whatever an entry holds.
+    #[tokio::test]
+    async fn whether_a_source_is_answering_is_asked_of_the_source_every_time() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let (source, cache, probe) = counting(dir.path(), task("T-1", "v1"));
+        held_at_v1(&cache);
+        cache.pin(&id("T-1"), "v1");
+        for _ in 0..2 {
+            source.health().await.expect("answering");
+        }
+        assert_eq!(probe.lock().expect("the probe").healths, 2);
     }
 }
