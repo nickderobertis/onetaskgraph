@@ -26,11 +26,6 @@
     "typecheck": { "inputs": ["default", "^default"], "cache": true },
     "test": { "inputs": ["default", "^default"], "cache": true },
     "coverage": { "inputs": ["default", "^default"], "cache": true },
-    "bootstrap": { "cache": false },
-    "budgets": {
-      "inputs": ["default", "^default", { "externalDependencies": ["@onebudgetspec/cli"] }],
-      "cache": true
-    },
-    "budgets-host": { "cache": false }
+    "bootstrap": { "cache": false }
   }
 }

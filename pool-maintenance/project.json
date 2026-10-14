@@ -51,7 +51,9 @@
       "options": {
         "command": "bun run onebudgetspec check pool-maintenance/budgets.yaml --label host"
       },
-      "//": "Wall-clock time on the host that runs it, so never cached (the target default). Not a dependency of `check` and not a target `just test` selects."
+      "cache": false,
+      "inputs": ["default", { "externalDependencies": ["@onebudgetspec/cli"] }],
+      "//": "Wall-clock time on the host that runs it, so never cached. Not a dependency of `check` and not a target `just test` selects. Its settings are declared here rather than as nx.json target defaults: Nx treats any nx.json edit as touching every project, which would open the live lanes for a change to this project alone. There is no cached `budgets` target here, because `just test` selects that name on every affected project and this project's only budget is host-labelled."
     }
   }
 }
