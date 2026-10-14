@@ -346,7 +346,7 @@ impl TemplateAnswers {
     ///
     /// Why the answers could not be written as YAML.
     pub fn to_yaml(&self) -> Result<String, String> {
-        serde_norway::to_string(&self.0).map_err(|error| error.to_string())
+        serde_saphyr::to_string(&self.0).map_err(|error| error.to_string())
     }
 }
 
@@ -795,6 +795,7 @@ impl Engine {
         let write = ItemWrite {
             target,
             item: Document {
+                version: None,
                 id: request
                     .id
                     .clone()
@@ -951,6 +952,7 @@ impl Engine {
         let write = ItemWrite {
             target,
             item: Project {
+                version: None,
                 id: request.id.clone(),
                 title: request.title.clone(),
                 content: Some(content),

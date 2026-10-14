@@ -3122,7 +3122,9 @@ impl Engine {
             let as_written = same_edges(&held.edges, &resolved(&edges))
                 && targets(&held_task.delivers, &item.to)
                     == targets(&resolved_entries(&delivers), &item.to);
-            item.skipped = as_written && skips(task, held, item.carried.is_some(), &item.to);
+            item.skipped = self.token_covers_a_copy(&item.source.source, item.carried.is_some())
+                && as_written
+                && skips(task, held, item.carried.is_some(), &item.to);
         }
         // What each task's comments come to at the destination, decided from the two reads
         // already in hand before anything is written: the record a task lands with is a digest
@@ -4587,6 +4589,7 @@ impl Engine {
         }
         let held = &running.homes[&key];
         let member = Project {
+            version: None,
             id: home.native.clone(),
             title: held.title.clone(),
             content: None,
@@ -6061,6 +6064,20 @@ fn reads_comments(request: &CopyRequest) -> bool {
             .items
             .query()
             .is_some_and(|query| query.commented_since.is_some())
+}
+
+impl Engine {
+    /// Whether `source`'s token vouches for every part a copy writes of a task — its fields,
+    /// its forward edges, and its comments when the copy carries them — so a copy may skip one
+    /// whose token is unchanged: a part it does not cover can change with the token as it was.
+    pub(super) fn token_covers_a_copy(&self, source: &SourceName, with_comments: bool) -> bool {
+        self.readable(source).is_ok_and(|source| {
+            let coverage = source.source().copy_version_coverage();
+            coverage.fields.reason().is_none()
+                && coverage.forward_edges.reason().is_none()
+                && (!with_comments || coverage.comments.reason().is_none())
+        })
+    }
 }
 
 /// Whether a copy may skip `task`, whose counterpart the destination holds as `held`: its

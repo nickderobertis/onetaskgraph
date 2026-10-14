@@ -271,7 +271,12 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # read from the raw document and the roots from the validated one.
     bundle = generate.validate_schema_bundle(emitted_bundle)
 
-    assert emitted_bundle["version"] == 37
+    assert emitted_bundle["version"] == 38
+    # Version 38 published a project's and a document's change token, each left out when
+    # absent, so a project or document of a source giving none reads as it did.
+    for root in ("Project", "Document"):
+        assert "version" in emitted_bundle["roots"][root]["properties"], root
+        assert "version" not in emitted_bundle["roots"][root].get("required", []), root
     assert "cache" in emitted_bundle["roots"]["TaskDetail"]["properties"]
     assert "enabled" in emitted_bundle["roots"]["SourceCacheConfig"]["properties"]
     assert "result" in emitted_bundle["roots"]["TaskPrioritySet"]["properties"]

@@ -249,6 +249,90 @@ fn the_runner_refuses_a_budget_with_nowhere_to_report_and_a_result_it_cannot_wri
 }
 
 #[test]
+fn the_cache_budget_is_reported_signed_at_its_workload_and_refused_at_another_or_without_a_figure()
+{
+    use crate::cache_budget::{BUDGET, WORKLOAD};
+    let sandbox = Sandbox::new();
+    // Each recording in a telemetry directory of its own, since they share the budget's id.
+    let report = |name: &str, recording: &Value| {
+        let recorded = sandbox.subdirectory(&format!("telemetry-{name}"));
+        std::fs::write(telemetry::file_in(&recorded, BUDGET), recording.to_string())
+            .expect("writable");
+        let result = sandbox
+            .subdirectory(&format!("result-{name}"))
+            .join("result.json");
+        std::fs::write(&result, "").expect("an empty result file, as onebudgetspec makes one");
+        let output = run_report(&recorded, |command| {
+            command
+                .env("ONEBUDGETSPEC_BUDGET_ID", BUDGET)
+                .env("ONEBUDGETSPEC_RESULT", &result);
+        });
+        (output, std::fs::read_to_string(&result).unwrap_or_default())
+    };
+
+    let hour =
+        |on: u64, off: u64| json!({"hour": {"on": {"complexity": on}, "off": {"complexity": off}}});
+    let valid = json!({"value": -5811, "detail": "the cache saves", "workload": WORKLOAD,
+                       "scales": {"1x": hour(60_003, 65_814), "10x": hour(600_222, 658_332)}});
+    let with = |pointer: &str, value: Value| {
+        let mut changed = valid.clone();
+        *changed.pointer_mut(pointer).expect("the member") = value;
+        changed
+    };
+    let (saved, result) = report("saved", &valid);
+    assert!(
+        saved.status.success(),
+        "{}",
+        String::from_utf8_lossy(&saved.stderr)
+    );
+    let result: Value = serde_json::from_str(&result).expect("the result");
+    assert_eq!(
+        result,
+        json!({"value": -5811.0, "detail": "the cache saves"}),
+        "a saving is reported as the negative figure it is"
+    );
+
+    for (name, recording, reason) in [
+        (
+            "another-workload",
+            with("/workload", json!("one host, one pass")),
+            "not of the workload the budget states",
+        ),
+        (
+            "no-figure",
+            with("/value", json!(null)),
+            "a whole number of complexity points",
+        ),
+        (
+            "fractional",
+            with("/value", json!(-0.5)),
+            "a whole number of complexity points",
+        ),
+        (
+            "no-ten-times-hour",
+            with("/scales/10x", json!({})),
+            "the 10x hour is not measured in both modes",
+        ),
+        (
+            "fractional-complexity",
+            with("/scales/1x/hour/off/complexity", json!(1.5)),
+            "the 1x hour is not measured in both modes",
+        ),
+        (
+            "another-figure",
+            with("/value", json!(0)),
+            "is not the larger hour's difference, -5811",
+        ),
+    ] {
+        let (refused, _) = report(name, &recording);
+        let stderr = String::from_utf8_lossy(&refused.stderr);
+        assert!(!refused.status.success(), "{name}: {stderr}");
+        assert!(stderr.contains(&format!("{BUDGET}: ")), "{name}: {stderr}");
+        assert!(stderr.contains(reason), "{name}: {stderr}");
+    }
+}
+
+#[test]
 fn a_budget_id_that_is_not_one_names_no_file() {
     for id in ["../escape", "/abs", "Upper", "", "a/b"] {
         let refused = telemetry::recorded(id).expect_err("not an id");
@@ -276,7 +360,7 @@ fn a_budget_id_that_is_not_unicode_is_refused_rather_than_read_as_absent() {
 fn asset_reports_require_the_full_recorded_workload_before_reporting() {
     let sandbox = Sandbox::new();
     let directory = sandbox.subdirectory("asset-telemetry");
-    let budgets: Value = serde_norway::from_str(include_str!("../../budgets.yaml")).unwrap();
+    let budgets: Value = serde_saphyr::from_str(include_str!("../../budgets.yaml")).unwrap();
     for budget in budgets["budgets"]
         .as_array()
         .unwrap()

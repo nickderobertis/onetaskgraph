@@ -33,6 +33,24 @@ impl Engine {
         }
     }
 
+    /// Pin the reads of project `id` this command makes to `version`, on exactly the terms
+    /// [`Engine::pin`] pins a task's: answered from the cache, with no request, when it holds the
+    /// project at that version or a later one and its source's token covers what is read.
+    pub fn pin_project(&self, id: &GlobalId, version: &str) {
+        if let Some(cache) = self.cache_of(&id.source) {
+            cache.pin_project(&id.native, version);
+        }
+    }
+
+    /// Pin the reads of document `id` this command makes — its fields, the manifest of its
+    /// image assets and their bytes — to `version`, on exactly the terms [`Engine::pin`] pins a
+    /// task's.
+    pub fn pin_document(&self, id: &GlobalId, version: &str) {
+        if let Some(cache) = self.cache_of(&id.source) {
+            cache.pin_document(&id.native, version);
+        }
+    }
+
     /// How the last read of `id` in this command used its source's cache, or `None` for a
     /// source keeping none.
     #[must_use]

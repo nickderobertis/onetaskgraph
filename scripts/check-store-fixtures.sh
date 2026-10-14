@@ -228,6 +228,25 @@ NOT_A_STORE = {
         "pinned schema, while `tests/plugin.rs` reads it back through the plugin's own parsing "
         "and drives the walk over two pages whose comments differ in author, times and body."
     ),
+    "crates/onetaskgraph-github-live/tests/fixtures/session-v3.json": (
+        "Not a store: it holds no items and no query is answered from it. It is the wire golden "
+        "of the live lane's versioned session-accounting record, and `tests/quota.rs` holds it "
+        "to `SessionRecord` by an exact round trip and to `SCHEMA_VERSION` by equality, so a "
+        "record that changed shape fails there rather than by two rows differing."
+    ),
+    "crates/onetaskgraph-local-md/tests/fixtures/plan-store.expected.json": (
+        "Not a store: no query is answered from it. It is what the release before the YAML crate "
+        "moved observed of each record under `tests/fixtures/plan-store` — each read, rewritten "
+        "whole, given a status and spliced back — and `tests/plan_store` compares this release's "
+        "observation of the same records with it by an exact equality per record."
+    ),
+    "crates/onetaskgraph-core/tests/fixtures/template-front-matter.expected.json": (
+        "Not a store: it holds no items and no query is answered from it. It is the order the "
+        "release before the YAML crate moved asked each template under "
+        "`tests/fixtures/template-front-matter` its variables in, and "
+        "`real_templates_are_asked_in_the_order_their_variables_are_declared` in "
+        "`tests/templates.rs` holds every template's prompt order to it by an exact equality."
+    ),
 }
 
 root = pathlib.Path(".")

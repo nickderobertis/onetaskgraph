@@ -51,6 +51,7 @@ fn board_token(
         item,
         comments,
         relationships,
+        facets: github::Facets::new(github::FacetKind::Task, Vec::new(), &[]).digest(),
         repository: Repository::try_from("github.com/acme/widgets".to_owned())
             .expect("a repository origin"),
     })
@@ -76,7 +77,6 @@ fn two_equal_versions_are_equal_and_a_change_orders_them() {
         board_token(at(2), at(1), 2, 0),
         board_token(at(1), at(1), 1, 0),
         board_token(at(1), at(2), 2, 0),
-        board_token(at(1), at(1), 2, 1),
     ] {
         assert_eq!(
             engine.compare_versions(of(&item, &after), of(&item, &before)),
@@ -85,6 +85,16 @@ fn two_equal_versions_are_equal_and_a_change_orders_them() {
         assert_eq!(
             engine.compare_versions(of(&item, &before), of(&item, &after)),
             VersionOrder::Earlier
+        );
+    }
+    // A relationship count that moved orders nothing: a deleted far end lowers it.
+    for moved in [
+        board_token(at(2), at(2), 2, 1),
+        board_token(at(1), at(1), 2, 1),
+    ] {
+        assert_eq!(
+            engine.compare_versions(of(&item, &moved), of(&item, &before)),
+            VersionOrder::Incomparable
         );
     }
 }

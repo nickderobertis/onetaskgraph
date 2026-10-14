@@ -1043,7 +1043,7 @@ pub enum ProjectCommand {
     /// List projects across the selected sources.
     List(ProjectListArgs),
     /// Show one project by its qualified id, `<source>:<native-id>`.
-    Show(ShowArgs),
+    Show(PinnedShowArgs),
     /// Walk one project's dependency edges.
     Deps(DependencyArgs),
     /// Print one project's tasks and their dependency edges as Mermaid flowchart text, or
@@ -1087,7 +1087,7 @@ pub enum DocumentCommand {
     /// List documents across the selected sources.
     List(DocumentListArgs),
     /// Show one document by its qualified id, `<source>:<native-id>`.
-    Show(ShowArgs),
+    Show(PinnedShowArgs),
     /// Copy documents into another configured source, by qualified id.
     Copy(DocumentCopyArgs),
     /// Set one key of one document's metadata, and nothing else about it.
@@ -1369,6 +1369,21 @@ pub struct TaskShowArgs {
     /// A version of the task the caller already holds: answered from the source's local
     /// cache, with no request, when it holds the task at that version or a later one — which
     /// may predate a change nobody has read yet — and from the source otherwise.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `ExpectArgs::expect`.
+    #[arg(long, value_name = "VERSION")]
+    pub pin: Option<String>,
+}
+
+/// `onetaskgraph project show` and `onetaskgraph document show`.
+#[derive(Debug, Args)]
+pub struct PinnedShowArgs {
+    #[command(flatten)]
+    pub item: ShowArgs,
+    /// A version of the item the caller already holds: answered from the source's local
+    /// cache, with no request, for every part its change token covers, when it holds the item
+    /// at that version or a later one — which may predate a change nobody has read yet — and
+    /// from the source otherwise, as `task show --pin` is.
     ///
     /// llmlint: ignore[invalid_states_unrepresentable] — as `ExpectArgs::expect`.
     #[arg(long, value_name = "VERSION")]

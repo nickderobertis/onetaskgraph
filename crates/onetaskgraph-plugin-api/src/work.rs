@@ -166,6 +166,14 @@ pub struct Project {
     /// repeats.
     #[serde(default, deserialize_with = "unique_repositories")]
     pub repositories: Vec<Repository>,
+    /// The project's change token, on exactly the terms of [`Task::version`]: two equal
+    /// versions of one project from one source mean nothing its source's
+    /// [`ProjectVersionCoverage`](crate::ProjectVersionCoverage) covers has changed, and a
+    /// source that cannot promise that leaves it absent, which means *always read it*.
+    /// Absent by default and left out of the wire when absent.
+    // llmlint: ignore[invalid_states_unrepresentable] As `Task::version`: the token is opaque to every caller, so the cache and both SDKs carry it unread, and the one reader that parses it — its own source's `TaskSource::order_versions` — answers `None` for any value it cannot parse.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
     /// Who may read this project, as it was declared, on the terms of
     /// [`Task::classification`]. A project holding a private task or document is private
     /// however this reads, and the engine records it so when it writes the project.
@@ -217,6 +225,12 @@ pub struct Document {
     /// repeats, as a [`Task`]'s.
     #[serde(default, deserialize_with = "unique_repositories")]
     pub repositories: Vec<Repository>,
+    /// The document's change token, on exactly the terms of [`Task::version`] and of what its
+    /// source's [`DocumentVersionCoverage`](crate::DocumentVersionCoverage) covers. Absent by
+    /// default and left out of the wire when absent.
+    // llmlint: ignore[invalid_states_unrepresentable] As `Task::version`: the token is opaque to every caller, so the cache and both SDKs carry it unread, and the one reader that parses it — its own source's `TaskSource::order_versions` — answers `None` for any value it cannot parse.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
     /// Who may read this document, as it was declared, on the terms of
     /// [`Task::classification`].
     #[serde(default, skip_serializing_if = "Classification::is_public")]

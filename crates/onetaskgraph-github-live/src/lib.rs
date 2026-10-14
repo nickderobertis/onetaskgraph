@@ -127,3 +127,6 @@ pub fn titled_stamp<'title>(title: &'title str, design_prefix: &str) -> Option<&
 pub fn labelled_stamp(name: &str) -> Option<&str> {
     name.strip_prefix(LABEL_PREFIX)
 }
+
+/// Internal session accounting shared by the two GitHub journeys and their reporter.
+pub mod quota;

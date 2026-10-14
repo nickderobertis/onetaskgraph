@@ -54,7 +54,7 @@ fn manifest(relative: &str) -> String {
 
 #[test]
 fn every_budget_names_the_one_runner_and_no_shell() {
-    let file: Value = serde_norway::from_str(&manifest("budgets.yaml")).expect("budgets.yaml");
+    let file: Value = serde_saphyr::from_str(&manifest("budgets.yaml")).expect("budgets.yaml");
     let budgets = file["budgets"].as_array().expect("a list of budgets");
     assert!(!budgets.is_empty(), "budgets.yaml declares no budget");
     let first = &budgets[0]["command"];

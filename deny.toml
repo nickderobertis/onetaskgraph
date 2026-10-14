@@ -84,6 +84,17 @@ deny = [
   { crate = "cached", reason = "an in-memory cache would let a second query be answered without re-asking the source" },
   { crate = "lru", reason = "an in-memory cache would let a second query be answered without re-asking the source" },
 
+  # Every YAML read and write goes through serde-saphyr, which is safe Rust. These are the
+  # crates built on libyaml's machine translation into unsafe Rust, unmaintained and flagged
+  # by RUSTSEC-2024-0449, so one re-entering the graph by any route fails this check.
+  { crate = "serde_yaml", reason = "RUSTSEC-2024-0449: built on unsafe-libyaml, the unmaintained machine translation of libyaml into unsafe Rust; YAML goes through serde-saphyr" },
+  { crate = "serde_yaml_ng", reason = "RUSTSEC-2024-0449: built on unsafe-libyaml, the unmaintained machine translation of libyaml into unsafe Rust; YAML goes through serde-saphyr" },
+  { crate = "serde_norway", reason = "RUSTSEC-2024-0449: built on unsafe-libyaml-norway, a fork of the unmaintained machine translation of libyaml into unsafe Rust; YAML goes through serde-saphyr" },
+  { crate = "serde_yml", reason = "RUSTSEC-2024-0449: built on libyml, a fork of the unmaintained machine translation of libyaml into unsafe Rust; YAML goes through serde-saphyr" },
+  { crate = "unsafe-libyaml", reason = "RUSTSEC-2024-0449: the unmaintained machine translation of libyaml into unsafe Rust" },
+  { crate = "unsafe-libyaml-norway", reason = "RUSTSEC-2024-0449: a fork of the unmaintained machine translation of libyaml into unsafe Rust" },
+  { crate = "libyml", reason = "RUSTSEC-2024-0449: a fork of the unmaintained machine translation of libyaml into unsafe Rust" },
+
   # The engine may depend on the contract and on every plugin; nothing may depend on the
   # engine except the binary that runs it and the three test-only e2e suites that drive it in
   # process beside the binary — `onetaskgraph-e2e` (a long-lived caller ending a command) and

@@ -1,0 +1,2831 @@
+[
+  {
+    "sequence": 1,
+    "phase": "Admission",
+    "kind": "Rest",
+    "operation_sha256": "7cfb8f1f9c7d442ace7ecf4036f51902d838f704790acff455ec3e2a9b92561c",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": "Rest"
+  },
+  {
+    "sequence": 2,
+    "phase": "Schema",
+    "kind": "Query",
+    "operation_sha256": "c8a4c4de0da4a5a450e26ac2abe938279ed72f61491bc279e253bd10e57c6728",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 3,
+    "phase": "Schema",
+    "kind": "Query",
+    "operation_sha256": "a6d891ff307d11ff4fc2db2a552181bbd0dbf622056526ce9d103f07652ad7d4",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 4,
+    "phase": "Schema",
+    "kind": "Query",
+    "operation_sha256": "76ca71de88803a4db688b8aeee0c4f363a6b97727e85be41877fd1cdab0428c7",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 5,
+    "phase": "Schema",
+    "kind": "Query",
+    "operation_sha256": "9d6e5cc9b313064e82e205d35e87f52491817fc298806cca9a92ce9ef3a17891",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 6,
+    "phase": "Schema",
+    "kind": "Query",
+    "operation_sha256": "3f3550277f631425c9dbc79e8f85350a9b6f2753faba1fada11c4acb5005f103",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 7,
+    "phase": "Schema",
+    "kind": "Query",
+    "operation_sha256": "46fd6695e053045d9eaf86b5750db54d6c1848383a11ae9ef44ea69e12612422",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 8,
+    "phase": "Schema",
+    "kind": "Query",
+    "operation_sha256": "11f8e216ab2f1bad748eed10c0b53ef3cedc4e327b9bd869b553efc017d0fbcc",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 9,
+    "phase": "Schema",
+    "kind": "Query",
+    "operation_sha256": "2315c12009ff15a8a799edd4d0962b2c89602b52451d1880d405914d8118c81b",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 10,
+    "phase": "Schema",
+    "kind": "Query",
+    "operation_sha256": "c6e60d248265d7c4765efddc82febe7e7b966228f402dfa37e9e0a7bf81f1a2b",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 11,
+    "phase": "Schema",
+    "kind": "Query",
+    "operation_sha256": "091a8457e2bff840b61d940ce203e5483a66863e84b119c890f8477de985ac3f",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 12,
+    "phase": "Reconciliation",
+    "kind": "Query",
+    "operation_sha256": "25ebb299e7c19f1375e7c00f3f4bd8251d89deecbbd69020d025626639dab51d",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 13,
+    "phase": "Reconciliation",
+    "kind": "Query",
+    "operation_sha256": "99d922a7ea8b1583370eac167fe3d053e57b704aaab73613882eac19b2375f4d",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 14,
+    "phase": "Reconciliation",
+    "kind": "Query",
+    "operation_sha256": "bc38b21a63e25eb209819a91f7fdde210313924506a51fab87838cf2ec0c874a",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 15,
+    "phase": "Reconciliation",
+    "kind": "Query",
+    "operation_sha256": "40d37e205b13a68cd7c4c7eaf7ae651a729a9f05b9b250629d1447f43e9eca28",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 16,
+    "phase": "Reconciliation",
+    "kind": "Query",
+    "operation_sha256": "3b24f1043846c74f0f72f27448045c1081b10a19ba960d8729d9cb525e9df128",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 17,
+    "phase": "Reconciliation",
+    "kind": "Query",
+    "operation_sha256": "fe99be9c0d5402df266f5bb9b44abe0833276aa75f03d9a998621d6ccfa18196",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 18,
+    "phase": "Reconciliation",
+    "kind": "Query",
+    "operation_sha256": "d26887c5da199830fc8e6c6ff331db1fb6fda835e2dff222c40267e762533d91",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 19,
+    "phase": "Reconciliation",
+    "kind": "Query",
+    "operation_sha256": "8b26de992c260e7ae09d8fb3b33614a9a5ac64d5091b75c80c28de8d5b67b8f3",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 20,
+    "phase": "Reconciliation",
+    "kind": "Query",
+    "operation_sha256": "d7bda0463ed4f062a2bd7ccf7f65d45b8aa7c933029799eeb54b2f81dff83862",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 21,
+    "phase": "Reconciliation",
+    "kind": "Query",
+    "operation_sha256": "85632d1f1a59fbf45810496bd9a0771443d3052dd07ec122f3d65bb320e7acc0",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 22,
+    "phase": "Reconciliation",
+    "kind": "Query",
+    "operation_sha256": "b0b648df1806d1151a2942abec2d9ee9989857f6f9059631962a20ebd838164b",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 23,
+    "phase": "Reconciliation",
+    "kind": "Query",
+    "operation_sha256": "cf9ca8716c96d483c1b65700b55a486e410b7eb906f2644e15307baf23b631f2",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 24,
+    "phase": "Reconciliation",
+    "kind": "Query",
+    "operation_sha256": "55e209c63f14dc787dfddb5c8db7cf56752db85171922bf1363156a08ad4b435",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 25,
+    "phase": "Reconciliation",
+    "kind": "Query",
+    "operation_sha256": "02557a2307b4ea62c1184fcf9a14ce0418928fce39d1e3aad460c5c6b0fd66a8",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 26,
+    "phase": "Reconciliation",
+    "kind": "Query",
+    "operation_sha256": "c95ff5c31279411ed12273136bbec33ec527d590b81b52c8d7e847240bf1e4e9",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 27,
+    "phase": "Reconciliation",
+    "kind": "Query",
+    "operation_sha256": "781f865ea84e956dc6b4d868bbe70082749e52db9eebf42406f283183f0740d5",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 28,
+    "phase": "Reconciliation",
+    "kind": "Query",
+    "operation_sha256": "acbb62e6cbe795c2aa50aa0b1bcd9479e8337774cbb20a05acee5e4616ab814d",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 29,
+    "phase": "Reconciliation",
+    "kind": "Query",
+    "operation_sha256": "e97e2b79d39a707c5c1b078e5f6bcd03783139b64e617b5ced1aa5cbe3cfabbb",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 30,
+    "phase": "Reconciliation",
+    "kind": "Query",
+    "operation_sha256": "2113b3fc9112a7957fd3751238b26e2e8fd420de976e887b0b8b3b2c40e7a1a2",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 31,
+    "phase": "Reconciliation",
+    "kind": "Query",
+    "operation_sha256": "25ebb299e7c19f1375e7c00f3f4bd8251d89deecbbd69020d025626639dab51d",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 32,
+    "phase": "Setup",
+    "kind": "Query",
+    "operation_sha256": "a0c342074b68f7b2adddfbc3aa7782176d99805c8f12d69acb0dd32fc6092d99",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 33,
+    "phase": "Setup",
+    "kind": "Query",
+    "operation_sha256": "e4ff4bf561beee4714d4c61e26903114aea60807a149e0a13cc0f5bd0c5321ea",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 34,
+    "phase": "Setup",
+    "kind": "Query",
+    "operation_sha256": "0c457d82d064a2c16f98aa680efd9a9c61763b40a7b0dbb75ab937c764f888a7",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 35,
+    "phase": "Setup",
+    "kind": "Query",
+    "operation_sha256": "4418eecba0026f38ea7d200371c673586f289b213fd5a364a252cf761081e8b5",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 36,
+    "phase": "Setup",
+    "kind": "Query",
+    "operation_sha256": "e4ff4bf561beee4714d4c61e26903114aea60807a149e0a13cc0f5bd0c5321ea",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 37,
+    "phase": "Setup",
+    "kind": "Query",
+    "operation_sha256": "4418eecba0026f38ea7d200371c673586f289b213fd5a364a252cf761081e8b5",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 38,
+    "phase": "Setup",
+    "kind": "Query",
+    "operation_sha256": "a2737a76affd86e9157f1191b538085e17a3c14180bf547720ba92bc31dd3626",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 39,
+    "phase": "Setup",
+    "kind": "Query",
+    "operation_sha256": "1150b46c3cdfeeb2d6532fde28c6fb094a21bec4ac2ff717517feb59fda8b9c9",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 40,
+    "phase": "Setup",
+    "kind": "Query",
+    "operation_sha256": "a86f3f0ff79aaa6e9d30a0f06702ac412cbba76192ff5d89430a91210b4ed2e0",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 41,
+    "phase": "Setup",
+    "kind": "Mutation",
+    "operation_sha256": "843536d64bbfedd88b957aa9d0a1ffcf9054f31e64e311d20b95169085dcfaa5",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 42,
+    "phase": "Setup",
+    "kind": "Mutation",
+    "operation_sha256": "eb74272ca2fc11aa731ca9103eebf7e4c41cace3fcd855e7e7066aa02139b3bd",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 43,
+    "phase": "Setup",
+    "kind": "Mutation",
+    "operation_sha256": "0513b01e9c72761fd555386b18ed2f9a3ecf156f547a7fe093938bf8a4484ba6",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 44,
+    "phase": "Setup",
+    "kind": "Query",
+    "operation_sha256": "0c457d82d064a2c16f98aa680efd9a9c61763b40a7b0dbb75ab937c764f888a7",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 45,
+    "phase": "Setup",
+    "kind": "Mutation",
+    "operation_sha256": "843536d64bbfedd88b957aa9d0a1ffcf9054f31e64e311d20b95169085dcfaa5",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 46,
+    "phase": "Setup",
+    "kind": "Mutation",
+    "operation_sha256": "eb74272ca2fc11aa731ca9103eebf7e4c41cace3fcd855e7e7066aa02139b3bd",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 47,
+    "phase": "Setup",
+    "kind": "Mutation",
+    "operation_sha256": "0513b01e9c72761fd555386b18ed2f9a3ecf156f547a7fe093938bf8a4484ba6",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 48,
+    "phase": "Setup",
+    "kind": "Mutation",
+    "operation_sha256": "230df812850a95075333550aa9d3f0771f11cd4acf435ffb08ff92235428351d",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 49,
+    "phase": "Setup",
+    "kind": "Mutation",
+    "operation_sha256": "843536d64bbfedd88b957aa9d0a1ffcf9054f31e64e311d20b95169085dcfaa5",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 50,
+    "phase": "Setup",
+    "kind": "Mutation",
+    "operation_sha256": "eb74272ca2fc11aa731ca9103eebf7e4c41cace3fcd855e7e7066aa02139b3bd",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 51,
+    "phase": "Setup",
+    "kind": "Mutation",
+    "operation_sha256": "0513b01e9c72761fd555386b18ed2f9a3ecf156f547a7fe093938bf8a4484ba6",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 52,
+    "phase": "Setup",
+    "kind": "Mutation",
+    "operation_sha256": "13eb479ca5a8243a2caa23c6bc979983a5c28f60eb6c4f8717b9598e55e52797",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 53,
+    "phase": "Setup",
+    "kind": "Query",
+    "operation_sha256": "0c457d82d064a2c16f98aa680efd9a9c61763b40a7b0dbb75ab937c764f888a7",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 54,
+    "phase": "Setup",
+    "kind": "Mutation",
+    "operation_sha256": "843536d64bbfedd88b957aa9d0a1ffcf9054f31e64e311d20b95169085dcfaa5",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 55,
+    "phase": "Setup",
+    "kind": "Mutation",
+    "operation_sha256": "eb74272ca2fc11aa731ca9103eebf7e4c41cace3fcd855e7e7066aa02139b3bd",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 56,
+    "phase": "Setup",
+    "kind": "Mutation",
+    "operation_sha256": "0513b01e9c72761fd555386b18ed2f9a3ecf156f547a7fe093938bf8a4484ba6",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 57,
+    "phase": "Setup",
+    "kind": "Mutation",
+    "operation_sha256": "13eb479ca5a8243a2caa23c6bc979983a5c28f60eb6c4f8717b9598e55e52797",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 58,
+    "phase": "Setup",
+    "kind": "Mutation",
+    "operation_sha256": "230df812850a95075333550aa9d3f0771f11cd4acf435ffb08ff92235428351d",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 59,
+    "phase": "Setup",
+    "kind": "Mutation",
+    "operation_sha256": "843536d64bbfedd88b957aa9d0a1ffcf9054f31e64e311d20b95169085dcfaa5",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 60,
+    "phase": "Setup",
+    "kind": "Mutation",
+    "operation_sha256": "eb74272ca2fc11aa731ca9103eebf7e4c41cace3fcd855e7e7066aa02139b3bd",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 61,
+    "phase": "Setup",
+    "kind": "Mutation",
+    "operation_sha256": "0513b01e9c72761fd555386b18ed2f9a3ecf156f547a7fe093938bf8a4484ba6",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 62,
+    "phase": "Setup",
+    "kind": "Mutation",
+    "operation_sha256": "9553cc7717c561597d2fd547f5f70893422476d372cf0d52022d2edbe7a43982",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 63,
+    "phase": "Setup",
+    "kind": "Rest",
+    "operation_sha256": "b449d2bdbc9ef9b4c1715603fbe20d0c3e1323aa325c63b728cb8bcd1a8761b0",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": "Rest"
+  },
+  {
+    "sequence": 64,
+    "phase": "Setup",
+    "kind": "Mutation",
+    "operation_sha256": "e5f6581d8c577d5a3e8019ec404d002da974965cb28d9869f0a022af82faf356",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 65,
+    "phase": "Setup",
+    "kind": "Query",
+    "operation_sha256": "0c457d82d064a2c16f98aa680efd9a9c61763b40a7b0dbb75ab937c764f888a7",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 66,
+    "phase": "Setup",
+    "kind": "Query",
+    "operation_sha256": "0c457d82d064a2c16f98aa680efd9a9c61763b40a7b0dbb75ab937c764f888a7",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 67,
+    "phase": "Capabilities",
+    "kind": "Query",
+    "operation_sha256": "4418eecba0026f38ea7d200371c673586f289b213fd5a364a252cf761081e8b5",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 68,
+    "phase": "Capabilities",
+    "kind": "Query",
+    "operation_sha256": "a86f3f0ff79aaa6e9d30a0f06702ac412cbba76192ff5d89430a91210b4ed2e0",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 69,
+    "phase": "Capabilities",
+    "kind": "Mutation",
+    "operation_sha256": "843536d64bbfedd88b957aa9d0a1ffcf9054f31e64e311d20b95169085dcfaa5",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 70,
+    "phase": "Capabilities",
+    "kind": "Mutation",
+    "operation_sha256": "eb74272ca2fc11aa731ca9103eebf7e4c41cace3fcd855e7e7066aa02139b3bd",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 71,
+    "phase": "Capabilities",
+    "kind": "Mutation",
+    "operation_sha256": "13eb479ca5a8243a2caa23c6bc979983a5c28f60eb6c4f8717b9598e55e52797",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 72,
+    "phase": "Capabilities",
+    "kind": "Query",
+    "operation_sha256": "0c457d82d064a2c16f98aa680efd9a9c61763b40a7b0dbb75ab937c764f888a7",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 73,
+    "phase": "Capabilities",
+    "kind": "Query",
+    "operation_sha256": "0c457d82d064a2c16f98aa680efd9a9c61763b40a7b0dbb75ab937c764f888a7",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 74,
+    "phase": "Capabilities",
+    "kind": "Query",
+    "operation_sha256": "0c457d82d064a2c16f98aa680efd9a9c61763b40a7b0dbb75ab937c764f888a7",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 75,
+    "phase": "Capabilities",
+    "kind": "Query",
+    "operation_sha256": "1977b9b516a55801d31b3f17631b83473a0ee8c08ae0d0dfb0f6cd134f4ad206",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 76,
+    "phase": "Capabilities",
+    "kind": "Query",
+    "operation_sha256": "1977b9b516a55801d31b3f17631b83473a0ee8c08ae0d0dfb0f6cd134f4ad206",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 77,
+    "phase": "Capabilities",
+    "kind": "Query",
+    "operation_sha256": "e4ff4bf561beee4714d4c61e26903114aea60807a149e0a13cc0f5bd0c5321ea",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 78,
+    "phase": "Capabilities",
+    "kind": "Query",
+    "operation_sha256": "0c457d82d064a2c16f98aa680efd9a9c61763b40a7b0dbb75ab937c764f888a7",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 79,
+    "phase": "Capabilities",
+    "kind": "Query",
+    "operation_sha256": "e55e55117bf771f536d66b3ffb5fe941bb6ba6e3c26d79605f3e2d9ed9e35008",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 80,
+    "phase": "Capabilities",
+    "kind": "Query",
+    "operation_sha256": "e55e55117bf771f536d66b3ffb5fe941bb6ba6e3c26d79605f3e2d9ed9e35008",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 81,
+    "phase": "Capabilities",
+    "kind": "Query",
+    "operation_sha256": "e55e55117bf771f536d66b3ffb5fe941bb6ba6e3c26d79605f3e2d9ed9e35008",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 82,
+    "phase": "Capabilities",
+    "kind": "Query",
+    "operation_sha256": "e55e55117bf771f536d66b3ffb5fe941bb6ba6e3c26d79605f3e2d9ed9e35008",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 83,
+    "phase": "Capabilities",
+    "kind": "Query",
+    "operation_sha256": "df8f138d170c99b7a7b88254fff8628ad66716bd02d1ff61453f4629f1ddda2d",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 84,
+    "phase": "Capabilities",
+    "kind": "Query",
+    "operation_sha256": "df8f138d170c99b7a7b88254fff8628ad66716bd02d1ff61453f4629f1ddda2d",
+    "attempt": 1,
+    "outcome": "GraphqlError",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 85,
+    "phase": "Capabilities",
+    "kind": "Query",
+    "operation_sha256": "4418eecba0026f38ea7d200371c673586f289b213fd5a364a252cf761081e8b5",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 86,
+    "phase": "Capabilities",
+    "kind": "Query",
+    "operation_sha256": "4418eecba0026f38ea7d200371c673586f289b213fd5a364a252cf761081e8b5",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 87,
+    "phase": "Capabilities",
+    "kind": "Query",
+    "operation_sha256": "81a1db0d9a65751b8f622ae0a1eb39d790696bd05007b33aa7b3f3796ffd2fd4",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 88,
+    "phase": "Capabilities",
+    "kind": "Mutation",
+    "operation_sha256": "0513b01e9c72761fd555386b18ed2f9a3ecf156f547a7fe093938bf8a4484ba6",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 89,
+    "phase": "Capabilities",
+    "kind": "Mutation",
+    "operation_sha256": "9553cc7717c561597d2fd547f5f70893422476d372cf0d52022d2edbe7a43982",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 90,
+    "phase": "Capabilities",
+    "kind": "Query",
+    "operation_sha256": "81a1db0d9a65751b8f622ae0a1eb39d790696bd05007b33aa7b3f3796ffd2fd4",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 91,
+    "phase": "CommentActivity",
+    "kind": "Mutation",
+    "operation_sha256": "6177a3a445176f47a1856dedcc616039fdafbc6cb3ba65a9cd9caea47f94efb1",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 92,
+    "phase": "CommentActivity",
+    "kind": "Query",
+    "operation_sha256": "4418eecba0026f38ea7d200371c673586f289b213fd5a364a252cf761081e8b5",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 93,
+    "phase": "CommentActivity",
+    "kind": "Query",
+    "operation_sha256": "0c457d82d064a2c16f98aa680efd9a9c61763b40a7b0dbb75ab937c764f888a7",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 94,
+    "phase": "CommentActivity",
+    "kind": "Query",
+    "operation_sha256": "4418eecba0026f38ea7d200371c673586f289b213fd5a364a252cf761081e8b5",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 95,
+    "phase": "CommentActivity",
+    "kind": "Query",
+    "operation_sha256": "f622038538803dbed2249300b821c7ce9d8ee0d8a3ad687f63788edc23179046",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 96,
+    "phase": "CommentActivity",
+    "kind": "Query",
+    "operation_sha256": "156b08b8a9fd952b67de5bfb80096043bf9f6ff9f37ff8a9999abbd8424cedad",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 97,
+    "phase": "CommentActivity",
+    "kind": "Mutation",
+    "operation_sha256": "58c1471ac1318bd0b3dfc021366a9353911eeb690cf3b81b8329dcf68477254e",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 98,
+    "phase": "CommentActivity",
+    "kind": "Query",
+    "operation_sha256": "4418eecba0026f38ea7d200371c673586f289b213fd5a364a252cf761081e8b5",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 99,
+    "phase": "CommentActivity",
+    "kind": "Mutation",
+    "operation_sha256": "6177a3a445176f47a1856dedcc616039fdafbc6cb3ba65a9cd9caea47f94efb1",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 100,
+    "phase": "CommentActivity",
+    "kind": "Query",
+    "operation_sha256": "0c457d82d064a2c16f98aa680efd9a9c61763b40a7b0dbb75ab937c764f888a7",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 101,
+    "phase": "CommentActivity",
+    "kind": "Query",
+    "operation_sha256": "f622038538803dbed2249300b821c7ce9d8ee0d8a3ad687f63788edc23179046",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 102,
+    "phase": "CommentActivity",
+    "kind": "Query",
+    "operation_sha256": "f622038538803dbed2249300b821c7ce9d8ee0d8a3ad687f63788edc23179046",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 103,
+    "phase": "ChangeToken",
+    "kind": "Query",
+    "operation_sha256": "c59bc0992fca239256a044fbabbf18ba5a4655e5b2ff9cead4b86a91f55ee4b1",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 104,
+    "phase": "ChangeToken",
+    "kind": "Mutation",
+    "operation_sha256": "6177a3a445176f47a1856dedcc616039fdafbc6cb3ba65a9cd9caea47f94efb1",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 105,
+    "phase": "ChangeToken",
+    "kind": "Query",
+    "operation_sha256": "c59bc0992fca239256a044fbabbf18ba5a4655e5b2ff9cead4b86a91f55ee4b1",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 106,
+    "phase": "ChangeToken",
+    "kind": "Query",
+    "operation_sha256": "156b08b8a9fd952b67de5bfb80096043bf9f6ff9f37ff8a9999abbd8424cedad",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 107,
+    "phase": "ChangeToken",
+    "kind": "Mutation",
+    "operation_sha256": "58c1471ac1318bd0b3dfc021366a9353911eeb690cf3b81b8329dcf68477254e",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 108,
+    "phase": "ChangeToken",
+    "kind": "Query",
+    "operation_sha256": "c59bc0992fca239256a044fbabbf18ba5a4655e5b2ff9cead4b86a91f55ee4b1",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 109,
+    "phase": "ChangeToken",
+    "kind": "Query",
+    "operation_sha256": "156b08b8a9fd952b67de5bfb80096043bf9f6ff9f37ff8a9999abbd8424cedad",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 110,
+    "phase": "ChangeToken",
+    "kind": "Mutation",
+    "operation_sha256": "87d170224673a29fc89b6489857b73b57c780bbd2fd0cea98cbc4720d81b28a7",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 111,
+    "phase": "ChangeToken",
+    "kind": "Query",
+    "operation_sha256": "c59bc0992fca239256a044fbabbf18ba5a4655e5b2ff9cead4b86a91f55ee4b1",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 112,
+    "phase": "ChangeToken",
+    "kind": "Mutation",
+    "operation_sha256": "9553cc7717c561597d2fd547f5f70893422476d372cf0d52022d2edbe7a43982",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 113,
+    "phase": "ChangeToken",
+    "kind": "Query",
+    "operation_sha256": "c59bc0992fca239256a044fbabbf18ba5a4655e5b2ff9cead4b86a91f55ee4b1",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 114,
+    "phase": "ChangeToken",
+    "kind": "Mutation",
+    "operation_sha256": "9553cc7717c561597d2fd547f5f70893422476d372cf0d52022d2edbe7a43982",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 115,
+    "phase": "ChangeToken",
+    "kind": "Query",
+    "operation_sha256": "c59bc0992fca239256a044fbabbf18ba5a4655e5b2ff9cead4b86a91f55ee4b1",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 116,
+    "phase": "ChangeToken",
+    "kind": "Mutation",
+    "operation_sha256": "e5f6581d8c577d5a3e8019ec404d002da974965cb28d9869f0a022af82faf356",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 117,
+    "phase": "ChangeToken",
+    "kind": "Query",
+    "operation_sha256": "c59bc0992fca239256a044fbabbf18ba5a4655e5b2ff9cead4b86a91f55ee4b1",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 118,
+    "phase": "ChangeToken",
+    "kind": "Mutation",
+    "operation_sha256": "9553cc7717c561597d2fd547f5f70893422476d372cf0d52022d2edbe7a43982",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 119,
+    "phase": "ChangeToken",
+    "kind": "Query",
+    "operation_sha256": "c59bc0992fca239256a044fbabbf18ba5a4655e5b2ff9cead4b86a91f55ee4b1",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 120,
+    "phase": "ChangeToken",
+    "kind": "Query",
+    "operation_sha256": "1150b46c3cdfeeb2d6532fde28c6fb094a21bec4ac2ff717517feb59fda8b9c9",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 121,
+    "phase": "ChangeToken",
+    "kind": "Query",
+    "operation_sha256": "f30265c09c30312b90d933c805ff819069e1970830762cf90b8e2e6c98d85fa1",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 122,
+    "phase": "ChangeToken",
+    "kind": "Mutation",
+    "operation_sha256": "7476135e066bc4b580bd9dfa09d74633499901e0273369ef86bdb7aea6266cc7",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 123,
+    "phase": "ChangeToken",
+    "kind": "Query",
+    "operation_sha256": "c59bc0992fca239256a044fbabbf18ba5a4655e5b2ff9cead4b86a91f55ee4b1",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 124,
+    "phase": "ChangeToken",
+    "kind": "Query",
+    "operation_sha256": "98ee6ba23e312eba91f9b62bf4176f827202ff8ba9ba8190664a7252b9d04405",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 125,
+    "phase": "ChangeToken",
+    "kind": "Query",
+    "operation_sha256": "e55e55117bf771f536d66b3ffb5fe941bb6ba6e3c26d79605f3e2d9ed9e35008",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 126,
+    "phase": "ChangeToken",
+    "kind": "Mutation",
+    "operation_sha256": "230df812850a95075333550aa9d3f0771f11cd4acf435ffb08ff92235428351d",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 127,
+    "phase": "ChangeToken",
+    "kind": "Query",
+    "operation_sha256": "c59bc0992fca239256a044fbabbf18ba5a4655e5b2ff9cead4b86a91f55ee4b1",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 128,
+    "phase": "ChangeToken",
+    "kind": "Query",
+    "operation_sha256": "4418eecba0026f38ea7d200371c673586f289b213fd5a364a252cf761081e8b5",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 129,
+    "phase": "ChangeToken",
+    "kind": "Query",
+    "operation_sha256": "e55e55117bf771f536d66b3ffb5fe941bb6ba6e3c26d79605f3e2d9ed9e35008",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 130,
+    "phase": "ChangeToken",
+    "kind": "Mutation",
+    "operation_sha256": "a5272831ad33eff97f7283b36d90e3be9f3d67f2d5fa1e5437cba4ac61874424",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 131,
+    "phase": "ChangeToken",
+    "kind": "Query",
+    "operation_sha256": "c59bc0992fca239256a044fbabbf18ba5a4655e5b2ff9cead4b86a91f55ee4b1",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 132,
+    "phase": "ChangeToken",
+    "kind": "Query",
+    "operation_sha256": "4418eecba0026f38ea7d200371c673586f289b213fd5a364a252cf761081e8b5",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 133,
+    "phase": "ChangeToken",
+    "kind": "Query",
+    "operation_sha256": "e55e55117bf771f536d66b3ffb5fe941bb6ba6e3c26d79605f3e2d9ed9e35008",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 134,
+    "phase": "ChangeToken",
+    "kind": "Mutation",
+    "operation_sha256": "a5272831ad33eff97f7283b36d90e3be9f3d67f2d5fa1e5437cba4ac61874424",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 135,
+    "phase": "ChangeToken",
+    "kind": "Mutation",
+    "operation_sha256": "230df812850a95075333550aa9d3f0771f11cd4acf435ffb08ff92235428351d",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 136,
+    "phase": "ChangeToken",
+    "kind": "Query",
+    "operation_sha256": "c59bc0992fca239256a044fbabbf18ba5a4655e5b2ff9cead4b86a91f55ee4b1",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 137,
+    "phase": "ChangeToken",
+    "kind": "Mutation",
+    "operation_sha256": "22dfead0398e5ba6184a162d035ac46e291352cd51cab39f6be451cc1b924ad3",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 138,
+    "phase": "ChangeToken",
+    "kind": "Query",
+    "operation_sha256": "c59bc0992fca239256a044fbabbf18ba5a4655e5b2ff9cead4b86a91f55ee4b1",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 139,
+    "phase": "ChangeToken",
+    "kind": "Mutation",
+    "operation_sha256": "13eb479ca5a8243a2caa23c6bc979983a5c28f60eb6c4f8717b9598e55e52797",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 140,
+    "phase": "ChangeToken",
+    "kind": "Query",
+    "operation_sha256": "c59bc0992fca239256a044fbabbf18ba5a4655e5b2ff9cead4b86a91f55ee4b1",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 141,
+    "phase": "ChangeToken",
+    "kind": "Mutation",
+    "operation_sha256": "0513b01e9c72761fd555386b18ed2f9a3ecf156f547a7fe093938bf8a4484ba6",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 142,
+    "phase": "ChangeToken",
+    "kind": "Mutation",
+    "operation_sha256": "9553cc7717c561597d2fd547f5f70893422476d372cf0d52022d2edbe7a43982",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 143,
+    "phase": "ChangeToken",
+    "kind": "Query",
+    "operation_sha256": "c59bc0992fca239256a044fbabbf18ba5a4655e5b2ff9cead4b86a91f55ee4b1",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 144,
+    "phase": "Cleanup",
+    "kind": "Query",
+    "operation_sha256": "a3cdd14d2fada703ec91f801a34c88486399749442354f2dbaf875cdc33388f3",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 145,
+    "phase": "Cleanup",
+    "kind": "Mutation",
+    "operation_sha256": "64a56b8cfd71af6230500d894f8f03d05a69294fa0b9b608d73ba37357953364",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 146,
+    "phase": "Cleanup",
+    "kind": "Mutation",
+    "operation_sha256": "f416c6c12d297febd40644f41640efe3602edf111fee8d2be28d066573f3d570",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 147,
+    "phase": "Cleanup",
+    "kind": "Mutation",
+    "operation_sha256": "64a56b8cfd71af6230500d894f8f03d05a69294fa0b9b608d73ba37357953364",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 148,
+    "phase": "Cleanup",
+    "kind": "Mutation",
+    "operation_sha256": "f416c6c12d297febd40644f41640efe3602edf111fee8d2be28d066573f3d570",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 149,
+    "phase": "Cleanup",
+    "kind": "Mutation",
+    "operation_sha256": "64a56b8cfd71af6230500d894f8f03d05a69294fa0b9b608d73ba37357953364",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 150,
+    "phase": "Cleanup",
+    "kind": "Mutation",
+    "operation_sha256": "f416c6c12d297febd40644f41640efe3602edf111fee8d2be28d066573f3d570",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 151,
+    "phase": "Cleanup",
+    "kind": "Mutation",
+    "operation_sha256": "64a56b8cfd71af6230500d894f8f03d05a69294fa0b9b608d73ba37357953364",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 152,
+    "phase": "Cleanup",
+    "kind": "Mutation",
+    "operation_sha256": "f416c6c12d297febd40644f41640efe3602edf111fee8d2be28d066573f3d570",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 153,
+    "phase": "Cleanup",
+    "kind": "Mutation",
+    "operation_sha256": "64a56b8cfd71af6230500d894f8f03d05a69294fa0b9b608d73ba37357953364",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 154,
+    "phase": "Cleanup",
+    "kind": "Mutation",
+    "operation_sha256": "f416c6c12d297febd40644f41640efe3602edf111fee8d2be28d066573f3d570",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 155,
+    "phase": "Cleanup",
+    "kind": "Mutation",
+    "operation_sha256": "64a56b8cfd71af6230500d894f8f03d05a69294fa0b9b608d73ba37357953364",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 156,
+    "phase": "Cleanup",
+    "kind": "Mutation",
+    "operation_sha256": "f416c6c12d297febd40644f41640efe3602edf111fee8d2be28d066573f3d570",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 157,
+    "phase": "Cleanup",
+    "kind": "Query",
+    "operation_sha256": "a3cdd14d2fada703ec91f801a34c88486399749442354f2dbaf875cdc33388f3",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 158,
+    "phase": "Cleanup",
+    "kind": "Rest",
+    "operation_sha256": "7bf4f32ea53d8605e54abadec2a6330f623ec2232ef7d365bdef7d9dbbb1b433",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": "Rest"
+  },
+  {
+    "sequence": 159,
+    "phase": "Cleanup",
+    "kind": "Rest",
+    "operation_sha256": "a92a741d2eff00f373df163b64adcc480e2ec4d28b7d8e736736c4855cda92ed",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": "Rest"
+  },
+  {
+    "sequence": 160,
+    "phase": "OrphanRecovery",
+    "kind": "Query",
+    "operation_sha256": "a3cdd14d2fada703ec91f801a34c88486399749442354f2dbaf875cdc33388f3",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 161,
+    "phase": "OrphanRecovery",
+    "kind": "Rest",
+    "operation_sha256": "7bf4f32ea53d8605e54abadec2a6330f623ec2232ef7d365bdef7d9dbbb1b433",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": "Rest"
+  },
+  {
+    "sequence": 1,
+    "phase": "Admission",
+    "kind": "Rest",
+    "operation_sha256": "7cfb8f1f9c7d442ace7ecf4036f51902d838f704790acff455ec3e2a9b92561c",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": "Rest"
+  },
+  {
+    "sequence": 2,
+    "phase": "AssetSetup",
+    "kind": "Query",
+    "operation_sha256": "83f2d3b0d30101113800ebd5597d087a425a799f81815664af62d647c0599dda",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 3,
+    "phase": "AssetTask",
+    "kind": "Query",
+    "operation_sha256": "a86f3f0ff79aaa6e9d30a0f06702ac412cbba76192ff5d89430a91210b4ed2e0",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 4,
+    "phase": "AssetTask",
+    "kind": "Rest",
+    "operation_sha256": "068c258372bd50b422ec437d659e17c5265d0170f873eb0f5d09ea6a180ee96c",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": "Rest"
+  },
+  {
+    "sequence": 5,
+    "phase": "AssetTask",
+    "kind": "Rest",
+    "operation_sha256": "7f347d9f36b8e409ade36707719a11977dbf5f46ae62a7f81b1e635cfaafd5d0",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": "Rest"
+  },
+  {
+    "sequence": 6,
+    "phase": "AssetTask",
+    "kind": "Rest",
+    "operation_sha256": "8239faf11d79b816b829b57da78367f8493cdb3ad4f90efa5986b04d93ff9857",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": "Rest"
+  },
+  {
+    "sequence": 7,
+    "phase": "AssetTask",
+    "kind": "Rest",
+    "operation_sha256": "7f347d9f36b8e409ade36707719a11977dbf5f46ae62a7f81b1e635cfaafd5d0",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": "Rest"
+  },
+  {
+    "sequence": 8,
+    "phase": "AssetTask",
+    "kind": "Rest",
+    "operation_sha256": "8239faf11d79b816b829b57da78367f8493cdb3ad4f90efa5986b04d93ff9857",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": "Rest"
+  },
+  {
+    "sequence": 9,
+    "phase": "AssetTask",
+    "kind": "Mutation",
+    "operation_sha256": "843536d64bbfedd88b957aa9d0a1ffcf9054f31e64e311d20b95169085dcfaa5",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 10,
+    "phase": "AssetTask",
+    "kind": "Mutation",
+    "operation_sha256": "eb74272ca2fc11aa731ca9103eebf7e4c41cace3fcd855e7e7066aa02139b3bd",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 11,
+    "phase": "AssetTask",
+    "kind": "Mutation",
+    "operation_sha256": "1f0f808d6864737f6c10d3519fa111a6d4b39b8b256967af9b9fcc94d7dd66ee",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 12,
+    "phase": "AssetTask",
+    "kind": "Rest",
+    "operation_sha256": "8239faf11d79b816b829b57da78367f8493cdb3ad4f90efa5986b04d93ff9857",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": "Rest"
+  },
+  {
+    "sequence": 13,
+    "phase": "AssetTask",
+    "kind": "Rest",
+    "operation_sha256": "8239faf11d79b816b829b57da78367f8493cdb3ad4f90efa5986b04d93ff9857",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": "Rest"
+  },
+  {
+    "sequence": 14,
+    "phase": "AssetTask",
+    "kind": "Query",
+    "operation_sha256": "4418eecba0026f38ea7d200371c673586f289b213fd5a364a252cf761081e8b5",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 15,
+    "phase": "AssetTask",
+    "kind": "Mutation",
+    "operation_sha256": "9553cc7717c561597d2fd547f5f70893422476d372cf0d52022d2edbe7a43982",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 16,
+    "phase": "AssetDocument",
+    "kind": "Query",
+    "operation_sha256": "83f2d3b0d30101113800ebd5597d087a425a799f81815664af62d647c0599dda",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 17,
+    "phase": "AssetDocument",
+    "kind": "Rest",
+    "operation_sha256": "7f347d9f36b8e409ade36707719a11977dbf5f46ae62a7f81b1e635cfaafd5d0",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": "Rest"
+  },
+  {
+    "sequence": 18,
+    "phase": "AssetDocument",
+    "kind": "Rest",
+    "operation_sha256": "8239faf11d79b816b829b57da78367f8493cdb3ad4f90efa5986b04d93ff9857",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": "Rest"
+  },
+  {
+    "sequence": 19,
+    "phase": "AssetDocument",
+    "kind": "Rest",
+    "operation_sha256": "7f347d9f36b8e409ade36707719a11977dbf5f46ae62a7f81b1e635cfaafd5d0",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": "Rest"
+  },
+  {
+    "sequence": 20,
+    "phase": "AssetDocument",
+    "kind": "Rest",
+    "operation_sha256": "8239faf11d79b816b829b57da78367f8493cdb3ad4f90efa5986b04d93ff9857",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": "Rest"
+  },
+  {
+    "sequence": 21,
+    "phase": "AssetDocument",
+    "kind": "Mutation",
+    "operation_sha256": "843536d64bbfedd88b957aa9d0a1ffcf9054f31e64e311d20b95169085dcfaa5",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 22,
+    "phase": "AssetDocument",
+    "kind": "Mutation",
+    "operation_sha256": "eb74272ca2fc11aa731ca9103eebf7e4c41cace3fcd855e7e7066aa02139b3bd",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 23,
+    "phase": "AssetDocument",
+    "kind": "Mutation",
+    "operation_sha256": "0513b01e9c72761fd555386b18ed2f9a3ecf156f547a7fe093938bf8a4484ba6",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 24,
+    "phase": "AssetDocument",
+    "kind": "Rest",
+    "operation_sha256": "8239faf11d79b816b829b57da78367f8493cdb3ad4f90efa5986b04d93ff9857",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": "Rest"
+  },
+  {
+    "sequence": 25,
+    "phase": "AssetDocument",
+    "kind": "Rest",
+    "operation_sha256": "8239faf11d79b816b829b57da78367f8493cdb3ad4f90efa5986b04d93ff9857",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": "Rest"
+  },
+  {
+    "sequence": 26,
+    "phase": "AssetDocument",
+    "kind": "Query",
+    "operation_sha256": "4418eecba0026f38ea7d200371c673586f289b213fd5a364a252cf761081e8b5",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 27,
+    "phase": "Cleanup",
+    "kind": "Query",
+    "operation_sha256": "48109d7300590f0a61394cb0359c8084ab2d3f4f4ed2a00917bdb0d869a67410",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 28,
+    "phase": "Cleanup",
+    "kind": "Query",
+    "operation_sha256": "4418eecba0026f38ea7d200371c673586f289b213fd5a364a252cf761081e8b5",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 29,
+    "phase": "Cleanup",
+    "kind": "Mutation",
+    "operation_sha256": "f416c6c12d297febd40644f41640efe3602edf111fee8d2be28d066573f3d570",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  },
+  {
+    "sequence": 30,
+    "phase": "Cleanup",
+    "kind": "Query",
+    "operation_sha256": "48109d7300590f0a61394cb0359c8084ab2d3f4f4ed2a00917bdb0d869a67410",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 31,
+    "phase": "Cleanup",
+    "kind": "Query",
+    "operation_sha256": "4418eecba0026f38ea7d200371c673586f289b213fd5a364a252cf761081e8b5",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "ReportedQuery": {
+        "points": 1
+      }
+    }
+  },
+  {
+    "sequence": 32,
+    "phase": "Cleanup",
+    "kind": "Mutation",
+    "operation_sha256": "f416c6c12d297febd40644f41640efe3602edf111fee8d2be28d066573f3d570",
+    "attempt": 1,
+    "outcome": "Success",
+    "charge": {
+      "Mutation": {
+        "points": 1,
+        "basis": {
+          "Modelled": {
+            "url": "https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api",
+            "points_per_request": 1
+          }
+        }
+      }
+    }
+  }
+]

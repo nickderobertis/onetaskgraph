@@ -60,6 +60,17 @@ struct Setup {
 
 impl Setup {
     fn new(visibility: Option<&str>, dataset: Value, team: bool, tasks: usize) -> Self {
+        Self::caching(visibility, dataset, team, tasks, false)
+    }
+
+    /// [`Setup::new`], with the Linear source's local cache on when `cache` says so.
+    fn caching(
+        visibility: Option<&str>,
+        dataset: Value,
+        team: bool,
+        tasks: usize,
+        cache: bool,
+    ) -> Self {
         let sandbox = Sandbox::new();
         let (mut config, workspace) =
             linear_workspace_with(&sandbox, dataset, TEAM_STATES, PROJECT_STATUSES);
@@ -69,6 +80,9 @@ impl Setup {
         }
         let plan = plan(&sandbox, tasks);
         let mut linear = json!({"plugin": "linear", "config": config});
+        if cache {
+            linear["cache"] = json!({"enabled": true});
+        }
         let mut folder = json!({"plugin": "local-md", "config": {"root": plan}});
         if let Some(visibility) = visibility {
             linear["visibility"] = json!(visibility);
@@ -297,5 +311,27 @@ fn a_linear_item_whose_stored_classification_is_malformed_is_refused_rather_than
         stderr(&output).contains("onetaskgraph.classification"),
         "{}",
         stderr(&output)
+    );
+}
+
+#[test]
+fn a_declared_sources_verification_reaches_linear_with_its_cache_on_as_it_does_without() {
+    // Whether a destination is private is never the cache's to answer: the same copy into a
+    // source declared private sends the same requests, its verification among them, cache on
+    // and cache off.
+    let spent: Vec<Vec<(String, Value)>> = [false, true]
+        .into_iter()
+        .map(|cache| {
+            let setup = Setup::caching(Some("private"), held(), true, 3, cache);
+            setup.ok(&["project", "copy", "plan:goal", "--to", "linear"])
+        })
+        .collect();
+    assert_eq!(resolutions(&spent[1]), 1, "{:#?}", spent[1]);
+    assert_eq!(
+        spent[0].len(),
+        spent[1].len(),
+        "cache off: {:#?}\ncache on: {:#?}",
+        spent[0],
+        spent[1]
     );
 }

@@ -111,3 +111,9 @@ class Document(BaseModel):
         str | None,
         Field(description="Where a person can open it, on the same terms as a [`Task`]'s."),
     ] = None
+    version: Annotated[
+        str | None,
+        Field(
+            description="The document's change token, on exactly the terms of [`Task::version`] and of what its\nsource's [`DocumentVersionCoverage`](crate::DocumentVersionCoverage) covers. Absent by\ndefault and left out of the wire when absent."
+        ),
+    ] = None

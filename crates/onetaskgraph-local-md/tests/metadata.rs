@@ -547,6 +547,29 @@ async fn refused_edit(before: &str, name: &str, value: Value, reason: &str) {
     );
 }
 
+/// Set `key` on the task `tasks/a.md` holds as `before`, which YAML cannot read, and assert the
+/// write is refused naming the file and `problem` — what YAML found wrong, and where — and
+/// that the file is untouched.
+async fn unreadable_edit(before: &str, name: &str, value: Value, problem: &str) {
+    let (root, source) = folder(&[("tasks/a.md", before)]);
+    let path = root.path().join("tasks/a.md");
+    let fingerprint_before = fingerprint(&path);
+    let error = source
+        .set_task_metadata(&id("a"), &key(name), &value)
+        .await
+        .expect_err("the write is refused");
+    let SourceError::Malformed { message } = error else {
+        panic!("expected the file to be reported malformed, got {error:?}");
+    };
+    let canonical = fs::canonicalize(&path).unwrap();
+    assert_eq!(message, format!("{}: {problem}", canonical.display()));
+    assert_eq!(
+        fingerprint(&path),
+        fingerprint_before,
+        "the file is untouched"
+    );
+}
+
 #[tokio::test]
 async fn metadata_that_cannot_be_edited_narrowly_is_refused_and_left_alone() {
     refused_edit(
@@ -556,18 +579,21 @@ async fn metadata_that_cannot_be_edited_narrowly_is_refused_and_left_alone() {
         "its `metadata` is written on one line as `{myapp.a: 1}`",
     )
     .await;
-    refused_edit(
+    // A file YAML refuses is refused as itself before any edit is tried.
+    unreadable_edit(
         "---\nstatus: todo\nmetadata:\n  myapp.a: [1,\n\t2]\n---\n",
         "myapp.a",
         json!(2),
-        "line 5 of the file is indented with a tab",
+        "metadata.myapp.a: tabs disallowed within this context (block indentation) at line 4, \
+         column 2",
     )
     .await;
-    refused_edit(
+    unreadable_edit(
         "---\nstatus: todo\nmetadata:\n  myapp.a: 1\n  myapp.a: 2\n---\n",
         "myapp.a",
         json!(3),
-        "its `metadata:` block holds `myapp.a` more than once",
+        "metadata.?: duplicate mapping key: myapp.a, set DuplicateKeyPolicy in Options if acceptable \
+         at line 4, column 3",
     )
     .await;
     refused_edit(
@@ -584,28 +610,42 @@ async fn metadata_that_cannot_be_edited_narrowly_is_refused_and_left_alone() {
         "line 5 of the file is not indented as the other entries of its `metadata:` block",
     )
     .await;
-    // A quoted scalar continued in column 0 reads, but the block this source sees ends there.
-    refused_edit(
+    // A quoted scalar continued in column 0 is not indented as its block's content.
+    unreadable_edit(
         "---\nstatus: todo\nmetadata:\n  myapp.a: \"one\ntwo\"\n---\n",
+        "myapp.b",
+        json!(3),
+        "metadata: invalid indentation in multiline quoted scalar at line 4, column 1",
+    )
+    .await;
+    // A comment in column 0 ends the block this source can see, while YAML reads on past it:
+    // the entry added to the block it sees repeats a key the block beyond the comment holds.
+    refused_edit(
+        "---\nstatus: todo\nmetadata:\n  myapp.a: 1\n# a note\n  myapp.b: 2\n---\n",
         "myapp.b",
         json!(3),
         "the edited front matter would not read back: ",
     )
     .await;
-    // YAML reads a NEL inside a double-quoted string as a space.
-    refused_edit(
-        "---\nstatus: todo\n---\n",
-        "myapp.a",
-        json!("x\u{85}y"),
-        "does not read back through this source's YAML as the same value",
-    )
-    .await;
-    // A comment in column 0 ends the block this source can see, while YAML reads on past it.
     refused_edit(
         "---\nstatus: todo\nmetadata:\n  myapp.a: 1\n# a note\n  myapp.b: 2\n---\n",
         "myapp.b",
         json!(3),
-        "the edited file would read back as more than that one key changed",
+        "duplicate mapping key: myapp.b, set DuplicateKeyPolicy in Options if acceptable at line \
+         6, column 3",
+    )
+    .await;
+}
+
+/// YAML reads a NEL inside a double-quoted string as itself, so a value holding one is set
+/// like any other.
+#[tokio::test]
+async fn a_value_holding_a_next_line_character_is_set_and_reads_back_as_itself() {
+    task_edit(
+        "---\nstatus: todo\n---\n",
+        "myapp.a",
+        json!("x\u{85}y"),
+        "---\nstatus: todo\nmetadata:\n  \"myapp.a\": \"x\u{85}y\"\n---\n",
     )
     .await;
 }

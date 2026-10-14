@@ -71,6 +71,7 @@ fn task(native: &str, content: &str) -> Task {
 
 fn document(native: &str, content: &str) -> Document {
     Document {
+        version: None,
         id: id(native),
         title: native.to_owned(),
         content: Some(content.to_owned()),

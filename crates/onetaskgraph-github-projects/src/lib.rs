@@ -628,14 +628,15 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
-    Capabilities, Classification, Comment, CommentBody, CommentOrigin, Cursor, DependencyEdge,
-    DependencyEndpoint, DependencyKind, DependencySupport, Direction, Document, DocumentQuery,
-    Health, ItemKind, ItemWrite, Label, LabelFilter, Location, MetadataKey, Metering, NativeId,
-    NewComment, Page, PageRequest, Priority, Project, ProjectFilter, ProjectQuery, Repository,
-    SecretResolver, SharedClock, SourceError, SourceName, SourcePlugin, Status, StatusCategory,
-    StatusMapping, Support, Task, TaskDetailRead, TaskQuery, TaskRef, TaskSource, TaskUpdate,
-    TaskUpdateOutcome, TextFields, TextQuery, UnmappedStatus, UpdatedField, VersionCoverage,
-    WriteJournal, WriteSupport, system_clock,
+    Capabilities, Classification, Comment, CommentBody, CommentOrigin, Coverage, Cursor,
+    DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport, Direction, Document,
+    DocumentQuery, DocumentVersionCoverage, Health, ItemKind, ItemWrite, Label, LabelFilter,
+    Location, MetadataKey, Metering, NativeId, NewComment, Page, PageRequest, Priority, Project,
+    ProjectFilter, ProjectQuery, ProjectVersionCoverage, Repository, SecretResolver, SharedClock,
+    SourceError, SourceName, SourcePlugin, Status, StatusCategory, StatusMapping, Support, Task,
+    TaskDetailRead, TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome, TextFields,
+    TextQuery, UnmappedStatus, UpdatedField, VersionCoverage, WriteJournal, WriteSupport,
+    system_clock,
 };
 use reqwest::{Client, StatusCode, Url};
 use schemars::{Schema, schema_for};
@@ -1891,6 +1892,7 @@ struct Attempted {
     limits: accounting::RateLimit,
     /// GitHub's own reported cost for this call, for a document that asked for it.
     reported_cost: Option<u64>,
+    response_outcome: accounting::ResponseOutcome,
 }
 
 /// One attempt's outcome: an error to report, or a rate limit to wait out.
@@ -4334,7 +4336,7 @@ impl GitHubProjectsSource {
                     self.clock.sleep(spacing).await;
                 }
             }
-            let attempt = self.send_once(query, &variables).await;
+            let attempt = self.send_once(query, &variables, waits + 1).await;
             if is_mutation(query) {
                 self.finish_mutation();
             }
@@ -4447,12 +4449,19 @@ impl GitHubProjectsSource {
     /// anybody remembering to count it, and
     /// `the_session_report_counts_every_request_the_board_served_and_what_each_cost` fails
     /// when one is not.
-    async fn send_once(&self, query: &str, variables: &Value) -> Result<Value, Attempt> {
+    async fn send_once(
+        &self,
+        query: &str,
+        variables: &Value,
+        number: u32,
+    ) -> Result<Value, Attempt> {
+        let executed = self.ledger.priced_document(query);
         let Attempted {
             result,
             limits,
             reported_cost,
-        } = self.attempt(query, variables).await;
+            response_outcome,
+        } = self.attempt(executed.as_ref(), variables).await;
         // No `otherwise` name: every document this source sends is one of its own, and the
         // inventory gate on `graphql::DOCUMENTS` is what keeps that true.
         let sending = accounting::Request::graphql(query, variables, None, reported_cost);
@@ -4461,7 +4470,12 @@ impl GitHubProjectsSource {
             Err(Attempt::Limited(_)) => accounting::Outcome::RateLimited,
             Err(Attempt::Failed(_)) => accounting::Outcome::Refused,
         };
-        self.ledger.record(sending.finished(outcome, limits));
+        self.ledger
+            .record(sending.finished(outcome, limits).with_execution(
+                Some(executed.into_owned()),
+                response_outcome,
+                number,
+            ));
         result
     }
 
@@ -4473,13 +4487,21 @@ impl GitHubProjectsSource {
     async fn attempt(&self, query: &str, variables: &Value) -> Attempted {
         let mut limits = accounting::RateLimit::default();
         let mut reported_cost = None;
+        let mut response_outcome = accounting::ResponseOutcome::TransportError;
         let result = self
-            .attempted(query, variables, &mut limits, &mut reported_cost)
+            .attempted(
+                query,
+                variables,
+                &mut limits,
+                &mut reported_cost,
+                &mut response_outcome,
+            )
             .await;
         Attempted {
             result,
             limits,
             reported_cost,
+            response_outcome,
         }
     }
 
@@ -4490,6 +4512,7 @@ impl GitHubProjectsSource {
         variables: &Value,
         limits: &mut accounting::RateLimit,
         reported_cost: &mut Option<u64>,
+        response_outcome: &mut accounting::ResponseOutcome,
     ) -> Result<Value, Attempt> {
         let response = self
             .client
@@ -4504,6 +4527,9 @@ impl GitHubProjectsSource {
                 })
             })?;
         let status = response.status();
+        if !status.is_success() {
+            *response_outcome = accounting::ResponseOutcome::HttpError;
+        }
         let header = |name: &str| whole_seconds(response.headers().get(name));
         let served = response
             .headers()
@@ -4546,6 +4572,13 @@ impl GitHubProjectsSource {
                 message: format!("GitHub GraphQL response could not be read: {e}"),
             })
         })?;
+        *reported_cost = serde_json::from_str::<Value>(&body)
+            .ok()
+            .as_ref()
+            .and_then(|body| body.pointer("/data/rateLimit/cost"))
+            .and_then(Value::as_u64);
+        let parsed = serde_json::from_str::<Value>(&body).ok();
+        *response_outcome = accounting::ResponseOutcome::of_graphql_reply(status, parsed.as_ref());
         if let Some(limiter) = Limiter::classify(status, exhausted, &body) {
             return Err(Attempt::Limited(Limited { limiter, hint }));
         }
@@ -4561,15 +4594,6 @@ impl GitHubProjectsSource {
                 message: format!("GitHub GraphQL returned HTTP {status}"),
             }));
         }
-        // GitHub reports what a call cost only when the document asked it to, and no
-        // document this source sends does — so this is `None` here and carries the figure
-        // for a caller whose own document selects `rateLimit { cost }`. What it must never
-        // pick up is a `dryRun` probe's cost, which is some other document's.
-        *reported_cost = serde_json::from_str::<Value>(&body)
-            .ok()
-            .as_ref()
-            .and_then(|body| body.pointer("/data/rateLimit/cost"))
-            .and_then(Value::as_u64);
         let mut data = self.answer(&body).map_err(Attempt::Failed)?;
         if let Some(served) = served {
             stamp_served(&mut data, &served.to_rfc3339());
@@ -6133,6 +6157,18 @@ impl GitHubProjectsSource {
     /// unit of plan — and an item whose content the token cannot see has nothing to
     /// report at all.
     fn resolve(&self, item: &Value) -> Result<Option<Resolved>, SourceError> {
+        let resolved = self.resolve_unremembered(item)?;
+        if let Some(resolved) = &resolved {
+            self.resolved_cache()?
+                .insert(resolved.id.clone(), resolved.clone());
+        }
+        Ok(resolved)
+    }
+
+    /// [`Self::resolve`], without remembering the item it resolves: what reading a token off a
+    /// write's own response needs, which says nothing this process should answer a later read
+    /// with.
+    fn resolve_unremembered(&self, item: &Value) -> Result<Option<Resolved>, SourceError> {
         let content = item.get("content").ok_or_else(|| SourceError::Malformed {
             message: "GitHub project item is missing content".into(),
         })?;
@@ -6174,22 +6210,7 @@ impl GitHubProjectsSource {
             message: format!("GitHub issue {content_id}: {message}"),
         })?;
         let raw_title = required_str(content, "title")?;
-        // The design prefix is read *first*, before either of the two rules that separate
-        // a project from a task. A document is not work whatever sub-issues it has and
-        // whatever marker it carries, and reading the prefix later would make a design
-        // issue with none of either an empty project.
-        let kind = if raw_title.starts_with(DESIGN_TITLE_PREFIX) {
-            BoardKind::Document
-        } else if parent.is_some() {
-            // Being a sub-issue wins outright, and no marker overrides it: an issue filed
-            // under a project is that project's task even when it has sub-issues of its
-            // own.
-            BoardKind::Work(ItemKind::Task)
-        } else if sub_issues > 0 || marked == Some(ItemKind::Project) {
-            BoardKind::Work(ItemKind::Project)
-        } else {
-            BoardKind::Work(ItemKind::Task)
-        };
+        let kind = BoardKind::of(raw_title, parent.is_some(), sub_issues, marked);
         // The title a person wrote, which for a document is the one without the prefix —
         // the same way `content` above is the body without this source's metadata slot.
         let title = match kind {
@@ -6228,6 +6249,7 @@ impl GitHubProjectsSource {
         };
         let (option, closed, reason) = Self::status_parts(nodes, content)?;
         let priority = self.held_priority(nodes)?;
+        let item_labels = labels(content)?;
         // Present when the item was reached through its own issue, whose board entry
         // names the board; a read of the board's own items has the board already. An
         // empty id names nothing a field write could address, so it is read as absent and
@@ -6252,7 +6274,7 @@ impl GitHubProjectsSource {
             closed,
             delivers,
             delivered_by,
-            labels: labels(content)?,
+            labels: item_labels.clone(),
             parent,
             origin: text_field(nodes, ORIGIN_FIELD)?.filter(|value| !value.is_empty()),
             projected: self.held_projections(nodes)?,
@@ -6279,6 +6301,13 @@ impl GitHubProjectsSource {
                 Some(served) => Some(served),
                 None => optional_time(item, SERVED_AT)?,
             },
+            // Both connections were read to their end above — one reporting a further page is
+            // refused — so these are every field value and every label the item holds. A
+            // response that did not select the labels at all says nothing of them, and gives
+            // no facets.
+            facets: content.get("labels").is_some().then(|| {
+                change_token::Facets::new(kind.facet(), facet_fields(nodes), &item_labels).digest()
+            }),
             own_repository,
             repositories,
             classification,
@@ -6288,8 +6317,6 @@ impl GitHubProjectsSource {
             board_fields: Self::carried_board_fields(content, board_id)?,
             blocked_by: carried_blocked_by(content)?,
         };
-        self.resolved_cache()?
-            .insert(resolved.id.clone(), resolved.clone());
         Ok(Some(resolved))
     }
 
@@ -8372,6 +8399,7 @@ impl GitHubProjectsSource {
             comment_count: None,
             relationship_events: None,
             served_at: None,
+            facets: None,
             own_repository,
             repositories: incoming.repositories.to_vec(),
             classification: incoming.classification,
@@ -9634,6 +9662,10 @@ struct Resolved {
     /// The server's clock on the response that read it — its `Date` header — when the
     /// response carried one.
     served_at: Option<DateTime<Utc>>,
+    /// The digest of its [`change_token::Facets`] — its own kind, its board field values and
+    /// its labels — when the read that reached it carried all three whole.
+    #[serde(default)]
+    facets: Option<change_token::FacetsDigest>,
     own_repository: Option<Repository>,
     repositories: Vec<Repository>,
     classification: Classification,
@@ -9739,7 +9771,7 @@ impl Resolved {
     }
 
     /// This item's change token — see [`change_token`] — or `None` when the read that
-    /// reached it did not carry all five of its parts, which a draft never does, did not say
+    /// reached it did not carry all six of its parts, which a draft never does, did not say
     /// when GitHub served it, or found it changed too recently to have settled.
     fn version(&self) -> Option<String> {
         match self.content_kind {
@@ -9750,6 +9782,7 @@ impl Resolved {
                     item,
                     comments: self.comment_count?,
                     relationships: self.relationship_events?,
+                    facets: self.facets.clone()?,
                     repository: self.own_repository.clone()?,
                 };
                 change_token::settled(issue, item, self.served_at?)
@@ -9811,6 +9844,7 @@ impl Resolved {
 
     fn project(&self) -> Project {
         Project {
+            version: self.version(),
             id: self.id.clone(),
             title: self.title.clone(),
             content: self.body.clone(),
@@ -9830,6 +9864,7 @@ impl Resolved {
     /// dependencies, because a document is not work.
     fn document(&self) -> Document {
         Document {
+            version: self.version(),
             id: self.id.clone(),
             title: self.title.clone(),
             content: self.body.clone(),
@@ -10037,6 +10072,36 @@ enum BoardKind {
 }
 
 impl BoardKind {
+    /// The kind of an item titled `title`, filed under a project or not, holding `sub_issues`
+    /// sub-issues and carrying the kind marker `marked` in its slot.
+    ///
+    /// The design prefix is read *first*, before either of the two rules that separate a
+    /// project from a task. A document is not work whatever sub-issues it has and whatever
+    /// marker it carries, and reading the prefix later would make a design issue with none of
+    /// either an empty project. Being a sub-issue wins outright over the rest, and no marker
+    /// overrides it: an issue filed under a project is that project's task even when it has
+    /// sub-issues of its own.
+    fn of(title: &str, filed: bool, sub_issues: u64, marked: Option<ItemKind>) -> Self {
+        if title.starts_with(DESIGN_TITLE_PREFIX) {
+            Self::Document
+        } else if filed {
+            Self::Work(ItemKind::Task)
+        } else if sub_issues > 0 || marked == Some(ItemKind::Project) {
+            Self::Work(ItemKind::Project)
+        } else {
+            Self::Work(ItemKind::Task)
+        }
+    }
+
+    /// What the change token's facets call this kind.
+    const fn facet(self) -> change_token::FacetKind {
+        match self {
+            Self::Document => change_token::FacetKind::Document,
+            Self::Work(ItemKind::Project) => change_token::FacetKind::Project,
+            Self::Work(ItemKind::Task) => change_token::FacetKind::Task,
+        }
+    }
+
     /// Whose half of `status_mapping` an item of this kind reads its status through. A
     /// document has no status of its own, so the task half stands in for whatever the issue
     /// holds; nothing reports it.
@@ -10149,6 +10214,17 @@ fn document_matches(document: &Document, query: &DocumentQuery, project: &Projec
             .is_none_or(|text| text_matches(&document.title, document.content.as_deref(), text))
 }
 
+/// Why a GitHub item's change token does not vouch for its forward edges.
+///
+/// A forward edge names its far end and that far end's kind, and the near item's token moves
+/// with the edges it holds but says nothing of the far ends themselves: a far end turning from a
+/// task into a project when it gains a sub-issue, retitled into a document, or deleted moves
+/// nothing the near token reads, so an edge kept at the near version could name a far end that
+/// is no longer what it said.
+const FAR_ENDS_UNCOVERED: &str = "a github item's change token does not attest a far end's kind, \
+     whether it became a document, or its deletion, so its forward edges are always read from \
+     github";
+
 #[async_trait::async_trait]
 impl TaskSource for GitHubProjectsSource {
     fn kind(&self) -> &'static str {
@@ -10157,10 +10233,39 @@ impl TaskSource for GitHubProjectsSource {
     fn order_versions(&self, a: &str, b: &str) -> Option<std::cmp::Ordering> {
         change_token::order(a, b)
     }
-    /// Every part: §4.13d of `docs/plugin-protocol.md` states, member by member, the change
-    /// each part of the token moves for, comments included.
+    /// A task's fields and comments: §4.13d of `docs/plugin-protocol.md` states, member by
+    /// member, the change each part of the token moves for. Not its forward edges — see
+    /// [`FAR_ENDS_UNCOVERED`].
     fn version_coverage(&self) -> VersionCoverage {
+        VersionCoverage {
+            forward_edges: Coverage::Uncovered {
+                reason: FAR_ENDS_UNCOVERED.to_owned(),
+            },
+            ..VersionCoverage::whole()
+        }
+    }
+    /// Every part, for a copy's skip: the relationship count moves for an edge added or removed
+    /// and for a far end deleted, so the token sees every change to a task's edges but one — a
+    /// far end's own kind flipping, by gaining a sub-issue or being retitled into a document,
+    /// which `spike-coverage` measured stale 1 of 1. A skipping recopy does not carry that, and
+    /// the next copy that reads the task does (`docs/plugin-protocol.md` §4.13d).
+    // llmlint: ignore[names_match_behavior] The manager's ruling (c-d7838f2c) keeps 0.6.0's GitHub skip and has this plugin state that bounded claim through the coverage it reports, with the bound documented here, in §4.13d and by the copy_skip journey; a separate bounded representation would be a contract change beyond a defaulted addition, which the ruling reserves for the contract's owner, and a follow-up is drafted for a far-end-aware skip.
+    fn copy_version_coverage(&self) -> VersionCoverage {
         VersionCoverage::whole()
+    }
+    /// A project's fields, and not its forward edges, for the same reason a task's are not.
+    fn project_version_coverage(&self) -> ProjectVersionCoverage {
+        ProjectVersionCoverage {
+            fields: Coverage::Covered,
+            forward_edges: Coverage::Uncovered {
+                reason: FAR_ENDS_UNCOVERED.to_owned(),
+            },
+        }
+    }
+    /// A document's fields and the manifest of its image assets, which its metadata slot
+    /// records: both are the issue's body, whose every edit moves the token's issue time.
+    fn document_version_coverage(&self) -> DocumentVersionCoverage {
+        DocumentVersionCoverage::whole()
     }
     fn write_context(&self, id: &NativeId) -> Option<Value> {
         self.context_of(id)
@@ -11301,6 +11406,47 @@ fn labels(content: &Value) -> Result<Vec<Label>, SourceError> {
             })
         })
         .collect()
+}
+
+/// Each board field value one item holds, as the change token's facets name it: the field's
+/// name, with the single-select option's name or the text. A value of a type no read here
+/// selects, and one naming no field, says nothing a person can rename and is left out.
+fn facet_fields(field_values: &[Value]) -> Vec<(String, String)> {
+    field_values
+        .iter()
+        .filter_map(|value| {
+            let field = value.pointer("/field/name")?.as_str()?;
+            let held = value.get("name").or_else(|| value.get("text"))?.as_str()?;
+            Some((field.to_owned(), held.to_owned()))
+        })
+        .collect()
+}
+
+/// The digest of the facets of the issue `content`, whose board item's values are
+/// `field_values` — or `None` when the response did not carry, whole, every member they are read
+/// from: the title, the parent, the sub-issue summary and the body its kind is read from, every
+/// label, and every field value.
+///
+/// What a write's own response spells its token from, by exactly the rules a read takes them by.
+fn facets_of(content: &Value, field_values: &Value) -> Option<change_token::FacetsDigest> {
+    let ended = |connection: &Value| {
+        connection.pointer("/pageInfo/hasNextPage") == Some(&Value::Bool(false))
+    };
+    let labels = content.get("labels").filter(|labels| ended(labels))?;
+    if !ended(field_values) {
+        return None;
+    }
+    let parent = content.get("parent")?;
+    let (_, slot) = metadata_body(content.get("body")?.as_str().map(str::to_owned)).ok()?;
+    let kind = BoardKind::of(
+        content.get("title")?.as_str()?,
+        !parent.is_null(),
+        sub_issue_total(content).ok()?,
+        ItemKind::from_metadata(&slot).ok()?,
+    );
+    let labels = self::labels(&json!({"labels": labels})).ok()?;
+    let nodes = field_values.get("nodes")?.as_array()?;
+    Some(change_token::Facets::new(kind.facet(), facet_fields(nodes), &labels).digest())
 }
 
 /// The definition of each board field one item's values are values of, in the shape a read

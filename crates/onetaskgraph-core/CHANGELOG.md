@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.6.0...onetaskgraph-core-v0.6.1) - 2026-10-14
+
+### Fixed
+
+- *(deps)* read and write task YAML with serde-saphyr in place of serde_norway ([#3607](https://github.com/nickderobertis/onetaskgraph/pull/3607))
+
 ## [0.6.0](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.5.0...onetaskgraph-core-v0.6.0) - 2026-10-12
 
 ### Added

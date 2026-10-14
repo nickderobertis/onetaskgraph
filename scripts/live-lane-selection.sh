@@ -76,9 +76,11 @@ from pathlib import Path
 # decision refused — and `--exclude=<crate>\r` names Nx a project it has never heard of.
 # Held here rather than in each caller, because this is the ONE implementation and a caller
 # repairing an answer is a caller restating the rule. stderr goes with it so the reason a
-# reader is given is one line per line there too.
-sys.stdout.reconfigure(newline="\n")
-sys.stderr.reconfigure(newline="\n")
+# reader is given is one line per line there too. Both streams are UTF-8 on every platform
+# for the same reason: piped, Windows writes the ANSI code page, and the reasons carry an
+# em dash that a caller decoding them as UTF-8 — lane_runner.py does — refuses as 0x97.
+sys.stdout.reconfigure(encoding="utf-8", newline="\n")
+sys.stderr.reconfigure(encoding="utf-8", newline="\n")
 
 MODE = os.environ["ONETASKGRAPH_LIVE_LANE_MODE"]
 BASE = os.environ["ONETASKGRAPH_LIVE_LANE_BASE"]

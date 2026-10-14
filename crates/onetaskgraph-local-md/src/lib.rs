@@ -99,6 +99,7 @@ pub mod change_token;
 mod probe;
 #[cfg(any(windows, test))]
 mod unlinking;
+mod yaml;
 
 /// The registry name for this plugin.
 pub const KIND: &str = "local-md";
@@ -795,10 +796,9 @@ impl LocalMdSource {
         // boundary check without duplicating an unreachable user-facing branch.
         debug_assert!(path.starts_with(&self.root));
         let (yaml, body) = Self::split_text(path, text)?;
-        let front: FrontMatter =
-            serde_norway::from_str(yaml).map_err(|e| SourceError::Malformed {
-                message: format!("{}: {e}", path.display()),
-            })?;
+        let front: FrontMatter = yaml::from_str(yaml).map_err(|e| SourceError::Malformed {
+            message: format!("{}: {e}", path.display()),
+        })?;
         let (shared, status, depends_on, delivery, priority) = front.split();
         // A task's comments section is not its content: what a query searches, a copy reads
         // and `task show` prints as the body is everything above it. A project has no
@@ -926,11 +926,12 @@ impl LocalMdSource {
         debug_assert!(path.starts_with(&self.root));
         let (yaml, body) = Self::split_text(path, text)?;
         let front: DocumentFrontMatter =
-            serde_norway::from_str(yaml).map_err(|e| SourceError::Malformed {
+            yaml::from_str(yaml).map_err(|e| SourceError::Malformed {
                 message: format!("{}: {e}", path.display()),
             })?;
         let common = self.common(Kind::Document, path, content_of(body, false), front.into())?;
         Ok(Document {
+            version: None,
             id: common.id,
             title: common.title,
             content: common.body,
@@ -1109,6 +1110,11 @@ impl TaskSource for LocalMdSource {
     }
     fn order_versions(&self, a: &str, b: &str) -> Option<std::cmp::Ordering> {
         change_token::order(a, b)
+    }
+    /// Every part: `md1` is the digest of the task's one file, which holds its fields, its
+    /// comments and its forward edges alike.
+    fn version_coverage(&self) -> onetaskgraph_plugin_api::VersionCoverage {
+        onetaskgraph_plugin_api::VersionCoverage::whole()
     }
     fn capabilities(&self) -> Capabilities {
         Capabilities {
@@ -1336,7 +1342,7 @@ impl TaskSource for LocalMdSource {
         };
         self.representable_status(&status)?;
         // A string always renders as a YAML scalar.
-        let rendered = serde_norway::to_string(&status.name).expect("a status word renders");
+        let rendered = yaml::to_string(&status.name).expect("a status word renders");
         self.rewrite_front_entry(&path, "status", Some(rendered.trim_end()))?;
         Ok(Some(status))
     }
@@ -1518,12 +1524,19 @@ impl TaskSource for LocalMdSource {
                 written: std::collections::BTreeSet::new(),
             }));
         }
-        let reread = self.parse_text(WorkKind::Task, &path, &edited)?;
-        let edges_after = reread.dependencies.clone();
-        let edges_landed = edges.as_ref().is_none_or(|edges| {
-            edges.len() == edges_after.len() && edges.iter().all(|edge| edges_after.contains(edge))
-        });
-        if unversioned(task(reread)) != unversioned(wanted) || (edges_differ && !edges_landed) {
+        // Edited text that does not read at all — a key the edit added repeating one beyond the
+        // block this source sees, say — reads back as nothing like what was wanted.
+        let reads_back = self
+            .parse_text(WorkKind::Task, &path, &edited)
+            .is_ok_and(|reread| {
+                let edges_after = &reread.dependencies;
+                let edges_landed = edges.as_ref().is_none_or(|edges| {
+                    edges.len() == edges_after.len()
+                        && edges.iter().all(|edge| edges_after.contains(edge))
+                });
+                unversioned(task(reread)) == unversioned(wanted) && (!edges_differ || edges_landed)
+            });
+        if !reads_back {
             return Err(SourceError::Refused {
                 message: format!(
                     "{}: cannot update this task without changing more than the update names: \
@@ -2002,7 +2015,7 @@ fn content_of(above: &str, sectioned: bool) -> &str {
 /// The answers block that stores `answers`, refused only when YAML cannot write them at all:
 /// whether what it writes reads back as the same values is the caller's read-back to check.
 fn answers_block(answers: &BTreeMap<String, serde_json::Value>) -> Result<String, SourceError> {
-    let yaml = serde_norway::to_string(answers).map_err(|e| SourceError::Refused {
+    let yaml = yaml::to_string(answers).map_err(|e| SourceError::Refused {
         message: format!(
             "cannot represent these template answers as YAML: {e}; next: give answers JSON and \
              YAML both carry"
@@ -2450,7 +2463,7 @@ fn outside(text: &str, scope: &ProjectFilter) -> bool {
     };
     let project = match front_yaml(text) {
         None => None,
-        Some(yaml) => match serde_norway::from_str::<Filing>(yaml) {
+        Some(yaml) => match yaml::from_str::<Filing>(yaml) {
             Ok(filing) => filing.project,
             Err(_) => return false,
         },
@@ -2976,6 +2989,7 @@ fn task(d: Entry) -> Task {
 }
 fn project(d: Entry) -> Project {
     Project {
+        version: None,
         id: d.common.id,
         title: d.common.title,
         content: d.common.body,
@@ -3314,7 +3328,7 @@ impl LocalMdSource {
         let Some((_, yaml)) = block else {
             return Ok(None);
         };
-        serde_norway::from_str::<Option<BTreeMap<String, serde_json::Value>>>(yaml)
+        yaml::from_str::<Option<BTreeMap<String, serde_json::Value>>>(yaml)
             .map(|answers| Some(answers.unwrap_or_default()))
             .map_err(|e| SourceError::Malformed {
                 message: format!(
@@ -3792,7 +3806,7 @@ impl LocalMdSource {
         let Some(yaml) = front_yaml(&rewritten) else {
             return Err(unfronted(path));
         };
-        serde_norway::from_str::<FrontMatter>(yaml).map_err(|e| SourceError::Malformed {
+        yaml::from_str::<FrontMatter>(yaml).map_err(|e| SourceError::Malformed {
             message: format!(
                 "{}: rewriting `{key}` would leave front matter this source cannot read: {e}; \
                  next: tidy that entry of the file by hand",
@@ -3824,7 +3838,7 @@ impl LocalMdSource {
         // A string always renders as a YAML scalar, and a list of strings as JSON, which is a
         // YAML flow sequence.
         let scalar = |value: &str| {
-            serde_norway::to_string(value)
+            yaml::to_string(&value)
                 .expect("a string renders")
                 .trim_end()
                 .to_owned()
@@ -4026,7 +4040,7 @@ impl LocalMdSource {
             delivers: delivers.iter().map(ToString::to_string).collect(),
             delivered_by: delivered_by.iter().map(ToString::to_string).collect(),
         };
-        let yaml = serde_norway::to_string(&front).map_err(|e| SourceError::Malformed {
+        let yaml = yaml::to_string(&front).map_err(|e| SourceError::Malformed {
             message: format!("cannot render front matter for {}: {e}", outgoing.id),
         })?;
         // The one line break that ends the rendering, whose place the closing `---` line's own
@@ -4169,9 +4183,8 @@ impl LocalMdSource {
             return Ok(Some(record));
         }
         let written = compact(value);
-        let alone = serde_norway::from_str::<BTreeMap<String, serde_json::Value>>(&format!(
-            "value: {written}"
-        ));
+        let alone =
+            yaml::from_str::<BTreeMap<String, serde_json::Value>>(&format!("value: {written}"));
         if alone
             .ok()
             .and_then(|mut read| read.remove("value"))

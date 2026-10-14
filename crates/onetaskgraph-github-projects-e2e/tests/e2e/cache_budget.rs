@@ -1,223 +1,577 @@
 //! What the board cache spends against what the same work spends without it, recorded as
 //! telemetry for the `github-cache-points-not-above-uncached` budget.
 //!
-//! The workload is the budget's: a loopback board of eighty tasks, twenty of which carry one
-//! to five comments and the follow-up metadata a pass narrows by, driven through four
-//! sequences once with the cache off and once with it on — a cold detail read of the twenty,
-//! a warm re-read pinned to what it returned, a narrowed listing followed by the full loads
-//! of its twenty results after five changed, and a follow-ups comment pass of a listing, a
-//! pinned read, forty comments and one verifying read. The stale-option fallback, the cache's
-//! one named exception, is measured beside them and kept out of the figure. Points are the
-//! plugin's own worst-case price of each document the board served.
+//! The workload is the budget's: a loopback board of 20 projects, 100 documents and 80 tasks —
+//! 20 of them carrying one to five comments — of which a pass loads 5 projects, 20 documents and
+//! 20 tasks, with 5 changed between passes and 8 of the loaded documents carrying one 256 KiB
+//! image; and the same at ten times the size. Each kind is driven through the binary once with
+//! the cache off and once with it on, each over a board of its own, through four sequences: a
+//! cold load; an unchanged reread pinned to what the cold load returned, made by two passes at
+//! once; a listing followed by the loads it pins, after five of each kind changed; and a write
+//! of each changed item followed by a read pinned to what a listing after it carries. An image's
+//! bytes are read only by a render keeping it, so that kind's four are renders instead: a first
+//! render, a second with the picture unchanged, one after the document was edited, and one after
+//! a render that wrote it.
+//!
+//! Points are the plugin's own worst-case price of each GraphQL document the board served; an
+//! attachment read is a REST request and spends no point, so the detail counts them apart. The
+//! figure is the largest difference, cache on minus cache off, over every cell — scale, kind and
+//! sequence — and every scale's total, so points added to one kind show however much another
+//! saves. The stale-option fallback, the cache's one named exception, is measured beside them
+//! and kept out of the figure.
 
-use onetaskgraph_github_projects::worst_case_point_cost;
+use std::path::PathBuf;
+
+use onetaskgraph_e2e_support::{
+    clock::SimulatedClock,
+    common::{Sandbox, stderr, stdout},
+    fixtures::{GitHubBoardFields, document, github_projects_with_items},
+    images,
+};
+use onetaskgraph_github_projects::{DESIGN_TITLE_PREFIX, DETAIL_BATCH, worst_case_point_cost};
 use serde_json::{Value, json};
 
+use super::asset_board::Board;
 use crate::budget_runner::directory;
-use crate::cache::{Cached, FOLLOWUPS, Followups, NARROWED, version_of, written_version};
-use crate::fixtures::github_extra_task;
+use crate::cache::{Cached, version_of, written_version};
 
 /// The budget this suite records.
 pub(crate) const BUDGET: &str = "github-cache-points-not-above-uncached";
 /// The workload it records, which the reporter holds the recording to.
-pub(crate) const WORKLOAD: &str = "board-80-tasks-20-commented-four-sequences";
+pub(crate) const WORKLOAD: &str = "board-20-projects-100-documents-80-tasks-8-images-at-1x-and-10x";
 /// The four sequences, in the order measured.
 pub(crate) const SEQUENCES: [&str; 4] = [
-    "cold-read",
-    "warm-reread",
-    "search-then-loads",
-    "comment-pass",
+    "cold",
+    "unchanged-pinned-reread",
+    "list-then-load-after-edits",
+    "write-then-read",
+];
+/// The four sequences of the asset-bytes kind, whose bytes only a render reads, so each is a
+/// render rather than a pinned load: a first render, a second with the picture unchanged, one
+/// after the document was edited, and one after a render that wrote it.
+pub(crate) const RENDER_SEQUENCES: [&str; 4] = [
+    "cold-render",
+    "unchanged-render",
+    "render-after-edits",
+    "render-after-render",
 ];
 
-/// What a list of served requests cost: requests and points.
-fn cost(served: &[(String, Value)]) -> Value {
-    let points: u64 = served
-        .iter()
-        .map(|(document, _)| {
-            worst_case_point_cost(document).expect("every document this source sends prices")
-        })
-        .sum();
-    json!({"requests": served.len(), "points": points})
+/// The sequences `kind` is measured through, in the order measured.
+pub(crate) const fn sequences_of(kind: &str) -> [&'static str; 4] {
+    if matches!(kind.as_bytes(), b"asset-bytes") {
+        RENDER_SEQUENCES
+    } else {
+        SEQUENCES
+    }
+}
+/// The kinds each sequence is measured for.
+pub(crate) const KINDS: [&str; 5] = ["tasks", "projects", "documents", "manifests", "asset-bytes"];
+/// The two scales, by name and factor.
+pub(crate) const SCALES: [(&str, usize); 2] = [("1x", 1), ("10x", 10)];
+
+/// One scale of the workload.
+#[derive(Clone, Copy)]
+struct Scale {
+    factor: usize,
 }
 
-fn add(total: &mut Value, more: &Value) {
-    for key in ["requests", "points"] {
-        total[key] = json!(total[key].as_u64().unwrap_or(0) + more[key].as_u64().unwrap_or(0));
+impl Scale {
+    fn projects(self) -> usize {
+        20 * self.factor
+    }
+    fn documents(self) -> usize {
+        100 * self.factor
+    }
+    fn tasks(self) -> usize {
+        80 * self.factor
+    }
+    fn commented(self) -> usize {
+        20 * self.factor
+    }
+    fn loaded_projects(self) -> usize {
+        5 * self.factor
+    }
+    fn loaded_documents(self) -> usize {
+        20 * self.factor
+    }
+    fn images(self) -> usize {
+        8 * self.factor
+    }
+    fn changed(self) -> usize {
+        5 * self.factor
     }
 }
 
-/// The ids of the twenty follow-ups, qualified.
-fn followup_ids() -> Vec<String> {
-    (0..FOLLOWUPS)
-        .map(|n| format!("board:{}", github_extra_task(n)))
-        .collect()
+/// What one sequence of one kind spent: GraphQL requests and their points, the loads it
+/// answered with no request, and its attachment reads.
+#[derive(Default, Clone, Copy)]
+struct Spent {
+    requests: u64,
+    points: u64,
+    hits: u64,
+    rest: u64,
 }
 
-/// `task show-many` of `ids`, pinned to `pins` when the cache is on.
-fn show_many(ids: &[String], pins: &[(String, String)], cache: bool) -> Vec<String> {
-    let mut arguments = vec!["task".to_owned(), "show-many".to_owned()];
-    arguments.extend(ids.iter().cloned());
-    if cache {
-        for (id, version) in pins {
-            arguments.push("--pin".to_owned());
-            arguments.push(format!("{id}={version}"));
+impl Spent {
+    fn add(&mut self, more: Self) {
+        self.requests += more.requests;
+        self.points += more.points;
+        self.hits += more.hits;
+        self.rest += more.rest;
+    }
+
+    fn json(self) -> Value {
+        json!({"requests": self.requests, "points": self.points, "hits": self.hits,
+               "rest": self.rest})
+    }
+}
+
+/// A board of one scale, with the cache on or off, behind its attachment host.
+struct Workload {
+    sandbox: Sandbox,
+    github: GitHubBoardFields,
+    board: Board,
+    clock: SimulatedClock,
+    cache_home: PathBuf,
+    scale: Scale,
+    template: PathBuf,
+    /// The board's ids of the documents rendered with an image.
+    imaged: Vec<String>,
+}
+
+fn project_id(n: usize) -> String {
+    format!("BP-{n}")
+}
+fn document_id(n: usize) -> String {
+    format!("BD-{n}")
+}
+fn task_id(n: usize) -> String {
+    format!("BT-{n}")
+}
+
+/// One board item, spelled as the shared dataset spells one, its slot holding `slot`.
+fn item(id: &str, title: &str, slot: &Value) -> Value {
+    let body = if slot.as_object().is_some_and(serde_json::Map::is_empty) {
+        format!("the body of {id}")
+    } else {
+        format!("the body of {id}\n\n<!-- onetaskgraph.metadata\n{slot}\n-->")
+    };
+    json!({"item": format!("ITEM-{id}"), "id": id, "type": "Issue", "title": title,
+           "body": body, "state": "OPEN", "reason": null, "parent": null,
+           "repo": "nickderobertis/onetaskgraph", "status": "Todo", "origin": "",
+           "labels": [["L-1", "bug"]]})
+}
+
+/// A template rendering a line of text and one picture, `./shot.png`.
+const PICTURE: &str = "---\nonetaskgraph_template: 1\nvariables:\n  note:\n    description: What \
+                       changed\n    type: string\n---\n# The change\n{{ note }}\n![shot](./shot.png)\n";
+
+impl Workload {
+    fn new(scale: Scale, cache: bool) -> Self {
+        let clock = SimulatedClock::start(1);
+        let sandbox = Sandbox::new();
+        let mut items = Vec::new();
+        for n in 0..scale.projects() {
+            items.push(item(
+                &project_id(n),
+                &format!("Budget project {n}"),
+                &json!({"onetaskgraph.item_kind": "project"}),
+            ));
+        }
+        // The images' documents are rendered below; these are the rest.
+        for n in 0..scale.documents() - scale.images() {
+            items.push(item(
+                &document_id(n),
+                &format!("{DESIGN_TITLE_PREFIX}Budget document {n}"),
+                &json!({}),
+            ));
+        }
+        for n in 0..scale.tasks() {
+            let slot = if n < scale.commented() {
+                json!({"budget.pass": "loaded"})
+            } else {
+                json!({})
+            };
+            items.push(item(&task_id(n), &format!("Budget task {n}"), &slot));
+        }
+        let (mut config, github) = github_projects_with_items(&sandbox, items);
+        let board = Board::new(config["endpoint"].as_str().unwrap(), &clock, 0, None);
+        config["endpoint"] = json!(board.endpoint);
+        config["pacing"] = json!({});
+        sandbox.project_document(&document(&json!({
+            "board": {"plugin": "github-projects", "config": config,
+                      "cache": {"enabled": cache}},
+        })));
+        for n in 0..scale.commented() {
+            for comment in 0..=(n % 5) {
+                github.add_comment(&task_id(n), &format!("comment {comment} on {n}"));
+            }
+        }
+        let template = sandbox.project().join("picture.md");
+        std::fs::write(&template, PICTURE).unwrap();
+        let mut workload = Self {
+            sandbox,
+            github,
+            board,
+            clock,
+            cache_home: PathBuf::new(),
+            scale,
+            template,
+            imaged: Vec::new(),
+        };
+        workload.cache_home = workload.sandbox.subdirectory("cache-home");
+        for n in 0..scale.images() {
+            let directory = workload.sandbox.subdirectory(&format!("image-{n}"));
+            std::fs::create_dir_all(&directory).unwrap();
+            let shot = directory.join("shot.png");
+            std::fs::write(&shot, images::png(n as u64, 256 * 1024)).unwrap();
+            let template = workload.template.display().to_string();
+            let shot = shot.display().to_string();
+            let (created, _) = workload.run(&[
+                "document",
+                "create",
+                "board",
+                "--project",
+                "P-1",
+                "--title",
+                &format!("Imaged {n}"),
+                "--template",
+                &template,
+                "--var",
+                "note=created",
+                "--no-interactive",
+                "--asset",
+                &shot,
+                "--json",
+            ]);
+            workload.imaged.push(
+                created["items"][0]["id"]
+                    .as_str()
+                    .expect("the imaged document")
+                    .to_owned(),
+            );
+        }
+        // Nothing the setup read is kept: every sequence starts from what it alone did.
+        let _ = std::fs::remove_dir_all(&workload.cache_home);
+        workload
+    }
+
+    /// Where the board's and the attachment host's ledgers stand now.
+    fn mark(&self) -> (usize, usize) {
+        (self.github.served().len(), self.board.calls().len())
+    }
+
+    /// Every GraphQL request and attachment read the ledgers took since `mark`, each once.
+    fn spent_since(&self, (documents, calls): (usize, usize)) -> Spent {
+        let served = &self.github.served()[documents..];
+        Spent {
+            requests: served.len() as u64,
+            points: served
+                .iter()
+                .map(|(document, _)| {
+                    worst_case_point_cost(document)
+                        .expect("every document this source sends prices")
+                })
+                .sum(),
+            hits: 0,
+            rest: self.board.calls()[calls..]
+                .iter()
+                .filter(|call| call.path.starts_with("/user-attachments/assets/"))
+                .count() as u64,
         }
     }
-    arguments.push("--json".to_owned());
-    arguments
-}
 
-fn run(followups: &Followups, arguments: &[String]) -> (Value, Vec<(String, Value)>) {
-    let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
-    followups.ok(&arguments)
-}
-
-/// Each detail's id and version, from a `show-many` or a listing.
-fn versions(answer: &Value, key: &str) -> Vec<(String, String)> {
-    answer[key]
-        .as_array()
-        .expect("a list")
-        .iter()
-        .map(|entry| {
-            let task = if key == "details" {
-                &entry["items"][0]
-            } else {
-                entry
-            };
-            (
-                task["id"].as_str().expect("an id").to_owned(),
-                task["item"]["version"]
-                    .as_str()
-                    .expect("a version")
-                    .to_owned(),
-            )
-        })
-        .collect()
-}
-
-// llmlint: ignore-block[budgets_reuse_gate_telemetry] The budget compares the same workload with the cache on and with it off, which no behavioural journey runs — the cache's journeys hold small boards to exact requests, cache on alone — and its task fixes the design: the e2e journeys record the four sequences in both modes, and the reporter only reads what they recorded.
-/// The four sequences against one board, with the cache on or off: what each cost.
-fn sequences(cache: bool) -> Vec<Value> {
-    let followups = Followups::new(cache);
-    let ids = followup_ids();
-    let mut costs = Vec::new();
-
-    // 1. A cold read of the twenty with their comments.
-    let (cold, served) = run(&followups, &show_many(&ids, &[], cache));
-    costs.push(cost(&served));
-    let held = versions(&cold, "details");
-
-    // 2. The same read, pinned to the versions it returned, nothing changed.
-    let (warm, served) = run(&followups, &show_many(&ids, &held, cache));
-    if cache {
-        assert!(
-            served.is_empty(),
-            "a warm pinned re-read sends nothing: {served:?}"
+    /// One command that had to succeed: what it printed and what the ledgers took while it ran
+    /// — its own spend, as long as no other command runs beside it.
+    fn run(&self, arguments: &[&str]) -> (Value, Spent) {
+        let mark = self.mark();
+        let output = self
+            .sandbox
+            .command()
+            .env("XDG_CACHE_HOME", &self.cache_home)
+            .envs(self.clock.client_env(0))
+            .args(arguments)
+            .assert()
+            .get_output()
+            .clone();
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "`onetaskgraph {}` failed\n{}",
+            arguments.join(" "),
+            stderr(&output)
         );
-        assert!(
-            warm["details"]
-                .as_array()
-                .unwrap()
+        (
+            serde_json::from_str(&stdout(&output)).unwrap_or(Value::Null),
+            self.spent_since(mark),
+        )
+    }
+
+    /// The ids of the items of `kind` a pass loads, qualified.
+    fn loaded(&self, kind: &str) -> Vec<String> {
+        let ids: Vec<String> = match kind {
+            "tasks" => (0..self.scale.commented()).map(task_id).collect(),
+            "projects" => (0..self.scale.loaded_projects()).map(project_id).collect(),
+            "documents" => (0..self.scale.loaded_documents() - self.scale.images())
+                .map(document_id)
+                .collect(),
+            _ => self
+                .imaged
                 .iter()
-                .all(|detail| detail["cache"]["served"] == "cache")
-        );
+                .map(|id| id.strip_prefix("board:").unwrap().to_owned())
+                .collect(),
+        };
+        ids.into_iter().map(|id| format!("board:{id}")).collect()
     }
-    costs.push(cost(&served));
 
-    // 3. Five change, then a narrowed listing over its pages and the full loads of its twenty
-    //    results, pinned to the versions the listing carried.
-    for n in 0..5 {
-        followups
-            .board
-            .edit_title(&github_extra_task(n * 3), "changed since the last pass");
-    }
-    let mut listing = vec!["task".to_owned(), "list".to_owned(), "--json".to_owned()];
-    listing.extend(NARROWED.iter().map(|word| (*word).to_owned()));
-    listing.extend(["--limit".to_owned(), "100".to_owned()]);
-    let (listed, mut served) = run(&followups, &listing);
-    let listed_versions = versions(&listed, "items");
-    assert_eq!(listed_versions.len(), FOLLOWUPS);
-    let listed_ids: Vec<String> = listed_versions.iter().map(|(id, _)| id.clone()).collect();
-    let (_, loads) = run(&followups, &show_many(&listed_ids, &listed_versions, cache));
-    served.extend(loads);
-    costs.push(cost(&served));
-
-    // 4. The follow-ups comment pass: a narrowed listing, a pinned read of its twenty, two
-    //    comments on each, and one batched, unpinned read of them all as verification.
-    let (listed, mut served) = run(&followups, &listing);
-    let listed_versions = versions(&listed, "items");
-    let (read, loads) = run(&followups, &show_many(&listed_ids, &listed_versions, cache));
-    served.extend(loads);
-    let mut current: Vec<(String, String)> = versions(&read, "details");
-    let mut unvouched = 0_u64;
-    for round in 0..2 {
-        for (id, version) in &mut current {
-            let mut arguments = vec![
-                "task".to_owned(),
-                "comment".to_owned(),
-                "add".to_owned(),
-                id.clone(),
-                "--json".to_owned(),
-            ];
-            if cache {
-                arguments.extend(["--expect".to_owned(), version.clone()]);
-            }
-            let before = followups.board.served().len();
-            let output = followups
-                .sandbox
-                .command()
-                .env("XDG_CACHE_HOME", &followups.cache_home)
-                .args(&arguments)
-                .write_stdin(format!("reply {round}"))
-                .assert()
-                .success()
-                .get_output()
-                .clone();
-            served.extend(followups.board.served()[before..].to_vec());
-            if cache {
-                let written: Value =
-                    serde_json::from_slice(&output.stdout).expect("the comment's JSON");
-                match written["result"]["version"].as_str() {
-                    Some(next) => *version = next.to_owned(),
-                    None => unvouched += 1,
+    /// Load every item of `kind` a pass loads, each pinned to `pins`'s version for it when
+    /// given: what it spent, and each one's version.
+    fn load(
+        &self,
+        kind: &str,
+        pins: Option<&[(String, String)]>,
+    ) -> (Spent, Vec<(String, String)>) {
+        let ids = self.loaded(kind);
+        let pin_of = |id: &str| {
+            pins.and_then(|pins| pins.iter().find(|(pinned, _)| pinned == id))
+                .map(|(_, version)| version.clone())
+        };
+        let mut spent = Spent::default();
+        let mut versions = Vec::new();
+        if kind == "tasks" {
+            // Whole detail batches per invocation, so the batched requests are the ones a single
+            // invocation sends, and the 10x pass's pinned ids stay under Windows' 32,767-character
+            // command line (`os error 206`).
+            for chunk in ids.chunks(2 * DETAIL_BATCH) {
+                let mut arguments = vec!["task".to_owned(), "show-many".to_owned()];
+                arguments.extend(chunk.iter().cloned());
+                for id in chunk {
+                    if let Some(version) = pin_of(id) {
+                        arguments.extend(["--pin".to_owned(), format!("{id}={version}")]);
+                    }
+                }
+                arguments.push("--json".to_owned());
+                let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
+                let (read, cost) = self.run(&arguments);
+                spent.add(cost);
+                for detail in read["details"].as_array().expect("details") {
+                    let task = &detail["items"][0];
+                    if detail["cache"]["served"] == "cache" {
+                        spent.hits += 1;
+                    }
+                    versions.push((
+                        task["id"].as_str().unwrap().to_owned(),
+                        task["item"]["version"].as_str().unwrap().to_owned(),
+                    ));
                 }
             }
+            return (spent, versions);
+        }
+        let verb = if kind == "projects" {
+            "project"
+        } else {
+            "document"
+        };
+        for id in ids {
+            let mut arguments = vec![verb.to_owned(), "show".to_owned(), id.clone()];
+            if let Some(version) = pin_of(&id) {
+                arguments.extend(["--pin".to_owned(), version]);
+            }
+            arguments.push("--json".to_owned());
+            let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
+            let (read, cost) = self.run(&arguments);
+            // Said by the answer itself, so it holds while another pass runs beside this one.
+            if read["cache"]["served"] == "cache" {
+                spent.hits += 1;
+            }
+            spent.add(cost);
+            versions.push((id, version_of(&read)));
+        }
+        (spent, versions)
+    }
+
+    /// Render every imaged document again keeping its picture: what reads the picture's bytes.
+    fn render(&self, note: &str) -> Spent {
+        let mut spent = Spent::default();
+        for id in &self.imaged {
+            let note = format!("note={note}");
+            let (_, cost) = self.run(&[
+                "document",
+                "render",
+                id,
+                "--var",
+                &note,
+                "--no-interactive",
+                "--json",
+            ]);
+            if cost.rest == 0 {
+                spent.hits += 1;
+            }
+            spent.add(cost);
+        }
+        spent
+    }
+
+    /// The version a listing of `kind` carries for each item a pass loads.
+    fn listed(&self, kind: &str) -> (Spent, Vec<(String, String)>) {
+        let arguments: Vec<&str> = match kind {
+            "tasks" => vec![
+                "task",
+                "list",
+                "--source",
+                "board",
+                "--metadata",
+                "budget.pass=loaded",
+                "--limit",
+                "100",
+                "--json",
+            ],
+            "projects" => vec![
+                "project", "list", "--source", "board", "--limit", "100", "--json",
+            ],
+            _ => vec![
+                "document", "list", "--source", "board", "--limit", "100", "--json",
+            ],
+        };
+        let mut spent = Spent::default();
+        let mut versions = Vec::new();
+        let mut page: Option<String> = None;
+        loop {
+            let mut walking: Vec<&str> = arguments.clone();
+            if let Some(token) = &page {
+                walking.extend(["--page", token]);
+            }
+            let (listing, cost) = self.run(&walking);
+            spent.add(cost);
+            for item in listing["items"].as_array().expect("a listing") {
+                if let Some(version) = item["item"]["version"].as_str() {
+                    versions.push((item["id"].as_str().unwrap().to_owned(), version.to_owned()));
+                }
+            }
+            match listing["next"].as_str() {
+                Some(next) => page = Some(next.to_owned()),
+                None => return (spent, versions),
+            }
         }
     }
-    let (_, verify) = run(&followups, &show_many(&listed_ids, &[], cache));
-    served.extend(verify);
-    let mut pass = cost(&served);
-    pass["writes_left_unvouched"] = json!(unvouched);
-    costs.push(pass);
-    costs
+
+    /// Change the first `changed` items of `kind` a pass loads, as a person would: a task's
+    /// body, and a project's or a document's title — the document's keeping the prefix that
+    /// makes it one, and the project's body keeping the marker that makes it one.
+    fn edit(&self, kind: &str) {
+        for id in self.loaded(kind).iter().take(self.scale.changed()) {
+            let native = id.strip_prefix("board:").unwrap();
+            match kind {
+                "tasks" => self
+                    .github
+                    .edit_body(native, &format!("{native}, changed by a person")),
+                "projects" => self
+                    .github
+                    .edit_title(native, &format!("{native}, changed by a person")),
+                _ => self.github.edit_title(
+                    native,
+                    &format!("{DESIGN_TITLE_PREFIX}{native}, changed by a person"),
+                ),
+            }
+        }
+    }
+
+    /// Write the first `changed` items of `kind` a pass loads through the binary.
+    fn write(&self, kind: &str) -> Spent {
+        let mut spent = Spent::default();
+        for id in self.loaded(kind).iter().take(self.scale.changed()) {
+            let arguments: Vec<&str> = match kind {
+                "tasks" => vec!["task", "status", "set", id, "in-progress", "--json"],
+                "projects" => vec![
+                    "project",
+                    "metadata",
+                    "set",
+                    id,
+                    "budget.note",
+                    "\"w\"",
+                    "--json",
+                ],
+                _ => vec![
+                    "document",
+                    "metadata",
+                    "set",
+                    id,
+                    "budget.note",
+                    "\"w\"",
+                    "--json",
+                ],
+            };
+            spent.add(self.run(&arguments).1);
+        }
+        spent
+    }
+
+    /// The four sequences of `kind` on this board: what each spent.
+    fn sequences(&self, kind: &str) -> Vec<Spent> {
+        if kind == "asset-bytes" {
+            let cold = self.render("cold");
+            let unchanged = self.render("unchanged");
+            self.edit("imaged");
+            let after = self.render("after edits");
+            let mut rendered_again = self.render("written");
+            rendered_again.add(self.render("read again"));
+            return vec![cold, unchanged, after, rendered_again];
+        }
+        let loads = if kind == "manifests" { "imaged" } else { kind };
+        let (cold, held) = self.load(loads, None);
+        // Two passes at once, each pinned to what the cold load returned. Each command's slice
+        // of the ledgers would hold the other's requests too, so the two are measured as one
+        // span, every request once; the hits are what each answer said of itself.
+        let mark = self.mark();
+        let hits: u64 = std::thread::scope(|scope| {
+            let passes: Vec<_> = (0..2)
+                .map(|_| scope.spawn(|| self.load(loads, Some(&held)).0.hits))
+                .collect();
+            passes
+                .into_iter()
+                .map(|pass| pass.join().expect("a pass"))
+                .sum()
+        });
+        let unchanged = Spent {
+            hits,
+            ..self.spent_since(mark)
+        };
+        self.edit(loads);
+        let listing_kind = match kind {
+            "tasks" | "projects" => kind,
+            _ => "documents",
+        };
+        let (mut after, listed) = self.listed(listing_kind);
+        after.add(self.load(loads, Some(&listed)).0);
+        let mut written = self.write(loads);
+        let (listing, listed) = self.listed(listing_kind);
+        written.add(listing);
+        written.add(self.load(loads, Some(&listed)).0);
+        vec![cold, unchanged, after, written]
+    }
 }
 
-/// The refresh read a written task costs when its write's response cannot vouch for a version,
-/// as against GitHub itself, where a response is stamped in the second of the change it made:
-/// an expected write answered before its task settles, then a read pinned to the version the
-/// caller held, which the cache cannot answer and the board does.
-fn refresh_after_unsettled_write() -> Value {
-    let cached = Cached::new();
-    let (first, _) = cached.ok(&["task", "show", "board:T-3", "--json"]);
-    let version = version_of(&first);
-    cached.board.read_as_it_changes(true);
-    let (written, _) = cached.ok(&[
-        "task",
-        "priority",
-        "set",
-        "board:T-3",
-        "high",
-        "--expect",
-        &version,
-        "--json",
-    ]);
-    let unvouched = written["result"]["version"].is_null();
-    cached.board.read_as_it_changes(false);
-    let before = cached.board.served().len();
-    cached.ok(&["task", "show", "board:T-3", "--pin", &version, "--json"]);
-    let mut refresh = cost(&cached.board.served()[before..]);
-    refresh["version_unvouched"] = json!(unvouched);
-    refresh
+/// Every kind's four sequences at one scale, with the cache on or off, on one board: each kind's
+/// cold sequence reads none of the entries another kind's sequences kept.
+fn measured(scale: Scale, cache: bool) -> Vec<Vec<Spent>> {
+    let workload = Workload::new(scale, cache);
+    let measured: Vec<Vec<Spent>> = KINDS.iter().map(|kind| workload.sequences(kind)).collect();
+    if !cache {
+        // With nothing kept, each of the two concurrent passes makes exactly the cold load's
+        // reads, so a span that counted any request twice — or missed one — reads otherwise.
+        for (kind, sequences) in KINDS.iter().zip(&measured) {
+            if *kind == "asset-bytes" {
+                continue;
+            }
+            let (cold, unchanged) = (sequences[0], sequences[1]);
+            assert_eq!(
+                (unchanged.requests, unchanged.points),
+                (2 * cold.requests, 2 * cold.points),
+                "{kind}: two concurrent passes are counted once each"
+            );
+        }
+    }
+    measured
 }
 
 /// The stale-option fallback, with the cache on and off: a priority write after the option it
@@ -236,60 +590,78 @@ fn stale_option(cache: bool) -> Value {
     if cache {
         let _ = written_version(&written);
     }
-    cost(&cached.board.served()[before..])
+    let served = &cached.board.served()[before..];
+    let points: u64 = served
+        .iter()
+        .map(|(document, _)| worst_case_point_cost(document).expect("priced"))
+        .sum();
+    json!({"requests": served.len(), "points": points})
 }
 
-// llmlint: ignore-end[budgets_reuse_gate_telemetry]
-
-/// A figure `copy_recopy`'s re-copy journeys recorded in this crate's telemetry, when they have.
-fn copy_figure(name: &str) -> Value {
-    std::fs::read(directory().join(format!("{name}.json")))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-        .map_or(
-            Value::Null,
-            |recorded| json!({"requests": recorded["requests"], "points": recorded["points"]}),
-        )
-}
-
+// llmlint: ignore-block[budgets_reuse_gate_telemetry] The budget compares the same workload with the cache on and with it off, which no behavioural journey runs — the cache's journeys hold small boards to exact requests, cache on alone — and its task fixes the design: the e2e journeys record the four sequences in both modes, and the reporter only reads what they recorded.
 #[test]
-fn the_cache_spends_no_more_board_points_than_no_cache_across_the_four_sequences() {
-    let off = sequences(false);
-    let on = sequences(true);
+fn the_cache_spends_no_more_board_points_than_no_cache_over_every_kind_sequence_and_scale() {
+    let runs: Vec<(&str, bool, Vec<Vec<Spent>>)> = std::thread::scope(|scope| {
+        let handles: Vec<_> = SCALES
+            .iter()
+            .flat_map(|(name, factor)| {
+                [false, true].map(|cache| {
+                    let scale = Scale { factor: *factor };
+                    (*name, cache, scope.spawn(move || measured(scale, cache)))
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|(name, cache, handle)| (name, cache, handle.join().expect("a run")))
+            .collect()
+    });
     let mut figure = i64::MIN;
-    let mut breakdown = serde_json::Map::new();
-    for (index, name) in SEQUENCES.iter().enumerate() {
-        let difference =
-            on[index]["points"].as_i64().unwrap() - off[index]["points"].as_i64().unwrap();
-        figure = figure.max(difference);
-        breakdown.insert(
-            (*name).to_owned(),
-            json!({"on": on[index], "off": off[index], "difference": difference}),
+    let mut scales = serde_json::Map::new();
+    for (name, _) in SCALES {
+        let of = |cache: bool| {
+            &runs
+                .iter()
+                .find(|(scale, on, _)| *scale == name && *on == cache)
+                .expect("both runs")
+                .2
+        };
+        let (off, on) = (of(false), of(true));
+        let mut kinds = serde_json::Map::new();
+        let (mut total_off, mut total_on) = (Spent::default(), Spent::default());
+        for (k, kind) in KINDS.iter().enumerate() {
+            let mut cells = serde_json::Map::new();
+            for (s, sequence) in sequences_of(kind).iter().enumerate() {
+                let difference = i64::try_from(on[k][s].points).unwrap()
+                    - i64::try_from(off[k][s].points).unwrap();
+                figure = figure.max(difference);
+                total_off.add(off[k][s]);
+                total_on.add(on[k][s]);
+                cells.insert(
+                    (*sequence).to_owned(),
+                    json!({"on": on[k][s].json(), "off": off[k][s].json(),
+                           "difference": difference}),
+                );
+            }
+            kinds.insert((*kind).to_owned(), Value::Object(cells));
+        }
+        let total =
+            i64::try_from(total_on.points).unwrap() - i64::try_from(total_off.points).unwrap();
+        figure = figure.max(total);
+        scales.insert(
+            name.to_owned(),
+            json!({"kinds": kinds, "total": {"on": total_on.json(), "off": total_off.json(),
+                                             "difference": total}}),
         );
     }
-    let mut total_off = json!({"requests": 0, "points": 0});
-    let mut total_on = json!({"requests": 0, "points": 0});
-    for index in 0..SEQUENCES.len() {
-        add(&mut total_off, &off[index]);
-        add(&mut total_on, &on[index]);
-    }
     let stale = json!({"on": stale_option(true), "off": stale_option(false)});
-    let refresh = refresh_after_unsettled_write();
-    let recopy = json!({
-        "unchanged_recopy_beyond_listing": copy_figure("github-copy-recopy-unchanged"),
-        "five_changed_recopy": copy_figure("github-copy-recopy-five-changed"),
-    });
     let detail = format!(
-        "largest difference, cache on minus cache off, in points over the four sequences: \
-         {figure}; per sequence {}; all four, off {total_off} and on {total_on}; the \
-         stale-option fallback, the cache's one named exception and outside the figure: {stale}; \
-         otg-copy-comments' recorded re-copies: {recopy}; a written task whose response vouches \
-         for no version costs one refresh read at its next pinned read, measured on a write \
-         answered before its task settled as against GitHub itself: {refresh} — on this \
-         loopback {} of forty comment writes were left so, against GitHub itself every one, \
-         which the pass's verifying read already makes",
-        Value::Object(breakdown.clone()),
-        on[3]["writes_left_unvouched"]
+        "largest difference, cache on minus cache off, in GitHub GraphQL points over every \
+         kind, sequence and scale and each scale's total: {figure}; by scale, kind and \
+         sequence, requests, points, loads answered with no request and attachment reads on \
+         and off: {}; the stale-option fallback, the cache's one named exception and outside \
+         the figure: {stale}",
+        Value::Object(scales.clone())
     );
     let directory = directory();
     std::fs::create_dir_all(&directory).expect("the telemetry directory");
@@ -300,12 +672,11 @@ fn the_cache_spends_no_more_board_points_than_no_cache_across_the_four_sequences
             "value": figure,
             "detail": detail,
             "workload": WORKLOAD,
-            "sequences": Value::Object(breakdown),
+            "scales": Value::Object(scales),
             "stale_option": stale,
-            "refresh_read_per_written_item": refresh,
-            "recopy": recopy,
         }))
         .expect("JSON"),
     )
     .expect("the telemetry is written");
 }
+// llmlint: ignore-end[budgets_reuse_gate_telemetry]

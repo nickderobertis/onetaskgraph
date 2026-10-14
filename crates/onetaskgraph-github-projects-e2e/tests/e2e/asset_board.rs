@@ -274,6 +274,10 @@ impl Board {
     pub fn calls(&self) -> Vec<Call> {
         self.state.lock().unwrap().calls.clone()
     }
+    /// The bytes this host holds at `path`, as an authenticated read of it would answer.
+    pub fn attachment(&self, path: &str) -> Option<Vec<u8>> {
+        self.state.lock().unwrap().assets.get(path).cloned()
+    }
     pub fn transfer_issue(&self, id: &str, repository: &str) {
         self.state
             .lock()

@@ -598,7 +598,8 @@ fn a_journey_the_account_cannot_afford_does_not_run_and_says_which_budget_was_sh
     // whose GraphQL budget is one point short of this session plus its retained buffer.
     // Nothing below the precondition is reached: the decline is the session's first act.
     let buffer = RETAINED_BUFFER.of(LIMIT);
-    let remaining = estimated(Budget::Graphql) + buffer - 1;
+    let demand = budget::session_design_points(onetaskgraph_github_live::quota::EntryPoint::Main);
+    let remaining = demand + buffer - 1;
     let standin = Standin::with(remaining, LIMIT);
     journey::against(journey::Endpoints {
         // Both point at the stand-in, which answers the allowance read and 404s everything
@@ -638,13 +639,7 @@ fn a_journey_the_account_cannot_afford_does_not_run_and_says_which_budget_was_sh
         "{message}"
     );
     assert!(message.contains("graphql"), "{message}");
-    for figure in [
-        LIMIT,
-        remaining,
-        estimated(Budget::Graphql),
-        buffer,
-        RESETS_AT,
-    ] {
+    for figure in [LIMIT, remaining, demand, buffer, RESETS_AT] {
         assert!(message.contains(&figure.to_string()), "{figure}: {message}");
     }
     // One request, and it is the allowance read: a declined session spends the account
@@ -653,5 +648,30 @@ fn a_journey_the_account_cannot_afford_does_not_run_and_says_which_budget_was_sh
 
     if std::env::var_os(budget::FOLLOW_THROUGH).is_some() {
         std::panic::resume_unwind(declined);
+    }
+}
+
+#[tokio::test]
+async fn the_combined_design_admits_both_roles_and_keeps_the_whole_retained_buffer() {
+    use onetaskgraph_github_live::quota::EntryPoint;
+    let retained = RETAINED_BUFFER.of(LIMIT);
+    // The design total, a reservation that may exceed the measured ceiling
+    // (`tests/fixtures/session-cost.md`).
+    for (role, estimate) in [(EntryPoint::Main, 327), (EntryPoint::Assets, 106)] {
+        for (remaining, succeeds) in [
+            (retained + estimate, true),
+            (retained + estimate - 1, false),
+        ] {
+            let server = Standin::serving((
+                "200 OK",
+                budget::documented_answer(LIMIT, remaining, LIMIT, RESETS_AT).to_string(),
+            ));
+            let ledger = Accounting::with_query_prices();
+            let result =
+                budget::precondition_session("test-token", &server.host, &ledger, role).await;
+            assert_eq!(result.is_ok(), succeeds);
+            assert_eq!(*server.asked.lock().unwrap(), vec!["GET /rate_limit"]);
+            assert_eq!(ledger.snapshot().total_requests(), 1);
+        }
     }
 }

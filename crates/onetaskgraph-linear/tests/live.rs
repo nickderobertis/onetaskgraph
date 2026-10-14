@@ -279,6 +279,7 @@ async fn drive_every_declared_capability(
         ..TaskQuery::default()
     };
     let project = |name: &str| Project {
+        version: None,
         id: NativeId("live-source-item".into()),
         title: name.to_owned(),
         content: Some("temporary credentialed write; the live lane removes this".into()),
@@ -621,7 +622,7 @@ async fn drive_every_declared_capability(
     drive_documents(run, source, &alpha_id, &title(5), &title(6)).await?;
     drive_follow_ups(run, source, &title(7), &title(8), &title(9), &title(10)).await?;
     // Renamed to another of this run's own titles, so the artifact cleanup still knows it.
-    linear_gives_no_change_token(
+    every_field_change_moves_a_linear_tasks_token(
         source,
         (&second_id, &first_id, &orphan_id),
         (&title(11), &label(&only_label)),
@@ -629,16 +630,17 @@ async fn drive_every_declared_capability(
     .await
 }
 
-/// A Linear task carries no change token, through every kind of change a copy would have to
-/// see — and what this lane learns along the way is printed, as the evidence a token would rest
-/// on.
+/// A Linear task carries a `lin1` change token through every kind of change a copy has to see,
+/// and every change to a member the token covers moves it — to a later one, or to one never
+/// ordered beside the last — and what this lane learns along the way is printed as evidence.
 ///
-/// `docs/plugin-protocol.md` §4.13d gives Linear none until this lane proves which of those
-/// changes move `Issue.updatedAt`, since a token that missed one would let a copy skip a task
-/// that changed. So each change is made to one of this run's tasks in turn, a second apart, and
-/// every read after it is held to carrying no `version`; whether its `updated_at` moved is
-/// printed beside the change, so a later change to the plugin has the record to decide from.
-async fn linear_gives_no_change_token(
+/// `docs/plugin-protocol.md` §4.13d states what `lin1` covers: a task's fields always, its
+/// forward edges only with the store's cache attached — which this source, built without one,
+/// is not — and its comments never. So each change is made to one of this run's tasks in turn,
+/// a second apart, and every read after it is held to carrying a token; a field change is held
+/// to moving it, and a comment or a relation change, which the token does not vouch for here,
+/// is only recorded. Whether `updated_at` and the token moved is printed beside each change.
+async fn every_field_change_moves_a_linear_tasks_token(
     source: &dyn TaskSource,
     (task, first, orphan): (&NativeId, &NativeId, &NativeId),
     (renamed, extra_label): (&str, &Label),
@@ -651,25 +653,48 @@ async fn linear_gives_no_change_token(
             .map_err(|error| format!("live read of the task failed: {error}"))?
             .ok_or_else(|| "the task was not there".to_owned())?;
         ensure!(
-            held.version.is_none(),
-            "Linear gave a change token, {:?}, which docs/plugin-protocol.md §4.13d says it does \
-             not until this lane proves what Issue.updatedAt covers",
+            held.version
+                .as_deref()
+                .is_some_and(|token| token.starts_with("lin1|")),
+            "Linear gave the task {:?} rather than a `lin1` change token, which \
+             docs/plugin-protocol.md §4.13d says every whole read carries",
             held.version
         );
         Ok::<Task, String>(held)
+    };
+    // Whether a change to a member the token covers moved it: never to an equal or an earlier
+    // token, which would let a cache serve the task as it was.
+    let moved = |kind: &str, before: &Task, after: &Task| {
+        let (Some(was), Some(now)) = (before.version.as_deref(), after.version.as_deref()) else {
+            return Ok(());
+        };
+        let order = source.order_versions(was, now);
+        ensure!(
+            !matches!(
+                order,
+                Some(std::cmp::Ordering::Equal | std::cmp::Ordering::Greater)
+            ),
+            "{kind} left the task's token at or before {was}: it read {now} ({order:?})"
+        );
+        Ok::<(), String>(())
     };
     let pause = || tokio::time::sleep(std::time::Duration::from_millis(1_100));
     let mut evidence = Vec::new();
     let mut before = read().await?;
     let mut note = |kind: &str, before: &Task, after: &Task| {
         evidence.push(format!(
-            "{kind}: updatedAt {} → {}",
+            "{kind}: updatedAt {} → {}, token {}",
             before
                 .updated_at
                 .map_or("none".to_owned(), |at| at.to_rfc3339()),
             after
                 .updated_at
                 .map_or("none".to_owned(), |at| at.to_rfc3339()),
+            if before.version == after.version {
+                "unmoved"
+            } else {
+                "moved"
+            },
         ));
     };
     let body = |text: &str| {
@@ -723,6 +748,7 @@ async fn linear_gives_no_change_token(
         .map_err(|error| format!("live content write failed: {error}"))?
         .ok_or_else(|| "the task to edit was not there".to_owned())?;
     let after = read().await?;
+    moved("a body edit", &before, &after)?;
     note("a body edit", &before, &after);
     before = after;
 
@@ -739,6 +765,7 @@ async fn linear_gives_no_change_token(
         .map_err(|error| format!("live title write failed: {error}"))?
         .ok_or_else(|| "the task to rename was not there".to_owned())?;
     let after = read().await?;
+    moved("a title edit", &before, &after)?;
     note("a title edit", &before, &after);
     before = after;
 
@@ -759,6 +786,7 @@ async fn linear_gives_no_change_token(
         .await
         .map_err(|error| format!("live label write failed: {error}"))?;
     let after = read().await?;
+    moved("a label change", &before, &after)?;
     note("a label change", &before, &after);
     before = after;
 
@@ -773,6 +801,7 @@ async fn linear_gives_no_change_token(
         .map_err(|error| format!("live metadata write failed: {error}"))?
         .ok_or_else(|| "the task to annotate was not there".to_owned())?;
     let after = read().await?;
+    moved("a metadata change", &before, &after)?;
     note("a metadata change", &before, &after);
     before = after;
 
@@ -783,6 +812,7 @@ async fn linear_gives_no_change_token(
         .map_err(|error| format!("live priority write failed: {error}"))?
         .ok_or_else(|| "the task to prioritise was not there".to_owned())?;
     let after = read().await?;
+    moved("a priority change", &before, &after)?;
     note("a priority change", &before, &after);
     before = after;
 
@@ -818,11 +848,11 @@ async fn linear_gives_no_change_token(
         .map_err(|error| format!("live status write failed: {error}"))?
         .ok_or_else(|| "the task to finish was not there".to_owned())?;
     let after = read().await?;
+    moved("a status change", &before, &after)?;
     note("a status change", &before, &after);
 
     eprintln!(
-        "Linear's Issue.updatedAt across every change a copy has to see, for whoever proves a \
-         Linear change token:\n  {}",
+        "Linear's Issue.updatedAt and lin1 token across every change a copy has to see:\n  {}",
         evidence.join("\n  ")
     );
     Ok(())
@@ -1025,6 +1055,7 @@ async fn drive_follow_ups(
         .write_document(&ItemWrite {
             target: None,
             item: Document {
+                version: None,
                 id: NativeId("live-source-item".into()),
                 title: document_title.to_owned(),
                 content: Some("A probed document.".to_owned()),
@@ -1215,6 +1246,7 @@ async fn drive_documents(
     loose: &str,
 ) -> Result<(), String> {
     let document = |title: &str, project: Option<&NativeId>| Document {
+        version: None,
         id: NativeId("live-source-item".into()),
         title: title.to_owned(),
         content: Some("temporary credentialed write; the live lane removes this".into()),

@@ -1166,7 +1166,7 @@ pub(crate) fn batched(served: &[(String, Value)], document: &str) -> Vec<String>
 }
 
 #[test]
-fn a_copy_by_query_loads_only_the_tasks_whose_listed_version_the_cache_does_not_hold() {
+fn a_copy_by_query_reads_its_tasks_edges_from_the_board_in_the_one_batch_that_carries_them() {
     let followups = Followups::new(true);
     let (first, served) = followups.copy("first");
     assert_eq!(first["items"].as_array().unwrap().len(), FOLLOWUPS);
@@ -1183,14 +1183,18 @@ fn a_copy_by_query_loads_only_the_tasks_whose_listed_version_the_cache_does_not_
             .board
             .edit_title(id, "changed since the first copy");
     }
-    // Into a folder holding none of them, so the destination skips nothing: every task is
-    // loaded, and only the five the cache does not hold at their listed version reach the
-    // board.
+    // Into a folder holding none of them, so the destination skips nothing. A copy reads each
+    // task's forward edges, which a board token does not vouch for — a far end can become a
+    // project or a document, or be deleted, without moving it — so every task is read again,
+    // in the one batched read that carries its edges: serving the fields from the cache and
+    // reading the edges alone would cost a request a task.
     let (second, served) = followups.copy("second");
     assert_eq!(second["items"].as_array().unwrap().len(), FOLLOWUPS);
-    let mut expected = changed.clone();
-    expected.sort();
-    assert_eq!(batched(&served, graphql::ISSUE_COPY_DETAILS), expected);
+    assert_eq!(
+        batched(&served, graphql::ISSUE_COPY_DETAILS).len(),
+        FOLLOWUPS,
+        "every task is read again with its edges"
+    );
     assert!(
         served
             .iter()
@@ -1420,7 +1424,13 @@ fn a_bound_copy_with_expect_reports_each_part_landed_rejected_or_unknown_and_ret
 
 /// Run one SDK script — Python's or TypeScript's — against the sandbox, with the cache home and
 /// the task named, answering what it printed.
-fn sdk(cached: &Cached, typescript: bool, script: &str, task: &str, pin: Option<&str>) -> Value {
+pub(crate) fn sdk(
+    cached: &Cached,
+    typescript: bool,
+    script: &str,
+    task: &str,
+    pin: Option<&str>,
+) -> Value {
     let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut command = if typescript {
         let mut command = std::process::Command::new("bun");
@@ -1720,6 +1730,16 @@ fn with_caching_on_the_cache_directory_is_the_only_place_a_file_changes() {
         &v,
         "--json",
     ]);
+    // Projects and documents, read cold and pinned, and the listings that pin them.
+    for (kind, id) in [("project", "board:P-1"), ("document", "board:D-1")] {
+        let (read, _) = cached.ok(&[kind, "show", id, "--json"]);
+        let pin = read["items"][0]["item"]["version"]
+            .as_str()
+            .expect("a version")
+            .to_owned();
+        cached.ok(&[kind, "show", id, "--pin", &pin, "--json"]);
+        cached.ok(&[kind, "list", "--source", "board", "--json"]);
+    }
     let after = tree(&root);
     let cache = cached.cache_home.join("onetaskgraph");
     let changed: Vec<&PathBuf> = after
@@ -1916,7 +1936,7 @@ fn a_github_task_with_no_change_token_is_read_every_time_and_says_why() {
 }
 
 #[test]
-fn a_project_copy_loads_only_the_tasks_its_listing_does_not_find_cached() {
+fn a_project_copy_reads_its_tasks_edges_from_the_board_however_the_cache_holds_them() {
     let cached = Cached::new();
     let copy = |folder: &str| {
         let root = cached.sandbox.project().join(folder);
@@ -1952,16 +1972,15 @@ fn a_project_copy_loads_only_the_tasks_its_listing_does_not_find_cached() {
         "{sent:?}"
     );
     // Into another folder holding none of them: the listing pins each task to the version it
-    // carries, the cache holds every one at it, and none is loaded again.
-    // T-2 was cached whole; T-1 records far ends of other sources beside its own, so the
-    // cache holds no complete page of its edges and it alone is loaded again.
+    // carries and the cache holds every one at it — but a board token does not vouch for a
+    // task's forward edges, so both are read again in the batch that carries their edges.
     let before = cached.board.served().len();
     let (second, _) = copy("second-copy");
     let served = cached.board.served()[before..].to_vec();
     assert_eq!(
         batched(&served, graphql::ISSUE_COPY_DETAILS),
-        ["T-1"],
-        "only the task the cache could not answer is loaded"
+        ["T-1", "T-2"],
+        "every task is read again with its edges"
     );
     assert_eq!(
         first["items"].as_array().unwrap().len(),
@@ -2702,15 +2721,39 @@ fn the_default_cache_lives_under_home_without_xdg_cache_home_and_nowhere_without
     assert!(shown.get("cache").is_none(), "{shown}");
 }
 
+/// The version a later read is pinned to after an expected write whose response left out
+/// `missing`: the version the response determined — or, for a response missing what the token's
+/// facets are read from, which determines none, the version the caller held before it.
+fn pinned_after(written: &Value, held: &str, facet_source: bool, missing: &str) -> String {
+    match written["result"]["version"].as_str() {
+        Some(version) => {
+            assert!(
+                !facet_source,
+                "a response without {missing} spells no gh3 token: {written}"
+            );
+            version.to_owned()
+        }
+        None => {
+            assert!(
+                facet_source,
+                "a response without {missing} still carries every part of the token: {written}"
+            );
+            held.to_owned()
+        }
+    }
+}
+
 #[test]
 fn a_response_carrying_its_token_but_leaving_out_one_member_is_not_taken_for_the_whole_task() {
-    for member in [
-        "labels",
-        "body",
-        "comments",
-        "parent",
-        "createdAt",
-        "number",
+    // The labels, the body and the parent are what the token's facets are read from, so a
+    // response without one determines no version at all; the rest leave it determined.
+    for (member, facet_source) in [
+        ("labels", true),
+        ("body", true),
+        ("parent", true),
+        ("comments", false),
+        ("createdAt", false),
+        ("number", false),
     ] {
         let cached = Cached::new();
         cached.board.set_created_at("T-3", CREATED_AT);
@@ -2727,13 +2770,13 @@ fn a_response_carrying_its_token_but_leaving_out_one_member_is_not_taken_for_the
             &v,
             "--json",
         ]);
-        let v2 = written_version(&written);
+        let pin = pinned_after(&written, &v, facet_source, member);
         cached.board.omit_from_writes(&[]);
-        let (shown, sent) = cached.ok(&["task", "show", "board:T-3", "--pin", &v2, "--json"]);
+        let (shown, sent) = cached.ok(&["task", "show", "board:T-3", "--pin", &pin, "--json"]);
         assert_eq!(
             sent,
             [ONE_READ],
-            "without {member}, the entry is not served at {v2}"
+            "without {member}, the entry is not served at {pin}"
         );
         assert_eq!(served_by(&shown), from_remote());
         assert_eq!(
@@ -2744,12 +2787,19 @@ fn a_response_carrying_its_token_but_leaving_out_one_member_is_not_taken_for_the
             shown["items"][0]["item"]["created_at"], CREATED_AT,
             "{member}"
         );
+        assert_eq!(shown["items"][0]["item"]["priority"], "high", "{member}");
     }
 }
 
 #[test]
 fn a_response_carrying_its_token_but_only_a_first_page_of_one_connection_is_not_taken_whole() {
-    for connection in ["/labels", "/comments", "/projectItems/nodes/0/fieldValues"] {
+    // A first page of the labels or of the board item's values is a first page of what the
+    // facets are read from: no version. One of the comments leaves the token whole.
+    for (connection, facet_source) in [
+        ("/labels", true),
+        ("/comments", false),
+        ("/projectItems/nodes/0/fieldValues", true),
+    ] {
         let cached = Cached::new();
         let (first, _) = cached.ok(&["task", "show", "board:T-3", "--json"]);
         let v = version_of(&first);
@@ -2764,13 +2814,13 @@ fn a_response_carrying_its_token_but_only_a_first_page_of_one_connection_is_not_
             &v,
             "--json",
         ]);
-        let v2 = written_version(&written);
+        let pin = pinned_after(&written, &v, facet_source, connection);
         cached.board.truncate_in_writes(&[]);
-        let (shown, sent) = cached.ok(&["task", "show", "board:T-3", "--pin", &v2, "--json"]);
+        let (shown, sent) = cached.ok(&["task", "show", "board:T-3", "--pin", &pin, "--json"]);
         assert_eq!(
             sent,
             [ONE_READ],
-            "with {connection} going on, the entry is not served at {v2}"
+            "with {connection} going on, the entry is not served at {pin}"
         );
         assert_eq!(served_by(&shown), from_remote());
         assert_eq!(

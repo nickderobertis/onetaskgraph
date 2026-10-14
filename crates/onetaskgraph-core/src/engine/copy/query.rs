@@ -5,7 +5,8 @@
 //! the change token its source gave, so a task whose token is the one its counterpart records
 //! — and whose counterpart reads as the copy that left it — is reported `unchanged` with
 //! `skipped: true` from the listing and the destination read alone, and nothing more of it is
-//! read from its source. Every other task is read whole, the way a copy by id reads it.
+//! read from its source, as long as that token covers every part the copy writes. Every other
+//! task is read whole, the way a copy by id reads it.
 //!
 //! The query's comment activity is never handed to a source. A source that applies it reads
 //! each candidate's comments to confirm it, and the copy would then read them again to carry
@@ -111,7 +112,10 @@ impl Engine {
         since: Option<DateTime<Utc>>,
         running: &mut Running,
     ) -> Result<Option<CopyOutcome>, EngineError> {
-        if listed.item.version.is_none() || self.routes.routes(&request.destination) {
+        if listed.item.version.is_none()
+            || self.routes.routes(&request.destination)
+            || !self.token_covers_a_copy(&listed.id.source, request.comments)
+        {
             return Ok(None);
         }
         let destination = self.writable(&request.destination)?;

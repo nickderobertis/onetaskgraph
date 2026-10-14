@@ -176,6 +176,23 @@ fn a_board_that_prices_a_document_differently_fails_the_run_naming_both_figures(
         }),
         "the board was never asked about {doing}; it answered {asked:?}"
     );
+    let ledger = journey::SESSION.snapshot();
+    let probes = ledger
+        .requests()
+        .iter()
+        .filter(|request| {
+            request
+                .document()
+                .is_some_and(|document| document.contains("dryRun:true"))
+        })
+        .collect::<Vec<_>>();
+    assert!(!probes.is_empty());
+    assert!(
+        probes
+            .iter()
+            .all(|request| request.reported_query_cost() == Some(1)),
+        "hypothetical mispricing must not become the executed request's primary charge"
+    );
 }
 
 /// What a joined thread's panic said, whichever way the payload was spelled.

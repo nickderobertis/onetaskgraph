@@ -301,11 +301,18 @@ impl GitHubProjectsSource {
             let response = match response {
                 Ok(response) => response,
                 Err(error) => {
-                    self.ledger
-                        .record(accounting::Request::rest(endpoint.clone()).finished(
-                            accounting::Outcome::Refused,
-                            accounting::RateLimit::default(),
-                        ));
+                    self.ledger.record(
+                        accounting::Request::rest(endpoint.clone())
+                            .finished(
+                                accounting::Outcome::Refused,
+                                accounting::RateLimit::default(),
+                            )
+                            .with_execution(
+                                None,
+                                accounting::ResponseOutcome::TransportError,
+                                waits + 1,
+                            ),
+                    );
                     return Err(SourceError::Unavailable {
                         message: format!("GitHub asset {name} {stage} request failed: {error}"),
                     });
@@ -348,7 +355,12 @@ impl GitHubProjectsSource {
                 Err(error) => {
                     self.ledger.record(
                         accounting::Request::rest(endpoint.clone())
-                            .finished(accounting::Outcome::Refused, limits),
+                            .finished(accounting::Outcome::Refused, limits)
+                            .with_execution(
+                                None,
+                                accounting::ResponseOutcome::TransportError,
+                                waits + 1,
+                            ),
                     );
                     return Err(SourceError::Unavailable {
                         message: format!(
@@ -366,8 +378,19 @@ impl GitHubProjectsSource {
             } else {
                 accounting::Outcome::Refused
             };
-            self.ledger
-                .record(accounting::Request::rest(endpoint.clone()).finished(outcome, limits));
+            self.ledger.record(
+                accounting::Request::rest(endpoint.clone())
+                    .finished(outcome, limits)
+                    .with_execution(
+                        None,
+                        if status.is_success() && limiter.is_none() {
+                            accounting::ResponseOutcome::Success
+                        } else {
+                            accounting::ResponseOutcome::HttpError
+                        },
+                        waits + 1,
+                    ),
+            );
             if let Some(limiter) = limiter {
                 let limited = Limited { limiter, hint };
                 let wait = hint.map_or(backoff, |hint| Duration::from_secs(hint).max(backoff));

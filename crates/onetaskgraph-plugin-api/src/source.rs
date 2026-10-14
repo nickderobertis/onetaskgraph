@@ -10,12 +10,12 @@ use serde_json::Value;
 
 use crate::{
     Asset, AssetName, AssetWrite, AssetsWritten, Capabilities, Comment, CommentBody, CommentCopy,
-    DependencyEdge, Direction, Document, DocumentQuery, ItemKind, ItemWrite, Label, MetadataKey,
-    MetadataRecord, Metering, NativeId, NewComment, Page, PageRequest, Priority, Project,
-    ProjectQuery, SharedClock, SourceError, SourceName, Status, StatusCategory, Task,
-    TaskDetailRead, TaskQuery, TaskRef, TaskUpdate, TaskUpdateOutcome, VersionCoverage, Visibility,
-    WriteJournal, WriteSupport, WriteTarget, assetless, commentless, documentless, unwritable,
-    unwritable_field, unwritable_metadata,
+    DependencyEdge, Direction, Document, DocumentQuery, DocumentVersionCoverage, ItemKind,
+    ItemWrite, Label, MetadataKey, MetadataRecord, Metering, NativeId, NewComment, Page,
+    PageRequest, Priority, Project, ProjectQuery, ProjectVersionCoverage, SharedClock, SourceError,
+    SourceName, Status, StatusCategory, Task, TaskDetailRead, TaskQuery, TaskRef, TaskUpdate,
+    TaskUpdateOutcome, VersionCoverage, Visibility, WriteJournal, WriteSupport, WriteTarget,
+    assetless, commentless, documentless, unwritable, unwritable_field, unwritable_metadata,
 };
 
 /// Whether a source is answering right now.
@@ -104,6 +104,68 @@ pub trait TaskSource: Send + Sync {
             "the {} plugin does not declare that its change token covers a task",
             self.kind()
         ))
+    }
+
+    /// Which parts of a task a copy may take this source's unchanged [`Task::version`] as
+    /// vouching for, when it decides to skip a task its destination already holds as written:
+    /// the task's fields, its comments when the copy carries them, and its forward edges. A copy
+    /// skips only a task whose source covers every one of those it writes.
+    ///
+    /// Defaulted to [`version_coverage`](Self::version_coverage). A source overrides it only to
+    /// state, with its measured bound, a claim about a copy's skip that is not one the cache may
+    /// serve from — as `docs/plugin-protocol.md` §4.13d does for the one plugin that does.
+    fn copy_version_coverage(&self) -> VersionCoverage {
+        self.version_coverage()
+    }
+
+    /// Which parts of a project this source's [`Project::version`] vouches for, on the terms
+    /// of [`version_coverage`](Self::version_coverage).
+    ///
+    /// Defaulted to no part, for the same reason.
+    fn project_version_coverage(&self) -> ProjectVersionCoverage {
+        ProjectVersionCoverage::none(format!(
+            "the {} plugin does not declare that its change token covers a project",
+            self.kind()
+        ))
+    }
+
+    /// Which parts of a document this source's [`Document::version`] vouches for, on the terms
+    /// of [`version_coverage`](Self::version_coverage).
+    ///
+    /// Defaulted to no part, for the same reason.
+    fn document_version_coverage(&self) -> DocumentVersionCoverage {
+        DocumentVersionCoverage::none(format!(
+            "the {} plugin does not declare that its change token covers a document",
+            self.kind()
+        ))
+    }
+
+    /// Tell this source the store's local cache now stands in front of it.
+    ///
+    /// Called exactly once, by the cache as it wraps the source, before any read and before
+    /// any coverage is read — so a source whose token needs a part only a wider selection
+    /// carries can widen its reads here, and declare the coverage that widening buys. Never
+    /// carried over the plugin protocol, as [`version_coverage`](Self::version_coverage) is
+    /// not.
+    ///
+    /// Defaulted to doing nothing: a source not overriding it reads exactly as it did.
+    fn attach_cache(&self) {}
+
+    /// The change token the response that answered this source's last
+    /// [`Direction::DependsOn`] read of task `id` in this process spelled, or `None` when it
+    /// spelled none.
+    ///
+    /// What lets the store's cache keep a task's forward edges by the version they were read
+    /// at when nothing else in the command read the task: those edges are served only to a pin
+    /// that version is at or after, and never vouch for the task's own fields. Synchronous, and
+    /// never carried over the plugin protocol, as [`version_coverage`](Self::version_coverage)
+    /// is not.
+    ///
+    /// Defaulted to `None`: a source whose dependency read spells no token keeps its edges
+    /// remote unless a read of the task itself vouched for them.
+    fn forward_edges_version(&self, id: &NativeId) -> Option<String> {
+        let _ = id;
+        None
     }
 
     /// What this source holds about task `id` — the item it read last in this process — that

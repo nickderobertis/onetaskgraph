@@ -4,12 +4,13 @@
 //! priority, labels, board fields, metadata, project, repository, edges and comments. So each
 //! journey here changes one task of a loopback board by exactly one of those kinds — the way a
 //! person changes it on GitHub, through the board's own state — and holds the token to moving:
-//! to a later one, by the store's own ordering, or for a repository transfer to one the store
-//! does not order at all, while every task the change did not touch keeps the token it had — a
-//! dependency touching both of the tasks it relates, as GitHub records it on both.
-//! `docs/plugin-protocol.md` §4.13d states what each plugin's token keys on; the loopback board
-//! models exactly those five parts, and moves neither time for a dependency or a project
-//! membership, as GitHub moves neither for a dependency.
+//! to a later one, by the store's own ordering, for a change one of the token's two times
+//! carries, or to one the store does not order at all, for a change of its facets — a board
+//! field value, a label — of its relationship count or of its repository, while every task the
+//! change did not touch keeps the token it had — a dependency touching both of the tasks it
+//! relates, as GitHub records it on both. `docs/plugin-protocol.md` §4.13d states what each
+//! plugin's token keys on; the loopback board models exactly those six parts, and moves neither
+//! time for a dependency or a project membership, as GitHub moves neither for a dependency.
 
 use std::collections::BTreeMap;
 
@@ -232,12 +233,14 @@ pub(crate) fn far_ends(kind: &str) -> &'static [&'static str] {
 pub(crate) const TRANSFERRED_TO: &str = "nickderobertis/onetaskgraph-elsewhere";
 
 /// How the store orders a task's token after a change of `kind` against the one before: later
-/// for every kind but a transfer, which a GitHub token compares and never orders.
+/// for a change one of the token's times carries — a comment, the body, the title and the
+/// metadata its body holds — and unordered for every other, which moves its facets, its
+/// relationship count or its repository: a `gh3` token compares those and never orders them.
 fn ordered_after(kind: &str) -> VersionOrder {
-    if kind == "a repository transfer" {
-        VersionOrder::Incomparable
-    } else {
-        VersionOrder::Later
+    match kind {
+        "a new comment" | "an edited comment" | "a deleted comment" | "a body edit"
+        | "a title edit" | "a metadata change" => VersionOrder::Later,
+        _ => VersionOrder::Incomparable,
     }
 }
 
@@ -253,12 +256,14 @@ impl Checked for GlobalId {
 }
 
 #[test]
-fn every_read_carries_the_token_its_source_gives_and_linear_gives_none() {
+fn every_read_carries_the_token_its_source_gives() {
     for row in ROWS.iter().filter(|row| row.fixture.complete_dataset) {
         let who = row.name;
         let sandbox = Sandbox::new();
         sandbox.project_document(&row.document(&sandbox));
-        let tokened = matches!(row.plugin, "github-projects" | "local-md");
+        // Every row whose source spells a token: a board, a folder of Markdown and Linear's
+        // `lin1`, each from what its read already answers.
+        let tokened = matches!(row.plugin, "github-projects" | "local-md" | "linear");
         let listed = listed(&sandbox, &[]);
         assert!(!listed.is_empty(), "{who}: the dataset holds tasks");
         for (id, token) in &listed {

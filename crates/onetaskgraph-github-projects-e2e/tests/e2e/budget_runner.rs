@@ -459,19 +459,17 @@ fn read_visibility(budget: &str) -> Result<(f64, String), String> {
 /// its workload with every sequence measured in both modes, and its figure the largest
 /// difference among them.
 fn read_cache_points(budget: &str) -> Result<(f64, String), String> {
-    use super::cache_budget::{SEQUENCES, WORKLOAD};
+    use super::cache_budget::{KINDS, SCALES, WORKLOAD, sequences_of};
     let value = recorded(budget)?;
     if value["workload"].as_str() != Some(WORKLOAD) {
-        return Err("workload does not match the four-sequence board workload".into());
+        return Err("workload does not match the board workload at 1x and 10x".into());
     }
     let figure = value["value"]
         .as_i64()
         .ok_or("missing whole-number figure")?;
-    let mut largest = i64::MIN;
-    for sequence in SEQUENCES {
-        let measured = &value["sequences"][sequence];
-        // A point count is a whole number of points spent, never negative, and small enough
-        // that the difference of two cannot overflow.
+    // A point count is a whole number of points spent, never negative, and small enough that
+    // the difference of two cannot overflow.
+    let difference = |measured: &Value, what: &str| -> Result<i64, String> {
         let points = |mode: &str| {
             measured[mode]["points"]
                 .as_u64()
@@ -479,16 +477,27 @@ fn read_cache_points(budget: &str) -> Result<(f64, String), String> {
         };
         let (Some(on), Some(off)) = (points("on"), points("off")) else {
             return Err(format!(
-                "sequence {sequence} is not measured in both modes as whole point counts"
+                "{what} is not measured in both modes as whole point counts"
             ));
         };
-        let difference = on
-            .checked_sub(off)
-            .ok_or("a sequence's point counts are out of range")?;
-        largest = largest.max(difference);
+        on.checked_sub(off)
+            .ok_or_else(|| format!("{what}'s point counts are out of range"))
+    };
+    let mut largest = i64::MIN;
+    for (scale, _) in SCALES {
+        let at = &value["scales"][scale];
+        for kind in KINDS {
+            for sequence in sequences_of(kind) {
+                largest = largest.max(difference(
+                    &at["kinds"][kind][sequence],
+                    &format!("{scale} {kind} {sequence}"),
+                )?);
+            }
+        }
+        largest = largest.max(difference(&at["total"], &format!("the {scale} total"))?);
     }
     if largest != figure {
-        return Err("the figure is not the largest difference the sequences record".into());
+        return Err("the figure is not the largest difference the recording holds".into());
     }
     let detail = value["detail"].as_str().ok_or("missing detail")?.to_owned();
     let figure = i32::try_from(figure).map_err(|_| "the figure is out of range")?;
@@ -796,4 +805,411 @@ fn the_visibility_report_refuses_a_missing_or_foreign_recording_without_a_figure
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(written, "a valid recording is reported");
+}
+
+#[test]
+fn the_cache_report_takes_the_whole_matrix_and_refuses_any_cell_or_figure_it_cannot_vouch_for() {
+    use super::cache_budget::{BUDGET, KINDS, SCALES, WORKLOAD, sequences_of};
+    use onetaskgraph_e2e_support::common::Sandbox;
+    use serde_json::json;
+    let sandbox = Sandbox::new();
+    let directory = sandbox.subdirectory("cache-points");
+    // Every cell spends 10 points off and 7 on, so the largest difference is a 3-point saving
+    // — except each scale's total, which sums them and saves more.
+    let cell = |on: u64, off: u64| json!({"on": {"points": on}, "off": {"points": off}});
+    let mut scales = serde_json::Map::new();
+    for (scale, _) in SCALES {
+        let mut kinds = serde_json::Map::new();
+        for kind in KINDS {
+            let cells: serde_json::Map<String, Value> = sequences_of(kind)
+                .iter()
+                .map(|sequence| ((*sequence).to_owned(), cell(7, 10)))
+                .collect();
+            kinds.insert(kind.to_owned(), Value::Object(cells));
+        }
+        scales.insert(
+            scale.to_owned(),
+            json!({"kinds": kinds, "total": cell(140, 200)}),
+        );
+    }
+    let valid = json!({"budget": BUDGET, "value": -3, "detail": "recorded", "workload": WORKLOAD,
+                       "scales": scales});
+    let run = |recorded: Option<Value>| {
+        let path = onetaskgraph_e2e_support::telemetry::file_in(&directory, BUDGET);
+        let _ = std::fs::remove_file(&path);
+        if let Some(recorded) = recorded {
+            std::fs::write(&path, recorded.to_string()).unwrap();
+        }
+        let result = directory.join("result.json");
+        let _ = std::fs::remove_file(&result);
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "budget_runner::report_cache_points",
+                "--exact",
+                "--nocapture",
+            ])
+            .env("GITHUB_ASSET_TELEMETRY_DIR", &directory)
+            .env("ONEBUDGETSPEC_BUDGET_ID", BUDGET)
+            .env("ONEBUDGETSPEC_RESULT", &result)
+            .output()
+            .unwrap();
+        (output, std::fs::read_to_string(&result).ok())
+    };
+    let with = |pointer: &str, value: Value| {
+        let mut changed = valid.clone();
+        *changed.pointer_mut(pointer).expect("the member") = value;
+        Some(changed)
+    };
+    let without = |pointer: &str, member: &str| {
+        let mut changed = valid.clone();
+        changed
+            .pointer_mut(pointer)
+            .and_then(Value::as_object_mut)
+            .expect("the object")
+            .remove(member);
+        Some(changed)
+    };
+    // A cell spending past what one budget can report, its figure made the largest so the range
+    // is what refuses it.
+    let mut huge = valid.clone();
+    huge["scales"]["10x"]["kinds"]["tasks"]["cold"] = cell(u64::from(u32::MAX) + 10, 10);
+    huge["value"] = json!(u64::from(u32::MAX));
+    for (recorded, message) in [
+        (None, "no telemetry"),
+        (
+            with("/budget", json!("github-copy-recopy-unchanged")),
+            "a different budget",
+        ),
+        (
+            with("/workload", json!("board-1-task")),
+            "workload does not match",
+        ),
+        (
+            without("/scales/1x/kinds/asset-bytes", "render-after-render"),
+            "1x asset-bytes render-after-render is not measured in both modes",
+        ),
+        (
+            without("/scales/10x", "total"),
+            "the 10x total is not measured in both modes",
+        ),
+        (
+            with("/scales/1x/kinds/documents/cold/on/points", json!(-1)),
+            "1x documents cold is not measured in both modes",
+        ),
+        (
+            with("/scales/1x/kinds/documents/cold/off/points", json!(2.5)),
+            "1x documents cold is not measured in both modes",
+        ),
+        (with("/value", json!(0)), "not the largest difference"),
+        (with("/value", json!(null)), "missing whole-number figure"),
+        (with("/value", json!(-3.5)), "missing whole-number figure"),
+        (with("/detail", json!(null)), "missing detail"),
+        (Some(huge), "the figure is out of range"),
+    ] {
+        let (output, written) = run(recorded);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "accepted: {message}");
+        assert!(stderr.contains(message), "{message}: {stderr}");
+        assert_eq!(
+            written.as_deref().unwrap_or_default(),
+            "",
+            "reported a figure over {message}"
+        );
+    }
+    let (output, written) = run(Some(valid));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result: Value = serde_json::from_str(&written.expect("a result")).expect("JSON");
+    assert_eq!(
+        result["value"],
+        json!(-3.0),
+        "a saving is the negative figure it is"
+    );
+}
+
+/// Report the current complete live pair without making any GitHub request.
+// llmlint: ignore[tests_assert_real_behavior] This report-only command is selected by budgets.yaml; live_session_report_boundary invokes this executable and checks its result and refusal paths.
+#[test]
+fn report_live_session() {
+    let Some(budget) = selected() else {
+        return;
+    };
+    // llmlint: ignore-block[budget_commands_measure_directly] The task requires this named report-only entry point; checking its SDK selector prevents a foreign budget id from receiving a live-session figure. The function measures only saved telemetry, with no threshold comparison.
+    if budget != "github-live-session-points" {
+        refuse("live-session reporter selected for a different budget");
+    }
+    // llmlint: ignore-end[budget_commands_measure_directly]
+    let (value, detail) = live_session_figure()
+        .unwrap_or_else(|error| refuse(&format!("live-session measurement unavailable: {error}")));
+    hand_over(value, &detail);
+}
+
+fn live_session_figure() -> Result<(f64, String), String> {
+    use onetaskgraph_github_live::quota::{
+        CurrentSession, PRICING_URL, WORKSPACE_VERSION, read_bill, reference_workload,
+    };
+    let directory =
+        std::env::var_os("GITHUB_LIVE_SESSION_DIR").ok_or("no current session directory")?;
+    let id = std::env::var("GITHUB_LIVE_SESSION_ID").map_err(|error| error.to_string())?;
+    let revision =
+        std::env::var("GITHUB_LIVE_SOURCE_REVISION").map_err(|error| error.to_string())?;
+    let workload = reference_workload();
+    let current = CurrentSession::new(&id, &revision, WORKSPACE_VERSION, &workload)?;
+    let bill = read_bill(std::path::Path::new(&directory), &current)?;
+    // The SDK accepts f64. Refuse rather than round an integer outside its exact range.
+    let figure =
+        u32::try_from(bill.points).map_err(|_| "session figure out of exact reporting range")?;
+    let phases = bill
+        .phases
+        .iter()
+        .map(|(phase, points)| format!("{phase:?}={points}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    // A smaller shared board bills less; say so rather than let its figure read as the
+    // registered workload's measurement.
+    let board = if bill.initial_items == workload.initial_items {
+        format!(
+            "initial board items={} (the registered workload)",
+            bill.initial_items
+        )
+    } else {
+        format!(
+            "initial board items={} (fewer than the registered workload's {}; not its measurement)",
+            bill.initial_items, workload.initial_items
+        )
+    };
+    let detail = format!(
+        "session_id={id}; source_revision={revision}; workspace_version={WORKSPACE_VERSION}; {board}; reported query points={}; Modelled mutation points={} ({} requests); Documented mutation points={} ({} requests); mutation count={}; pricing URL={PRICING_URL}; GraphQL requests={}; REST requests={} (excluded from points); phases: {phases}; corroborating account movement={:?}; concurrent movement flagged={}; actual asset bytes={:?}; requested PNG bytes={:?}; Modelled deliberate page-size refusal points={} ({} requests)",
+        bill.query_points,
+        bill.modelled_mutation_points,
+        bill.modelled_mutations,
+        bill.documented_mutation_points,
+        bill.documented_mutations,
+        bill.mutations,
+        bill.graphql_requests,
+        bill.rest_requests,
+        bill.account_movement,
+        bill.movement_flagged,
+        workload.asset_bytes,
+        workload.asset_target_bytes,
+        bill.modelled_page_refusal_points,
+        bill.modelled_page_refusals
+    );
+    Ok((f64::from(figure), detail))
+}
+
+fn live_report_pair(points: u64) -> Vec<onetaskgraph_github_live::quota::SessionRecord> {
+    use onetaskgraph_github_live::quota::{
+        CallRecord, Charge, EntryPoint, MutationBasis, Outcome, PRICING_URL, Phase, RequestKind,
+        SessionRecord, WORKSPACE_VERSION, operation_sha256, reference_workload,
+    };
+    let phases = [
+        (
+            EntryPoint::Main,
+            vec![
+                Phase::Admission,
+                Phase::Schema,
+                Phase::Reconciliation,
+                Phase::Setup,
+                Phase::Capabilities,
+                Phase::CommentActivity,
+                Phase::ChangeToken,
+                Phase::Cleanup,
+                Phase::OrphanRecovery,
+            ],
+        ),
+        (
+            EntryPoint::Assets,
+            vec![
+                Phase::Admission,
+                Phase::AssetSetup,
+                Phase::AssetTask,
+                Phase::AssetDocument,
+                Phase::Cleanup,
+            ],
+        ),
+    ];
+    let mut pair: Vec<_> = phases
+        .into_iter()
+        .map(|(invocation, phases)| SessionRecord {
+            schema_version: onetaskgraph_github_live::quota::SCHEMA_VERSION,
+            session_id: "current-test-session".into(),
+            source_revision: "a".repeat(40),
+            workspace_version: WORKSPACE_VERSION.into(),
+            invocation,
+            workload: reference_workload(),
+            complete: true,
+            calls: phases
+                .into_iter()
+                .enumerate()
+                .map(|(index, phase)| CallRecord {
+                    sequence: u64::try_from(index + 1).unwrap(),
+                    phase,
+                    operation_sha256: operation_sha256("query{rateLimit{cost}}"),
+                    attempt: 1,
+                    kind: RequestKind::Query,
+                    outcome: Outcome::Success,
+                    charge: Charge::ReportedQuery { points: 1 },
+                    allowance: None,
+                })
+                .collect(),
+        })
+        .collect();
+    pair[0].calls[0].charge = Charge::ReportedQuery {
+        points: points - 13,
+    };
+    pair[0].calls[3].kind = RequestKind::Mutation;
+    pair[0].calls[3].charge = Charge::Mutation {
+        points: 1,
+        basis: MutationBasis::Modelled {
+            url: PRICING_URL.into(),
+            points_per_request: 1,
+        },
+    };
+    pair[1].calls[3].kind = RequestKind::Mutation;
+    pair[1].calls[3].charge = Charge::Mutation {
+        points: 1,
+        basis: MutationBasis::Documented {
+            url: PRICING_URL.into(),
+        },
+    };
+    let mut rest = pair[1].calls[4].clone();
+    rest.sequence = 6;
+    rest.kind = RequestKind::Rest;
+    rest.charge = Charge::Rest;
+    pair[1].calls.push(rest);
+    pair
+}
+
+#[test]
+fn live_session_report_boundary() {
+    use onetaskgraph_e2e_support::common::Sandbox;
+    use onetaskgraph_github_live::quota::{Charge, Phase};
+    let sandbox = Sandbox::new();
+    let directory = sandbox.subdirectory("live-session");
+    std::fs::create_dir_all(&directory).unwrap();
+    let result = directory.join("sdk-result");
+    let configuration = onebudgetspec_core::load(
+        &[PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("budgets.yaml")],
+        false,
+    )
+    .unwrap();
+    let budget = configuration
+        .files()
+        .iter()
+        .flat_map(|file| &file.contents.budgets)
+        .find(|budget| budget.id == "github-live-session-points")
+        .unwrap();
+    assert!(budget.labels.iter().any(|label| label == "github"));
+    let boundary = budget.threshold.to_string().parse::<u64>().unwrap();
+    let good = live_report_pair(boundary);
+    let mut cases = vec![(good.clone(), None), (live_report_pair(boundary + 1), None)];
+    for change in [
+        |pair: &mut Vec<onetaskgraph_github_live::quota::SessionRecord>| {
+            pair.pop();
+        },
+        |pair: &mut Vec<onetaskgraph_github_live::quota::SessionRecord>| pair[1].complete = false,
+        |pair: &mut Vec<onetaskgraph_github_live::quota::SessionRecord>| {
+            pair[1].session_id.push('x')
+        },
+        |pair: &mut Vec<onetaskgraph_github_live::quota::SessionRecord>| {
+            pair[1].source_revision = "b".repeat(40)
+        },
+        |pair: &mut Vec<onetaskgraph_github_live::quota::SessionRecord>| {
+            pair[1].workspace_version.push('x')
+        },
+        |pair: &mut Vec<onetaskgraph_github_live::quota::SessionRecord>| {
+            pair[1].workload.asset_bytes.pop().map(|_| ()).unwrap()
+        },
+        |pair: &mut Vec<onetaskgraph_github_live::quota::SessionRecord>| {
+            pair[1].calls.retain(|call| call.phase != Phase::Cleanup)
+        },
+        |pair: &mut Vec<onetaskgraph_github_live::quota::SessionRecord>| {
+            pair[0].calls[0].charge = Charge::Unavailable {
+                reason: "missing actual price".into(),
+            }
+        },
+        |pair: &mut Vec<onetaskgraph_github_live::quota::SessionRecord>| pair[1] = pair[0].clone(),
+    ] {
+        let mut pair = good.clone();
+        change(&mut pair);
+        cases.push((pair, Some("live-session measurement unavailable")));
+    }
+    for (pair, failure) in cases {
+        for file in ["main.json", "assets.json", "sdk-result"] {
+            let _ = std::fs::remove_file(directory.join(file));
+        }
+        for (index, record) in pair.iter().enumerate() {
+            std::fs::write(
+                directory.join(if index == 0 {
+                    "main.json"
+                } else {
+                    "assets.json"
+                }),
+                serde_json::to_vec(record).unwrap(),
+            )
+            .unwrap();
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "budget_runner::report_live_session",
+                "--exact",
+                "--nocapture",
+            ])
+            .env("GITHUB_LIVE_SESSION_DIR", &directory)
+            .env("GITHUB_LIVE_SESSION_ID", "current-test-session")
+            .env("GITHUB_LIVE_SOURCE_REVISION", "a".repeat(40))
+            .env("ONEBUDGETSPEC_BUDGET_ID", "github-live-session-points")
+            .env("ONEBUDGETSPEC_RESULT", &result)
+            .output()
+            .unwrap();
+        let said = String::from_utf8_lossy(&output.stderr);
+        if let Some(message) = failure {
+            assert!(!output.status.success(), "{said}");
+            assert!(said.contains(message), "{said}");
+            assert!(!result.exists());
+        } else {
+            assert!(output.status.success(), "{said}");
+            let reported: Value = serde_json::from_slice(&std::fs::read(&result).unwrap()).unwrap();
+            assert_eq!(
+                reported["value"].as_f64(),
+                Some(match pair[0].calls[0].charge {
+                    Charge::ReportedQuery { points } =>
+                        f64::from(u32::try_from(points + 13).unwrap()),
+                    _ => unreachable!(),
+                })
+            );
+            let verdict = onebudgetspec_core::judge(
+                budget.direction,
+                budget.threshold,
+                reported["value"].as_f64().unwrap(),
+            )
+            .0;
+            let expected = if matches!(pair[0].calls[0].charge, Charge::ReportedQuery { points } if points + 13 == boundary)
+            {
+                onebudgetspec_core::report::Verdict::Within
+            } else {
+                onebudgetspec_core::report::Verdict::Over
+            };
+            assert_eq!(verdict, expected);
+            let detail = reported["detail"].as_str().unwrap();
+            for fact in [
+                "Modelled mutation points=1 (1 requests)",
+                "Documented mutation points=1 (1 requests)",
+                "mutation count=2",
+                "REST requests=1",
+                "AssetDocument=1",
+                "Cleanup=2",
+                "workspace_version=",
+                "source_revision=",
+                "session_id=current-test-session",
+                "initial board items=90 (the registered workload)",
+            ] {
+                assert!(detail.contains(fact), "{fact}: {detail}");
+            }
+        }
+    }
 }

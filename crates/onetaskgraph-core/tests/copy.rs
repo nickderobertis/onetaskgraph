@@ -2613,6 +2613,7 @@ fn member(id: &NativeId) -> Task {
 
 fn held_document(id: &NativeId) -> Document {
     Document {
+        version: None,
         id: id.clone(),
         title: "Design review".to_owned(),
         content: None,
@@ -2648,6 +2649,7 @@ fn edge(near: &NativeId, kind: ItemKind) -> DependencyEdge {
 
 fn held_project(id: &NativeId) -> Project {
     Project {
+        version: None,
         id: id.clone(),
         title: "Engine".to_owned(),
         content: None,

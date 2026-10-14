@@ -1,29 +1,33 @@
-requests 163
-node count 272519
+requests 190
+node count 278469
 
 requests per call
     1       0  DELETE /repos/{owner}/{repo}/labels/{name}
     1       0  GET /rate_limit
     2       0  GET /repos/{owner}/{repo}/labels
+    2       0  PATCH /repos/{owner}/{repo}/labels/{name}
     1       0  POST /repos/{owner}/{repo}/labels
     1       0  account allowance after the reconciliation
     1       0  account allowance before the reconciliation
     3       0  adding a comment
-    6       0  adding an issue to the board
+    7       0  adding an issue to the board
     2     100  board page size probe
    10       0  contract schema introspection
-    6       0  creating an issue
+    1       0  creating a board single-select field with its options
+    7       0  creating an issue
     1       0  deleting a comment
-    6       0  deleting an issue
+    7       0  deleting an issue
     2       0  editing a comment
-    4       0  filing an issue under its project
+    5       0  filing an issue under its project
     6       0  live artifact cleanup
     3     300  live artifact lookup
-    1      20  live board item lookup
+    2      40  live board item lookup
     1       0  live board text field write
-    2       0  live label attachment
+    4       0  live label attachment
     1       0  live origin field cleanup
     1       0  live origin field creation
+    1       0  live scratch field removal
+    1       0  live scratch field value
     1     915  node-count and point-cost reconciliation while looking up the items copied from one origin
     1    7272  node-count and point-cost reconciliation while reading a batch of issues with their comments
     1    7413  node-count and point-cost reconciliation while reading a batch of issues with their comments and dependencies for a copy
@@ -42,20 +46,21 @@ requests per call
     1       0  node-count and point-cost reconciliation while reading which issue a comment is on
     1   20400  node-count and point-cost reconciliation while searching this board's issues
     1    5150  node-count and point-cost reconciliation while snapshotting board Status options and assignments
-    1       0  nominated board lookup
+    1       2  nominated board lookup
     1    7272  reading a batch of issues with their comments
     2   50800  reading a project's tasks
     3     300  reading a task's comments
     7    1000  reading an issue's dependencies
-   24   10944  reading one issue
+   37   16872  reading one issue
     3   20451  reading the board
     2     100  reading the board's fields and the destination repository
     3       0  reading which issue a comment is on
     4       0  recording a dependency
     2       0  removing a dependency
+    1       0  safely replacing the board Status option list
    11   77520  searching this board's issues
     1       0  taking an issue out of its project
     2   20200  terminal status read-back
     6       0  updating an issue
     4     400  writable field discovery
-    7       0  writing a board field
+    8       0  writing a board field

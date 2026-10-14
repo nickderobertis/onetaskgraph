@@ -18,6 +18,7 @@
 //! credential therefore needs to be able to delete an issue in `GH_PROJECTS_REPOSITORY`.
 
 pub mod budget;
+pub mod quota;
 
 use std::{
     collections::BTreeMap,
@@ -26,7 +27,7 @@ use std::{
 };
 
 use onetaskgraph_github_projects::accounting::{
-    Accounting, Endpoint, Method, Mode, Outcome, RateLimit, Request,
+    Accounting, Endpoint, Method, Mode, Outcome, RateLimit, Request, ResponseOutcome,
 };
 use onetaskgraph_github_projects::{
     graphql, largest_page_sizes, worst_case_node_count, worst_case_point_cost,
@@ -58,7 +59,8 @@ use crate::lane::{
 /// residue sweep and the cleanup below, and every request
 /// [`Plugin::build_recording_into`](onetaskgraph_github_projects::Plugin) has the source
 /// send.
-pub static SESSION: LazyLock<Arc<Accounting>> = LazyLock::new(|| Arc::new(Accounting::new()));
+pub static SESSION: LazyLock<Arc<Accounting>> =
+    LazyLock::new(|| Arc::new(Accounting::with_query_prices()));
 
 /// Which API this journey's own calls go to, and which one the source it builds does.
 ///
@@ -95,6 +97,76 @@ impl Endpoints {
                 + std::time::Duration::from_secs(2),
         }
     }
+    /// Only explicit loopback URLs may replace GitHub in entry-point regressions.
+    /// Real invocations retain the API hosts and the full settling margin above.
+    pub fn configured() -> Result<Self, String> {
+        let read = |name: &str| match std::env::var(name) {
+            Ok(value) => Ok(Some(value)),
+            Err(std::env::VarError::NotPresent) => Ok(None),
+            Err(error) => Err(error.to_string()),
+        };
+        let graphql = read("GITHUB_LIVE_TEST_GRAPHQL")?;
+        let rest = read("GITHUB_LIVE_TEST_REST")?;
+        match (graphql, rest) {
+            (None, None) => Ok(Self::github()),
+            (Some(graphql), Some(rest)) => Self::loopback(&graphql, &rest),
+            _ => Err("both loopback endpoint variables must be supplied".into()),
+        }
+    }
+
+    pub fn loopback(graphql: &str, rest: &str) -> Result<Self, String> {
+        let validate = |value: &str, path: &str| {
+            let url = reqwest::Url::parse(value).map_err(|error| error.to_string())?;
+            let local = url
+                .host_str()
+                .and_then(|host| {
+                    host.trim_matches(['[', ']'])
+                        .parse::<std::net::IpAddr>()
+                        .ok()
+                })
+                .is_some_and(|host| host.is_loopback());
+            if url.scheme() != "http"
+                || !local
+                || url.port().is_none()
+                || !url.username().is_empty()
+                || url.password().is_some()
+                || url.query().is_some()
+                || url.fragment().is_some()
+                || url.path() != path
+            {
+                return Err(
+                    "live test endpoints must be plain HTTP loopback URLs with an explicit port"
+                        .to_owned(),
+                );
+            }
+            Ok(url)
+        };
+        let graphql = validate(graphql, "/graphql")?;
+        let rest = validate(rest, "/")?;
+        Ok(Self {
+            graphql: graphql.to_string(),
+            rest_host: rest.origin().ascii_serialization(),
+            source: Some(
+                json!({"endpoint":graphql.as_str(),"pacing":{"min_mutation_interval_ms":0,"retry_budget_ms":0}}),
+            ),
+            // The double supplies a Date past SETTLED; the token itself still checks 60 seconds.
+            settle: std::time::Duration::ZERO,
+        })
+    }
+
+    pub fn attachment_prefix(&self) -> String {
+        if self.source.is_some() {
+            format!(
+                "{}/user-attachments/assets/",
+                reqwest::Url::parse(&self.graphql)
+                    .expect("validated endpoint")
+                    .origin()
+                    .ascii_serialization()
+            )
+        } else {
+            "https://github.com/user-attachments/assets/".into()
+        }
+    }
 }
 
 static ENDPOINTS: std::sync::OnceLock<Endpoints> = std::sync::OnceLock::new();
@@ -119,7 +191,7 @@ fn endpoints() -> &'static Endpoints {
 /// Everything the credentialed lane builds is here plus whatever [`Endpoints::source`]
 /// carries, so a fixture drive builds the same source the live one does and only reaches
 /// somewhere else.
-fn source_config(mut config: Value) -> Value {
+pub fn source_config(mut config: Value) -> Value {
     if let (Some(extra), Some(object)) = (endpoints().source.as_ref(), config.as_object_mut()) {
         for (key, value) in extra.as_object().expect("a source configuration object") {
             object.insert(key.clone(), value.clone());
@@ -197,6 +269,30 @@ async fn graphql_answer(
     query_name: &str,
     variables: Value,
 ) -> Result<Value, Refusal> {
+    graphql_answer_at(token, query, query_name, variables, 1).await
+}
+
+fn valid_graphql_errors(response: &Value) -> bool {
+    response
+        .get("errors")
+        .and_then(Value::as_array)
+        .is_some_and(|errors| {
+            !errors.is_empty()
+                && errors
+                    .iter()
+                    .all(|error| error.get("message").is_some_and(Value::is_string))
+        })
+}
+
+async fn graphql_answer_at(
+    token: &str,
+    query: &str,
+    query_name: &str,
+    variables: Value,
+    attempt: u32,
+) -> Result<Value, Refusal> {
+    let priced = SESSION.priced_document(query);
+    let query = priced.as_ref();
     let sending =
         |reported_cost| Request::graphql(query, &variables, Some(query_name), reported_cost);
     let response = match reqwest::Client::new()
@@ -211,7 +307,15 @@ async fn graphql_answer(
         Err(error) => {
             // A request that never reached GitHub carries no headers to read, and is a
             // refusal rather than a rate limit: nothing said it was one.
-            SESSION.record(sending(None).finished(Outcome::Refused, RateLimit::default()));
+            SESSION.record(
+                sending(None)
+                    .finished(Outcome::Refused, RateLimit::default())
+                    .with_execution(
+                        Some(query.to_owned()),
+                        ResponseOutcome::TransportError,
+                        attempt,
+                    ),
+            );
             return Err(Refusal::Unanswered(format!(
                 "{query_name} query could not reach GitHub: {error}"
             )));
@@ -220,19 +324,69 @@ async fn graphql_answer(
     let status = response.status();
     let limits = rate_limit_headers(&response);
     let exhausted = budget_exhausted(&response);
-    let outcome = |outcome: Outcome| sending(None).finished(outcome, limits.clone());
+    let served = response
+        .headers()
+        .get(reqwest::header::DATE)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
     let body = match response.text().await {
         Ok(body) => body,
         Err(error) => {
-            SESSION.record(outcome(Outcome::Refused));
+            SESSION.record(
+                sending(None)
+                    .finished(Outcome::Refused, limits)
+                    .with_execution(
+                        Some(query.to_owned()),
+                        ResponseOutcome::TransportError,
+                        attempt,
+                    ),
+            );
             return Err(Refusal::Unanswered(format!(
                 "{query_name} query returned no readable body: {error}"
             )));
         }
     };
-    let ended = Outcome::of_response(status, exhausted, &body);
+    let parsed = serde_json::from_str::<Value>(&body);
+    // An actual alias is selected separately from the hypothetical reconciliation price.
+    let reported_cost = parsed.as_ref().ok().and_then(|response| {
+        if query.contains("actualCost:rateLimit(dryRun:false)") {
+            response
+                .pointer("/data/actualCost/cost")
+                .and_then(Value::as_u64)
+        } else if !query.contains("dryRun:true") {
+            response
+                .pointer("/data/rateLimit/cost")
+                .and_then(Value::as_u64)
+        } else {
+            None
+        }
+    });
+    let errors = parsed
+        .as_ref()
+        .ok()
+        .and_then(|response| response.get("errors"))
+        .filter(|errors| {
+            !errors.is_null() && errors.as_array().is_none_or(|errors| !errors.is_empty())
+        });
+    let protocol = ResponseOutcome::of_graphql_reply(status, parsed.as_ref().ok());
+    let ended = if errors.is_some() {
+        Outcome::Refused
+    } else {
+        Outcome::of_response(status, exhausted, &body)
+    };
+    SESSION.record(
+        sending(reported_cost)
+            .finished(ended, limits)
+            .with_execution(Some(query.to_owned()), protocol, attempt),
+    );
+    if query == onetaskgraph_github_live::quota::PAGE_SIZE_PROBE_DOCUMENT
+        && variables["first"].as_u64() == Some(101)
+        && protocol == ResponseOutcome::GraphqlError
+        && reported_cost.is_none()
+    {
+        quota::model_last_page_size_refusal().map_err(Refusal::Unanswered)?;
+    }
     if !status.is_success() {
-        SESSION.record(outcome(ended));
         let problem = format!("{query_name} query failed: HTTP {status}");
         return Err(if status.is_server_error() {
             Refusal::Unanswered(problem)
@@ -240,34 +394,42 @@ async fn graphql_answer(
             Refusal::Answered(problem, None)
         });
     }
-    let response: Value = match serde_json::from_str(&body) {
-        Ok(response) => response,
-        Err(error) => {
-            SESSION.record(outcome(Outcome::Refused));
-            return Err(Refusal::Answered(
-                format!("{query_name} query returned invalid JSON: {error}"),
-                None,
-            ));
-        }
-    };
-    if let Some(errors) = response.get("errors") {
-        SESSION.record(outcome(Outcome::Refused));
+    if errors.is_some() && !parsed.as_ref().is_ok_and(valid_graphql_errors) {
         return Err(Refusal::Answered(
-            format!("{query_name} query was rejected by GitHub: {errors}"),
-            Some(response.clone()),
+            format!("{query_name} returned an invalid GraphQL errors envelope"),
+            None,
         ));
     }
-    // GitHub reports what a call cost only when the document asked it to, and the allowance
-    // probe below does. A `dryRun` probe's `cost` is what some *other* document would spend
-    // and never what this call spent, so it is deliberately not picked up here.
-    let reported_cost = (!query.contains("dryRun"))
-        .then(|| {
-            response
-                .pointer("/data/rateLimit/cost")
-                .and_then(Value::as_u64)
-        })
-        .flatten();
-    SESSION.record(sending(reported_cost).finished(ended, limits));
+    if let Some(errors) = errors {
+        return Err(Refusal::Answered(
+            format!("{query_name} query was rejected by GitHub: {errors}"),
+            parsed.ok(),
+        ));
+    }
+    if protocol == ResponseOutcome::TransportError {
+        return Err(Refusal::Answered(
+            format!(
+                "{query_name} GraphQL response must be an object with a data object or valid errors"
+            ),
+            None,
+        ));
+    }
+    let mut response = parsed.map_err(|error| {
+        Refusal::Answered(
+            format!("{query_name} query returned invalid JSON: {error}"),
+            None,
+        )
+    })?;
+    let object = response.as_object_mut().ok_or_else(|| {
+        Refusal::Answered(
+            format!("{query_name} GraphQL response must be an object"),
+            None,
+        )
+    })?;
+    if let Some(served) = served {
+        object.insert("_served".into(), json!(served));
+    }
+
     Ok(response)
 }
 
@@ -323,11 +485,12 @@ fn budget_exhausted(response: &reqwest::Response) -> bool {
 /// reports is what that run saw.
 ///
 /// `rateLimit` is a field of `Query`, so a **mutation** cannot be asked at all. What is
-/// checked instead is that each mutation this source sends is priced at GitHub's one-point
-/// minimum, which a connection resolved once under a mutation could not move either.
+/// checked instead is the approved one-point mutation model. GitHub documents a minimum
+/// call price, not an exact primary mutation tariff; the session record labels it Modelled.
 async fn reconcile_node_counts_and_point_costs(token: &str) -> Result<(), String> {
     let (limit, before) = account_allowance(token, "before").await?;
     let mut asked = 0_usize;
+    let mut strategy = PricingStrategy::Aliases;
     for (document, doing) in graphql::DOCUMENTS {
         if Mode::of_document(document) == Mode::Write {
             // A mutation is skipped because `rateLimit` is a field of `Query` and there is
@@ -338,35 +501,137 @@ async fn reconcile_node_counts_and_point_costs(token: &str) -> Result<(), String
             let ours = worst_case_point_cost(document).map_err(|error| {
                 format!("the document for {doing} could not be priced: {error}")
             })?;
-            if ours != 1 {
+            if ours != onetaskgraph_github_live::quota::MODELLED_MUTATION_POINTS {
                 return Err(format!(
                     "the mutation for {doing} computes {ours} points, and GitHub cannot be \
-                     asked about a mutation — `rateLimit` is a field of Query. A mutation \
-                     costs GitHub's one-point minimum unless a connection under it multiplies; \
-                     reconcile that another way, or the calculation is wrong"
+                     asked about a mutation — `rateLimit` is a field of Query. This differs \
+                     from the approved Modelled one-point-per-request basis; ask the manager \
+                     before changing that pricing agreement"
                 ));
             }
             continue;
         }
-        let response = graphql_variables(
-            token,
-            &with_rate_limit_probe(document)?,
-            &format!("node-count and point-cost reconciliation while {doing}"),
-            dry_run_variables(document),
-        )
-        .await?;
+        let response = reconciliation_response(token, document, doing, &mut strategy).await?;
+        match strategy {
+            PricingStrategy::Aliases => {
+                say(&format!(
+                    "pricing reconciliation while {doing}: hypothetical node_count={:?} cost={:?}; executed actual_cost={:?}",
+                    response
+                        .pointer("/data/rateLimit/nodeCount")
+                        .and_then(Value::as_u64),
+                    response
+                        .pointer("/data/rateLimit/cost")
+                        .and_then(Value::as_u64),
+                    response
+                        .pointer("/data/actualCost/cost")
+                        .and_then(Value::as_u64)
+                ));
+            }
+            PricingStrategy::Executed => say(&format!(
+                "executed read-only reconciliation while {doing}: node_count={:?}; actual_cost={:?}",
+                response
+                    .pointer("/data/rateLimit/nodeCount")
+                    .and_then(Value::as_u64),
+                response
+                    .pointer("/data/rateLimit/cost")
+                    .and_then(Value::as_u64),
+            )),
+        }
         reconciled(doing, document, &response)?;
         asked += 1;
     }
     let (_, after) = account_allowance(token, "after").await?;
     say(&format!(
         "node-count and point-cost reconciliation: {asked} documents agreed with GitHub's own \
-         dryRun nodeCount and cost; the account's GraphQL allowance read {before} of {limit} \
+         nodeCount and cost under {strategy:?}; the account's GraphQL allowance read {before} of {limit} \
          before and {after} after, a movement of {} across the whole reconciliation (the \
          account's, shared with everything else this credential does)",
         before.saturating_sub(after)
     ));
     Ok(())
+}
+
+/// Whether GitHub supports separate hypothetical and executed price aliases.
+#[derive(Debug)]
+enum PricingStrategy {
+    Aliases,
+    Executed,
+}
+
+async fn reconciliation_response(
+    token: &str,
+    document: &str,
+    doing: &str,
+    strategy: &mut PricingStrategy,
+) -> Result<Value, String> {
+    let name = format!("node-count and point-cost reconciliation while {doing}");
+    let attempt = if matches!(strategy, PricingStrategy::Aliases) {
+        2
+    } else {
+        1
+    };
+    if matches!(strategy, PricingStrategy::Aliases) {
+        match graphql_answer(
+            token,
+            &with_rate_limit_probe(document)?,
+            &name,
+            dry_run_variables(document),
+        )
+        .await
+        {
+            Ok(answer)
+                if answer
+                    .pointer("/data/actualCost/cost")
+                    .and_then(Value::as_u64)
+                    .is_some() =>
+            {
+                return Ok(answer);
+            }
+            Ok(_) | Err(Refusal::Answered(_, _)) => {
+                // The original request remains recorded, including an unavailable actual
+                // price. A fallback cannot make a missing-price session numerically complete.
+                *strategy = PricingStrategy::Executed;
+                say(
+                    "GitHub did not support both pricing aliases; using executed read-only reconciliation",
+                );
+            }
+            Err(refusal) => return Err(refusal.into_message()),
+        }
+    }
+    let opening = document
+        .find('{')
+        .ok_or("a reconciliation document has no selection set")?;
+    let executed = format!(
+        "{}rateLimit{{cost nodeCount limit remaining}} {}",
+        &document[..=opening],
+        &document[opening + 1..]
+    );
+    match graphql_answer_at(
+        token,
+        &executed,
+        &name,
+        dry_run_variables(document),
+        attempt,
+    )
+    .await
+    {
+        Ok(answer) => Ok(answer),
+        // An execution error resolving a deliberately nonexistent node may preserve the
+        // sibling rateLimit's actual price and planned node count; reconcile those facts.
+        Err(Refusal::Answered(_, Some(answer)))
+            if answer
+                .pointer("/data/rateLimit/cost")
+                .and_then(Value::as_u64)
+                .is_some()
+                && answer
+                    .pointer("/data/rateLimit/nodeCount")
+                    .and_then(Value::as_u64)
+                    .is_some() =>
+        {
+            Ok(answer)
+        }
+        Err(refusal) => Err(refusal.into_message()),
+    }
 }
 
 /// What GitHub's own answer about one document says against this workspace's figures, or
@@ -457,7 +722,7 @@ fn with_rate_limit_probe(document: &str) -> Result<String, String> {
         .find('{')
         .ok_or_else(|| format!("this document has no selection set to probe: {document}"))?;
     Ok(format!(
-        "{}rateLimit(dryRun:true){{cost nodeCount limit remaining}} {}",
+        "{}rateLimit(dryRun:true){{cost nodeCount limit remaining}} actualCost:rateLimit(dryRun:false){{cost}} {}",
         &document[..=opening],
         &document[opening + 1..]
     ))
@@ -803,11 +1068,12 @@ async fn delete_issue(token: &str, issue_id: &str) -> Result<(), String> {
     let mut unanswered = None;
     let mut answered = None;
     for attempt in 1..=ATTEMPTS {
-        match graphql_answer(
+        match graphql_answer_at(
             token,
             "mutation($input:DeleteIssueInput!){deleteIssue(input:$input){repository{id}}}",
             "live artifact issue cleanup",
             json!({"input":{"issueId":issue_id}}),
+            u32::try_from(attempt).expect("three cleanup attempts fit u32"),
         )
         .await
         {
@@ -1363,11 +1629,19 @@ async fn nominated_project_id(
 ) -> Result<String, String> {
     let response = graphql_variables(
         token,
-        "query($owner:String!,$number:Int!){repositoryOwner(login:$owner){... on ProjectV2Owner{projectV2(number:$number){id}}}}",
+        "query LiveBoardWorkload($owner:String!,$number:Int!){repositoryOwner(login:$owner){... on ProjectV2Owner{projectV2(number:$number){id items(first:1){totalCount} fields(first:1){totalCount}}}}}",
         "nominated board lookup",
         json!({"owner":owner,"number":project_number}),
     )
     .await?;
+    quota::observe_initial_board(
+        response
+            .pointer("/data/repositoryOwner/projectV2/items/totalCount")
+            .and_then(Value::as_u64),
+        response
+            .pointer("/data/repositoryOwner/projectV2/fields/totalCount")
+            .and_then(Value::as_u64),
+    )?;
     response
         .pointer("/data/repositoryOwner/projectV2/id")
         .and_then(Value::as_str)
@@ -1850,7 +2124,10 @@ pub fn contract_field_types(type_name: &str) -> &'static [(&'static str, &'stati
 }
 
 fn page(cursor: Option<onetaskgraph_plugin_api::Cursor>) -> PageRequest {
-    PageRequest { cursor, limit: 50 }
+    PageRequest {
+        cursor,
+        limit: onetaskgraph_github_live::quota::BOARD_WALK_PAGE_SIZE,
+    }
 }
 
 /// The one board, repository and naming this run may write under.
@@ -1884,6 +2161,7 @@ impl LiveRun {
 
 fn artifact_project(title: &str, status: &Status) -> Project {
     Project {
+        version: None,
         id: NativeId("live-source-item".into()),
         title: title.to_owned(),
         content: Some("temporary credentialed write; the live lane removes this".into()),
@@ -1906,6 +2184,7 @@ fn artifact_project(title: &str, status: &Status) -> Project {
 /// is the round trip this leg of the lane is for.
 fn artifact_document(title: &str, project: Option<NativeId>) -> Document {
     Document {
+        version: None,
         id: NativeId("live-source-item".into()),
         title: title.to_owned(),
         content: Some("temporary credentialed write; the live lane removes this".into()),
@@ -2037,10 +2316,10 @@ async fn project_titles(
 ///
 /// Reads nothing this lane needs; what it establishes is whether GitHub's own connection
 /// accepts that page size, which is what `max_page_size` claims to describe.
-async fn board_items_page(token: &str, project_id: &str, first: u32) -> Result<Value, String> {
-    graphql_variables(
+async fn board_items_page(token: &str, project_id: &str, first: u32) -> Result<Value, Refusal> {
+    graphql_answer(
         token,
-        "query($id:ID!,$first:Int!){node(id:$id){... on ProjectV2{items(first:$first){nodes{id}}}}}",
+        onetaskgraph_github_live::quota::PAGE_SIZE_PROBE_DOCUMENT,
         "board page size probe",
         json!({"id":project_id,"first":first}),
     )
@@ -2349,6 +2628,7 @@ async fn drive_every_declared_capability(
     // A source built the way `writer` was, for the legs that follow the one mutation this
     // journey makes without going through a source at all. See where it is called.
     rebuilt: &dyn Fn() -> Box<dyn TaskSource>,
+    admitted: &budget::Admitted,
 ) -> Result<(), String> {
     let (alpha, beta) = (run.title(0), run.title(1));
     let (first, second, orphan) = (run.title(2), run.title(3), run.title(4));
@@ -2455,6 +2735,13 @@ async fn drive_every_declared_capability(
         projects: run_projects,
     } = settled_fixture(rebuilt, &prefix, 3, 2).await?;
     let writer = source.as_ref();
+    quota::phase(onetaskgraph_github_live::quota::Phase::Capabilities)?;
+    budget::recheck_remaining(
+        admitted,
+        &SESSION,
+        budget::remaining_design_points(onetaskgraph_github_live::quota::Phase::Capabilities),
+    )
+    .map_err(|declined| declined.to_string())?;
 
     // `search_title` and `projects`: one title search over the whole board selects exactly
     // this run's five items, three of which are tasks and two of which are projects.
@@ -2806,17 +3093,25 @@ async fn drive_every_declared_capability(
     board_items_page(&run.token, &run.project_id, ceiling)
         .await
         .map_err(|error| {
-            format!("GitHub refused a page of the declared maximum {ceiling}: {error}")
+            format!(
+                "GitHub refused a page of the declared maximum {ceiling}: {}",
+                error.into_message()
+            )
         })?;
-    if board_items_page(&run.token, &run.project_id, ceiling + 1)
-        .await
-        .is_ok()
-    {
-        return Err(format!(
-            "GitHub served a page of {} board items, so {ceiling} is not its connection \
-             maximum and max_page_size no longer describes it",
-            ceiling + 1
-        ));
+    match board_items_page(&run.token, &run.project_id, ceiling + 1).await {
+        Err(Refusal::Answered(_, Some(response))) if valid_graphql_errors(&response) => (),
+        Err(refusal) => {
+            return Err(format!(
+                "GitHub did not establish its page-size ceiling: {}",
+                refusal.into_message()
+            ));
+        }
+        Ok(_) => {
+            return Err(format!(
+                "GitHub served a page of {} board items, so {ceiling} is not its connection maximum and max_page_size no longer describes it",
+                ceiling + 1,
+            ));
+        }
     }
 
     // The values a copy carries: caller metadata keeps its JSON types, and the column the
@@ -2877,6 +3172,13 @@ async fn drive_every_declared_capability(
             ),
         "cancelled did not read back as Status=Cancelled, state=CLOSED, reason=NOT_PLANNED"
     );
+    quota::phase(onetaskgraph_github_live::quota::Phase::CommentActivity)?;
+    budget::recheck_remaining(
+        admitted,
+        &SESSION,
+        budget::remaining_design_points(onetaskgraph_github_live::quota::Phase::CommentActivity),
+    )
+    .map_err(|declined| declined.to_string())?;
     an_edited_comment_moves_its_issue_and_is_selected_since(
         writer,
         (&first_id, &first),
@@ -2886,13 +3188,28 @@ async fn drive_every_declared_capability(
     )
     .await?;
     // Renamed to another of this run's own titles, so the artifact cleanup still knows it.
+    quota::phase(onetaskgraph_github_live::quota::Phase::ChangeToken)?;
+    budget::recheck_remaining(
+        admitted,
+        &SESSION,
+        budget::remaining_design_points(onetaskgraph_github_live::quota::Phase::ChangeToken),
+    )
+    .map_err(|declined| declined.to_string())?;
     every_change_kind_moves_a_tasks_token(
         writer,
         rebuilt,
         (&run.token, &run.project_id),
         (&second_id, &first_id, &orphan_id),
         (&beta_id, &alpha_id),
-        (&label_id, &run.title(LAST_TITLE_OFFSET)),
+        (&label_id, &run.title(6)),
+    )
+    .await?;
+    every_facet_change_moves_a_projects_and_a_documents_token(
+        run,
+        writer,
+        rebuilt,
+        (&alpha_id, &beta_id, &design_id, &orphan_id),
+        (&label_id, &label_name),
     )
     .await
 }
@@ -2903,76 +3220,155 @@ async fn drive_every_declared_capability(
 /// past [`Endpoints::settle`] by this machine's clock can still fall inside the plugin's margin.
 const TOKEN_READS: u32 = 30;
 
-/// A task's change token, as a source that has read nothing of the board yet reads it — so a
-/// record this run's own writer kept is not what answers. `None` is the plugin withholding it,
-/// which it does while the task's last change is within `change_token::SETTLED` of the read.
-async fn token_now(
-    rebuilt: &dyn Fn() -> Box<dyn TaskSource>,
-    task: &NativeId,
-    when: &str,
-) -> Result<Option<String>, String> {
-    Ok(rebuilt()
-        .get_task(task)
-        .await
-        .map_err(|error| format!("live read of the task {when} failed: {error}"))?
-        .ok_or_else(|| format!("the task was not there {when}"))?
-        .version)
+/// Which kind of item a token is read of: which of the plugin's own reads by id answers it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Observed {
+    /// `get_task`.
+    Task,
+    /// `get_project`.
+    Project,
+    /// `get_document`.
+    Document,
 }
 
-/// The task's token once the plugin gives one, asked again a second apart while it withholds
-/// it — failing, naming `when`, only when it is still withheld [`TOKEN_READS`] reads later.
+impl std::fmt::Display for Observed {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Task => "task",
+            Self::Project => "project",
+            Self::Document => "document",
+        })
+    }
+}
+
+/// A token as the plugin's own product read gives it: one read by id, of a source built afresh
+/// so nothing this run wrote or read before answers it — never a read of this lane's own that
+/// spells a token beside the plugin's.
+#[derive(Clone, Copy)]
+struct TokenReader<'a> {
+    rebuilt: &'a dyn Fn() -> Box<dyn TaskSource>,
+    kind: Observed,
+}
+
+async fn token_now(
+    reader: TokenReader<'_>,
+    item: &NativeId,
+    when: &str,
+) -> Result<Option<String>, String> {
+    let source = (reader.rebuilt)();
+    let kind = reader.kind;
+    let failed = |error: onetaskgraph_plugin_api::SourceError| {
+        format!("live read of the {kind} {when} failed: {error}")
+    };
+    let version = match kind {
+        Observed::Task => source
+            .get_task(item)
+            .await
+            .map_err(failed)?
+            .map(|task| task.version),
+        Observed::Project => source
+            .get_project(item)
+            .await
+            .map_err(failed)?
+            .map(|project| project.version),
+        Observed::Document => source
+            .get_document(item)
+            .await
+            .map_err(failed)?
+            .map(|document| document.version),
+    };
+    version.ok_or_else(|| format!("the {kind} was not there {when}"))
+}
+
+/// The settled token of task `task`, read through a source `rebuilt` builds afresh.
 pub async fn settled_token(
     rebuilt: &dyn Fn() -> Box<dyn TaskSource>,
     task: &NativeId,
+    when: &str,
+) -> Result<String, String> {
+    settled_token_of(
+        TokenReader {
+            rebuilt,
+            kind: Observed::Task,
+        },
+        task,
+        when,
+    )
+    .await
+}
+
+/// The settled token of the `kind` `item`, read through a source `rebuilt` builds afresh.
+pub async fn settled_token_of_kind(
+    rebuilt: &dyn Fn() -> Box<dyn TaskSource>,
+    kind: Observed,
+    item: &NativeId,
+    when: &str,
+) -> Result<String, String> {
+    settled_token_of(TokenReader { rebuilt, kind }, item, when).await
+}
+
+async fn settled_token_of(
+    reader: TokenReader<'_>,
+    item: &NativeId,
     when: &str,
 ) -> Result<String, String> {
     for read in 0..TOKEN_READS {
         if read > 0 {
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         }
-        if let Some(token) = token_now(rebuilt, task, when).await? {
+        if let Some(token) = token_now(reader, item, when).await? {
             return Ok(token);
         }
     }
     Err(format!(
-        "GitHub gave the task no change token {when}, though the leg waited {TOKEN_READS} \
-         seconds past the plugin's settling margin; the plugin withholds a token only while \
-         the task's last change is within change_token::SETTLED of the read"
+        "GitHub gave the {} no change token {when}, though the leg waited {TOKEN_READS} seconds past the plugin's settling margin; the plugin withholds a token only while the item's last change is within change_token::SETTLED of the read",
+        reader.kind
     ))
 }
 
-/// Wait for the token to move off `before` after `kind`, and hold it to being the later one
-/// by the plugin's own ordering — asked again for a bounded while, because a read made the
-/// moment a write returns can be answered from before it, and a token is withheld until the
-/// change has settled.
+/// Wait for the token to move off `before` after `kind`, and hold it to the property the
+/// store's cache rests on — an entry kept at `before` is never served to a reader pinned to the
+/// new token, because the plugin's own ordering never puts `before` at or after it — asked again
+/// for a bounded while, because a read made the moment a write returns can be answered from
+/// before it, and a token is withheld until the change has settled.
+///
+/// A change the token's times carry orders the new token after `before`; one that moves its
+/// facets or its relationship count leaves the two unordered. Either holds the property; only
+/// `before` ordered at or after the new token breaks it.
 async fn moved(
-    rebuilt: &dyn Fn() -> Box<dyn TaskSource>,
-    task: &NativeId,
+    reader: TokenReader<'_>,
+    item: &NativeId,
     kind: &str,
     before: &str,
 ) -> Result<String, String> {
     tokio::time::sleep(endpoints().settle).await;
     let when = format!("after {kind}");
-    let mut after = settled_token(rebuilt, task, &when).await?;
+    let mut after = settled_token_of(reader, item, &when).await?;
     for _ in 1..10 {
         if after != before {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        after = settled_token(rebuilt, task, &when).await?;
+        after = settled_token_of(reader, item, &when).await?;
     }
     ensure!(
         after != before,
-        "{kind} left the task's change token at {before}, ten seconds after it; the token is \
-         what a copy skips by, so the plugin's statement of what it covers \
-         (docs/plugin-protocol.md §4.13d) no longer holds; next: tell the owner of the \
-         github-projects plugin that GitHub's behaviour changed, rather than re-running"
+        "{kind} left the {}'s change token at {before}, ten seconds after it; the token is \
+         what a copy skips by and the cache serves by, so the plugin's statement of what it \
+         covers (docs/plugin-protocol.md §4.13d) no longer holds; next: tell the owner of the \
+         github-projects plugin that GitHub's behaviour changed, rather than re-running",
+        reader.kind
     );
+    let held = onetaskgraph_github_projects::change_token::order(before, &after);
     ensure!(
-        onetaskgraph_github_projects::change_token::order(&after, before)
-            == Some(std::cmp::Ordering::Greater),
-        "{kind} moved the task's change token from {before} to {after}, which the plugin's own \
-         ordering does not put after it"
+        !matches!(
+            held,
+            Some(std::cmp::Ordering::Equal | std::cmp::Ordering::Greater)
+        ),
+        "{kind} moved the {}'s change token from {before} to {after}, and the plugin's own \
+         ordering puts the held token {held:?} against the new one, so a cache holding it would \
+         be served to a reader pinned to the new one",
+        reader.kind
     );
     Ok(after)
 }
@@ -2998,7 +3394,11 @@ async fn every_change_kind_moves_a_tasks_token(
     };
     let pause = || tokio::time::sleep(std::time::Duration::from_millis(1_100));
     tokio::time::sleep(endpoints().settle).await;
-    let mut before = settled_token(rebuilt, task, "before any change").await?;
+    let reader = TokenReader {
+        rebuilt,
+        kind: Observed::Task,
+    };
+    let mut before = settled_token_of(reader, task, "before any change").await?;
 
     pause().await;
     let comment = writer
@@ -3012,7 +3412,7 @@ async fn every_change_kind_moves_a_tasks_token(
         .await
         .map_err(|error| format!("live comment write failed: {error}"))?
         .ok_or_else(|| "the task to comment on was not there".to_owned())?;
-    before = moved(rebuilt, task, "a comment added", &before).await?;
+    before = moved(reader, task, "a comment added", &before).await?;
 
     pause().await;
     writer
@@ -3024,7 +3424,7 @@ async fn every_change_kind_moves_a_tasks_token(
         .await
         .map_err(|error| format!("live comment edit failed: {error}"))?
         .ok_or_else(|| "the comment to edit was not there".to_owned())?;
-    before = moved(rebuilt, task, "a comment edited", &before).await?;
+    before = moved(reader, task, "a comment edited", &before).await?;
 
     pause().await;
     writer
@@ -3032,7 +3432,7 @@ async fn every_change_kind_moves_a_tasks_token(
         .await
         .map_err(|error| format!("live comment deletion failed: {error}"))?
         .ok_or_else(|| "the comment to delete was not there".to_owned())?;
-    before = moved(rebuilt, task, "a comment deleted", &before).await?;
+    before = moved(reader, task, "a comment deleted", &before).await?;
 
     pause().await;
     writer
@@ -3040,7 +3440,7 @@ async fn every_change_kind_moves_a_tasks_token(
         .await
         .map_err(|error| format!("live content write failed: {error}"))?
         .ok_or_else(|| "the task to edit was not there".to_owned())?;
-    before = moved(rebuilt, task, "a body edit", &before).await?;
+    before = moved(reader, task, "a body edit", &before).await?;
 
     pause().await;
     let renamed = TaskUpdate {
@@ -3052,11 +3452,11 @@ async fn every_change_kind_moves_a_tasks_token(
         .await
         .map_err(|error| format!("live title write failed: {error}"))?
         .ok_or_else(|| "the task to rename was not there".to_owned())?;
-    before = moved(rebuilt, task, "a title edit", &before).await?;
+    before = moved(reader, task, "a title edit", &before).await?;
 
     pause().await;
     attach_artifact_label(token, &task.0, label_id).await?;
-    before = moved(rebuilt, task, "a label change", &before).await?;
+    before = moved(reader, task, "a label change", &before).await?;
 
     pause().await;
     writer
@@ -3068,13 +3468,13 @@ async fn every_change_kind_moves_a_tasks_token(
         .await
         .map_err(|error| format!("live metadata write failed: {error}"))?
         .ok_or_else(|| "the task to annotate was not there".to_owned())?;
-    before = moved(rebuilt, task, "a metadata change", &before).await?;
+    before = moved(reader, task, "a metadata change", &before).await?;
 
     // A board text field — the origin field, the one this lane's board holds — written as a
     // person editing it would, so nothing else of the issue moves with it.
     pause().await;
     rewrite_origin_field(token, board, &task.0, "live:origin-rewritten").await?;
-    before = moved(rebuilt, task, "a board text field change", &before).await?;
+    before = moved(reader, task, "a board text field change", &before).await?;
 
     pause().await;
     let depends = |on: &[&NativeId]| TaskUpdate {
@@ -3086,7 +3486,7 @@ async fn every_change_kind_moves_a_tasks_token(
         .await
         .map_err(|error| format!("live dependency write failed: {error}"))?
         .ok_or_else(|| "the task to make depend was not there".to_owned())?;
-    before = moved(rebuilt, task, "a dependency added", &before).await?;
+    before = moved(reader, task, "a dependency added", &before).await?;
 
     pause().await;
     writer
@@ -3094,7 +3494,7 @@ async fn every_change_kind_moves_a_tasks_token(
         .await
         .map_err(|error| format!("live dependency removal failed: {error}"))?
         .ok_or_else(|| "the task to unhook was not there".to_owned())?;
-    before = moved(rebuilt, task, "a dependency removed", &before).await?;
+    before = moved(reader, task, "a dependency removed", &before).await?;
 
     // Replaced: one dependency removed and another added in one write, which leaves the count
     // of what the task depends on where it was. GitHub moves neither of the token's times for a
@@ -3105,18 +3505,18 @@ async fn every_change_kind_moves_a_tasks_token(
         .await
         .map_err(|error| format!("live dependency replacement failed: {error}"))?
         .ok_or_else(|| "the task to rewire was not there".to_owned())?;
-    before = moved(rebuilt, task, "a dependency replaced", &before).await?;
+    before = moved(reader, task, "a dependency replaced", &before).await?;
 
     // Project membership, which is a parent issue: taken out of its project, then filed under
     // another, each by the one relationship mutation a person's move sends, so nothing else of
     // the issue moves with it.
     pause().await;
     refile(token, graphql::REMOVE_SUB_ISSUE, filed_under, task).await?;
-    before = moved(rebuilt, task, "taken out of its project", &before).await?;
+    before = moved(reader, task, "taken out of its project", &before).await?;
 
     pause().await;
     refile(token, graphql::ADD_SUB_ISSUE, other_project, task).await?;
-    before = moved(rebuilt, task, "filed under another project", &before).await?;
+    before = moved(reader, task, "filed under another project", &before).await?;
 
     if writer.capabilities().priority.is_native() {
         pause().await;
@@ -3125,7 +3525,7 @@ async fn every_change_kind_moves_a_tasks_token(
             .await
             .map_err(|error| format!("live priority write failed: {error}"))?
             .ok_or_else(|| "the task to prioritise was not there".to_owned())?;
-        before = moved(rebuilt, task, "a priority change", &before).await?;
+        before = moved(reader, task, "a priority change", &before).await?;
     }
 
     // Last, because it closes the issue: the status is a board field, and done is the state
@@ -3136,8 +3536,262 @@ async fn every_change_kind_moves_a_tasks_token(
         .await
         .map_err(|error| format!("live status write failed: {error}"))?
         .ok_or_else(|| "the task to finish was not there".to_owned())?;
-    moved(rebuilt, task, "a status change", &before).await?;
+    moved(reader, task, "a status change", &before).await?;
     Ok(())
+}
+
+/// The six legs `spike-coverage` drafted for the `gh3` token, each a change a person makes on
+/// GitHub that moved no part of a `gh2` token, made to this run's own stamped items and held to
+/// moving the token of the item it reaches — every token read through the plugin's own read by id
+/// of a source built afresh, never a read of this lane's own that spells a token beside it:
+///
+/// 1. the run's label **renamed** moves the token of the project `beta` and of the document
+///    `design`, which carry it;
+/// 2. the same label **recoloured** moves both again;
+/// 3. an option of a stamped scratch single-select field **renamed** moves the token of `beta`,
+///    whose board item holds it — the board's own `Status` options are never touched;
+/// 4. `alpha` **deleted** leaves the new token of `beta`, which depended on it, unordered against
+///    the one held;
+/// 5. the same deletion leaves the new token of `design`, filed under it, unordered too;
+/// 6. the task `orphan` **gaining a sub-issue** moves its own token, so a read pinned to the new
+///    one reports the project it became.
+///
+/// Last of the journey, because two of them delete or reshape items the legs above read.
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] The six legs join this repository's existing credentialed GitHub lane, which it deliberately keeps in the plugin's own test target so only a change to the plugin or what it links selects it; the manager's ruling keeps the legs in that lane, and moving the lane is outside this plan.
+async fn every_facet_change_moves_a_projects_and_a_documents_token(
+    run: &LiveRun,
+    writer: &dyn TaskSource,
+    rebuilt: &dyn Fn() -> Box<dyn TaskSource>,
+    (alpha, beta, design, orphan): (&NativeId, &NativeId, &NativeId, &NativeId),
+    (label_id, label_name): (&str, &str),
+) -> Result<(), String> {
+    use onetaskgraph_github_projects::change_token::order;
+    let project = TokenReader {
+        rebuilt,
+        kind: Observed::Project,
+    };
+    let document = TokenReader {
+        rebuilt,
+        kind: Observed::Document,
+    };
+    attach_artifact_label(&run.token, &beta.0, label_id).await?;
+    attach_artifact_label(&run.token, &design.0, label_id).await?;
+    tokio::time::sleep(endpoints().settle).await;
+    let mut held_project = settled_token_of(project, beta, "before the label legs").await?;
+    let mut held_document = settled_token_of(document, design, "before the label legs").await?;
+
+    // Renamed to another of this run's own label names, so its cleanup still finds it.
+    let renamed = run.own.label(run.stamp_micros + 1);
+    change_artifact_label(run, label_name, json!({"new_name": renamed})).await?;
+    held_project = moved(project, beta, "its label renamed", &held_project).await?;
+    held_document = moved(document, design, "its label renamed", &held_document).await?;
+
+    change_artifact_label(run, &renamed, json!({"color": "5319e7"})).await?;
+    // The scratch leg reads its own token before its change, so this one is not held on.
+    moved(project, beta, "its label recoloured", &held_project).await?;
+    held_document = moved(document, design, "its label recoloured", &held_document).await?;
+
+    // The scratch field is removed whether or not the leg holds.
+    let scratch = create_scratch_field(run).await?;
+    let renamed_option = async {
+        set_scratch_value(run, beta, &scratch).await?;
+        tokio::time::sleep(endpoints().settle).await;
+        let before = settled_token_of(project, beta, "with a scratch option set").await?;
+        rename_scratch_option(run, &scratch).await?;
+        moved(project, beta, "a scratch field option renamed", &before).await
+    }
+    .await;
+    let removed = delete_scratch_field(run, &scratch).await;
+    held_project = renamed_option?;
+    removed?;
+
+    writer
+        .delete_project(alpha)
+        .await
+        .map_err(|error| format!("live project deletion failed: {error}"))?;
+    let after = moved(project, beta, "its native far end deleted", &held_project).await?;
+    ensure!(
+        order(&held_project, &after).is_none(),
+        "deleting beta's far end left its token {after} ordered against the one held, \
+         {held_project}; a cache would have served it"
+    );
+    let after = moved(document, design, "its project deleted", &held_document).await?;
+    ensure!(
+        order(&held_document, &after).is_none(),
+        "deleting the document's project left its token {after} ordered against the one held, \
+         {held_document}; a cache would have served it"
+    );
+
+    // A sub-issue makes the task a project.
+    let task = TokenReader {
+        rebuilt,
+        kind: Observed::Task,
+    };
+    let before = settled_token_of(task, orphan, "before it gains a sub-issue").await?;
+    let open = Status {
+        category: StatusCategory::Todo,
+        name: run.status_option.clone(),
+    };
+    let child = writer
+        .write_task(&ItemWrite {
+            target: None,
+            item: artifact_task(
+                &run.title(LAST_TITLE_OFFSET),
+                "temporary credentialed write; the live lane removes this".into(),
+                &open,
+                None,
+                BTreeMap::new(),
+            ),
+            depends_on: vec![],
+        })
+        .await
+        .map_err(|error| format!("live sub-issue write failed: {error}"))?;
+    refile(&run.token, graphql::ADD_SUB_ISSUE, orphan, &child).await?;
+    tokio::time::sleep(endpoints().settle).await;
+    let became = settled_token_of(
+        TokenReader {
+            rebuilt,
+            kind: Observed::Project,
+        },
+        orphan,
+        "after it gained a sub-issue",
+    )
+    .await?;
+    ensure!(
+        !matches!(
+            order(&before, &became),
+            Some(std::cmp::Ordering::Equal | std::cmp::Ordering::Greater)
+        ),
+        "a task gaining a sub-issue left its token {became} at or after {before}"
+    );
+    let as_task = rebuilt()
+        .get_task(orphan)
+        .await
+        .map_err(|error| format!("live read of the task after its flip failed: {error}"))?;
+    ensure!(
+        as_task.is_none(),
+        "the task that gained a sub-issue still reads as a task: {as_task:?}"
+    );
+    Ok(())
+}
+
+/// Change the run's label `name` over GitHub's REST API, as a person editing it would.
+async fn change_artifact_label(run: &LiveRun, name: &str, change: Value) -> Result<(), String> {
+    let mut parameters = repository_parameters(&run.repository);
+    parameters.push(("name", name));
+    rest(
+        &run.token,
+        Method::Patch,
+        "/repos/{owner}/{repo}/labels/{name}",
+        &parameters,
+        "",
+        Some(change),
+        "live label change",
+    )
+    .await
+    .map(|_| ())
+}
+
+/// A stamped single-select field this run created on the board, with its options.
+struct ScratchField {
+    id: String,
+    options: Vec<Value>,
+}
+
+/// Create a stamped single-select field of two options on the board.
+async fn create_scratch_field(run: &LiveRun) -> Result<ScratchField, String> {
+    let answer = graphql_variables(
+        &run.token,
+        graphql::CREATE_FIELD,
+        "live scratch field creation",
+        json!({"input": {"projectId": run.project_id, "dataType": "SINGLE_SELECT",
+                         "name": run.own.label(run.stamp_micros + 2),
+                         "singleSelectOptions": [
+                             {"name": "live-a", "color": "GRAY", "description": ""},
+                             {"name": "live-b", "color": "BLUE", "description": ""}]}}),
+    )
+    .await?;
+    let created = &answer["data"]["createProjectV2Field"]["projectV2Field"];
+    Ok(ScratchField {
+        id: created["id"]
+            .as_str()
+            .ok_or_else(|| format!("the scratch field came back without an id: {answer}"))?
+            .to_owned(),
+        options: created["options"]
+            .as_array()
+            .cloned()
+            .ok_or_else(|| format!("the scratch field came back without options: {answer}"))?,
+    })
+}
+
+/// Set `issue`'s value of the scratch field to its first option, as a person would.
+async fn set_scratch_value(
+    run: &LiveRun,
+    issue: &NativeId,
+    scratch: &ScratchField,
+) -> Result<(), String> {
+    let items = graphql_variables(
+        &run.token,
+        "query LiveBoardItem($id:ID!){node(id:$id){... on Issue{projectItems(first:20){nodes{id project{id}}}}}}",
+        "live board item lookup",
+        json!({"id": issue.0}),
+    )
+    .await?;
+    let item = items
+        .pointer("/data/node/projectItems/nodes")
+        .and_then(Value::as_array)
+        .and_then(|nodes| {
+            nodes.iter().find(|node| {
+                node.pointer("/project/id").and_then(Value::as_str) == Some(&run.project_id)
+            })
+        })
+        .and_then(|node| node.get("id").and_then(Value::as_str))
+        .ok_or_else(|| format!("issue {} has no item on the live board", issue.0))?
+        .to_owned();
+    graphql_variables(
+        &run.token,
+        "mutation($input:UpdateProjectV2ItemFieldValueInput!){updateProjectV2ItemFieldValue(input:$input){projectV2Item{id}}}",
+        "live scratch field value",
+        json!({"input": {"projectId": run.project_id, "itemId": item, "fieldId": scratch.id,
+                         "value": {"singleSelectOptionId": scratch.options[0]["id"]}}}),
+    )
+    .await
+    .map(|_| ())
+}
+
+/// Rename the scratch field's first option, keeping every option's id.
+async fn rename_scratch_option(run: &LiveRun, scratch: &ScratchField) -> Result<(), String> {
+    let options: Vec<Value> = scratch
+        .options
+        .iter()
+        .enumerate()
+        .map(|(index, option)| {
+            json!({"id": option["id"],
+                   "name": if index == 0 { json!("live-a-renamed") } else { option["name"].clone() },
+                   "color": option.get("color").cloned().unwrap_or(json!("GRAY")),
+                   "description": option.get("description").cloned().unwrap_or(json!(""))})
+        })
+        .collect();
+    graphql_variables(
+        &run.token,
+        graphql::STATUS_OPTIONS_UPDATE,
+        "live scratch option rename",
+        json!({"input": {"fieldId": scratch.id, "singleSelectOptions": options}}),
+    )
+    .await
+    .map(|_| ())
+}
+
+/// Remove the scratch field from the board.
+async fn delete_scratch_field(run: &LiveRun, scratch: &ScratchField) -> Result<(), String> {
+    graphql_variables(
+        &run.token,
+        "mutation($input:DeleteProjectV2FieldInput!){deleteProjectV2Field(input:$input){projectV2Field{... on ProjectV2SingleSelectField{id}}}}",
+        "live scratch field removal",
+        json!({"input": {"fieldId": scratch.id}}),
+    )
+    .await
+    .map(|_| ())
 }
 
 /// `filter_by_comment_activity`, and the GitHub fact it rests on, re-taken on every run.
@@ -3344,7 +3998,7 @@ pub struct Nomination {
 
 /// The highest offset [`LiveRun::title`] is asked for, so a run checks before it writes
 /// anything that every stamp it will write can be spelled.
-const LAST_TITLE_OFFSET: u64 = 6;
+const LAST_TITLE_OFFSET: u64 = 7;
 
 /// The credentialed lane's whole entry: admit it, open its one session, and run it.
 ///
@@ -3428,16 +4082,23 @@ pub async fn run(nomination: Nomination) {
     // account can pay for this session and still keep the share it may never touch. A
     // session that cannot is DECLINED — it did not run, so it is neither a pass nor a
     // failing assertion — and nothing below has reached GitHub by the time it is.
-    let admitted = budget::precondition(&token, &endpoints().rest_host, &SESSION)
-        .await
-        .unwrap_or_else(|declined| declined.refuse());
+    let admitted = budget::precondition_session(
+        &token,
+        &endpoints().rest_host,
+        &SESSION,
+        onetaskgraph_github_live::quota::EntryPoint::Main,
+    )
+    .await
+    .unwrap_or_else(|declined| declined.refuse());
     // Decided again on the session's own first real call, whose headers are the account's
     // word about this very request where the endpoint above was a claim about it. The two
     // have been observed to disagree, and a session the headers cannot afford is DECLINED
     // on them here — after that one call, before anything is written — rather than left to
     // fail on its next one.
+    quota::phase(onetaskgraph_github_live::quota::Phase::Schema).unwrap();
     verify_contract_schema(&token, || {
-        budget::recheck(&admitted, &SESSION).unwrap_or_else(|declined| declined.refuse());
+        budget::recheck_first_session(&admitted, &SESSION)
+            .unwrap_or_else(|declined| declined.refuse());
     })
     .await
     .unwrap_or_else(|error| panic!("GitHub contract schema drifted: {error}"));
@@ -3446,6 +4107,13 @@ pub async fn run(nomination: Nomination) {
     // in the offline gate because it needs the credential this lane already has, and it runs
     // unconditionally once that credential is present: behind no flag, and not skipped
     // because the setup above went well.
+    quota::phase(onetaskgraph_github_live::quota::Phase::Reconciliation).unwrap();
+    budget::recheck_remaining(
+        &admitted,
+        &SESSION,
+        budget::remaining_design_points(onetaskgraph_github_live::quota::Phase::Reconciliation),
+    )
+    .unwrap_or_else(|declined| declined.refuse());
     reconcile_node_counts_and_point_costs(&token)
         .await
         .unwrap_or_else(|error| {
@@ -3455,6 +4123,13 @@ pub async fn run(nomination: Nomination) {
     // grammar and the project number's range — before either reaches GitHub. It is built
     // recording into this run's own accounting, so the session total covers the source's
     // requests and this lane's alike rather than either one on its own.
+    quota::phase(onetaskgraph_github_live::quota::Phase::Setup).unwrap();
+    budget::recheck_remaining(
+        &admitted,
+        &SESSION,
+        budget::remaining_design_points(onetaskgraph_github_live::quota::Phase::Setup),
+    )
+    .unwrap_or_else(|declined| declined.refuse());
     let source = onetaskgraph_github_projects::Plugin
         .build_recording_into(
             &SourceName::new("github-live").unwrap(),
@@ -3618,7 +4293,9 @@ pub async fn run(nomination: Nomination) {
     };
     let writer = rebuild();
     run_then_cleanup(
-        || drive_every_declared_capability(&run, writer.as_ref(), &rebuild),
+        || async {
+            drive_every_declared_capability(&run, writer.as_ref(), &rebuild, &admitted).await
+        },
         || async {
             // This run's own, first: everything it wrote goes whether the journey passed or
             // failed. Then what an interrupted EARLIER run left, which is a different
@@ -3627,6 +4304,13 @@ pub async fn run(nomination: Nomination) {
             // deleted the in-flight items of any session that happened to be running
             // beside this one; a sweep after it recovers exactly the same orphans and can
             // reach nothing a live run owns.
+            let cleanup_telemetry = quota::phase(onetaskgraph_github_live::quota::Phase::Cleanup);
+            let cleanup_budget = budget::recheck_remaining(
+                &admitted,
+                &SESSION,
+                budget::remaining_design_points(onetaskgraph_github_live::quota::Phase::Cleanup),
+            )
+            .map_err(|declined| declined.to_string());
             let mine = remove_live_state(
                 &token,
                 &project_id,
@@ -3638,6 +4322,16 @@ pub async fn run(nomination: Nomination) {
             // Made as this process's machine run whichever stamp it wrote: what it can
             // recover is a machine-stamped orphan of THIS machine, and on a fresh hosted
             // runner that is none.
+            let orphan_telemetry =
+                quota::phase(onetaskgraph_github_live::quota::Phase::OrphanRecovery);
+            let orphan_budget = budget::recheck_remaining(
+                &admitted,
+                &SESSION,
+                budget::remaining_design_points(
+                    onetaskgraph_github_live::quota::Phase::OrphanRecovery,
+                ),
+            )
+            .map_err(|declined| declined.to_string());
             let orphans = sweep_orphans(
                 &token,
                 &project_id,
@@ -3645,6 +4339,11 @@ pub async fn run(nomination: Nomination) {
                 &Sweep::of(Run::current(), now_micros()),
             )
             .await;
+            let mine = mine
+                .and(cleanup_telemetry)
+                .and(orphan_telemetry)
+                .and(cleanup_budget)
+                .and(orphan_budget);
             match (mine, orphans) {
                 (Ok(()), Ok(())) => Ok(()),
                 (Err(mine), Ok(())) => Err(mine),
@@ -3660,4 +4359,17 @@ pub async fn run(nomination: Nomination) {
     )
     .await
     .unwrap_or_else(|error| panic!("GitHub live capability journey failed: {error}"));
+}
+
+/// Invalid required-flag input on every platform; Unix also exercises non-Unicode input.
+pub fn malformed_required_flag() -> std::ffi::OsString {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt;
+        std::ffi::OsString::from_vec(vec![0xff])
+    }
+    #[cfg(not(unix))]
+    {
+        "invalid".into()
+    }
 }
