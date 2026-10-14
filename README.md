@@ -1272,16 +1272,12 @@ the item's own fields. A GitHub board keeps the defaults: its edges are always r
 **Turning the cache on widens seven Linear queries.** `ISSUES`, `ISSUE` and `ISSUE_DETAIL` gain
 the comments, relations and inverse relations pages the token is read from, `PROJECTS` and
 `PROJECT` the project relations page, and `ISSUE_RELATIONS` and `PROJECT_RELATIONS` the token's
-other parts, so a dependency read can fill an entry, asking for 10 rows a page; a write's own
-read of its target sends the plain query. At 100 rows `ISSUES` is about 5,908 of the 10,000 cap, and `PROJECTS` asks for at most
-90 rows, about 8,550, so a listing of more than 90 projects takes one more page. With the cache
-off every query is the one 0.6.0 sent. The `linear-cache-cost-not-above-uncached` budget holds
-the cache to sending strictly fewer requests than no cache — the key's 2,500 an hour per user is
-what runs out first — over an hour of three hosts, each a cold and a warm pass over 10 projects,
-40 documents and 60 issues, and at ten times that; `linear-cache-largest-query-complexity` holds
-the dearest single query any read sends with the cache on to 9,000; and four absolute budgets
-hold the cache-on hour to its share of the key — 250 requests at 1x, 2,500 at 10x, 1,250 at 10x
-with every pass warm, and 750,000 complexity at 10x. On GitHub nothing is widened,
+other parts, so a dependency read can fill an entry; a write's own read of its target sends the
+plain query. With the cache off every query is the one 0.6.0 sent. What each widened query costs,
+the page sizes the cache asks for, and the budgets that hold the cache to sending fewer requests
+than no cache over an hour and to its share of the key's hourly limits are in
+`docs/plugin-protocol.md` §4.13e, with their thresholds in
+`crates/onetaskgraph-linear-e2e/budgets.yaml`. On GitHub nothing is widened,
 and `github-cache-points-not-above-uncached` holds the cache to adding no point at any kind,
 sequence or scale.
 
