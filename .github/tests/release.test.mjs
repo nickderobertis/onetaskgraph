@@ -238,25 +238,28 @@ test("wheel extraction reports corrupt archives and destination IO failures thro
       `import subprocess, sys, tempfile, zipfile
 from pathlib import Path
 with tempfile.TemporaryDirectory() as temporary:
-    tree = Path(temporary) / 'dist/wheels/aarch64-apple-darwin'
+    checkout = Path(temporary).resolve()
+    tree = checkout / 'dist/wheels/aarch64-apple-darwin'
     tree.mkdir(parents=True)
     wheel = tree / 'cli.whl'
-    binary = Path(temporary) / 'target/aarch64-apple-darwin/release/onetaskgraph'
+    binary = checkout / 'target/aarch64-apple-darwin/release/onetaskgraph'
     binary.parent.parent.mkdir(parents=True)
-    command = [sys.executable, 'scripts/release-wheel-binary.py', '--wheels', str(tree), '--binary', str(binary)]
+    script = str(Path('scripts/release-wheel-binary.py').resolve())
+    # A relative interpreter would not resolve from the temporary checkout.
+    command = [str(Path(sys.executable).resolve()), script, '--wheels', str(tree), '--binary', str(binary)]
     wheel.write_bytes(b'corrupt ZIP')
-    rejected = subprocess.run(command, capture_output=True, text=True)
+    rejected = subprocess.run(command, cwd=checkout, capture_output=True, text=True)
     assert rejected.returncode == 1
     assert 'wheel extraction failed:' in rejected.stderr and 'next:' in rejected.stderr
     assert not binary.exists()
     with zipfile.ZipFile(wheel, 'w') as archive:
         archive.writestr('cli.data/scripts/onetaskgraph', b'payload')
     binary.parent.write_text('parent is a file')
-    rejected = subprocess.run(command, capture_output=True, text=True)
+    rejected = subprocess.run(command, cwd=checkout, capture_output=True, text=True)
     assert rejected.returncode == 1
     assert 'wheel extraction failed:' in rejected.stderr and 'next:' in rejected.stderr
     binary.parent.unlink()
-    installed = subprocess.run(command, capture_output=True, text=True)
+    installed = subprocess.run(command, cwd=checkout, capture_output=True, text=True)
     assert installed.returncode == 0, installed.stderr
     assert binary.read_bytes() == b'payload'
 `,
@@ -273,7 +276,9 @@ test("wheel extraction refuses paths outside the release layout before writing",
       `import subprocess, sys, tempfile, zipfile
 from pathlib import Path
 with tempfile.TemporaryDirectory() as temporary:
-    root = Path(temporary)
+    root = Path(temporary).resolve()
+    outside = root / 'outside'
+    outside.mkdir()
     wheels = root / 'dist/wheels/aarch64-apple-darwin'
     wheels.mkdir(parents=True)
     with zipfile.ZipFile(wheels / 'cli.whl', 'w') as archive:
@@ -283,8 +288,10 @@ with tempfile.TemporaryDirectory() as temporary:
         (root / 'dist', root / 'target/aarch64-apple-darwin/release/onetaskgraph', '--wheels'),
         (wheels, stray, '--binary'),
         (wheels, root / 'target/x86_64-unknown-linux-gnu/release/onetaskgraph', '--binary'),
+        (wheels, outside / 'target/aarch64-apple-darwin/release/onetaskgraph', '--binary'),
     ]:
-        rejected = subprocess.run([sys.executable, 'scripts/release-wheel-binary.py', '--wheels', str(wheel_dir), '--binary', str(binary)], capture_output=True, text=True)
+        script = str(Path('scripts/release-wheel-binary.py').resolve())
+        rejected = subprocess.run([str(Path(sys.executable).resolve()), script, '--wheels', str(wheel_dir), '--binary', str(binary)], cwd=root, capture_output=True, text=True)
         assert rejected.returncode == 2, rejected.stderr
         assert flag + ' must be' in rejected.stderr and 'next:' in rejected.stderr, rejected.stderr
         assert not binary.exists()
