@@ -327,7 +327,12 @@ fn on_and_off(cached: &Cached, arguments: &[&str]) -> [(Option<i32>, Value, Stri
 type Change = (&'static str, Box<dyn Fn(&Cached)>);
 
 /// A change to one item, named, with the two kinds or the item it reaches.
-type Case = (&'static str, &'static str, &'static str, Box<dyn Fn(&Cached)>);
+type Case = (
+    &'static str,
+    &'static str,
+    &'static str,
+    Box<dyn Fn(&Cached)>,
+);
 
 /// The changes `spike-coverage` measured a `gh2` token missing, each made to the board as a
 /// person makes it: a label renamed and recoloured, a board field option renamed.
