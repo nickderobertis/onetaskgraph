@@ -4311,10 +4311,10 @@ pub fn linear_workspace(sandbox: &Sandbox, held: Value) -> (Value, LinearWorkspa
     linear_workspace_failing(sandbox, held, &[])
 }
 
-// llmlint: ignore[code_lands_in_the_domain_that_owns_it] As `linear_workspace` above: the shared e2e harness is where the agreed e2e layout puts every loopback server and its constructors, so no suite copies one, and the Linear suite's rollback journey needs this one's refusal beside the handle the engine's own suite drives too.
 /// [`linear_workspace`], refusing each operation `failing` names once, as
 /// [`linear_failing_a_relation_write_once`] refuses one: a copy whose last write is refused,
 /// and which takes back what it wrote.
+// llmlint: ignore[code_lands_in_the_domain_that_owns_it] As `linear_workspace` above: the shared e2e harness is where the agreed e2e layout puts every loopback server and its constructors, so no suite copies one, and the Linear suite's rollback journey needs this one's refusal beside the handle the engine's own suite drives too.
 pub fn linear_workspace_failing(
     sandbox: &Sandbox,
     held: Value,
