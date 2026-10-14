@@ -141,6 +141,7 @@ budgets:
     unit: requests
     direction: max
     threshold: 1250
+  # llmlint: ignore[budgets_track_product_owner_outcomes] Linear meters a key by two separate hourly quotas, 2,500 requests and 3,000,000 complexity, and either can run out first; this budget is the complexity quota's share, which the request budgets cannot see, and the manager's ruling of 2026-10-14 sets it as its own budget at that share.
   - id: linear-hourly-complexity-10x
     description: >-
       The complexity the cold-then-warm hour at 10x spends with the Linear cache on, each request
