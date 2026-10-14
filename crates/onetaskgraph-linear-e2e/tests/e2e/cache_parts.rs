@@ -1346,6 +1346,30 @@ fn a_relation_write_retires_only_this_stores_edges_entries_and_is_refused_when_i
         "this store's entry is retired, and nothing else"
     );
 
+    // An entry this process cannot read, which another process may still read as one, is
+    // retired with the rest.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let cached = Cached::new(held());
+        filled(&cached, &REVERSE_EDGES);
+        let directory = cached.dir().expect("a cache").join("reverse-edges-v2");
+        let held = walk(&directory);
+        assert!(!held.is_empty(), "the read filled an entry: {held:?}");
+        for path in &held {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o000))
+                .expect("unreadable");
+        }
+        if std::fs::read(&held[0]).is_err() {
+            cached.ok(&write);
+            assert_eq!(
+                walk(&directory),
+                Vec::<std::path::PathBuf>::new(),
+                "an unreadable entry is retired"
+            );
+        }
+    }
+
     // A directory this process cannot list refuses the write before anything is sent.
     #[cfg(unix)]
     {
