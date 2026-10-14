@@ -463,6 +463,7 @@ fn summed(hour: &[[Vec<Spent>; 2]]) -> (Vec<[Spent; 2]>, Spent) {
 
 // llmlint: ignore-block[budgets_reuse_gate_telemetry] The budget compares the same hour with the cache on and with it off, which no behavioural journey runs — the cache's journeys hold small workspaces to exact requests — and its task fixes the design: this journey records both modes through the binary, and the shared runner only reads what it recorded.
 #[test]
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Its functional run is this crate's own `test` target, selected only by the Linear plugin's, the engine's and the binary's edge; that `workspace:coverage` re-runs every crate's tests instrumented on any affected change is the repository's recorded decision (AGENTS.md, Tests, "Coverage"), and this journey is the only producer of the two cache budgets' figures, which its task fixes as an ordinary test of this crate.
 fn the_cache_sends_fewer_of_the_linear_keys_requests_in_an_hour_than_no_cache() {
     let runs: Vec<(usize, bool, (Hour, Hour))> = std::thread::scope(|scope| {
         let handles: Vec<_> = [1, 10]
