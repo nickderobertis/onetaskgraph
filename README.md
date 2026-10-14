@@ -1275,11 +1275,7 @@ the comments, relations and inverse relations pages the token is read from, `PRO
 own read of its target sends the plain query. A copy filing items under two or more of a caching
 source's projects reads one page of that source's projects first, which pins them, so the
 filing lookup's read of each is answered from the cache while unchanged — at most one request
-over reading each, and only when that page pins none of them. With the cache off every query is the one 0.6.0 sent. What each widened query costs,
-the page sizes the cache asks for, and the budgets that hold the cache to sending fewer requests
-than no cache over an hour and to its share of the key's hourly limits are in
-`docs/plugin-protocol.md` §4.13e, with their thresholds in
-`crates/onetaskgraph-linear-e2e/budgets.yaml`. On GitHub nothing is widened,
+over reading each, and only when that page pins none of them. With the cache off every query is the one 0.6.0 sent. On GitHub nothing is widened,
 and `github-cache-points-not-above-uncached` holds the cache to adding no point at any kind,
 sequence or scale.
 

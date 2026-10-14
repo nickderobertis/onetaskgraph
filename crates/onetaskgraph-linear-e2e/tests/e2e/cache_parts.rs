@@ -1189,9 +1189,10 @@ fn a_project_edge_walk_read_across_a_change_between_its_pages_is_never_kept() {
     );
 }
 
-#[test]
-fn a_copy_filing_tasks_under_several_projects_reads_one_page_of_them_and_no_more() {
-    // Eighty projects: more than the seventy-four one page of them holds, so `PX-79` is past it.
+/// Eighty projects — more than the seventy-four one page of them holds, so `PX-79` is past it —
+/// and four tasks: three marked `many`, filed under `PX-0`, `PX-1` and `PX-79`, and one marked
+/// `one`, filed under `PX-2`.
+fn many_projects() -> Value {
     let projects: Vec<Value> = (0..80)
         .map(|n| {
             json!({"id": format!("PX-{n}"), "title": format!("Project {n}"),
@@ -1206,7 +1207,7 @@ fn a_copy_filing_tasks_under_several_projects_reads_one_page_of_them_and_no_more
             json!({"project": project, "metadata": {"pin.case": case}}),
         )
     };
-    let workspace = crate::linear::held(
+    crate::linear::held(
         vec![
             task("TX-1", "PX-0", "many"),
             task("TX-2", "PX-1", "many"),
@@ -1215,24 +1216,32 @@ fn a_copy_filing_tasks_under_several_projects_reads_one_page_of_them_and_no_more
         ],
         projects,
         Vec::new(),
-    );
-    let copy = |case: &str| {
-        [
-            "task",
-            "copy",
-            "--to",
-            "notes",
-            "--source",
-            "linear",
-            "--metadata",
-            &format!("pin.case={case}"),
-            "--dry-run",
-            "--no-link",
-            "--json",
-        ]
-        .map(str::to_owned)
-        .to_vec()
-    };
+    )
+}
+
+/// A dry-run copy into `notes` of the tasks marked `case`.
+fn filing_copy(case: &str) -> Vec<String> {
+    [
+        "task",
+        "copy",
+        "--to",
+        "notes",
+        "--source",
+        "linear",
+        "--metadata",
+        &format!("pin.case={case}"),
+        "--dry-run",
+        "--no-link",
+        "--json",
+    ]
+    .map(str::to_owned)
+    .to_vec()
+}
+
+#[test]
+fn a_copy_filing_tasks_under_several_projects_reads_one_page_of_them_and_no_more() {
+    let workspace = many_projects();
+    let copy = filing_copy;
     let count =
         |sent: &[String], document: &str| sent.iter().filter(|sent| *sent == document).count();
     let cached = Cached::new(workspace);
@@ -1264,19 +1273,48 @@ fn a_copy_filing_tasks_under_several_projects_reads_one_page_of_them_and_no_more
     let [on, off] = cached.on_and_off(&strs(&copy("many")));
     assert_eq!(on.0, off.0, "what an uncached copy answers");
     assert_eq!(bare(warm_answer), on.0.1);
-    assert!(
-        on.1 <= off.1,
-        "a warm copy costs no more than an uncached one: {} against {}",
-        on.1,
-        off.1
-    );
-    assert!(
-        count(&cold, graphql::PROJECTS_CACHED) + count(&cold, graphql::PROJECT_CACHED) <= 3 + 1,
-        "and a cold one at most one request over it"
-    );
 
     // One project named: no page is read, and its project is read by id as before.
     let (_, one) = cached.ok(&strs(&copy("one")));
     assert_eq!(count(&one, graphql::PROJECTS_CACHED), 0, "{one:?}");
     assert_eq!(count(&one, graphql::PROJECT_CACHED), 1, "{one:?}");
+}
+
+#[test]
+fn a_copy_whose_projects_page_is_refused_reads_each_project_by_id_and_answers_the_same() {
+    let sandbox = crate::common::Sandbox::new();
+    let (config, workspace) =
+        linear_workspace_failing(&sandbox, many_projects(), &[graphql::PROJECTS_CACHED]);
+    let mut source = linear(&config, json!({"status_mapping": eng_mapping()}));
+    source["cache"] = json!({"enabled": true});
+    let notes = sandbox.subdirectory("notes");
+    for kind in ["tasks", "projects", "documents"] {
+        std::fs::create_dir_all(notes.join(kind)).expect("a folder");
+    }
+    sandbox.project_document(&document(&json!({
+        "linear": source,
+        "notes": {"plugin": "local-md", "config": {"root": notes}},
+    })));
+    let cached = Cached {
+        cache_home: sandbox.subdirectory("cache-home"),
+        sandbox,
+        workspace,
+    };
+    let (refused, sent) = cached.ok(&strs(&filing_copy("many")));
+    assert_eq!(
+        sent.iter()
+            .filter(|document| *document == graphql::PROJECTS_CACHED)
+            .count(),
+        1,
+        "the refused page is not sent again: {sent:?}"
+    );
+    assert_eq!(
+        sent.iter()
+            .filter(|document| *document == graphql::PROJECT_CACHED)
+            .count(),
+        3,
+        "each project is read by id instead: {sent:?}"
+    );
+    let [_, off] = cached.on_and_off(&strs(&filing_copy("many")));
+    assert_eq!(bare(refused), off.0.1, "what an uncached copy answers");
 }

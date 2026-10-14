@@ -81,7 +81,7 @@ impl EntryKind {
     }
 }
 
-/// Which edges an edges entry holds: one of the three edge kinds of [`EntryKind`].
+/// Which edges an edges entry holds: one of the four edge kinds of [`EntryKind`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum EdgeKind {
     /// A task's forward edges.
@@ -130,7 +130,7 @@ pub(crate) enum DocumentTag {
     Document,
 }
 
-/// The `kind` an edges entry can carry: one of the three edge kinds, and never another.
+/// The `kind` an edges entry can carry: one of the four edge kinds, and never another.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum EdgesTag {
@@ -175,9 +175,8 @@ pub(crate) struct DocumentEntry {
     pub(crate) assets: Option<Vec<Asset>>,
 }
 
-/// One item's edges in one direction as a dependency read answered them — a task's forward or
-/// reverse edges, or a project's forward edges — at the version that read's own response
-/// spelled.
+/// One item's edges in one direction as a dependency read answered them — a task's or a
+/// project's forward or reverse edges — at the version that read's own response spelled.
 ///
 /// Never vouches for the item's fields: it holds nothing but the edges.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
