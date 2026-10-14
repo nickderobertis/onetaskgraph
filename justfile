@@ -23,11 +23,11 @@ default:
 prune_superseded_version := "0.1.1"
 
 # Set up from a clean clone: every toolchain, the judged-lint tier and the pool pruner.
-# The pruner is a host's maintenance tool, so a GitHub Actions run skips it rather than
-# compiling it on every leg; the release pull request's budget step installs it itself.
+# The pruner is installed everywhere bootstrap runs, CI included; only its pinned-version
+# check decides whether an install is needed.
 bootstrap:
     @{{nx}} run-many -t bootstrap --all
-    @[ "${GITHUB_ACTIONS:-}" = true ] || just pool-maintenance-tool
+    @just pool-maintenance-tool
 
 # Install the pinned cargo-prune-superseded, unless that version is the one on PATH.
 pool-maintenance-tool:
