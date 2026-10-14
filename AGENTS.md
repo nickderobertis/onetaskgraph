@@ -163,7 +163,7 @@ mechanisms rather than rediscovering the rule; each says how it fails, not how i
 
 **One named exception: the local cache of a remote source, and only where a configuration
 turns it on.** `sources.<name>.cache.enabled` (off unless set) keeps a GitHub board's or a
-Linear source's tasks under `${XDG_CACHE_HOME:-$HOME/.cache}/onetaskgraph/<digest>` or
+Linear source's tasks, projects, documents and verified image bytes under `${XDG_CACHE_HOME:-$HOME/.cache}/onetaskgraph/<digest>` or
 `cache.dir`, keyed on the change token alone and served only at the version a caller pinned
 or a later one (`crates/onetaskgraph-core/src/cache/`, README "A local cache of a remote
 source"). It is the one write of a user's work outside its plugin, asked for in configuration
@@ -1018,8 +1018,8 @@ them do; this is the inventory of what is owed, not a status board.
     spending no request a declared-nothing source does not, an unverifiable one refused.
 91. The pinned onevcs boundary schema is what the released `boundary schema --json` prints, and
     every payload the store sends and every verdict it reads is held to it.
-92. A task's `version` is in the JSON of every read on a GitHub board and a folder of Markdown
-    and absent on Linear, and one board task changed by each kind — a comment added, edited and
+92. A task's `version` is in the JSON of every read on a GitHub board, a folder of Markdown and
+    Linear, and one board task changed by each kind — a comment added, edited and
     deleted, a body, title, status, priority, label, board-field, metadata and dependency
     change — carries a token the store orders as later, while no other task's moves.
 93. `task copy --comments` and `project copy --comments` carry comments from a board into
@@ -1063,6 +1063,19 @@ them do; this is the inventory of what is owed, not a status board.
     settings take every layer, `cache clear` empties what it names, an entry another release
     wrote or a racing writer left behind is a miss, the command line, both SDKs and a Rust
     caller share one cache, and a Linear source's reads are bypassed, saying why.
+100. A pinned `project show` and `document show` on a loopback GitHub board are answered from
+    their entries, a document's manifest and image bytes with them, and a newer, unordered or
+    absent pin is the one read; a label or option renamed or recoloured, a far end deleted and
+    an item's own kind changed are each read again rather than served, and a far end's kind flip
+    is read in every edge; a byte file that no longer hashes is read again; every project and
+    document write retires its entries before it is sent, or refuses; `cache clear` reclaims
+    a source's items and bytes together; and a listing fills nothing.
+101. On a loopback Linear with the cache on, a task's fields and forward edges, a project's and a
+    document's fields are a cold load, a hit on an unchanged pin and a miss on a newer one; every
+    change `spike-linear-coverage` measured or the facets cover by construction is read again
+    pinned to the new `lin1` token; a token Linear cannot vouch for — 50 labels, a relations page
+    past 10 rows or reporting another — is never kept or served; comments, project edges and every
+    listing reach Linear every time; and with the cache off every document sent is 0.6.0's.
 
 ## The public boundary
 

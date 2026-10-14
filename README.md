@@ -1157,7 +1157,8 @@ sources:
 ### A local cache of a remote source
 
 A source reading a remote — a GitHub Projects board, a Linear team — can keep a **local cache**
-of its tasks on this host, so a read the store already knows is unchanged costs no request:
+of its tasks, projects and documents on this host, so a read the store already knows is
+unchanged costs no request:
 
 ```yaml
 sources:
@@ -1176,13 +1177,24 @@ later layer over an earlier one. Without `dir` the cache lives under
 remote — the board's endpoint, owner and number, or Linear's endpoint and team — so every
 process on the host configuring the same remote shares one cache: the command line, both
 SDKs, and a Rust caller of the engine. A source with no remote, such as a folder of Markdown,
-ignores the setting. Each task is one file, written whole to a staging file and renamed into
-place, with no lock; it holds the task's `version`, its fields, its metadata, its comments,
-its assets and its forward edges under an entry schema version, and a reader that does not
-know that schema version, or cannot parse the entry, reads the task from its source instead
-and never fails on it. Releases of different ages share the directory that way. Nothing
-expires by age. `onetaskgraph cache clear [<SOURCE>]` empties one source's cache, or every
-source's, removing only the entries this store wrote there.
+ignores the setting. Each task, project and document is one file, and so is a task's forward
+edges read on their own, each written whole to a staging file and renamed into place, with no
+lock; each holds the record's `version` and what it was read with under an entry schema
+version, every kind in a directory of its own named with its schema, and a reader that does
+not know that schema version, or cannot parse the entry, reads the record from its source
+instead and never fails on it. Releases of different ages share the directory that way. An
+image asset's bytes are kept once per SHA-256, under that digest, and served only while they
+still hash to it.
+
+**How large it grows, and how it is reclaimed.** An entry is filled lazily, by a load, and
+replaced in place, so the item files hold at most one per record a load has ever read; byte
+files hold one per distinct image ever read and are never replaced, so an image edited ten
+times leaves eleven. Nothing expires by age and nothing caps the total. A board the GitHub cache
+budget's size — a pass loading 5 projects, 20 documents and 20 tasks, 8 of the documents holding
+a 256 KiB image — holds at most 45 item files and 2 MiB of bytes, plus 256 KiB for each image
+replaced; at ten times that size, 450 files and 20 MiB. `onetaskgraph cache clear [<SOURCE>]`
+empties one source's cache, or every source's, reclaiming its item and byte entries together and
+removing only the files this store wrote there.
 
 **The freshness rule.** The cache is keyed on the change token a task's `version` carries
 (`docs/plugin-protocol.md` §4.13d), and it **never adds a request and never serves stale
@@ -1195,18 +1207,54 @@ cache never asks a source whether something changed:
   query, or an engine caller's `task_details` after a `tasks` listing reads only the tasks
   whose listed version is not already cached.
 - **Across commands**, a caller pins a read with a version it already holds: `task show <ID>
-  --pin VERSION`, `task comment list <ID> --pin VERSION`, and `task show-many <ID>... --pin
-  <ID>=VERSION` (repeatable). A pinned read of a task the cache holds at that version or a
-  later one sends **no request**; otherwise it makes the one read it always made, and refreshes
-  the entry. **A pin means "at least as fresh as the version I hold", not "current"**: a pinned
+  --pin VERSION`, `task comment list <ID> --pin VERSION`, `task show-many <ID>... --pin
+  <ID>=VERSION` (repeatable), `project show <ID> --pin VERSION` and `document show <ID> --pin
+  VERSION` — and a Rust caller with `Engine::pin`, `Engine::pin_project` and
+  `Engine::pin_document`. A pinned read of a record the cache holds at that version or a later
+  one sends **no request**; otherwise it makes the one read it always made, and refreshes the
+  entry. **A pin means "at least as fresh as the version I hold", not "current"**: a pinned
   read answered from the cache can predate a change at the source nobody has read yet.
 - An entry older than the pin — one a racing writer left — is never served, and neither is
   one the source cannot put in order beside it.
 - An **unpinned** read by id, a plain `task show <ID>`, reads the source as it always did, and
   refreshes the entry.
-- A part of a task the source's token does not cover is cached but never served: every Linear
-  read today, whose tasks carry no token, and a GitHub task changed within the minute before
-  its read, or a draft. The read goes to the source and says why.
+- A listing — `task list`, `project list`, `document list`, a search — only pins: it never fills
+  an entry. Nothing is pre-warmed.
+- A part of a record the source's token does not cover is never served, and neither is a
+  record with no token — a GitHub item changed within the minute before its read, a draft, or a
+  Linear item whose labels or relations came back as only a first page. The read goes to the
+  source and says why.
+
+**What each source's token is, and what it covers.** `docs/plugin-protocol.md` §4.13d states
+both tokens part by part with the live evidence for each, and §4.13e every read with the reason
+each remote one is remote.
+
+- A **GitHub** item's token is `gh3`: the issue's and the board item's times, its comment count,
+  its relationship events, a digest of its *facets* — its own kind, its board field values and
+  its labels by name and colour — and its repository. The facets are what `gh2` missed, measured
+  on a real board: a label renamed or recoloured and a field option renamed left it equal, a far
+  end deleted made it order the new token *earlier*, and a task gaining a sub-issue left it
+  equal. It covers a task's fields and comments, a project's fields, and a document's fields
+  and its image manifest. It does not cover forward edges, because an item's token cannot see a
+  far end become a document or be deleted, so every dependency read goes to GitHub.
+- A **Linear** item's token is `lin1`: its `updatedAt` and a digest of its facets — for a task its
+  identifier, labels, project, state and url; for a project its labels and status; for a document
+  its content's digest, project, title and url — and, for a task with the cache on, a digest of
+  its first page of relations. Each part is what `updatedAt` was measured missing on a real team:
+  a label renamed or recoloured and a workflow state renamed (3 of 3), a relation added (3 of 3),
+  and a document's content edited (4 of 4). It covers a task's fields and forward edges, a
+  project's fields and a document's fields. A task's comments (no time moved for any of 3
+  changes, and a digest of them fails the cost test) and a project's forward edges (0 of 2, and a
+  digest would bring the projects listing to about 9,491 of Linear's 10,000 per-query complexity)
+  are always read from Linear.
+
+**Turning the cache on widens four Linear queries.** `ISSUES`, `ISSUE` and `ISSUE_DETAIL` gain
+the relations page the token is read from, and `ISSUE_RELATIONS` gains the token's other parts,
+so a dependency read can fill an entry; at 100 rows `ISSUES` is about 3,108 of the 10,000 cap.
+With the cache off every query is the one 0.6.0 sent. Over the Linear cache budget's hour —
+three hosts, each a cold and a warm pass over 10 projects, 40 documents and 60 issues — the
+cache spends 5,811 less complexity than no cache, and 58,110 less at ten times the size. On
+GitHub nothing is widened and the cache adds no point at any kind, sequence or scale.
 
 Every read from a caching source carries `cache: {"served": "cache" | "remote", "bypassed":
 null | "<reason>"}` in its JSON, and a source keeping no cache carries no such member. A
@@ -1214,7 +1262,9 @@ command's `spent` counts only the requests it really sent.
 
 **A write keeps the cache current from its own response** — `task comment add`, `edit` and
 `delete`, a copy onto the caching source, and `task metadata`, `status`, `priority`, `update`
-and `content`. It advances the entry only to what that response vouches for: the whole task,
+and `content`. A write to a project or a document — a create, an update, a metadata write, a
+render, an asset write, a deletion, a copy's rollback — takes every entry naming it out of
+service and fills none, so the next pinned read reads it. It advances the entry only to what that response vouches for: the whole task,
 comments included, at the version the response determines. A response showing only the fields
 it wrote leaves the entry unserved, because a person's concurrent edit to another field, or a
 new comment, can share that version; so does one that determines no version. The entry is
@@ -1237,7 +1287,7 @@ the cache can add is the first write after a board option it kept was renamed or
 refused mutation, one read that refreshes the board's kept ids, and that part once more.
 
 The cache is an efficiency layer and never a snapshot: it serves the pinned version or a later
-one, keeps one entry per task, and is shared and cleared freely. To keep an exact version of a
+one, keeps one entry per record, and is shared and cleared freely. To keep an exact version of a
 task, copy it into a folder of Markdown of your own with `task copy`.
 
 ### Status mapping
