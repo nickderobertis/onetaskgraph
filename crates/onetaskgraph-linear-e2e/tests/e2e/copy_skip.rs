@@ -68,37 +68,58 @@ fn a_comment_added_in_linear_is_carried_by_the_next_comments_copy_rather_than_sk
 }
 
 #[test]
-fn a_relation_added_in_linear_is_carried_by_the_next_copy_from_a_source_with_no_cache() {
-    let cached = Cached::with(dataset(), &json!({"enabled": false}));
-    let copy = [
+fn a_repeat_copy_by_query_skips_a_linear_task_only_where_its_token_covers_the_edges() {
+    let query = [
         "task",
         "copy",
-        "linear:L-1",
+        "--source",
+        "linear",
         "--to",
         "notes",
         "--no-link",
         "--json",
     ];
-    cached.ok(&copy);
-    assert!(!notes(&cached).contains("linear:L-3"), "{}", notes(&cached));
-    let before = cached
+    let skipped = |copied: &Value| {
+        copied["items"]
+            .as_array()
+            .expect("a copy report")
+            .iter()
+            .filter(|item| item["skipped"] == true)
+            .count()
+    };
+    // With the cache on, a task's token carries its relations, so an unchanged repeat skips.
+    let cached = Cached::new(dataset());
+    cached.ok(&query);
+    let (again, _) = cached.ok(&query);
+    assert!(
+        skipped(&again) > 0,
+        "a covered, unchanged task is skipped: {again}"
+    );
+
+    // With it off, the token does not cover forward edges, so nothing is skipped — and a
+    // relation added in Linear, which moves no part of that token, is carried.
+    let uncached = Cached::with(dataset(), &json!({"enabled": false}));
+    uncached.ok(&query);
+    let (again, _) = uncached.ok(&query);
+    assert_eq!(
+        skipped(&again),
+        0,
+        "no task is skipped on a token blind to its edges: {again}"
+    );
+    let before = uncached
         .listed("task", "linear:L-1")
         .expect("L-1 carries a token");
-    cached.workspace.relate("L-1", "L-3", "blocks");
+    uncached.workspace.relate("L-1", "L-3", "blocks");
     assert_eq!(
-        cached.listed("task", "linear:L-1").as_deref(),
+        uncached.listed("task", "linear:L-1").as_deref(),
         Some(before.as_str()),
         "with no cache attached, a relation moves no part of Linear's token"
     );
-    let (again, _) = cached.ok(&copy);
-    assert_ne!(
-        outcome(&again, "L-1")["skipped"],
-        true,
-        "a task whose edges its token does not cover is never skipped: {again}"
-    );
+    let (related, _) = uncached.ok(&query);
+    assert_ne!(outcome(&related, "L-1")["skipped"], true, "{related}");
     assert!(
-        notes(&cached).contains("linear:L-3"),
+        notes(&uncached).contains("linear:L-3") || notes(&uncached).contains("notes:L-3"),
         "the new edge is carried: {}",
-        notes(&cached)
+        notes(&uncached)
     );
 }

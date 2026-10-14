@@ -1324,9 +1324,9 @@ task read from a hosted plugin is never skipped. So a `--comments` copy out of L
 skips — its token never covers comments — and a copy out of a Linear source with no cache never
 skips either, its token not covering forward edges then. A folder of Markdown covers every part:
 `md1` digests the task's one file. A GitHub board reports every part for a copy's skip, though
-its cache serves no forward edge: a copy holds the edges it reads now to the destination's
-before it skips, and the relationship count moves for an edge added or removed and for a far end
-deleted. **Its one bound is a far end's own kind flipping** — a far end gaining a sub-issue, or
+its cache serves no forward edge: the relationship count moves for an edge added or removed and
+for a far end deleted, so its token sees every change to a task's edges but one. **That one
+bound is a far end's own kind flipping** — a far end gaining a sub-issue, or
 retitled into a document — which moves nothing of the task that depends on it, measured stale 1
 of 1 by `spike-coverage`: a skipping recopy keeps that edge as it was, and the next copy that
 reads the task carries it (`a_far_end_turned_into_a_project_is_carried_by_the_next_copy_that_reads_the_task_after_it`
