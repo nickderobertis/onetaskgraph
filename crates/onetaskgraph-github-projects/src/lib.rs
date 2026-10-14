@@ -9851,6 +9851,7 @@ impl Resolved {
 
     fn project(&self) -> Project {
         Project {
+            version: None,
             id: self.id.clone(),
             title: self.title.clone(),
             content: self.body.clone(),
@@ -9870,6 +9871,7 @@ impl Resolved {
     /// dependencies, because a document is not work.
     fn document(&self) -> Document {
         Document {
+            version: None,
             id: self.id.clone(),
             title: self.title.clone(),
             content: self.body.clone(),

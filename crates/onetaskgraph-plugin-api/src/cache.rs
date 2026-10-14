@@ -4,8 +4,9 @@
 //! gives, serves it only at that version or a later one, and holds nothing a source did not
 //! hand it. A source says three things here, and nothing else about the cache reaches it:
 //!
-//! - which parts of a task its change token vouches for — [`VersionCoverage`] — so a part it
-//!   does not cover is never served from the cache;
+//! - which parts of a task, a project and a document its change token vouches for —
+//!   [`VersionCoverage`], [`ProjectVersionCoverage`] and [`DocumentVersionCoverage`] — so a part
+//!   it does not cover is never served from the cache;
 //! - what a write that expects one version of a task may take instead of reading it — an
 //!   opaque [`TaskSource::write_context`](crate::TaskSource::write_context) and
 //!   [`TaskSource::board_context`](crate::TaskSource::board_context), handed back through
@@ -48,17 +49,31 @@ impl Coverage {
     }
 }
 
+/// What a member of a coverage reads as when the value it is read from names none — one written
+/// before that member existed — so a part nobody declared is never served.
+fn undeclared() -> Coverage {
+    Coverage::Uncovered {
+        reason: "the source did not declare that its change token covers this part".to_owned(),
+    }
+}
+
 /// Which parts of a task a source's change token vouches for.
 ///
-/// Two parts, because they are read apart: a task's own fields — title, content, status,
-/// priority, labels, metadata, edges and the image assets its content names — and its
-/// comments.
+/// Three parts, because they are read apart: a task's own fields — title, content, status,
+/// priority, labels, metadata and the image assets its content names — its comments, and its
+/// forward dependency edges, native and recorded. A member absent from the value it is read
+/// from is [`Coverage::Uncovered`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct VersionCoverage {
     /// The task's own fields.
+    #[serde(default = "undeclared")]
     pub fields: Coverage,
     /// Its comments.
+    #[serde(default = "undeclared")]
     pub comments: Coverage,
+    /// Its forward dependency edges: what it depends on, natively and as recorded.
+    #[serde(default = "undeclared")]
+    pub forward_edges: Coverage,
 }
 
 impl VersionCoverage {
@@ -68,6 +83,7 @@ impl VersionCoverage {
         Self {
             fields: Coverage::Covered,
             comments: Coverage::Covered,
+            forward_edges: Coverage::Covered,
         }
     }
 
@@ -79,7 +95,88 @@ impl VersionCoverage {
             fields: Coverage::Uncovered {
                 reason: reason.clone(),
             },
-            comments: Coverage::Uncovered { reason },
+            comments: Coverage::Uncovered {
+                reason: reason.clone(),
+            },
+            forward_edges: Coverage::Uncovered { reason },
+        }
+    }
+}
+
+/// Which parts of a project a source's change token — its [`Project::version`] — vouches for.
+///
+/// A member absent from the value it is read from is [`Coverage::Uncovered`].
+///
+/// [`Project::version`]: crate::Project::version
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectVersionCoverage {
+    /// The project's own fields: title, content, status, labels and metadata.
+    #[serde(default = "undeclared")]
+    pub fields: Coverage,
+    /// Its forward dependency edges.
+    #[serde(default = "undeclared")]
+    pub forward_edges: Coverage,
+}
+
+impl ProjectVersionCoverage {
+    /// A token covering every part of a project.
+    #[must_use]
+    pub fn whole() -> Self {
+        Self {
+            fields: Coverage::Covered,
+            forward_edges: Coverage::Covered,
+        }
+    }
+
+    /// A token covering no part of a project, for `reason`.
+    #[must_use]
+    pub fn none(reason: impl Into<String>) -> Self {
+        let reason = reason.into();
+        Self {
+            fields: Coverage::Uncovered {
+                reason: reason.clone(),
+            },
+            forward_edges: Coverage::Uncovered { reason },
+        }
+    }
+}
+
+/// Which parts of a document a source's change token — its [`Document::version`] — vouches
+/// for.
+///
+/// A member absent from the value it is read from is [`Coverage::Uncovered`].
+///
+/// [`Document::version`]: crate::Document::version
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct DocumentVersionCoverage {
+    /// The document's own fields: title, content, project, labels and metadata.
+    #[serde(default = "undeclared")]
+    pub fields: Coverage,
+    /// The manifest of the image assets it holds — each one's name, digest and type. The
+    /// bytes are served only against a digest a covered manifest named, and re-hashed.
+    #[serde(default = "undeclared")]
+    pub assets: Coverage,
+}
+
+impl DocumentVersionCoverage {
+    /// A token covering every part of a document.
+    #[must_use]
+    pub fn whole() -> Self {
+        Self {
+            fields: Coverage::Covered,
+            assets: Coverage::Covered,
+        }
+    }
+
+    /// A token covering no part of a document, for `reason`.
+    #[must_use]
+    pub fn none(reason: impl Into<String>) -> Self {
+        let reason = reason.into();
+        Self {
+            fields: Coverage::Uncovered {
+                reason: reason.clone(),
+            },
+            assets: Coverage::Uncovered { reason },
         }
     }
 }

@@ -1182,6 +1182,7 @@ async fn a_handshake_that_says_nothing_about_documents_is_read_as_having_none() 
 /// The document a write test hands the far side, which never gets as far as holding one.
 fn filed() -> Document {
     Document {
+        version: None,
         id: NativeId("D-1".to_owned()),
         title: "Why the store holds a document".to_owned(),
         content: None,

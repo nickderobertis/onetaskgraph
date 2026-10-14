@@ -2168,6 +2168,7 @@ impl LiveRun {
 
 fn artifact_project(title: &str, status: &Status) -> Project {
     Project {
+        version: None,
         id: NativeId("live-source-item".into()),
         title: title.to_owned(),
         content: Some("temporary credentialed write; the live lane removes this".into()),
@@ -2190,6 +2191,7 @@ fn artifact_project(title: &str, status: &Status) -> Project {
 /// is the round trip this leg of the lane is for.
 fn artifact_document(title: &str, project: Option<NativeId>) -> Document {
     Document {
+        version: None,
         id: NativeId("live-source-item".into()),
         title: title.to_owned(),
         content: Some("temporary credentialed write; the live lane removes this".into()),

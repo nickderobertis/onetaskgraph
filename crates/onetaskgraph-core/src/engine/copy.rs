@@ -4587,6 +4587,7 @@ impl Engine {
         }
         let held = &running.homes[&key];
         let member = Project {
+            version: None,
             id: home.native.clone(),
             title: held.title.clone(),
             content: None,

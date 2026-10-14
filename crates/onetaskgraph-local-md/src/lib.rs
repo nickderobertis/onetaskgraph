@@ -931,6 +931,7 @@ impl LocalMdSource {
             })?;
         let common = self.common(Kind::Document, path, content_of(body, false), front.into())?;
         Ok(Document {
+            version: None,
             id: common.id,
             title: common.title,
             content: common.body,
@@ -2983,6 +2984,7 @@ fn task(d: Entry) -> Task {
 }
 fn project(d: Entry) -> Project {
     Project {
+        version: None,
         id: d.common.id,
         title: d.common.title,
         content: d.common.body,

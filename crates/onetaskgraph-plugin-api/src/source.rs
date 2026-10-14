@@ -10,12 +10,12 @@ use serde_json::Value;
 
 use crate::{
     Asset, AssetName, AssetWrite, AssetsWritten, Capabilities, Comment, CommentBody, CommentCopy,
-    DependencyEdge, Direction, Document, DocumentQuery, ItemKind, ItemWrite, Label, MetadataKey,
-    MetadataRecord, Metering, NativeId, NewComment, Page, PageRequest, Priority, Project,
-    ProjectQuery, SharedClock, SourceError, SourceName, Status, StatusCategory, Task,
-    TaskDetailRead, TaskQuery, TaskRef, TaskUpdate, TaskUpdateOutcome, VersionCoverage, Visibility,
-    WriteJournal, WriteSupport, WriteTarget, assetless, commentless, documentless, unwritable,
-    unwritable_field, unwritable_metadata,
+    DependencyEdge, Direction, Document, DocumentQuery, DocumentVersionCoverage, ItemKind,
+    ItemWrite, Label, MetadataKey, MetadataRecord, Metering, NativeId, NewComment, Page,
+    PageRequest, Priority, Project, ProjectQuery, ProjectVersionCoverage, SharedClock, SourceError,
+    SourceName, Status, StatusCategory, Task, TaskDetailRead, TaskQuery, TaskRef, TaskUpdate,
+    TaskUpdateOutcome, VersionCoverage, Visibility, WriteJournal, WriteSupport, WriteTarget,
+    assetless, commentless, documentless, unwritable, unwritable_field, unwritable_metadata,
 };
 
 /// Whether a source is answering right now.
@@ -105,6 +105,39 @@ pub trait TaskSource: Send + Sync {
             self.kind()
         ))
     }
+
+    /// Which parts of a project this source's [`Project::version`] vouches for, on the terms
+    /// of [`version_coverage`](Self::version_coverage).
+    ///
+    /// Defaulted to no part, for the same reason.
+    fn project_version_coverage(&self) -> ProjectVersionCoverage {
+        ProjectVersionCoverage::none(format!(
+            "the {} plugin does not declare that its change token covers a project",
+            self.kind()
+        ))
+    }
+
+    /// Which parts of a document this source's [`Document::version`] vouches for, on the terms
+    /// of [`version_coverage`](Self::version_coverage).
+    ///
+    /// Defaulted to no part, for the same reason.
+    fn document_version_coverage(&self) -> DocumentVersionCoverage {
+        DocumentVersionCoverage::none(format!(
+            "the {} plugin does not declare that its change token covers a document",
+            self.kind()
+        ))
+    }
+
+    /// Tell this source the store's local cache now stands in front of it.
+    ///
+    /// Called exactly once, by the cache as it wraps the source, before any read and before
+    /// any coverage is read — so a source whose token needs a part only a wider selection
+    /// carries can widen its reads here, and declare the coverage that widening buys. Never
+    /// carried over the plugin protocol, as [`version_coverage`](Self::version_coverage) is
+    /// not.
+    ///
+    /// Defaulted to doing nothing: a source not overriding it reads exactly as it did.
+    fn attach_cache(&self) {}
 
     /// What this source holds about task `id` — the item it read last in this process — that
     /// a later write expecting that version of it could take instead of reading it again, or

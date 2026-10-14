@@ -279,6 +279,7 @@ async fn drive_every_declared_capability(
         ..TaskQuery::default()
     };
     let project = |name: &str| Project {
+        version: None,
         id: NativeId("live-source-item".into()),
         title: name.to_owned(),
         content: Some("temporary credentialed write; the live lane removes this".into()),
@@ -1025,6 +1026,7 @@ async fn drive_follow_ups(
         .write_document(&ItemWrite {
             target: None,
             item: Document {
+                version: None,
                 id: NativeId("live-source-item".into()),
                 title: document_title.to_owned(),
                 content: Some("A probed document.".to_owned()),
@@ -1215,6 +1217,7 @@ async fn drive_documents(
     loose: &str,
 ) -> Result<(), String> {
     let document = |title: &str, project: Option<&NativeId>| Document {
+        version: None,
         id: NativeId("live-source-item".into()),
         title: title.to_owned(),
         content: Some("temporary credentialed write; the live lane removes this".into()),

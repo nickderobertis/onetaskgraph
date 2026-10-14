@@ -93,6 +93,7 @@ fn task() -> Task {
 /// One project, so the project verbs have something to return.
 fn project() -> Project {
     Project {
+        version: None,
         id: NativeId::from("P-1"),
         title: "Engine".to_owned(),
         content: None,

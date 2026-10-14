@@ -3911,6 +3911,7 @@ async fn a_document_is_created_updated_and_removed_again_over_real_http() {
     let written = |title: &str, content: Option<&str>, project: Option<&str>| ItemWrite {
         target: None,
         item: Document {
+            version: None,
             id: "ignored".into(),
             title: title.into(),
             content: content.map(str::to_owned),
@@ -4045,6 +4046,7 @@ async fn a_document_is_created_updated_and_removed_again_over_real_http() {
 #[tokio::test]
 async fn a_document_write_refuses_by_name_what_this_source_cannot_carry() {
     let document = Document {
+        version: None,
         id: "ignored".into(),
         title: "Design".into(),
         content: None,
@@ -6640,6 +6642,7 @@ async fn a_project_with_ten_kilobytes_of_caller_metadata_copies_into_its_content
         .write_project(&ItemWrite {
             target: None,
             item: Project {
+                version: None,
                 id: "plan".into(),
                 title: "The plan".into(),
                 content: Some("The plan's description.".into()),

@@ -4560,6 +4560,7 @@ fn map_project(v: &Value, statuses: &StatusMapping) -> Result<Project, SourceErr
     let classification = classification_of(&mut metadata)?;
     let url = optional_string(v, "url")?;
     Ok(Project {
+        version: None,
         id: NativeId(str_at(v, "id")?.into()),
         title: str_at(v, "name")?.into(),
         content,
@@ -4627,6 +4628,7 @@ fn map_document(v: &Value) -> Result<Document, SourceError> {
     let classification = classification_of(&mut metadata)?;
     let url = optional_string(v, "url")?;
     Ok(Document {
+        version: None,
         id: NativeId(str_at(v, "id")?.into()),
         title: str_at(v, "title")?.into(),
         content,

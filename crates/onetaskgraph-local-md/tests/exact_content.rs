@@ -83,6 +83,7 @@ fn task(content: &str) -> Task {
 
 fn document(content: &str) -> Document {
     Document {
+        version: None,
         id: id("design"),
         title: "Design".to_owned(),
         content: Some(content.to_owned()),
@@ -100,6 +101,7 @@ fn document(content: &str) -> Document {
 
 fn project(content: &str) -> Project {
     Project {
+        version: None,
         id: id("launch"),
         title: "Launch".to_owned(),
         content: Some(content.to_owned()),

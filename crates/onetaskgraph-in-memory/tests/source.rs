@@ -1841,6 +1841,7 @@ async fn a_document_written_into_a_documentary_source_is_created_then_updated_th
 /// One document to write, filed under a project this source really holds.
 fn a_document() -> Document {
     Document {
+        version: None,
         id: NativeId("D-7".to_owned()),
         title: "Written".to_owned(),
         content: Some("a body".to_owned()),

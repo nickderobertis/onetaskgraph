@@ -2953,6 +2953,7 @@ fn task(id: &str, title: &str, status: Status) -> Task {
 
 fn project(id: &str, title: &str, status: Status) -> Project {
     Project {
+        version: None,
         id: NativeId(id.to_owned()),
         title: title.to_owned(),
         content: None,
@@ -2974,6 +2975,7 @@ fn design(id: &str, title: &str) -> Item {
 
 fn document(id: &str, title: &str) -> Document {
     Document {
+        version: None,
         id: NativeId(id.to_owned()),
         title: title.to_owned(),
         content: None,
