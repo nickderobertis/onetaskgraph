@@ -141,7 +141,7 @@ report_unless_archive_lists() {
   grep -qx -- "$2" <<<"$listing" || report "$3"
 }
 
-if ! (cd "$TREE" && PATH="$scratch/bin:$PATH" TARGETS="$targets" EXT=tar.gz TAG="$tag" GH_TOKEN=stand-in \
+if ! (cd "$TREE" && PATH="$scratch/bin:$PATH" TARGETS="$targets" EXT=tar.gz TAG="$tag" \
   bash "$scratch/package.sh") > "$scratch/package.log" 2>&1; then
   sed 's/^/    /' "$scratch/package.log" >&2
   report "the packaging step failed over TARGETS='$targets' (its output is above)"
@@ -370,7 +370,7 @@ then report "the production verifier accepted an invalid release product input";
 
 # 2. A tag the installer would refuse is refused here first, before anything is built.
 rm -f "$UPLOADS"
-if (cd "$TREE" && PATH="$scratch/bin:$PATH" TARGETS="$targets" EXT=tar.gz TAG="not-a-release" GH_TOKEN=stand-in \
+if (cd "$TREE" && PATH="$scratch/bin:$PATH" TARGETS="$targets" EXT=tar.gz TAG="not-a-release" \
   bash "$scratch/package.sh") > "$scratch/package.log" 2>&1; then
   report "the packaging step accepted the tag 'not-a-release'"
 elif ! grep -qF "invalid release tag: not-a-release" "$scratch/package.log"; then

@@ -34,7 +34,6 @@ jobs:
       - name: Archive, checksum, and stage
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.event.release.tag_name }}
           TARGETS: ${{ matrix.target }}=${{ matrix.npm }}
           EXT: ${{ matrix.ext }}
@@ -87,7 +86,6 @@ jobs:
       - name: Archive, checksum, and stage
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.event.release.tag_name }}
           EXT: tar.gz
         run: |
