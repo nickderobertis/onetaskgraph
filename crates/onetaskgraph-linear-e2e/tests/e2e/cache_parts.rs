@@ -246,6 +246,17 @@ fn a_comment_or_edge_read_its_token_cannot_vouch_for_is_never_kept_or_served() {
             "/comments/pageInfo/hasNextPage",
         ),
         (
+            "eleven comments, read beside the task",
+            Box::new(|w| {
+                for n in 0..10 {
+                    w.add_comment("L-1", &format!("Word {n}."));
+                }
+            }),
+            DETAIL,
+            "tasks",
+            "/comments/pageInfo/hasNextPage",
+        ),
+        (
             "eleven inverse relations",
             Box::new(|w| {
                 for n in 0..10 {
@@ -306,6 +317,43 @@ fn a_comment_or_edge_read_its_token_cannot_vouch_for_is_never_kept_or_served() {
         assert!(
             !kept.iter().any(|path| holds(path, native)),
             "{case}: nothing is kept without a token: {kept:?}"
+        );
+    }
+
+    // A copy by query reads a task with eleven comments every time, and the rest once.
+    let cached = Cached::new(held());
+    for n in 0..10 {
+        cached.workspace.add_comment("L-1", &format!("Word {n}."));
+    }
+    let copy = [
+        "task",
+        "copy",
+        "--to",
+        "notes",
+        "--source",
+        "linear",
+        "--comments",
+        "--dry-run",
+        "--no-link",
+        "--json",
+    ];
+    for pass in 0..3 {
+        let before = cached.workspace.served().len();
+        cached.ok(&copy);
+        let mut loaded: Vec<String> = cached.workspace.served()[before..]
+            .iter()
+            .filter(|(document, _)| document == graphql::ISSUE_DETAIL_CACHED)
+            .map(|(_, variables)| variables["id"].as_str().unwrap_or_default().to_owned())
+            .collect();
+        loaded.sort();
+        let expected: &[&str] = if pass == 0 {
+            &["L-1", "L-2", "L-3", "L-4"]
+        } else {
+            &["L-1"]
+        };
+        assert_eq!(
+            loaded, expected,
+            "copy {pass}: the task with no token, every time"
         );
     }
 

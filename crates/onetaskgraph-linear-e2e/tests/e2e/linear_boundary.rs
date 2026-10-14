@@ -81,7 +81,8 @@ impl Setup {
         let plan = plan(&sandbox, tasks);
         let mut linear = json!({"plugin": "linear", "config": config});
         if cache {
-            linear["cache"] = json!({"enabled": true});
+            // A directory of its own, since the sandbox gives the binary no cache home.
+            linear["cache"] = json!({"enabled": true, "dir": sandbox.subdirectory("cache")});
         }
         let mut folder = json!({"plugin": "local-md", "config": {"root": plan}});
         if let Some(visibility) = visibility {
@@ -316,22 +317,53 @@ fn a_linear_item_whose_stored_classification_is_malformed_is_refused_rather_than
 
 #[test]
 fn a_declared_sources_verification_reaches_linear_with_its_cache_on_as_it_does_without() {
-    // Whether a destination is private is never the cache's to answer: the same copy into a
-    // source declared private sends the same requests, its verification among them, cache on
-    // and cache off.
-    let spent: Vec<Vec<(String, Value)>> = [false, true]
+    // Whether a destination is private is never the cache's to answer: the same copies into a
+    // source declared private send the same requests, each its verification among them, cache on
+    // and cache off — with an entry the cache filled already present beside them.
+    let mut workspace = held();
+    workspace["tasks"] = json!([{
+        "id": "L-1", "title": "Issue L-1", "content": "The body of L-1.",
+        "status": {"name": "Ready", "category": "todo"},
+        "_linear_state": {"name": "Ready", "type": "unstarted"},
+        "labels": [], "priority": "none",
+    }]);
+    let spent: Vec<Vec<Vec<(String, Value)>>> = [false, true]
         .into_iter()
         .map(|cache| {
-            let setup = Setup::caching(Some("private"), held(), true, 3, cache);
-            setup.ok(&["project", "copy", "plan:goal", "--to", "linear"])
+            let setup = Setup::caching(Some("private"), workspace.clone(), true, 3, cache);
+            let listed = setup
+                .sandbox
+                .command()
+                .args(["task", "list", "--source", "linear", "--json"])
+                .assert()
+                .get_output()
+                .clone();
+            let listed: Value = serde_json::from_str(&stdout(&listed)).expect("a listing");
+            let pin = listed["items"][0]["item"]["version"]
+                .as_str()
+                .expect("a token")
+                .to_owned();
+            let fill = ["task", "show", "linear:L-1", "--pin", &pin, "--json"];
+            setup.ok(&fill);
+            let filled = setup.ok(&fill);
+            assert_eq!(
+                filled.is_empty(),
+                cache,
+                "cache {cache}: the entry is filled and served: {filled:#?}"
+            );
+            vec![
+                setup.ok(&["project", "copy", "plan:goal", "--to", "linear"]),
+                setup.ok(&["task", "copy", "plan:t-0", "--to", "linear"]),
+            ]
         })
         .collect();
-    assert_eq!(resolutions(&spent[1]), 1, "{:#?}", spent[1]);
-    assert_eq!(
-        spent[0].len(),
-        spent[1].len(),
-        "cache off: {:#?}\ncache on: {:#?}",
-        spent[0],
-        spent[1]
-    );
+    for (copy, on) in spent[1].iter().enumerate() {
+        assert_eq!(resolutions(on), 1, "copy {copy}: {on:#?}");
+        assert_eq!(
+            spent[0][copy].len(),
+            on.len(),
+            "copy {copy}: cache off: {:#?}\ncache on: {on:#?}",
+            spent[0][copy],
+        );
+    }
 }
