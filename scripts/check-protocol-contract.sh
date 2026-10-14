@@ -99,6 +99,10 @@ NOT_METHODS = {
         "not carried: §4.13d says the protocol carries no ordering method, so a hosted "
         "plugin's tokens are compared for equality alone"
     ),
+    "copy_version_coverage": (
+        "not carried: §4.13d says what a copy's skip may take a token as vouching for is "
+        "read in process, so a hosted plugin declares no part and none of its tasks is skipped"
+    ),
     "get_task_details_for_copy": (
         "not a message: §4.4 says the engine answers it for a hosted source exactly as "
         "`get_task_details`, which crosses as `get_task_detail` or `get_task` and "

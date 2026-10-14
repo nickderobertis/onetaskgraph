@@ -1111,6 +1111,11 @@ impl TaskSource for LocalMdSource {
     fn order_versions(&self, a: &str, b: &str) -> Option<std::cmp::Ordering> {
         change_token::order(a, b)
     }
+    /// Every part: `md1` is the digest of the task's one file, which holds its fields, its
+    /// comments and its forward edges alike.
+    fn version_coverage(&self) -> onetaskgraph_plugin_api::VersionCoverage {
+        onetaskgraph_plugin_api::VersionCoverage::whole()
+    }
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             projects: Support::Native,

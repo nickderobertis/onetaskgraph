@@ -1169,3 +1169,77 @@ fn a_destination_recorded_under_the_tokens_older_spelling_is_read_again_once_and
         );
     }
 }
+
+/// The bound `docs/plugin-protocol.md` §4.13d states for a board's skip: a far end's own kind
+/// flipping moves nothing of the task that depends on it, so a skipping recopy keeps the edge as
+/// it was, and the next copy that reads the task carries it.
+#[test]
+fn a_far_end_turned_into_a_project_is_carried_by_the_next_copy_that_reads_the_task_after_it() {
+    let stores = Stores::new();
+    stores.board.block("T-4", &["T-3".to_owned()]);
+    let query = ["--to", "notes", "--source", "board", "--no-link"];
+    let (landed, _, _) = stores.copy(&query);
+    let note = landed
+        .iter()
+        .find(|(source, _)| source == "board:T-4")
+        .map(|(_, outcome)| outcome["destination"].as_str().expect("an id").to_owned())
+        .expect("T-4 landed");
+    let outcome = |copied: &[(String, Value)]| {
+        copied
+            .iter()
+            .find(|(source, _)| source == "board:T-4")
+            .map(|(_, outcome)| outcome.clone())
+            .expect("T-4 is copied")
+    };
+    // What the folder's copy of T-4 says of the far end that was T-3.
+    let far_end = |stores: &Stores| {
+        stores.json(&["task", "deps", &note, "--direction", "depends-on"])["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .map(|edge| edge["to"].clone())
+            .find(|to| to["id"].as_str().is_some_and(|id| id.ends_with(":T-3")))
+            .expect("T-4 depends on T-3")
+    };
+    assert_eq!(far_end(&stores)["kind"], "task");
+
+    // T-3 gains a sub-issue, so it is a project; nothing of T-4 moves on GitHub.
+    let held = stores.task("board:T-4")["version"].clone();
+    stores.board.file_under("T-1", Some("T-3"));
+    assert_eq!(
+        stores.task("board:T-4")["version"],
+        held,
+        "T-4's own token is unmoved"
+    );
+    let source_kind =
+        stores.json(&["task", "deps", "board:T-4", "--direction", "depends-on"])["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .find(|edge| edge["to"]["id"] == "board:T-3")
+            .map(|edge| edge["to"]["kind"].clone());
+    assert_eq!(
+        source_kind,
+        Some(json!("project")),
+        "the board reads T-3 as a project"
+    );
+
+    let (flipped, _, _) = stores.copy(&query);
+    assert!(skipped(&outcome(&flipped)), "{flipped:#?}");
+    assert_eq!(
+        far_end(&stores)["kind"],
+        "task",
+        "the bound: a skipping recopy does not carry a far end's kind flip alone"
+    );
+
+    stores
+        .board
+        .edit_body("T-4", "edited, so the next copy reads it");
+    let (read, _, _) = stores.copy(&query);
+    assert!(!skipped(&outcome(&read)), "{read:#?}");
+    assert_eq!(
+        far_end(&stores),
+        json!({"id": "board:T-3", "kind": "project"}),
+        "the next copy that reads T-4 carries what its far end has become"
+    );
+}

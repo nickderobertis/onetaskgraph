@@ -777,6 +777,11 @@ impl TaskSource for CachedSource {
     fn version_coverage(&self) -> VersionCoverage {
         self.inner.version_coverage()
     }
+    /// The source's own: a copy's skip asks what the plugin's token vouches for, not what the
+    /// cache may serve.
+    fn copy_version_coverage(&self) -> VersionCoverage {
+        self.inner.copy_version_coverage()
+    }
 
     fn project_version_coverage(&self) -> ProjectVersionCoverage {
         self.inner.project_version_coverage()

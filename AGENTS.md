@@ -1076,6 +1076,10 @@ them do; this is the inventory of what is owed, not a status board.
     pinned to the new `lin1` token; a token Linear cannot vouch for — 50 labels, a relations page
     past 10 rows or reporting another — is never kept or served; comments, project edges and every
     listing reach Linear every time; and with the cache off every document sent is 0.6.0's.
+102. A repeat copy skips a task only when its source's token covers every part the copy writes:
+    a comment added in Linear, and a relation added to a Linear source with no cache, are each
+    carried by the next copy; and a board's far end turned into a project is kept as it was by a
+    skipping recopy and carried by the next copy that reads the task depending on it.
 
 ## The public boundary
 

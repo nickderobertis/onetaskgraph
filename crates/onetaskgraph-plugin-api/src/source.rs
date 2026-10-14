@@ -106,6 +106,18 @@ pub trait TaskSource: Send + Sync {
         ))
     }
 
+    /// Which parts of a task a copy may take this source's unchanged [`Task::version`] as
+    /// vouching for, when it decides to skip a task its destination already holds as written:
+    /// the task's fields, its comments when the copy carries them, and its forward edges. A copy
+    /// skips only a task whose source covers every one of those it writes.
+    ///
+    /// Defaulted to [`version_coverage`](Self::version_coverage). A source overrides it only to
+    /// state, with its measured bound, a claim about a copy's skip that is not one the cache may
+    /// serve from — as `docs/plugin-protocol.md` §4.13d does for the one plugin that does.
+    fn copy_version_coverage(&self) -> VersionCoverage {
+        self.version_coverage()
+    }
+
     /// Which parts of a project this source's [`Project::version`] vouches for, on the terms
     /// of [`version_coverage`](Self::version_coverage).
     ///

@@ -10244,6 +10244,15 @@ impl TaskSource for GitHubProjectsSource {
             ..VersionCoverage::whole()
         }
     }
+    /// Every part, for a copy's skip: a copy holds the forward edges it reads now to the ones
+    /// the destination holds before it skips, and the relationship count moves for an edge added
+    /// or removed and for a far end deleted. The one change neither sees is a far end's own kind
+    /// flipping — a far end gaining a sub-issue, or retitled into a document — which
+    /// `spike-coverage` measured stale 1 of 1: a skipping recopy does not carry it, and the next
+    /// copy that reads the task does (`docs/plugin-protocol.md` §4.13d).
+    fn copy_version_coverage(&self) -> VersionCoverage {
+        VersionCoverage::whole()
+    }
     /// A project's fields, and not its forward edges, for the same reason a task's are not.
     fn project_version_coverage(&self) -> ProjectVersionCoverage {
         ProjectVersionCoverage {

@@ -3122,7 +3122,16 @@ impl Engine {
             let as_written = same_edges(&held.edges, &resolved(&edges))
                 && targets(&held_task.delivers, &item.to)
                     == targets(&resolved_entries(&delivers), &item.to);
-            item.skipped = as_written && skips(task, held, item.carried.is_some(), &item.to);
+            // And only when its source's token vouches for every part this copy would write:
+            // a part it does not cover can change with the token as it was.
+            let covered = self.readable(&item.source.source).is_ok_and(|source| {
+                let coverage = source.source().copy_version_coverage();
+                coverage.fields.reason().is_none()
+                    && coverage.forward_edges.reason().is_none()
+                    && (item.carried.is_none() || coverage.comments.reason().is_none())
+            });
+            item.skipped =
+                covered && as_written && skips(task, held, item.carried.is_some(), &item.to);
         }
         // What each task's comments come to at the destination, decided from the two reads
         // already in hand before anything is written: the record a task lands with is a digest

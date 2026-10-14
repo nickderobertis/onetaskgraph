@@ -1314,6 +1314,24 @@ url after a team move, a project's label renamed or recoloured and its status re
 document's title and refiling, and a workflow state renamed. The loopback journeys make every
 row's change and every one of those, and hold a read pinned to the new token to the changed
 value.
+
+**What a copy's skip takes a token as vouching for.** A repeat copy, or a copy by query, skips a
+task whose source token is the one its destination counterpart records only when the source's
+`copy_version_coverage` covers every part the copy would write: the task's fields, its forward
+edges, and its comments when the copy carries them. It defaults to the cache's
+`version_coverage` and, like it, is read in process and never carried over this protocol, so a
+task read from a hosted plugin is never skipped. So a `--comments` copy out of Linear never
+skips — its token never covers comments — and a copy out of a Linear source with no cache never
+skips either, its token not covering forward edges then. A folder of Markdown covers every part:
+`md1` digests the task's one file. A GitHub board reports every part for a copy's skip, though
+its cache serves no forward edge: a copy holds the edges it reads now to the destination's
+before it skips, and the relationship count moves for an edge added or removed and for a far end
+deleted. **Its one bound is a far end's own kind flipping** — a far end gaining a sub-issue, or
+retitled into a document — which moves nothing of the task that depends on it, measured stale 1
+of 1 by `spike-coverage`: a skipping recopy keeps that edge as it was, and the next copy that
+reads the task carries it (`a_far_end_turned_into_a_project_is_carried_by_the_next_copy_that_reads_the_task_after_it`
+in `crates/onetaskgraph-e2e/tests/e2e/copy_skip.rs`; the Linear journeys are in
+`crates/onetaskgraph-linear-e2e/tests/e2e/copy_skip.rs`).
 <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
 **Why a GitHub token waits for its task to settle.** GitHub reports both of the token's times
