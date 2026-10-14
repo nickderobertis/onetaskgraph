@@ -3932,7 +3932,7 @@ impl TaskSource for LinearSource {
         self.targeted_update(id, update).await
     }
 
-    /// The tokens its forward-edge walks spelled, and nothing else: what this source holds
+    /// The tokens its dependency walks spelled, and nothing else: what this source holds
     /// across a command is its [`Vocabulary`] — the team's id, its workflow states and the
     /// workspace's project statuses — which stays valid in normal use and is read afresh when a
     /// name misses. No issue, project, document or search answer outlives the call that read it,

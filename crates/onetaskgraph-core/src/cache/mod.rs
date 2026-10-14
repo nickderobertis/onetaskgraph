@@ -2,14 +2,16 @@
 //!
 //! **Opt-in, one source at a time, and keyed on nothing but the change token a source gives.**
 //! A source configured with `cache.enabled` has its tasks — each one's fields, metadata,
-//! comments, assets and forward edges — its projects, its documents with the manifest of their
-//! image assets, and the verified bytes of those assets kept on this host, one file per item,
+//! comments, assets and forward and reverse edges — its projects with their forward edges, its
+//! documents with the manifest of their image assets, and the verified bytes of those assets kept
+//! on this host, one file per item,
 //! under a directory named for the remote it reads; `kinds` says how each kind beside a task's
 //! is laid out. Every process that configures the same remote shares it: the
 //! command line, both SDKs and a Rust caller of the engine.
 //!
-//! The rule it may never break is that **it never adds a request and never serves stale data**.
-//! Freshness comes only from tokens the store already holds — a caller's pin, or the version a
+//! The rule it may never break is that **it never serves stale data**; what it costs is held over
+//! an hour of the assumed workload, which it must spend fewer requests on than no cache, rather
+//! than read by read. Freshness comes only from tokens the store already holds — a caller's pin, or the version a
 //! listing in the same command carried — and an entry is served only when it is at that version
 //! or a later one, by the ordering of the source that spelled both. Nothing expires by age, and
 //! nothing asks the source whether something changed. A part of a task the source's token does

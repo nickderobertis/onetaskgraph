@@ -32,10 +32,6 @@ pub const PREFIX: &str = "lin1|";
 /// most: the `first` of the pages the cache's documents select.
 pub const PAGE: usize = 10;
 
-/// The rows the relations page a task's token is spelled from holds at most: [`PAGE`], under the
-/// name the loopback Linear and earlier callers read it by.
-pub const RELATIONS_PAGE: usize = PAGE;
-
 /// The labels Linear answers a `labels` connection with when it names no `first`: a response
 /// holding this many may be a first page of more, so it gives no token.
 pub const DEFAULT_LABEL_PAGE: usize = 50;
