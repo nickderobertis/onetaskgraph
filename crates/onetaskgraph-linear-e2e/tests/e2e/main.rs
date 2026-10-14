@@ -18,6 +18,7 @@ mod cache;
 mod cache_budget;
 mod cache_documents;
 mod copy_skip;
+mod health;
 mod linear;
 mod linear_assets;
 mod linear_boundary;
