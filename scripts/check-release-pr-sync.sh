@@ -132,7 +132,6 @@ sdks/python/pyproject.toml
 sdks/typescript/package.json
 npm/cli/package.json
 npm/platforms/darwin-arm64/package.json
-npm/platforms/darwin-x64/package.json
 npm/platforms/linux-arm64/package.json
 npm/platforms/linux-x64/package.json
 npm/platforms/win32-x64/package.json"

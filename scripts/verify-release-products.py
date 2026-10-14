@@ -41,12 +41,12 @@ def tar_payload(packed: tarfile.TarFile, path: str, kind: str) -> bytes:
     return payload.read()
 
 
-def verify_installed_cli(executable: Path, prefix: list[str], version: str) -> None:
+def verify_installed_cli(executable: Path, version: str) -> None:
     # llmlint: ignore[changed_behavior_has_e2e] Manager-approved: the public subprocess-failure handler is driven by a real installer exit failure; real native CLI execution exercises this call successfully and rejects incorrect output and an unusable executable without mocking the CLI.
-    output = subprocess.check_output(prefix + [str(executable), '--version'], text=True)
+    output = subprocess.check_output([str(executable), '--version'], text=True)
     require(output.strip() == f'onetaskgraph {version}', f'installed CLI version mismatch: {executable}')
     # llmlint: ignore[changed_behavior_has_e2e] Manager-approved: the public subprocess-failure handler is driven by a real installer exit failure; real native CLI execution exercises this call successfully and rejects incorrect output and an unusable executable without mocking the CLI.
-    require('Usage:' in subprocess.check_output(prefix + [str(executable), '--help'], text=True), 'installed CLI did not render help')
+    require('Usage:' in subprocess.check_output([str(executable), '--help'], text=True), 'installed CLI did not render help')
 
 
 def verify(product: ReleaseProduct, install: bool) -> None:
@@ -104,8 +104,9 @@ def verify(product: ReleaseProduct, install: bool) -> None:
             case _:
                 host_arch = 'unsupported'
         target_arch = 'arm64' if product.target.startswith('aarch64') else 'x64'
-        rosetta = product.os == 'Darwin' and host_arch == 'arm64' and target_arch == 'x64'
-        require(host_arch == target_arch or rosetta, 'cannot execute a foreign architecture without supported emulation')
+        # Every released target installs on its own architecture; Intel macOS, the one
+        # emulated case, is no longer released.
+        require(host_arch == target_arch, 'cannot execute a foreign architecture')
 
         with tempfile.TemporaryDirectory(prefix='release-install-') as scratch:
             dest = Path(scratch)
@@ -116,10 +117,8 @@ def verify(product: ReleaseProduct, install: bool) -> None:
             checksums.mkdir(parents=True)
             shutil.copy2(archive, archives / archive.name)
             shutil.copy2(str(archive) + '.sha256', checksums / (archive.name + '.sha256'))
-            # llmlint: ignore[changed_behavior_has_e2e] Darwin/Rosetta execution needs an Apple Silicon host unavailable in this dispatch; local native installation and foreign-tag/hash contracts are driven, and this exact command runs in the single release Mac job before Linux publication.
-            prefix = ['arch', '-x86_64'] if rosetta else []
             env = {**os.environ, 'ONETASKGRAPH_CHECKSUM_BASE_URL': checksums.parent.as_uri()}
-            subprocess.run(prefix + [bash_executable(platform.system()), 'scripts/install.sh', '--version', product.tag, '--to', str(dest / 'archive'), '--archive-base-url', archives.parent.as_uri()], env=env, check=True, stdout=sys.stderr)
+            subprocess.run([bash_executable(platform.system()), 'scripts/install.sh', '--version', product.tag, '--to', str(dest / 'archive'), '--archive-base-url', archives.parent.as_uri()], env=env, check=True, stdout=sys.stderr)
             # llmlint: ignore[changed_behavior_has_e2e] Manager-approved: this call uses the same public subprocess-failure handler driven by a real installer exit failure; the real native installation exercises this command successfully without mocking installers.
             subprocess.run([PYTHON_EXECUTABLE, '-m', 'venv', str(dest / 'installer-python')], check=True, stdout=sys.stderr)
             pip_python = dest / 'installer-python' / ('Scripts/python.exe' if product.os == 'Windows' else 'bin/python')
@@ -131,7 +130,7 @@ def verify(product: ReleaseProduct, install: bool) -> None:
             require(len(wheel_bins) == 1, 'wheel install must expose one CLI executable')
             products = [dest / 'archive' / binary, wheel_bins[0], dest / 'npm' / 'node_modules' / '@onetaskgraph' / f'cli-{product.npm_platform}' / 'bin' / binary]
             for executable in products:
-                verify_installed_cli(executable, prefix, product.version)
+                verify_installed_cli(executable, product.version)
     print(json.dumps(result.record()))
 
 

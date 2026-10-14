@@ -33,5 +33,5 @@ fail explicitly. The annotation cannot alter upstream bytes unnoticed. Release p
 proofs remain in scripts/test-distribution.sh and scripts/check-release-packaging.sh,
 behind their existing distribution targets. The local journey executes only host-native
 products; Darwin compatibility is proved by tags, contents, hashes and the declared
-native/Rosetta installers. Those installers' real Mac execution is draft-run evidence,
+native Apple Silicon installers. Those installers' real Mac execution is draft-run evidence,
 which can be queued or skipped without being claimed as executed locally.

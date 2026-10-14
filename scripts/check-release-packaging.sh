@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Drive the release workflow's packaging step, as written, over both macOS architectures.
+# Drive the release workflow's packaging step, as written, over the macOS job's targets.
 #
 # The step is a `run: |` block inside .github/workflows/release.yml, and a release is the
 # only thing that runs it — so a defect in it was discoverable only by cutting a version.
-# Folding both macOS targets into one job (#1991) turned that block into a loop over
-# `TARGETS` pairs, and this reads the block out of the workflow and runs it here, against a
+# Folding macOS into one job (#1991) turned that block into a loop over `TARGETS` pairs —
+# Apple Silicon alone now that Intel macOS is no longer released — and this reads the block out of the workflow and runs it here, against a
 # stand-in binary per target and a `gh` that records what it was asked to upload, so what
 # the fold packages is proven rather than read: one archive and one checksum uploaded per
 # target, under the names scripts/install.sh downloads, and one carrier tarball per npm
@@ -99,7 +99,7 @@ targets="$(cd "$ROOT" && sed -n 's/^      TARGETS: \(.*\)$/\1/p' "$WORKFLOW" | h
 for pair in $targets; do
   [[ $pair =~ ^[a-z0-9_]+(-[a-z0-9_]+)+=[a-z0-9]+-[a-z0-9]+$ ]] || fatal \
     "the macOS job's TARGETS entry '$pair' is not <rust target triple>=<npm platform>" \
-    "restore the job's TARGETS to pairs like x86_64-apple-darwin=darwin-x64"
+    "restore the job's TARGETS to pairs like aarch64-apple-darwin=darwin-arm64"
 done
 
 # A stand-in binary per target, and a `gh` that records any premature upload.
@@ -146,7 +146,7 @@ report_unless_archive_lists() {
   grep -qx -- "$2" <<<"$listing" || report "$3"
 }
 
-# 1. The step over both targets, exactly as the job runs it.
+# 1. The step over every target, exactly as the job runs it.
 if ! (cd "$TREE" && PATH="$scratch/bin:$PATH" TARGETS="$targets" EXT=tar.gz TAG="$tag" GH_TOKEN=stand-in \
   bash "$scratch/package.sh") > "$scratch/package.log" 2>&1; then
   sed 's/^/    /' "$scratch/package.log" >&2
@@ -243,7 +243,7 @@ def refused(args, reason):
     result = subprocess.run(args, cwd=tree, capture_output=True, text=True)
     if result.returncode == 0 or reason not in result.stderr:
         raise SystemExit(f'product boundary did not refuse {reason}: {result.stderr}; repair the production verifier')
-for flags, reason in [(['--target', '../invalid'], 'invalid Rust target'), (['--npm', '../invalid'], 'invalid npm platform'), (['--tag', 'invalid'], 'invalid semantic release tag'), (['--ext', 'invalid'], 'invalid choice'), (['--npm', 'darwin-x64'], 'inconsistent target'), (['--ext', 'tar.gz'], 'inconsistent target')]:
+for flags, reason in [(['--target', '../invalid'], 'invalid Rust target'), (['--npm', '../invalid'], 'invalid npm platform'), (['--tag', 'invalid'], 'invalid semantic release tag'), (['--ext', 'invalid'], 'invalid choice'), (['--npm', 'darwin-arm64'], 'inconsistent target'), (['--ext', 'tar.gz'], 'inconsistent target')]:
     refused(command + flags, reason)
 foreign = command
 if platform.system() == 'Windows':
@@ -352,10 +352,6 @@ if platform.system() == 'Linux':
             info = tarfile.TarInfo(name)
             info.size = len(data)
             packed.addfile(info, io.BytesIO(data))
-    refused([sys.executable, str(root / 'scripts/verify-release-products.py'), '--target', other_target, '--npm', other_npm, '--tag', tag, '--install'], 'cannot execute a foreign architecture')
-elif platform.system() == 'Darwin' and platform.machine().lower() == 'x86_64':
-    pair = next(pair for pair in re.search(r'^      TARGETS: (.*)$', workflow, re.M)[1].split() if pair.startswith('aarch64'))
-    other_target, other_npm = pair.split('=')
     refused([sys.executable, str(root / 'scripts/verify-release-products.py'), '--target', other_target, '--npm', other_npm, '--tag', tag, '--install'], 'cannot execute a foreign architecture')
 archive_bytes = archive.read_bytes()
 archive.write_bytes(b'corrupt ZIP')

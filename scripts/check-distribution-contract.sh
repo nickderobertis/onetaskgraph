@@ -10,7 +10,7 @@ fail() { echo "distribution contract drift: $1" >&2; echo "next: update the rele
 # directory", which names the sourcing line rather than the file to put back.
 read_lines_path="$(dirname "${BASH_SOURCE[0]}")/read-lines.sh"
 if [ ! -r "$read_lines_path" ] || ! source "$read_lines_path"; then echo "distribution contract drift: could not load scripts/read-lines.sh, which reads both inventories below into arrays" >&2; echo "next: restore it with 'git checkout -- scripts/read-lines.sh'" >&2; exit 1; fi
-expected=(darwin-arm64 darwin-x64 linux-arm64 linux-x64 win32-x64)
+expected=(darwin-arm64 linux-arm64 linux-x64 win32-x64)
 packages_file="$(mktemp)" || fail "could not create a temporary carrier inventory"
 trap 'rm -f "$packages_file"' EXIT
 if ! find npm/platforms -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort > "$packages_file"; then
@@ -30,32 +30,33 @@ ubuntu-latest x86_64-unknown-linux-gnu tar.gz linux-x64
 ubuntu-24.04-arm aarch64-unknown-linux-gnu tar.gz linux-arm64
 windows-latest x86_64-pc-windows-msvc zip win32-x64
 MAPPINGS
-# The two macOS architectures are ONE job — native assets, carriers and wheels alike — rather
-# than rows of the two sequential matrices: the account's macOS runner pool is small and
-# shared, and four macOS jobs in two stages queued a release behind itself for hours. What
-# the downstream jobs consume is held here by name, so the fold cannot rename an artifact.
+# macOS is ONE job — native assets, carriers and wheels alike — rather than rows of the two
+# sequential matrices: the account's macOS runner pool is small and shared, and four macOS
+# jobs in two stages queued a release behind itself for hours. Apple Silicon is the only
+# Darwin target; Intel macOS is no longer released, so nothing names x86_64-apple-darwin or
+# darwin-x64, and the installer refuses that host by name rather than fetch a missing asset.
+# What the downstream jobs consume is held here by name, so the fold cannot rename an artifact.
 macos_job=$(sed -n '/^  macos-assets-carriers-and-wheels:/,/^  collect-wheels:/p' .github/workflows/release.yml)
 [[ -n $macos_job ]] || fail "the release workflow has no macos-assets-carriers-and-wheels job ahead of collect-wheels"
-! grep -Fq -- '- { os: macos-latest' .github/workflows/release.yml || fail "macOS must not be a row of a sequential matrix; both architectures build in the one macOS job"
+! grep -Fq -- '- { os: macos-latest' .github/workflows/release.yml || fail "macOS must not be a row of a sequential matrix; Apple Silicon builds in the one macOS job"
 grep -Fq 'runs-on: macos-latest' <<< "$macos_job" || fail "the macOS job must run on macos-latest"
-grep -Fq 'TARGETS: x86_64-apple-darwin=darwin-x64 aarch64-apple-darwin=darwin-arm64' <<< "$macos_job" || fail "the macOS job must package both x86_64-apple-darwin=darwin-x64 and aarch64-apple-darwin=darwin-arm64"
+grep -Fq 'TARGETS: aarch64-apple-darwin=darwin-arm64' <<< "$macos_job" || fail "the macOS job must package exactly aarch64-apple-darwin=darwin-arm64"
 grep -Fq 'EXT: tar.gz' <<< "$macos_job" || fail "the macOS job must archive as tar.gz, which is what the installer expects"
-grep -Fq 'with: { target: "x86_64-apple-darwin,aarch64-apple-darwin" }' <<< "$macos_job" || fail "the macOS job must install both Rust Darwin targets"
-for target in x86_64-apple-darwin aarch64-apple-darwin; do
-  grep -Fq "$target; ext=tar.gz" scripts/install.sh || fail "$target is not mapped to tar.gz in the installer"
-  grep -Fq "with: { target: \"$target\", args: \"--release --locked --out dist/wheels/$target\" }" <<< "$macos_job" || fail "the macOS job does not build the $target wheel into dist/wheels/$target"
-  grep -Fq "with: { name: \"wheels-$target\", path: dist/wheels/$target }" <<< "$macos_job" || fail "the macOS job does not upload the $target wheels as wheels-$target, the name publish-python downloads"
-done
-for npm in darwin-x64 darwin-arm64; do
-  grep -Fq "with: { name: \"carrier-$npm\", path: \"dist/carriers/$npm/*.tgz\" }" <<< "$macos_job" || fail "the macOS job does not upload the $npm carrier as carrier-$npm, the name publish-npm downloads"
-done
+grep -Fq 'with: { target: "aarch64-apple-darwin" }' <<< "$macos_job" || fail "the macOS job must install the Apple Silicon Rust target"
+! grep -RqiE 'x86_64-apple-darwin|darwin-x64|rosetta' .github/workflows release-targets.toml npm/platforms npm/cli/package.json scripts/product_versions.py scripts/verify-release-products.py || fail "an Intel macOS target, carrier or Rosetta step is still declared; Intel macOS is no longer released"
+grep -Fq 'Darwin:x86_64) die 69 "Intel macOS is no longer supported' scripts/install.sh || fail "the installer must refuse Intel macOS by name"
+target=aarch64-apple-darwin npm=darwin-arm64
+grep -Fq "$target; ext=tar.gz" scripts/install.sh || fail "$target is not mapped to tar.gz in the installer"
+grep -Fq "with: { target: \"$target\", args: \"--release --locked --out dist/wheels/$target\" }" <<< "$macos_job" || fail "the macOS job does not build the $target wheel into dist/wheels/$target"
+grep -Fq "with: { name: \"wheels-$target\", path: dist/wheels/$target }" <<< "$macos_job" || fail "the macOS job does not upload the $target wheels as wheels-$target, the name publish-python downloads"
+grep -Fq "with: { name: \"carrier-$npm\", path: \"dist/carriers/$npm/*.tgz\" }" <<< "$macos_job" || fail "the macOS job does not upload the $npm carrier as carrier-$npm, the name publish-npm downloads"
 # Maturin owns the canonical bytes. Every other form is staged from those bytes,
 # and all registry publication waits for the Linux archive attachment after install proofs.
 wheel_line=$(grep -Fn 'PyO3/maturin-action' <<< "$macos_job" | head -n1 | cut -d: -f1) || fail "the macOS job must declare its canonical wheel build"
 archive_line=$(grep -Fn 'name: Archive, checksum, and stage' <<< "$macos_job" | head -n1 | cut -d: -f1) || fail "the macOS job must name its archive staging step 'Archive, checksum, and stage'"
 [[ -n $archive_line && -n $wheel_line && $wheel_line -lt $archive_line ]] || fail "the macOS job must build its canonical wheels before packaging archives"
 grep -Fq 'python3 scripts/release-wheel-binary.py' <<< "$macos_job" || fail "the macOS job must reuse maturin wheel binaries"
-grep -Fq 'python3 scripts/verify-release-products.py' <<< "$macos_job" || fail "the macOS job must install and run both staged products before publication"
+grep -Fq 'python3 scripts/verify-release-products.py' <<< "$macos_job" || fail "the macOS job must install and run its staged products before publication"
 # One packaging body, in both jobs, byte for byte: a fix to one that left the other behind
 # would ship two releases' worth of archives from two different scripts.
 python3 - <<'PY' || fail "the two 'Archive, checksum, and stage' steps of the release workflow differ; keep their run bodies identical"

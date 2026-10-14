@@ -64,19 +64,17 @@ jobs:
         with: { name: "assets-${{ matrix.target }}", path: dist/assets }
       - uses: actions/upload-artifact@v4
         with: { name: "carrier-${{ matrix.npm }}", path: "dist/carriers/${{ matrix.npm }}/*.tgz" }
-  # One Apple Silicon host builds both Darwin wheels; their payloads are the single
-  # input to archives and npm carriers. Both staged architectures run before publication.
+  # One Apple Silicon host builds the only Darwin wheel; its payload is the single input
+  # to the archive and npm carrier, and the staged products run before publication.
+  # Intel macOS is no longer released, so nothing here cross-compiles or emulates x86_64.
   macos-assets-carriers-and-wheels:
     runs-on: macos-latest
     env:
-      TARGETS: x86_64-apple-darwin=darwin-x64 aarch64-apple-darwin=darwin-arm64
+      TARGETS: aarch64-apple-darwin=darwin-arm64
     steps:
       - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-        with: { target: "x86_64-apple-darwin,aarch64-apple-darwin" }
-      - uses: PyO3/maturin-action@v1
-        env: { RUSTFLAGS: "-D warnings" }
-        with: { target: "x86_64-apple-darwin", args: "--release --locked --out dist/wheels/x86_64-apple-darwin" }
+        with: { target: "aarch64-apple-darwin" }
       - uses: PyO3/maturin-action@v1
         env: { RUSTFLAGS: "-D warnings" }
         with: { target: "aarch64-apple-darwin", args: "--release --locked --out dist/wheels/aarch64-apple-darwin" }
@@ -108,21 +106,16 @@ jobs:
             cp "$bin" "carrier/${npm_platform}/bin/$(basename "$bin")"
             npm pack ./carrier/"${npm_platform}" --pack-destination "dist/carriers/${npm_platform}"
           done
-      - name: Install and run both Darwin architectures
+      - name: Install and run the Apple Silicon products
         env: { TAG: "${{ github.event.release.tag_name }}" }
         run: |
-          softwareupdate --install-rosetta --agree-to-license
           for pair in $TARGETS; do
             python3 scripts/verify-release-products.py --target "${pair%%=*}" --npm "${pair#*=}" --tag "$TAG" --install
           done
       - uses: actions/upload-artifact@v4
         with: { name: assets-darwin, path: dist/assets }
       - uses: actions/upload-artifact@v4
-        with: { name: "carrier-darwin-x64", path: "dist/carriers/darwin-x64/*.tgz" }
-      - uses: actions/upload-artifact@v4
         with: { name: "carrier-darwin-arm64", path: "dist/carriers/darwin-arm64/*.tgz" }
-      - uses: actions/upload-artifact@v4
-        with: { name: "wheels-x86_64-apple-darwin", path: dist/wheels/x86_64-apple-darwin }
       - uses: actions/upload-artifact@v4
         with: { name: "wheels-aarch64-apple-darwin", path: dist/wheels/aarch64-apple-darwin }
   collect-wheels:

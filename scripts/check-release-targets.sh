@@ -78,7 +78,7 @@ esac
 # schema_version, whatever else the document says. So an older build on PATH
 # reported this repository's scoped identifiers as defects in a document that is
 # exactly what the schema documents, and pointed whoever read it at the wrong
-# file. This repository really publishes `@onetaskgraph/cli`, its five carriers and
+# file. This repository really publishes `@onetaskgraph/cli`, its four carriers and
 # `@onetaskgraph/sdk`; the scoped spelling is not the declaration's to give up, so
 # the reader is what has to be nailed down.
 #

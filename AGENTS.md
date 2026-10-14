@@ -1249,9 +1249,10 @@ The capture drives `local-md` and `in-memory` only: no credential or socket.
   only from a same-repository `release-plz-` branch with a semantic version/changelog-only
   diff; an unreadable PR requires coverage. The author is not authority: release-plz
   uses the owner's PAT. An explicit manual diagnostic is default off.
-  Release builds both Darwin wheels on one Apple Silicon runner, then uses each wheel's
-  binary for its archive and npm carrier. Install/run proofs (Rosetta for x86_64) precede
-  Linux asset attachment and registry publication. The production packaging journey and
+  Release builds the Apple Silicon wheel on one Apple Silicon runner, then uses its binary
+  for the archive and npm carrier; Intel macOS is no longer released, and the installer
+  and npm launcher refuse it by name. Native install/run proofs precede Linux asset
+  attachment and registry publication. The production packaging journey and
   `.github/tests/` hold payload hashes, required names, event routing and reusable calls;
   `github-workflows:test` records ignored telemetry and its `budgets` target alone applies
   the two limits in `.github/budgets.yaml`. No Mac work runs on schedules or downstream
@@ -1273,7 +1274,7 @@ The capture drives `local-md` and `in-memory` only: no credential or socket.
   and it cannot see this file to notice one moved or a sixth appeared. A name is one of
   the five when a dependent writes it down, which is why both SDKs are targets and neither
   is folded into the binary's: `sdk-npm` is to `npm` what `sdk-pypi` is to `pypi`.
-  Everything else this repository publishes — the five per-platform npm carriers, the six
+  Everything else this repository publishes — the four per-platform npm carriers, the six
   sibling crates — is covered by the target whose release carries it. Both rules go
   through `scripts/check-release-targets.sh`, the drift gate that makes the second
   spelling safe and that reconciles the declared set against the real release workflow

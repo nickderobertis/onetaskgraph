@@ -76,7 +76,7 @@ published_by = ".github/workflows/release.yml — the publish-python job, from t
 manifest = "sdks/python/pyproject.toml"
 
 # The launcher an `npm install @onetaskgraph/cli` resolves, published after the
-# five per-platform carriers it pins at its own exact version.
+# four per-platform carriers it pins at its own exact version.
 [[target]]
 id = "npm:@onetaskgraph/cli"
 name = "npm"
@@ -86,7 +86,6 @@ manifest = "npm/cli/package.json"
 covers = [
     "npm:@onetaskgraph/cli-linux-x64",
     "npm:@onetaskgraph/cli-linux-arm64",
-    "npm:@onetaskgraph/cli-darwin-x64",
     "npm:@onetaskgraph/cli-darwin-arm64",
     "npm:@onetaskgraph/cli-win32-x64",
 ]

@@ -14,7 +14,7 @@ function ancestors(jobs, id, seen = new Set()) {
   }
   return seen;
 }
-test("actual release declarations retain every platform, package and independent crate tag", () => {
+test("actual release declarations retain every released platform, package and independent crate tag", () => {
   const release = workflows()["release.yml"];
   const native = release.jobs["native-assets-and-carriers"];
   const mac = release.jobs["macos-assets-carriers-and-wheels"];
@@ -93,9 +93,21 @@ test("actual release declarations retain every platform, package and independent
     );
   }
   assert.equal(mac["runs-on"], "macos-latest");
+  // Intel macOS is discontinued: the one Mac job builds, packs and proves arm64 natively,
+  // with no x86_64 cross-compilation or Rosetta step, and nothing declares the old target.
+  assert.equal(mac.env.TARGETS, "aarch64-apple-darwin=darwin-arm64");
+  assert.ok(mac.steps.some((s) => s.name === "Install and run the Apple Silicon products"));
+  for (const source of [
+    read(".github/workflows/release.yml"),
+    read("release-targets.toml"),
+    read("npm/cli/package.json"),
+    read("scripts/product_versions.py"),
+  ])
+    assert.doesNotMatch(source, /x86_64-apple-darwin|darwin-x64|rosetta/i);
+  assert.ok(!carriers.includes("darwin-x64"));
   assert.match(
-    mac.steps.find((s) => s.name === "Install and run both Darwin architectures").run,
-    /install-rosetta/,
+    read("scripts/install.sh"),
+    /Darwin:x86_64\) die 69 "Intel macOS is no longer supported/,
   );
   const config = JSON.parse(
     execFileSync(
@@ -148,7 +160,7 @@ test("Mac comparison base is the exact production body and environment exercised
   assert.ok(!ci.jobs.macos.steps.some((step) => step.run === "just distribution-test"));
 });
 
-test("telemetry retains both compiled Darwin architectures on the single runner row", () => {
+test("telemetry records the Apple Silicon target alone on the single runner row", () => {
   const release = workflows()["release.yml"];
   const row = graph({ event: "release", action: "published" }, { macosRequired: false })
     .find((run) => run.workflow === "release.yml")
@@ -157,6 +169,7 @@ test("telemetry retains both compiled Darwin architectures on the single runner 
     (pair) => pair.split("=")[0],
   );
   assert.deepEqual(row.target.split(",").sort(), declared.sort());
+  assert.deepEqual(declared, ["aarch64-apple-darwin"]);
 });
 
 test("release subprocesses choose Git Bash over a WSL launcher and refuse missing Git Bash", () => {
