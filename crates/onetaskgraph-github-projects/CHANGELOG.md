@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.6.0...onetaskgraph-github-projects-v0.6.1) - 2026-10-14
+
+### Performance
+
+- *(github-live)* keep the complete live lane below 300 GraphQL points ([#3604](https://github.com/nickderobertis/onetaskgraph/pull/3604))
+
 ## [0.6.0](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.5.0...onetaskgraph-github-projects-v0.6.0) - 2026-10-12
 
 ### Added
