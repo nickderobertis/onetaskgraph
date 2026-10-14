@@ -1060,6 +1060,10 @@ struct GitHubBoard {
     /// changed or gone.
     replacing: Vec<(String, usize, Option<Value>)>,
     blocked_by: Vec<(String, Vec<String>)>,
+    /// Every relationship event recorded since the board was built: the issue whose timeline
+    /// holds it, the issue it names, and its type — so deleting an issue can take the events
+    /// naming it off every other timeline, as GitHub does.
+    relationship_log: Vec<(String, String, TimelineEvent)>,
     /// The timeline event types the request being answered counts: the default of the
     /// `[IssueTimelineItemsItemType!]` variable its document declares, which is the only way
     /// this source names them.
@@ -1482,6 +1486,20 @@ impl GitHubBoardFields {
         option["name"] = json!(to);
     }
 
+    /// Rename the `Status` option `from` to `to` as a person renaming it on the board would: the
+    /// option keeps its id, every item sitting in it now reads under the new name, and neither
+    /// an issue's `updatedAt` nor a board item's moves.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board's own field options and the values naming them, which every read of it answers from: that state is the board's private state, so a suite renaming an option as a person would can only do it through this handle, beside `rename_option`.
+    pub fn rename_status_option(&self, from: &str, to: &str) {
+        self.rename_option(from, to);
+        let mut board = self.board.lock().unwrap();
+        for item in &mut board.items {
+            if item["status"] == json!(from) {
+                item["status"] = json!(to);
+            }
+        }
+    }
+
     /// Make the fixture report assignment drift after the next Status option update.
     pub fn drift_after_status_update(&self) {
         self.board.lock().unwrap().drift_after_status_update = true;
@@ -1719,6 +1737,80 @@ impl GitHubBoardFields {
                 .collect(),
         );
         board.touch_issue(&json!(id));
+    }
+
+    /// Rename the repository label `label` — every issue carrying it now carries the new name —
+    /// as a person renaming it on GitHub would: no issue's `updatedAt` moves, and no board
+    /// item's.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board's labels, which every read of it answers from: that state is the board's private state, so a suite renaming a label as a person would can only do it through this handle, beside `set_labels`.
+    pub fn rename_label(&self, label: &str, name: &str) {
+        let mut board = self.board.lock().unwrap();
+        for item in &mut board.items {
+            for pair in item["labels"].as_array_mut().into_iter().flatten() {
+                if pair[0] == json!(label) {
+                    pair[1] = json!(name);
+                }
+            }
+        }
+    }
+
+    /// Give the repository label `label` the colour `color` on every issue carrying it, as a
+    /// person recolouring it on GitHub would: no issue's `updatedAt` moves, and no board item's.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board's labels, beside `rename_label`, for the same reason.
+    pub fn recolour_label(&self, label: &str, color: &str) {
+        let mut board = self.board.lock().unwrap();
+        for item in &mut board.items {
+            for pair in item["labels"].as_array_mut().into_iter().flatten() {
+                if pair[0] == json!(label)
+                    && let Some(pair) = pair.as_array_mut()
+                {
+                    pair.truncate(2);
+                    pair.push(json!(color));
+                }
+            }
+        }
+    }
+
+    /// Answer every read of `id` with its labels saying another page follows, as a read of an
+    /// issue carrying more labels than one page holds would.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board's own answers, beside `rename_label`, for the same reason.
+    pub fn report_more_labels(&self, id: &str, more: bool) {
+        self.board.lock().unwrap().find(&json!(id))["more_labels"] = json!(more);
+    }
+
+    /// Delete the issue `id`, as a person deleting it on GitHub would: it leaves the board, every
+    /// dependency and project membership naming it goes, and so does every relationship event
+    /// naming it on another issue's timeline — which is how a far end's deletion *lowers* the
+    /// relationship count of an issue that depended on it — while no other issue's `updatedAt`
+    /// moves.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board's issues and their timelines, which every read of it answers from: that state is the board's private state, so a suite deleting an issue as a person would can only do it through this handle, beside `block` and `file_under`.
+    pub fn delete_issue(&self, id: &str) {
+        let mut board = self.board.lock().unwrap();
+        board.items.retain(|item| item["id"] != json!(id));
+        board.blocked_by.retain(|(near, _)| near != id);
+        for (_, blockers) in &mut board.blocked_by {
+            blockers.retain(|blocker| blocker != id);
+        }
+        for item in &mut board.items {
+            if item["parent"] == json!(id) {
+                item["parent"] = Value::Null;
+            }
+        }
+        let naming: Vec<(String, TimelineEvent)> = board
+            .relationship_log
+            .iter()
+            .filter(|(end, other, _)| other == id && end != id)
+            .map(|(end, _, kind)| (end.clone(), *kind))
+            .collect();
+        board
+            .relationship_log
+            .retain(|(end, other, _)| end != id && other != id);
+        for (end, kind) in naming {
+            if let Some(item) = board.items.iter_mut().find(|item| item["id"] == json!(end)) {
+                let held = item["timeline"][kind.name()].as_u64().unwrap_or(0);
+                item["timeline"][kind.name()] = json!(held.saturating_sub(1));
+            }
+        }
     }
 
     /// Set one caller key in the metadata slot at the end of one issue's body, adding the slot
@@ -2122,7 +2214,7 @@ impl GitHubBoard {
         (near, far): (&str, &str),
         (near_kind, far_kind): (TimelineEvent, TimelineEvent),
     ) {
-        for (end, kind) in [(near, near_kind), (far, far_kind)] {
+        for (end, other, kind) in [(near, far, near_kind), (far, near, far_kind)] {
             if let Some(item) = self
                 .items
                 .iter_mut()
@@ -2131,6 +2223,8 @@ impl GitHubBoard {
             {
                 let held = item["timeline"][kind.name()].as_u64().unwrap_or(0);
                 item["timeline"][kind.name()] = json!(held + 1);
+                self.relationship_log
+                    .push((end.to_owned(), other.to_owned(), kind));
             }
         }
     }
@@ -2237,8 +2331,10 @@ impl GitHubBoard {
                "parent":item["parent"].as_str().map(|id| json!({"id":id})),
                "subIssuesSummary":{"total":self.subs(item["id"].as_str().unwrap())},
                "labels":{"nodes":item["labels"].as_array().unwrap().iter()
-                   .map(|pair| json!({"id":pair[0],"name":pair[1],"color":null}))
-                   .collect::<Vec<_>>(),"pageInfo":{"hasNextPage":false}}})
+                   .map(|pair| json!({"id":pair[0],"name":pair[1],
+                                      "color":pair.get(2).cloned().unwrap_or(Value::Null)}))
+                   .collect::<Vec<_>>(),
+                   "pageInfo":{"hasNextPage":item["more_labels"] == json!(true)}}})
     }
 
     /// The two halves of an origin lookup, answered the way GitHub answers each: the board's
@@ -2587,6 +2683,7 @@ fn github_projects_board_at(
         replacing: Vec::new(),
         blocked_by: github_blockers(),
         counted_types: Vec::new(),
+        relationship_log: Vec::new(),
         created: 0,
         lagging_reads,
         documents: Vec::new(),
