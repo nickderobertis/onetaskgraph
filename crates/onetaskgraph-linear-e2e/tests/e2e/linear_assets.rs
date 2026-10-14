@@ -1694,3 +1694,126 @@ fn malformed_live_demand_is_refused_before_any_session_opens() {
     assert!(!output.status.success());
     assert!(stderr(&output).contains("ONETASKGRAPH_LIVE_REQUIRED is not Unicode"));
 }
+
+#[test]
+fn a_task_created_with_an_asset_retires_the_far_ends_reverse_edges_in_a_caching_destination() {
+    let journey = Journey::new();
+    let cache = journey.sandbox.subdirectory("cache");
+    journey.sandbox.project_document(&document(&json!({
+        "notes": {"plugin": "local-md", "config": {"root": journey.sandbox.subdirectory("notes")}},
+        "dest": {"plugin": "linear", "config": journey.config,
+                 "cache": {"enabled": true, "dir": cache}},
+    })));
+    let run = |arguments: &[&str]| {
+        let output = journey
+            .sandbox
+            .command()
+            .envs(journey.workspace.clock.client_env(0))
+            .args(arguments)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{arguments:?}: {}",
+            stderr(&output)
+        );
+        stdout(&output)
+    };
+    let sent = || journey.workspace.held.served().len();
+    let copied: Value = serde_json::from_str(&run(&[
+        "--json",
+        "project",
+        "copy",
+        "notes:launch",
+        "--to",
+        "dest",
+    ]))
+    .unwrap();
+    let project = copied["items"][0]["destination"]
+        .as_str()
+        .and_then(|id| id.split_once(':'))
+        .map(|(_, native)| native.to_owned())
+        .expect("the project landed");
+    let inputs = journey.sandbox.subdirectory("far-inputs");
+    let body = inputs.join("body.md");
+    std::fs::write(&body, "The far end.\n").unwrap();
+    let far = run(&[
+        "task",
+        "create",
+        "dest",
+        "--project",
+        &project,
+        "--title",
+        "Far end",
+        "--body-file",
+        body.to_str().unwrap(),
+    ])
+    .trim()
+    .to_owned();
+    let listed: Value =
+        serde_json::from_str(&run(&["--json", "task", "list", "--source", "dest"])).unwrap();
+    let pin = listed["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == far.as_str())
+        .and_then(|item| item["item"]["version"].as_str())
+        .expect("the far end carries a token")
+        .to_owned();
+    let reverse = [
+        "--json",
+        "task",
+        "deps",
+        &far,
+        "--direction",
+        "depended-on-by",
+        "--pin",
+        &pin,
+    ];
+    run(&reverse);
+    let before = sent();
+    run(&reverse);
+    assert_eq!(
+        sent(),
+        before,
+        "the far end's reverse edges are filled and served"
+    );
+    let native = far.split_once(':').unwrap().1;
+    let directory = std::fs::read_dir(&cache)
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| path.join("reverse-edges-v2").is_dir())
+        .map_or_else(|| cache.clone(), |path| path)
+        .join("reverse-edges-v2");
+    let kept = directory.join(format!("{}.json", asset_sha256(native.as_bytes())));
+    assert!(kept.exists(), "{}", kept.display());
+
+    let image = inputs.join("shot.png");
+    std::fs::write(&image, images::png(17, 475_000)).unwrap();
+    let near_body = inputs.join("near.md");
+    std::fs::write(&near_body, "The near end.\n\n![shot](./shot.png)\n").unwrap();
+    run(&[
+        "task",
+        "create",
+        "dest",
+        "--project",
+        &project,
+        "--title",
+        "Near end",
+        "--body-file",
+        near_body.to_str().unwrap(),
+        "--asset",
+        image.to_str().unwrap(),
+        "--depends-on",
+        &far,
+    ]);
+    assert!(
+        !kept.exists(),
+        "the asset create takes the far end's reverse edges out of service"
+    );
+    let before = sent();
+    let edges: Value = serde_json::from_str(&run(&reverse)).unwrap();
+    assert!(sent() > before, "the next read is Linear's");
+    assert_eq!(edges["items"].as_array().map(Vec::len), Some(1), "{edges}");
+}
