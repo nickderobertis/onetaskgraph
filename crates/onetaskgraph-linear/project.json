@@ -52,7 +52,8 @@
         ],
         "parallel": false
       },
-      "//": "The live journey is one of the tests the first command runs; the second drives it through skipped, declined and expected-but-absent without a credential. Serial: it re-runs the binary the first builds. The env inputs are the cache key's, because this target's result is not a function of the files \u2014 a replay of an uncredentialed run would otherwise stand in for a credentialed one and the live tests would not run while the target reported green. `coverage` takes none of them: scripts/rust-coverage.sh clears the credentials first, which is what keeps one run to one live session.",
+      "parallelism": false,
+      "//": "The live journey is one of the tests the first command runs; the second drives it through skipped, declined and expected-but-absent without a credential. Serial: it re-runs the binary the first builds. `parallelism: false` runs this target alone: onetaskgraph-linear-e2e's asset journey takes the same one-at-a-time Linear seat, and with both selected in one `just check` the second to start was declined, failing the required check; scripts/check-live-seat-serialised.sh proves against real Nx that no two seat-holding targets overlap. The env inputs are the cache key's, because this target's result is not a function of the files \u2014 a replay of an uncredentialed run would otherwise stand in for a credentialed one and the live tests would not run while the target reported green. `coverage` takes none of them: scripts/rust-coverage.sh clears the credentials first, which is what keeps one run to one live session.",
       "inputs": [
         "default",
         "^default",
