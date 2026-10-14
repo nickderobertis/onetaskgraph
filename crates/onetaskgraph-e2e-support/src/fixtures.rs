@@ -5766,7 +5766,7 @@ fn linear_uncached(operation: &str) -> Option<&'static str> {
 }
 
 /// Add to `answer`, the plain document's, what the cache's `operation` selects beside it: each
-/// issue's first page of ten relations, or — for a dependency read — every other part of its
+/// issue's first page of relations, or — for a dependency read — every other part of its
 /// token.
 fn linear_widen(operation: &str, answer: &mut Value, data: &Value, vars: &Value) {
     use onetaskgraph_linear::graphql;
@@ -5776,8 +5776,10 @@ fn linear_widen(operation: &str, answer: &mut Value, data: &Value, vars: &Value)
             .as_array()
             .cloned()
             .unwrap_or_default();
-        let more = nodes.len() > 10;
-        json!({"nodes": nodes.into_iter().take(10).collect::<Vec<_>>(),
+        // The page the cache's documents select, which the plugin's own test holds them to.
+        let first = onetaskgraph_linear::change_token::RELATIONS_PAGE;
+        let more = nodes.len() > first;
+        json!({"nodes": nodes.into_iter().take(first).collect::<Vec<_>>(),
                "pageInfo": {"hasNextPage": more}})
     };
     let widen = |issue: &mut Value| {

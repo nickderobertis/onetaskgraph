@@ -37,30 +37,47 @@ pub const RELATIONS_PAGE: usize = 10;
 /// holding this many may be a first page of more, so it gives no token.
 pub const DEFAULT_LABEL_PAGE: usize = 50;
 
+/// One label as a facet spells it: its id, its name and its colour, which Linear may leave null.
+type LabelFacet<'a> = (&'a str, &'a str, Option<&'a str>);
+
+/// A workflow state's or a project status's name and type.
+type NamedType<'a> = (&'a str, &'a str);
+
 /// A task's facets, as its token's digest spells them.
 #[derive(Serialize)]
 struct TaskFacets<'a> {
-    key: &'a Value,
-    labels: Vec<(&'a Value, &'a Value, &'a Value)>,
-    project: &'a Value,
-    state: (&'a Value, &'a Value),
-    url: &'a Value,
+    key: &'a str,
+    labels: Vec<LabelFacet<'a>>,
+    project: Option<&'a str>,
+    state: NamedType<'a>,
+    url: Option<&'a str>,
 }
 
 /// A project's facets.
 #[derive(Serialize)]
 struct ProjectFacets<'a> {
-    labels: Vec<(&'a Value, &'a Value, &'a Value)>,
-    status: (&'a Value, &'a Value),
+    labels: Vec<LabelFacet<'a>>,
+    status: NamedType<'a>,
+}
+
+/// The lowercase hex SHA-256 of a document's content, made only by hashing it.
+#[derive(Serialize)]
+#[serde(transparent)]
+struct ContentDigest(String);
+
+impl ContentDigest {
+    fn of(content: &str) -> Self {
+        Self(asset_sha256(content.as_bytes()))
+    }
 }
 
 /// A document's facets.
 #[derive(Serialize)]
 struct DocumentFacets<'a> {
-    content: String,
-    project: &'a Value,
-    title: &'a Value,
-    url: &'a Value,
+    content: ContentDigest,
+    project: Option<&'a str>,
+    title: &'a str,
+    url: &'a str,
 }
 
 /// The lowercase hex SHA-256 of `facets`' canonical JSON.
@@ -68,41 +85,56 @@ fn digest(facets: &impl Serialize) -> Option<String> {
     Some(asset_sha256(serde_json::to_string(facets).ok()?.as_bytes()))
 }
 
+/// `key` of `item` when it is a string — and `None`, so no token, when it is missing or anything
+/// else: a part read as something Linear's schema does not give vouches for nothing.
+fn text<'a>(item: &'a Value, key: &str) -> Option<&'a str> {
+    item.get(key)?.as_str()
+}
+
+/// `key` of `item` when it is a string or null, `None` within when null — and `None` when it is
+/// missing or anything else.
+fn nullable_text<'a>(item: &'a Value, key: &str) -> Option<Option<&'a str>> {
+    match item.get(key)? {
+        Value::Null => Some(None),
+        Value::String(text) => Some(Some(text)),
+        _ => None,
+    }
+}
+
 /// Every label of `item`, as `[id, name, color]` sorted by id — or `None` when the connection is
-/// missing or may be only a first page.
-fn labels(item: &Value) -> Option<Vec<(&Value, &Value, &Value)>> {
+/// missing, may be only a first page, or holds a label without a string id and name and a
+/// string or null colour.
+fn labels(item: &Value) -> Option<Vec<LabelFacet<'_>>> {
     let nodes = item.pointer("/labels/nodes")?.as_array()?;
     if nodes.len() >= DEFAULT_LABEL_PAGE {
         return None;
     }
-    let null = &Value::Null;
-    let mut labels: Vec<(&Value, &Value, &Value)> = nodes
+    let mut labels = nodes
         .iter()
         .map(|label| {
-            (
-                label.get("id").unwrap_or(null),
-                label.get("name").unwrap_or(null),
-                label.get("color").unwrap_or(null),
-            )
+            Some((
+                text(label, "id")?,
+                text(label, "name")?,
+                nullable_text(label, "color")?,
+            ))
         })
-        .collect();
-    labels.sort_by(|a, b| a.0.as_str().cmp(&b.0.as_str()));
+        .collect::<Option<Vec<_>>>()?;
+    labels.sort_unstable();
     Some(labels)
 }
 
-/// The project `item` is filed under, as its facets name it: its id, or null.
-fn project(item: &Value) -> Option<&Value> {
-    let project = item.get("project")?;
-    Some(if project.is_null() {
-        project
-    } else {
-        project.get("id")?
-    })
+/// The project `item` is filed under, as its facets name it: its id, or `Some(None)` when it is
+/// in none — and `None` when the member is missing or names a project without a string id.
+fn project(item: &Value) -> Option<Option<&str>> {
+    match item.get("project")? {
+        Value::Null => Some(None),
+        project => Some(Some(text(project, "id")?)),
+    }
 }
 
-/// A `{name, type}` status or workflow state, as a facet names it.
-fn named_type(status: &Value) -> Option<(&Value, &Value)> {
-    Some((status.get("name")?, status.get("type")?))
+/// A `{name, type}` status or workflow state, as a facet names it, when both are strings.
+fn named_type(status: &Value) -> Option<NamedType<'_>> {
+    Some((text(status, "name")?, text(status, "type")?))
 }
 
 /// `updatedAt`, read as an instant and spelled back the one way this module spells it.
@@ -142,11 +174,11 @@ pub fn relations(issue: &Value) -> Option<String> {
 #[must_use]
 pub fn task(issue: &Value, attached: bool) -> Option<String> {
     let facets = TaskFacets {
-        key: issue.get("identifier")?,
+        key: text(issue, "identifier")?,
         labels: labels(issue)?,
         project: project(issue)?,
         state: named_type(issue.get("state")?)?,
-        url: issue.get("url")?,
+        url: nullable_text(issue, "url")?,
     };
     let base = format!("{PREFIX}{}|{}", updated(issue)?, digest(&facets)?);
     if attached {
@@ -174,12 +206,11 @@ pub fn project_token(project: &Value) -> Option<String> {
 /// of the content as Linear holds it, metadata slot and all.
 #[must_use]
 pub fn document_token(document: &Value) -> Option<String> {
-    let content = document.get("content")?;
     let facets = DocumentFacets {
-        content: asset_sha256(content.as_str().unwrap_or_default().as_bytes()),
+        content: ContentDigest::of(nullable_text(document, "content")?.unwrap_or_default()),
         project: project(document)?,
-        title: document.get("title")?,
-        url: document.get("url")?,
+        title: text(document, "title")?,
+        url: text(document, "url")?,
     };
     Some(format!(
         "{PREFIX}{}|{}",
@@ -330,9 +361,55 @@ mod tests {
     }
 
     #[test]
+    fn a_part_of_another_json_type_than_linears_schema_gives_no_token() {
+        let whole = issue("2026-10-01T00:00:00Z", "bug", page(&[], false));
+        assert!(task(&whole, true).is_some());
+        for (part, value) in [
+            ("/identifier", json!(7)),
+            ("/url", json!(["a"])),
+            ("/project", json!({"id": 7})),
+            ("/project", json!("p1")),
+            ("/state/type", json!(null)),
+            ("/state/name", json!(1)),
+            ("/labels/nodes/0/name", json!(null)),
+            ("/labels/nodes/0/id", json!(1)),
+            ("/labels/nodes/0/color", json!(0)),
+        ] {
+            let mut broken = whole.clone();
+            *broken.pointer_mut(part).expect("the part") = value.clone();
+            assert_eq!(task(&broken, true), None, "{part} as {value}");
+        }
+        let document = json!({"title": "Design", "url": "https://linear.app/x/document/design",
+                              "project": null, "updatedAt": "2026-10-01T00:00:00Z",
+                              "content": null});
+        assert!(
+            document_token(&document).is_some(),
+            "Linear's content may be null"
+        );
+        for (part, value) in [
+            ("/title", json!(null)),
+            ("/url", json!(null)),
+            ("/content", json!(1)),
+        ] {
+            let mut broken = document.clone();
+            *broken.pointer_mut(part).expect("the part") = value.clone();
+            assert_eq!(document_token(&broken), None, "{part} as {value}");
+        }
+    }
+
+    #[test]
+    fn the_relations_page_a_token_is_read_from_is_the_one_the_cache_selects() {
+        assert!(
+            crate::graphql::RELATIONS_PAGE.contains(&format!("relations(first:{RELATIONS_PAGE})")),
+            "{} selects a page of {RELATIONS_PAGE}",
+            crate::graphql::RELATIONS_PAGE
+        );
+    }
+
+    #[test]
     fn a_documents_token_moves_with_its_content_and_the_relations_part_comes_off() {
         let document = |content: &str| {
-            json!({"title": "Design", "url": null, "project": null,
+            json!({"title": "Design", "url": "https://linear.app/x/document/design", "project": null,
                    "updatedAt": "2026-10-01T00:00:00Z", "content": content})
         };
         let one = document_token(&document("a")).unwrap();
