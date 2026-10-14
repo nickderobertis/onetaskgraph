@@ -1515,7 +1515,10 @@ mod tests {
     use std::collections::BTreeMap;
 
     use onetaskgraph_in_memory::{InMemoryConfig, InMemorySource};
-    use onetaskgraph_plugin_api::{JournalEntry, RequestKind, Shown, StatusCategory, WholeTask};
+    use onetaskgraph_plugin_api::{
+        Cursor, DependencyEndpoint, DependencyKind, ItemKind, JournalEntry, RequestKind, Shown,
+        StatusCategory, WholeTask,
+    };
 
     use super::super::CacheLocation;
     use super::*;
@@ -1644,6 +1647,134 @@ mod tests {
         ) -> Result<Page<DependencyEdge>, SourceError> {
             self.inner.project_dependencies(id, direction, page).await
         }
+    }
+
+    /// An in-memory source whose task `T-1` has two forward edges, one a page, read at `v1`: a
+    /// first page answers the first and the cursor `1`, and any other cursor the second and
+    /// nothing after it.
+    struct Paging {
+        inner: InMemorySource,
+    }
+
+    #[async_trait::async_trait]
+    impl TaskSource for Paging {
+        fn kind(&self) -> &'static str {
+            self.inner.kind()
+        }
+        fn capabilities(&self) -> Capabilities {
+            self.inner.capabilities()
+        }
+        fn forward_edges_version(&self, _id: &NativeId) -> Option<String> {
+            Some("v1".to_owned())
+        }
+        async fn health(&self) -> Result<Health, SourceError> {
+            self.inner.health().await
+        }
+        async fn get_task(&self, id: &NativeId) -> Result<Option<Task>, SourceError> {
+            self.inner.get_task(id).await
+        }
+        async fn get_project(&self, id: &NativeId) -> Result<Option<Project>, SourceError> {
+            self.inner.get_project(id).await
+        }
+        async fn query_tasks(
+            &self,
+            query: &TaskQuery,
+            page: &PageRequest,
+        ) -> Result<Page<Task>, SourceError> {
+            self.inner.query_tasks(query, page).await
+        }
+        async fn query_projects(
+            &self,
+            query: &ProjectQuery,
+            page: &PageRequest,
+        ) -> Result<Page<Project>, SourceError> {
+            self.inner.query_projects(query, page).await
+        }
+        async fn labels(&self, page: &PageRequest) -> Result<Page<Label>, SourceError> {
+            self.inner.labels(page).await
+        }
+        async fn task_dependencies(
+            &self,
+            id: &NativeId,
+            _direction: Direction,
+            page: &PageRequest,
+        ) -> Result<Page<DependencyEdge>, SourceError> {
+            let edge = |to: &str| DependencyEdge {
+                from: DependencyEndpoint::from_native(id.clone(), ItemKind::Task),
+                to: DependencyEndpoint::from_native(NativeId::from(to), ItemKind::Task),
+                kind: DependencyKind::Blocks,
+            };
+            Ok(match &page.cursor {
+                None => Page {
+                    items: vec![edge("T-2")],
+                    next: Some(Cursor("1".to_owned())),
+                },
+                Some(_) => Page {
+                    items: vec![edge("T-3")],
+                    next: None,
+                },
+            })
+        }
+        async fn project_dependencies(
+            &self,
+            id: &NativeId,
+            direction: Direction,
+            page: &PageRequest,
+        ) -> Result<Page<DependencyEdge>, SourceError> {
+            self.inner.project_dependencies(id, direction, page).await
+        }
+    }
+
+    /// A walk of `T-1`'s forward edges through a caching [`Paging`] source in `dir`, its second
+    /// page resumed from `cursor`: what it answered, and whether an entry of them was kept.
+    async fn walk_resumed_from(dir: &std::path::Path, cursor: &str) -> (usize, bool) {
+        let cache = SourceCache::new(
+            CacheLocation {
+                dir: dir.to_path_buf(),
+                remote: "remote".to_owned(),
+            },
+            VersionCoverage::whole(),
+            ProjectVersionCoverage::whole(),
+            DocumentVersionCoverage::whole(),
+        );
+        let source = CachedSource::over(
+            Box::new(Paging {
+                inner: InMemorySource::new(InMemoryConfig::default()).expect("an empty source"),
+            }),
+            cache.clone(),
+        );
+        let page = |cursor: Option<&str>| PageRequest {
+            cursor: cursor.map(|cursor| Cursor(cursor.to_owned())),
+            limit: 1,
+        };
+        let first = source
+            .task_dependencies(&id("T-1"), Direction::DependsOn, &page(None))
+            .await
+            .expect("the first page");
+        let second = source
+            .task_dependencies(&id("T-1"), Direction::DependsOn, &page(Some(cursor)))
+            .await
+            .expect("the second page");
+        (
+            first.items.len() + second.items.len(),
+            cache.read_edges(&id("T-1")).is_some(),
+        )
+    }
+
+    #[tokio::test]
+    async fn a_walk_resumed_from_a_cursor_its_first_page_never_gave_keeps_no_edges() {
+        let dir = tempfile::tempdir().expect("a directory");
+        assert_eq!(
+            walk_resumed_from(dir.path(), "1").await,
+            (2, true),
+            "a walk resumed where its first page left off is whole, and kept"
+        );
+        let dir = tempfile::tempdir().expect("a directory");
+        assert_eq!(
+            walk_resumed_from(dir.path(), "elsewhere").await,
+            (2, false),
+            "one resumed from another cursor answers what the source answers and keeps nothing"
+        );
     }
 
     fn id(value: &str) -> NativeId {

@@ -5700,9 +5700,10 @@ fn linear_response(
             .iter()
             .find(|v| v["id"] == id);
         if operation == graphql::ISSUE_RELATIONS {
-            return Ok(
-                json!({"issue":linear_relations(data,"task_dependencies",id,"Issue",recorded)}),
-            );
+            return Ok(json!({"issue":linear_relation_page(
+                linear_relations(data, "task_dependencies", id, "Issue", recorded),
+                &vars,
+            )}));
         }
         return Ok(json!({"issue":item.map(|v|linear_task(v,data))}));
     }
@@ -5714,13 +5715,42 @@ fn linear_response(
             .iter()
             .find(|v| v["id"] == id);
         if operation == graphql::PROJECT_RELATIONS {
-            return Ok(
-                json!({"project":linear_relations(data,"project_dependencies",id,"Project",recorded)}),
-            );
+            return Ok(json!({"project":linear_relation_page(
+                linear_relations(data, "project_dependencies", id, "Project", recorded),
+                &vars,
+            )}));
         }
         return Ok(json!({"project":item.map(|v|linear_project(v,data))}));
     }
     Ok(json!({"viewer":{"id":"fixture-user"}}))
+}
+
+/// `item`'s relations and inverse relations, each cut to the page a dependency read's `first` and
+/// `after` ask for, as Linear pages a connection: at most `first` rows after the cursor `after`,
+/// with `hasNextPage` saying whether more follow and `endCursor` where they resume.
+fn linear_relation_page(mut item: Value, vars: &Value) -> Value {
+    let first = vars["first"]
+        .as_u64()
+        .and_then(|first| usize::try_from(first).ok())
+        .unwrap_or(50);
+    let after = vars["after"]
+        .as_str()
+        .and_then(|after| after.parse::<usize>().ok())
+        .unwrap_or(0);
+    for connection in ["relations", "inverseRelations"] {
+        let nodes = item[connection]["nodes"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        let end = after.saturating_add(first).min(nodes.len());
+        let page: Vec<Value> = nodes.get(after.min(end)..end).unwrap_or_default().to_vec();
+        let more = end < nodes.len();
+        item[connection] = json!({"nodes": page, "pageInfo": {
+            "hasNextPage": more,
+            "endCursor": more.then(|| end.to_string()),
+        }});
+    }
+    item
 }
 
 /// The document the store's cache sends `operation` in place of, when it sends it in place of one.

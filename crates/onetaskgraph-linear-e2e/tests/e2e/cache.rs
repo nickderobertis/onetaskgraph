@@ -336,6 +336,103 @@ fn a_projects_tasks_listed_then_their_forward_edges_are_answered_from_the_cache_
     assert_ne!(changed, cold);
 }
 
+/// The native ids whose forward edges the cache directory holds an entry of.
+fn edges_kept(cached: &Cached) -> Vec<String> {
+    let mut kept: Vec<String> = cached
+        .dir()
+        .map(|dir| walk(&dir.join("edges-v1")))
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|path| std::fs::read(path).ok())
+        .filter_map(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .filter_map(|entry| entry["id"].as_str().map(str::to_owned))
+        .collect();
+    kept.sort();
+    kept
+}
+
+#[test]
+fn a_forward_edge_walk_not_read_whole_at_one_version_in_one_command_is_never_kept() {
+    let graph = ["project", "graph", "linear:P-1", "--format", "json"];
+    let relations_of = |cached: &Cached, task: &str| {
+        let before = cached.workspace.served().len();
+        cached.ok(&graph);
+        cached.workspace.served()[before..]
+            .iter()
+            .filter(|(document, variables)| {
+                document == onetaskgraph_linear::graphql::ISSUE_RELATIONS_CACHED
+                    && variables["id"] == task
+            })
+            .count()
+    };
+
+    // A walk read whole at one version keeps its edges, and the next command is answered by them.
+    let cached = Cached::new(dataset());
+    cached.ok(&graph);
+    assert!(
+        edges_kept(&cached).contains(&"L-4".to_owned()),
+        "a whole walk is kept: {:?}",
+        edges_kept(&cached)
+    );
+    assert_eq!(relations_of(&cached, "L-4"), 0, "and served");
+
+    // L-4's walk is its relations page, then its recorded far ends' page: an edit landing between
+    // the two reads the second at another version, so the walk is neither one and is not kept.
+    let cached = Cached::new(dataset());
+    cached.workspace.after_request(
+        |document, variables| {
+            document == onetaskgraph_linear::graphql::ISSUE_RELATIONS_CACHED
+                && variables["id"] == "L-4"
+        },
+        0,
+        |workspace| workspace.retitle("tasks", "L-4", "Edited between the walk's pages"),
+    );
+    cached.ok(&graph);
+    assert!(
+        !edges_kept(&cached).contains(&"L-4".to_owned()),
+        "a walk whose task changed between its pages is not kept: {:?}",
+        edges_kept(&cached)
+    );
+    assert_eq!(
+        relations_of(&cached, "L-4"),
+        2,
+        "the next command reads L-4's relations and recorded far ends again"
+    );
+
+    // L-1's two relations walked a page a command: the second page resumes a walk this process
+    // never began, past the relations page its token is read from, so neither page is kept.
+    let cached = Cached::new(dataset());
+    cached.workspace.relate("L-1", "L-4", "related");
+    let (first, _) = cached.ok(&["task", "deps", "linear:L-1", "--limit", "1", "--json"]);
+    let token = first["next"].as_str().expect("a second page").to_owned();
+    let (second, _) = cached.ok(&[
+        "task",
+        "deps",
+        "linear:L-1",
+        "--limit",
+        "1",
+        "--page",
+        &token,
+        "--json",
+    ]);
+    assert_eq!(
+        first["items"].as_array().map_or(0, Vec::len)
+            + second["items"].as_array().map_or(0, Vec::len),
+        2,
+        "both of L-1's relations, a page each"
+    );
+    assert!(
+        !edges_kept(&cached).contains(&"L-1".to_owned()),
+        "a walk split across commands is not kept: {:?}",
+        edges_kept(&cached)
+    );
+    assert_eq!(
+        relations_of(&cached, "L-1"),
+        1,
+        "the next command reads L-1's relations from Linear"
+    );
+}
+
 #[test]
 fn a_token_linear_cannot_vouch_for_is_never_kept_or_served() {
     // (what makes the token absent or unordered, the issue, how)
