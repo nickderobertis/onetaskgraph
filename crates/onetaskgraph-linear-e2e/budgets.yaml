@@ -94,6 +94,7 @@ budgets:
     unit: requests
     direction: min
     threshold: 1
+  # llmlint: ignore[budgets_track_product_owner_outcomes] A different limit from the hourly complexity quota: Linear refuses any one query above 10,000 complexity outright, whatever the hour has spent, so the dearest single query is an outcome of its own (a read that fails), not a share of the hourly total; the task fixes it as its own budget at 9,000.
   - id: linear-cache-largest-query-complexity
     description: >-
       The dearest single query any Linear read sends with the cache on over the same hour at 1x

@@ -7,11 +7,9 @@
 //! the source already receives: the item's `updatedAt`, and the digest of its *facets* — what a
 //! person can change about it without moving that time, which `spike-linear-coverage` measured
 //! `updatedAt` alone missing: a label renamed or recoloured, a workflow state renamed, a
-//! document's content and slot edited. With the store's cache attached a task's token carries
-//! three parts more — the digests of its first page of comments, of its first page of relations
-//! and of its first page of inverse relations — and a project's one, the digest of its first page
-//! of relations, because a comment, a relation and an inverse relation added or removed moved no
-//! time the spike could see on the item that holds the token.
+//! document's content and slot edited. With the store's cache attached a task's token also
+//! carries digests of its first page of comments, relations and inverse relations, and a
+//! project's of its first page of relations — the parts §4.13d says each covers.
 //!
 //! An item whose labels came back as 50 nodes or more — Linear's default page, which the
 //! documents here select without a `first` or a `pageInfo` — gives no token, and so does an item
