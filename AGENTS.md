@@ -550,7 +550,12 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   A seat was always a file on one machine, which excluded nothing on another, and the hosted
   check runs on three. The Linear lane keeps one for a different reason: it is the one
   precondition that can decline that lane without a credential and without reaching Linear,
-  which is what `scripts/check-live-decline.sh` drives through to a red check. That script
+  which is what `scripts/check-live-decline.sh` drives through to a red check.
+  Two crates take that seat — the plugin's live journey and `onetaskgraph-linear-e2e`'s asset
+  journey — so `onetaskgraph-linear:test` is `parallelism: false`: run side by side in one
+  `just check`, the second to start was declined and the required check went red.
+  `scripts/check-live-seat-serialised.sh`, in `scripts:test`, finds every seat-holder by scan
+  and proves against real Nx that none overlap. That script
   reads the lane to find out which precondition it has, and **refuses a lane that opens
   `Shared` unless another `check-*-decline.sh` in that crate's own `test` target drives its
   decline** — for GitHub Projects that is `scripts/check-budget-decline.sh` — so a lane
