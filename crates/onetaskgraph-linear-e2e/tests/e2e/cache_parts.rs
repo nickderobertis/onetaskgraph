@@ -1193,8 +1193,9 @@ fn a_project_edge_walk_read_across_a_change_between_its_pages_is_never_kept() {
 }
 
 /// Eighty projects — more than the seventy-four one page of them holds, so `PX-79` is past it —
-/// and four tasks: three marked `many`, filed under `PX-0`, `PX-1` and `PX-79`, and one marked
-/// `one`, filed under `PX-2`.
+/// four tasks — three marked `many`, filed under `PX-0`, `PX-1` and `PX-79`, and one marked
+/// `one`, filed under `PX-2` — and three documents, `DX-0`, `DX-1` and `DX-79`, filed under the
+/// project of the same number.
 fn many_projects() -> Value {
     let projects: Vec<Value> = (0..80)
         .map(|n| {
@@ -1218,7 +1219,13 @@ fn many_projects() -> Value {
             task("TX-4", "PX-2", "one"),
         ],
         projects,
-        Vec::new(),
+        [0, 1, 79]
+            .map(|n| {
+                json!({"id": format!("DX-{n}"), "title": format!("Document {n}"),
+                       "content": format!("Notes {n}."), "project": format!("PX-{n}"),
+                       "labels": []})
+            })
+            .to_vec(),
     )
 }
 
@@ -1281,6 +1288,69 @@ fn a_copy_filing_tasks_under_several_projects_reads_one_page_of_them_and_no_more
     let (_, one) = cached.ok(&strs(&copy("one")));
     assert_eq!(count(&one, graphql::PROJECTS_CACHED), 0, "{one:?}");
     assert_eq!(count(&one, graphql::PROJECT_CACHED), 1, "{one:?}");
+}
+
+#[test]
+fn a_document_copy_filing_under_several_projects_reads_one_page_of_them_and_no_more() {
+    let copy = [
+        "document",
+        "copy",
+        "linear:DX-0",
+        "linear:DX-1",
+        "linear:DX-79",
+        "--to",
+        "notes",
+        "--dry-run",
+        "--no-link",
+        "--json",
+    ];
+    let cached = Cached::new(many_projects());
+    // The projects each request reads by id, in order.
+    let reads = |arguments: &[&str], document: &str| {
+        let before = cached.workspace.served().len();
+        let (answer, _) = cached.ok(arguments);
+        let served = cached.workspace.served()[before..].to_vec();
+        let pages = served
+            .iter()
+            .filter(|(sent, _)| sent == graphql::PROJECTS_CACHED)
+            .count();
+        let mut ids: Vec<Value> = served
+            .iter()
+            .filter(|(sent, _)| sent == document)
+            .map(|(_, variables)| variables["id"].clone())
+            .collect();
+        ids.sort_by_key(ToString::to_string);
+        (answer, pages, ids, served.len())
+    };
+    let mut off = vec!["--set", "sources.linear.cache.enabled=false"];
+    off.extend_from_slice(&copy);
+    let (uncached, no_pages, mut by_id, uncached_requests) = reads(&off, graphql::PROJECT);
+    assert_eq!(no_pages, 0, "no page without a cache");
+
+    // Each document's own project is read for its references, and then its filing: the cold
+    // copy reads one page of projects between the two, and the warm one serves the filing of
+    // each project that page carried — `PX-0` and `PX-1` — reading only `PX-79` by id again.
+    let (_, cold_pages, _, _) = reads(&copy, graphql::PROJECT_CACHED);
+    assert_eq!(cold_pages, 1, "one page");
+    let (warm, pages, warm_by_id, requests) = reads(&copy, graphql::PROJECT_CACHED);
+    assert_eq!(pages, 1, "one page");
+    for served in ["PX-0", "PX-1"] {
+        let at = by_id
+            .iter()
+            .position(|id| id == served)
+            .expect("an uncached copy reads it");
+        by_id.remove(at);
+    }
+    assert_eq!(
+        warm_by_id, by_id,
+        "the filing of each project on the page is served"
+    );
+    assert_eq!(
+        requests,
+        uncached_requests - 1,
+        "one page sent, two reads saved"
+    );
+    assert_eq!(bare(warm), bare(uncached), "what an uncached copy answers");
 }
 
 #[test]
