@@ -484,10 +484,7 @@
         },
         "metadata": {
           "kudirulukove.guru-kind": {
-            "dumos": [
-              "gavat-lenumev-mubojisuti",
-              "gavat-pecodu-von-bulade"
-            ],
+            "dumos": ["gavat-lenumev-mubojisuti", "gavat-pecodu-von-bulade"],
             "kind": "topila"
           },
           "kudirulukove.guru-koritu": {
@@ -601,9 +598,7 @@
           },
           "tiborenavok.id": "fegukegano-ci-zisacel-huzivo",
           "tiborenavok.locanuz": "Dokevub devehopefu mo to rutugilo ture, robon zuned fuziroz tabifes rut topus: fot cugodope tifoz potozu bedor vide in zopupip-mako-huzivo.di1 fot kavo `& $huzivo --tubanek` (rez `& $ledezini.Dusuvo --tubanek`) nam ropala bi kujim mi vigir, rez HefirObeka's -kitac on bi kujim kigojop si rez meko hep top fot zuzodazel $Henibod masecice, lo fot tubanek nodoked bo cosev bima lemo fot noko bo tapemet. Kese fot munuma fuvu meg rikajo mimozo hevijezu.",
-          "tiborenavok.mihirosulo": [
-            "fegukegano-ci-zisacel-huzivo"
-          ],
+          "tiborenavok.mihirosulo": ["fegukegano-ci-zisacel-huzivo"],
           "tiborenavok.mokamim": "duvekeku",
           "tiborenavok.nuzijat": "huvebi",
           "tiborenavok.nuzijat_dunito": "674f76769cd50f4ec979cf1fe8dce3380ef6f239",
@@ -611,9 +606,7 @@
         },
         "priority": "none",
         "project": "666f726f723a495f6a61434f52494c556d65384a49485548497a45526552",
-        "repositories": [
-          "github.com/tubivivalipemi/fegukegano-ci"
-        ],
+        "repositories": ["github.com/tubivivalipemi/fegukegano-ci"],
         "status": {
           "category": "done",
           "name": "done"
@@ -630,9 +623,7 @@
       "item": {
         "content": "Nokibur sukuke-fa zokumu https://github.com/tubivivalipemi/cobuhozudimub/gibomi/146, \"begada magocemara tuhuk zep repiden\". Fot user beferimu take ro fot himamatehu ruvep, rez fot dokevub dezoses si.\n\nGum fot rut hovacire `zep-repiden (gupore-gapuva)` rez `zep-repiden (fucoh-gapuva)` mo fot vutokabi status mizeri mi `fahi` on `github.com/tubivivalipemi/cobuhozudimub`. Fot himamatehu's pen zikir famenifa gudagek lekimac deha bove `.github/jatuhekaf/pu.vec:285`. Fogihek in fot sutu nubecab, rez fot fihisine fise `zug/fise/vutokabi-hovacire.fise.hov` bo pevi ro si bo in take guru.\n\nHi si jefehi men:\n\n- `gi cat -X HIHO gazip/tubivivalipemi/cobuhozudimub/bojatoju/fahi/magocemara/vutokabi_status_mizeri/hovacire -f 'hovacire[]=zep-repiden (gupore-gapuva)' -f 'hovacire[]=zep-repiden (fucoh-gapuva)'`; ke\n- on github.com, in fot himamatehu's **Lekoropu → Bojatoju → fahi → Duzirus status mizeri mo boju**, gum fibo mizeri rez besa.\n\nNopa hirohan:\n\n1. `gi cat gazip/tubivivalipemi/cobuhozudimub/bojatoju/fahi/magocemara --ve '.vutokabi_status_mizeri.hovacire'` remaj fibo `zep-repiden` hovacire nudujo fot sozido gudagek vutokabi.\n2. Zo-sic fot `Vutokabi hovacire` famenifa (`.github/jatuhekaf/vutokabi-hovacire.vec`) on `fahi`, rez si cudi bozoc.\n\nFikocu fot zudi sini vide famenifa sic's URL. Fogihek depends on take zudi, lo si blocks no zesac fota.\n",
         "created_at": null,
-        "delivers": [
-          "mujumavok:I_gaDUDAm5I88MIDOLIFOFON"
-        ],
+        "delivers": ["mujumavok:I_gaDUDAm5I88MIDOLIFOFON"],
         "id": "duzirus-fot-zep-repiden-mizeri-on-cobuhozudimub-fahi",
         "key": null,
         "labels": [],
@@ -983,11 +974,7 @@
     },
     "tasks/placeholder-project/quoted-labels.md": {
       "answers": {
-        "labels": [
-          "needs: quoting",
-          "2026-Q4",
-          "yes"
-        ],
+        "labels": ["needs: quoting", "2026-Q4", "yes"],
         "what": "Placeholder text describing what the task does.\n\nA second placeholder paragraph.",
         "why": "Placeholder text describing why."
       },
@@ -1007,9 +994,7 @@
       "item": {
         "content": "## What\n\nPlaceholder text describing what the task does.\n\n## Why\n\nPlaceholder text describing why.\n",
         "created_at": null,
-        "delivers": [
-          "elsewhere:placeholder-ticket-1"
-        ],
+        "delivers": ["elsewhere:placeholder-ticket-1"],
         "id": "placeholder-project/quoted-labels",
         "key": null,
         "labels": [
@@ -1054,13 +1039,7 @@
         },
         "metadata": {
           "placeholder.id": "quoted-labels",
-          "placeholder.list": [
-            "first placeholder",
-            "second: placeholder",
-            3,
-            true,
-            null
-          ],
+          "placeholder.list": ["first placeholder", "second: placeholder", 3, true, null],
           "placeholder.review": {
             "at": "2026-01-02T03:04:05+00:00",
             "by": "placeholder-reviewer",
