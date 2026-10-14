@@ -393,6 +393,26 @@ test("unknown authoritative event names fail closed even over a release-only PR"
   assert.equal(classify(payload, heads.version, base, "merge_group").macosRequired, false);
 });
 
+test("every known non-PR automatic event stays Mac-free whatever the diff", () => {
+  for (const name of [
+    "push",
+    "release",
+    "workflow_run",
+    "repository_dispatch",
+    "schedule",
+    "workflow_dispatch",
+    "merge_group",
+  ])
+    for (const head of [heads.source, heads.version, heads.dependency]) {
+      const result = classify({ event_name: name }, head, base, name);
+      assert.deepEqual(
+        [result.isReleaseOnly, result.macosRequired],
+        [false, false],
+        `${name}: ${result.reason}`,
+      );
+    }
+});
+
 test("malformed product versions, non-version uv content and empty diffs never authorize omission", () => {
   assert.equal(classify(event("release-plz-123"), base, base).macosRequired, true);
   for (const changed of [
