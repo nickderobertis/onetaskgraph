@@ -7,11 +7,13 @@ The initial-board lookup now selects item and field totals from two connections 
 at one. The observed loopback total changed from 272,519 to 272,521 nodes, with the same
 163 requests. Selecting actual prices and the reconciliation alias adds no dispatches.
 
-Fresh token-bearing queries replace 15 full issue hydrations in the main token leg.
-The observed loopback ledger remains 163 requests, with 267,181 worst-case nodes.
-This payload change earns no point savings: the replaced ISSUE request already costs
-one point. The lane still reads a fresh settled token after every mutation, and logs
-comment count and both timestamps from those existing responses around deletion.
+The main token leg reads every token through the plugin's own read by id — a source built
+afresh, sending `ISSUE` — since the token became `gh3`, whose facets (the item's kind, its
+board field values and its labels) a separate token-spelling query could only spell by
+restating the plugin's rules. Those 15 reads replace the 15 `LiveChangeToken` queries that
+had replaced them before, so the ledger is again 163 requests, now with 272,521 worst-case
+nodes. No point moves: `ISSUE` costs one point, as `LiveChangeToken` did. The lane still
+reads a fresh settled token after every mutation.
 
 ## Whole credentialed lane
 

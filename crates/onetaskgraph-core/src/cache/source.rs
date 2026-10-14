@@ -5,15 +5,22 @@
 //! makes — meets the cache at one seam, and no verb decides for itself whether an entry is
 //! fresh. Everything is forwarded to the plugin's own source except:
 //!
-//! - **A listing** is always sent, and each task it carries pins the reads of it that follow in
-//!   the same command.
-//! - **A read by id** is answered from the cache when it is pinned — by a caller, by a listing,
-//!   or by a write expecting a version — and the entry is at that version or a later one, by the
-//!   source's own ordering. Every other read is sent, and what it answered is written to the
-//!   entry. A part of a task the source's token does not cover is never served.
-//! - **A write** is sent, and leaves the entry unserveable — unless it was expected, when the
-//!   source is primed with what the entry kept so it need not read first, and the entry is
-//!   advanced to what the write's own last response showed whole, when it showed it.
+//! - **A listing** of tasks, projects or documents is always sent, and each item it carries pins
+//!   the reads of it that follow in the same command. It fills no entry.
+//! - **A read by id** — a task's, a project's or a document's — is answered from the cache when
+//!   it is pinned — by a caller, by a listing, or by a write expecting a version — and the entry
+//!   is at that version or a later one, by the source's own ordering. Every other read is sent,
+//!   and what it answered is written to the entry. A part the source's token does not cover is
+//!   never served.
+//! - **A task's forward edges** are served only where the source's token covers them: from the
+//!   task's entry, or from an entry of their own kept at the version the source's dependency
+//!   read spelled ([`TaskSource::forward_edges_version`]). Every reverse read is sent.
+//! - **An image asset's bytes** are served only for a manifest the cache holds at a covered
+//!   version, by the digest it names, and only when the kept bytes still hash to it.
+//! - **A write** is sent, and leaves every entry naming its item unserveable — unless it was an
+//!   expected task write, when the source is primed with what the entry kept so it need not read
+//!   first, and the entry is advanced to what the write's own last response showed whole, when it
+//!   showed it.
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -23,17 +30,18 @@ use std::sync::Arc;
 
 use onetaskgraph_plugin_api::{
     Asset, AssetName, AssetWrite, AssetsWritten, Capabilities, Comment, CommentBody, CommentCopy,
-    DependencyEdge, Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label,
-    MetadataKey, Metering, NativeId, NewComment, Page, PageRequest, PartOutcome, Priority, Project,
-    ProjectQuery, SourceError, Status, StatusCategory, Task, TaskDetailRead, TaskQuery, TaskRef,
-    TaskSource, TaskUpdate, TaskUpdateOutcome, VersionCoverage, Visibility, WriteJournal,
-    WriteSupport, WriteTarget,
+    DependencyEdge, Direction, Document, DocumentQuery, DocumentVersionCoverage, Health, ItemKind,
+    ItemWrite, Label, MetadataKey, Metering, NativeId, NewComment, Page, PageRequest, PartOutcome,
+    Priority, Project, ProjectQuery, ProjectVersionCoverage, SourceError, Status, StatusCategory,
+    Task, TaskDetailRead, TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome,
+    VersionCoverage, Visibility, WriteJournal, WriteSupport, WriteTarget,
 };
 use serde_json::Value;
 
+use super::kinds::{DocumentEntry, KIND_ENTRY_SCHEMA, sha256};
 use super::{
-    CacheUse, ENTRY_SCHEMA, Entry, ExpectedWrite, Priming, SourceCache, WriteFallback, WritePart,
-    WriteResult,
+    CacheLocation, CacheUse, ENTRY_SCHEMA, Entry, ExpectedWrite, Priming, SourceCache,
+    WriteFallback, WritePart, WriteResult,
 };
 
 /// One write's future, boxed so one helper can run any of the trait's writes.
@@ -60,8 +68,35 @@ pub(crate) struct CachedSource {
 }
 
 impl CachedSource {
-    /// `inner`, behind `cache`.
-    pub(crate) fn new(inner: Box<dyn TaskSource>, cache: Arc<SourceCache>) -> Self {
+    /// `inner`, behind a cache at `location`, and that cache.
+    ///
+    /// The source is told the cache stands in front of it — [`TaskSource::attach_cache`], once —
+    /// before anything is read and before its coverage is, so a source that widens its reads for
+    /// the cache declares the coverage that widening buys.
+    pub(crate) fn new(
+        inner: Box<dyn TaskSource>,
+        location: CacheLocation,
+    ) -> (Self, Arc<SourceCache>) {
+        inner.attach_cache();
+        let cache = SourceCache::new(
+            location,
+            inner.version_coverage(),
+            inner.project_version_coverage(),
+            inner.document_version_coverage(),
+        );
+        (
+            Self {
+                inner,
+                cache: cache.clone(),
+            },
+            cache,
+        )
+    }
+
+    /// `inner`, behind a cache already made — for this module's tests, which watch the cache
+    /// from beside the source.
+    #[cfg(test)]
+    fn over(inner: Box<dyn TaskSource>, cache: Arc<SourceCache>) -> Self {
         Self { inner, cache }
     }
 
@@ -217,17 +252,14 @@ impl CachedSource {
                         .is_some_and(|comments| comments.len() <= page.limit as usize)
                 });
                 // A detail read is followed by a read of the task's assets, and a copy's by its
-                // edges — and by its assets' bytes only when its content names one, which the
-                // cache does not keep: an entry missing what follows would send a request the
-                // uncached read carried for nothing, so it is not served.
+                // edges and by the bytes of every asset its content names: an entry missing what
+                // follows would send a request the uncached read carried for nothing, so it is
+                // not served.
                 let follows = if edges {
                     // A source primed for a write expecting this task answers its edges from what
                     // it was primed with.
-                    (entry.edges.is_some() || self.primed_for(id))
-                        && onetaskgraph_plugin_api::asset_references(
-                            entry.task.content.as_deref().unwrap_or_default(),
-                        )
-                        .is_empty()
+                    (self.held_edges(id).is_some() || self.primed_for(id))
+                        && self.bytes_kept_for(&entry)
                 } else {
                     entry.assets.is_some()
                 };
@@ -298,6 +330,20 @@ impl CachedSource {
             }
         }
         answers.into_iter().flatten().collect()
+    }
+
+    /// Whether the cache keeps the verified bytes of every asset `entry`'s content names, under
+    /// the digest its manifest gives each — so a copy of it reads none of them from the source.
+    fn bytes_kept_for(&self, entry: &Entry) -> bool {
+        let named = onetaskgraph_plugin_api::asset_references(
+            entry.task.content.as_deref().unwrap_or_default(),
+        );
+        named.is_empty()
+            || entry.assets.as_ref().is_some_and(|assets| {
+                named
+                    .iter()
+                    .all(|name| kept_bytes(&self.cache, Some(assets.clone()), name).is_some())
+            })
     }
 
     /// Whether the source was primed for a write expecting `id`.
@@ -525,6 +571,174 @@ impl CachedSource {
     }
 }
 
+/// The kinds beside a task's: projects, documents, edges read on their own, and asset bytes.
+impl CachedSource {
+    /// The version reads of project `id` are pinned to in this command: a caller's pin, or the
+    /// version a listing carried.
+    fn project_pin(&self, id: &NativeId) -> Option<String> {
+        let command = self.cache.command();
+        command
+            .project_pins
+            .get(id)
+            .or_else(|| command.project_listed.get(id))
+            .cloned()
+    }
+
+    /// The version reads of document `id` are pinned to in this command, as
+    /// [`project_pin`](Self::project_pin) says for a project.
+    fn document_pin(&self, id: &NativeId) -> Option<String> {
+        let command = self.cache.command();
+        command
+            .document_pins
+            .get(id)
+            .or_else(|| command.document_listed.get(id))
+            .cloned()
+    }
+
+    /// The project a pinned read of `id` may be answered with: its fields covered, and kept at
+    /// the pin or later.
+    fn servable_project(&self, id: &NativeId) -> Option<Project> {
+        let pin = self.project_pin(id)?;
+        self.cache
+            .project_coverage
+            .fields
+            .reason()
+            .is_none()
+            .then_some(())?;
+        let entry = self.cache.read_project(id)?;
+        let held = entry.project.version.as_deref()?;
+        self.fresh(held, &pin).then_some(entry.project)
+    }
+
+    /// The document entry a pinned read of `id` may be answered from: its fields covered, and
+    /// kept at the pin or later.
+    fn servable_document(&self, id: &NativeId) -> Option<DocumentEntry> {
+        let pin = self.document_pin(id)?;
+        self.cache
+            .document_coverage
+            .fields
+            .reason()
+            .is_none()
+            .then_some(())?;
+        let entry = self.cache.read_document(id)?;
+        let held = entry.document.version.as_deref()?;
+        self.fresh(held, &pin).then_some(entry)
+    }
+
+    /// The manifest of document `id`'s image assets the cache holds at a covered version: the
+    /// one served with the document in this command, the one a pin vouches for, or the one
+    /// kept at the version the document was read from the source at in this command.
+    fn document_manifest(&self, id: &NativeId) -> Option<Vec<Asset>> {
+        self.cache
+            .document_coverage
+            .assets
+            .reason()
+            .is_none()
+            .then_some(())?;
+        let (served, read) = {
+            let command = self.cache.command();
+            (
+                command.document_served.get(id).cloned(),
+                command.document_read.get(id).cloned(),
+            )
+        };
+        if let Some(entry) = served.or_else(|| self.servable_document(id)) {
+            return entry.assets;
+        }
+        let entry = self.cache.read_document(id)?;
+        (entry.document.version.as_deref() == read.as_deref()).then_some(())?;
+        entry.assets
+    }
+
+    /// The manifest of task `id`'s image assets the cache holds at a covered version, as
+    /// [`document_manifest`](Self::document_manifest) says for a document.
+    fn task_manifest(&self, id: &NativeId) -> Option<Vec<Asset>> {
+        if let Some(entry) = self.held(id) {
+            return entry.assets;
+        }
+        let read = self.cache.command().read.get(id).cloned()?;
+        let entry = self.cache.read(id)?;
+        (entry.version() == Some(read.as_str())).then_some(())?;
+        entry.assets
+    }
+
+    /// Task `id`'s forward edges, when the source's token covers them and the cache holds them
+    /// at a version a pin vouches for: with the task's entry, or in an entry of their own kept
+    /// at the version the dependency read that answered them spelled.
+    fn held_edges(&self, id: &NativeId) -> Option<Vec<DependencyEdge>> {
+        self.cache
+            .coverage
+            .forward_edges
+            .reason()
+            .is_none()
+            .then_some(())?;
+        if let Some(edges) = self.held(id).and_then(|entry| entry.edges) {
+            return Some(edges);
+        }
+        let pin = self.pin(id)?;
+        let entry = self.cache.read_edges(id)?;
+        self.fresh(&entry.version, &pin).then_some(entry.edges)
+    }
+
+    /// Record one page of a forward-edge walk of task `id` from the source, `so_far` the edges
+    /// its earlier pages answered: kept for the next page while the walk goes on, and, once it
+    /// ends, kept as the task's forward edges — in its own entry at the version the source's read
+    /// spelled, or, for a source spelling none, with the task's entry at the version it was read
+    /// at in this command.
+    fn walked(&self, id: &NativeId, mut so_far: Vec<DependencyEdge>, read: &Page<DependencyEdge>) {
+        so_far.extend(read.items.iter().cloned());
+        if let Some(next) = &read.next {
+            self.cache
+                .command()
+                .walking
+                .insert(id.clone(), (so_far, next.clone()));
+            return;
+        }
+        self.cache.command().walking.remove(id);
+        match self.inner.forward_edges_version(id) {
+            Some(version) => self.cache.write_edges(id, &version, &so_far),
+            None => self.complete(id, None, Some(&so_far)),
+        }
+    }
+
+    /// Run one write naming `id`, every entry naming it taken out of service before anything is
+    /// sent — the write refused, sending nothing, when that cannot be done — and left
+    /// unserveable after it.
+    async fn retiring<T>(
+        &self,
+        id: Option<&NativeId>,
+        write: impl Future<Output = Result<T, SourceError>>,
+    ) -> Result<T, SourceError> {
+        if let Some(id) = id {
+            self.cache.retire_before_write(id)?;
+        }
+        let written = write.await;
+        if let Some(id) = id {
+            self.cache.invalidate(id);
+        }
+        written
+    }
+
+    /// Keep `bytes` an asset read from the source answered, under their own digest, when the
+    /// source's token covers the manifest that will name them.
+    fn keep_bytes(&self, covered: bool, bytes: Option<&Vec<u8>>) {
+        if let Some(bytes) = bytes.filter(|_| covered) {
+            self.cache.write_bytes(&sha256(bytes), bytes);
+        }
+    }
+}
+
+/// The bytes of the asset called `name` in `manifest`, when the cache keeps them whole.
+fn kept_bytes(
+    cache: &SourceCache,
+    manifest: Option<Vec<Asset>>,
+    name: &AssetName,
+) -> Option<Vec<u8>> {
+    let manifest = manifest?;
+    let asset = manifest.iter().find(|asset| asset.name == *name)?;
+    cache.read_bytes(&asset.sha256)
+}
+
 #[async_trait::async_trait]
 impl TaskSource for CachedSource {
     fn kind(&self) -> &'static str {
@@ -541,6 +755,21 @@ impl TaskSource for CachedSource {
 
     fn version_coverage(&self) -> VersionCoverage {
         self.inner.version_coverage()
+    }
+
+    fn project_version_coverage(&self) -> ProjectVersionCoverage {
+        self.inner.project_version_coverage()
+    }
+
+    fn document_version_coverage(&self) -> DocumentVersionCoverage {
+        self.inner.document_version_coverage()
+    }
+
+    /// Nothing: [`CachedSource::new`] told the source, once, as it wrapped it.
+    fn attach_cache(&self) {}
+
+    fn forward_edges_version(&self, id: &NativeId) -> Option<String> {
+        self.inner.forward_edges_version(id)
     }
 
     fn write_context(&self, id: &NativeId) -> Option<Value> {
@@ -634,7 +863,18 @@ impl TaskSource for CachedSource {
     }
 
     async fn get_project(&self, id: &NativeId) -> Result<Option<Project>, SourceError> {
-        self.inner.get_project(id).await
+        if let Some(project) = self.servable_project(id) {
+            return Ok(Some(project));
+        }
+        let read = self.inner.get_project(id).await;
+        // Kept only for the project it is about, and only where the token covers its fields.
+        if let Ok(Some(project)) = &read
+            && project.id == *id
+            && self.cache.project_coverage.fields.reason().is_none()
+        {
+            self.cache.write_project(project);
+        }
+        read
     }
 
     async fn query_tasks(
@@ -658,7 +898,17 @@ impl TaskSource for CachedSource {
         query: &ProjectQuery,
         page: &PageRequest,
     ) -> Result<Page<Project>, SourceError> {
-        self.inner.query_projects(query, page).await
+        let listed = self.inner.query_projects(query, page).await?;
+        let mut command = self.cache.command();
+        for project in &listed.items {
+            if let Some(version) = &project.version {
+                command
+                    .project_listed
+                    .insert(project.id.clone(), version.clone());
+            }
+        }
+        drop(command);
+        Ok(listed)
     }
 
     async fn labels(&self, page: &PageRequest) -> Result<Page<Label>, SourceError> {
@@ -672,10 +922,16 @@ impl TaskSource for CachedSource {
         page: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
         self.prime_expected(id);
-        if direction == Direction::DependsOn && page.cursor.is_none() {
+        // A reverse read, and every read of a source whose token does not cover a task's
+        // forward edges, goes to the source — which answers a write expecting the task from
+        // what it was primed with.
+        if direction != Direction::DependsOn || self.cache.coverage.forward_edges.reason().is_some()
+        {
+            return self.inner.task_dependencies(id, direction, page).await;
+        }
+        let Some(cursor) = &page.cursor else {
             if let Some(edges) = self
-                .held(id)
-                .and_then(|entry| entry.edges)
+                .held_edges(id)
                 .filter(|edges| edges.len() <= page.limit as usize)
             {
                 return Ok(Page {
@@ -684,12 +940,23 @@ impl TaskSource for CachedSource {
                 });
             }
             let read = self.inner.task_dependencies(id, direction, page).await?;
-            if read.next.is_none() {
-                self.complete(id, None, Some(&read.items));
-            }
+            self.walked(id, Vec::new(), &read);
             return Ok(read);
+        };
+        // A later page continues the walk its first page began only when it resumes exactly
+        // where that page left off.
+        let so_far = {
+            let mut command = self.cache.command();
+            match command.walking.remove(id) {
+                Some((so_far, next)) if next == *cursor => Some(so_far),
+                _ => None,
+            }
+        };
+        let read = self.inner.task_dependencies(id, direction, page).await?;
+        if let Some(so_far) = so_far {
+            self.walked(id, so_far, &read);
         }
-        self.inner.task_dependencies(id, direction, page).await
+        Ok(read)
     }
 
     async fn project_dependencies(
@@ -713,7 +980,8 @@ impl TaskSource for CachedSource {
     }
 
     async fn write_project(&self, write: &ItemWrite<Project>) -> Result<NativeId, SourceError> {
-        self.inner.write_project(write).await
+        self.retiring(write.target.as_ref(), self.inner.write_project(write))
+            .await
     }
 
     async fn check_status_write(
@@ -829,7 +1097,8 @@ impl TaskSource for CachedSource {
         key: &MetadataKey,
         value: &Value,
     ) -> Result<Option<Project>, SourceError> {
-        self.inner.set_project_metadata(id, key, value).await
+        self.retiring(Some(id), self.inner.set_project_metadata(id, key, value))
+            .await
     }
 
     async fn set_document_metadata(
@@ -838,7 +1107,8 @@ impl TaskSource for CachedSource {
         key: &MetadataKey,
         value: &Value,
     ) -> Result<Option<Document>, SourceError> {
-        self.inner.set_document_metadata(id, key, value).await
+        self.retiring(Some(id), self.inner.set_document_metadata(id, key, value))
+            .await
     }
 
     async fn delete_task(&self, id: &NativeId) -> Result<(), SourceError> {
@@ -847,11 +1117,48 @@ impl TaskSource for CachedSource {
     }
 
     async fn delete_project(&self, id: &NativeId) -> Result<(), SourceError> {
-        self.inner.delete_project(id).await
+        self.retiring(Some(id), self.inner.delete_project(id)).await
     }
 
     async fn get_document(&self, id: &NativeId) -> Result<Option<Document>, SourceError> {
-        self.inner.get_document(id).await
+        if let Some(entry) = self.servable_document(id) {
+            let document = entry.document.clone();
+            let mut command = self.cache.command();
+            command.document_read.remove(id);
+            command.document_served.insert(id.clone(), entry);
+            return Ok(Some(document));
+        }
+        let read = self.inner.get_document(id).await;
+        let mut kept = None;
+        // Kept only for the document it is about, and only where the token covers its fields —
+        // with the manifest an entry at that very version already held.
+        if let Ok(Some(document)) = &read
+            && document.id == *id
+            && self.cache.document_coverage.fields.reason().is_none()
+            && let Some(version) = document.version.clone()
+        {
+            let assets = self
+                .cache
+                .read_document(id)
+                .filter(|held| held.document.version.as_deref() == Some(version.as_str()))
+                .and_then(|held| held.assets);
+            self.cache.write_document(&DocumentEntry {
+                schema: KIND_ENTRY_SCHEMA,
+                kind: super::kinds::EntryKind::Document,
+                remote: self.cache.remote.clone(),
+                document: document.clone(),
+                assets,
+            });
+            kept = Some(version);
+        }
+        let mut command = self.cache.command();
+        command.document_served.remove(id);
+        match kept {
+            Some(version) => command.document_read.insert(id.clone(), version),
+            None => command.document_read.remove(id),
+        };
+        drop(command);
+        read
     }
 
     async fn query_documents(
@@ -859,15 +1166,27 @@ impl TaskSource for CachedSource {
         query: &DocumentQuery,
         page: &PageRequest,
     ) -> Result<Page<Document>, SourceError> {
-        self.inner.query_documents(query, page).await
+        let listed = self.inner.query_documents(query, page).await?;
+        let mut command = self.cache.command();
+        for document in &listed.items {
+            if let Some(version) = &document.version {
+                command
+                    .document_listed
+                    .insert(document.id.clone(), version.clone());
+            }
+        }
+        drop(command);
+        Ok(listed)
     }
 
     async fn write_document(&self, write: &ItemWrite<Document>) -> Result<NativeId, SourceError> {
-        self.inner.write_document(write).await
+        self.retiring(write.target.as_ref(), self.inner.write_document(write))
+            .await
     }
 
     async fn delete_document(&self, id: &NativeId) -> Result<(), SourceError> {
-        self.inner.delete_document(id).await
+        self.retiring(Some(id), self.inner.delete_document(id))
+            .await
     }
 
     async fn task_comments(
@@ -978,7 +1297,11 @@ impl TaskSource for CachedSource {
         write: &ItemWrite<Document>,
         answers: &BTreeMap<String, Value>,
     ) -> Result<NativeId, SourceError> {
-        self.inner.write_document_rendered(write, answers).await
+        self.retiring(
+            write.target.as_ref(),
+            self.inner.write_document_rendered(write, answers),
+        )
+        .await
     }
 
     async fn write_project_rendered(
@@ -986,7 +1309,11 @@ impl TaskSource for CachedSource {
         write: &ItemWrite<Project>,
         answers: &BTreeMap<String, Value>,
     ) -> Result<NativeId, SourceError> {
-        self.inner.write_project_rendered(write, answers).await
+        self.retiring(
+            write.target.as_ref(),
+            self.inner.write_project_rendered(write, answers),
+        )
+        .await
     }
 
     async fn set_task_rendering(
@@ -1012,9 +1339,12 @@ impl TaskSource for CachedSource {
         provenance: &Value,
         answers: &BTreeMap<String, Value>,
     ) -> Result<Option<()>, SourceError> {
-        self.inner
-            .set_document_rendering(id, content, provenance, answers)
-            .await
+        self.retiring(
+            Some(id),
+            self.inner
+                .set_document_rendering(id, content, provenance, answers),
+        )
+        .await
     }
 
     async fn set_project_rendering(
@@ -1024,9 +1354,12 @@ impl TaskSource for CachedSource {
         provenance: &Value,
         answers: &BTreeMap<String, Value>,
     ) -> Result<Option<()>, SourceError> {
-        self.inner
-            .set_project_rendering(id, content, provenance, answers)
-            .await
+        self.retiring(
+            Some(id),
+            self.inner
+                .set_project_rendering(id, content, provenance, answers),
+        )
+        .await
     }
 
     async fn task_assets(&self, id: &NativeId) -> Result<Vec<Asset>, SourceError> {
@@ -1040,7 +1373,28 @@ impl TaskSource for CachedSource {
     }
 
     async fn document_assets(&self, id: &NativeId) -> Result<Vec<Asset>, SourceError> {
-        self.inner.document_assets(id).await
+        if self.cache.document_coverage.assets.reason().is_none() {
+            let served = self.cache.command().document_served.get(id).cloned();
+            if let Some(assets) = served
+                .or_else(|| self.servable_document(id))
+                .and_then(|entry| entry.assets)
+            {
+                return Ok(assets);
+            }
+        }
+        let read = self.inner.document_assets(id).await?;
+        // Kept with the document only when it was read from the source at the entry's own
+        // version in this command, and only where the token covers the manifest.
+        let at = self.cache.command().document_read.get(id).cloned();
+        if self.cache.document_coverage.assets.reason().is_none()
+            && let Some(at) = at
+            && let Some(mut entry) = self.cache.read_document(id)
+            && entry.document.version.as_deref() == Some(at.as_str())
+        {
+            entry.assets = Some(read.clone());
+            self.cache.write_document(&entry);
+        }
+        Ok(read)
     }
 
     async fn task_asset(
@@ -1048,7 +1402,13 @@ impl TaskSource for CachedSource {
         id: &NativeId,
         name: &AssetName,
     ) -> Result<Option<Vec<u8>>, SourceError> {
-        self.inner.task_asset(id, name).await
+        let covered = self.cache.coverage.fields.reason().is_none();
+        if covered && let Some(bytes) = kept_bytes(&self.cache, self.task_manifest(id), name) {
+            return Ok(Some(bytes));
+        }
+        let read = self.inner.task_asset(id, name).await?;
+        self.keep_bytes(covered, read.as_ref());
+        Ok(read)
     }
 
     async fn document_asset(
@@ -1056,7 +1416,13 @@ impl TaskSource for CachedSource {
         id: &NativeId,
         name: &AssetName,
     ) -> Result<Option<Vec<u8>>, SourceError> {
-        self.inner.document_asset(id, name).await
+        let covered = self.cache.document_coverage.assets.reason().is_none();
+        if let Some(bytes) = kept_bytes(&self.cache, self.document_manifest(id), name) {
+            return Ok(Some(bytes));
+        }
+        let read = self.inner.document_asset(id, name).await?;
+        self.keep_bytes(covered, read.as_ref());
+        Ok(read)
     }
 
     async fn write_task_with_assets(
@@ -1077,9 +1443,12 @@ impl TaskSource for CachedSource {
         answers: Option<&BTreeMap<String, Value>>,
         assets: &AssetWrite,
     ) -> Result<AssetsWritten, SourceError> {
-        self.inner
-            .write_document_with_assets(write, answers, assets)
-            .await
+        self.retiring(
+            write.target.as_ref(),
+            self.inner
+                .write_document_with_assets(write, answers, assets),
+        )
+        .await
     }
 
     async fn set_task_rendering_with_assets(
@@ -1107,9 +1476,12 @@ impl TaskSource for CachedSource {
         answers: &BTreeMap<String, Value>,
         assets: &AssetWrite,
     ) -> Result<Option<AssetsWritten>, SourceError> {
-        self.inner
-            .set_document_rendering_with_assets(id, content, provenance, answers, assets)
-            .await
+        self.retiring(
+            Some(id),
+            self.inner
+                .set_document_rendering_with_assets(id, content, provenance, answers, assets),
+        )
+        .await
     }
 
     async fn metering(&self) -> Result<Option<Metering>, SourceError> {
@@ -1275,6 +1647,8 @@ mod tests {
                 remote: "remote".to_owned(),
             },
             VersionCoverage::whole(),
+            ProjectVersionCoverage::whole(),
+            DocumentVersionCoverage::whole(),
         );
         let inner = Answering {
             inner: InMemorySource::new(InMemoryConfig::default()).expect("an empty source"),
@@ -1284,7 +1658,7 @@ mod tests {
         };
         let probe = inner.probe.clone();
         (
-            CachedSource::new(Box::new(inner), cache.clone()),
+            CachedSource::over(Box::new(inner), cache.clone()),
             cache,
             probe,
         )
@@ -1397,6 +1771,8 @@ mod tests {
                 remote: "remote".to_owned(),
             },
             VersionCoverage::whole(),
+            ProjectVersionCoverage::whole(),
+            DocumentVersionCoverage::whole(),
         )
     }
 

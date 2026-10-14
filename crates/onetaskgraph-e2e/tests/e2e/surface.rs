@@ -295,7 +295,14 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 37);
+    assert_eq!(bundle["version"], 38);
+    // Version 38: a project's and a document's change token, left out of the wire when absent.
+    for root in ["Project", "Document"] {
+        assert!(
+            bundle["roots"][root]["properties"]["version"].is_object(),
+            "{root} carries its version"
+        );
+    }
     // Version 35: a `github-projects` source's `metadata_fields`, in its configuration and in
     // the `FieldsReport` `sources fields` answers with.
     assert!(

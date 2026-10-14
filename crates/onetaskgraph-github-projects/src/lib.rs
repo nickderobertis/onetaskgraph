@@ -628,14 +628,15 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
-    Capabilities, Classification, Comment, CommentBody, CommentOrigin, Cursor, DependencyEdge,
-    DependencyEndpoint, DependencyKind, DependencySupport, Direction, Document, DocumentQuery,
-    Health, ItemKind, ItemWrite, Label, LabelFilter, Location, MetadataKey, Metering, NativeId,
-    NewComment, Page, PageRequest, Priority, Project, ProjectFilter, ProjectQuery, Repository,
-    SecretResolver, SharedClock, SourceError, SourceName, SourcePlugin, Status, StatusCategory,
-    StatusMapping, Support, Task, TaskDetailRead, TaskQuery, TaskRef, TaskSource, TaskUpdate,
-    TaskUpdateOutcome, TextFields, TextQuery, UnmappedStatus, UpdatedField, VersionCoverage,
-    WriteJournal, WriteSupport, system_clock,
+    Capabilities, Classification, Comment, CommentBody, CommentOrigin, Coverage, Cursor,
+    DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport, Direction, Document,
+    DocumentQuery, DocumentVersionCoverage, Health, ItemKind, ItemWrite, Label, LabelFilter,
+    Location, MetadataKey, Metering, NativeId, NewComment, Page, PageRequest, Priority, Project,
+    ProjectFilter, ProjectQuery, ProjectVersionCoverage, Repository, SecretResolver, SharedClock,
+    SourceError, SourceName, SourcePlugin, Status, StatusCategory, StatusMapping, Support, Task,
+    TaskDetailRead, TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome, TextFields,
+    TextQuery, UnmappedStatus, UpdatedField, VersionCoverage, WriteJournal, WriteSupport,
+    system_clock,
 };
 use reqwest::{Client, StatusCode, Url};
 use schemars::{Schema, schema_for};
@@ -876,19 +877,6 @@ pub mod graphql {
             ",$relationshipEvents:[IssueTimelineItemsItemType!]=[BLOCKED_BY_ADDED_EVENT,BLOCKED_BY_REMOVED_EVENT,BLOCKING_ADDED_EVENT,BLOCKING_REMOVED_EVENT,PARENT_ISSUE_ADDED_EVENT,PARENT_ISSUE_REMOVED_EVENT]"
         };
     }
-
-    /// Internal live-lane support: fresh token-bearing facts for its own disposable issue.
-    /// Uses the same relationship event defaults as the plugin's issue reads.
-    pub const LIVE_CHANGE_TOKEN: &str = concat!(
-        "query LiveChangeToken($id:ID!,$boardItems:Int!=100",
-        relationship_events_variable!(),
-        r#"){node(id:$id){...on Issue{
-            updatedAt repository{nameWithOwner}
-            commentCount:comments{totalCount}
-            relationshipEvents:timelineItems(itemTypes:$relationshipEvents){totalCount}
-            projectItems(first:$boardItems){nodes{updatedAt project{id}}pageInfo{hasNextPage}}
-        }}}"#,
-    );
 
     /// Everything this source reads about one issue, wherever it reaches that issue.
     ///
@@ -1540,12 +1528,8 @@ pub mod graphql {
     /// `documents_are_all_inventoried` reads this file back and fails naming any `pub
     /// const` here that this list omits, so the two cannot part — which is the same guard
     /// `CATEGORIES` carries, in the one shape available to a set of `&str` constants.
-    pub const DOCUMENTS: [(&str, &str); 41] = [
+    pub const DOCUMENTS: [(&str, &str); 40] = [
         (SEARCH_ISSUES, "searching this board's issues"),
-        (
-            LIVE_CHANGE_TOKEN,
-            "reading fresh change-token facts for the live lane's disposable issue",
-        ),
         (ISSUE, "reading one issue"),
         (
             ISSUE_BOARD_ITEMS,
@@ -6173,6 +6157,18 @@ impl GitHubProjectsSource {
     /// unit of plan — and an item whose content the token cannot see has nothing to
     /// report at all.
     fn resolve(&self, item: &Value) -> Result<Option<Resolved>, SourceError> {
+        let resolved = self.resolve_unremembered(item)?;
+        if let Some(resolved) = &resolved {
+            self.resolved_cache()?
+                .insert(resolved.id.clone(), resolved.clone());
+        }
+        Ok(resolved)
+    }
+
+    /// [`Self::resolve`], without remembering the item it resolves: what reading a token off a
+    /// write's own response needs, which says nothing this process should answer a later read
+    /// with.
+    fn resolve_unremembered(&self, item: &Value) -> Result<Option<Resolved>, SourceError> {
         let content = item.get("content").ok_or_else(|| SourceError::Malformed {
             message: "GitHub project item is missing content".into(),
         })?;
@@ -6214,22 +6210,7 @@ impl GitHubProjectsSource {
             message: format!("GitHub issue {content_id}: {message}"),
         })?;
         let raw_title = required_str(content, "title")?;
-        // The design prefix is read *first*, before either of the two rules that separate
-        // a project from a task. A document is not work whatever sub-issues it has and
-        // whatever marker it carries, and reading the prefix later would make a design
-        // issue with none of either an empty project.
-        let kind = if raw_title.starts_with(DESIGN_TITLE_PREFIX) {
-            BoardKind::Document
-        } else if parent.is_some() {
-            // Being a sub-issue wins outright, and no marker overrides it: an issue filed
-            // under a project is that project's task even when it has sub-issues of its
-            // own.
-            BoardKind::Work(ItemKind::Task)
-        } else if sub_issues > 0 || marked == Some(ItemKind::Project) {
-            BoardKind::Work(ItemKind::Project)
-        } else {
-            BoardKind::Work(ItemKind::Task)
-        };
+        let kind = BoardKind::of(raw_title, parent.is_some(), sub_issues, marked);
         // The title a person wrote, which for a document is the one without the prefix —
         // the same way `content` above is the body without this source's metadata slot.
         let title = match kind {
@@ -6268,6 +6249,7 @@ impl GitHubProjectsSource {
         };
         let (option, closed, reason) = Self::status_parts(nodes, content)?;
         let priority = self.held_priority(nodes)?;
+        let item_labels = labels(content)?;
         // Present when the item was reached through its own issue, whose board entry
         // names the board; a read of the board's own items has the board already. An
         // empty id names nothing a field write could address, so it is read as absent and
@@ -6292,7 +6274,7 @@ impl GitHubProjectsSource {
             closed,
             delivers,
             delivered_by,
-            labels: labels(content)?,
+            labels: item_labels.clone(),
             parent,
             origin: text_field(nodes, ORIGIN_FIELD)?.filter(|value| !value.is_empty()),
             projected: self.held_projections(nodes)?,
@@ -6319,6 +6301,13 @@ impl GitHubProjectsSource {
                 Some(served) => Some(served),
                 None => optional_time(item, SERVED_AT)?,
             },
+            // Both connections were read to their end above — one reporting a further page is
+            // refused — so these are every field value and every label the item holds. A
+            // response that did not select the labels at all says nothing of them, and gives
+            // no facets.
+            facets: content.get("labels").is_some().then(|| {
+                change_token::Facets::new(kind.facet(), facet_fields(nodes), &item_labels).digest()
+            }),
             own_repository,
             repositories,
             classification,
@@ -6328,8 +6317,6 @@ impl GitHubProjectsSource {
             board_fields: Self::carried_board_fields(content, board_id)?,
             blocked_by: carried_blocked_by(content)?,
         };
-        self.resolved_cache()?
-            .insert(resolved.id.clone(), resolved.clone());
         Ok(Some(resolved))
     }
 
@@ -8412,6 +8399,7 @@ impl GitHubProjectsSource {
             comment_count: None,
             relationship_events: None,
             served_at: None,
+            facets: None,
             own_repository,
             repositories: incoming.repositories.to_vec(),
             classification: incoming.classification,
@@ -9674,6 +9662,10 @@ struct Resolved {
     /// The server's clock on the response that read it — its `Date` header — when the
     /// response carried one.
     served_at: Option<DateTime<Utc>>,
+    /// The digest of its [`change_token::Facets`] — its own kind, its board field values and
+    /// its labels — when the read that reached it carried all three whole.
+    #[serde(default)]
+    facets: Option<String>,
     own_repository: Option<Repository>,
     repositories: Vec<Repository>,
     classification: Classification,
@@ -9779,7 +9771,7 @@ impl Resolved {
     }
 
     /// This item's change token — see [`change_token`] — or `None` when the read that
-    /// reached it did not carry all five of its parts, which a draft never does, did not say
+    /// reached it did not carry all six of its parts, which a draft never does, did not say
     /// when GitHub served it, or found it changed too recently to have settled.
     fn version(&self) -> Option<String> {
         match self.content_kind {
@@ -9790,6 +9782,7 @@ impl Resolved {
                     item,
                     comments: self.comment_count?,
                     relationships: self.relationship_events?,
+                    facets: self.facets.clone()?,
                     repository: self.own_repository.clone()?,
                 };
                 change_token::settled(issue, item, self.served_at?)
@@ -9851,7 +9844,7 @@ impl Resolved {
 
     fn project(&self) -> Project {
         Project {
-            version: None,
+            version: self.version(),
             id: self.id.clone(),
             title: self.title.clone(),
             content: self.body.clone(),
@@ -9871,7 +9864,7 @@ impl Resolved {
     /// dependencies, because a document is not work.
     fn document(&self) -> Document {
         Document {
-            version: None,
+            version: self.version(),
             id: self.id.clone(),
             title: self.title.clone(),
             content: self.body.clone(),
@@ -10079,6 +10072,36 @@ enum BoardKind {
 }
 
 impl BoardKind {
+    /// The kind of an item titled `title`, filed under a project or not, holding `sub_issues`
+    /// sub-issues and carrying the kind marker `marked` in its slot.
+    ///
+    /// The design prefix is read *first*, before either of the two rules that separate a
+    /// project from a task. A document is not work whatever sub-issues it has and whatever
+    /// marker it carries, and reading the prefix later would make a design issue with none of
+    /// either an empty project. Being a sub-issue wins outright over the rest, and no marker
+    /// overrides it: an issue filed under a project is that project's task even when it has
+    /// sub-issues of its own.
+    fn of(title: &str, filed: bool, sub_issues: u64, marked: Option<ItemKind>) -> Self {
+        if title.starts_with(DESIGN_TITLE_PREFIX) {
+            Self::Document
+        } else if filed {
+            Self::Work(ItemKind::Task)
+        } else if sub_issues > 0 || marked == Some(ItemKind::Project) {
+            Self::Work(ItemKind::Project)
+        } else {
+            Self::Work(ItemKind::Task)
+        }
+    }
+
+    /// What the change token's facets call this kind.
+    const fn facet(self) -> &'static str {
+        match self {
+            Self::Document => "document",
+            Self::Work(ItemKind::Project) => "project",
+            Self::Work(ItemKind::Task) => "task",
+        }
+    }
+
     /// Whose half of `status_mapping` an item of this kind reads its status through. A
     /// document has no status of its own, so the task half stands in for whatever the issue
     /// holds; nothing reports it.
@@ -10191,6 +10214,17 @@ fn document_matches(document: &Document, query: &DocumentQuery, project: &Projec
             .is_none_or(|text| text_matches(&document.title, document.content.as_deref(), text))
 }
 
+/// Why a GitHub item's change token does not vouch for its forward edges.
+///
+/// A forward edge names its far end and that far end's kind, and the near item's token moves
+/// with the edges it holds but says nothing of the far ends themselves: a far end turning from a
+/// task into a project when it gains a sub-issue, retitled into a document, or deleted moves
+/// nothing the near token reads, so an edge kept at the near version could name a far end that
+/// is no longer what it said.
+const FAR_ENDS_UNCOVERED: &str = "a github item's change token does not attest a far end's kind, \
+     whether it became a document, or its deletion, so its forward edges are always read from \
+     github";
+
 #[async_trait::async_trait]
 impl TaskSource for GitHubProjectsSource {
     fn kind(&self) -> &'static str {
@@ -10199,10 +10233,30 @@ impl TaskSource for GitHubProjectsSource {
     fn order_versions(&self, a: &str, b: &str) -> Option<std::cmp::Ordering> {
         change_token::order(a, b)
     }
-    /// Every part: §4.13d of `docs/plugin-protocol.md` states, member by member, the change
-    /// each part of the token moves for, comments included.
+    /// A task's fields and comments: §4.13d of `docs/plugin-protocol.md` states, member by
+    /// member, the change each part of the token moves for. Not its forward edges — see
+    /// [`FAR_ENDS_UNCOVERED`].
     fn version_coverage(&self) -> VersionCoverage {
-        VersionCoverage::whole()
+        VersionCoverage {
+            forward_edges: Coverage::Uncovered {
+                reason: FAR_ENDS_UNCOVERED.to_owned(),
+            },
+            ..VersionCoverage::whole()
+        }
+    }
+    /// A project's fields, and not its forward edges, for the same reason a task's are not.
+    fn project_version_coverage(&self) -> ProjectVersionCoverage {
+        ProjectVersionCoverage {
+            fields: Coverage::Covered,
+            forward_edges: Coverage::Uncovered {
+                reason: FAR_ENDS_UNCOVERED.to_owned(),
+            },
+        }
+    }
+    /// A document's fields and the manifest of its image assets, which its metadata slot
+    /// records: both are the issue's body, whose every edit moves the token's issue time.
+    fn document_version_coverage(&self) -> DocumentVersionCoverage {
+        DocumentVersionCoverage::whole()
     }
     fn write_context(&self, id: &NativeId) -> Option<Value> {
         self.context_of(id)
@@ -11343,6 +11397,47 @@ fn labels(content: &Value) -> Result<Vec<Label>, SourceError> {
             })
         })
         .collect()
+}
+
+/// Each board field value one item holds, as the change token's facets name it: the field's
+/// name, with the single-select option's name or the text. A value of a type no read here
+/// selects, and one naming no field, says nothing a person can rename and is left out.
+fn facet_fields(field_values: &[Value]) -> Vec<(String, String)> {
+    field_values
+        .iter()
+        .filter_map(|value| {
+            let field = value.pointer("/field/name")?.as_str()?;
+            let held = value.get("name").or_else(|| value.get("text"))?.as_str()?;
+            Some((field.to_owned(), held.to_owned()))
+        })
+        .collect()
+}
+
+/// The digest of the facets of the issue `content`, whose board item's values are
+/// `field_values` — or `None` when the response did not carry, whole, every member they are read
+/// from: the title, the parent, the sub-issue summary and the body its kind is read from, every
+/// label, and every field value.
+///
+/// What a write's own response spells its token from, by exactly the rules a read takes them by.
+fn facets_of(content: &Value, field_values: &Value) -> Option<String> {
+    let ended = |connection: &Value| {
+        connection.pointer("/pageInfo/hasNextPage") == Some(&Value::Bool(false))
+    };
+    let labels = content.get("labels").filter(|labels| ended(labels))?;
+    if !ended(field_values) {
+        return None;
+    }
+    let parent = content.get("parent")?;
+    let (_, slot) = metadata_body(content.get("body")?.as_str().map(str::to_owned)).ok()?;
+    let kind = BoardKind::of(
+        content.get("title")?.as_str()?,
+        !parent.is_null(),
+        sub_issue_total(content).ok()?,
+        ItemKind::from_metadata(&slot).ok()?,
+    );
+    let labels = self::labels(&json!({"labels": labels})).ok()?;
+    let nodes = field_values.get("nodes")?.as_array()?;
+    Some(change_token::Facets::new(kind.facet(), facet_fields(nodes), &labels).digest())
 }
 
 /// The definition of each board field one item's values are values of, in the shape a read

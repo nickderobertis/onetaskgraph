@@ -239,7 +239,9 @@ export interface ClearedCache {
  */
 dir: string
 /**
- * How many task entries it held.
+ * How many item entries it held — tasks', projects', documents' and the forward edges kept
+ * on their own. The verified bytes of their image assets are removed with them and not
+ * counted.
  */
 entries: number
 /**

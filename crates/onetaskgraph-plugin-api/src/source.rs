@@ -139,6 +139,23 @@ pub trait TaskSource: Send + Sync {
     /// Defaulted to doing nothing: a source not overriding it reads exactly as it did.
     fn attach_cache(&self) {}
 
+    /// The change token the response that answered this source's last
+    /// [`Direction::DependsOn`] read of task `id` in this process spelled, or `None` when it
+    /// spelled none.
+    ///
+    /// What lets the store's cache keep a task's forward edges by the version they were read
+    /// at when nothing else in the command read the task: those edges are served only to a pin
+    /// that version is at or after, and never vouch for the task's own fields. Synchronous, and
+    /// never carried over the plugin protocol, as [`version_coverage`](Self::version_coverage)
+    /// is not.
+    ///
+    /// Defaulted to `None`: a source whose dependency read spells no token keeps its edges
+    /// remote unless a read of the task itself vouched for them.
+    fn forward_edges_version(&self, id: &NativeId) -> Option<String> {
+        let _ = id;
+        None
+    }
+
     /// What this source holds about task `id` — the item it read last in this process — that
     /// a later write expecting that version of it could take instead of reading it again, or
     /// `None` when it holds nothing of the kind.

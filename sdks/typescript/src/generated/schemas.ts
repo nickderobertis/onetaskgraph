@@ -352,7 +352,7 @@ export const runtimeSchemas = {
             "type": "string"
           },
           "entries": {
-            "description": "How many task entries it held.",
+            "description": "How many item entries it held — tasks', projects', documents' and the forward edges kept\non their own. The verified bytes of their image assets are removed with them and not\ncounted.",
             "format": "uint64",
             "minimum": 0,
             "type": "integer"

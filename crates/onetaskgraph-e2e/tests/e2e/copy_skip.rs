@@ -1108,10 +1108,11 @@ fn a_destination_recorded_under_the_tokens_older_spelling_is_read_again_once_and
         .find(|(source, _)| source == "board:T-3")
         .map(|(_, outcome)| outcome["destination"].as_str().expect("an id").to_owned())
         .expect("T-3 landed");
-    // What a build before the relationship count and the repository recorded: the issue's and
-    // the board item's times and the comment count, the token's first three parts, spelled
-    // `gh1`. A copy skips only on the recorded token being the listed one, so this record is
-    // never skipped on, and the read it costs is what brings it up to date.
+    // What the builds before this one recorded: `gh2`, before the facets — 0.6.0's — and `gh1`,
+    // before the relationship count and the repository too, each spelled from this token's own
+    // parts. A copy skips only on the recorded token being the listed one, and this build orders
+    // neither spelling, so such a record is never skipped on, and the read it costs is what
+    // brings it up to date.
     let recorded = stores.metadata(&note)["onetaskgraph.copied_version"]
         .as_str()
         .expect("the copy records the source's token")
@@ -1119,9 +1120,10 @@ fn a_destination_recorded_under_the_tokens_older_spelling_is_read_again_once_and
     let parts: Vec<&str> = recorded
         .strip_prefix(change_token::PREFIX)
         .expect("a token of this build")
-        .splitn(5, '|')
+        .splitn(6, '|')
         .collect();
-    assert_eq!(parts.len(), 5, "a GitHub token's five parts: {recorded}");
+    assert_eq!(parts.len(), 6, "a GitHub token's six parts: {recorded}");
+    let gh2 = format!("gh2|{}|{}", parts[..4].join("|"), parts[5]);
     let gh1 = format!("gh1|{}", parts[..3].join("|"));
     let file = stores
         .sandbox
@@ -1131,37 +1133,39 @@ fn a_destination_recorded_under_the_tokens_older_spelling_is_read_again_once_and
             "{}.md",
             note.strip_prefix("notes:").expect("a folder id")
         ));
-    let text = std::fs::read_to_string(&file).expect("the copy's file");
-    assert_eq!(text.matches(&recorded).count(), 1, "{text}");
-    std::fs::write(&file, text.replace(&recorded, &gh1)).expect("the copy's file");
+    for older in [gh2, gh1] {
+        let text = std::fs::read_to_string(&file).expect("the copy's file");
+        assert_eq!(text.matches(&recorded).count(), 1, "{text}");
+        std::fs::write(&file, text.replace(&recorded, &older)).expect("the copy's file");
 
-    let (again, served, _) = stores.copy(&query);
-    for (source, outcome) in &again {
+        let (again, served, _) = stores.copy(&query);
+        for (source, outcome) in &again {
+            assert_eq!(
+                skipped(outcome),
+                source != "board:T-3",
+                "{source} is read again exactly when its record is a token this build never \
+                 gives, here {older}: {outcome:#}"
+            );
+        }
+        assert!(
+            !served.naming("T-3").is_empty(),
+            "the task recorded under {older} was read: {:?}",
+            served.names()
+        );
         assert_eq!(
-            skipped(outcome),
-            source != "board:T-3",
-            "{source} is read again exactly when its record is a token this build never gives: \
-             {outcome:#}"
+            stores.metadata(&note)["onetaskgraph.copied_version"],
+            json!(recorded),
+            "the copy records the token this build gives"
+        );
+        let (settled, served, _) = stores.copy(&query);
+        assert!(
+            settled.iter().all(|(_, outcome)| skipped(outcome)),
+            "{settled:#?}"
+        );
+        assert!(
+            served.names().iter().all(|name| LISTING.contains(name)),
+            "and the next copy skips it on its listing alone: {:?}",
+            served.names()
         );
     }
-    assert!(
-        !served.naming("T-3").is_empty(),
-        "the task recorded under the older spelling was read: {:?}",
-        served.names()
-    );
-    assert_eq!(
-        stores.metadata(&note)["onetaskgraph.copied_version"],
-        json!(recorded),
-        "the copy records the token this build gives"
-    );
-    let (settled, served, _) = stores.copy(&query);
-    assert!(
-        settled.iter().all(|(_, outcome)| skipped(outcome)),
-        "{settled:#?}"
-    );
-    assert!(
-        served.names().iter().all(|name| LISTING.contains(name)),
-        "and the next copy skips it on its listing alone: {:?}",
-        served.names()
-    );
 }

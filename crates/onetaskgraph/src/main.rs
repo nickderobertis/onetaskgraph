@@ -630,8 +630,13 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
         Command::Project {
             command: ProjectCommand::Show(args),
         } => {
-            let response = engine(loaded)
-                .project(&qualified(&args.id)?)
+            let id = qualified(&args.item.id)?;
+            let engine = engine(loaded);
+            if let Some(pin) = &args.pin {
+                engine.pin_project(&id, pin);
+            }
+            let response = engine
+                .project(&id)
                 .await
                 .map_err(|error| Failure::from(&error))?;
             show(
@@ -639,7 +644,7 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
                 loaded,
                 response,
                 render::project_detail,
-                args,
+                &args.item,
                 "project",
             )
         }
@@ -717,8 +722,13 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
         Command::Document {
             command: DocumentCommand::Show(args),
         } => {
-            let detail = engine(loaded)
-                .document_detail(&qualified(&args.id)?)
+            let id = qualified(&args.item.id)?;
+            let engine = engine(loaded);
+            if let Some(pin) = &args.pin {
+                engine.pin_document(&id, pin);
+            }
+            let detail = engine
+                .document_detail(&id)
                 .await
                 .map_err(|error| Failure::from(&error))?;
             // The assets ride beside the document in the machine rendering, and after its body
@@ -730,7 +740,7 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
                 &detail.response,
                 &detail,
                 |document| render::document_with_assets(document, assets),
-                args,
+                &args.item,
                 "document",
             )
         }

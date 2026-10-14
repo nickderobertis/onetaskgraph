@@ -1407,7 +1407,8 @@ impl GitHubBoardFields {
     }
 
     /// Answer every mutation selecting the whole issue it wrote with only what it wrote and
-    /// the parts of the issue's change token, or, with `false`, whole again.
+    /// the parts of the issue's change token — its facets' sources included — or, with
+    /// `false`, whole again.
     // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board, which lives here for the reason `GitHubBoard` records: what it changes is the board's private state, read by its own request loop, so it can only be a method of this handle, beside `refuse_once` and `rename_option`, and a suite of one plugin could not add it from outside.
     pub fn answer_writes_partially(&self, partially: bool) {
         self.board.lock().unwrap().partial_writes = partially;
@@ -1743,8 +1744,10 @@ impl GitHubBoardFields {
     }
 
     /// Set a person's own text field on one item's board card — a board field this product
-    /// neither reads nor writes — as a person editing the card on the board would. GitHub
-    /// moves the board item's `updatedAt` for it and leaves the issue's alone.
+    /// writes nothing to, and reads only as one of the values its change token's facets hold —
+    /// as a person editing the card on the board would. GitHub moves the board item's
+    /// `updatedAt` for it and leaves the issue's alone, and every read selecting a text value
+    /// carries it.
     pub fn set_card_field(&self, id: &str, field: &str, value: &str) {
         let mut board = self.board.lock().unwrap();
         let item = board.find(&json!(id));
@@ -2336,6 +2339,15 @@ impl GitHubBoard {
         for field in &self.text_fields {
             if let Some(text) = item["texts"][field["id"].as_str().unwrap_or_default()].as_str() {
                 values.push(json!({"text":text,"field":{"id":field["id"],"name":field["name"]}}));
+            }
+        }
+        // A person's own text fields, which every read selecting a text value carries too.
+        if let Some(own) = item["own_fields"].as_object() {
+            for (name, text) in own {
+                values.push(
+                    json!({"text":text,"field":{"id":format!("FIELD-own-{name}"),
+                                                         "name":name}}),
+                );
             }
         }
         json!({"id":item["item"],"updatedAt":item["itemUpdatedAt"],
@@ -3031,6 +3043,14 @@ impl GitHubBoard {
                 "commentCount": token("commentCount"),
                 "relationshipEvents": token("relationshipEvents"),
                 "repository": token("repository"),
+                // What the token's facets are read from: the item's own kind — its title, its
+                // parent, its sub-issues and the marker its body's slot may carry — and every
+                // label, beside the board item's values below.
+                "title": token("title"),
+                "parent": token("parent"),
+                "subIssuesSummary": token("subIssuesSummary"),
+                "body": token("body"),
+                "labels": token("labels"),
                 "projectItems": {"nodes": node["projectItems"]["nodes"].as_array().map(|nodes| {
                     nodes.iter().map(|membership| json!({
                         "id": membership["id"],

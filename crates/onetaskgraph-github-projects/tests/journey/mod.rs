@@ -492,13 +492,6 @@ async fn reconcile_node_counts_and_point_costs(token: &str) -> Result<(), String
     let mut asked = 0_usize;
     let mut strategy = PricingStrategy::Aliases;
     for (document, doing) in graphql::DOCUMENTS {
-        // This internal document is sent only by the live lane, which bills the actual
-        // cost GitHub reports on every response. Keep its offline schema, node-count and
-        // price pins in the inventory without adding a reconciliation request to the
-        // measured session workload.
-        if document == graphql::LIVE_CHANGE_TOKEN {
-            continue;
-        }
         if Mode::of_document(document) == Mode::Write {
             // A mutation is skipped because `rateLimit` is a field of `Query` and there is
             // no way to ask GitHub about one at all — neither for its node count nor for its
@@ -3204,6 +3197,7 @@ async fn drive_every_declared_capability(
     .map_err(|declined| declined.to_string())?;
     every_change_kind_moves_a_tasks_token(
         writer,
+        rebuilt,
         (&run.token, &run.project_id),
         (&second_id, &first_id, &orphan_id),
         (&beta_id, &alpha_id),
@@ -3218,173 +3212,155 @@ async fn drive_every_declared_capability(
 /// past [`Endpoints::settle`] by this machine's clock can still fall inside the plugin's margin.
 const TOKEN_READS: u32 = 30;
 
-/// A cold plugin read retained for its dedicated withholding regression; the main lane
-/// reads only fresh token-bearing facts, without re-hydrating parents and board fields.
+/// Which kind of item a token is read of: which of the plugin's own reads by id answers it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Observed {
+    /// `get_task`.
+    Task,
+    /// `get_project`.
+    Project,
+    /// `get_document`.
+    Document,
+}
+
+impl std::fmt::Display for Observed {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Task => "task",
+            Self::Project => "project",
+            Self::Document => "document",
+        })
+    }
+}
+
+/// A token as the plugin's own product read gives it: one read by id, of a source built afresh
+/// so nothing this run wrote or read before answers it — never a read of this lane's own that
+/// spells a token beside the plugin's.
 #[derive(Clone, Copy)]
-enum TokenReader<'a> {
-    Source(&'a dyn Fn() -> Box<dyn TaskSource>),
-    Fresh { credential: &'a str, board: &'a str },
+struct TokenReader<'a> {
+    rebuilt: &'a dyn Fn() -> Box<dyn TaskSource>,
+    kind: Observed,
 }
 
 async fn token_now(
     reader: TokenReader<'_>,
-    task: &NativeId,
+    item: &NativeId,
     when: &str,
-    attempt: u32,
 ) -> Result<Option<String>, String> {
-    match reader {
-        TokenReader::Source(rebuilt) => Ok(rebuilt()
-            .get_task(task)
+    let source = (reader.rebuilt)();
+    let kind = reader.kind;
+    let failed = |error: onetaskgraph_plugin_api::SourceError| {
+        format!("live read of the {kind} {when} failed: {error}")
+    };
+    let version = match kind {
+        Observed::Task => source
+            .get_task(item)
             .await
-            .map_err(|error| format!("live read of the task {when} failed: {error}"))?
-            .ok_or_else(|| format!("the task was not there {when}"))?
-            .version),
-        TokenReader::Fresh { credential, board } => {
-            use onetaskgraph_github_projects::change_token::{Parts, settled, spell};
-            let answer = graphql_answer_at(
-                credential,
-                graphql::LIVE_CHANGE_TOKEN,
-                "reading fresh token-bearing issue facts",
-                json!({"id":task.0,"boardItems":100}),
-                attempt,
-            )
+            .map_err(failed)?
+            .map(|task| task.version),
+        Observed::Project => source
+            .get_project(item)
             .await
-            .map_err(Refusal::into_message)?;
-            let issue = &answer["data"]["node"];
-            ensure!(!issue.is_null(), "the task was not there {when}");
-            let memberships = issue["projectItems"]["nodes"]
-                .as_array()
-                .ok_or("missing token board memberships")?;
-            let item = memberships
-                .iter()
-                .find(|item| item["project"]["id"] == board)
-                .ok_or("fresh token read did not contain this run's nominated board item")?;
-            let timestamp = |value: &Value| {
-                value
-                    .as_str()
-                    .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
-                    .map(|value| value.with_timezone(&chrono::Utc))
-            };
-            let facts = match (
-                timestamp(&issue["updatedAt"]),
-                timestamp(&item["updatedAt"]),
-                issue["commentCount"]["totalCount"].as_u64(),
-                issue["relationshipEvents"]["totalCount"].as_u64(),
-                issue["repository"]["nameWithOwner"].as_str(),
-            ) {
-                (
-                    Some(issue),
-                    Some(item),
-                    Some(comments),
-                    Some(relationships),
-                    Some(repository),
-                ) => Parts {
-                    issue,
-                    item,
-                    comments,
-                    relationships,
-                    repository: onetaskgraph_plugin_api::Repository::try_from(format!(
-                        "github.com/{repository}"
-                    ))?,
-                },
-                _ => return Ok(None),
-            };
-            let served = answer["_served"]
-                .as_str()
-                .and_then(|value| chrono::DateTime::parse_from_rfc2822(value).ok())
-                .map(|value| value.with_timezone(&chrono::Utc));
-            let version = served
-                .filter(|served| settled(facts.issue, facts.item, *served))
-                .map(|_| spell(&facts));
-            say(&format!(
-                "fresh token facts {when}: comments={} issue_updated_at={} item_updated_at={} relationships={} version={version:?}",
-                facts.comments, facts.issue, facts.item, facts.relationships
-            ));
-            Ok(version)
-        }
-    }
+            .map_err(failed)?
+            .map(|project| project.version),
+        Observed::Document => source
+            .get_document(item)
+            .await
+            .map_err(failed)?
+            .map(|document| document.version),
+    };
+    version.ok_or_else(|| format!("the {kind} was not there {when}"))
 }
 
-/// Dedicated cold-source withholding regression entry; the main journey uses Fresh.
+/// The settled token of task `task`, read through a source `rebuilt` builds afresh.
 pub async fn settled_token(
     rebuilt: &dyn Fn() -> Box<dyn TaskSource>,
     task: &NativeId,
     when: &str,
 ) -> Result<String, String> {
-    settled_token_using(TokenReader::Source(rebuilt), task, when).await
+    settled_token_of(
+        TokenReader {
+            rebuilt,
+            kind: Observed::Task,
+        },
+        task,
+        when,
+    )
+    .await
 }
 
-/// Fresh token polling used by the main lane, exposed to its HTTP loopback regression.
-pub async fn settled_fresh_token(
-    credential: &str,
-    board: &str,
-    task: &NativeId,
+/// The settled token of the `kind` `item`, read through a source `rebuilt` builds afresh.
+pub async fn settled_token_of_kind(
+    rebuilt: &dyn Fn() -> Box<dyn TaskSource>,
+    kind: Observed,
+    item: &NativeId,
     when: &str,
 ) -> Result<String, String> {
-    settled_token_using(TokenReader::Fresh { credential, board }, task, when).await
+    settled_token_of(TokenReader { rebuilt, kind }, item, when).await
 }
 
-async fn settled_token_using(
+async fn settled_token_of(
     reader: TokenReader<'_>,
-    task: &NativeId,
+    item: &NativeId,
     when: &str,
-) -> Result<String, String> {
-    settled_token_with_attempt(reader, task, when, &mut 0).await
-}
-
-async fn settled_token_with_attempt(
-    reader: TokenReader<'_>,
-    task: &NativeId,
-    when: &str,
-    attempt: &mut u32,
 ) -> Result<String, String> {
     for read in 0..TOKEN_READS {
         if read > 0 {
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         }
-        *attempt += 1;
-        if let Some(token) = token_now(reader, task, when, *attempt).await? {
+        if let Some(token) = token_now(reader, item, when).await? {
             return Ok(token);
         }
     }
     Err(format!(
-        "GitHub gave the task no change token {when}, though the leg waited {TOKEN_READS} seconds past the plugin's settling margin; the plugin withholds a token only while the task's last change is within change_token::SETTLED of the read"
+        "GitHub gave the {} no change token {when}, though the leg waited {TOKEN_READS} seconds past the plugin's settling margin; the plugin withholds a token only while the item's last change is within change_token::SETTLED of the read",
+        reader.kind
     ))
 }
 
-/// Wait for the token to move off `before` after `kind`, and hold it to being the later one
-/// by the plugin's own ordering — asked again for a bounded while, because a read made the
-/// moment a write returns can be answered from before it, and a token is withheld until the
-/// change has settled.
+/// Wait for the token to move off `before` after `kind`, and hold it to the property the
+/// store's cache rests on — an entry kept at `before` is never served to a reader pinned to the
+/// new token, because the plugin's own ordering never puts `before` at or after it — asked again
+/// for a bounded while, because a read made the moment a write returns can be answered from
+/// before it, and a token is withheld until the change has settled.
+///
+/// A change the token's times carry orders the new token after `before`; one that moves its
+/// facets or its relationship count leaves the two unordered. Either holds the property; only
+/// `before` ordered at or after the new token breaks it.
 async fn moved(
     reader: TokenReader<'_>,
-    task: &NativeId,
+    item: &NativeId,
     kind: &str,
     before: &str,
 ) -> Result<String, String> {
     tokio::time::sleep(endpoints().settle).await;
     let when = format!("after {kind}");
-    let mut attempt = 0;
-    let mut after = settled_token_with_attempt(reader, task, &when, &mut attempt).await?;
+    let mut after = settled_token_of(reader, item, &when).await?;
     for _ in 1..10 {
         if after != before {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        after = settled_token_with_attempt(reader, task, &when, &mut attempt).await?;
+        after = settled_token_of(reader, item, &when).await?;
     }
     ensure!(
         after != before,
-        "{kind} left the task's change token at {before}, ten seconds after it; the token is \
-         what a copy skips by, so the plugin's statement of what it covers \
-         (docs/plugin-protocol.md §4.13d) no longer holds; next: tell the owner of the \
-         github-projects plugin that GitHub's behaviour changed, rather than re-running"
+        "{kind} left the {}'s change token at {before}, ten seconds after it; the token is \
+         what a copy skips by and the cache serves by, so the plugin's statement of what it \
+         covers (docs/plugin-protocol.md §4.13d) no longer holds; next: tell the owner of the \
+         github-projects plugin that GitHub's behaviour changed, rather than re-running",
+        reader.kind
     );
+    let held = onetaskgraph_github_projects::change_token::order(before, &after);
     ensure!(
-        onetaskgraph_github_projects::change_token::order(&after, before)
-            == Some(std::cmp::Ordering::Greater),
-        "{kind} moved the task's change token from {before} to {after}, which the plugin's own \
-         ordering does not put after it"
+        !matches!(
+            held,
+            Some(std::cmp::Ordering::Equal | std::cmp::Ordering::Greater)
+        ),
+        "{kind} moved the {}'s change token from {before} to {after}, and the plugin's own \
+         ordering puts the held token {held:?} against the new one, so a cache holding it would \
+         be served to a reader pinned to the new one",
+        reader.kind
     );
     Ok(after)
 }
@@ -3399,6 +3375,7 @@ async fn moved(
 /// the one before, so no two of them share a second.
 async fn every_change_kind_moves_a_tasks_token(
     writer: &dyn TaskSource,
+    rebuilt: &dyn Fn() -> Box<dyn TaskSource>,
     (token, board): (&str, &str),
     (task, first, orphan): (&NativeId, &NativeId, &NativeId),
     (filed_under, other_project): (&NativeId, &NativeId),
@@ -3409,11 +3386,11 @@ async fn every_change_kind_moves_a_tasks_token(
     };
     let pause = || tokio::time::sleep(std::time::Duration::from_millis(1_100));
     tokio::time::sleep(endpoints().settle).await;
-    let reader = TokenReader::Fresh {
-        credential: token,
-        board,
+    let reader = TokenReader {
+        rebuilt,
+        kind: Observed::Task,
     };
-    let mut before = settled_token_using(reader, task, "before any change").await?;
+    let mut before = settled_token_of(reader, task, "before any change").await?;
 
     pause().await;
     let comment = writer

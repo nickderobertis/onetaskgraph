@@ -27,8 +27,8 @@ use serde_json::{Value, json};
 
 use super::{
     BOARD_ITEMS_PAGE_SIZE, BoardFields, BoardKind, GitHubProjectsSource, ItemKind, MAX_PAGE_SIZE,
-    NESTED_PAGE_SIZE, RepositoryTarget, Resolved, SERVED_AT, change_token, comment_page, graphql,
-    is_mutation, operation_description, optional_time,
+    NESTED_PAGE_SIZE, RepositoryTarget, Resolved, SERVED_AT, change_token, comment_page, facets_of,
+    graphql, is_mutation, operation_description, optional_time,
 };
 
 /// The version of the context this source hands the store, so a context an earlier or a later
@@ -36,7 +36,7 @@ use super::{
 ///
 /// `tests/context.rs` pins it beside the shape [`context_shapes`] answers, so a change to what a
 /// context holds that does not move this number fails there.
-pub const CONTEXT_VERSION: u64 = 1;
+pub const CONTEXT_VERSION: u64 = 2;
 
 /// The JSON Schema of the task context and the board context this source hands the store.
 #[must_use]
@@ -382,8 +382,9 @@ impl GitHubProjectsSource {
         self.expected.record(entry);
     }
 
-    /// The change token `issue` spells, as a response shows it: every part present and the
-    /// issue settled by the response's own clock.
+    /// The change token `issue` spells, as a response shows it: every part present — its
+    /// facets read by exactly the rules a read takes them by — and the issue settled by the
+    /// response's own clock.
     fn token_of(&self, issue: &Value) -> Option<String> {
         let updated = optional_time(issue, "updatedAt").ok()??;
         let nodes = issue.pointer("/projectItems/nodes")?.as_array()?;
@@ -395,6 +396,7 @@ impl GitHubProjectsSource {
             item,
             comments: issue.pointer("/commentCount/totalCount")?.as_u64()?,
             relationships: issue.pointer("/relationshipEvents/totalCount")?.as_u64()?,
+            facets: facets_of(issue, entry.get("fieldValues")?)?,
             repository: Repository::try_from(format!(
                 "{}/{}",
                 RepositoryTarget::HOST,

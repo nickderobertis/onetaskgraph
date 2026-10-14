@@ -2289,7 +2289,7 @@ const THIRTY_EIGHTH_BUNDLE_SHAPE: [(&str, u64); 117] = [
     ("AssetUploads", 0xc07fc8afac6acde5),
     ("AssetWrite", 0x425ab5b21768c337),
     ("AssetsWritten", 0x5a394f7414967354),
-    ("CacheCleared", 0x6c2d2a4c86a940e0),
+    ("CacheCleared", 0x07f2024428115e02),
     ("CacheUse", 0x99e677fe6a710743),
     ("Capabilities", 0x6d340697813a7f4f),
     ("Classification", 0xca41e910f010da5b),

@@ -1086,11 +1086,16 @@ export class OnetaskgraphClient {
     addFilters(args, options);
     return this.run("project list", args);
   }
+  // `pin` is a version of the project the caller holds, as `taskShow`'s is of a task.
   projectShow(
     id: string,
-    options: Pick<QueryOptions, "allowPartial"> = {},
+    options: Pick<QueryOptions, "allowPartial"> & { pin?: string } = {},
   ): Promise<QueryResponseOfQualifiedProject> {
-    return this.run("project show", [id, ...(options.allowPartial ? ["--allow-partial"] : [])]);
+    return this.run("project show", [
+      id,
+      ...(options.allowPartial ? ["--allow-partial"] : []),
+      ...pinFlags("projectShow", options.pin),
+    ]);
   }
   projectDeps(id: string, options: DependencyOptions = {}): Promise<QueryResponseOfQualifiedEdge> {
     const args = [id];
@@ -1143,11 +1148,16 @@ export class OnetaskgraphClient {
     if (options.noProject) args.push("--no-project");
     return this.run("document list", args);
   }
+  // `pin` is a version of the document the caller holds, as `taskShow`'s is of a task.
   documentShow(
     id: string,
-    options: Pick<QueryOptions, "allowPartial"> = {},
+    options: Pick<QueryOptions, "allowPartial"> & { pin?: string } = {},
   ): Promise<DocumentDetail> {
-    return this.run("document show", [id, ...(options.allowPartial ? ["--allow-partial"] : [])]);
+    return this.run("document show", [
+      id,
+      ...(options.allowPartial ? ["--allow-partial"] : []),
+      ...pinFlags("documentShow", options.pin),
+    ]);
   }
   // A document has no comments, so a document copy carries none.
   documentCopy(

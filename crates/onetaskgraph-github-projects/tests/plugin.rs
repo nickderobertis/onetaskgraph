@@ -2210,15 +2210,6 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         draft["projectV2Items"] = item.project_items(&options, asked);
         return json!({ "node": draft });
     }
-    if query == onetaskgraph_github_projects::graphql::LIVE_CHANGE_TOKEN {
-        let id = variables["id"].as_str().expect("a node id");
-        let node = state
-            .items
-            .iter()
-            .find(|item| item.content_id == id)
-            .map(|item| item.as_issue(&state.options(), asked));
-        return json!({"node":node});
-    }
     if query == onetaskgraph_github_projects::graphql::ISSUE {
         let id = variables["id"].as_str().expect("a node id").to_owned();
         let Some(item) = state.items.iter().find(|item| item.content_id == id) else {
@@ -19787,7 +19778,7 @@ async fn actual_execution_facts_distinguish_refusals_retries_and_unreadable_resp
 }
 
 #[test]
-fn fresh_token_polling_reads_again_after_a_server_date_inside_the_margin() {
+fn a_token_read_inside_the_margin_is_read_again_by_the_plugins_own_read() {
     let output = std::process::Command::new(std::env::current_exe().unwrap())
         .args(["fresh_token_polling_child", "--exact", "--nocapture"])
         .env("GITHUB_FRESH_TOKEN_CHILD", "settling")
@@ -19800,7 +19791,7 @@ fn fresh_token_polling_reads_again_after_a_server_date_inside_the_margin() {
     );
 }
 
-// llmlint: ignore[tests_assert_real_behavior] This subprocess helper is driven by fresh_token_polling_reads_again_after_a_server_date_inside_the_margin; ordinary test runs omit its selector and start no fixture.
+// llmlint: ignore[tests_assert_real_behavior] This subprocess helper is driven by a_token_read_inside_the_margin_is_read_again_by_the_plugins_own_read; ordinary test runs omit its selector and start no fixture.
 #[tokio::test]
 async fn fresh_token_polling_child() {
     if std::env::var("GITHUB_FRESH_TOKEN_CHILD").as_deref() != Ok("settling") {
@@ -19817,14 +19808,12 @@ async fn fresh_token_polling_child() {
         source: None,
         settle: std::time::Duration::ZERO,
     });
-    let version = journey::settled_fresh_token(
-        "test-token",
-        "PVT_board",
-        &NativeId("I_fresh".into()),
-        "after deletion",
-    )
-    .await
-    .unwrap();
+    // The token is the plugin's own: a read by id of a source built afresh, as the live lane
+    // reads every token it asserts on.
+    let rebuild = || recording(&fixture.endpoint, &journey::SESSION);
+    let version = journey::settled_token(&rebuild, &NativeId("I_fresh".into()), "after deletion")
+        .await
+        .unwrap();
     assert!(version.starts_with(onetaskgraph_github_projects::change_token::PREFIX));
     assert_eq!(fixture.state.lock().unwrap().unsettled_answers, 0);
     let snapshot = journey::SESSION.snapshot();
@@ -19834,22 +19823,17 @@ async fn fresh_token_polling_child() {
         2,
         "the unsettled read must be followed by a fresh request"
     );
-    assert_eq!(calls[0].attempt(), 1);
-    assert_eq!(calls[1].attempt(), 2);
     assert!(
         calls
             .iter()
             .all(|call| call.reported_query_cost() == Some(1))
     );
+    let read_by_id = Accounting::with_query_prices().priced_document(graphql::ISSUE);
     assert!(
         calls
             .iter()
-            .all(|call| call.document().unwrap().contains("query LiveChangeToken("))
-    );
-    assert!(
-        !calls
-            .iter()
-            .any(|call| call.document().unwrap().contains("title body"))
+            .all(|call| call.document() == Some(&*read_by_id)),
+        "every token is read by the plugin's own read by id, and nothing else is sent"
     );
 }
 
