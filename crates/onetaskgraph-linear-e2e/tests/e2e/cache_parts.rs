@@ -1043,49 +1043,38 @@ fn a_reverse_edge_read_a_page_at_a_time_is_never_served_or_kept_as_the_whole() {
 
 #[test]
 fn a_task_created_from_a_template_retires_the_far_ends_reverse_edges() {
-    // (what the create writes besides its fields, and its arguments past the shared ones). A
-    // create carrying an image asset is `linear_assets.rs`'s, whose loopback serves uploads.
-    let creates: Vec<(&str, fn(&Path) -> Vec<String>)> = vec![("a rendering", |inputs| {
-        let template = inputs.join("note.md");
-        std::fs::write(&template, "A rendered body.\n").expect("a template");
-        vec![
-            "--template".to_owned(),
-            template.display().to_string(),
-            "--no-interactive".to_owned(),
-        ]
-    })];
-    for (what, extra) in creates {
-        let cached = Cached::new(held());
-        let pin = filled(&cached, &REVERSE_EDGES);
-        let dir = cached.dir().expect("a cache");
-        assert!(entry(&dir, "reverse-edges-v2", "L-2").exists());
-        let inputs = cached.sandbox.subdirectory("inputs");
-        let mut create: Vec<String> = [
-            "task",
-            "create",
-            "linear",
-            "--project",
-            "P-1",
-            "--title",
-            "Depends on L-2",
-            "--depends-on",
-            "linear:L-2",
-            "--json",
-        ]
-        .map(str::to_owned)
-        .to_vec();
-        create.extend(extra(&inputs));
-        let (created, _) = cached.ok(&strs(&create));
-        assert!(
-            !entry(&dir, "reverse-edges-v2", "L-2").exists(),
-            "{what}: the create takes L-2's reverse edges out of service: {created}"
-        );
-        let (edges, sent) = cached.ok(&strs(&REVERSE_EDGES.with(&pin)));
-        assert_eq!(sent.len(), 1, "{what}: the next read is Linear's");
-        assert_eq!(
-            edges["items"].as_array().map(Vec::len),
-            Some(2),
-            "{what}: L-1's edge and the new task's: {edges}"
-        );
-    }
+    // A create carrying an image asset is `linear_assets.rs`'s, whose loopback serves uploads.
+    let cached = Cached::new(held());
+    let pin = filled(&cached, &REVERSE_EDGES);
+    let dir = cached.dir().expect("a cache");
+    assert!(entry(&dir, "reverse-edges-v2", "L-2").exists());
+    let template = cached.sandbox.subdirectory("inputs").join("note.md");
+    std::fs::write(&template, "A rendered body.\n").expect("a template");
+    let template = template.display().to_string();
+    let (created, _) = cached.ok(&[
+        "task",
+        "create",
+        "linear",
+        "--project",
+        "P-1",
+        "--title",
+        "Depends on L-2",
+        "--depends-on",
+        "linear:L-2",
+        "--template",
+        &template,
+        "--no-interactive",
+        "--json",
+    ]);
+    assert!(
+        !entry(&dir, "reverse-edges-v2", "L-2").exists(),
+        "the rendered create takes L-2's reverse edges out of service: {created}"
+    );
+    let (edges, sent) = cached.ok(&strs(&REVERSE_EDGES.with(&pin)));
+    assert_eq!(sent.len(), 1, "the next read is Linear's");
+    assert_eq!(
+        edges["items"].as_array().map(Vec::len),
+        Some(2),
+        "L-1's edge and the new task's: {edges}"
+    );
 }
