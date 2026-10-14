@@ -692,11 +692,20 @@ impl CachedSource {
     }
 
     /// Record one page of a forward-edge walk of task `id` from the source, `so_far` the edges
-    /// its earlier pages answered: kept for the next page while the walk goes on, and, once it
-    /// ends, kept as the task's forward edges — in its own entry at the version the source's read
-    /// spelled, or, for a source spelling none, with the task's entry at the version it was read
-    /// at in this command.
-    fn walked(&self, id: &NativeId, mut so_far: Vec<DependencyEdge>, read: &Page<DependencyEdge>) {
+    /// its earlier pages answered — `None` for the walk's first page: kept for the next page while
+    /// the walk goes on, and, once it ends, kept as the task's forward edges — in their own entry
+    /// at the version the source's reads spelled, or, when they spelled none and one response
+    /// answered the whole walk, with the task's entry at the version it was read at in this
+    /// command. A walk of several pages that spelled no version may have read them at several,
+    /// so it is kept nowhere.
+    fn walked(
+        &self,
+        id: &NativeId,
+        so_far: Option<Vec<DependencyEdge>>,
+        read: &Page<DependencyEdge>,
+    ) {
+        let one_response = so_far.is_none();
+        let mut so_far = so_far.unwrap_or_default();
         so_far.extend(read.items.iter().cloned());
         if let Some(next) = &read.next {
             self.cache
@@ -708,7 +717,8 @@ impl CachedSource {
         self.cache.command().walking.remove(id);
         match self.inner.forward_edges_version(id) {
             Some(version) => self.cache.write_edges(id, &version, &so_far),
-            None => self.complete(id, None, Some(&so_far)),
+            None if one_response => self.complete(id, None, Some(&so_far)),
+            None => {}
         }
     }
 
@@ -951,7 +961,7 @@ impl TaskSource for CachedSource {
                 });
             }
             let read = self.inner.task_dependencies(id, direction, page).await?;
-            self.walked(id, Vec::new(), &read);
+            self.walked(id, None, &read);
             return Ok(read);
         };
         // A later page continues the walk its first page began only when it resumes exactly
@@ -965,7 +975,7 @@ impl TaskSource for CachedSource {
         };
         let read = self.inner.task_dependencies(id, direction, page).await?;
         if let Some(so_far) = so_far {
-            self.walked(id, so_far, &read);
+            self.walked(id, Some(so_far), &read);
         }
         Ok(read)
     }

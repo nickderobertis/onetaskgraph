@@ -433,6 +433,63 @@ fn a_forward_edge_walk_not_read_whole_at_one_version_in_one_command_is_never_kep
     );
 }
 
+/// The forward edges the task entry of `native` holds beside its fields, or `None` when it holds
+/// none or there is no such entry.
+fn task_entry_edges(cached: &Cached, native: &str) -> Option<Value> {
+    cached
+        .dir()
+        .map(|dir| walk(&dir.join("tasks")))
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|path| std::fs::read(path).ok())
+        .filter_map(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .find(|entry| entry["task"]["id"] == native)
+        .map(|entry| entry["edges"].clone())
+        .filter(|edges| !edges.is_null())
+}
+
+#[test]
+fn a_task_read_then_walked_across_a_change_between_pages_keeps_no_edges_beside_its_fields() {
+    let copy = [
+        "task",
+        "copy",
+        "linear:L-4",
+        "--to",
+        "notes",
+        "--no-link",
+        "--json",
+    ];
+    // L-4 is read, filling its entry, then its forward edges are walked in the same command: its
+    // relations page, then its recorded far ends' page — with an edit landing between the two.
+    let cached = Cached::new(dataset());
+    cached.workspace.after_request(
+        |document, variables| {
+            document == onetaskgraph_linear::graphql::ISSUE_RELATIONS_CACHED
+                && variables["id"] == "L-4"
+        },
+        0,
+        |workspace| workspace.retitle("tasks", "L-4", "Edited between the walk's pages"),
+    );
+    let (_, sent) = cached.ok(&copy);
+    assert!(
+        sent.iter()
+            .filter(|document| *document == onetaskgraph_linear::graphql::ISSUE_RELATIONS_CACHED)
+            .count()
+            >= 2,
+        "the copy walked L-4's relations and its recorded far ends: {sent:?}"
+    );
+    assert_eq!(
+        task_entry_edges(&cached, "L-4"),
+        None,
+        "a walk read at two versions is not kept with the fields read at the first"
+    );
+    assert!(
+        !edges_kept(&cached).contains(&"L-4".to_owned()),
+        "nor in an entry of its own: {:?}",
+        edges_kept(&cached)
+    );
+}
+
 #[test]
 fn a_token_linear_cannot_vouch_for_is_never_kept_or_served() {
     // (what makes the token absent or unordered, the issue, how)
