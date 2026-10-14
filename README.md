@@ -1248,6 +1248,16 @@ each remote one is remote.
   digest would bring the projects listing to about 9,491 of Linear's 10,000 per-query complexity)
   are always read from Linear.
 
+**What a plugin tells the cache, and how a dependency read fills it.** Through `TaskSource`, and
+never over the stdio plugin protocol: `attach_cache`, called once when the cache wraps the source
+and before any read, which is what lets Linear widen the queries below; and
+`forward_edges_version`, defaulted to none, the token the response that answered a task's last
+`DependsOn` read spelled. A Linear task's forward edges are kept in an entry of their own keyed by
+that version, served only to a pin at that version or a later one — so `project graph` lists a
+project's tasks and the next run answers their dependencies from the cache, sending no
+dependency request while the listed tokens are unchanged — and never vouch for the task's own
+fields. A GitHub board keeps the default: its forward edges are always read.
+
 **Turning the cache on widens four Linear queries.** `ISSUES`, `ISSUE` and `ISSUE_DETAIL` gain
 the relations page the token is read from, and `ISSUE_RELATIONS` gains the token's other parts,
 so a dependency read can fill an entry; at 100 rows `ISSUES` is about 3,108 of the 10,000 cap.
