@@ -121,7 +121,7 @@ fn linear_is_a_permanent_task_destination_with_typed_metadata_and_repository_ori
     let sandbox = Sandbox::new();
     let root = sandbox.subdirectory("linear-task-source");
     std::fs::create_dir_all(root.join("tasks")).unwrap();
-    std::fs::write(root.join("tasks/A.md"), "---\ntitle: Authored locally\nstatus: Todo\nlabels: [{id: local-bug, name: bug}]\nmetadata: {object: {a: 1}, array: [1, true], string: text, number: 3.5, boolean: true, null: null}\nrepositories: [github.com/acme/work]\n---\nvisible body\n").unwrap();
+    std::fs::write(root.join("tasks/A.md"), "---\ntitle: Authored locally\nstatus: Todo\nlabels: [{id: local-bug, name: bug}]\nmetadata: {object: {a: 1}, array: [1, true], string: text, number: 3.5, boolean: true, \"null\": null}\nrepositories: [github.com/acme/work]\n---\nvisible body\n").unwrap();
     sandbox.project_document(&document(&json!({
         "authored": {"plugin":"local-md","config":{"root":root,"status_mapping":{"Todo":"todo"}}},
         "linear": {"plugin":"linear","config":linear_block(&sandbox)},

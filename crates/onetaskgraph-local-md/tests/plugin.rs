@@ -572,7 +572,8 @@ async fn project_query_surfaces_a_malformed_record() {
     assert!(
         matches!(error, SourceError::Malformed { ref message }
             if message.contains("bad-project.md")
-                && message.contains("expected node content")),
+                && message.contains("unclosed bracket '['")
+                && message.contains("line 1, column 9")),
         "{error:?}"
     );
 }
@@ -594,7 +595,8 @@ async fn document_query_surfaces_a_malformed_record() {
     assert!(
         matches!(error, SourceError::Malformed { ref message }
             if message.contains("bad-document.md")
-                && message.contains("expected node content")),
+                && message.contains("unclosed bracket '['")
+                && message.contains("line 1, column 9")),
         "{error:?}"
     );
 }

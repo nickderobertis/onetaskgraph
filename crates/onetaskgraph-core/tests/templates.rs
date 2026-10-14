@@ -1766,3 +1766,108 @@ fn every_variant_of_a_declaration_vocabulary_is_in_its_all() {
         ItemType::ALL.map(|items| items.as_str().to_owned()),
     );
 }
+
+/// A prompt asks a template's variables in the order its front matter declares them, for the
+/// front matter of every real template this was measured on.
+///
+/// `tests/fixtures/template-front-matter` holds redacted copies of the front matter of the 28
+/// template files found on the author's host, and the `.expected.json` beside it the order
+/// [`onetaskgraph_core::Template::unanswered`] — what an interactive `template render` asks
+/// from — gave each under the release before the YAML crate moved. A reader that sorted the
+/// keys, as a `serde_json` map does, would ask most of them alphabetically.
+#[test]
+fn real_templates_are_asked_in_the_order_their_variables_are_declared() {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let expected: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
+        &std::fs::read_to_string(fixtures.join("template-front-matter.expected.json"))
+            .expect("the expected orders"),
+    )
+    .expect("the expected orders are JSON");
+    let directory = fixtures.join("template-front-matter");
+    let mut files: Vec<String> = std::fs::read_dir(&directory)
+        .expect("the fixtures")
+        .map(|entry| {
+            entry
+                .expect("an entry")
+                .file_name()
+                .into_string()
+                .expect("UTF-8")
+        })
+        .collect();
+    files.sort();
+    assert_eq!(files.len(), 28, "every real template's front matter");
+
+    for file in files {
+        let source = std::fs::read_to_string(directory.join(&file)).expect("a fixture");
+        let asked: Vec<String> = TemplateLoader::new()
+            .with_template(file.clone(), source)
+            .load_name(&file)
+            .and_then(|template| template.unanswered(&Answers::new()))
+            .unwrap_or_else(|error| panic!("{file}: {error}"))
+            .iter()
+            .map(|variable| variable.name().to_owned())
+            .collect();
+        assert_eq!(
+            json!(asked),
+            expected[&file],
+            "{file} asks its variables in the order it declares them"
+        );
+    }
+}
+
+/// A `variables` key is whatever YAML reads it as: a plain `true` is the name `true`, `1` is
+/// the name `1`, which is refused as no variable name, and a null key, a sequence key, a
+/// repeated variable and a non-finite default are refused as YAML, each at its position.
+#[test]
+fn a_variables_key_is_read_as_yaml_reads_it() {
+    let asked = |variables: &str| {
+        let source = format!("---\nonetaskgraph_template: 1\nvariables:\n{variables}---\n");
+        TemplateLoader::new()
+            .with_template("t.md", source)
+            .load_name("t.md")
+            .and_then(|template| template.unanswered(&Answers::new()))
+            .map(|asked| {
+                asked
+                    .iter()
+                    .map(|variable| variable.name().to_owned())
+                    .collect::<Vec<_>>()
+            })
+            .map_err(|error| error.to_string())
+    };
+
+    assert_eq!(
+        asked("  true: {description: d}\n"),
+        Ok(vec!["true".to_owned()])
+    );
+    for (variables, problem) in [
+        (
+            "  1: {description: d}\n",
+            "front matter key `variables.1` is not a variable name",
+        ),
+        (
+            "  ~: {description: d}\n",
+            "its front matter is not YAML: cannot deserialize null into string; use \
+             Option<String> at line 3, column 3",
+        ),
+        (
+            "  [a]: {description: d}\n",
+            "its front matter is not YAML: expected string scalar at line 3, column 3",
+        ),
+        (
+            "  a: {description: d}\n  a: {description: e}\n",
+            "its front matter is not YAML: duplicate mapping key: a, set DuplicateKeyPolicy in \
+             Options if acceptable at line 4, column 3",
+        ),
+        (
+            "  a: {description: d, default: .inf}\n",
+            "its front matter is not YAML: non-finite float `.inf` rejected by \
+             reject_non_finite_typeless_float at line 3, column 32",
+        ),
+    ] {
+        let refused = asked(variables).expect_err(variables);
+        assert!(
+            refused.starts_with("template t.md: ") && refused.contains(problem),
+            "{variables:?}: {refused}"
+        );
+    }
+}

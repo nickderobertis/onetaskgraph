@@ -45,6 +45,7 @@ pub mod subprocess;
 // llmlint: ignore[code_lands_in_the_domain_that_owns_it] The task that introduced templates fixes their API at this crate's root; the head of `template/mod.rs` states why.
 pub mod template;
 pub mod version;
+mod yaml;
 
 pub use cache::{
     CacheCleared, CacheUse, ExpectedWrite, Served, WriteFallback, WritePart, WriteResult,

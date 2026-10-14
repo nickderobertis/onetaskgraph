@@ -276,7 +276,7 @@ fn a_budget_id_that_is_not_unicode_is_refused_rather_than_read_as_absent() {
 fn asset_reports_require_the_full_recorded_workload_before_reporting() {
     let sandbox = Sandbox::new();
     let directory = sandbox.subdirectory("asset-telemetry");
-    let budgets: Value = serde_norway::from_str(include_str!("../../budgets.yaml")).unwrap();
+    let budgets: Value = serde_saphyr::from_str(include_str!("../../budgets.yaml")).unwrap();
     for budget in budgets["budgets"]
         .as_array()
         .unwrap()

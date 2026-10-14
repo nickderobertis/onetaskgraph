@@ -107,11 +107,70 @@ fn a_source_name_nothing_configures_is_refused_with_the_names_that_exist() {
 #[test]
 fn a_configuration_that_will_not_parse_is_refused_where_it_is_written() {
     // Invalid YAML cannot describe a plugin, so this pre-construction refusal has no
-    // protocol capability through which a subprocess wrapper could repeat it.
+    // protocol capability through which a subprocess wrapper could repeat it. The second is
+    // refused before any key exists, so the position alone says where.
+    for (text, problem) in [
+        (
+            "sources:\n  work:\n   plugin: [this is not a plugin name\n",
+            "not valid YAML: unclosed bracket '[' at line 3, column 12",
+        ),
+        (
+            "[\n",
+            "not valid YAML: unclosed bracket '[' at line 1, column 1",
+        ),
+    ] {
+        let sandbox = Sandbox::new();
+        let file = sandbox.project_document(text);
+        let output = run(&sandbox, &["task", "list"]);
+        refused(
+            &output,
+            "correct the syntax at the position named above",
+            "re-run",
+        );
+        refused(&output, &format!("{}: {problem}", file.display()), "next:");
+        assert_eq!(output.status.code(), Some(1));
+    }
+}
+
+#[test]
+fn a_markdown_record_yaml_refuses_is_named_by_its_file_and_its_field_or_position() {
     let sandbox = Sandbox::new();
-    sandbox.project_document("sources:\n  work:\n   plugin: [this is not a plugin name\n");
-    let output = run(&sandbox, &["task", "list"]);
-    refused(&output, "not valid YAML", "correct the syntax");
+    let root = sandbox.subdirectory("records");
+    let tasks = root.join("tasks");
+    std::fs::create_dir_all(&tasks).expect("the task folder");
+    let records = [
+        (
+            "typed",
+            "---\ntitle: T\nstatus: todo\nlabels: 5\n---\n",
+            "labels: expected sequence start at line 3, column 9",
+        ),
+        (
+            "unknown",
+            "---\ntitle: T\nstatus: todo\nbogus: x\n---\n",
+            "bogus: unknown field `bogus`, expected one of title, status,",
+        ),
+        (
+            "syntax",
+            "---\n[\n---\n",
+            "unclosed bracket '[' at line 1, column 1",
+        ),
+    ];
+    for (name, text, _) in records {
+        std::fs::write(tasks.join(format!("{name}.md")), text).expect("a record");
+    }
+    sandbox.project_document(&document(&json!({
+        "work": {"plugin": "local-md", "config": {"root": root}},
+    })));
+
+    for (name, _, problem) in records {
+        let output = run(&sandbox, &["task", "show", &qualified("work", name)]);
+        let file = tasks
+            .join(format!("{name}.md"))
+            .canonicalize()
+            .expect("the record's path");
+        refused(&output, &format!("{}: {problem}", file.display()), "next:");
+        assert_eq!(output.status.code(), Some(4), "{name}");
+    }
 }
 
 #[test]

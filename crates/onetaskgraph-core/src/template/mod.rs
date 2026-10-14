@@ -248,9 +248,9 @@ impl TemplateVariable {
     pub fn parse(&self, text: &str) -> Result<Value, String> {
         let value = match self.kind {
             VariableType::String | VariableType::Text => Value::String(text.to_owned()),
-            _ => {
-                serde_norway::from_str(text).map_err(|error| format!("it is not YAML: {error}"))?
-            }
+            _ => crate::yaml::one_value(text)
+                .map_err(|error| format!("it is not one YAML value: {error}"))?
+                .unwrap_or(Value::Null),
         };
         self.check(&value)?;
         Ok(value)

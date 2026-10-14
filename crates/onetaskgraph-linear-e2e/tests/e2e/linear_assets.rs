@@ -779,7 +779,7 @@ fn measure_three_concurrent_project_asset_copies() {
 
 #[test]
 fn loopback_request_limit_and_budget_description_agree() {
-    let budgets: Value = serde_norway::from_str(include_str!("../../budgets.yaml")).unwrap();
+    let budgets: Value = serde_saphyr::from_str(include_str!("../../budgets.yaml")).unwrap();
     let description = budgets["budgets"]
         .as_array()
         .unwrap()

@@ -392,7 +392,7 @@ fn a_project_created_from_a_template_records_its_provenance_and_keeps_its_answer
     assert!(!content.contains("template-answers"));
     let yaml = stdout(&plan.exits(&["project", "answers", &id], 0));
     assert!(
-        yaml.contains("goal: Ship it") && yaml.contains("- 'tokens: 10'"),
+        yaml.contains("goal: Ship it") && yaml.contains("- \"tokens: 10\""),
         "the answers as YAML, which `--answers` reads back:\n{yaml}"
     );
 
