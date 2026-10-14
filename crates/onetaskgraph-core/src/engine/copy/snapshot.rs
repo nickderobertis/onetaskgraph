@@ -145,13 +145,13 @@ pub(super) async fn take(
         None => return Ok(Taken::Gone),
     };
     let paged = page.next.is_some();
-    let vouched = covers_comments(source);
-    let mut held = match walk(source, id, &task, page, vouched).await? {
+    let held_by = HeldBy::of(source);
+    let mut held = match walk(source, id, &task, page, held_by).await? {
         Walked::All(comments) => comments,
         Walked::Gone => return Ok(Taken::Gone),
         Walked::Changed => return Ok(Taken::Changed),
     };
-    if !(vouched && task.version.is_some()) && paged {
+    if !(held_by == HeldBy::Token && task.version.is_some()) && paged {
         let mut settled = false;
         for _ in 1..FULL_PASSES {
             let start = PageRequest {
@@ -168,13 +168,13 @@ pub(super) async fn take(
             let Some(again) = again else {
                 return Ok(Taken::Gone);
             };
-            if !reads_alike(&task, &again.task, vouched) {
+            if !reads_alike(&task, &again.task, held_by) {
                 return Ok(Taken::Changed);
             }
             let Some(page) = first_page(id, again.comments)? else {
                 return Ok(Taken::Gone);
             };
-            let pass = match walk(source, id, &task, page, vouched).await? {
+            let pass = match walk(source, id, &task, page, held_by).await? {
                 Walked::All(comments) => comments,
                 Walked::Gone => return Ok(Taken::Gone),
                 Walked::Changed => return Ok(Taken::Changed),
@@ -223,13 +223,13 @@ fn first_page(
 }
 
 /// Every comment of `id`, from `page` — its first — through every further page, each request
-/// held to `task` — by its token alone when `vouched` says the token covers comments.
+/// held to `task` as `held_by` says.
 async fn walk(
     source: &ResolvedSource,
     id: &NativeId,
     task: &Task,
     page: Page<Comment>,
-    vouched: bool,
+    held_by: HeldBy,
 ) -> Result<Walked, SourceError> {
     let limit = comment_page(source).limit;
     fits(page.items.len(), limit)?;
@@ -252,7 +252,7 @@ async fn walk(
         let Some(later) = answer else {
             return Ok(Walked::Gone);
         };
-        if !reads_alike(task, &later.task, vouched) {
+        if !reads_alike(task, &later.task, held_by) {
             return Ok(Walked::Changed);
         }
         let Some(page) = first_page(id, later.comments)? else {
@@ -282,22 +282,36 @@ fn commentless(id: &NativeId) -> SourceError {
     }
 }
 
-/// Whether `source` declares that its change token covers a task's comments — the one thing
-/// that lets two equal tokens stand for one state of them.
-fn covers_comments(source: &ResolvedSource) -> bool {
-    source
-        .source()
-        .version_coverage()
-        .comments
-        .reason()
-        .is_none()
+/// What two reads of one task are held to when a walk of its comments asks whether it moved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HeldBy {
+    /// Its change token, which the source declares covers a task's comments — the one thing
+    /// that lets two equal tokens stand for one state of them.
+    Token,
+    /// Every member but the token, which says nothing of a change to a comment alone.
+    Fields,
+}
+
+impl HeldBy {
+    fn of(source: &ResolvedSource) -> Self {
+        if source
+            .source()
+            .version_coverage()
+            .comments
+            .reason()
+            .is_none()
+        {
+            Self::Token
+        } else {
+            Self::Fields
+        }
+    }
 }
 
 /// Whether two reads of one task agree on it: the same change token when both gave one and
-/// `vouched` says it covers comments, and otherwise the same task in every member but the
-/// token, which says nothing of a change to a comment alone.
-fn reads_alike(first: &Task, later: &Task, vouched: bool) -> bool {
-    if let (true, Some(first), Some(later)) = (vouched, &first.version, &later.version) {
+/// `held_by` is the token, and otherwise the same task in every member but the token.
+fn reads_alike(first: &Task, later: &Task, held_by: HeldBy) -> bool {
+    if let (HeldBy::Token, Some(first), Some(later)) = (held_by, &first.version, &later.version) {
         return first == later;
     }
     let untokened = |task: &Task| Task {
