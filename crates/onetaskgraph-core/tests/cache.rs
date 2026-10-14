@@ -7,12 +7,16 @@
 //! number exists to prevent. Each number is recorded beside a digest of the shapes it publishes;
 //! the table is append-only, and a shape changed without a new row fails here.
 
-use onetaskgraph_core::cache::{ENTRY_SCHEMA, entry_shapes};
+use onetaskgraph_core::cache::{ENTRY_SCHEMA, KIND_ENTRY_SCHEMA, entry_shapes, kind_entry_shapes};
 
 include!("support/bundle_digest.rs");
 
 /// Every entry schema number with the digest of the task and board entry shapes it publishes.
 const PUBLISHED_ENTRIES: &[(u32, u64)] = &[(1, 0x9da1_0712_ef55_81f8)];
+
+/// Every project, document, edge and byte entry schema number with the digest of the shapes it
+/// publishes — the same rule, for the kinds whose directories that number names.
+const PUBLISHED_KIND_ENTRIES: &[(u32, u64)] = &[(1, 0x05d4_3e8a_0087_6768)];
 
 #[test]
 fn the_entry_schema_number_moves_whenever_the_entry_shape_does() {
@@ -41,5 +45,36 @@ fn the_entry_schema_number_moves_whenever_the_entry_shape_does() {
         "the entry shape changed: bump ENTRY_SCHEMA and append ({}, {emitted:#018x}), or put \
          the shape back",
         ENTRY_SCHEMA + 1
+    );
+}
+
+#[test]
+fn the_kind_entry_schema_number_moves_whenever_a_kind_entry_shape_does() {
+    for (index, (version, _)) in PUBLISHED_KIND_ENTRIES.iter().enumerate() {
+        assert_eq!(
+            *version as usize,
+            index + 1,
+            "rows are the numbers in order"
+        );
+        assert!(
+            !PUBLISHED_KIND_ENTRIES[..index]
+                .iter()
+                .any(|(_, earlier)| *earlier == PUBLISHED_KIND_ENTRIES[index].1),
+            "number {version} republishes an earlier shape"
+        );
+    }
+    let (version, recorded) = PUBLISHED_KIND_ENTRIES.last().expect("one row at least");
+    assert_eq!(
+        *version, KIND_ENTRY_SCHEMA,
+        "KIND_ENTRY_SCHEMA is {KIND_ENTRY_SCHEMA} and the last row records {version}: append a \
+         row"
+    );
+    let emitted = digest(&kind_entry_shapes());
+    assert_eq!(
+        emitted,
+        *recorded,
+        "a kind entry's shape changed: bump KIND_ENTRY_SCHEMA and append ({}, {emitted:#018x}), \
+         or put the shape back",
+        KIND_ENTRY_SCHEMA + 1
     );
 }

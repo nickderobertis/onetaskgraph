@@ -27,8 +27,9 @@ use super::{SourceCache, digest};
 /// The schema every project, document, edge and byte entry this build writes is spelled in,
 /// and the suffix of the directory each kind lives in.
 ///
-/// Held apart from [`super::ENTRY_SCHEMA`], which a task's entries carry, so a change to one
-/// kind's shape moves its own directory and leaves every other kind's entries served.
+/// Held apart from [`super::ENTRY_SCHEMA`], which a task's entries carry, so a change to these
+/// kinds' shapes moves their directories — every one of them, since they share this number —
+/// and leaves a task's entries served.
 pub const KIND_ENTRY_SCHEMA: u32 = 1;
 
 /// Which kind an entry is: written into it and held to the directory it is read from.
