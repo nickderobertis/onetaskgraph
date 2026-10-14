@@ -58,8 +58,8 @@ pub struct Parts {
     /// How many relationship events — dependencies and project memberships added or removed —
     /// its timeline holds.
     pub relationships: u64,
-    /// The lowercase hex SHA-256 of the item's [`Facets`].
-    pub facets: String,
+    /// The digest of the item's [`Facets`].
+    pub facets: FacetsDigest,
     /// The repository it is in. Spelled last, and read back as everything after the facets, so
     /// any origin a [`Repository`] admits comes back as it went.
     pub repository: Repository,
@@ -77,18 +77,78 @@ pub struct Facets {
     /// The item's own kind, as this plugin derives it from the response — the `DESIGN: ` title
     /// prefix, its sub-issues — rather than the raw sub-issue total, so a project gaining a task
     /// does not move it.
-    kind: &'static str,
+    kind: FacetKind,
     /// Each board field this item holds a value of, by name, with the option's name or the text.
     fields: Vec<(String, String)>,
     /// Each label, by id, with its name and colour.
     labels: Vec<(String, String, Option<String>)>,
 }
 
-impl Facets {
-    /// The facets of an item of `kind` — `task`, `project` or `document` — holding `fields`
-    /// and carrying `labels`, in any order.
+/// The kind of item a token's facets name: the one closed set the canonical JSON's `kind` holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FacetKind {
+    /// A task.
+    Task,
+    /// A project.
+    Project,
+    /// A document.
+    Document,
+}
+
+/// The lowercase hex SHA-256 of an item's [`Facets`]: the token's facets part, held to that
+/// spelling so a token spelled from it is always one [`order`] can read back.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct FacetsDigest(String);
+
+/// Spelled as the string it serializes to, inline, exactly as the `String` it replaced was.
+impl schemars::JsonSchema for FacetsDigest {
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        String::schema_name()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        String::json_schema(generator)
+    }
+}
+
+impl TryFrom<String> for FacetsDigest {
+    type Error = String;
+
+    fn try_from(digest: String) -> Result<Self, Self::Error> {
+        Self::parse(&digest).ok_or_else(|| format!("{digest:?} is not a lowercase hex SHA-256"))
+    }
+}
+
+impl From<FacetsDigest> for String {
+    fn from(digest: FacetsDigest) -> Self {
+        digest.0
+    }
+}
+
+impl FacetsDigest {
+    /// `digest`, when it is spelled as a lowercase hex SHA-256.
     #[must_use]
-    pub fn new(kind: &'static str, mut fields: Vec<(String, String)>, labels: &[Label]) -> Self {
+    pub fn parse(digest: &str) -> Option<Self> {
+        is_digest(digest).then(|| Self(digest.to_owned()))
+    }
+
+    /// The digest as the token spells it.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Facets {
+    /// The facets of an item of `kind` holding `fields` and carrying `labels`, in any order.
+    #[must_use]
+    pub fn new(kind: FacetKind, mut fields: Vec<(String, String)>, labels: &[Label]) -> Self {
         fields.sort();
         let mut labels: Vec<(String, String, Option<String>)> = labels
             .iter()
@@ -104,9 +164,12 @@ impl Facets {
 
     /// The lowercase hex SHA-256 of their canonical JSON: the token's facets part.
     #[must_use]
-    pub fn digest(&self) -> String {
-        // A struct of strings and lists of them always serializes.
-        asset_sha256(serde_json::to_string(self).unwrap_or_default().as_bytes())
+    pub fn digest(&self) -> FacetsDigest {
+        // A struct of strings and lists of them always serializes, and a SHA-256 is always
+        // spelled as one.
+        FacetsDigest(asset_sha256(
+            serde_json::to_string(self).unwrap_or_default().as_bytes(),
+        ))
     }
 }
 
@@ -119,7 +182,7 @@ pub fn spell(parts: &Parts) -> String {
         parts.item.to_rfc3339_opts(SecondsFormat::AutoSi, true),
         parts.comments,
         parts.relationships,
-        parts.facets,
+        parts.facets.as_str(),
         parts.repository.as_str()
     )
 }
@@ -139,7 +202,7 @@ fn parts(token: &str) -> Option<Parts> {
     let item = DateTime::parse_from_rfc3339(parts.next()?).ok()?;
     let comments = parts.next()?.parse().ok()?;
     let relationships = parts.next()?.parse().ok()?;
-    let facets = parts.next().filter(|facets| is_digest(facets))?.to_owned();
+    let facets = FacetsDigest::parse(parts.next()?)?;
     let repository = Repository::try_from(parts.next()?.to_owned()).ok()?;
     Some(Parts {
         issue: issue.with_timezone(&Utc),
@@ -201,9 +264,9 @@ mod tests {
     }
 
     /// The facets of a task in `Todo` carrying the label `bug`.
-    fn facets() -> String {
+    fn facets() -> FacetsDigest {
         Facets::new(
-            "task",
+            FacetKind::Task,
             vec![("Status".to_owned(), "Todo".to_owned())],
             &[label("L_1", "bug", "d73a4a")],
         )
@@ -219,14 +282,14 @@ mod tests {
         item: u32,
         comments: u64,
         relationships: u64,
-        facets: &str,
+        facets: &FacetsDigest,
     ) -> String {
         spell(&Parts {
             issue: at(issue),
             item: at(item),
             comments,
             relationships,
-            facets: facets.to_owned(),
+            facets: facets.clone(),
             repository: repository("github.com/acme/widgets"),
         })
     }
@@ -238,7 +301,7 @@ mod tests {
     #[test]
     fn the_facets_are_the_digest_of_their_canonical_json_whatever_order_they_arrive_in() {
         let one = Facets::new(
-            "project",
+            FacetKind::Project,
             vec![
                 ("Status".to_owned(), "Todo".to_owned()),
                 ("Priority".to_owned(), "P1".to_owned()),
@@ -246,7 +309,7 @@ mod tests {
             &[label("L_2", "ui", "ffffff"), label("L_1", "bug", "d73a4a")],
         );
         let other = Facets::new(
-            "project",
+            FacetKind::Project,
             vec![
                 ("Priority".to_owned(), "P1".to_owned()),
                 ("Status".to_owned(), "Todo".to_owned()),
@@ -259,7 +322,7 @@ mod tests {
             r#"{"kind":"project","fields":[["Priority","P1"],["Status","Todo"]],"labels":[["L_1","bug","d73a4a"],["L_2","ui","ffffff"]]}"#
         );
         assert_eq!(
-            one.digest(),
+            one.digest().as_str(),
             asset_sha256(serde_json::to_string(&one).unwrap().as_bytes())
         );
     }
@@ -283,25 +346,25 @@ mod tests {
     fn another_facet_another_relationship_count_or_another_repository_is_never_ordered() {
         let before = token(1, 1, 2, 3);
         let renamed = Facets::new(
-            "task",
+            FacetKind::Task,
             vec![("Status".to_owned(), "Todo".to_owned())],
             &[label("L_1", "defect", "d73a4a")],
         )
         .digest();
         let recoloured = Facets::new(
-            "task",
+            FacetKind::Task,
             vec![("Status".to_owned(), "Todo".to_owned())],
             &[label("L_1", "bug", "000000")],
         )
         .digest();
         let option_renamed = Facets::new(
-            "task",
+            FacetKind::Task,
             vec![("Status".to_owned(), "To do".to_owned())],
             &[label("L_1", "bug", "d73a4a")],
         )
         .digest();
         let became_a_project = Facets::new(
-            "project",
+            FacetKind::Project,
             vec![("Status".to_owned(), "Todo".to_owned())],
             &[label("L_1", "bug", "d73a4a")],
         )
@@ -362,7 +425,18 @@ mod tests {
     fn crossed_times_and_foreign_or_older_values_are_not_ordered() {
         assert_eq!(order(&token(2, 1, 0, 0), &token(1, 2, 0, 0)), None);
         assert_eq!(order("md1|abc", &token(1, 1, 0, 0)), None);
-        let digest = facets();
+        let digest = facets().as_str().to_owned();
+        for spelled in ["not-a-digest", &digest.to_uppercase(), &digest[1..]] {
+            assert_eq!(FacetsDigest::parse(spelled), None, "{spelled}");
+            assert!(
+                serde_json::from_value::<FacetsDigest>(serde_json::json!(spelled)).is_err(),
+                "a context record holding {spelled} is refused"
+            );
+        }
+        assert_eq!(
+            serde_json::from_value::<FacetsDigest>(serde_json::json!(digest)).ok(),
+            Some(facets())
+        );
         for malformed in [
             format!("gh3|not-a-time|x|1|0|{digest}|github.com/a/b"),
             format!("gh3|2026-10-01T00:00:01Z|2026-10-01T00:00:01Z|0|0|{digest}|"),

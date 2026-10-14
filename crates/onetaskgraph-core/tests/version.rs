@@ -51,7 +51,7 @@ fn board_token(
         item,
         comments,
         relationships,
-        facets: github::Facets::new("task", Vec::new(), &[]).digest(),
+        facets: github::Facets::new(github::FacetKind::Task, Vec::new(), &[]).digest(),
         repository: Repository::try_from("github.com/acme/widgets".to_owned())
             .expect("a repository origin"),
     })

@@ -9665,7 +9665,7 @@ struct Resolved {
     /// The digest of its [`change_token::Facets`] — its own kind, its board field values and
     /// its labels — when the read that reached it carried all three whole.
     #[serde(default)]
-    facets: Option<String>,
+    facets: Option<change_token::FacetsDigest>,
     own_repository: Option<Repository>,
     repositories: Vec<Repository>,
     classification: Classification,
@@ -10094,11 +10094,11 @@ impl BoardKind {
     }
 
     /// What the change token's facets call this kind.
-    const fn facet(self) -> &'static str {
+    const fn facet(self) -> change_token::FacetKind {
         match self {
-            Self::Document => "document",
-            Self::Work(ItemKind::Project) => "project",
-            Self::Work(ItemKind::Task) => "task",
+            Self::Document => change_token::FacetKind::Document,
+            Self::Work(ItemKind::Project) => change_token::FacetKind::Project,
+            Self::Work(ItemKind::Task) => change_token::FacetKind::Task,
         }
     }
 
@@ -11419,7 +11419,7 @@ fn facet_fields(field_values: &[Value]) -> Vec<(String, String)> {
 /// label, and every field value.
 ///
 /// What a write's own response spells its token from, by exactly the rules a read takes them by.
-fn facets_of(content: &Value, field_values: &Value) -> Option<String> {
+fn facets_of(content: &Value, field_values: &Value) -> Option<change_token::FacetsDigest> {
     let ended = |connection: &Value| {
         connection.pointer("/pageInfo/hasNextPage") == Some(&Value::Bool(false))
     };
