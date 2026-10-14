@@ -5856,7 +5856,8 @@ fn linear_first_page(nodes: Vec<Value>) -> Value {
 
 /// Add to `answer`, the plain document's, what the cache's `operation` selects beside it: each
 /// issue's first page of comments, relations and inverse relations, each project's first page
-/// of relations, or — for a dependency read — every other part of its token.
+/// of relations and inverse relations, or — for a dependency read — every other part of its
+/// token.
 fn linear_widen(operation: &str, answer: &mut Value, data: &Value, vars: &Value) {
     use onetaskgraph_linear::graphql;
     let relations = |key: &str, suffix: &str, id: &str, connection: &str| {
@@ -5898,6 +5899,8 @@ fn linear_widen(operation: &str, answer: &mut Value, data: &Value, vars: &Value)
     let widen_project = |project: &mut Value| {
         if let Some(id) = project.get("id").and_then(Value::as_str).map(str::to_owned) {
             project["relations"] = relations("project_dependencies", "Project", &id, "relations");
+            project["inverseRelations"] =
+                relations("project_dependencies", "Project", &id, "inverseRelations");
         }
     };
     let row = |collection: &str| {

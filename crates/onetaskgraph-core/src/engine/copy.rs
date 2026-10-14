@@ -1069,6 +1069,9 @@ struct Running {
     /// Keyed by the source project and the source the item lands in, because a routed task
     /// lands in its home's member project rather than in the home.
     filings: BTreeMap<(String, SourceName), Option<NativeId>>,
+    /// Every source whose first page of projects this command read to pin them — see
+    /// [`Engine::pin_filing_projects`] — so it is read at most once.
+    projects_paged: BTreeSet<SourceName>,
     /// Every home project this copy has learned the member projects of, by the home's
     /// qualified id: which members it holds, and whether this copy added one.
     homes: BTreeMap<String, Home>,
@@ -3162,6 +3165,9 @@ impl Engine {
             .await?;
         }
 
+        if project.is_none() {
+            self.pin_filing_projects(&planned, running).await;
+        }
         // Resolved once per item, and used by both passes: the repair pass writes the
         // same item again, and re-deriving this there could file it somewhere else.
         let mut filed = Vec::new();
@@ -4510,6 +4516,60 @@ impl Engine {
         };
         running.filings.insert(key, filed.clone());
         Ok(filed)
+    }
+
+    /// Pin the projects the items of `planned` are filed under, so the filing lookup's read of
+    /// each — [`Engine::linked_project`] — is answered from the source's cache while unchanged.
+    ///
+    /// Only for a source whose cache stands in front of it, only when the items name at least
+    /// two of its projects this command has not already looked up, and only one page: a
+    /// listing pins every project it carries, and the rest are read by id as they always were.
+    /// So it never costs more than one request over reading each project, and saves one per
+    /// project the page carried beyond the first. A page that fails costs only that request:
+    /// every read it would have pinned is made as before, and reports its own failure.
+    async fn pin_filing_projects(&self, planned: &[Planned], running: &mut Running) {
+        let mut named: BTreeMap<SourceName, BTreeSet<NativeId>> = BTreeMap::new();
+        for item in planned.iter().filter(|item| !item.skipped) {
+            let project = match &item.item {
+                Item::Task(task) => task.project.as_ref(),
+                Item::Document(document) => document.project.as_ref(),
+                Item::Project(_) => None,
+            };
+            let Some(project) = project else { continue };
+            let qualified = GlobalId::new(item.source.source.clone(), project.clone());
+            if running.counterparts.contains_key(&qualified.to_string())
+                || running
+                    .filings
+                    .contains_key(&(qualified.to_string(), item.to.clone()))
+            {
+                continue;
+            }
+            named
+                .entry(item.source.source.clone())
+                .or_default()
+                .insert(project.clone());
+        }
+        for (name, projects) in named {
+            if projects.len() < 2 || !self.caches(&name) || running.projects_paged.contains(&name) {
+                continue;
+            }
+            let Ok(source) = self.readable(&name) else {
+                continue;
+            };
+            let capabilities = source.source().capabilities();
+            if !capabilities.projects.is_native() {
+                continue;
+            }
+            running.projects_paged.insert(name);
+            let page = PageRequest {
+                cursor: None,
+                limit: capabilities.max_page_size.max(1),
+            };
+            let _ = source
+                .source()
+                .query_projects(&ProjectQuery::default(), &page)
+                .await;
+        }
     }
 
     /// The counterpart a source project has in some source this copy can reach — its home —

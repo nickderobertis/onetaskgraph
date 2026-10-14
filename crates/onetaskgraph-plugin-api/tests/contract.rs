@@ -2702,12 +2702,17 @@ fn a_source_that_declares_nothing_more_keeps_reverse_and_project_edges_remote() 
             source.edges_version(ItemKind::Task, &id, Direction::DependedOnBy),
             None
         );
-        let reason = source
-            .reverse_edges_coverage()
-            .reason()
-            .map(str::to_owned)
-            .expect("reverse edges are not covered");
-        assert!(reason.contains(source.kind()), "{reason}");
+        for (kind, named) in [(ItemKind::Task, "task"), (ItemKind::Project, "project")] {
+            let reason = source
+                .reverse_edges_coverage(kind)
+                .reason()
+                .map(str::to_owned)
+                .expect("reverse edges are not covered");
+            assert!(
+                reason.contains(source.kind()) && reason.contains(named),
+                "{reason}"
+            );
+        }
     }
     // A task's forward edges answer what the older hook answers.
     assert_eq!(

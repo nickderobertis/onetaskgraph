@@ -213,7 +213,8 @@ fn the_protocols_price_table_and_budget_thresholds_are_the_ones_the_budgets_use(
     let task_pages = p::RELATIONS_PAGE + p::INVERSE_RELATIONS_PAGE + p::COMMENTS_PAGE;
     let at = |at_100: u64, first: u64| (at_100 * first).div_ceil(100);
     let row = p::ISSUES_ROW + task_pages;
-    let project_row = p::PROJECTS_ROW + p::PROJECT_RELATIONS_PAGE;
+    let project_row =
+        p::PROJECTS_ROW + p::PROJECT_RELATIONS_PAGE + p::PROJECT_INVERSE_RELATIONS_PAGE;
     for line in [
         format!(
             "| `ISSUES`, at 100 rows | {} + {} a row: {} | {} + {row} a row: **{}** |",
@@ -244,7 +245,7 @@ fn the_protocols_price_table_and_budget_thresholds_are_the_ones_the_budgets_use(
         format!(
             "| `PROJECT` | {} | {} |",
             p::PROJECT,
-            p::PROJECT + p::PROJECT_RELATIONS_PAGE
+            p::PROJECT + p::PROJECT_RELATIONS_PAGE + p::PROJECT_INVERSE_RELATIONS_PAGE
         ),
         format!(
             "| `PROJECT_RELATIONS` | {}, at `first:100` | {}, at `first:{page}` |",

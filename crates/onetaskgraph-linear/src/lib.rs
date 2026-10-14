@@ -403,12 +403,12 @@ pub const MAX_PAGE_SIZE: u32 = 100;
 /// The rows a projects listing asks for at most while the store's cache stands in front of this
 /// source.
 ///
-/// Linear prices `projects` by the rows a request asks for: 70 a row plain, and 95 with the
-/// relations page a project's token is read from (`spike-linear-coverage`, about 9,491 at 100
-/// rows, within 509 of Linear's per-query cap of 10,000). Ninety rows price at 8,550, under the
-/// `linear-cache-largest-query-complexity` guard of 9,000; a listing of more than ninety projects
-/// takes one more request, which the `linear-cache-cost-not-above-uncached` budget counts.
-pub const PROJECTS_CACHED_PAGE: u32 = 90;
+/// Linear prices `projects` by the rows a request asks for: 70 a row plain, 95 with the relations
+/// page a project's token is read from (`spike-linear-coverage`, about 9,491 at 100 rows), and,
+/// taking the inverse relations page at the relations page's 25, 120 with both. Seventy-four rows
+/// price at 8,880, under the `linear-cache-largest-query-complexity` guard of 9,000; a listing of
+/// more than seventy-four projects takes another request a page, which the hour budgets count.
+pub const PROJECTS_CACHED_PAGE: u32 = 74;
 const DEFAULT_ENDPOINT: &str = "https://api.linear.app/graphql";
 
 /// Exact GraphQL query documents issued by this plugin.
@@ -579,9 +579,13 @@ pub mod graphql {
     /// page it already reads.
     pub const COMMENTS_PAGE: &str = "comments(first:10){nodes{id updatedAt} pageInfo{hasNextPage}}";
     /// The first page of a project's relations a project's `lin1` token's relations part is
-    /// spelled from: what [`PROJECTS_CACHED`] and [`PROJECT_CACHED`] add.
+    /// spelled from: one of what [`PROJECTS_CACHED`] and [`PROJECT_CACHED`] add.
     pub const PROJECT_RELATIONS_PAGE: &str =
         "relations(first:10){nodes{id type relatedProject{id}} pageInfo{hasNextPage}}";
+    /// The first page of a project's inverse relations — what depends on it — a project's
+    /// `lin1` token's inverse part is spelled from, added beside [`PROJECT_RELATIONS_PAGE`].
+    pub const PROJECT_INVERSE_RELATIONS_PAGE: &str =
+        "inverseRelations(first:10){nodes{id type project{id}} pageInfo{hasNextPage}}";
     /// What [`ISSUE_RELATIONS_CACHED`] adds to [`ISSUE_RELATIONS`]: every part of a task's
     /// `lin1` token beside the two relations pages that document already reads, and nothing
     /// else.
@@ -604,14 +608,15 @@ pub mod graphql {
     /// its edges are kept at.
     pub const ISSUE_RELATIONS_CACHED: &str = "query($id:String!,$first:Int!,$after:String){ issue(id:$id){ updatedAt identifier url state{name type} labels{nodes{id name color}} project{id} comments(first:10){nodes{id updatedAt} pageInfo{hasNextPage}} description relations(first:$first,after:$after){nodes{id type relatedIssue{id}} pageInfo{hasNextPage endCursor}} inverseRelations(first:$first,after:$after){nodes{id type issue{id}} pageInfo{hasNextPage endCursor}} } }";
     /// [`PROJECTS`], sent in its place while the store's cache stands in front of this source:
-    /// with [`PROJECT_RELATIONS_PAGE`], so a listing pins each project to the token its forward
-    /// edges are kept at. Sent at most [`super::PROJECTS_CACHED_PAGE`] rows a page.
-    pub const PROJECTS_CACHED: &str = "query($first:Int!,$after:String,$filter:ProjectFilter){ projects(first:$first,after:$after,filter:$filter){ nodes{id name content url createdAt updatedAt status{name type} labels{nodes{id name color}} relations(first:10){nodes{id type relatedProject{id}} pageInfo{hasNextPage}}} pageInfo{hasNextPage endCursor} } }";
+    /// with [`PROJECT_RELATIONS_PAGE`] and [`PROJECT_INVERSE_RELATIONS_PAGE`], so a listing pins
+    /// each project to the token its edges are kept at. Sent at most
+    /// [`super::PROJECTS_CACHED_PAGE`] rows a page.
+    pub const PROJECTS_CACHED: &str = "query($first:Int!,$after:String,$filter:ProjectFilter){ projects(first:$first,after:$after,filter:$filter){ nodes{id name content url createdAt updatedAt status{name type} labels{nodes{id name color}} relations(first:10){nodes{id type relatedProject{id}} pageInfo{hasNextPage}} inverseRelations(first:10){nodes{id type project{id}} pageInfo{hasNextPage}}} pageInfo{hasNextPage endCursor} } }";
     /// [`PROJECT`], sent in its place while the store's cache stands in front of this source.
-    pub const PROJECT_CACHED: &str = "query($id:String!){ project(id:$id){ id name content url createdAt updatedAt archivedAt status{name type} labels{nodes{id name color}} relations(first:10){nodes{id type relatedProject{id}} pageInfo{hasNextPage}} } }";
+    pub const PROJECT_CACHED: &str = "query($id:String!){ project(id:$id){ id name content url createdAt updatedAt archivedAt status{name type} labels{nodes{id name color}} relations(first:10){nodes{id type relatedProject{id}} pageInfo{hasNextPage}} inverseRelations(first:10){nodes{id type project{id}} pageInfo{hasNextPage}} } }";
     /// [`PROJECT_RELATIONS`], sent in its place while the store's cache stands in front of this
-    /// source: with [`PROJECT_TOKEN_PARTS`], so a forward dependency read spells the token its
-    /// edges are kept at.
+    /// source: with [`PROJECT_TOKEN_PARTS`], so a dependency read in either direction spells the
+    /// token its edges are kept at.
     pub const PROJECT_RELATIONS_CACHED: &str = "query($id:String!,$first:Int!,$after:String){ project(id:$id){ updatedAt status{name type} labels{nodes{id name color}} content relations(first:$first,after:$after){nodes{id type relatedProject{id}} pageInfo{hasNextPage endCursor}} inverseRelations(first:$first,after:$after){nodes{id type project{id}} pageInfo{hasNextPage endCursor}} } }";
     /// Place one comment: which issue it is on, if any.
     ///
@@ -2848,6 +2853,12 @@ const REVERSE_EDGES_UNATTACHED: &str = "a relation another linear issue records 
      moves no part of this issue's token until the cache attaches the inverse relations page its \
      inverse part is read from";
 
+/// Why a Linear project's token does not vouch for its reverse edges while no cache is attached.
+const PROJECT_REVERSE_EDGES_UNATTACHED: &str = "a linear project's updatedAt moved for 0 of 2 \
+     relation changes another project made with it (spike-linear-coverage), so its token vouches \
+     for its reverse edges only once the cache attaches the inverse relations page its inverse \
+     part is read from";
+
 /// Why a Linear project's token does not vouch for its forward edges while no cache is attached.
 const PROJECT_EDGES_UNATTACHED: &str = "a linear project's updatedAt moved for 0 of 2 relation \
      changes (spike-linear-coverage), so its token vouches for its forward edges only once the \
@@ -2879,11 +2890,14 @@ impl TaskSource for LinearSource {
             forward_edges: self.attached_coverage(PROJECT_EDGES_UNATTACHED),
         }
     }
-    /// A task's reverse edges once the cache is attached: its token then carries the digest of
-    /// its first page of inverse relations, which moves for every relation another issue adds
-    /// or removes with it.
-    fn reverse_edges_coverage(&self) -> onetaskgraph_plugin_api::Coverage {
-        self.attached_coverage(REVERSE_EDGES_UNATTACHED)
+    /// A task's and a project's reverse edges once the cache is attached: the token then carries
+    /// the digest of its first page of inverse relations, which moves for every relation another
+    /// item adds or removes with it.
+    fn reverse_edges_coverage(&self, kind: ItemKind) -> onetaskgraph_plugin_api::Coverage {
+        self.attached_coverage(match kind {
+            ItemKind::Task => REVERSE_EDGES_UNATTACHED,
+            ItemKind::Project => PROJECT_REVERSE_EDGES_UNATTACHED,
+        })
     }
     /// A document's fields; never its asset manifest.
     fn document_version_coverage(&self) -> onetaskgraph_plugin_api::DocumentVersionCoverage {
@@ -4141,8 +4155,7 @@ impl LinearSource {
     /// whether it still agrees with the token the first page spelled — the recorded far ends'
     /// page, read from a long form a change of which moves the time the token carries, keeps it
     /// only while the rest of the token before its relations part is the same, and a page of
-    /// relations past the first ends it. A project's reverse edges are never kept, so nothing is
-    /// noted for them.
+    /// relations past the first ends it.
     fn note_edges_version(
         &self,
         root: DependencyRoot,
@@ -4151,9 +4164,7 @@ impl LinearSource {
         data: &Value,
         page: WalkPage,
     ) {
-        if !self.attached()
-            || (root, direction) == (DependencyRoot::Project, Direction::DependedOnBy)
-        {
+        if !self.attached() {
             return;
         }
         let item = data.get(root.as_str()).unwrap_or(&Value::Null);

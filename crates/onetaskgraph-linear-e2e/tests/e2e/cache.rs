@@ -3,13 +3,13 @@
 //!
 //! Linear's `lin1` token — an item's `updatedAt`, the digest of its facets and, with the cache
 //! attached, the digests of a task's first page of comments, relations and inverse relations and
-//! of a project's first page of relations — covers a task's fields and forward edges, a project's
-//! fields and a document's fields, so a read pinned to a token the entry is at or after sends
-//! nothing. Every change `spike-linear-coverage` measured `updatedAt` alone missing, and every
-//! member the facets embed, moves the token: a read pinned to the new listing token reads Linear
-//! and answers what an uncached read does. `cache_parts.rs` holds comments, reverse edges and a
-//! project's forward edges to the same; a project's reverse edges and every listing are always
-//! read from Linear.
+//! of a project's first page of relations and inverse relations — covers a task's fields and
+//! forward edges, a project's fields and a document's fields, so a read pinned to a token the
+//! entry is at or after sends nothing. Every change `spike-linear-coverage` measured `updatedAt`
+//! alone missing, and every member the facets embed, moves the token: a read pinned to the new
+//! listing token reads Linear and answers what an uncached read does. `cache_parts.rs` holds
+//! comments, reverse edges and a project's edges to the same; every listing is always read from
+//! Linear.
 
 use std::path::{Path, PathBuf};
 use std::process::Output;
@@ -838,26 +838,6 @@ fn every_linear_read_kept_remote_reaches_linear_every_time_and_costs_what_it_did
     let dir = cached.dir().expect("a cache");
     let filled = walk(&dir);
     let remote: Vec<Vec<&str>> = vec![
-        // A project's reverse edges, pinned or not: no part of a project's token moves for a
-        // relation another project records with it (0 of 2 in spike-linear-coverage).
-        vec![
-            "project",
-            "deps",
-            "linear:P-2",
-            "--direction",
-            "depended-on-by",
-            "--pin",
-            &project_pin,
-            "--json",
-        ],
-        vec![
-            "project",
-            "deps",
-            "linear:P-2",
-            "--direction",
-            "depended-on-by",
-            "--json",
-        ],
         vec!["task", "list", "--source", "linear", "--json"],
         vec!["project", "list", "--source", "linear", "--json"],
         vec!["document", "list", "--source", "linear", "--json"],

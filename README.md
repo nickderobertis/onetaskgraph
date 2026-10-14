@@ -1225,8 +1225,8 @@ cache never asks a source whether something changed:
 - A part of a record the source's token does not cover is never served, and neither is a
   record with no token — a GitHub item changed within the minute before its read, a draft, or a
   Linear item whose labels, comments, relations or inverse relations came back as only a first
-  page, which with the cache on is a task with more than ten comments, relations or dependents
-  and a project with more than ten relations. The read goes to the
+  page, which with the cache on is a task or a project with more than ten relations or
+  dependents, and a task with more than ten comments. The read goes to the
   source and says why.
 
 **What each source's token is, and what it covers.** `docs/plugin-protocol.md` §4.13d states
@@ -1245,13 +1245,12 @@ each remote one is remote.
   identifier, labels, project, state and url; for a project its labels and status; for a document
   its content's digest, project, title and url — and, with the cache on, digests of first pages:
   a task's comments (each one's id and update time), relations and inverse relations, and a
-  project's relations. Each part is what `updatedAt` was measured missing on a real team: a label
+  project's relations and inverse relations. Each part is what `updatedAt` was measured missing on a real team: a label
   renamed or recoloured and a workflow state renamed (3 of 3), a relation added (3 of 3), a
   comment added, edited or deleted (0 of 3 moved it), a project relation added or removed (0 of
   2), and a document's content edited (4 of 4). With the cache on it covers a task's fields,
-  comments and edges both ways, a project's fields and forward edges, and a document's fields. A
-  project's reverse edges are always read from Linear: the far project's time moved for neither
-  of 2 relation changes, and its token spells no part of its inverse relations.
+  comments and edges both ways, a project's fields and edges both ways, and a document's
+  fields.
 - **A Linear comment's author is the one member served older than its token.** A person renaming
   themselves moves no part of any token, so a comment served from the cache names its author as
   they were named when the entry was filled; its id, body, times and the set of comments are
@@ -1263,7 +1262,7 @@ never over the stdio plugin protocol: `attach_cache`, called once when the cache
 and before any read, which is what lets Linear widen the queries below; `forward_edges_version`
 and `edges_version`, defaulted to none, the token the response that answered an item's last
 dependency read in a direction spelled; and `reverse_edges_coverage`, defaulted to uncovered. A
-Linear task's forward and reverse edges, and a project's forward edges, are each kept in an entry
+Linear task's and project's forward and reverse edges are each kept in an entry
 of their own keyed by that version, served only to a pin at that version or a later one — so
 `project graph` lists a project's tasks and the next run answers their dependencies from the
 cache, sending no dependency request while the listed tokens are unchanged — and never vouch for
@@ -1271,9 +1270,12 @@ the item's own fields. A GitHub board keeps the defaults: its edges are always r
 
 **Turning the cache on widens seven Linear queries.** `ISSUES`, `ISSUE` and `ISSUE_DETAIL` gain
 the comments, relations and inverse relations pages the token is read from, `PROJECTS` and
-`PROJECT` the project relations page, and `ISSUE_RELATIONS` and `PROJECT_RELATIONS` the token's
-other parts, so a dependency read can fill an entry; a write's own read of its target sends the
-plain query. With the cache off every query is the one 0.6.0 sent. What each widened query costs,
+`PROJECT` the project relations and inverse relations pages, and `ISSUE_RELATIONS` and
+`PROJECT_RELATIONS` the token's other parts, so a dependency read can fill an entry; a write's
+own read of its target sends the plain query. A copy filing items under two or more of a caching
+source's projects reads one page of that source's projects first, which pins them, so the
+filing lookup's read of each is answered from the cache while unchanged — at most one request
+over reading each, and only when that page pins none of them. With the cache off every query is the one 0.6.0 sent. What each widened query costs,
 the page sizes the cache asks for, and the budgets that hold the cache to sending fewer requests
 than no cache over an hour and to its share of the key's hourly limits are in
 `docs/plugin-protocol.md` §4.13e, with their thresholds in

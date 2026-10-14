@@ -1,13 +1,15 @@
-//! A Linear task's comments and reverse edges, and a project's forward edges, answered from the
-//! store's cache, driven through the binary against the loopback Linear, doubling only Linear.
+//! A Linear task's comments and reverse edges, and a project's edges both ways, answered from
+//! the store's cache, driven through the binary against the loopback Linear, doubling only
+//! Linear.
 //!
 //! With the cache attached a task's `lin1` token carries the digests of its first page of
-//! comments, relations and inverse relations, and a project's the digest of its first page of
-//! relations, so a read of any of those pinned to a token the entry is at or after sends
-//! nothing. Every change to them moves the token — a comment added, edited or deleted, a project
-//! relation added or removed, a relation another issue records with this one — and a read pinned
-//! to the new listing token reads Linear and answers what an uncached read does. The one member
-//! served older than its token is a comment author's display name, which no part covers.
+//! comments, relations and inverse relations, and a project's the digests of its first page of
+//! relations and inverse relations, so a read of any of those pinned to a token the entry is at
+//! or after sends nothing. Every change to them moves the token — a comment added, edited or
+//! deleted, a relation added or removed from either end — and a read pinned to the new listing
+//! token reads Linear and answers what an uncached read does. The one member served older than
+//! its token is a comment author's display name, which no part covers. A copy filing under two
+//! or more projects reads one page of them, which pins them, and no more.
 
 use std::path::Path;
 
@@ -81,6 +83,14 @@ const PROJECT_EDGES: Read = Read {
     arguments: |pin| words("project deps linear:P-1", pin),
 };
 
+/// A project's reverse edges: `P-1` depends on `P-2`.
+const PROJECT_REVERSE_EDGES: Read = Read {
+    name: "reverse project deps",
+    kind: "project",
+    id: "linear:P-2",
+    arguments: |pin| words("project deps linear:P-2 --direction depended-on-by", pin),
+};
+
 /// A task's reverse edges.
 const REVERSE_EDGES: Read = Read {
     name: "reverse task deps",
@@ -150,6 +160,11 @@ fn every_comment_and_edge_read_is_a_cold_load_a_hit_on_an_unchanged_pin_and_a_mi
             REVERSE_EDGES,
             graphql::ISSUE_RELATIONS_CACHED,
             Box::new(|w| w.relate("L-3", "L-2", "blocks")),
+        ),
+        (
+            PROJECT_REVERSE_EDGES,
+            graphql::PROJECT_RELATIONS_CACHED,
+            Box::new(|w| w.relate_projects("P-3", "P-2")),
         ),
     ];
     for (read, cold, change) in reads {
@@ -277,6 +292,17 @@ fn a_comment_or_edge_read_its_token_cannot_vouch_for_is_never_kept_or_served() {
             "project-edges-v2",
             "/relations/pageInfo/hasNextPage",
         ),
+        (
+            "eleven projects depending on one",
+            Box::new(|w| {
+                for n in 0..10 {
+                    w.relate_projects(["P-1", "P-3"][n % 2], "P-2");
+                }
+            }),
+            PROJECT_REVERSE_EDGES,
+            "project-reverse-edges-v2",
+            "/inverseRelations/pageInfo/hasNextPage",
+        ),
     ];
     for (case, make, read, directory, more) in cases {
         let cached = Cached::new(held());
@@ -369,6 +395,7 @@ fn a_comment_or_edge_read_its_token_cannot_vouch_for_is_never_kept_or_served() {
         (DETAIL, "linear:L-3"),
         (REVERSE_EDGES, "linear:L-3"),
         (PROJECT_EDGES, "linear:P-3"),
+        (PROJECT_REVERSE_EDGES, "linear:P-3"),
     ] {
         let cached = Cached::new(held());
         let pin = filled(&cached, &read);
@@ -389,7 +416,7 @@ fn a_comment_or_edge_read_its_token_cannot_vouch_for_is_never_kept_or_served() {
 }
 
 /// `token`, of an item of `kind`, as the release before this one spelled an attached token: its
-/// time and facets, and — for a task — a relations part alone, where a project had none.
+/// time and facets, and — for a task — a relations part alone, where a project had no part.
 fn earlier_spelling(kind: &str, token: &str) -> String {
     let mut parts = token.split('|');
     let (prefix, updated, facets) = (
@@ -497,6 +524,24 @@ fn every_comment_and_relation_change_is_read_again_pinned_to_the_new_token() {
             "the far issue trashed",
             Box::new(|w| w.trash_issue("L-1")),
             REVERSE_EDGES,
+            false,
+        ),
+        (
+            "a project relation added by the far project",
+            Box::new(|w| w.relate_projects("P-3", "P-2")),
+            PROJECT_REVERSE_EDGES,
+            true,
+        ),
+        (
+            "a project relation removed by the far project",
+            Box::new(|w| w.unrelate_projects("P-1", "P-2")),
+            PROJECT_REVERSE_EDGES,
+            true,
+        ),
+        (
+            "the far project deleted",
+            Box::new(|w| w.remove_project("P-1")),
+            PROJECT_REVERSE_EDGES,
             false,
         ),
     ];
@@ -733,8 +778,10 @@ fn every_relation_write_takes_the_edges_entries_it_can_change_out_of_service() {
     )
     .expect("the edit");
     let pin = filled(&cached, &PROJECT_EDGES);
+    let reverse_pin = filled(&cached, &PROJECT_REVERSE_EDGES);
     let dir = cached.dir().expect("a cache");
     assert!(entry(&dir, "project-edges-v2", "P-1").exists());
+    assert!(entry(&dir, "project-reverse-edges-v2", "P-2").exists());
     let (back, _) = cached.ok(&[
         "project",
         "copy",
@@ -752,6 +799,13 @@ fn every_relation_write_takes_the_edges_entries_it_can_change_out_of_service() {
     let (edges, sent) = cached.ok(&strs(&PROJECT_EDGES.with(&pin)));
     assert_eq!(sent.len(), 1, "the read after the write is Linear's");
     assert_eq!(edges["items"], json!([]), "{edges}");
+    assert!(
+        !entry(&dir, "project-reverse-edges-v2", "P-2").exists(),
+        "and the far project's reverse edges, which that relation was recorded on too"
+    );
+    let (depended, sent) = cached.ok(&strs(&PROJECT_REVERSE_EDGES.with(&reverse_pin)));
+    assert_eq!(sent.len(), 1, "the far project's next read is Linear's");
+    assert_eq!(depended["items"], json!([]), "{depended}");
 }
 
 #[test]
@@ -794,6 +848,8 @@ fn a_copy_taken_back_takes_every_edges_entry_its_deletes_can_change_out_of_servi
     let dir = cached.dir().expect("a cache");
     assert!(entry(&dir, "reverse-edges-v2", "L-2").exists());
     assert!(entry(&dir, "project-edges-v2", "P-1").exists());
+    filled(&cached, &PROJECT_REVERSE_EDGES);
+    assert!(entry(&dir, "project-reverse-edges-v2", "P-2").exists());
 
     let output = cached.run(&["project", "copy", "notes:NP", "--to", "linear", "--json"]);
     assert_ne!(
@@ -821,6 +877,10 @@ fn a_copy_taken_back_takes_every_edges_entry_its_deletes_can_change_out_of_servi
     assert!(
         !entry(&dir, "reverse-edges-v2", "L-2").exists(),
         "and every task's reverse edges"
+    );
+    assert!(
+        !entry(&dir, "project-reverse-edges-v2", "P-2").exists(),
+        "and every project's reverse edges"
     );
     let (_, sent) = cached.ok(&strs(&PROJECT_EDGES.with(&project_pin)));
     assert_eq!(sent.len(), 1, "the next read is Linear's");
@@ -968,20 +1028,26 @@ fn cache_clear_reclaims_reverse_and_project_edge_entries_and_counts_them() {
     let cached = Cached::new(held());
     filled(&cached, &REVERSE_EDGES);
     filled(&cached, &PROJECT_EDGES);
+    filled(&cached, &PROJECT_REVERSE_EDGES);
     let dir = cached.dir().expect("a cache");
     let entries = |directory: &str| walk(&dir.join(directory)).len();
     assert_eq!(
-        (entries("reverse-edges-v2"), entries("project-edges-v2")),
-        (1, 1)
+        (
+            entries("reverse-edges-v2"),
+            entries("project-edges-v2"),
+            entries("project-reverse-edges-v2")
+        ),
+        (1, 1, 1)
     );
     let foreign = dir.join("reverse-edges-v2/not-ours.json");
     std::fs::write(&foreign, b"{\"kind\": \"something else\"}").expect("a foreign file");
     let (cleared, _) = cached.ok(&["cache", "clear", "linear", "--json"]);
     assert!(
-        cleared["cleared"][0]["entries"].as_u64() >= Some(2),
-        "both are counted: {cleared}"
+        cleared["cleared"][0]["entries"].as_u64() >= Some(3),
+        "all three are counted: {cleared}"
     );
     assert_eq!(entries("project-edges-v2"), 0);
+    assert_eq!(entries("project-reverse-edges-v2"), 0);
     assert_eq!(
         walk(&dir.join("reverse-edges-v2")),
         [foreign],
@@ -1121,4 +1187,96 @@ fn a_project_edge_walk_read_across_a_change_between_its_pages_is_never_kept() {
         2,
         "the next command reads both pages from Linear again"
     );
+}
+
+#[test]
+fn a_copy_filing_tasks_under_several_projects_reads_one_page_of_them_and_no_more() {
+    // Eighty projects: more than the seventy-four one page of them holds, so `PX-79` is past it.
+    let projects: Vec<Value> = (0..80)
+        .map(|n| {
+            json!({"id": format!("PX-{n}"), "title": format!("Project {n}"),
+                   "content": format!("About {n}."),
+                   "status": {"category": "todo", "name": "Todo"}, "labels": []})
+        })
+        .collect();
+    let task = |id: &str, project: &str, case: &str| {
+        crate::linear::issue(
+            id,
+            "Todo",
+            json!({"project": project, "metadata": {"pin.case": case}}),
+        )
+    };
+    let workspace = crate::linear::held(
+        vec![
+            task("TX-1", "PX-0", "many"),
+            task("TX-2", "PX-1", "many"),
+            task("TX-3", "PX-79", "many"),
+            task("TX-4", "PX-2", "one"),
+        ],
+        projects,
+        Vec::new(),
+    );
+    let copy = |case: &str| {
+        [
+            "task",
+            "copy",
+            "--to",
+            "notes",
+            "--source",
+            "linear",
+            "--metadata",
+            &format!("pin.case={case}"),
+            "--dry-run",
+            "--no-link",
+            "--json",
+        ]
+        .map(str::to_owned)
+        .to_vec()
+    };
+    let count =
+        |sent: &[String], document: &str| sent.iter().filter(|sent| *sent == document).count();
+    let cached = Cached::new(workspace);
+
+    // Three projects named, two on the first page: the cold copy reads that page and each
+    // project, filling them; the warm one reads the page and only the project past it.
+    let (_, cold) = cached.ok(&strs(&copy("many")));
+    assert_eq!(
+        count(&cold, graphql::PROJECTS_CACHED),
+        1,
+        "one page: {cold:?}"
+    );
+    assert_eq!(count(&cold, graphql::PROJECT_CACHED), 3, "{cold:?}");
+    let before = cached.workspace.served().len();
+    let (warm_answer, warm) = cached.ok(&strs(&copy("many")));
+    assert_eq!(count(&warm, graphql::PROJECTS_CACHED), 1, "{warm:?}");
+    let read: Vec<Value> = cached.workspace.served()[before..]
+        .iter()
+        .filter(|(document, _)| document == graphql::PROJECT_CACHED)
+        .map(|(_, variables)| variables["id"].clone())
+        .collect();
+    assert_eq!(
+        read,
+        [json!("PX-79")],
+        "only the project the page did not carry"
+    );
+
+    // The same copy with no cache reads each project, and answers the same.
+    let [on, off] = cached.on_and_off(&strs(&copy("many")));
+    assert_eq!(on.0, off.0, "what an uncached copy answers");
+    assert_eq!(bare(warm_answer), on.0.1);
+    assert!(
+        on.1 <= off.1,
+        "a warm copy costs no more than an uncached one: {} against {}",
+        on.1,
+        off.1
+    );
+    assert!(
+        count(&cold, graphql::PROJECTS_CACHED) + count(&cold, graphql::PROJECT_CACHED) <= 3 + 1,
+        "and a cold one at most one request over it"
+    );
+
+    // One project named: no page is read, and its project is read by id as before.
+    let (_, one) = cached.ok(&strs(&copy("one")));
+    assert_eq!(count(&one, graphql::PROJECTS_CACHED), 0, "{one:?}");
+    assert_eq!(count(&one, graphql::PROJECT_CACHED), 1, "{one:?}");
 }

@@ -1275,7 +1275,7 @@ the source (§4.13e) widens a request.
 - **A task:** `lin1|<Issue.updatedAt>|<facets>[|c:<comments>|r:<relations>|i:<inverse>]`, the
   facets being
   `{"key":<identifier>,"labels":[[<id>,<name>,<color>],...],"project":<id|null>,"state":[<name>,<type>],"url":<url>}`.
-- **A project:** `lin1|<Project.updatedAt>|<facets>[|r:<relations>]`, the facets being
+- **A project:** `lin1|<Project.updatedAt>|<facets>[|r:<relations>|i:<inverse>]`, the facets being
   `{"labels":[[<id>,<name>,<color>],...],"status":[<name>,<type>]}`.
 - **A document:** `lin1|<Document.updatedAt>|<facets>`, the facets being
   `{"content":<SHA-256 of its content>,"project":<id|null>,"title":<title>,"url":<url>}`.
@@ -1291,8 +1291,10 @@ the source (§4.13e) widens a request.
     `[[<relation id>,<type>,<relatedProject id>],...]`, from
     `relations(first:10){nodes{id type relatedProject{id}} pageInfo{hasNextPage}}`;
   - `i:` — a task's inverse relations, `[[<relation id>,<type>,<issue id>],...]`, from
-    `inverseRelations(first:10){nodes{id type issue{id}} pageInfo{hasNextPage}}`: the relations
-    other issues record with it, which is what a `DependedOnBy` read answers.
+    `inverseRelations(first:10){nodes{id type issue{id}} pageInfo{hasNextPage}}`, or a project's,
+    `[[<relation id>,<type>,<project id>],...]`, from
+    `inverseRelations(first:10){nodes{id type project{id}} pageInfo{hasNextPage}}`: the relations
+    other items record with it, which is what a `DependedOnBy` read answers.
 - **Completeness.** A labels connection names no `first` and no `pageInfo`, so a response
   returning 50 or more label nodes — Linear's default page — gives no token, and so does one
   whose comments, relations or inverse relations page reports another page or holds more than
@@ -1321,7 +1323,7 @@ below) made each change and read each part before and after:
 | a comment added, edited or deleted | **missed, 0 of 3 moved** | the comments digest | s15–s17 (session 1) |
 | a project's name or content | moved | — | s35, s36 (session 1) |
 | a project's status changed, a label added or removed | moved | the facets too | s37–s39 (session 1) |
-| a project relation added or removed | **missed, 0 of 2 moved** | the near project's relations digest; nothing on the far project | s40, s41 (session 1) |
+| a project relation added or removed | **missed, 0 of 2 moved, on either project** | the near project's relations digest, and the far project's inverse relations digest, 2 of 2 | s40, s41 (session 1) |
 | a document's title, or its project | moved | the facets too, for its project | s42, s45 (session 1) |
 | a document's content, or an asset reference in its slot | **missed, 4 of 4** | the content digest the facets carry | s43, s44 (sessions 1 and 2) |
 
@@ -1340,10 +1342,9 @@ was filled — the one member a served read may answer older than its token. Eve
 a comment — its id, body, creation and update times, and which comments there are — is served no
 older than the caller's token. **A task's reverse edges are covered by `i:` by construction** —
 it digests the very rows a `DependedOnBy` read answers — and the issue a relation names moved its
-`updatedAt` too on each of those 8 changes. **A project's reverse edges have no part**: the far
-project's `updatedAt` stayed where it was on 2 of 2 project relation adds and removes, and a
-project's token spells no part of its inverse relations, so a project's `DependedOnBy` read is
-always sent.
+`updatedAt` too on each of those 8 changes. **A project's reverse edges are covered by its `i:`
+part alone**: neither project's `updatedAt` moved for a project relation added or removed (0 of
+2), and the far project's inverse relations digest moved on both.
 
 **What a copy's skip takes a token as vouching for.** A repeat copy, or a copy by query, skips a
 task whose source token is the one its destination counterpart records only when the source's
@@ -1382,13 +1383,15 @@ rule — a copy's skip, and the board cache built on the same token.
 ### 4.13e The store's local cache
 
 A source configured with `cache.enabled` has its tasks with their comments, a task's forward and
-reverse edges, its projects with their forward edges, its documents, and the verified bytes of
+reverse edges, its projects with their forward and reverse edges, its documents, and the verified
+bytes of
 image assets kept on the host the engine runs on, keyed on the `version` of §4.13d and on
 nothing else. The rule it may never break is that **it never serves stale data**, and its cost
 is held over an hour rather than per read: over an hour of the assumed workload it sends fewer
 requests than no cache (`linear-cache-cost-not-above-uncached`, and on GitHub
 `github-cache-points-not-above-uncached`), though one read may cost more than it did — a widened
-query, or a Linear projects listing of more than 90 rows taking one more page. An entry is
+query, a Linear projects listing of more than 74 rows taking one more page, or a copy's one
+page of projects (below) that pins none of the projects it files under. An entry is
 served only when the version a
 caller pinned — explicitly, or by a listing in the same command — is that entry's version or an
 earlier one, by the source's own `order_versions`, and never when the two are `incomparable`.
@@ -1423,8 +1426,9 @@ subprocess-hosted plugin has no remote identity, so the engine keeps no cache of
   spelled. A project's forward edges and a task's reverse ones are kept only at a version it
   gives, and served only to a pin that version is at or after. Defaulted to
   `forward_edges_version` for a task's forward edges and none otherwise.
-- `reverse_edges_coverage` — whether the task token vouches for a task's reverse edges, which
-  are recorded on the tasks that depend on it. Defaulted to not covering them, with a reason.
+- `reverse_edges_coverage` — whether a task's or a project's token vouches for its reverse
+  edges, which are recorded on the items that depend on it. Defaulted to not covering them, with
+  a reason.
 - `remote_identity`, on `SourcePlugin` — what names the remote it reads, which the cache
   directory is a digest of.
 - `write_context`, `board_context`, `prime_write` and `unprime` — opaque records the cache
@@ -1451,7 +1455,7 @@ filled lazily, by a load, and nothing is pre-warmed.
 | a document's asset manifest, and a task's | served, at the version its record was served at | remote: Linear's asset reads send no request, so there is nothing to save |
 | an asset's bytes | served by digest, below | — |
 | a task's reverse edges (`DependedOnBy`) | remote: a reverse edge is another record's | served, with the cache attached; the inverse relations part is what vouches for them |
-| a project's reverse edges | remote | remote: the far project's `updatedAt` moved for 0 of 2 relation changes, and its token spells no part of its inverse relations |
+| a project's reverse edges | remote | served, with the cache attached; the project's inverse relations part is what vouches for them |
 | `query_tasks`, `query_projects`, `query_documents` | remote: they pin, and fill nothing | remote |
 | `labels`, `health`, `visibility`, and Linear's `status_names` | remote | remote |
 <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
@@ -1459,13 +1463,14 @@ filled lazily, by a load, and nothing is pre-warmed.
 **What `attach_cache` widens on Linear, and what it costs.** With the cache attached, `ISSUES`
 and `ISSUE` gain exactly the comments, relations and inverse relations pages of §4.13d,
 `ISSUE_DETAIL` the relations and inverse relations pages — its comments part is spelled from the
-comments page it already reads — and `PROJECTS` and `PROJECT` the project relations page, so
+comments page it already reads — and `PROJECTS` and `PROJECT` the project relations and inverse
+relations pages, so
 every response that fills or pins an item carries the same parts. `ISSUE_RELATIONS` gains exactly
 `updatedAt`, `identifier`, `url`, `state{name type}`, `labels{nodes{id name color}}`,
 `project{id}` and the comments page, and `PROJECT_RELATIONS` exactly `updatedAt`,
 `status{name type}` and `labels{nodes{id name color}}`, the tokens' other parts, so a dependency
 read in either direction can fill; each asks for at most 10 rows a page, the most a token
-vouches for, so an item with more takes a request a page. `PROJECTS` asks for at most 90 rows a
+vouches for, so an item with more takes a request a page. `PROJECTS` asks for at most 74 rows a
 page. Every other
 document is unchanged — `ISSUE_COMMENTS` among them, since a caching source's comment listing is
 the detail read, which already fills the comments and the fields together — and so is the read a
@@ -1473,7 +1478,7 @@ write makes of its own target, whose answer fills nothing. With no cache attache
 for byte the one 0.6.0 sent. Linear's complexity for each, against its per-query cap of 10,000,
 priced from `spike-linear-coverage`: the plain documents, the relations page on `ISSUE` (+25),
 the comments page on each `ISSUES` row (+3) and the relations page on each `PROJECTS` row asked
-for (+25) are measured; the inverse relations page is taken as the relations page's 25, the
+for (+25) are measured; each inverse relations page is taken as its relations page's 25, the
 comments page as the same 3 wherever it is added, a project's relations page on `PROJECT` as on
 `PROJECTS`, and `PROJECT_RELATIONS`' token parts as the 3 `ISSUE_RELATIONS`' were measured at:
 
@@ -1483,20 +1488,31 @@ comments page as the same 3 wherever it is added, a project's relations page on 
 | `ISSUE` | 6 | 59 |
 | `ISSUE_DETAIL`, at `last:100` | 11 | 61 |
 | `ISSUE_RELATIONS` | 522, at `first:100` | 56, at `first:10` |
-| `PROJECTS` | 70 a row asked for: 7,000 at 100 | 95 a row asked for, at most 90: **8,550** |
-| `PROJECT` | 69 | 94 |
+| `PROJECTS` | 70 a row asked for: 7,000 at 100 | 120 a row asked for, at most 74: **8,880** |
+| `PROJECT` | 69 | 119 |
 | `PROJECT_RELATIONS` | 522, at `first:100` | 53, at `first:10` |
 
-So a widened query costs more than the one it replaces, and one listing of more than 90 projects
-takes one request more; the cache earns both back by the reads it answers. The
+So a widened query costs more than the one it replaces, and one listing of more than 74 projects
+takes one request more; the cache earns both back by the reads it answers.
+
+**A copy's one page of projects.** A copy files each task or document under its source project's
+counterpart, which reads that project by id to follow its link. When the copy's source caches,
+and the items it files name at least two of that source's projects it has not already looked
+up in the command, the copy reads the first page of that source's projects once, which pins
+every project it carries, so each of those reads is answered from the cache while unchanged. It
+reads one page and no more, and the rest are read by id as before, so it costs at most one request
+over reading each project, and only when that page pins none of them. A listing narrowed to the
+projects the copy names would make the saving hold at every workspace size; it needs an id
+predicate the engine's `ProjectQuery` does not have. The
 `linear-cache-cost-not-above-uncached` budget holds it to sending strictly fewer requests than no
 cache — what Linear's key runs out of first, at 2,500 an hour per user — over an hour of three
 hosts, each a cold and a warm pass over 10 projects, 40 documents and 60 issues, and at ten times
 that; and `linear-cache-largest-query-complexity` holds the dearest single query any read sends
 with the cache on to 9,000, 90% of the cap. Four more hold the cache-on hour to absolute shares
-of the key, each a share of its hourly limits: `linear-hourly-requests-1x` (250 requests),
-`linear-hourly-requests-10x` (2,500), `linear-hourly-requests-10x-warm` (1,250, every pass
-warm) and `linear-hourly-complexity-10x` (750,000 of its 3,000,000 complexity). On GitHub nothing is widened:
+of the key, each its measured figure plus 20% within a ceiling the user set:
+`linear-hourly-requests-1x` (250 requests, ceiling 250), `linear-hourly-requests-10x` (2,350,
+ceiling 2,500), `linear-hourly-requests-10x-warm` (750, every pass warm, ceiling 1,250) and
+`linear-hourly-complexity-10x` (675,000 of the key's 3,000,000 complexity, ceiling 750,000). On GitHub nothing is widened:
 `github-cache-points-not-above-uncached` holds every kind, sequence and scale to adding no
 point.
 
@@ -1515,8 +1531,8 @@ so an image edited ten times leaves eleven. Nothing expires by age and nothing c
 At the GitHub budget's workload a pass loads 5 projects, 20 documents and 20 tasks, at most 45
 item files, and its 8 images of 256 KiB are 2 MiB of bytes, growing by 256 KiB for each image
 replaced; at ten times the size, 450 files and 20 MiB. At the Linear budget's, at most 60
-task, 60 forward edge, 60 reverse edge, 10 project, 10 project edge and 40 document files, and
-2,400 at ten times. **`onetaskgraph cache
+task, 60 forward edge, 60 reverse edge, 10 project, 10 project forward edge, 10 project reverse
+edge and 40 document files, and 2,500 at ten times. **`onetaskgraph cache
 clear [<SOURCE>]` reclaims a source's item and byte entries together**, removing only files
 this store wrote.
 

@@ -171,6 +171,10 @@ fn with_the_cache_on_only_seven_documents_differ_each_by_exactly_what_the_cache_
         graphql::RELATIONS_PAGE,
         graphql::INVERSE_RELATIONS_PAGE,
     ];
+    let project_pages = [
+        graphql::PROJECT_RELATIONS_PAGE,
+        graphql::PROJECT_INVERSE_RELATIONS_PAGE,
+    ];
     let widened: [(&str, &str, &[&str]); 7] = [
         (graphql::ISSUES_CACHED, graphql::ISSUES, &task_pages),
         (graphql::ISSUE_CACHED, graphql::ISSUE, &task_pages),
@@ -184,16 +188,8 @@ fn with_the_cache_on_only_seven_documents_differ_each_by_exactly_what_the_cache_
             graphql::ISSUE_RELATIONS,
             &[graphql::TOKEN_PARTS],
         ),
-        (
-            graphql::PROJECTS_CACHED,
-            graphql::PROJECTS,
-            &[graphql::PROJECT_RELATIONS_PAGE],
-        ),
-        (
-            graphql::PROJECT_CACHED,
-            graphql::PROJECT,
-            &[graphql::PROJECT_RELATIONS_PAGE],
-        ),
+        (graphql::PROJECTS_CACHED, graphql::PROJECTS, &project_pages),
+        (graphql::PROJECT_CACHED, graphql::PROJECT, &project_pages),
         (
             graphql::PROJECT_RELATIONS_CACHED,
             graphql::PROJECT_RELATIONS,

@@ -15,9 +15,9 @@
 //! - **A task's forward edges** are served only where the source's token covers them: from the
 //!   task's entry, or from an entry of their own kept at the version the source's dependency
 //!   read spelled ([`TaskSource::edges_version`]). **A project's forward edges, and a task's
-//!   reverse ones,** are served on the same terms from an entry of their own, where the
-//!   source's coverage says its token covers them ([`ProjectVersionCoverage::forward_edges`],
-//!   [`TaskSource::reverse_edges_coverage`]). Every other reverse read is sent.
+//!   and a project's reverse ones,** are served on the same terms from an entry of their own,
+//!   where the source's coverage says its token covers them
+//!   ([`ProjectVersionCoverage::forward_edges`], [`TaskSource::reverse_edges_coverage`]).
 //! - **A task's comments** are served from the task's entry where the source's token covers
 //!   them. A later page of comments is never served or kept, since no one page past the first is
 //!   the whole of them.
@@ -708,17 +708,65 @@ impl CachedSource {
         self.fresh(&entry.version, &pin).then_some(entry.edges)
     }
 
-    /// Task `id`'s reverse edges, when the source's token covers them and the cache holds them,
-    /// in an entry of their own, at a version a pin vouches for.
-    fn held_reverse_edges(&self, id: &NativeId) -> Option<Vec<DependencyEdge>> {
+    /// The `kind` item `id`'s reverse edges, when the source's token covers them and the cache
+    /// holds them, in an entry of their own, at a version a pin of the item vouches for.
+    fn held_reverse_edges(&self, kind: ItemKind, id: &NativeId) -> Option<Vec<DependencyEdge>> {
         self.inner
-            .reverse_edges_coverage()
+            .reverse_edges_coverage(kind)
             .reason()
             .is_none()
             .then_some(())?;
-        let pin = self.pin(id)?;
-        let entry = self.cache.read_edges(EdgeKind::TaskReverse, id)?;
+        let (pin, edges) = match kind {
+            ItemKind::Task => (self.pin(id)?, EdgeKind::TaskReverse),
+            ItemKind::Project => (self.project_pin(id)?, EdgeKind::ProjectReverse),
+        };
+        let entry = self.cache.read_edges(edges, id)?;
         self.fresh(&entry.version, &pin).then_some(entry.edges)
+    }
+
+    /// One reverse-edge read of the `kind` item `id`: answered from the cache only from its first
+    /// page, which is all an entry of them holds, and kept only when one response answered every
+    /// edge.
+    async fn read_reverse(
+        &self,
+        kind: ItemKind,
+        id: &NativeId,
+        page: &PageRequest,
+    ) -> Result<Page<DependencyEdge>, SourceError> {
+        if page.cursor.is_none()
+            && let Some(edges) = self
+                .held_reverse_edges(kind, id)
+                .filter(|edges| edges.len() <= page.limit as usize)
+        {
+            return Ok(Page {
+                items: edges,
+                next: None,
+            });
+        }
+        let read = match kind {
+            ItemKind::Task => {
+                self.inner
+                    .task_dependencies(id, Direction::DependedOnBy, page)
+                    .await?
+            }
+            ItemKind::Project => {
+                self.inner
+                    .project_dependencies(id, Direction::DependedOnBy, page)
+                    .await?
+            }
+        };
+        let edges = match kind {
+            ItemKind::Task => EdgeKind::TaskReverse,
+            ItemKind::Project => EdgeKind::ProjectReverse,
+        };
+        if page.cursor.is_none()
+            && read.next.is_none()
+            && self.inner.reverse_edges_coverage(kind).reason().is_none()
+            && let Some(version) = self.inner.edges_version(kind, id, Direction::DependedOnBy)
+        {
+            self.cache.write_edges(edges, id, &version, &read.items);
+        }
+        Ok(read)
     }
 
     /// Project `id`'s forward edges, when the source's token covers them and the cache holds
@@ -913,8 +961,8 @@ impl TaskSource for CachedSource {
         self.inner.edges_version(kind, id, direction)
     }
 
-    fn reverse_edges_coverage(&self) -> onetaskgraph_plugin_api::Coverage {
-        self.inner.reverse_edges_coverage()
+    fn reverse_edges_coverage(&self, kind: ItemKind) -> onetaskgraph_plugin_api::Coverage {
+        self.inner.reverse_edges_coverage(kind)
     }
 
     fn write_context(&self, id: &NativeId) -> Option<Value> {
@@ -1068,30 +1116,7 @@ impl TaskSource for CachedSource {
     ) -> Result<Page<DependencyEdge>, SourceError> {
         self.prime_expected(id);
         if direction == Direction::DependedOnBy {
-            // A reverse read is answered from the cache only from its first page, which is all
-            // an entry of them holds, and kept only when one response answered every edge.
-            if page.cursor.is_none()
-                && let Some(edges) = self
-                    .held_reverse_edges(id)
-                    .filter(|edges| edges.len() <= page.limit as usize)
-            {
-                return Ok(Page {
-                    items: edges,
-                    next: None,
-                });
-            }
-            let read = self.inner.task_dependencies(id, direction, page).await?;
-            if page.cursor.is_none()
-                && read.next.is_none()
-                && self.inner.reverse_edges_coverage().reason().is_none()
-                && let Some(version) =
-                    self.inner
-                        .edges_version(ItemKind::Task, id, Direction::DependedOnBy)
-            {
-                self.cache
-                    .write_edges(EdgeKind::TaskReverse, id, &version, &read.items);
-            }
-            return Ok(read);
+            return self.read_reverse(ItemKind::Task, id, page).await;
         }
         // Every read of a source whose token does not cover a task's forward edges goes to the
         // source — which answers a write expecting the task from what it was primed with.
@@ -1117,11 +1142,12 @@ impl TaskSource for CachedSource {
         direction: Direction,
         page: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
-        // A project's reverse edges, and every forward read of a source whose token does not
-        // cover a project's, go to the source.
-        if direction != Direction::DependsOn
-            || self.cache.project_coverage.forward_edges.reason().is_some()
-        {
+        if direction == Direction::DependedOnBy {
+            return self.read_reverse(ItemKind::Project, id, page).await;
+        }
+        // Every forward read of a source whose token does not cover a project's goes to the
+        // source.
+        if self.cache.project_coverage.forward_edges.reason().is_some() {
             return self.inner.project_dependencies(id, direction, page).await;
         }
         if page.cursor.is_none()
@@ -1152,8 +1178,11 @@ impl TaskSource for CachedSource {
     }
 
     async fn write_project(&self, write: &ItemWrite<Project>) -> Result<NativeId, SourceError> {
-        self.retiring(write.target.as_ref(), self.inner.write_project(write))
-            .await
+        self.relating(
+            EdgeKind::ProjectReverse,
+            self.retiring(write.target.as_ref(), self.inner.write_project(write)),
+        )
+        .await
     }
 
     async fn check_status_write(
@@ -1298,8 +1327,11 @@ impl TaskSource for CachedSource {
 
     async fn delete_project(&self, id: &NativeId) -> Result<(), SourceError> {
         self.relating(
-            EdgeKind::ProjectForward,
-            self.retiring(Some(id), self.inner.delete_project(id)),
+            EdgeKind::ProjectReverse,
+            self.relating(
+                EdgeKind::ProjectForward,
+                self.retiring(Some(id), self.inner.delete_project(id)),
+            ),
         )
         .await
     }
@@ -1496,9 +1528,12 @@ impl TaskSource for CachedSource {
         write: &ItemWrite<Project>,
         answers: &BTreeMap<String, Value>,
     ) -> Result<NativeId, SourceError> {
-        self.retiring(
-            write.target.as_ref(),
-            self.inner.write_project_rendered(write, answers),
+        self.relating(
+            EdgeKind::ProjectReverse,
+            self.retiring(
+                write.target.as_ref(),
+                self.inner.write_project_rendered(write, answers),
+            ),
         )
         .await
     }

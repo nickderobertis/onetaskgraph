@@ -1,9 +1,10 @@
-//! The entries the cache keeps beside a task's: a project's, a document's, a task's forward
-//! and reverse edges each read on their own, a project's forward edges, and the verified bytes
-//! of an image asset.
+//! The entries the cache keeps beside a task's: a project's, a document's, a task's and a
+//! project's forward and reverse edges each read on their own, and the verified bytes of an image
+//! asset.
 //!
 //! **Each kind lives in a directory of its own, named with its schema** — `projects-v2/`,
-//! `documents-v2/`, `edges-v2/`, `reverse-edges-v2/`, `project-edges-v2/`, `bytes-v2/` — so an id cannot name one kind's entry for
+//! `documents-v2/`, `edges-v2/`, `reverse-edges-v2/`, `project-edges-v2/`,
+//! `project-reverse-edges-v2/`, `bytes-v2/` — so an id cannot name one kind's entry for
 //! another's, and a release writing this schema never writes over a file a release of another
 //! schema wrote: that one lives in its own directory. Each entry still carries its schema, its
 //! kind and the remote it is from, and a reader holds it to all three, so a file another release
@@ -32,7 +33,8 @@ use super::{SourceCache, digest};
 /// kinds' shapes moves their directories — every one of them, since they share this number —
 /// and leaves a task's entries served.
 ///
-/// Version 2 added a task's reverse edges and a project's forward edges as kinds of their own; what version 1 kept is left in its own directories, unread, for
+/// Version 2 added a task's reverse edges and a project's forward and reverse edges as kinds of
+/// their own; what version 1 kept is left in its own directories, unread, for
 /// `cache clear` of that release.
 pub const KIND_ENTRY_SCHEMA: u32 = 2;
 
@@ -50,16 +52,19 @@ pub(crate) enum EntryKind {
     ReverseEdges,
     /// A project's forward dependency edges, read on their own.
     ProjectEdges,
+    /// A project's reverse dependency edges, read on their own.
+    ProjectReverseEdges,
 }
 
 impl EntryKind {
     /// Every kind, in the order `cache clear` walks them.
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 6] = [
         Self::Project,
         Self::Document,
         Self::Edges,
         Self::ReverseEdges,
         Self::ProjectEdges,
+        Self::ProjectReverseEdges,
     ];
 
     /// The directory this kind's entries live in.
@@ -70,6 +75,7 @@ impl EntryKind {
             Self::Edges => "edges",
             Self::ReverseEdges => "reverse-edges",
             Self::ProjectEdges => "project-edges",
+            Self::ProjectReverseEdges => "project-reverse-edges",
         };
         format!("{name}-v{KIND_ENTRY_SCHEMA}")
     }
@@ -84,6 +90,8 @@ pub(crate) enum EdgeKind {
     TaskReverse,
     /// A project's forward edges.
     ProjectForward,
+    /// A project's reverse edges.
+    ProjectReverse,
 }
 
 impl EdgeKind {
@@ -92,6 +100,7 @@ impl EdgeKind {
             Self::TaskForward => EntryKind::Edges,
             Self::TaskReverse => EntryKind::ReverseEdges,
             Self::ProjectForward => EntryKind::ProjectEdges,
+            Self::ProjectReverse => EntryKind::ProjectReverseEdges,
         }
     }
 
@@ -100,6 +109,7 @@ impl EdgeKind {
             Self::TaskForward => EdgesTag::Edges,
             Self::TaskReverse => EdgesTag::ReverseEdges,
             Self::ProjectForward => EdgesTag::ProjectEdges,
+            Self::ProjectReverse => EdgesTag::ProjectReverseEdges,
         }
     }
 }
@@ -130,6 +140,8 @@ pub(crate) enum EdgesTag {
     ReverseEdges,
     /// [`EntryKind::ProjectEdges`].
     ProjectEdges,
+    /// [`EntryKind::ProjectReverseEdges`].
+    ProjectReverseEdges,
 }
 
 /// One project as the cache keeps it, at its own `version`.
@@ -428,9 +440,10 @@ fn reads_whole(kind: EntryKind, value: Value) -> bool {
     match kind {
         EntryKind::Project => serde_json::from_value::<ProjectEntry>(value).is_ok(),
         EntryKind::Document => serde_json::from_value::<DocumentEntry>(value).is_ok(),
-        EntryKind::Edges | EntryKind::ReverseEdges | EntryKind::ProjectEdges => {
-            serde_json::from_value::<EdgesEntry>(value).is_ok()
-        }
+        EntryKind::Edges
+        | EntryKind::ReverseEdges
+        | EntryKind::ProjectEdges
+        | EntryKind::ProjectReverseEdges => serde_json::from_value::<EdgesEntry>(value).is_ok(),
     }
 }
 

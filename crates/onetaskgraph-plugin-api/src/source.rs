@@ -173,11 +173,11 @@ pub trait TaskSource: Send + Sync {
     /// none — on the terms of [`forward_edges_version`](Self::forward_edges_version), which is
     /// what it answers for a task's [`Direction::DependsOn`].
     ///
-    /// What lets the store's cache keep a project's forward edges, and a task's reverse ones, by
-    /// the version they were read at: a project's are served only where
-    /// [`project_version_coverage`](Self::project_version_coverage) covers its forward edges, a
-    /// task's reverse ones only where [`reverse_edges_coverage`](Self::reverse_edges_coverage)
-    /// covers them, and each only to a pin that version is at or after. Synchronous, and never
+    /// What lets the store's cache keep a project's forward edges, and either kind's reverse
+    /// ones, by the version they were read at: a project's forward edges are served only where
+    /// [`project_version_coverage`](Self::project_version_coverage) covers them, reverse ones only
+    /// where [`reverse_edges_coverage`](Self::reverse_edges_coverage) covers that kind's, and each
+    /// only to a pin that version is at or after. Synchronous, and never
     /// carried over the plugin protocol.
     ///
     /// Defaulted to [`forward_edges_version`](Self::forward_edges_version) for a task's forward
@@ -189,20 +189,25 @@ pub trait TaskSource: Send + Sync {
         }
     }
 
-    /// Whether this source's [`Task::version`] vouches for a task's reverse edges — what a
-    /// [`Direction::DependedOnBy`] read answers — so the store's cache may serve them.
+    /// Whether this source's token for a `kind` item — [`Task::version`] or
+    /// [`Project::version`] — vouches for its reverse edges, what a [`Direction::DependedOnBy`]
+    /// read answers, so the store's cache may serve them.
     ///
     /// A reverse edge is recorded on another item, so a token vouches for one only where it
     /// carries a part that moves whenever one is added to or removed from that other item —
-    /// which no part of a task's own fields does. Never carried over the plugin protocol.
+    /// which no part of an item's own fields does. Never carried over the plugin protocol.
     ///
     /// Defaulted to not covering them, with that reason.
-    fn reverse_edges_coverage(&self) -> crate::Coverage {
+    fn reverse_edges_coverage(&self, kind: ItemKind) -> crate::Coverage {
         crate::Coverage::Uncovered {
             reason: format!(
-                "the {} plugin does not declare that its change token covers a task's reverse \
-                 edges, which are recorded on the tasks that depend on it",
-                self.kind()
+                "the {} plugin does not declare that its change token covers a {}'s reverse \
+                 edges, which are recorded on the items that depend on it",
+                self.kind(),
+                match kind {
+                    ItemKind::Task => "task",
+                    ItemKind::Project => "project",
+                }
             ),
         }
     }

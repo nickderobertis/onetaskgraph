@@ -9,7 +9,8 @@
 //! `updatedAt` alone missing: a label renamed or recoloured, a workflow state renamed, a
 //! document's content and slot edited. With the store's cache attached a task's token also
 //! carries digests of its first page of comments, relations and inverse relations, and a
-//! project's of its first page of relations — the parts §4.13d says each covers.
+//! project's of its first page of relations and inverse relations — the parts §4.13d says each
+//! covers.
 //!
 //! An item whose labels came back as 50 nodes or more — Linear's default page, which the
 //! documents here select without a `first` or a `pageInfo` — gives no token, and so does an item
@@ -309,16 +310,19 @@ pub fn task_before_relations(issue: &Value) -> Option<String> {
     })
 }
 
-/// The token of the project `project`, as one response answered it — with the digest of its
-/// first page of relations when [`Spelling::Attached`], and none at all when that page is not
-/// whole.
+/// The token of the project `project`, as one response answered it — with the digests of its
+/// first page of relations and of inverse relations when [`Spelling::Attached`], and none at all
+/// when either page is not whole.
 #[must_use]
 pub fn project_token(project: &Value, spelling: Spelling) -> Option<String> {
     let base = project_before_relations(project)?;
     match spelling {
-        Spelling::Attached => with_parts(base, &[Part::Relations], |_| {
-            relation_digest(project, "relations", "relatedProject")
-        }),
+        Spelling::Attached => {
+            with_parts(base, &[Part::Relations, Part::Inverse], |part| match part {
+                Part::Inverse => relation_digest(project, "inverseRelations", "project"),
+                _ => relation_digest(project, "relations", "relatedProject"),
+            })
+        }
         Spelling::Plain => Some(base),
     }
 }
@@ -369,12 +373,16 @@ pub fn without_relations(token: &str) -> &str {
 }
 
 /// The parts a token carries beside its time and its facets: none, as every plain token and a
-/// document's; a relations part alone, as an attached project's; or, as an attached task's, a
-/// comments, a relations and an inverse relations part, in that order. Nothing else is a token.
+/// document's; a relations and an inverse relations part, as an attached project's; or, as an
+/// attached task's, a comments, a relations and an inverse relations part, in that order.
+/// Nothing else is a token.
 #[derive(Debug, PartialEq, Eq)]
 enum Extra {
     None,
-    Relations(Sha256Hex),
+    Project {
+        relations: Sha256Hex,
+        inverse: Sha256Hex,
+    },
     Task {
         comments: Sha256Hex,
         relations: Sha256Hex,
@@ -403,7 +411,10 @@ fn parts(token: &str) -> Option<Parts> {
     let rest: Vec<&str> = parts.collect();
     let extra = match rest.as_slice() {
         [] => Extra::None,
-        [relations] => Extra::Relations(tagged(relations, Part::Relations)?),
+        [relations, inverse] => Extra::Project {
+            relations: tagged(relations, Part::Relations)?,
+            inverse: tagged(inverse, Part::Inverse)?,
+        },
         [comments, relations, inverse] => Extra::Task {
             comments: tagged(comments, Part::Comments)?,
             relations: tagged(relations, Part::Relations)?,
@@ -553,7 +564,10 @@ mod tests {
         // What the release before this one spelled for the same issue: its relations part alone.
         let relations = relation_digest(&held, "relations", "relatedIssue").unwrap();
         let earlier = format!("{}|r:{relations}", task(&held, Spelling::Plain).unwrap());
-        assert!(parts(&earlier).is_some(), "it still reads as a token");
+        assert!(
+            parts(&earlier).is_none(),
+            "a relations part alone is no shape of this one"
+        );
         assert_eq!(order(&earlier, &now), None);
         assert_eq!(order(&now, &earlier), None);
         // A part out of its one order, or twice, is no token of this plugin.
@@ -565,11 +579,10 @@ mod tests {
         );
         assert!(parts(&format!("{base}|r:{relations}|c:{comments_part}")).is_none());
         assert!(parts(&format!("{base}|c:{comments_part}|c:{comments_part}")).is_none());
-        // Nor is any incomplete combination of a task's three parts.
+        // Nor is any combination that is neither a project's two parts nor a task's three.
         for incomplete in [
             format!("{base}|c:{comments_part}"),
             format!("{base}|c:{comments_part}|r:{relations}"),
-            format!("{base}|r:{relations}|i:{relations}"),
             format!("{base}|i:{relations}"),
         ] {
             assert!(parts(&incomplete).is_none(), "{incomplete}");
@@ -730,24 +743,45 @@ mod tests {
     }
 
     #[test]
-    fn a_projects_token_carries_its_relations_only_attached() {
-        let project = |relations: Value| {
+    fn a_projects_token_carries_its_relations_and_inverse_relations_only_attached() {
+        let none = json!({"nodes": [], "pageInfo": {"hasNextPage": false}});
+        let with = |relations: Value, inverse: Value| {
             json!({"updatedAt": "2026-10-01T00:00:00Z", "status": {"name": "Doing", "type": "started"},
-                   "labels": {"nodes": []}, "relations": relations})
+                   "labels": {"nodes": []}, "relations": relations, "inverseRelations": inverse})
         };
+        let project = |relations: Value| with(relations, none.clone());
         let related = json!({"nodes": [{"id": "pr1", "type": "dependency",
                                         "relatedProject": {"id": "p2"}}],
                              "pageInfo": {"hasNextPage": false}});
         let none = json!({"nodes": [], "pageInfo": {"hasNextPage": false}});
         let plain = project_token(&project(none.clone()), Spelling::Plain).unwrap();
         assert!(!plain.contains("|r:"));
-        let attached = project_token(&project(none), Spelling::Attached).unwrap();
+        let attached = project_token(&project(none.clone()), Spelling::Attached).unwrap();
         let added = project_token(&project(related), Spelling::Attached).unwrap();
         assert_eq!(order(&attached, &added), None, "a project relation added");
         assert_eq!(order(&plain, &attached), None);
         assert_eq!(without_relations(&added), plain);
+        let depended = with(
+            none.clone(),
+            json!({"nodes": [{"id": "pr2", "type": "dependency", "project": {"id": "p3"}}],
+                   "pageInfo": {"hasNextPage": false}}),
+        );
+        let depended = project_token(&depended, Spelling::Attached).unwrap();
+        assert_eq!(
+            order(&attached, &depended),
+            None,
+            "a project depending on it added"
+        );
+        assert_eq!(without_relations(&depended), plain);
         let more = json!({"nodes": [], "pageInfo": {"hasNextPage": true}});
-        assert_eq!(project_token(&project(more), Spelling::Attached), None);
+        assert_eq!(
+            project_token(&project(more.clone()), Spelling::Attached),
+            None
+        );
+        assert_eq!(
+            project_token(&with(none.clone(), more), Spelling::Attached),
+            None
+        );
     }
 
     #[test]

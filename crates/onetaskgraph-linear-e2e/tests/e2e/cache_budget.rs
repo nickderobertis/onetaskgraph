@@ -98,6 +98,10 @@ pub(crate) mod price {
     /// The relations page a project's `lin1` token's relations part is read from — `+R`,
     /// measured on each `PROJECTS` row asked for — taken as the same connection on `PROJECT`.
     pub(crate) const PROJECT_RELATIONS_PAGE: u64 = 25;
+    /// The inverse relations page a project's `lin1` token's inverse part is read from. Not
+    /// priced by the spike: taken as [`PROJECT_RELATIONS_PAGE`], the same connection of the same
+    /// size and selection with `project{id}` in place of `relatedProject{id}`.
+    pub(crate) const PROJECT_INVERSE_RELATIONS_PAGE: u64 = PROJECT_RELATIONS_PAGE;
     /// Linear's per-query complexity cap.
     pub(crate) const CAP: u64 = 10_000;
     /// The guard on any one query this workload sends with the cache on: 90% of [`CAP`], the
@@ -148,10 +152,15 @@ pub(crate) fn complexity(document: &str, variables: &Value, answer: &Value) -> u
         // A project's token parts beside its relations, taken as the issue's measured three.
         g::PROJECT_RELATIONS_CACHED => relations(price::RELATIONS_CACHED_AT_100),
         g::PROJECT => price::PROJECT,
-        g::PROJECT_CACHED => price::PROJECT + price::PROJECT_RELATIONS_PAGE,
+        g::PROJECT_CACHED => {
+            price::PROJECT + price::PROJECT_RELATIONS_PAGE + price::PROJECT_INVERSE_RELATIONS_PAGE
+        }
         g::PROJECTS => price::PROJECTS_ROW * first("first"),
         g::PROJECTS_CACHED => {
-            (price::PROJECTS_ROW + price::PROJECT_RELATIONS_PAGE) * first("first")
+            (price::PROJECTS_ROW
+                + price::PROJECT_RELATIONS_PAGE
+                + price::PROJECT_INVERSE_RELATIONS_PAGE)
+                * first("first")
         }
         g::DOCUMENT => price::DOCUMENT,
         g::DOCUMENTS => price::DOCUMENTS_ROW * first("first"),
