@@ -4917,9 +4917,8 @@ fn strip_delivery_keys(metadata: &mut std::collections::BTreeMap<String, Value>)
     metadata.remove(TaskRef::DELIVERS_KEY);
     metadata.remove(TaskRef::DELIVERED_BY_KEY);
 }
-///
-/// Its version is the project's `lin1` token — see [`change_token`] — spelled with the relations
-/// part when `attached`, and absent when the response does not carry every part whole.
+/// Its version is the project's `lin1` token in `spelling`, absent when the response does not
+/// carry every part whole.
 fn map_project(
     v: &Value,
     statuses: &StatusMapping,

@@ -42,7 +42,7 @@ pub enum Spelling {
     /// `lin1|<updatedAt>|<facets>`, from what every read selects.
     Plain,
     /// With the parts the cache's widened reads carry: a task's comments, relations and inverse
-    /// relations, a project's relations.
+    /// relations, a project's relations and inverse relations.
     Attached,
 }
 
@@ -56,7 +56,7 @@ enum Part {
     Comments,
     /// A task's or a project's relations, as `[id, type, far end]` rows.
     Relations,
-    /// A task's inverse relations, as `[id, type, near end]` rows.
+    /// A task's or a project's inverse relations, as `[id, type, near end]` rows.
     Inverse,
 }
 
