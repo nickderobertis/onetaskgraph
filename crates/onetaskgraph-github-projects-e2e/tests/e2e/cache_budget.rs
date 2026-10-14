@@ -8,8 +8,10 @@
 //! the cache off and once with it on, each over a board of its own, through four sequences: a
 //! cold load; an unchanged reread pinned to what the cold load returned, made by two passes at
 //! once; a listing followed by the loads it pins, after five of each kind changed; and a write
-//! of each changed item followed by a read pinned to what a listing after it carries. The
-//! image's bytes are read by a render keeping it, which is what reads them.
+//! of each changed item followed by a read pinned to what a listing after it carries. An image's
+//! bytes are read only by a render keeping it, so that kind's four are renders instead: a first
+//! render, a second with the picture unchanged, one after the document was edited, and one after
+//! a render that wrote it.
 //!
 //! Points are the plugin's own worst-case price of each GraphQL document the board served; an
 //! attachment read is a REST request and spends no point, so the detail counts them apart. The
@@ -44,6 +46,24 @@ pub(crate) const SEQUENCES: [&str; 4] = [
     "list-then-load-after-edits",
     "write-then-read",
 ];
+/// The four sequences of the asset-bytes kind, whose bytes only a render reads, so each is a
+/// render rather than a pinned load: a first render, a second with the picture unchanged, one
+/// after the document was edited, and one after a render that wrote it.
+pub(crate) const RENDER_SEQUENCES: [&str; 4] = [
+    "cold-render",
+    "unchanged-render",
+    "render-after-edits",
+    "render-after-render",
+];
+
+/// The sequences `kind` is measured through, in the order measured.
+pub(crate) const fn sequences_of(kind: &str) -> [&'static str; 4] {
+    if matches!(kind.as_bytes(), b"asset-bytes") {
+        RENDER_SEQUENCES
+    } else {
+        SEQUENCES
+    }
+}
 /// The kinds each sequence is measured for.
 pub(crate) const KINDS: [&str; 5] = ["tasks", "projects", "documents", "manifests", "asset-bytes"];
 /// The two scales, by name and factor.
@@ -473,13 +493,14 @@ impl Workload {
     /// The four sequences of `kind` on this board: what each spent.
     fn sequences(&self, kind: &str) -> Vec<Spent> {
         if kind == "asset-bytes" {
+            // [`RENDER_SEQUENCES`], in order.
             let cold = self.render("cold");
             let unchanged = self.render("unchanged");
             self.edit("imaged");
             let after = self.render("after edits");
-            let mut written = self.render("written");
-            written.add(self.render("read again"));
-            return vec![cold, unchanged, after, written];
+            let mut rendered_again = self.render("written");
+            rendered_again.add(self.render("read again"));
+            return vec![cold, unchanged, after, rendered_again];
         }
         let loads = if kind == "manifests" { "imaged" } else { kind };
         let (cold, held) = self.load(loads, None);
@@ -573,7 +594,7 @@ fn the_cache_spends_no_more_board_points_than_no_cache_over_every_kind_sequence_
         let (mut total_off, mut total_on) = (Spent::default(), Spent::default());
         for (k, kind) in KINDS.iter().enumerate() {
             let mut cells = serde_json::Map::new();
-            for (s, sequence) in SEQUENCES.iter().enumerate() {
+            for (s, sequence) in sequences_of(kind).iter().enumerate() {
                 let difference = i64::try_from(on[k][s].points).unwrap()
                     - i64::try_from(off[k][s].points).unwrap();
                 figure = figure.max(difference);

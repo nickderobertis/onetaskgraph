@@ -459,7 +459,7 @@ fn read_visibility(budget: &str) -> Result<(f64, String), String> {
 /// its workload with every sequence measured in both modes, and its figure the largest
 /// difference among them.
 fn read_cache_points(budget: &str) -> Result<(f64, String), String> {
-    use super::cache_budget::{KINDS, SCALES, SEQUENCES, WORKLOAD};
+    use super::cache_budget::{KINDS, SCALES, WORKLOAD, sequences_of};
     let value = recorded(budget)?;
     if value["workload"].as_str() != Some(WORKLOAD) {
         return Err("workload does not match the board workload at 1x and 10x".into());
@@ -487,7 +487,7 @@ fn read_cache_points(budget: &str) -> Result<(f64, String), String> {
     for (scale, _) in SCALES {
         let at = &value["scales"][scale];
         for kind in KINDS {
-            for sequence in SEQUENCES {
+            for sequence in sequences_of(kind) {
                 largest = largest.max(difference(
                     &at["kinds"][kind][sequence],
                     &format!("{scale} {kind} {sequence}"),
