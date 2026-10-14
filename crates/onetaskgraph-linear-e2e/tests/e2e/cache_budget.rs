@@ -40,9 +40,9 @@ pub(crate) mod price {
     pub(crate) const ISSUE_DETAIL: u64 = 11;
     /// `ISSUE_COMMENTS`, at `last:100`.
     pub(crate) const ISSUE_COMMENTS: u64 = 6;
-    /// `ISSUES`: its base, and each row it returns — modelled from one-row pages.
+    /// `ISSUES`: its base, modelled from one-row pages.
     pub(crate) const ISSUES_BASE: u64 = 8;
-    /// The same.
+    /// `ISSUES`: what each row it returns adds to [`ISSUES_BASE`].
     pub(crate) const ISSUES_ROW: u64 = 6;
     /// `ISSUE_RELATIONS` and `PROJECT_RELATIONS`, at `first:100`.
     pub(crate) const RELATIONS_AT_100: u64 = 522;

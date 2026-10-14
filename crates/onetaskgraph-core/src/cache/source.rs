@@ -583,7 +583,6 @@ impl CachedSource {
     }
 }
 
-/// The kinds beside a task's: projects, documents, edges read on their own, and asset bytes.
 impl CachedSource {
     /// The version reads of project `id` are pinned to in this command: a caller's pin, or the
     /// version a listing carried.

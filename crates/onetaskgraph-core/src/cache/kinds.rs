@@ -229,7 +229,8 @@ impl SourceCache {
         (entry.document.id == *id && entry.document.version.is_some()).then_some(entry)
     }
 
-    /// Keep `entry`.
+    /// Keep `entry` — only when its document carries the version a read answered it at, since
+    /// an entry without one could be served to no pin.
     pub(crate) fn write_document(&self, entry: &DocumentEntry) {
         if entry.document.version.is_none() {
             return;

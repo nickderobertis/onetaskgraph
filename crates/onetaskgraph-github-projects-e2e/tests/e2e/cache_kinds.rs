@@ -255,7 +255,7 @@ fn an_entry_a_release_before_gh3_left_is_read_again_rather_than_served() {
 }
 
 #[test]
-fn an_item_whose_labels_go_on_past_one_page_gives_no_token_and_is_never_served() {
+fn an_item_whose_labels_go_on_past_one_page_is_refused_and_leaves_the_entry_at_the_version_held() {
     let cached = Cached::new();
     let (first, _) = show(&cached, "document", "board:D-1", None);
     let held = version(&first);
