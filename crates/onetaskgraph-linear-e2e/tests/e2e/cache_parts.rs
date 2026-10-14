@@ -8,8 +8,10 @@
 //! or after sends nothing. Every change to them moves the token — a comment added, edited or
 //! deleted, a relation added or removed from either end — and a read pinned to the new listing
 //! token reads Linear and answers what an uncached read does. The one member served older than
-//! its token is a comment author's display name, which no part covers. A copy filing under two
-//! or more projects reads one page of them, which pins them, and no more.
+//! its token is a comment author's display name, which no part covers. Every public route to a
+//! task's comments — `task comment list`, `task show`, `task show-many`, both SDKs and a
+//! `--comments` copy — reaches them through the task's detail read, and each is held to the same.
+//! A copy filing under two or more projects reads one page of them, which pins them, and no more.
 
 use std::path::Path;
 
@@ -1391,4 +1393,187 @@ fn an_edges_entry_under_another_kinds_path_is_never_served() {
     assert_eq!(sent.len(), 1, "read from Linear, never the misplaced entry");
     let [on, off] = cached.on_and_off(&strs(&reverse));
     assert_eq!(on.0, off.0, "what an uncached read answers");
+}
+
+/// One public route to a task's comments: what it is called, and how it reads `L-1`'s comments
+/// pinned to a version — or unpinned — answering what it printed.
+struct Route {
+    name: &'static str,
+    read: fn(&Cached, Option<&str>) -> Value,
+}
+
+/// The comments a route printed, as `(id, body)` pairs: a detail carries them as `comments`, a
+/// comment list as `items`.
+fn comments_of(printed: &Value) -> Vec<(Value, Value)> {
+    let detail = printed["details"].get(0).unwrap_or(printed);
+    detail
+        .get("comments")
+        .or_else(|| printed.get("items"))
+        .and_then(Value::as_array)
+        .unwrap_or_else(|| panic!("comments: {printed}"))
+        .iter()
+        .map(|comment| (comment["id"].clone(), comment["body"].clone()))
+        .collect()
+}
+
+fn python(cached: &Cached, script: &str, pin: Option<&str>) -> Value {
+    onetaskgraph_e2e_support::sdk::run(
+        &cached.sandbox,
+        &cached.cache_home,
+        false,
+        script,
+        "linear:L-1",
+        pin,
+    )
+}
+
+fn typescript(cached: &Cached, script: &str, pin: Option<&str>) -> Value {
+    onetaskgraph_e2e_support::sdk::run(
+        &cached.sandbox,
+        &cached.cache_home,
+        true,
+        script,
+        "linear:L-1",
+        pin,
+    )
+}
+
+/// Every route other than `task comment list` and `task show`, which the journeys above drive,
+/// and a `--comments` copy, which `a_comments_copy_by_query_reads_only_the_task_whose_comments_moved`
+/// drives.
+const ROUTES: [Route; 5] = [
+    Route {
+        name: "show-many with comments",
+        read: |cached, pin| {
+            let mut arguments = vec!["task", "show-many", "linear:L-1", "--json"];
+            let pinned = pin.map(|pin| format!("linear:L-1={pin}"));
+            if let Some(pinned) = &pinned {
+                arguments.extend(["--pin", pinned]);
+            }
+            cached.ok(&arguments).0
+        },
+    },
+    Route {
+        name: "the Python SDK's task_show",
+        read: |cached, pin| {
+            python(
+                cached,
+                "print((await c.task_show(id=task,pin=pin)).model_dump_json(exclude_none=True))",
+                pin,
+            )
+        },
+    },
+    Route {
+        name: "the Python SDK's task_comment_list",
+        read: |cached, pin| {
+            python(
+                cached,
+                "print((await c.task_comment_list(task,pin=pin)).model_dump_json(exclude_none=True))",
+                pin,
+            )
+        },
+    },
+    Route {
+        name: "the TypeScript SDK's taskShow",
+        read: |cached, pin| {
+            typescript(
+                cached,
+                "console.log(JSON.stringify(await client.taskShow(id, pin === undefined ? {} : {pin})));",
+                pin,
+            )
+        },
+    },
+    Route {
+        name: "the TypeScript SDK's taskCommentList",
+        read: |cached, pin| {
+            typescript(
+                cached,
+                "console.log(JSON.stringify(await client.taskCommentList(id, pin === undefined ? {} : {pin})));",
+                pin,
+            )
+        },
+    },
+];
+
+#[test]
+fn every_route_to_a_tasks_comments_is_served_warm_and_read_fresh_on_a_newer_or_unordered_pin() {
+    for route in ROUTES {
+        let cached = Cached::new(held());
+        let sent_by = |pin: Option<&str>| {
+            let before = cached.workspace.served().len();
+            let printed = (route.read)(&cached, pin);
+            let sent: Vec<String> = cached.workspace.served()[before..]
+                .iter()
+                .map(|(document, _)| document.clone())
+                .collect();
+            (comments_of(&printed), sent)
+        };
+        let pin = cached.listed("task", "linear:L-1").expect("a token");
+        let (loaded, sent) = sent_by(Some(&pin));
+        assert_eq!(
+            sent,
+            [graphql::ISSUE_DETAIL_CACHED],
+            "{}: a cold read is one request",
+            route.name
+        );
+        let (hit, sent) = sent_by(Some(&pin));
+        assert_eq!(
+            sent,
+            Vec::<String>::new(),
+            "{}: warm, it sends nothing",
+            route.name
+        );
+        assert_eq!(hit, loaded, "{}: the hit answers the load", route.name);
+        assert_eq!(
+            loaded,
+            [(json!("C-1"), json!("The first word."))],
+            "{}: L-1's one comment",
+            route.name
+        );
+
+        let (_, sent) = sent_by(None);
+        assert_eq!(sent.len(), 1, "{}: no pin reads Linear", route.name);
+        let unordered = earlier_spelling("task", &pin);
+        let (_, sent) = sent_by(Some(&unordered));
+        assert_eq!(
+            sent.len(),
+            1,
+            "{}: an unordered pin reads Linear",
+            route.name
+        );
+
+        cached
+            .workspace
+            .edit_comment("C-1", "The first word, edited.");
+        let newer = cached.listed("task", "linear:L-1").expect("a token");
+        assert_ne!(newer, pin, "{}: the token moves", route.name);
+        let (fresh, sent) = sent_by(Some(&newer));
+        assert_eq!(
+            sent,
+            [graphql::ISSUE_DETAIL_CACHED],
+            "{}: a newer pin misses",
+            route.name
+        );
+        let [_, off] = cached.on_and_off(&[
+            "task",
+            "comment",
+            "list",
+            "linear:L-1",
+            "--pin",
+            &newer,
+            "--json",
+        ]);
+        assert_eq!(
+            fresh,
+            [(json!("C-1"), json!("The first word, edited."))],
+            "{}: the edit is read",
+            route.name
+        );
+        assert_eq!(
+            fresh,
+            comments_of(&off.0.1),
+            "{}: what an uncached read answers",
+            route.name
+        );
+    }
 }
