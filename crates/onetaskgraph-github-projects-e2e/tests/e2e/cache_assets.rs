@@ -268,6 +268,41 @@ fn a_render_keeping_an_unchanged_picture_reads_no_attachment_twice() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn a_picture_the_cache_cannot_keep_is_read_from_the_board_at_every_render_until_it_can() {
+    use std::os::unix::fs::PermissionsExt;
+    let assets = Assets::new();
+    // A read of the document reads no picture, and makes the board's cache directory.
+    let _ = assets.held("document");
+    let bytes = assets.board_cache().join("bytes-v1");
+    std::fs::create_dir_all(&bytes).unwrap();
+    std::fs::set_permissions(&bytes, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let refused: Vec<usize> = ["first", "second"]
+        .map(|note| assets.render("board", "document", note, None))
+        .to_vec();
+    std::fs::set_permissions(&bytes, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(
+        refused,
+        [1, 1],
+        "bytes the cache could not keep are read from the board each time, and the render lands"
+    );
+    assert!(
+        walk(&bytes).is_empty(),
+        "nothing was kept: {:?}",
+        walk(&bytes)
+    );
+    let (digest, held) = assets.held("document");
+    assert_eq!(digest, asset_sha256(assets.created("document")));
+    assert_eq!(held, assets.created("document"));
+    assert_eq!(
+        assets.render("board", "document", "third", None),
+        1,
+        "once the directory takes them, the next render keeps what it reads"
+    );
+    assert_eq!(assets.render("board", "document", "fourth", None), 0);
+}
+
 #[test]
 fn a_manifest_naming_other_bytes_reads_them_and_bytes_that_no_longer_hash_are_read_again() {
     let assets = Assets::new();

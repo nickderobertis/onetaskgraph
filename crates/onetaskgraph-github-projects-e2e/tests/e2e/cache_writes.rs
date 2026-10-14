@@ -41,7 +41,8 @@ const NOTE: &str = "---\nonetaskgraph_template: 1\nvariables:\n  note:\n    desc
                     changed\n    type: string\n---\n# Notes\n{{ note }}\n";
 
 #[test]
-fn every_project_and_document_write_takes_its_entry_out_of_service_before_it_is_sent() {
+fn a_project_or_document_metadata_write_or_render_removes_its_entry_and_the_next_pinned_read_is_the_boards()
+ {
     let cached = Cached::new();
     let template = cached.sandbox.project().join("note.md");
     std::fs::write(&template, NOTE).unwrap();

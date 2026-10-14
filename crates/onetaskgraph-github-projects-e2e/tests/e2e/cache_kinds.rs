@@ -583,3 +583,53 @@ fn a_far_ends_kind_flip_or_retitle_into_a_document_is_read_from_the_board_in_eve
         }
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn an_entry_the_cache_directory_will_not_replace_is_served_to_no_pin_after_its_item_changed() {
+    use std::os::unix::fs::PermissionsExt;
+    // (the kind, its id, its native id, its entries' directory, the title a person types on
+    // the board, the title a read reports)
+    for (kind, id, native, directory, typed, renamed) in [
+        (
+            "project",
+            "board:P-1",
+            "P-1",
+            "projects-v1",
+            "Engine, renamed by a person".to_owned(),
+            "Engine, renamed by a person",
+        ),
+        (
+            "document",
+            "board:D-1",
+            "D-1",
+            "documents-v1",
+            format!("{DESIGN_TITLE_PREFIX}Design, renamed by a person"),
+            "Design, renamed by a person",
+        ),
+    ] {
+        let cached = Cached::new();
+        let (first, _) = show(&cached, kind, id, None);
+        let held = version(&first);
+        cached.board.edit_title(native, &typed);
+        let newer = listed(&cached, kind, id);
+        // The directory takes no new file, so the read pinned to the newer version cannot keep
+        // what it read — and the entry it would have replaced is emptied rather than left.
+        let entries = cache_dir(&cached).expect("a cache").join(directory);
+        std::fs::set_permissions(&entries, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let (current, sent) = show(&cached, kind, id, Some(&newer));
+        let (older, sent_older) = show(&cached, kind, id, Some(&held));
+        std::fs::set_permissions(&entries, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(sent, [READ_BY_ID], "{kind}: a newer pin misses");
+        assert_eq!(current["items"][0]["item"]["title"], renamed);
+        assert_eq!(
+            sent_older,
+            [READ_BY_ID],
+            "{kind}: the entry at the older version is no longer served, even to its own pin"
+        );
+        assert_eq!(
+            older["items"][0]["item"]["title"], renamed,
+            "{kind}: the read is the board's, never the entry it could not replace"
+        );
+    }
+}
