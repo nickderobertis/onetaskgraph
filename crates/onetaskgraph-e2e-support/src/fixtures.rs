@@ -4368,12 +4368,220 @@ impl LinearWorkspace {
 
     /// Rewrite one issue's description, as a person editing it in Linear would.
     pub fn edit_description(&self, issue: &str, content: &str) {
+        self.change("tasks", issue, true, |row| {
+            row["content"] = json!(content);
+            row.as_object_mut()
+                .map(|row| row.remove("_linear_description"));
+        });
+    }
+
+    /// Change the held `collection` row `id` through `change`, as a person editing it in
+    /// Linear would — moving its `updatedAt` when `moves` says Linear moves it for that change.
+    fn change(&self, collection: &str, id: &str, moves: bool, change: impl FnOnce(&mut Value)) {
         let mut data = self.state.lock().unwrap();
+        let (_, stamp) = linear_tick(&mut data);
+        let row = data[collection]
+            .as_array_mut()
+            .and_then(|rows| rows.iter_mut().find(|row| row["id"] == id))
+            .unwrap_or_else(|| panic!("{collection} holds {id}"));
+        change(row);
+        if moves {
+            row["_updated"] = json!(stamp);
+        }
+    }
+
+    /// Every held issue and project row carrying the label `label`, changed by `change` — a
+    /// label is the workspace's, so renaming or recolouring it changes every item carrying it,
+    /// and Linear moves no item's `updatedAt` for it.
+    fn each_label(&self, label: &str, change: impl Fn(&mut Value)) {
+        let mut data = self.state.lock().unwrap();
+        for collection in ["tasks", "projects"] {
+            for row in data[collection].as_array_mut().into_iter().flatten() {
+                for held in row["labels"].as_array_mut().into_iter().flatten() {
+                    if held["id"] == label {
+                        change(held);
+                    }
+                }
+            }
+        }
+        for held in data["labels"].as_array_mut().into_iter().flatten() {
+            if held["id"] == label {
+                change(held);
+            }
+        }
+    }
+
+    /// Rename the workspace label `label`, as a person would in Linear.
+    pub fn rename_label(&self, label: &str, name: &str) {
+        self.each_label(label, |held| held["name"] = json!(name));
+    }
+
+    /// Give the workspace label `label` the colour `color`, as a person would in Linear.
+    pub fn recolour_label(&self, label: &str, color: &str) {
+        self.each_label(label, |held| held["color"] = json!(color));
+    }
+
+    /// Set the labels — `(id, name)` — the issue or project `id` of `collection` carries, as a
+    /// person adding or removing one would: its `updatedAt` moves.
+    pub fn set_labels(&self, collection: &str, id: &str, labels: &[(&str, &str)]) {
+        self.change(collection, id, true, |row| {
+            row["labels"] = Value::Array(
+                labels
+                    .iter()
+                    .map(|(id, name)| json!({"id": id, "name": name}))
+                    .collect(),
+            );
+        });
+    }
+
+    /// Retitle the `collection` row `id`: an issue's or a project's `updatedAt` moves, and a
+    /// document's — whose title its token's facets carry — is left where it was.
+    pub fn retitle(&self, collection: &str, id: &str, title: &str) {
+        self.change(collection, id, collection != "documents", |row| {
+            row["title"] = json!(title);
+        });
+    }
+
+    /// Set one issue's priority, by the shared dataset's name for it.
+    pub fn set_priority(&self, issue: &str, priority: &str) {
+        self.change("tasks", issue, true, |row| {
+            row["priority"] = json!(priority)
+        });
+    }
+
+    /// Move one issue to the workflow state `name` of type `kind`.
+    pub fn move_to_state(&self, issue: &str, name: &str, kind: &str) {
+        self.change("tasks", issue, true, |row| {
+            linear_put_state(row, (name.to_owned(), kind.to_owned()));
+        });
+    }
+
+    /// Rename the workflow state `from` of the team to `to`, as a person would: every issue in it
+    /// reads under the new name, and none moves its `updatedAt`.
+    pub fn rename_state(&self, from: &str, to: &str) {
+        let mut data = self.state.lock().unwrap();
+        for row in data["tasks"].as_array_mut().into_iter().flatten() {
+            if row["_linear_state"]["name"] == from {
+                row["_linear_state"]["name"] = json!(to);
+                row["status"]["name"] = json!(to);
+            }
+        }
+        for state in data["_linear_states"].as_array_mut().into_iter().flatten() {
+            if state["name"] == from {
+                state["name"] = json!(to);
+            }
+        }
+    }
+
+    /// Move one project to the project status `name` of type `kind`.
+    pub fn set_project_status(&self, project: &str, name: &str, kind: &str) {
+        self.change("projects", project, true, |row| {
+            row["status"]["_linear_status"] = json!({"name": name, "type": kind});
+        });
+    }
+
+    /// Rename the project status `from` to `to`, as a person would: every project at it reads
+    /// under the new name, and none moves its `updatedAt`.
+    pub fn rename_project_status(&self, from: &str, to: &str) {
+        let mut data = self.state.lock().unwrap();
+        for row in data["projects"].as_array_mut().into_iter().flatten() {
+            if linear_project_status(&row["status"])["name"] == from {
+                let held = linear_project_status(&row["status"]);
+                row["status"]["_linear_status"] = json!({"name": to, "type": held["type"]});
+            }
+        }
+        for status in data["_linear_project_statuses"]
+            .as_array_mut()
+            .into_iter()
+            .flatten()
+        {
+            if status["name"] == from {
+                status["name"] = json!(to);
+            }
+        }
+    }
+
+    /// Rewrite one project's content, as a person editing it in Linear would.
+    pub fn edit_project_content(&self, project: &str, content: &str) {
+        self.change("projects", project, true, |row| {
+            row["_linear_description"] = json!(content);
+        });
+    }
+
+    /// Rewrite one document's content — its metadata slot included — as a person would: Linear
+    /// moves no `updatedAt` for it, as `spike-linear-coverage` measured (4 of 4).
+    pub fn edit_document_content(&self, document: &str, content: &str) {
+        self.change("documents", document, false, |row| {
+            row["_linear_description"] = json!(content);
+        });
+    }
+
+    /// File one document under `project`, or under none.
+    pub fn refile_document(&self, document: &str, project: Option<&str>) {
+        self.change("documents", document, false, |row| {
+            row["project"] = project.map_or(Value::Null, |project| json!(project));
+        });
+    }
+
+    /// File one issue under `project`, or under none.
+    pub fn file_issue(&self, issue: &str, project: Option<&str>) {
+        self.change("tasks", issue, true, |row| match project {
+            Some(project) => row["project"] = json!(project),
+            None => {
+                row.as_object_mut().map(|row| row.remove("project"));
+            }
+        });
+    }
+
+    /// Move one issue to another team, which gives it another identifier and another address.
+    pub fn move_team(&self, issue: &str, identifier: &str) {
+        self.change("tasks", issue, true, |row| {
+            row["_identifier"] = json!(identifier);
+            row["url"] = json!(format!("https://linear.app/fixture/issue/{identifier}"));
+        });
+    }
+
+    /// Relate `from` to `to` — `blocks` or `related` — as a person would: no issue's
+    /// `updatedAt` moves for it, as `spike-linear-coverage` measured (3 of 3).
+    pub fn relate(&self, from: &str, to: &str, kind: &str) {
+        let mut data = self.state.lock().unwrap();
+        data["task_dependencies"]
+            .as_array_mut()
+            .expect("the relations")
+            .push(json!({"from": from, "to": to, "kind": kind}));
+    }
+
+    /// Remove every relation from `from` to `to`, as a person would.
+    pub fn unrelate(&self, from: &str, to: &str) {
+        let mut data = self.state.lock().unwrap();
+        data["task_dependencies"]
+            .as_array_mut()
+            .expect("the relations")
+            .retain(|edge| !(edge["from"] == from && edge["to"] == to));
+    }
+
+    /// Trash one issue, as a person would: it is read as archived and listed nowhere, and the
+    /// relations naming it stay where they were.
+    pub fn trash_issue(&self, issue: &str) {
+        let mut data = self.state.lock().unwrap();
+        let (_, stamp) = linear_tick(&mut data);
         let row = data["tasks"]
             .as_array_mut()
-            .and_then(|tasks| tasks.iter_mut().find(|row| row["id"] == issue))
-            .expect("the issue to edit");
-        row["content"] = json!(content);
+            .and_then(|rows| rows.iter_mut().find(|row| row["id"] == issue))
+            .expect("the issue to trash");
+        row["_trashed"] = json!(stamp);
+    }
+
+    /// Give the `collection` row `id` `count` labels — as many as Linear's default page holds or
+    /// more, so a read of them may be a first page.
+    pub fn crowd_labels(&self, collection: &str, id: &str, count: usize) {
+        self.change(collection, id, true, |row| {
+            row["labels"] = Value::Array(
+                (0..count)
+                    .map(|n| json!({"id": format!("L-crowd-{n}"), "name": format!("crowd {n}")}))
+                    .collect(),
+            );
+        });
     }
 
     /// Add one comment to an issue, as a person writing it in Linear would, answering with its
@@ -5205,12 +5413,24 @@ fn linear_response(
         graphql::COMMENT_CREATE,
         graphql::COMMENT_UPDATE,
         graphql::COMMENT_DELETE,
+        graphql::ISSUES_CACHED,
+        graphql::ISSUE_CACHED,
+        graphql::ISSUE_DETAIL_CACHED,
+        graphql::ISSUE_RELATIONS_CACHED,
     ]
     .contains(&operation)
     {
         return Err("unknown GraphQL operation");
     }
     let vars = Value::Object(request.variables);
+    // What the store's cache sends in place of four documents: the plain one's answer, with
+    // exactly what the cache's document adds to it.
+    if let Some(plain) = linear_uncached(operation) {
+        let mut answer =
+            linear_response(&json!({"query": plain, "variables": vars}), recorded, data)?;
+        linear_widen(operation, &mut answer, data, &vars);
+        return Ok(answer);
+    }
     validate_linear_variables(operation, &vars)?;
     // The issue and a page of its comments in one answer: exactly what the issue read and the
     // comment page read answer apart, on one `issue` field.
@@ -5330,6 +5550,7 @@ fn linear_response(
             ("documents", "content", "documentUpdate", "document")
         };
         let id = vars["id"].as_str().ok_or("update id must be a string")?;
+        let (_, stamp) = linear_tick(data);
         let row = data[collection]
             .as_array_mut()
             .ok_or("fixture collection is not an array")?
@@ -5337,6 +5558,11 @@ fn linear_response(
             .find(|row| row["id"] == id)
             .ok_or("update target does not exist")?;
         row["_linear_description"] = vars["input"][field].clone();
+        // A project's `updatedAt` moves for its content; a document's does not, which is what
+        // `spike-linear-coverage` measured Linear doing (4 of 4).
+        if collection == "projects" {
+            row["_updated"] = json!(stamp);
+        }
         return Ok(json!({ (root): {"success":true,(payload):{"id":id}} }));
     }
     if matches!(operation, graphql::PROJECT_CREATE | graphql::PROJECT_UPDATE) {
@@ -5431,6 +5657,8 @@ fn linear_response(
             .unwrap()
             .iter()
             .filter(|v| linear_holds(v, &vars["filter"], LinearRow::Issue, data))
+            // A trashed issue is listed nowhere, as Linear's own listing leaves it out.
+            .filter(|v| v.get("_trashed").is_none_or(Value::is_null))
             .map(|v| linear_task(v, data))
             .collect();
         return Ok(json!({"issues":linear_connection(std::mem::take(&mut rows),&vars)}));
@@ -5476,6 +5704,79 @@ fn linear_response(
     Ok(json!({"viewer":{"id":"fixture-user"}}))
 }
 
+/// The document the store's cache sends `operation` in place of, when it sends it in place of one.
+fn linear_uncached(operation: &str) -> Option<&'static str> {
+    use onetaskgraph_linear::graphql;
+    match operation {
+        graphql::ISSUES_CACHED => Some(graphql::ISSUES),
+        graphql::ISSUE_CACHED => Some(graphql::ISSUE),
+        graphql::ISSUE_DETAIL_CACHED => Some(graphql::ISSUE_DETAIL),
+        graphql::ISSUE_RELATIONS_CACHED => Some(graphql::ISSUE_RELATIONS),
+        _ => None,
+    }
+}
+
+/// Add to `answer`, the plain document's, what the cache's `operation` selects beside it: each
+/// issue's first page of ten relations, or — for a dependency read — every other part of its
+/// token.
+fn linear_widen(operation: &str, answer: &mut Value, data: &Value, vars: &Value) {
+    use onetaskgraph_linear::graphql;
+    let page = |id: &str| {
+        let relations = linear_relations(data, "task_dependencies", id, "Issue", None);
+        let nodes = relations["relations"]["nodes"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        let more = nodes.len() > 10;
+        json!({"nodes": nodes.into_iter().take(10).collect::<Vec<_>>(),
+               "pageInfo": {"hasNextPage": more}})
+    };
+    let widen = |issue: &mut Value| {
+        if let Some(id) = issue.get("id").and_then(Value::as_str).map(str::to_owned) {
+            issue["relations"] = page(&id);
+        }
+    };
+    match operation {
+        graphql::ISSUES_CACHED => {
+            for issue in answer
+                .pointer_mut("/issues/nodes")
+                .and_then(Value::as_array_mut)
+                .into_iter()
+                .flatten()
+            {
+                widen(issue);
+            }
+        }
+        graphql::ISSUE_CACHED | graphql::ISSUE_DETAIL_CACHED => {
+            if let Some(issue) = answer.get_mut("issue").filter(|issue| !issue.is_null()) {
+                widen(issue);
+            }
+        }
+        _ => {
+            let row = data["tasks"]
+                .as_array()
+                .and_then(|tasks| tasks.iter().find(|task| task["id"] == vars["id"]));
+            let (Some(row), Some(issue)) = (
+                row,
+                answer.get_mut("issue").filter(|issue| issue.is_object()),
+            ) else {
+                return;
+            };
+            let read = linear_task(row, data);
+            for part in [
+                "updatedAt",
+                "identifier",
+                "url",
+                "state",
+                "labels",
+                "project",
+            ] {
+                issue[part] = read[part].clone();
+            }
+        }
+    }
+}
+
 fn linear_write_item(
     data: &mut Value,
     vars: &Value,
@@ -5486,6 +5787,8 @@ fn linear_write_item(
         .as_object()
         .ok_or("write input must be an object")?;
     let collection = if project { "projects" } else { "tasks" };
+    // A whole write moves the item's `updatedAt`, as Linear moves it for every field sent.
+    let (_, stamp) = linear_tick(data);
     let vocabulary = json!({"_linear_states": data["_linear_states"].clone(),
         "_linear_project_statuses": data["_linear_project_statuses"].clone()});
     let rows = data[collection]
@@ -5556,6 +5859,7 @@ fn linear_write_item(
     if !project && let Some(priority) = input.get("priority") {
         row["priority"] = linear_priority_name(priority);
     }
+    row["_updated"] = json!(stamp);
     if let Some(index) = existing {
         rows[index] = row;
     } else {
@@ -5608,6 +5912,10 @@ fn linear_write_document(
     });
     if let Some(project) = input.get("projectId").filter(|value| !value.is_null()) {
         row["project"] = project.clone();
+    }
+    // A document's `updatedAt` stays where it was for a content write, as Linear's did.
+    if let Some(updated) = existing.and_then(|index| rows[index].get("_updated").cloned()) {
+        row["_updated"] = updated;
     }
     if let Some(index) = existing {
         rows[index] = row;
@@ -5993,7 +6301,7 @@ fn recorded_far_ends(key: &str, id: &Value) -> Vec<Value> {
         .collect()
 }
 fn linear_label(v: &Value) -> Value {
-    json!({"id":v["id"],"name":v["name"],"color":null})
+    json!({"id":v["id"],"name":v["name"],"color":v.get("color").cloned().unwrap_or(Value::Null)})
 }
 /// Where the Linear row holds one entity: its own page there, as a link.
 fn linear_place(_sandbox: &Sandbox, verb: &str, id: &str) -> Option<Placed> {
@@ -6252,6 +6560,7 @@ fn linear_narrow_issue_update(
 ) -> Result<Value, &'static str> {
     let id = vars["id"].as_str().ok_or("update id must be a string")?;
     let states = json!({"_linear_states": data["_linear_states"].clone()});
+    let (_, stamp) = linear_tick(data);
     let row = data["tasks"]
         .as_array_mut()
         .ok_or("fixture collection is not an array")?
@@ -6272,6 +6581,7 @@ fn linear_narrow_issue_update(
         let held = linear_held_state(&states, state).ok_or("stateId names no state of the team")?;
         linear_put_state(row, held);
     }
+    row["_updated"] = json!(stamp);
     Ok(
         if operation == onetaskgraph_linear::graphql::ISSUE_PRIORITY_UPDATE {
             json!({"issueUpdate":{"success":true,
@@ -6283,17 +6593,35 @@ fn linear_narrow_issue_update(
 }
 
 fn linear_task(v: &Value, data: &Value) -> Value {
-    json!({"id":v["id"],"priority":linear_priority(&v["priority"]),"identifier":linear_identifier(v["id"].as_str().expect("an issue id")),"title":v["title"],"description":linear_description(v,"task_dependencies",data),"state":linear_state(v),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"project":v.get("project").map(|id|json!({"id":id})),"url":linear_web_address(v,"issue"),"createdAt":null,"updatedAt":null,"archivedAt":null})
+    let identifier = v
+        .get("_identifier")
+        .filter(|identifier| identifier.is_string())
+        .cloned()
+        .unwrap_or_else(|| json!(linear_identifier(v["id"].as_str().expect("an issue id"))));
+    json!({"id":v["id"],"priority":linear_priority(&v["priority"]),"identifier":identifier,"title":v["title"],"description":linear_description(v,"task_dependencies",data),"state":linear_state(v),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"project":v.get("project").map(|id|json!({"id":id})),"url":linear_web_address(v,"issue"),"createdAt":null,"updatedAt":linear_updated(v),"archivedAt":v.get("_trashed").cloned().unwrap_or(Value::Null)})
 }
 fn linear_project(v: &Value, data: &Value) -> Value {
-    json!({"id":v["id"],"name":v["title"],"content":linear_description(v,"project_dependencies",data),"status":linear_project_status(&v["status"]),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"url":linear_web_address(v,"project"),"createdAt":null,"updatedAt":null,"archivedAt":null})
+    json!({"id":v["id"],"name":v["title"],"content":linear_description(v,"project_dependencies",data),"status":linear_project_status(&v["status"]),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"url":linear_web_address(v,"project"),"createdAt":null,"updatedAt":linear_updated(v),"archivedAt":null})
 }
+
+/// When this workspace last changed one item, as Linear's `updatedAt` answers it: the
+/// workspace's epoch until something Linear moves that time for changes it.
+fn linear_updated(v: &Value) -> Value {
+    v.get("_updated")
+        .filter(|updated| updated.is_string())
+        .cloned()
+        .unwrap_or_else(|| json!(LINEAR_EPOCH))
+}
+
+/// When every item of a loopback Linear workspace last changed before anything changed it —
+/// the day its fixtures were recorded.
+const LINEAR_EPOCH: &str = "2026-08-24T00:00:00Z";
 
 /// One Linear document. It has no `labels` field and no `state`, because Linear's own
 /// published `Document` has neither — which is what the `linear` row of the table above
 /// declares and what the shared document journeys drive.
 fn linear_document(v: &Value) -> Value {
-    json!({"id":v["id"],"title":v["title"],"content":linear_long_form(v,Vec::new()),"project":v.get("project").filter(|project|project.is_string()).map(|id|json!({"id":id})),"url":linear_web_address(v,"document"),"createdAt":null,"updatedAt":null,"archivedAt":null})
+    json!({"id":v["id"],"title":v["title"],"content":linear_long_form(v,Vec::new()),"project":v.get("project").filter(|project|project.is_string()).map(|id|json!({"id":id})),"url":linear_web_address(v,"document"),"createdAt":null,"updatedAt":linear_updated(v),"archivedAt":null})
 }
 
 /// The Linear web address this workspace holds one item at.

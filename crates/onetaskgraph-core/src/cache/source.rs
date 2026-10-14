@@ -182,7 +182,18 @@ impl CachedSource {
 
     /// Write what a read of `task` from the source answered, keeping what the entry already
     /// held at the very same version and the read did not carry.
+    ///
+    /// Comments are kept only where the source's token covers them: one that does not would
+    /// never have them served, and nothing a reader never sees — a comment's body, its author's
+    /// name — is written down.
+    ///
+    /// A task read without a token is not written at all: an entry is keyed on its version, and
+    /// one without could vouch for nothing.
     fn remember(&self, task: &Task, comments: Option<Vec<Comment>>) {
+        if task.version.is_none() {
+            return;
+        }
+        let comments = comments.filter(|_| self.cache.coverage.comments.reason().is_none());
         let held = self
             .cache
             .read(&task.id)
@@ -191,6 +202,7 @@ impl CachedSource {
             Some(held) => (held.assets, held.edges, held.comments),
             None => (None, None, None),
         };
+        let kept = kept.filter(|_| self.cache.coverage.comments.reason().is_none());
         self.cache.write(&Entry {
             schema: ENTRY_SCHEMA,
             remote: self.cache.remote.clone(),

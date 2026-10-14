@@ -256,12 +256,14 @@ impl Checked for GlobalId {
 }
 
 #[test]
-fn every_read_carries_the_token_its_source_gives_and_linear_gives_none() {
+fn every_read_carries_the_token_its_source_gives() {
     for row in ROWS.iter().filter(|row| row.fixture.complete_dataset) {
         let who = row.name;
         let sandbox = Sandbox::new();
         sandbox.project_document(&row.document(&sandbox));
-        let tokened = matches!(row.plugin, "github-projects" | "local-md");
+        // Every row whose source spells a token: a board, a folder of Markdown and Linear's
+        // `lin1`, each from what its read already answers.
+        let tokened = matches!(row.plugin, "github-projects" | "local-md" | "linear");
         let listed = listed(&sandbox, &[]);
         assert!(!listed.is_empty(), "{who}: the dataset holds tasks");
         for (id, token) in &listed {

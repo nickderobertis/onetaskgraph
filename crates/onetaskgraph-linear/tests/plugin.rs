@@ -350,6 +350,11 @@ fn pinned_schema_checks_selected_fields_arguments_and_fixture_keys() {
             Some(include_str!("fixtures/comments.json")),
         ),
         (graphql::COMMENT, None),
+        // What the store's cache sends in place of four of the above.
+        (graphql::ISSUE_CACHED, None),
+        (graphql::ISSUES_CACHED, None),
+        (graphql::ISSUE_DETAIL_CACHED, None),
+        (graphql::ISSUE_RELATIONS_CACHED, None),
     ] {
         let document = query::parse_query::<String>(operation).unwrap();
         let fixture =
