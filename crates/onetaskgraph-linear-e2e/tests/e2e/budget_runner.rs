@@ -249,6 +249,69 @@ fn the_runner_refuses_a_budget_with_nowhere_to_report_and_a_result_it_cannot_wri
 }
 
 #[test]
+fn the_cache_budget_is_reported_signed_at_its_workload_and_refused_at_another_or_without_a_figure()
+{
+    use crate::cache_budget::{BUDGET, WORKLOAD};
+    let sandbox = Sandbox::new();
+    // Each recording in a telemetry directory of its own, since they share the budget's id.
+    let report = |name: &str, recording: &Value| {
+        let recorded = sandbox.subdirectory(&format!("telemetry-{name}"));
+        std::fs::write(telemetry::file_in(&recorded, BUDGET), recording.to_string())
+            .expect("writable");
+        let result = sandbox
+            .subdirectory(&format!("result-{name}"))
+            .join("result.json");
+        std::fs::write(&result, "").expect("an empty result file, as onebudgetspec makes one");
+        let output = run_report(&recorded, |command| {
+            command
+                .env("ONEBUDGETSPEC_BUDGET_ID", BUDGET)
+                .env("ONEBUDGETSPEC_RESULT", &result);
+        });
+        (output, std::fs::read_to_string(&result).unwrap_or_default())
+    };
+
+    let (saved, result) = report(
+        "saved",
+        &json!({"value": -5811, "detail": "the cache saves", "workload": WORKLOAD}),
+    );
+    assert!(
+        saved.status.success(),
+        "{}",
+        String::from_utf8_lossy(&saved.stderr)
+    );
+    let result: Value = serde_json::from_str(&result).expect("the result");
+    assert_eq!(
+        result,
+        json!({"value": -5811.0, "detail": "the cache saves"}),
+        "a saving is reported as the negative figure it is"
+    );
+
+    for (name, recording, reason) in [
+        (
+            "another-workload",
+            json!({"value": 0, "detail": "d", "workload": "one host, one pass"}),
+            "not of the workload the budget states",
+        ),
+        (
+            "no-figure",
+            json!({"detail": "d", "workload": WORKLOAD}),
+            "a whole number of complexity points",
+        ),
+        (
+            "fractional",
+            json!({"value": -0.5, "detail": "d", "workload": WORKLOAD}),
+            "a whole number of complexity points",
+        ),
+    ] {
+        let (refused, _) = report(name, &recording);
+        let stderr = String::from_utf8_lossy(&refused.stderr);
+        assert!(!refused.status.success(), "{name}: {stderr}");
+        assert!(stderr.contains(&format!("{BUDGET}: ")), "{name}: {stderr}");
+        assert!(stderr.contains(reason), "{name}: {stderr}");
+    }
+}
+
+#[test]
 fn a_budget_id_that_is_not_one_names_no_file() {
     for id in ["../escape", "/abs", "Upper", "", "a/b"] {
         let refused = telemetry::recorded(id).expect_err("not an id");
