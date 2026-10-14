@@ -88,6 +88,7 @@ pub(crate) struct ProjectEntry {
     /// [`EntryKind::Project`], the only kind it can carry.
     pub(crate) kind: ProjectTag,
     /// The digest of the remote it is from.
+    // llmlint: ignore[invalid_states_unrepresentable] An equality key and nothing more: every read compares it byte for byte with this store's own `CacheLocation::remote`, the public `String` a task's entry carries too, so any other value is a miss and never misread; a digest type here alone would validate a value no reader interprets.
     pub(crate) remote: String,
     /// The project, its `id` the entry's own and its `version` the token it was read at.
     pub(crate) project: Project,
@@ -101,6 +102,7 @@ pub(crate) struct DocumentEntry {
     /// [`EntryKind::Document`], the only kind it can carry.
     pub(crate) kind: DocumentTag,
     /// The digest of the remote it is from.
+    // llmlint: ignore[invalid_states_unrepresentable] An equality key and nothing more: every read compares it byte for byte with this store's own `CacheLocation::remote`, the public `String` a task's entry carries too, so any other value is a miss and never misread; a digest type here alone would validate a value no reader interprets.
     pub(crate) remote: String,
     /// The document, its `id` the entry's own and its `version` the token it was read at.
     pub(crate) document: Document,
@@ -120,6 +122,7 @@ pub(crate) struct EdgesEntry {
     /// [`EntryKind::Edges`], the only kind it can carry.
     pub(crate) kind: EdgesTag,
     /// The digest of the remote it is from.
+    // llmlint: ignore[invalid_states_unrepresentable] An equality key and nothing more: every read compares it byte for byte with this store's own `CacheLocation::remote`, the public `String` a task's entry carries too, so any other value is a miss and never misread; a digest type here alone would validate a value no reader interprets.
     pub(crate) remote: String,
     /// The task they are the forward edges of.
     pub(crate) id: NativeId,
