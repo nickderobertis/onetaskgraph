@@ -5881,14 +5881,19 @@ fn linear_widen(operation: &str, answer: &mut Value, data: &Value, vars: &Value)
                 .collect(),
         )
     };
-    let widen_issue = |issue: &mut Value, with_comments: bool| {
+    // Both relations pages, which every widened issue read adds.
+    let widen_relations = |issue: &mut Value| {
         if let Some(id) = issue.get("id").and_then(Value::as_str).map(str::to_owned) {
-            if with_comments {
-                issue["comments"] = comments(&id);
-            }
             issue["relations"] = relations("task_dependencies", "Issue", &id, "relations");
             issue["inverseRelations"] =
                 relations("task_dependencies", "Issue", &id, "inverseRelations");
+        }
+    };
+    // And the comments page, which a widened read with no comments page of its own adds.
+    let widen_issue = |issue: &mut Value| {
+        widen_relations(issue);
+        if let Some(id) = issue.get("id").and_then(Value::as_str).map(str::to_owned) {
+            issue["comments"] = comments(&id);
         }
     };
     let widen_project = |project: &mut Value| {
@@ -5909,12 +5914,17 @@ fn linear_widen(operation: &str, answer: &mut Value, data: &Value, vars: &Value)
                 .into_iter()
                 .flatten()
             {
-                widen_issue(issue, true);
+                widen_issue(issue);
             }
         }
-        graphql::ISSUE_CACHED | graphql::ISSUE_DETAIL_CACHED => {
+        graphql::ISSUE_CACHED => {
             if let Some(issue) = answer.get_mut("issue").filter(|issue| !issue.is_null()) {
-                widen_issue(issue, operation == graphql::ISSUE_CACHED);
+                widen_issue(issue);
+            }
+        }
+        graphql::ISSUE_DETAIL_CACHED => {
+            if let Some(issue) = answer.get_mut("issue").filter(|issue| !issue.is_null()) {
+                widen_relations(issue);
             }
         }
         graphql::PROJECTS_CACHED => {

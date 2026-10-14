@@ -36,6 +36,17 @@ pub const PAGE: usize = 10;
 /// holding this many may be a first page of more, so it gives no token.
 pub const DEFAULT_LABEL_PAGE: usize = 50;
 
+/// Which spelling of a token a response is read as: the one a source with no cache attached gives,
+/// or the one the cache's widened reads let it give, carrying their first pages' digests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Spelling {
+    /// `lin1|<updatedAt>|<facets>`, from what every read selects.
+    Plain,
+    /// With the parts the cache's widened reads carry: a task's comments, relations and inverse
+    /// relations, a project's relations.
+    Attached,
+}
+
 /// One of the parts the cache's widened reads add to a token, each the digest of one first page.
 ///
 /// Spelled in this order, which is the only order a token holds them in, so the part a later
@@ -279,15 +290,14 @@ fn with_parts(
 }
 
 /// The token of the issue `issue`, as one response answered it — with the digests of its first
-/// page of comments, relations and inverse relations when `attached`, and none at all when any of
+/// page of comments, relations and inverse relations when [`Spelling::Attached`], and none at all when any of
 /// those pages is not whole — or `None` when the response does not carry every part whole.
 #[must_use]
-pub fn task(issue: &Value, attached: bool) -> Option<String> {
+pub fn task(issue: &Value, spelling: Spelling) -> Option<String> {
     let base = task_base(issue)?;
-    if attached {
-        with_parts(base, &Part::ALL, |part| task_part(issue, part))
-    } else {
-        Some(base)
+    match spelling {
+        Spelling::Attached => with_parts(base, &Part::ALL, |part| task_part(issue, part)),
+        Spelling::Plain => Some(base),
     }
 }
 
@@ -302,16 +312,16 @@ pub fn task_before_relations(issue: &Value) -> Option<String> {
 }
 
 /// The token of the project `project`, as one response answered it — with the digest of its
-/// first page of relations when `attached`, and none at all when that page is not whole.
+/// first page of relations when [`Spelling::Attached`], and none at all when that page is not
+/// whole.
 #[must_use]
-pub fn project_token(project: &Value, attached: bool) -> Option<String> {
+pub fn project_token(project: &Value, spelling: Spelling) -> Option<String> {
     let base = project_before_relations(project)?;
-    if attached {
-        with_parts(base, &[Part::Relations], |_| {
+    match spelling {
+        Spelling::Attached => with_parts(base, &[Part::Relations], |_| {
             relation_digest(project, "relations", "relatedProject")
-        })
-    } else {
-        Some(base)
+        }),
+        Spelling::Plain => Some(base),
     }
 }
 
@@ -457,8 +467,16 @@ mod tests {
     #[test]
     fn a_later_time_with_the_same_facets_and_parts_orders_after() {
         let none = page(&[], false);
-        let before = task(&issue("2026-10-01T00:00:00Z", "bug", none.clone()), true).unwrap();
-        let after = task(&issue("2026-10-01T00:00:01Z", "bug", none), true).unwrap();
+        let before = task(
+            &issue("2026-10-01T00:00:00Z", "bug", none.clone()),
+            Spelling::Attached,
+        )
+        .unwrap();
+        let after = task(
+            &issue("2026-10-01T00:00:01Z", "bug", none),
+            Spelling::Attached,
+        )
+        .unwrap();
         assert_eq!(order(&after, &before), Some(Ordering::Greater));
         assert_eq!(order(&before, &after), Some(Ordering::Less));
         assert_eq!(order(&before, &before), Some(Ordering::Equal));
@@ -468,35 +486,43 @@ mod tests {
     fn another_facet_or_part_is_never_ordered() {
         let none = page(&[], false);
         let held = issue("2026-10-01T00:00:00Z", "bug", none.clone());
-        let before = task(&held, true).unwrap();
-        let renamed = task(&issue("2026-10-01T00:00:05Z", "defect", none.clone()), true).unwrap();
+        let before = task(&held, Spelling::Attached).unwrap();
+        let renamed = task(
+            &issue("2026-10-01T00:00:05Z", "defect", none.clone()),
+            Spelling::Attached,
+        )
+        .unwrap();
         assert_eq!(order(&renamed, &before), None, "a label renamed");
         let related = task(
             &issue("2026-10-01T00:00:05Z", "bug", page(&[("r1", "i2")], false)),
-            true,
+            Spelling::Attached,
         )
         .unwrap();
         assert_eq!(order(&related, &before), None, "a relation added");
         let mut depended = held.clone();
         depended["inverseRelations"] = inverse(&[("r2", "i3")], false);
         assert_eq!(
-            order(&task(&depended, true).unwrap(), &before),
+            order(&task(&depended, Spelling::Attached).unwrap(), &before),
             None,
             "an inverse relation added"
         );
         let mut commented = held.clone();
         commented["comments"] = comments(&[("c1", "2026-10-01T00:00:00Z")], false);
-        let commented_token = task(&commented, true).unwrap();
+        let commented_token = task(&commented, Spelling::Attached).unwrap();
         assert_eq!(order(&commented_token, &before), None, "a comment added");
         let mut edited = commented.clone();
         edited["comments"] = comments(&[("c1", "2026-10-01T00:00:09Z")], false);
         assert_eq!(
-            order(&task(&edited, true).unwrap(), &commented_token),
+            order(
+                &task(&edited, Spelling::Attached).unwrap(),
+                &commented_token
+            ),
             None,
             "a comment edited"
         );
         assert_eq!(order(&before, &commented_token), None, "a comment deleted");
-        let unattached = task(&issue("2026-10-01T00:00:00Z", "bug", none), false).unwrap();
+        let unattached =
+            task(&issue("2026-10-01T00:00:00Z", "bug", none), Spelling::Plain).unwrap();
         assert!(!unattached.contains("|r:") && !unattached.contains("|c:"));
         assert_eq!(
             order(&unattached, &before),
@@ -510,10 +536,10 @@ mod tests {
     #[test]
     fn the_earlier_spelling_of_an_attached_token_is_never_ordered_beside_this_one() {
         let held = issue("2026-10-01T00:00:00Z", "bug", page(&[], false));
-        let now = task(&held, true).unwrap();
+        let now = task(&held, Spelling::Attached).unwrap();
         // What the release before this one spelled for the same issue: its relations part alone.
         let relations = relation_digest(&held, "relations", "relatedIssue").unwrap();
-        let earlier = format!("{}|r:{relations}", task(&held, false).unwrap());
+        let earlier = format!("{}|r:{relations}", task(&held, Spelling::Plain).unwrap());
         assert!(parts(&earlier).is_some(), "it still reads as a token");
         assert_eq!(order(&earlier, &now), None);
         assert_eq!(order(&now, &earlier), None);
@@ -532,7 +558,10 @@ mod tests {
     fn a_part_read_from_part_of_a_connection_gives_no_token() {
         let more = page(&[("r1", "i2")], true);
         assert_eq!(
-            task(&issue("2026-10-01T00:00:00Z", "bug", more), true),
+            task(
+                &issue("2026-10-01T00:00:00Z", "bug", more),
+                Spelling::Attached
+            ),
             None
         );
         let rows: Vec<(String, String)> = (0..=PAGE)
@@ -545,7 +574,7 @@ mod tests {
         assert_eq!(
             task(
                 &issue("2026-10-01T00:00:00Z", "bug", page(&eleven, false)),
-                true
+                Spelling::Attached
             ),
             None
         );
@@ -564,9 +593,13 @@ mod tests {
         ] {
             let mut partial = whole.clone();
             partial[connection] = value.clone();
-            assert_eq!(task(&partial, true), None, "{connection}: {value}");
+            assert_eq!(
+                task(&partial, Spelling::Attached),
+                None,
+                "{connection}: {value}"
+            );
             assert!(
-                task(&partial, false).is_some(),
+                task(&partial, Spelling::Plain).is_some(),
                 "{connection}: a token without the cache's parts reads none of them"
             );
         }
@@ -577,15 +610,15 @@ mod tests {
             .collect();
         let mut crowded = whole.clone();
         crowded["comments"] = comments(&crowd, false);
-        assert_eq!(task(&crowded, true), None, "eleven comments");
+        assert_eq!(task(&crowded, Spelling::Attached), None, "eleven comments");
         let mut crowded = whole;
         crowded["labels"]["nodes"] = Value::Array(
             (0..DEFAULT_LABEL_PAGE)
                 .map(|n| json!({"id": format!("l{n}"), "name": "x", "color": null}))
                 .collect(),
         );
-        assert_eq!(task(&crowded, true), None);
-        assert_eq!(task(&crowded, false), None);
+        assert_eq!(task(&crowded, Spelling::Attached), None);
+        assert_eq!(task(&crowded, Spelling::Plain), None);
     }
 
     #[test]
@@ -607,14 +640,17 @@ mod tests {
             ],
             "pageInfo": {"hasPreviousPage": false, "startCursor": "c1"},
         });
-        assert_eq!(task(&forwards, true), task(&backwards, true));
-        assert!(task(&forwards, true).is_some());
+        assert_eq!(
+            task(&forwards, Spelling::Attached),
+            task(&backwards, Spelling::Attached)
+        );
+        assert!(task(&forwards, Spelling::Attached).is_some());
     }
 
     #[test]
     fn a_part_of_another_json_type_than_linears_schema_gives_no_token() {
         let whole = issue("2026-10-01T00:00:00Z", "bug", page(&[], false));
-        assert!(task(&whole, true).is_some());
+        assert!(task(&whole, Spelling::Attached).is_some());
         for (part, value) in [
             ("/identifier", json!(7)),
             ("/url", json!(["a"])),
@@ -628,12 +664,12 @@ mod tests {
         ] {
             let mut broken = whole.clone();
             *broken.pointer_mut(part).expect("the part") = value.clone();
-            assert_eq!(task(&broken, true), None, "{part} as {value}");
+            assert_eq!(task(&broken, Spelling::Attached), None, "{part} as {value}");
         }
         let mut broken = whole;
         broken["comments"] = comments(&[("c1", "yesterday")], false);
         assert_eq!(
-            task(&broken, true),
+            task(&broken, Spelling::Attached),
             None,
             "a comment time that is no instant"
         );
@@ -680,15 +716,15 @@ mod tests {
                                         "relatedProject": {"id": "p2"}}],
                              "pageInfo": {"hasNextPage": false}});
         let none = json!({"nodes": [], "pageInfo": {"hasNextPage": false}});
-        let plain = project_token(&project(none.clone()), false).unwrap();
+        let plain = project_token(&project(none.clone()), Spelling::Plain).unwrap();
         assert!(!plain.contains("|r:"));
-        let attached = project_token(&project(none), true).unwrap();
-        let added = project_token(&project(related), true).unwrap();
+        let attached = project_token(&project(none), Spelling::Attached).unwrap();
+        let added = project_token(&project(related), Spelling::Attached).unwrap();
         assert_eq!(order(&attached, &added), None, "a project relation added");
         assert_eq!(order(&plain, &attached), None);
         assert_eq!(without_relations(&added), plain);
         let more = json!({"nodes": [], "pageInfo": {"hasNextPage": true}});
-        assert_eq!(project_token(&project(more), true), None);
+        assert_eq!(project_token(&project(more), Spelling::Attached), None);
     }
 
     #[test]
@@ -701,7 +737,7 @@ mod tests {
         let other = document_token(&document("a, edited")).unwrap();
         assert_eq!(order(&one, &other), None);
         let held = issue("2026-10-01T00:00:00Z", "bug", page(&[], false));
-        let token = task(&held, true).unwrap();
+        let token = task(&held, Spelling::Attached).unwrap();
         assert_eq!(
             without_relations(&token),
             task_before_relations(&held).unwrap()

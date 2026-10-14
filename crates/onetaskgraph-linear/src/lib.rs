@@ -2493,7 +2493,7 @@ impl LinearSource {
             written_is(issue, asked)?;
         }
         optional(&json!({ "issue": issue }), "issue", |v| {
-            map_task(v, &self.name, &self.statuses, self.attached())
+            map_task(v, &self.name, &self.statuses, self.spelling())
         })
     }
 
@@ -2796,7 +2796,7 @@ impl LinearSource {
                     let data = self.send(if matches!(kind, WriteKind::Project) { PROJECTS } else { ISSUES }, json!({"first":MAX_PAGE_SIZE,"after":cursor.as_ref().map(|cursor|&cursor.0),"filter":filter})).await?;
                     let (items, next) = if matches!(kind, WriteKind::Project) {
                         let page = connection(&data, "projects", |v| {
-                            map_project(v, &self.statuses, self.attached())
+                            map_project(v, &self.statuses, self.spelling())
                         })?;
                         (
                             page.items
@@ -2807,7 +2807,7 @@ impl LinearSource {
                         )
                     } else {
                         let page = connection(&data, "issues", |v| {
-                            map_task(v, &self.name, &self.statuses, self.attached())
+                            map_task(v, &self.name, &self.statuses, self.spelling())
                         })?;
                         (
                             page.items
@@ -3025,7 +3025,7 @@ impl TaskSource for LinearSource {
     ) -> Result<Page<Task>, SourceError> {
         let d=self.send(self.read_document(ISSUES),json!({"first":page.limit.min(MAX_PAGE_SIZE),"after":page.cursor.as_ref().map(|c|&c.0),"filter":self.issue_filter(query)?})).await?;
         let page = connection(&d, "issues", |v| {
-            map_task(v, &self.name, &self.statuses, self.attached())
+            map_task(v, &self.name, &self.statuses, self.spelling())
         })?;
         Ok(Page {
             items: page
@@ -3044,7 +3044,7 @@ impl TaskSource for LinearSource {
         // llmlint: ignore[changed_behavior_has_e2e] The shared CLI journey `every_complete_dataset_source_filters_projects_by_label_status_and_text` asserts that Linear status filtering returns only P-2 and reports native pushdown; `item_reads_and_transport_error_boundaries_are_exercised` separately asserts the serialized `status:{name:{eqIgnoreCase:…}}` predicate the mapping names.
         let d=self.send(self.read_document(PROJECTS),json!({"first":page.limit.min(self.projects_page()),"after":page.cursor.as_ref().map(|c|&c.0),"filter":self.project_filter(&query.labels,&query.statuses)})).await?;
         let page = connection(&d, "projects", |v| {
-            map_project(v, &self.statuses, self.attached())
+            map_project(v, &self.statuses, self.spelling())
         })?;
         // A project's text is applied here, over the page Linear answered: `search_title` and
         // `search_content` are declared for every level, and `ProjectFilter` is not asked for
@@ -4071,6 +4071,16 @@ impl LinearSource {
 }
 
 impl LinearSource {
+    /// The spelling this source's tokens take: [`change_token::Spelling::Attached`] while the
+    /// store's cache stands in front of it.
+    fn spelling(&self) -> change_token::Spelling {
+        if self.attached() {
+            change_token::Spelling::Attached
+        } else {
+            change_token::Spelling::Plain
+        }
+    }
+
     /// Whether the store's cache stands in front of this source.
     fn attached(&self) -> bool {
         self.attached.load(std::sync::atomic::Ordering::Relaxed)
@@ -4149,11 +4159,11 @@ impl LinearSource {
         let item = data.get(root.as_str()).unwrap_or(&Value::Null);
         let (whole, before_relations) = match root {
             DependencyRoot::Issue => (
-                change_token::task(item, true),
+                change_token::task(item, change_token::Spelling::Attached),
                 change_token::task_before_relations(item),
             ),
             DependencyRoot::Project => (
-                change_token::project_token(item, true),
+                change_token::project_token(item, change_token::Spelling::Attached),
                 change_token::project_before_relations(item),
             ),
         };
@@ -4225,7 +4235,7 @@ impl LinearSource {
         let data = self.send(document, json!({"id":id.0})).await?;
         Ok(optional(&data, "issue", |v| {
             Ok((
-                map_task(v, &self.name, &self.statuses, self.attached())?,
+                map_task(v, &self.name, &self.statuses, self.spelling())?,
                 optional_string(v, "description")?,
             ))
         })?
@@ -4251,7 +4261,7 @@ impl LinearSource {
             )
             .await?;
         Ok(optional(&data, "issue", |v| {
-            let mut task = map_task(v, &self.name, &self.statuses, self.attached())?;
+            let mut task = map_task(v, &self.name, &self.statuses, self.spelling())?;
             // A page resumed from a cursor is not the whole of the comments, so with the cache
             // attached — whose token carries their digest — it vouches for no version.
             if self.attached() && page.cursor.is_some() {
@@ -4280,7 +4290,7 @@ impl LinearSource {
         let data = self.send(document, json!({"id":id.0})).await?;
         Ok(optional(&data, "project", |v| {
             Ok((
-                map_project(v, &self.statuses, self.attached())?,
+                map_project(v, &self.statuses, self.spelling())?,
                 optional_string(v, "content")?,
             ))
         })?
@@ -4782,7 +4792,7 @@ fn map_task(
     v: &Value,
     source: &SourceName,
     statuses: &StatusMapping,
-    attached: bool,
+    spelling: change_token::Spelling,
 ) -> Result<Task, SourceError> {
     let (content, mut metadata) = metadata_description(optional_string(v, "description")?)?;
     let repositories = Repository::from_metadata(&metadata)
@@ -4795,7 +4805,7 @@ fn map_task(
     let delivers = delivery_list(&mut metadata, TaskRef::DELIVERS_KEY, &id, source)?;
     let delivered_by = delivery_list(&mut metadata, TaskRef::DELIVERED_BY_KEY, &id, source)?;
     Ok(Task {
-        version: change_token::task(v, attached),
+        version: change_token::task(v, spelling),
         id,
         // `Issue.identifier` is `String!` and every read of an issue selects it, so a
         // response without one is a response this source cannot read rather than an issue
@@ -4890,7 +4900,7 @@ fn strip_delivery_keys(metadata: &mut std::collections::BTreeMap<String, Value>)
 fn map_project(
     v: &Value,
     statuses: &StatusMapping,
-    attached: bool,
+    spelling: change_token::Spelling,
 ) -> Result<Project, SourceError> {
     let (content, mut metadata) = metadata_description(optional_string(v, "content")?)?;
     strip_delivery_keys(&mut metadata);
@@ -4899,7 +4909,7 @@ fn map_project(
     let classification = classification_of(&mut metadata)?;
     let url = optional_string(v, "url")?;
     Ok(Project {
-        version: change_token::project_token(v, attached),
+        version: change_token::project_token(v, spelling),
         id: NativeId(str_at(v, "id")?.into()),
         title: str_at(v, "name")?.into(),
         content,

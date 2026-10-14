@@ -178,7 +178,6 @@ fn every_comment_and_edge_read_is_a_cold_load_a_hit_on_an_unchanged_pin_and_a_mi
         assert_eq!(sent, [cold], "{}: a newer pin misses", read.name);
         let [on, off] = cached.on_and_off(&strs(&read.with(&newer)));
         assert_eq!(on.0, off.0, "{}: what an uncached read answers", read.name);
-        // And the newer entry is served to that pin from here on.
         let (_, sent) = cached.ok(&strs(&read.with(&newer)));
         assert_eq!(sent, Vec::<String>::new(), "{}: refilled", read.name);
     }
