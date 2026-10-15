@@ -4792,6 +4792,12 @@ impl Engine {
     /// recorded on the second instead, under the first's destination id, by the second's own
     /// source. A dependent this copy landed whose edges no longer name it is taken off, because
     /// this copy wrote those edges; one this copy did not land is kept as it was.
+    ///
+    /// Only a far end that is a member of the copied set is recorded on — its counterpart, which
+    /// this copy landed or resolved as already landed — because that is a task in a source this
+    /// copy writes to. An id an edge names directly, of a task the copy does not carry, is
+    /// withheld exactly as it always was: recording on it would write to a source the copy was
+    /// never asked to write to, and may only read.
     fn recordings(&self, running: &Running) -> Recordings {
         let decided: BTreeSet<String> = running
             .dependents
@@ -4808,7 +4814,15 @@ impl Engine {
                 &running.resolvable,
                 &running.counterparts,
             );
-            for end in ends.into_iter().flatten() {
+            for (read, end) in dependent.edges.iter().zip(ends) {
+                let member = !read.to.is_qualified()
+                    && running.resolvable.contains(&GlobalId::new(
+                        dependent.origin.clone(),
+                        NativeId(read.to.id().to_owned()),
+                    ));
+                let (true, Some(end)) = (member, end) else {
+                    continue;
+                };
                 let Some(far) = far_end(&end.to, near) else {
                     continue;
                 };

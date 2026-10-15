@@ -2114,6 +2114,9 @@ fn a_copy_withholds_an_id_naming_a_private_item_from_a_public_write_and_a_privat
     let hidden = std::fs::read_to_string(store.folder("vault").join("tasks/hidden.md"))
         .expect("the hidden task");
     assert!(hidden.contains(&example_at), "{hidden}");
+    // The copy did not carry the hidden task, so the edge naming it directly is withheld and
+    // recorded nowhere: only a member of the copied set records who depends on it.
+    assert!(!hidden.contains("depended_on_by"), "{hidden}");
     let open = std::fs::read_to_string(store.folder("shelf").join("tasks/open.md"))
         .expect("the open task");
     assert!(open.contains(&example_at), "{open}");

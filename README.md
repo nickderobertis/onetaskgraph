@@ -1710,17 +1710,18 @@ for it to be written, so that write is refused before anything is written rather
 answering something else.
 
 **A public task's dependency on a private task is kept on the private side.** A copy that
-withholds an edge from a task it lands somewhere not declared private to a task of a source
-declared private records that edge on the private task instead, under the reserved key
+withholds an edge from a task it lands somewhere not declared private to a task of the copied
+set that lands in a source declared private records that edge on the private task instead, under the reserved key
 `onetaskgraph.depended_on_by`: an object keyed by each dependent's qualified id, whose value is
 `{"id": <that id>, "kind": "task"}`. So a plan whose home is on a public board and whose member
 project is in a private source keeps its order both ways. `task deps` of the public task also
 asks every source declared private which of its tasks record it, `task deps --direction
 depended-on-by` of the private task reads what it records, and `project graph` draws the edge;
-a source that cannot answer fails the read rather than leaving the edge out. A later copy keeps
-exactly one entry per dependent; on a private task it copies, or one an edge it carries names,
-it takes off a dependent it landed whose edges no longer name that task, and leaves every entry
-naming a task it did not land as it was. Nothing of this reaches the public destination; the
+a source that cannot answer fails the read rather than leaving the edge out. An edge naming a
+private task the copy does not carry is withheld as before, recorded nowhere, because the copy
+was not asked to write to that task's source. A later copy keeps exactly one entry per
+dependent, takes off a dependent it landed whose edges no longer name that task, and leaves
+every entry naming a task it did not land as it was. Nothing of this reaches the public destination; the
 home's own `onetaskgraph.members` list is unchanged by it.
 
 **Term scope.** Which private repositories a check derives terms from is the caller's to say.
