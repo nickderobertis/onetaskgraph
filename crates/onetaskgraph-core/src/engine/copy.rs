@@ -4849,7 +4849,12 @@ impl Engine {
 
     /// Write each of `recordings` whose task does not already record what it is to: one read
     /// of the task and one write of it, through its own source, every other member as the
-    /// source holds it. A task its source no longer holds records nothing.
+    /// source holds it.
+    ///
+    /// # Errors
+    ///
+    /// [`EngineError::NoSuchTask`] for a task its source no longer holds that a dependent this
+    /// copy landed depends on, and whatever its source refuses.
     async fn record_dependents(
         &self,
         recordings: Recordings,
@@ -4864,8 +4869,15 @@ impl Engine {
                 continue;
             }
             let at = self.writable(&recording.at.source)?;
+            // A task gone from its source has nothing left to take off, but one a dependent
+            // this copy landed still names is refused rather than leaving that edge nowhere.
             let Some(prior) = self.prior(at, Level::Task, &recording.at.native).await? else {
-                continue;
+                if recording.named.iter().next().is_none() {
+                    continue;
+                }
+                return Err(EngineError::NoSuchTask {
+                    id: recording.at.to_string(),
+                });
             };
             let Item::Task(mut task) = prior.item.clone() else {
                 continue;

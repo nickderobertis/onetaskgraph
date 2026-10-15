@@ -4277,6 +4277,17 @@ fn a_public_task_s_edges_page_with_what_every_private_source_records_of_it() {
     let mut whole_reverse = edges_of(&store, "vault:hidden", "depended-on-by");
     whole_reverse.sort();
     assert_eq!(whole_reverse, reverse, "paged and whole agree");
+
+    // A private task its source does not hold records nothing, and its reverse read answers
+    // exactly what a public source's does for a task it does not hold.
+    assert_eq!(
+        edges_of(&store, "vault:nothing", "depended-on-by"),
+        Vec::new()
+    );
+    assert_eq!(
+        edges_of(&store, "site:nothing", "depended-on-by"),
+        Vec::new()
+    );
 }
 
 // A folder's permissions are Unix's to refuse a write with.
@@ -4544,5 +4555,45 @@ fn a_dry_run_of_a_routed_plan_records_nothing_on_either_side() {
             landed["draft:rollout"].clone(),
             landed["draft:consumer"].clone()
         )]
+    );
+}
+
+#[test]
+fn a_member_copy_whose_private_prerequisite_is_gone_is_refused_naming_it() {
+    let store = routed_plan_in("plan");
+    let landed = landed_ids(&store.ok(&["project", "copy", "plan:goal", "--to", "site", "--json"]));
+    let consumer = &landed["plan:consumer"];
+    store.record(
+        "plan",
+        "tasks",
+        "announce",
+        "title: Announce\nstatus: todo\nproject: goal\ndepends_on: [consumer]",
+        PLAIN,
+    );
+    std::fs::remove_file(store.folder("vault").join("tasks").join(format!(
+        "{}.md",
+        consumer.strip_prefix("vault:").expect("a vault id")
+    )))
+    .expect("the private task removed");
+    let site = tree(&store.folder("site"));
+    let output = store.run(&[
+        "project",
+        "copy",
+        "plan:goal",
+        "--member",
+        "plan:announce",
+        "--to",
+        "site",
+    ]);
+    assert_ne!(output.status.code(), Some(0), "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains(&format!("no task with the id {consumer}")),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(
+        tree(&store.folder("site")),
+        site,
+        "nothing of the copy stays on site"
     );
 }
