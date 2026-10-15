@@ -473,8 +473,8 @@ so the next copy can tell whether anything changed at either end without reading
   as the copy left it: every member a copy writes and compares, its forward edges, and — after
   a `--comments` copy — its comments, each copy by its origin's identity and body and each
   comment native to the destination by its id and body. The three keys themselves, the task's
-  `delivered_by` (which the store keeps in step after the copy) and the destination's own id,
-  url, location and times are left out.
+  `delivered_by` and `onetaskgraph.depended_on_by` (which the store keeps in step after the
+  copy) and the destination's own id, url, location and times are left out.
 
   It is not the destination's own change token (`Task.version`), and cannot be: a hosted
   board's token is times the service assigns, which the write of this key itself moves, and
@@ -482,7 +482,7 @@ so the next copy can tell whether anything changed at either end without reading
   written canonically — keys sorted at every depth, no insignificant whitespace, UTF-8 — whose
   members are the task's `title`, `content`, `status`, `priority`, `labels`, `project`,
   `repositories` and `classification` (`"public"` when a read leaves it out) as the task's own
-  JSON spells them; `metadata` without the three keys; `delivers` as qualified ids naming the
+  JSON spells them; `metadata` without the three keys and `onetaskgraph.depended_on_by`; `delivers` as qualified ids naming the
   destination source, `[]` when there are none; `edges`, each forward edge as
   `[<far end id>, <item kind>, <dependency kind>]` — the far end's native id when it is an item
   of the destination, and its qualified id otherwise — sorted by its canonical JSON; and, after a
