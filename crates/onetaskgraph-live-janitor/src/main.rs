@@ -15,7 +15,6 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use onetaskgraph_github_live::{BOARD_NUMBER, BOARD_OWNER, SCRATCH_REPOSITORY};
-use onetaskgraph_live::artifact::now_micros;
 use onetaskgraph_live_janitor::{Config, Outcome, Report, VirtualClock, run, run_with_clock};
 
 /// Why an invocation did not complete.
@@ -58,23 +57,20 @@ fn configure() -> Result<(Config, ClockMode), Failure> {
     // Explicit loopback-only test boundary: no offline journey can send a token to a host.
     let arguments: Vec<_> = std::env::args().skip(1).collect();
     if arguments.is_empty() {
-        return Config::github(&write_token, &actions_token, now_micros())
+        return Config::github(&write_token, &actions_token)
             .map(|config| (config, ClockMode::Real))
             .map_err(Failure::Configuration);
     }
-    if !(arguments.len() == 3 || (arguments.len() == 4 && arguments[3] == "--virtual-clock"))
+    if !(arguments.len() == 2 || (arguments.len() == 3 && arguments[2] == "--virtual-clock"))
         || arguments[0] != "--loopback"
     {
         return Err(Failure::Configuration(
-            "expected --loopback URL NOW_MICROS".into(),
+            "expected --loopback URL [--virtual-clock]".into(),
         ));
     }
-    let now = arguments[2]
-        .parse()
-        .map_err(|_| Failure::Configuration("NOW_MICROS must be unsigned decimal".into()))?;
-    Config::loopback(&arguments[1], &write_token, &actions_token, now)
+    Config::loopback(&arguments[1], &write_token, &actions_token)
         .map(|config| {
-            let mode = if arguments.len() == 4 {
+            let mode = if arguments.len() == 3 {
                 ClockMode::Virtual
             } else {
                 ClockMode::Real
