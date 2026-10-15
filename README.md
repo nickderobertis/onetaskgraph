@@ -1725,8 +1725,9 @@ source asks that source and carries the edge to the private task's counterpart, 
 draws the edge; a source that cannot answer fails the read rather than leaving the edge out. An
 edge naming a private task the copy does not carry is withheld as before, recorded nowhere,
 because the copy was not asked to write to that task's source. A later copy keeps exactly one
-entry per dependent, takes off a dependent it landed whose edges no longer name that task, and
-leaves every entry naming a task it did not land as it was; a copy whose dependent names a
+entry per dependent, takes off a dependent it landed whose edges no longer name that task —
+asking every source declared private which of its tasks record it, so a dependent copied on its
+own with `--member` takes its dropped edge off a task the copy does not carry — and leaves every entry naming a task it did not land as it was; a copy whose dependent names a
 private task its source no longer holds, or holds with a record it cannot read, is refused and
 taken back. Nothing of this reaches the public destination; the home's own
 `onetaskgraph.members` list is unchanged by it.
