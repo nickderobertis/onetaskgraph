@@ -95,8 +95,9 @@ pub(super) fn carried_comments(metadata: &BTreeMap<String, Value>) -> bool {
 /// its comments as [`super::comments::digest_entries`] gives them.
 ///
 /// Over exactly what a copy writes and compares: every member [`super::same`] holds a task to
-/// but `delivered_by`, which the store keeps in step after the copy rather than the copy
-/// writing it, and none of the destination's own — its id, url, location and times.
+/// but `delivered_by` and the dependents a task of a private source records, which the store
+/// keeps in step after the copy rather than the copy writing them, and none of the
+/// destination's own — its id, url, location and times.
 pub(super) fn digest(
     task: &Task,
     edges: &[DependencyEdge],
@@ -140,7 +141,12 @@ pub(super) fn digest(
         ),
         (
             "metadata".to_owned(),
-            Value::Object(without_record(&task.metadata).into_iter().collect()),
+            Value::Object(
+                without_record(&task.metadata)
+                    .into_iter()
+                    .filter(|(key, _)| key != super::super::dependents::DEPENDED_ON_BY_KEY)
+                    .collect(),
+            ),
         ),
         (
             "repositories".to_owned(),

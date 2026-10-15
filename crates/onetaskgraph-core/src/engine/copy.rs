@@ -68,6 +68,7 @@ use crate::{Failure, GlobalId};
 use super::assets;
 use super::boundary::{Exposure, Outbound};
 use super::delivery::{Delivered, targets};
+use super::dependents::{self, Dependents};
 use super::fetch::{fits, unrepeated};
 use super::local::ProjectSelector;
 use super::narrow::holds_priority;
@@ -1079,6 +1080,17 @@ struct Running {
     delivers_rewritten: u64,
     /// Every task this copy landed, for the relation rule once the whole copy is complete.
     landed: Vec<LandedTask>,
+    /// Every task this copy landed somewhere not declared private, with its forward edges as
+    /// its source reported them: an edge of one to a task of a source declared private is
+    /// withheld from it and recorded on that task once the whole copy has landed.
+    dependents: Vec<Dependent>,
+    /// The member projects each home this copy read names, by the home's qualified id: where a
+    /// task filed under it can be recorded as depending on a task it cannot hold the edge to
+    /// itself. Noted by the read that classifies the home, or read once per home per command.
+    home_members: HashMap<String, Vec<GlobalId>>,
+    /// Every task this copy landed in a source declared private, by its destination id, with
+    /// the dependents it held there before: the record a copy keeps as it found it.
+    recorders: BTreeMap<String, (GlobalId, Dependents)>,
     /// Every item this copy landed, in the order it landed them, for the link each records
     /// once the whole copy has landed.
     linking: Vec<Linking>,
@@ -1225,6 +1237,35 @@ struct LandedTask {
     category: StatusCategory,
     /// Who may read it, as the copy wrote it.
     classification: Classification,
+}
+
+/// A task a copy landed somewhere not declared private, with its forward edges as its source
+/// reported them.
+struct Dependent {
+    destination: GlobalId,
+    /// The source it was read from, which a bare far end names a task of.
+    origin: SourceName,
+    /// Its forward edges, as its source reported them.
+    edges: Vec<DependencyEdge>,
+}
+
+/// What one task of a source declared private records once a copy has landed: what it held,
+/// less every dependent the copy landed, plus each of those whose edges name it.
+struct Recording {
+    at: GlobalId,
+    /// The dependents this copy landed whose edges name it.
+    named: Dependents,
+    /// What it held before, when this copy landed it and so already read it.
+    held: Option<Dependents>,
+}
+
+/// Every dependent a copy landed, whose entries that copy decides, and what each task of a
+/// source declared private it touches is to record.
+struct Recordings {
+    /// The destination ids of every task the copy landed somewhere not declared private.
+    decided: Dependents,
+    /// One per task of a source declared private the copy landed or a landed edge names.
+    each: Vec<Recording>,
 }
 
 /// A task a copy landed, with the tasks it delivers now and delivered before, qualified.
@@ -1735,8 +1776,10 @@ impl Engine {
             .collect();
         let linking = std::mem::take(&mut running.linking);
         let homes = std::mem::take(&mut running.homes);
+        let recordings = self.recordings(&running);
         self.repair(request, running, journal).await?;
         if !request.dry_run {
+            self.record_dependents(recordings, journal).await?;
             self.record_members(homes, journal).await?;
         }
         let mut items = items;
@@ -2146,7 +2189,14 @@ impl Engine {
                     self.home_placement(request, &project, &reads).await?
                 };
                 let project = self
-                    .aim(request, project, home.clone(), class, None)
+                    .aim(
+                        request,
+                        project,
+                        home.clone(),
+                        class,
+                        None,
+                        &mut running.home_members,
+                    )
                     .await?;
                 let mut tasks = Vec::new();
                 for read in reads {
@@ -2161,7 +2211,17 @@ impl Engine {
                             self.placed_at(request, &request.destination)
                         }
                     };
-                    tasks.push(self.aim(request, read, placement, class, None).await?);
+                    tasks.push(
+                        self.aim(
+                            request,
+                            read,
+                            placement,
+                            class,
+                            None,
+                            &mut running.home_members,
+                        )
+                        .await?,
+                    );
                 }
                 plans.push((project, tasks, changed));
             } else {
@@ -2585,10 +2645,13 @@ impl Engine {
         Ok((carried, unrecorded))
     }
 
-    /// Every task the source holds in `project`, by qualified id.
+    /// Every task the source holds in `project` and, when it is a home, in each member
+    /// project it names, by qualified id: the plan a whole-project copy carries, read as
+    /// `task list --project <home> --members` reads it, so a home copied on takes its members'
+    /// tasks with it and the destination's own routes file each one.
     async fn project_members(&self, project: &GlobalId) -> Result<Vec<GlobalId>, EngineError> {
         Ok(self
-            .project_member_tasks(project, FOR_A_COPY)
+            .project_tasks(project, FOR_A_COPY, true)
             .await?
             .into_iter()
             .map(|task| task.id)
@@ -2606,6 +2669,17 @@ impl Engine {
         project: &GlobalId,
         reading: &str,
     ) -> Result<Vec<Qualified<Task>>, EngineError> {
+        self.project_tasks(project, reading, false).await
+    }
+
+    /// [`project_member_tasks`](Self::project_member_tasks), with the tasks of every member
+    /// project `project` names when `members` asks.
+    async fn project_tasks(
+        &self,
+        project: &GlobalId,
+        reading: &str,
+        members: bool,
+    ) -> Result<Vec<Qualified<Task>>, EngineError> {
         let mut request = TaskRequest {
             sources: vec![project.source.clone()],
             filters: Filters::default(),
@@ -2614,7 +2688,7 @@ impl Engine {
             commented_since: None,
             metadata: Vec::new(),
             origin: None,
-            include_members: false,
+            include_members: members,
             paging: Paging {
                 limit: PROJECT_PAGE,
                 token: None,
@@ -3259,6 +3333,33 @@ impl Engine {
                     journal,
                 )
                 .await?;
+            if let Some(id) = outcome.destination()
+                && !request.dry_run
+                && let Item::Task(_) = &item.item
+            {
+                if self.declared(&item.to) == crate::config::SourceVisibility::Private {
+                    let held = match item.held.as_ref().map(|held| &held.item) {
+                        Some(Item::Task(held)) => {
+                            dependents::recorded(&held.metadata).map_err(|message| {
+                                refused(
+                                    destination,
+                                    SourceError::Malformed {
+                                        message: format!("task {id}: {message}"),
+                                    },
+                                )
+                            })?
+                        }
+                        _ => Dependents::default(),
+                    };
+                    running.recorders.insert(id.to_string(), (id.clone(), held));
+                } else {
+                    running.dependents.push(Dependent {
+                        destination: id.clone(),
+                        origin: item.source.source.clone(),
+                        edges: item.edges.clone(),
+                    });
+                }
+            }
             if let Some(id) = outcome.destination() {
                 running
                     .counterparts
@@ -3362,8 +3463,15 @@ impl Engine {
             ),
         };
         let aimed = running.aimed.remove(&id.to_string());
-        self.aim(request, read, placement, classification, aimed)
-            .await
+        self.aim(
+            request,
+            read,
+            placement,
+            classification,
+            aimed,
+            &mut running.home_members,
+        )
+        .await
     }
 
     /// Who may read one item read for a copy: its own declaration, tightened by its
@@ -3392,9 +3500,10 @@ impl Engine {
         let filed = match filed {
             Some(filed) if self.boundary_active() => {
                 match self
-                    .source_project_class(
+                    .source_project_class_noting(
                         &GlobalId::new(read.source.source.clone(), filed.clone()),
                         &mut running.project_classes,
+                        Some(&mut running.home_members),
                     )
                     .await
                 {
@@ -3427,6 +3536,17 @@ impl Engine {
         &self,
         project: &GlobalId,
         known: &mut HashMap<GlobalId, Classification>,
+    ) -> Result<Classification, EngineError> {
+        self.source_project_class_noting(project, known, None).await
+    }
+
+    /// [`source_project_class`](Self::source_project_class), noting in `members` the member
+    /// projects the record it reads names, so a copy that needs them reads it no second time.
+    async fn source_project_class_noting(
+        &self,
+        project: &GlobalId,
+        known: &mut HashMap<GlobalId, Classification>,
+        members: Option<&mut HashMap<String, Vec<GlobalId>>>,
     ) -> Result<Classification, EngineError> {
         let cached = known.get(project).copied();
         if let Some(class) = cached
@@ -3461,6 +3581,9 @@ impl Engine {
             }
             return Ok(Classification::Public);
         };
+        if let (Some(members), Ok(named)) = (members, members_of(project, &held.metadata)) {
+            members.insert(project.to_string(), named);
+        }
         if let Some(class) = cached {
             // Read again, its record may have tightened since; nothing loosens it.
             let class =
@@ -3863,6 +3986,70 @@ impl Engine {
         }
     }
 
+    /// The edges from `id`, a task read for a copy, that a task of a source declared private
+    /// records of it (see [`dependents`]): each to that task, qualified, so the copy carries
+    /// them as it carries the task's own edges — remapped to the counterpart a member of the
+    /// copied set lands as, and withheld from, and recorded on the private side of, a write
+    /// anywhere not declared private.
+    ///
+    /// Asked only of the private sources the task's home names a member project in: a task
+    /// filed under no such home holds no edge the private side could record, so a copy of one
+    /// asks no source it did not before. The home's member list comes from the read that
+    /// classified it — a store with a source declared private has its boundary active — and
+    /// is read here only when that read was not made.
+    ///
+    /// # Errors
+    ///
+    /// The home's source failing its read or holding a member list it cannot read, and
+    /// whatever [`Engine::recorded_prerequisites_in`] refuses.
+    async fn recorded_for_copy(
+        &self,
+        id: &GlobalId,
+        task: &Task,
+        home_members: &mut HashMap<String, Vec<GlobalId>>,
+    ) -> Result<Vec<DependencyEdge>, EngineError> {
+        let recording = self.recording_sources(&id.source);
+        let Some(project) = task.project.as_ref().filter(|_| !recording.is_empty()) else {
+            return Ok(Vec::new());
+        };
+        let home = GlobalId::new(id.source.clone(), project.clone());
+        if let std::collections::hash_map::Entry::Vacant(unread) =
+            home_members.entry(home.to_string())
+        {
+            let source = self.readable(&id.source)?;
+            let held = source
+                .source()
+                .get_project(project)
+                .await
+                .map_err(|error| refused(source, error))?;
+            unread.insert(match held {
+                Some(held) => members_of(&home, &held.metadata)
+                    .map_err(|message| refused(source, SourceError::Malformed { message }))?,
+                None => Vec::new(),
+            });
+        }
+        let mut sources: Vec<SourceName> = Vec::new();
+        for member in &home_members[&home.to_string()] {
+            if recording.contains(&member.source) && !sources.contains(&member.source) {
+                sources.push(member.source.clone());
+            }
+        }
+        if sources.is_empty() {
+            return Ok(Vec::new());
+        }
+        Ok(self
+            .recorded_prerequisites_in(id, &sources)
+            .await?
+            .into_iter()
+            .map(|prerequisite| DependencyEdge {
+                from: DependencyEndpoint::from_native(id.native.clone(), ItemKind::Task),
+                to: DependencyEndpoint::new(prerequisite.to_string(), ItemKind::Task)
+                    .expect("a qualified id is a valid endpoint"),
+                kind: DependencyKind::Blocks,
+            })
+            .collect())
+    }
+
     /// Decide where one read item is going, once it is known which source it lands in.
     async fn aim(
         &self,
@@ -3871,6 +4058,7 @@ impl Engine {
         placement: Placement,
         classification: Classification,
         aimed: Option<(Target, Option<Prior>)>,
+        home_members: &mut HashMap<String, Vec<GlobalId>>,
     ) -> Result<Planned, EngineError> {
         let Read {
             source: id,
@@ -3920,7 +4108,10 @@ impl Engine {
                 ));
             }
         };
-        let edges = forward_edges(source, &id.native, item.level()).await?;
+        let mut edges = forward_edges(source, &id.native, item.level()).await?;
+        if let Item::Task(task) = &item {
+            edges.extend(self.recorded_for_copy(&id, task, home_members).await?);
+        }
         // A task copied by query was already aimed from its listing, when the copy asked
         // whether it could skip it.
         let (target, held) = match aimed {
@@ -4705,6 +4896,178 @@ impl Engine {
         Ok(Some(created))
     }
 
+    /// What every task of a source declared private that this copy touches is to record of the
+    /// tasks depending on it from somewhere not declared private, once every destination id is
+    /// known.
+    ///
+    /// An edge from a task this copy landed somewhere not declared private, to a task of a
+    /// source declared private, is withheld from the first (see [`Engine::withholds`]); it is
+    /// recorded on the second instead, under the first's destination id, by the second's own
+    /// source. A dependent this copy landed whose edges no longer name it is taken off, because
+    /// this copy wrote those edges; one this copy did not land is kept as it was.
+    ///
+    /// Only a far end that is a member of the copied set is recorded on — its counterpart, which
+    /// this copy landed or resolved as already landed — because that is a task in a source this
+    /// copy writes to. An id an edge names directly, of a task the copy does not carry, is
+    /// withheld exactly as it always was: recording on it would write to a source the copy was
+    /// never asked to write to, and may only read.
+    fn recordings(&self, running: &Running) -> Recordings {
+        let decided: Dependents = running
+            .dependents
+            .iter()
+            .map(|dependent| dependent.destination.clone())
+            .collect();
+        let mut named: BTreeMap<String, (GlobalId, Dependents)> = BTreeMap::new();
+        for dependent in &running.dependents {
+            let near = &dependent.destination.source;
+            let ends = mapped_edges(
+                &dependent.edges,
+                &dependent.origin,
+                near,
+                &running.resolvable,
+                &running.counterparts,
+            );
+            for (read, end) in dependent.edges.iter().zip(ends) {
+                let member = far_end(&read.to, &dependent.origin)
+                    .is_some_and(|far| running.resolvable.contains(&far));
+                let (true, Some(end)) = (member, end) else {
+                    continue;
+                };
+                let Some(far) = far_end(&end.to, near) else {
+                    continue;
+                };
+                if end.kind != DependencyKind::Blocks
+                    || end.to.kind != ItemKind::Task
+                    || self.declared(&far.source) != crate::config::SourceVisibility::Private
+                    || !self.withholds(near, &far, &[])
+                {
+                    continue;
+                }
+                named
+                    .entry(far.to_string())
+                    .or_insert_with(|| (far.clone(), Dependents::default()))
+                    .1
+                    .insert(dependent.destination.clone());
+            }
+        }
+        let mut each = Vec::new();
+        for (key, (at, held)) in &running.recorders {
+            each.push(Recording {
+                at: at.clone(),
+                named: named
+                    .remove(key)
+                    .map(|(_, named)| named)
+                    .unwrap_or_default(),
+                held: Some(held.clone()),
+            });
+        }
+        each.extend(named.into_values().map(|(at, named)| Recording {
+            at,
+            named,
+            held: None,
+        }));
+        Recordings { decided, each }
+    }
+
+    /// Write each of `recordings` whose task does not already record what it is to: one read
+    /// of the task and one write of it, through its own source, every other member as the
+    /// source holds it.
+    ///
+    /// A task of a source declared private that an earlier copy recorded a dependent this copy
+    /// landed on, and that this copy neither landed nor found named, is found by asking each
+    /// source that may record one, and has that dependent taken off: the dependent's edges no
+    /// longer name it, and this copy decides that dependent's entries wherever they are kept —
+    /// so a dependent copied on its own, without the task it used to depend on, does not leave
+    /// the removed edge readable from the far end.
+    ///
+    /// # Errors
+    ///
+    /// [`EngineError::NoSuchTask`] for a task its source no longer holds that a dependent this
+    /// copy landed depends on, a record that does not say what it names, and whatever its
+    /// source refuses.
+    async fn record_dependents(
+        &self,
+        mut recordings: Recordings,
+        journal: &mut Journal,
+    ) -> Result<(), EngineError> {
+        for dependent in recordings.decided.iter() {
+            for at in self.recorded_prerequisites(dependent).await? {
+                if !recordings.each.iter().any(|recording| recording.at == at) {
+                    recordings.each.push(Recording {
+                        at,
+                        named: Dependents::default(),
+                        held: None,
+                    });
+                }
+            }
+        }
+        for recording in &recordings.each {
+            // A task this copy landed was read as it landed, so one already recording what it
+            // is to is not read again.
+            if let Some(held) = &recording.held
+                && held.applied(&recordings.decided, &recording.named) == *held
+            {
+                continue;
+            }
+            let at = self.writable(&recording.at.source)?;
+            // A task gone from its source has nothing left to take off, but one a dependent
+            // this copy landed still names is refused rather than leaving that edge nowhere.
+            let Some(prior) = self.prior(at, Level::Task, &recording.at.native).await? else {
+                if recording.named.iter().next().is_none() {
+                    continue;
+                }
+                return Err(EngineError::NoSuchTask {
+                    id: recording.at.to_string(),
+                });
+            };
+            let Item::Task(mut task) = prior.item.clone() else {
+                continue;
+            };
+            let current = dependents::recorded(&task.metadata).map_err(|message| {
+                refused(
+                    at,
+                    SourceError::Malformed {
+                        message: format!("task {}: {message}", recording.at),
+                    },
+                )
+            })?;
+            let dependents = current.applied(&recordings.decided, &recording.named);
+            if dependents == current {
+                continue;
+            }
+            dependents::record(&mut task.metadata, &dependents);
+            at.source()
+                .check_status_write(
+                    ItemKind::Task,
+                    task.status.category,
+                    Some(&recording.at.native),
+                )
+                .await
+                .map_err(|error| refused(at, error))?;
+            self.at_write(
+                at,
+                &recording.at.to_string(),
+                &WriteTarget::Existing(&recording.at.native),
+            )
+            .await?;
+            let edges = prior.edges.clone();
+            journal.record(Undo::Updated {
+                at: recording.at.source.clone(),
+                id: recording.at.native.clone(),
+                prior,
+            });
+            at.source()
+                .write_task(&ItemWrite {
+                    target: Some(recording.at.native.clone()),
+                    item: *task,
+                    depends_on: edges,
+                })
+                .await
+                .map_err(|error| refused(at, error))?;
+        }
+        Ok(())
+    }
+
     /// Write each home's grown `onetaskgraph.members` through its own project write, once the
     /// whole copy has landed.
     ///
@@ -5102,7 +5465,8 @@ impl Engine {
 const FOR_A_COPY: &str = "for a copy";
 
 /// How many tasks of a project are read at once while walking it.
-const PROJECT_PAGE: std::num::NonZeroU32 = std::num::NonZeroU32::new(50).expect("50 is not zero");
+pub(super) const PROJECT_PAGE: std::num::NonZeroU32 =
+    std::num::NonZeroU32::new(50).expect("50 is not zero");
 
 /// Each source's own running totals, in the order the sources were given.
 ///
@@ -6068,6 +6432,7 @@ fn carried(
         MetadataKey::MEMBERS_KEY,
         MetadataKey::MEMBER_OF_KEY,
         MetadataKey::ASSETS_KEY,
+        dependents::DEPENDED_ON_BY_KEY,
     ]
     .into_iter()
     .chain(record::KEYS)
@@ -6355,6 +6720,12 @@ fn mapped_edges(
         .iter()
         .map(|edge| {
             let far = GlobalId::new(origin.clone(), NativeId(edge.to.id().to_owned()));
+            let qualified = edge
+                .to
+                .is_qualified()
+                .then(|| edge.to.id().parse::<GlobalId>().ok())
+                .flatten()
+                .filter(|far| copied.contains(far));
             let id = if let Some(native) = names(&edge.to, destination) {
                 // A far end already qualified to the destination's own source is that
                 // source's own item, so it is written the way that source names its own:
@@ -6366,6 +6737,12 @@ fn mapped_edges(
                 // A member of this copy, inside one source included: a copy there lands
                 // beside the item it was read from, so the edge names the copy rather than
                 // the original the copy's own project does not hold.
+                written
+                    .get(&far.to_string())
+                    .map(|landed| spelled_from(landed, destination))
+            } else if let Some(far) = qualified {
+                // A member of this copy in another source — a home and its member copied as
+                // one set — names that member's copy for the same reason.
                 written
                     .get(&far.to_string())
                     .map(|landed| spelled_from(landed, destination))
