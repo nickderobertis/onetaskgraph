@@ -1712,8 +1712,7 @@ answering something else.
 **A public task's dependency on a private task is kept on the private side.** A copy that
 withholds an edge from a task it lands somewhere not declared private to a task of the copied
 set that lands in a source declared private records that edge on the private task instead, under the reserved key
-`onetaskgraph.depended_on_by`: an object keyed by each dependent's qualified id, whose value is
-`{"id": <that id>, "kind": "task"}`. So a plan whose home is on a public board and whose member
+`onetaskgraph.depended_on_by`, one entry per dependent's qualified id. So a plan whose home is on a public board and whose member
 project is in a private source keeps its order both ways. `task deps` of the public task also
 asks every source declared private which of its tasks record it, `task deps --direction
 depended-on-by` of the private task reads what it records, and `project graph` draws the edge;

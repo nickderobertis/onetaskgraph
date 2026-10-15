@@ -21,12 +21,14 @@
 #   2. In a Claude Code session, persists PATH (so the freshly installed binary
 #      resolves) into CLAUDE_ENV_FILE so later Bash calls inherit it.
 #
+# llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] This comment names the model `oneharness.toml` pins so a reader here knows which harness runs; every place the repository names it is required to name the same one, and `oneharness.toml` stays the one value read.
 # Harness selection: the committed `oneharness.toml` is in fallback mode (codex +
 # gpt-6.1-sol primary, claude-code + opus-4.8 secondary), so llmlint runs the primary
 # for a contributor with Codex authenticated and falls through to claude-code in a
 # Claude Code session where codex is absent — no `ONEHARNESS_*` override needed
 # (one would only clobber the fallback list). If your fallback order can't select
 # the right harness for some environment, set ONEHARNESS_HARNESSES there.
+# llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 # llmlint: ignore-file[tool_output_is_signal, boundary_inputs_validated] deliberate for a session-startup installer (see header): every step logs and continues rather than blocking startup, so a flaky install can't abort the hook; and the toolchain is installed from PyPI (`uv tool install llmlint-cli`) whose wheels ship with Trusted Publishing + PEP 740 attestations, so no unvalidated external input is executed.
 set -uo pipefail
 

@@ -3310,6 +3310,11 @@ async fn forward_edges(
 ///
 /// The match goes down when the source applies metadata matches itself, and is applied here
 /// either way, so a source that ignores it still answers only what matches.
+///
+/// # Errors
+///
+/// What the source returned, and [`SourceError::Malformed`] for a matched task whose record
+/// does not name `near` as a task.
 async fn recorded_for(
     recorder: &ResolvedSource,
     near: &GlobalId,
@@ -3348,15 +3353,21 @@ async fn recorded_for(
         },
     )
     .await?;
-    Ok(Fetched {
-        rows: fetched
-            .rows
-            .into_iter()
-            .map(|row| fetch::Row {
+    // A record the match found is held to naming `near` as a task before it is an edge, so
+    // an entry holding the id under another kind is refused rather than drawn.
+    let rows = fetched
+        .rows
+        .into_iter()
+        .map(|row| {
+            dependents::names(&row.item, near)?;
+            Ok(fetch::Row {
                 item: dependents::edge(near, row.item.id),
                 resume: row.resume,
             })
-            .collect(),
+        })
+        .collect::<Result<_, SourceError>>()?;
+    Ok(Fetched {
+        rows,
         after: fetched.after,
     })
 }
@@ -3386,10 +3397,7 @@ async fn recorded_on(
                     next: None,
                 });
             };
-            let edges =
-                dependents::recorded_edges(&task).map_err(|message| SourceError::Malformed {
-                    message: format!("task {native}: {message}"),
-                })?;
+            let edges = dependents::recorded_edges(&task)?;
             let at = cursor
                 .as_ref()
                 .map_or(Ok(0), |cursor| cursor.0.parse::<usize>())

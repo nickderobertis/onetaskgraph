@@ -4032,6 +4032,29 @@ fn a_public_task_s_dependency_on_a_private_member_task_is_kept_on_the_private_si
     assert_eq!(edges_of(&store, rollout, "depends-on"), kept);
     assert_eq!(edges_of(&store, consumer, "depended-on-by"), kept);
 
+    // An entry naming a dependent this copy does not land is the private task's own, and
+    // outlives every copy; the entries for what the copy lands are the copy's to decide.
+    let consumer_file = store
+        .folder("vault")
+        .join("tasks")
+        .join(format!("{consumer_native}.md"));
+    let held = std::fs::read_to_string(&consumer_file).expect("the consumer");
+    std::fs::write(
+        &consumer_file,
+        held.replace(
+            "  onetaskgraph.depended_on_by:\n",
+            "  onetaskgraph.depended_on_by:\n    site:elsewhere:\n      id: site:elsewhere\n      kind: task\n",
+        ),
+    )
+    .expect("a dependent recorded by hand");
+    assert_eq!(
+        edges_of(&store, consumer, "depended-on-by"),
+        vec![
+            ("site:elsewhere".to_owned(), consumer.clone()),
+            (rollout.clone(), consumer.clone())
+        ]
+    );
+
     // Dropping the edge at the draft takes it off the private task on the next copy.
     let draft = store.folder("draft").join("tasks/rollout.md");
     let authored = std::fs::read_to_string(&draft).expect("the draft rollout");
@@ -4042,11 +4065,10 @@ fn a_public_task_s_dependency_on_a_private_member_task_is_kept_on_the_private_si
     .expect("the edge dropped");
     store.ok(&["project", "copy", "draft:goal", "--to", "site"]);
     assert_eq!(edges_of(&store, rollout, "depends-on"), Vec::new());
-    assert_eq!(edges_of(&store, consumer, "depended-on-by"), Vec::new());
-    assert!(
-        !held_text(&store, "vault").contains("depended_on_by"),
-        "{}",
-        held_text(&store, "vault")
+    assert_eq!(
+        edges_of(&store, consumer, "depended-on-by"),
+        vec![("site:elsewhere".to_owned(), consumer.clone())],
+        "only the entry the copy decides is taken off"
     );
 }
 
@@ -4060,11 +4082,43 @@ fn a_dependency_read_a_private_source_cannot_answer_fails_rather_than_dropping_t
     // A record `vault` cannot read leaves the read of a public task's edges failed, naming
     // the source, rather than answered without what `vault` holds.
     store.record("vault", "tasks", "unreadable", "title: [", PLAIN);
-    let output = store.run(&["task", "deps", rollout]);
-    assert_ne!(output.status.code(), Some(0), "{}", stdout(&output));
-    assert!(stderr(&output).contains("vault"), "{}", stderr(&output));
+    for arguments in [
+        vec!["task", "deps", rollout.as_str()],
+        vec!["project", "graph", landed["draft:goal"].as_str()],
+    ] {
+        let output = store.run(&arguments);
+        assert_ne!(output.status.code(), Some(0), "{}", stdout(&output));
+        assert!(stderr(&output).contains("vault"), "{}", stderr(&output));
+    }
     std::fs::remove_file(store.folder("vault").join("tasks/unreadable.md"))
         .expect("the unreadable record removed");
+
+    // A record the forward read's match finds, holding the public task's id as another kind,
+    // fails that read rather than being drawn as a task edge.
+    store.record(
+        "vault",
+        "tasks",
+        "misspelled",
+        &format!(
+            "title: Misspelled\nstatus: todo\nmetadata:\n  onetaskgraph.depended_on_by:\n    \
+             '{rollout}':\n      id: {rollout}\n      kind: project"
+        ),
+        PLAIN,
+    );
+    for arguments in [
+        vec!["task", "deps", rollout.as_str()],
+        vec!["project", "graph", landed["draft:goal"].as_str()],
+    ] {
+        let output = store.run(&arguments);
+        assert_ne!(output.status.code(), Some(0), "{}", stdout(&output));
+        assert!(
+            stderr(&output).contains("onetaskgraph.depended_on_by"),
+            "{}",
+            stderr(&output)
+        );
+    }
+    std::fs::remove_file(store.folder("vault").join("tasks/misspelled.md"))
+        .expect("the misspelled record removed");
 
     // And a recorded entry that does not say what it names is refused, never read as none.
     let path = store.folder("vault").join("tasks").join(format!(
@@ -4083,5 +4137,184 @@ fn a_dependency_read_a_private_source_cannot_answer_fails_rather_than_dropping_t
         stderr(&output).contains("onetaskgraph.depended_on_by"),
         "{}",
         stderr(&output)
+    );
+}
+
+#[test]
+fn a_public_task_s_edges_page_with_what_every_private_source_records_of_it() {
+    // `vault` applies the match itself; `memory` declares it unsupported, so the engine
+    // narrows its tasks, one to a page.
+    let recorded = |id: &str| json!({id: {"id": id, "kind": "task"}});
+    let store = Store::laid(Some(registered), |_| {
+        json!({
+            "memory": {
+                "plugin": "in-memory",
+                "visibility": "private",
+                "config": {
+                    "capabilities": {"filter_by_metadata": "unsupported", "max_page_size": 1},
+                    "tasks": [
+                        {"id": "M-0", "title": "Unrelated", "status": {"category": "todo", "name": "Todo"}, "labels": []},
+                        {"id": "M-1", "title": "Recorder", "status": {"category": "todo", "name": "Todo"}, "labels": [],
+                         "metadata": {"onetaskgraph.depended_on_by": recorded("site:rollout")}},
+                        {"id": "M-2", "title": "Decoy", "status": {"category": "todo", "name": "Todo"}, "labels": [],
+                         "metadata": {"onetaskgraph.depended_on_by": recorded("site:other")}},
+                    ],
+                },
+            },
+        })
+    });
+    store.record(
+        "site",
+        "tasks",
+        "library",
+        "title: Library\nstatus: todo",
+        PLAIN,
+    );
+    store.record(
+        "site",
+        "tasks",
+        "rollout",
+        "title: Rollout\nstatus: todo\ndepends_on: [library]",
+        PLAIN,
+    );
+    store.record(
+        "vault",
+        "tasks",
+        "hidden",
+        "title: Hidden\nstatus: todo\nmetadata:\n  onetaskgraph.depended_on_by:\n    \
+         'site:rollout':\n      id: site:rollout\n      kind: task\n    \
+         'site:other':\n      id: site:other\n      kind: task",
+        PLAIN,
+    );
+
+    // The source's own edge and one edge from each private source, merged into one answer.
+    let mut whole = edges_of(&store, "site:rollout", "depends-on");
+    whole.sort();
+    let rollout = || "site:rollout".to_owned();
+    assert_eq!(
+        whole,
+        vec![
+            (rollout(), "memory:M-1".to_owned()),
+            (rollout(), "site:library".to_owned()),
+            (rollout(), "vault:hidden".to_owned()),
+        ]
+    );
+
+    // A page of one at a time walks to exhaustion with every edge once.
+    let mut paged = Vec::new();
+    let mut token: Option<String> = None;
+    for _ in 0..10 {
+        let mut arguments = vec!["task", "deps", "site:rollout", "--limit", "1", "--json"];
+        if let Some(token) = &token {
+            arguments.extend(["--page", token.as_str()]);
+        }
+        let page: Value = serde_json::from_str(&store.ok(&arguments)).expect("a page");
+        let items = page["items"].as_array().expect("the edges");
+        assert!(items.len() <= 1, "{page:#}");
+        paged.extend(items.iter().map(|edge| {
+            (
+                edge["from"]["id"].as_str().expect("a near end").to_owned(),
+                edge["to"]["id"].as_str().expect("a far end").to_owned(),
+            )
+        }));
+        match page["next"].as_str() {
+            Some(next) => token = Some(next.to_owned()),
+            None => break,
+        }
+    }
+    paged.sort();
+    assert_eq!(paged, whole, "paged and whole agree");
+
+    // Each private task reads what it records from its own end, paged too.
+    assert_eq!(
+        edges_of(&store, "memory:M-1", "depended-on-by"),
+        vec![(rollout(), "memory:M-1".to_owned())]
+    );
+    let first: Value = serde_json::from_str(&store.ok(&[
+        "task",
+        "deps",
+        "vault:hidden",
+        "--direction",
+        "depended-on-by",
+        "--limit",
+        "1",
+        "--json",
+    ]))
+    .expect("a page");
+    let token = first["next"].as_str().expect("a second page");
+    let second: Value = serde_json::from_str(&store.ok(&[
+        "task",
+        "deps",
+        "vault:hidden",
+        "--direction",
+        "depended-on-by",
+        "--limit",
+        "1",
+        "--page",
+        token,
+        "--json",
+    ]))
+    .expect("a page");
+    let mut froms: Vec<&str> = [&first, &second]
+        .iter()
+        .flat_map(|page| page["items"].as_array().expect("the edges"))
+        .map(|edge| edge["from"]["id"].as_str().expect("a near end"))
+        .collect();
+    froms.sort_unstable();
+    assert_eq!(froms, vec!["site:other", "site:rollout"]);
+    assert!(second["next"].is_null(), "{second:#}");
+}
+
+// A folder's permissions are Unix's to refuse a write with.
+#[cfg(unix)]
+#[test]
+fn a_copy_whose_record_on_the_private_task_cannot_be_written_leaves_both_folders_as_it_found_them()
+{
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let store = routed_plan();
+    // The first copy without the edge, so the second has only the record to add on `vault`
+    // beside a change to `site`.
+    let draft = store.folder("draft").join("tasks/rollout.md");
+    let authored = std::fs::read_to_string(&draft).expect("the draft rollout");
+    std::fs::write(
+        &draft,
+        authored.replace("depends_on: [consumer]", "depends_on: []"),
+    )
+    .expect("the edge left out");
+    store.ok(&["project", "copy", "draft:goal", "--to", "site"]);
+    std::fs::write(
+        &draft,
+        authored.replace("title: Rollout", "title: Rollout, revised"),
+    )
+    .expect("the edge and a new title");
+
+    let site = tree(&store.folder("site"));
+    let vault = tree(&store.folder("vault"));
+    let tasks = store.folder("vault").join("tasks");
+    let sealed: Vec<(std::path::PathBuf, u32, u32)> = std::fs::read_dir(&tasks)
+        .expect("vault's tasks")
+        .map(|entry| (entry.expect("a task file").path(), 0o444, 0o644))
+        .chain([(tasks.clone(), 0o555, 0o755)])
+        .collect();
+    for (path, mode, _) in &sealed {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(*mode)).expect("sealed");
+    }
+    let output = store.run(&["project", "copy", "draft:goal", "--to", "site"]);
+    for (path, _, mode) in &sealed {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(*mode)).expect("unsealed");
+    }
+
+    assert_ne!(output.status.code(), Some(0), "{}", stdout(&output));
+    assert!(stderr(&output).contains("vault"), "{}", stderr(&output));
+    assert_eq!(
+        tree(&store.folder("site")),
+        site,
+        "the revised title is taken back"
+    );
+    assert_eq!(
+        tree(&store.folder("vault")),
+        vault,
+        "and vault holds no record"
     );
 }

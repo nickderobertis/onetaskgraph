@@ -68,7 +68,7 @@ use crate::{Failure, GlobalId};
 use super::assets;
 use super::boundary::{Exposure, Outbound};
 use super::delivery::{Delivered, targets};
-use super::dependents;
+use super::dependents::{self, Dependents};
 use super::fetch::{fits, unrepeated};
 use super::local::ProjectSelector;
 use super::narrow::holds_priority;
@@ -1086,7 +1086,7 @@ struct Running {
     dependents: Vec<Dependent>,
     /// Every task this copy landed in a source declared private, by its destination id, with
     /// the dependents it held there before: the record a copy keeps as it found it.
-    recorders: BTreeMap<String, (GlobalId, BTreeSet<String>)>,
+    recorders: BTreeMap<String, (GlobalId, Dependents)>,
     /// Every item this copy landed, in the order it landed them, for the link each records
     /// once the whole copy has landed.
     linking: Vec<Linking>,
@@ -1252,27 +1252,24 @@ struct Recording {
     /// The task, where it is held.
     at: GlobalId,
     /// The dependents this copy landed whose edges name it.
-    named: BTreeSet<String>,
+    named: Dependents,
     /// What it held before, when this copy landed it and so already read it.
-    held: Option<BTreeSet<String>>,
+    held: Option<Dependents>,
 }
 
 /// Every dependent a copy landed, whose entries that copy decides, and what each task of a
 /// source declared private it touches is to record.
 struct Recordings {
     /// The destination ids of every task the copy landed somewhere not declared private.
-    decided: BTreeSet<String>,
+    decided: Dependents,
     /// One per task of a source declared private the copy landed or a landed edge names.
     each: Vec<Recording>,
 }
 
 impl Recordings {
     /// What a task holding `held` records afterwards.
-    fn applied(&self, recording: &Recording, held: &BTreeSet<String>) -> BTreeSet<String> {
-        held.difference(&self.decided)
-            .chain(&recording.named)
-            .cloned()
-            .collect()
+    fn applied(&self, recording: &Recording, held: &Dependents) -> Dependents {
+        held.applied(&self.decided, &recording.named)
     }
 }
 
@@ -3326,7 +3323,7 @@ impl Engine {
                                 )
                             })?
                         }
-                        _ => BTreeSet::new(),
+                        _ => Dependents::default(),
                     };
                     running.recorders.insert(id.to_string(), (id.clone(), held));
                 } else {
@@ -4799,12 +4796,12 @@ impl Engine {
     /// withheld exactly as it always was: recording on it would write to a source the copy was
     /// never asked to write to, and may only read.
     fn recordings(&self, running: &Running) -> Recordings {
-        let decided: BTreeSet<String> = running
+        let decided: Dependents = running
             .dependents
             .iter()
-            .map(|dependent| dependent.destination.to_string())
+            .map(|dependent| dependent.destination.clone())
             .collect();
-        let mut named: BTreeMap<String, (GlobalId, BTreeSet<String>)> = BTreeMap::new();
+        let mut named: BTreeMap<String, (GlobalId, Dependents)> = BTreeMap::new();
         for dependent in &running.dependents {
             let near = &dependent.destination.source;
             let ends = mapped_edges(
@@ -4835,9 +4832,9 @@ impl Engine {
                 }
                 named
                     .entry(far.to_string())
-                    .or_insert_with(|| (far.clone(), BTreeSet::new()))
+                    .or_insert_with(|| (far.clone(), Dependents::default()))
                     .1
-                    .insert(dependent.destination.to_string());
+                    .insert(dependent.destination.clone());
             }
         }
         let mut each = Vec::new();

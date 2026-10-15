@@ -22,11 +22,13 @@ files:
     - "docs/screenshots/**"
     - "screenshots/fonts/**"
 rationales: true
+# llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] This comment names the model `oneharness.toml` pins so a reader here knows which harness runs; every place the repository names it is required to name the same one, and `oneharness.toml` stays the one value read.
 # No `agents` block: the harness/model are NOT pinned here. `oneharness.toml`
 # (composed alongside this file) selects them in fallback mode — codex + gpt-6.1-sol
 # primary, claude-code + opus-4.8 secondary — so a Claude Code session falls
 # through to claude-code with no config edit. Leaving the harness unset is what
 # lets that fallback (or an ONEHARNESS_<FIELD> env override) decide.
+# llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 plugins:
   - "https://raw.githubusercontent.com/nickderobertis/llmlint/main/assets/config_lint.yml@1"
   - "https://raw.githubusercontent.com/nickderobertis/dero-skills/main/skills/bootstrap/create-repo/assets/llmlint/base.llmlint.yml@1"
