@@ -1076,6 +1076,84 @@ fn provenance_naming_a_private_source_never_reaches_a_public_one() {
 }
 
 #[test]
+fn a_document_of_a_private_source_is_filed_under_the_home_its_project_s_link_names() {
+    // `site` routes `openco` work to `elsewhere`, so a walk for a home would read it too.
+    let store = Store::new(
+        Some(registered),
+        json!({
+            "site": {"routes": [{"repositories": ["github.com/openco/*"], "to": "elsewhere"}]},
+            "elsewhere": {"plugin": "local-md", "config": {"root": "elsewhere"}, "visibility": "public"},
+        }),
+    );
+    std::fs::create_dir_all(store.folder("elsewhere")).expect("the folder");
+    store.record(
+        "vault",
+        "projects",
+        "public-plan",
+        "title: Public plan\nstatus: todo",
+        PLAIN,
+    );
+    store.ok(&["project", "copy", "vault:public-plan", "--to", "site"]);
+    let home = one_file(&store, "site", "projects");
+    assert!(
+        !home.contains("vault") && !home.contains("onetaskgraph.origin"),
+        "{home}"
+    );
+    // A folder keeps the id it is given; a board assigns its own. The home is moved to an id
+    // of its own, and the link with it, so filing under the source project's id would miss it.
+    let source_project = store.folder("vault").join("projects/public-plan.md");
+    let project = std::fs::read_to_string(&source_project).expect("the source project");
+    assert!(project.contains("site:public-plan"), "{project}");
+    std::fs::write(
+        &source_project,
+        project.replace("site:public-plan", "site:board-7"),
+    )
+    .expect("the link moved");
+    let link = store.folder("site").join("projects/board-7.md");
+    std::fs::rename(store.folder("site").join("projects/public-plan.md"), &link)
+        .expect("the home moved");
+    // A walk of `elsewhere` now fails, on a record it cannot read: the home is found by the
+    // link, or the copy is refused.
+    store.record("elsewhere", "projects", "unreadable", "title: [", PLAIN);
+    store.record(
+        "vault",
+        "documents",
+        "design",
+        "title: \"Design: public-plan\"\nproject: public-plan",
+        PLAIN,
+    );
+    store.ok(&["document", "copy", "vault:design", "--to", "site"]);
+    let document = one_file(&store, "site", "documents");
+    assert!(document.contains("project: board-7"), "{document}");
+    assert!(
+        !document.contains("vault") && !document.contains("onetaskgraph.origin"),
+        "{document}"
+    );
+    // A second copy updates the document the first filed rather than filing another.
+    let source = std::fs::read_to_string(store.folder("vault").join("documents/design.md"))
+        .expect("the source document");
+    std::fs::write(
+        store.folder("vault").join("documents/design.md"),
+        source.replace(PLAIN, "Retry with a capped exponential backoff, revised."),
+    )
+    .expect("the source edited");
+    store.ok(&["document", "copy", "vault:design", "--to", "site"]);
+    let document = one_file(&store, "site", "documents");
+    assert!(document.contains("revised"), "{document}");
+    assert!(document.contains("project: board-7"), "{document}");
+    // A link naming a home `site` no longer holds is refused naming that project.
+    std::fs::remove_file(store.folder("elsewhere").join("projects/unreadable.md"))
+        .expect("the unreadable record removed");
+    std::fs::remove_file(&link).expect("the home removed");
+    let (kind, problem) = store.refused(&["document", "copy", "vault:design", "--to", "site"]);
+    assert_eq!(kind, "stale-link", "{problem}");
+    assert!(
+        problem.contains("vault:public-plan was last copied to site:board-7"),
+        "{problem}"
+    );
+}
+
+#[test]
 fn an_inherited_classification_is_never_loosened_by_an_explicit_public() {
     let store = Store::new(Some(registered), json!({}));
     store.record(

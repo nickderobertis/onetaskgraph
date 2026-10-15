@@ -4707,13 +4707,17 @@ impl Engine {
 
     /// The home project a source project's own `onetaskgraph.copies` names in a source this
     /// copy can reach, when the project it names there still records that source project as
-    /// its origin.
+    /// its origin — or records none, where the source is declared private and the source
+    /// it names is not, because that copy withheld the origin (see [`Engine::target`]).
     ///
     /// The filing lookup's half of following a link: one read of the project at its source
     /// and one of its counterpart by id, in place of a walk of the destination's projects.
     /// A link that names nothing there, or names a project somebody re-pointed, is not a
     /// refusal here as it is for a copy's own target — this only decides where an item is
-    /// filed — so the walk answers instead, exactly as it did before there were links.
+    /// filed — so the walk answers instead, exactly as it did before there were links. A
+    /// withheld link naming nothing is the exception: no origin there can name a private
+    /// project, so the walk would only file the item under an id the destination never held,
+    /// and it is refused as a copy's own stale link is, unless the caller asked to recreate.
     async fn linked_project(
         &self,
         request: &CopyRequest,
@@ -4741,8 +4745,23 @@ impl Engine {
                 .get_project(&link.native)
                 .await
                 .map_err(|error| refused(there, error))?;
-            if named.is_some_and(|there| origin_of(&there.metadata).as_ref() == Some(project)) {
-                return Ok(Some(link));
+            let withheld = self.declared(&project.source)
+                == crate::config::SourceVisibility::Private
+                && self.declared(&reachable) != crate::config::SourceVisibility::Private;
+            match named {
+                Some(there)
+                    if origin_of(&there.metadata).as_ref() == Some(project)
+                        || (withheld && origin_of(&there.metadata).is_none()) =>
+                {
+                    return Ok(Some(link));
+                }
+                None if withheld && !request.recreate => {
+                    return Err(EngineError::StaleLink {
+                        item: project.to_string(),
+                        link: link.to_string(),
+                    });
+                }
+                _ => {}
             }
         }
         Ok(None)
