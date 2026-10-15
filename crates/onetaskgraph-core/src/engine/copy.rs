@@ -1084,6 +1084,10 @@ struct Running {
     /// its source reported them: an edge of one to a task of a source declared private is
     /// withheld from it and recorded on that task once the whole copy has landed.
     dependents: Vec<Dependent>,
+    /// The member projects each home this copy read names, by the home's qualified id: where a
+    /// task filed under it can be recorded as depending on a task it cannot hold the edge to
+    /// itself. Noted by the read that classifies the home, or read once per home per command.
+    home_members: HashMap<String, Vec<GlobalId>>,
     /// Every task this copy landed in a source declared private, by its destination id, with
     /// the dependents it held there before: the record a copy keeps as it found it.
     recorders: BTreeMap<String, (GlobalId, Dependents)>,
@@ -2185,7 +2189,14 @@ impl Engine {
                     self.home_placement(request, &project, &reads).await?
                 };
                 let project = self
-                    .aim(request, project, home.clone(), class, None)
+                    .aim(
+                        request,
+                        project,
+                        home.clone(),
+                        class,
+                        None,
+                        &mut running.home_members,
+                    )
                     .await?;
                 let mut tasks = Vec::new();
                 for read in reads {
@@ -2200,7 +2211,17 @@ impl Engine {
                             self.placed_at(request, &request.destination)
                         }
                     };
-                    tasks.push(self.aim(request, read, placement, class, None).await?);
+                    tasks.push(
+                        self.aim(
+                            request,
+                            read,
+                            placement,
+                            class,
+                            None,
+                            &mut running.home_members,
+                        )
+                        .await?,
+                    );
                 }
                 plans.push((project, tasks, changed));
             } else {
@@ -2624,10 +2645,13 @@ impl Engine {
         Ok((carried, unrecorded))
     }
 
-    /// Every task the source holds in `project`, by qualified id.
+    /// Every task the source holds in `project` and, when it is a home, in each member
+    /// project it names, by qualified id: the plan a whole-project copy carries, read as
+    /// `task list --project <home> --members` reads it, so a home copied on takes its members'
+    /// tasks with it and the destination's own routes file each one.
     async fn project_members(&self, project: &GlobalId) -> Result<Vec<GlobalId>, EngineError> {
         Ok(self
-            .project_member_tasks(project, FOR_A_COPY)
+            .project_tasks(project, FOR_A_COPY, true)
             .await?
             .into_iter()
             .map(|task| task.id)
@@ -2645,6 +2669,17 @@ impl Engine {
         project: &GlobalId,
         reading: &str,
     ) -> Result<Vec<Qualified<Task>>, EngineError> {
+        self.project_tasks(project, reading, false).await
+    }
+
+    /// [`project_member_tasks`](Self::project_member_tasks), with the tasks of every member
+    /// project `project` names when `members` asks.
+    async fn project_tasks(
+        &self,
+        project: &GlobalId,
+        reading: &str,
+        members: bool,
+    ) -> Result<Vec<Qualified<Task>>, EngineError> {
         let mut request = TaskRequest {
             sources: vec![project.source.clone()],
             filters: Filters::default(),
@@ -2653,7 +2688,7 @@ impl Engine {
             commented_since: None,
             metadata: Vec::new(),
             origin: None,
-            include_members: false,
+            include_members: members,
             paging: Paging {
                 limit: PROJECT_PAGE,
                 token: None,
@@ -3428,8 +3463,15 @@ impl Engine {
             ),
         };
         let aimed = running.aimed.remove(&id.to_string());
-        self.aim(request, read, placement, classification, aimed)
-            .await
+        self.aim(
+            request,
+            read,
+            placement,
+            classification,
+            aimed,
+            &mut running.home_members,
+        )
+        .await
     }
 
     /// Who may read one item read for a copy: its own declaration, tightened by its
@@ -3458,9 +3500,10 @@ impl Engine {
         let filed = match filed {
             Some(filed) if self.boundary_active() => {
                 match self
-                    .source_project_class(
+                    .source_project_class_noting(
                         &GlobalId::new(read.source.source.clone(), filed.clone()),
                         &mut running.project_classes,
+                        Some(&mut running.home_members),
                     )
                     .await
                 {
@@ -3493,6 +3536,17 @@ impl Engine {
         &self,
         project: &GlobalId,
         known: &mut HashMap<GlobalId, Classification>,
+    ) -> Result<Classification, EngineError> {
+        self.source_project_class_noting(project, known, None).await
+    }
+
+    /// [`source_project_class`](Self::source_project_class), noting in `members` the member
+    /// projects the record it reads names, so a copy that needs them reads it no second time.
+    async fn source_project_class_noting(
+        &self,
+        project: &GlobalId,
+        known: &mut HashMap<GlobalId, Classification>,
+        members: Option<&mut HashMap<String, Vec<GlobalId>>>,
     ) -> Result<Classification, EngineError> {
         let cached = known.get(project).copied();
         if let Some(class) = cached
@@ -3527,6 +3581,9 @@ impl Engine {
             }
             return Ok(Classification::Public);
         };
+        if let (Some(members), Ok(named)) = (members, members_of(project, &held.metadata)) {
+            members.insert(project.to_string(), named);
+        }
         if let Some(class) = cached {
             // Read again, its record may have tightened since; nothing loosens it.
             let class =
@@ -3929,6 +3986,70 @@ impl Engine {
         }
     }
 
+    /// The edges from `id`, a task read for a copy, that a task of a source declared private
+    /// records of it (see [`dependents`]): each to that task, qualified, so the copy carries
+    /// them as it carries the task's own edges — remapped to the counterpart a member of the
+    /// copied set lands as, and withheld from, and recorded on the private side of, a write
+    /// anywhere not declared private.
+    ///
+    /// Asked only of the private sources the task's home names a member project in: a task
+    /// filed under no such home holds no edge the private side could record, so a copy of one
+    /// asks no source it did not before. The home's member list comes from the read that
+    /// classified it — a store with a source declared private has its boundary active — and
+    /// is read here only when that read was not made.
+    ///
+    /// # Errors
+    ///
+    /// The home's source failing its read or holding a member list it cannot read, and
+    /// whatever [`Engine::recorded_prerequisites_in`] refuses.
+    async fn recorded_for_copy(
+        &self,
+        id: &GlobalId,
+        task: &Task,
+        home_members: &mut HashMap<String, Vec<GlobalId>>,
+    ) -> Result<Vec<DependencyEdge>, EngineError> {
+        let recording = self.recording_sources(&id.source);
+        let Some(project) = task.project.as_ref().filter(|_| !recording.is_empty()) else {
+            return Ok(Vec::new());
+        };
+        let home = GlobalId::new(id.source.clone(), project.clone());
+        if let std::collections::hash_map::Entry::Vacant(unread) =
+            home_members.entry(home.to_string())
+        {
+            let source = self.readable(&id.source)?;
+            let held = source
+                .source()
+                .get_project(project)
+                .await
+                .map_err(|error| refused(source, error))?;
+            unread.insert(match held {
+                Some(held) => members_of(&home, &held.metadata)
+                    .map_err(|message| refused(source, SourceError::Malformed { message }))?,
+                None => Vec::new(),
+            });
+        }
+        let mut sources: Vec<SourceName> = Vec::new();
+        for member in &home_members[&home.to_string()] {
+            if recording.contains(&member.source) && !sources.contains(&member.source) {
+                sources.push(member.source.clone());
+            }
+        }
+        if sources.is_empty() {
+            return Ok(Vec::new());
+        }
+        Ok(self
+            .recorded_prerequisites_in(id, &sources)
+            .await?
+            .into_iter()
+            .map(|prerequisite| DependencyEdge {
+                from: DependencyEndpoint::from_native(id.native.clone(), ItemKind::Task),
+                to: DependencyEndpoint::new(prerequisite.to_string(), ItemKind::Task)
+                    .expect("a qualified id is a valid endpoint"),
+                kind: DependencyKind::Blocks,
+            })
+            .collect())
+    }
+
     /// Decide where one read item is going, once it is known which source it lands in.
     async fn aim(
         &self,
@@ -3937,6 +4058,7 @@ impl Engine {
         placement: Placement,
         classification: Classification,
         aimed: Option<(Target, Option<Prior>)>,
+        home_members: &mut HashMap<String, Vec<GlobalId>>,
     ) -> Result<Planned, EngineError> {
         let Read {
             source: id,
@@ -3986,7 +4108,10 @@ impl Engine {
                 ));
             }
         };
-        let edges = forward_edges(source, &id.native, item.level()).await?;
+        let mut edges = forward_edges(source, &id.native, item.level()).await?;
+        if let Item::Task(task) = &item {
+            edges.extend(self.recorded_for_copy(&id, task, home_members).await?);
+        }
         // A task copied by query was already aimed from its listing, when the copy asked
         // whether it could skip it.
         let (target, held) = match aimed {
@@ -4803,11 +4928,8 @@ impl Engine {
                 &running.counterparts,
             );
             for (read, end) in dependent.edges.iter().zip(ends) {
-                let member = !read.to.is_qualified()
-                    && running.resolvable.contains(&GlobalId::new(
-                        dependent.origin.clone(),
-                        NativeId(read.to.id().to_owned()),
-                    ));
+                let member = far_end(&read.to, &dependent.origin)
+                    .is_some_and(|far| running.resolvable.contains(&far));
                 let (true, Some(end)) = (member, end) else {
                     continue;
                 };
@@ -6579,6 +6701,12 @@ fn mapped_edges(
         .iter()
         .map(|edge| {
             let far = GlobalId::new(origin.clone(), NativeId(edge.to.id().to_owned()));
+            let qualified = edge
+                .to
+                .is_qualified()
+                .then(|| edge.to.id().parse::<GlobalId>().ok())
+                .flatten()
+                .filter(|far| copied.contains(far));
             let id = if let Some(native) = names(&edge.to, destination) {
                 // A far end already qualified to the destination's own source is that
                 // source's own item, so it is written the way that source names its own:
@@ -6590,6 +6718,12 @@ fn mapped_edges(
                 // A member of this copy, inside one source included: a copy there lands
                 // beside the item it was read from, so the edge names the copy rather than
                 // the original the copy's own project does not hold.
+                written
+                    .get(&far.to_string())
+                    .map(|landed| spelled_from(landed, destination))
+            } else if let Some(far) = qualified {
+                // A member of this copy in another source — a home and its member copied as
+                // one set — names that member's copy for the same reason.
                 written
                     .get(&far.to_string())
                     .map(|landed| spelled_from(landed, destination))

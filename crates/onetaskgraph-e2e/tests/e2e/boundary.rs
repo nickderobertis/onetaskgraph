@@ -3876,6 +3876,12 @@ fn a_create_under_a_project_held_private_by_its_members_or_not_held_at_all_write
     ]);
 }
 
+/// `base` with `extra`'s keys laid over it.
+fn merged(mut base: Value, extra: Value) -> Value {
+    merge(&mut base, extra);
+    base
+}
+
 /// A plan authored in the public `draft` folder whose `openco` task `site` routes to `vault`:
 /// a home on `site` with a member on `vault`, and an edge each way across the two.
 fn routed_plan() -> Store {
@@ -3883,13 +3889,18 @@ fn routed_plan() -> Store {
 }
 
 /// [`routed_plan`], authored in the folder `author` — `draft`, or the private `plan`, which
-/// keeps the links a copy records — beside a second private folder, `archive`.
+/// keeps the links a copy records — beside a second private folder, `archive`, and a second
+/// public one, `mirror`, routing the same work to it.
 fn routed_plan_in(author: &str) -> Store {
     let store = Store::laid(Some(registered), |sandbox| {
         json!({
             "draft": folder(sandbox, "draft", "public"),
             "archive": folder(sandbox, "archive", "private"),
             "site": {"routes": [{"repositories": ["github.com/openco/*"], "to": "vault"}]},
+            "mirror": merged(
+                folder(sandbox, "mirror", "public"),
+                json!({"routes": [{"repositories": ["github.com/openco/*"], "to": "archive"}]}),
+            ),
         })
     });
     store.record(
@@ -4596,4 +4607,113 @@ fn a_member_copy_whose_private_prerequisite_is_gone_is_refused_naming_it() {
         site,
         "nothing of the copy stays on site"
     );
+}
+
+#[test]
+fn a_routed_plan_copied_on_from_its_public_home_keeps_its_dependency_on_the_private_member() {
+    let store = routed_plan();
+    let first = landed_ids(&store.ok(&["project", "copy", "draft:goal", "--to", "site", "--json"]));
+    assert_eq!(
+        members_of_home(&store, &first["draft:goal"]).len(),
+        1,
+        "the home on site names its member on vault"
+    );
+
+    // The home copied on carries its member's tasks: the home to `mirror`, the member's
+    // `openco` task routed by `mirror` to the private `archive`.
+    let copy = [
+        "project",
+        "copy",
+        first["draft:goal"].as_str(),
+        "--to",
+        "mirror",
+        "--json",
+    ];
+    let landed = landed_ids(&store.ok(&copy));
+    let (home, library, consumer, rollout) = (
+        &landed[&first["draft:goal"]],
+        &landed[&first["draft:library"]],
+        &landed[&first["draft:consumer"]],
+        &landed[&first["draft:rollout"]],
+    );
+    assert!(
+        home.starts_with("mirror:") && rollout.starts_with("mirror:"),
+        "{landed:?}"
+    );
+    assert!(consumer.starts_with("archive:"), "{landed:?}");
+
+    // The edge the first copy kept on `vault` arrives between the copies, from either end, and
+    // the private task's own edge names the public task's copy.
+    let kept = vec![(rollout.clone(), consumer.clone())];
+    assert_eq!(edges_of(&store, rollout, "depends-on"), kept);
+    assert_eq!(edges_of(&store, consumer, "depended-on-by"), kept);
+    assert_eq!(
+        edges_of(&store, consumer, "depends-on"),
+        vec![(consumer.clone(), library.clone())]
+    );
+    let graph: Value =
+        serde_json::from_str(&store.ok(&["project", "graph", home, "--format", "json"]))
+            .expect("a graph");
+    assert!(
+        graph["edges"]
+            .as_array()
+            .expect("the graph's edges")
+            .contains(&json!({"from": consumer, "to": rollout})),
+        "{graph:#}"
+    );
+
+    // Nothing on `mirror` names either private task, its source, its title or where it is.
+    // The home's own member list is the one record there naming `archive`, and it names the
+    // member project alone, as it did before this edge was kept (left as it is, by ruling).
+    let members = members_of_home(&store, home);
+    assert_eq!(members.len(), 1, "{members:?}");
+    assert!(members[0].starts_with("archive:"), "{members:?}");
+    let members_entry = format!("  onetaskgraph.members:\n  - {}\n", members[0]);
+    let private = [
+        consumer.as_str(),
+        first["draft:consumer"].as_str(),
+        "Quiet consumer",
+        "draft:consumer",
+        "archive",
+        "vault",
+    ];
+    let roots = [
+        store.folder("archive").display().to_string(),
+        store.folder("vault").display().to_string(),
+    ];
+    for (path, bytes) in tree(&store.folder("mirror")) {
+        let text = String::from_utf8(bytes)
+            .expect("a text record")
+            .replace(&members_entry, "");
+        for named in private
+            .iter()
+            .copied()
+            .chain(roots.iter().map(String::as_str))
+        {
+            assert!(!text.contains(named), "{path} names {named}:\n{text}");
+        }
+    }
+
+    // Copying the same home again writes nothing anywhere and keeps exactly one edge.
+    let before = store.tree();
+    assert_eq!(
+        landed_ids(&store.ok(&copy)),
+        landed,
+        "every counterpart is found"
+    );
+    assert_eq!(store.tree(), before, "nothing is written a second time");
+    assert_eq!(edges_of(&store, rollout, "depends-on"), kept);
+    assert_eq!(edges_of(&store, consumer, "depended-on-by"), kept);
+}
+
+/// The member projects `home` records, read back through the binary.
+fn members_of_home(store: &Store, home: &str) -> Vec<String> {
+    let shown: Value = serde_json::from_str(&store.ok(&["project", "show", home, "--json"]))
+        .expect("a project answer");
+    shown["items"][0]["item"]["metadata"]["onetaskgraph.members"]
+        .as_array()
+        .expect("the home names its members")
+        .iter()
+        .map(|member| member.as_str().expect("a qualified id").to_owned())
+        .collect()
 }

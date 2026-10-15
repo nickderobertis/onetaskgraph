@@ -1109,6 +1109,10 @@ them do; this is the inventory of what is owed, not a status board.
     private task; a second copy writes nothing and keeps one edge, dropping the edge at the
     draft takes it off, and a private source that cannot answer, or a recorded entry that does
     not say what it names, fails the read rather than dropping the edge.
+105. That public home copied on to another public folder routing to a private one carries its
+    member's task and the recorded edge between their copies, read from either end and drawn
+    by `project graph`, with nothing on that folder naming either private task; a second copy
+    writes nothing anywhere and keeps one edge.
 
 ## The public boundary
 

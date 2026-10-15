@@ -217,8 +217,22 @@ impl Engine {
         &self,
         dependent: &GlobalId,
     ) -> Result<Vec<GlobalId>, EngineError> {
+        let sources = self.recording_sources(&dependent.source);
+        self.recorded_prerequisites_in(dependent, &sources).await
+    }
+
+    /// [`recorded_prerequisites`](Self::recorded_prerequisites), asked of `sources` alone.
+    ///
+    /// # Errors
+    ///
+    /// As [`recorded_prerequisites`](Self::recorded_prerequisites).
+    pub(crate) async fn recorded_prerequisites_in(
+        &self,
+        dependent: &GlobalId,
+        sources: &[SourceName],
+    ) -> Result<Vec<GlobalId>, EngineError> {
         let mut prerequisites = Vec::new();
-        for source in self.recording_sources(&dependent.source) {
+        for source in sources.iter().cloned() {
             let mut request = TaskRequest {
                 sources: vec![source],
                 filters: Filters::default(),
