@@ -3305,22 +3305,6 @@ async fn forward_edges(
     }
 }
 
-/// Walk one item's dependency edges, emulating the reverse direction when the source
-/// only reports forward ones.
-///
-/// The emulation is the bounded page-by-page scan the contract describes: a page of the
-/// source's items, each asked for its own forward edges, keeping the ones that point at
-/// `native`. It is indexless by construction — nothing is retained between pages beyond
-/// the caller's own page — which is why a source that cannot walk backwards costs a scan
-/// rather than a stored reverse index.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "every argument is one axis of one walk — the source, the item, the \
-              direction, which of its two graphs, whether the reverse is emulated, where \
-              to resume, how many rows to return and where to count calls. Grouping them \
-              into a struct would name the same eight values one indirection further from \
-              the loop that reads them."
-)]
 /// Walk the tasks of `recorder`, a source declared private, that record `near` as depending
 /// on them, each as the edge `near` → that task.
 ///
@@ -3422,6 +3406,22 @@ async fn recorded_on(
     .await
 }
 
+/// Walk one item's dependency edges, emulating the reverse direction when the source
+/// only reports forward ones.
+///
+/// The emulation is the bounded page-by-page scan the contract describes: a page of the
+/// source's items, each asked for its own forward edges, keeping the ones that point at
+/// `native`. It is indexless by construction — nothing is retained between pages beyond
+/// the caller's own page — which is why a source that cannot walk backwards costs a scan
+/// rather than a stored reverse index.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "every argument is one axis of one walk — the source, the item, the \
+              direction, which of its two graphs, whether the reverse is emulated, where \
+              to resume, how many rows to return and where to count calls. Grouping them \
+              into a struct would name the same eight values one indirection further from \
+              the loop that reads them."
+)]
 async fn fetch_edges(
     source: &ResolvedSource,
     native: &NativeId,
