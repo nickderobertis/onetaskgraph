@@ -4717,3 +4717,68 @@ fn members_of_home(store: &Store, home: &str) -> Vec<String> {
         .map(|member| member.as_str().expect("a qualified id").to_owned())
         .collect()
 }
+
+#[test]
+fn copying_a_public_home_on_is_refused_when_its_private_member_cannot_say_what_it_records() {
+    let store = routed_plan();
+    let first = landed_ids(&store.ok(&["project", "copy", "draft:goal", "--to", "site", "--json"]));
+    let rollout = first["draft:rollout"].clone();
+    let copy = [
+        "project",
+        "copy",
+        first["draft:goal"].as_str(),
+        "--to",
+        "mirror",
+    ];
+
+    // A record `vault` cannot read, and one the match finds holding the public task's id as
+    // another kind: each refuses the copy before it writes, rather than copying it without
+    // the edge `vault` keeps.
+    let misspelled = format!(
+        "title: Misspelled\nstatus: todo\nmetadata:\n  onetaskgraph.depended_on_by:\n    \
+         '{rollout}':\n      id: {rollout}\n      kind: project"
+    );
+    for (record, front, said) in [
+        ("unreadable", "title: [", "vault"),
+        (
+            "misspelled",
+            misspelled.as_str(),
+            "onetaskgraph.depended_on_by",
+        ),
+    ] {
+        store.record("vault", "tasks", record, front, PLAIN);
+        let before = store.tree();
+        let output = store.run(&copy);
+        assert_ne!(
+            output.status.code(),
+            Some(0),
+            "{record}: {}",
+            stdout(&output)
+        );
+        assert!(
+            stderr(&output).contains(said),
+            "{record}: {}",
+            stderr(&output)
+        );
+        assert_eq!(store.tree(), before, "{record}: nothing was written");
+        std::fs::remove_file(store.folder("vault").join(format!("tasks/{record}.md")))
+            .expect("the record removed");
+    }
+
+    // With the record put right the same copy lands, carrying the edge.
+    let landed = landed_ids(&store.ok(&[
+        "project",
+        "copy",
+        first["draft:goal"].as_str(),
+        "--to",
+        "mirror",
+        "--json",
+    ]));
+    assert_eq!(
+        edges_of(&store, &landed[&rollout], "depends-on"),
+        vec![(
+            landed[&rollout].clone(),
+            landed[&first["draft:consumer"]].clone()
+        )]
+    );
+}
