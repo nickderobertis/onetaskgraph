@@ -1103,6 +1103,12 @@ them do; this is the inventory of what is owed, not a status board.
     relations, an unordered pin and the earlier spelling are never kept or served; a comment
     author renamed is the one member served as it was; and every comment write, relation write
     and copy taken back takes the entries it can change out of service.
+104. A plan copied from a public folder to a public one routing a task to a private one keeps
+    the public home task's dependency on the private member task: `task deps` reads it from
+    either end and `project graph` draws it, while nothing on the public folder names the
+    private task; a second copy writes nothing and keeps one edge, dropping the edge at the
+    draft takes it off, and a private source that cannot answer, or a recorded entry that does
+    not say what it names, fails the read rather than dropping the edge.
 
 ## The public boundary
 
