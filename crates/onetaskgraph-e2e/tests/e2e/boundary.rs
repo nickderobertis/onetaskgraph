@@ -4147,6 +4147,42 @@ fn a_dependency_read_a_private_source_cannot_answer_fails_rather_than_dropping_t
     );
 }
 
+/// Every `(from, to)` pair `task deps` answers for `id` in `direction`, one edge to a page,
+/// walked to exhaustion.
+fn paged_edges(store: &Store, id: &str, direction: &str) -> Vec<(String, String)> {
+    let mut paged = Vec::new();
+    let mut token: Option<String> = None;
+    for _ in 0..20 {
+        let mut arguments = vec![
+            "task",
+            "deps",
+            id,
+            "--direction",
+            direction,
+            "--limit",
+            "1",
+            "--json",
+        ];
+        if let Some(token) = &token {
+            arguments.extend(["--page", token.as_str()]);
+        }
+        let page: Value = serde_json::from_str(&store.ok(&arguments)).expect("a page");
+        let items = page["items"].as_array().expect("the edges");
+        assert!(items.len() <= 1, "{page:#}");
+        paged.extend(items.iter().map(|edge| {
+            (
+                edge["from"]["id"].as_str().expect("a near end").to_owned(),
+                edge["to"]["id"].as_str().expect("a far end").to_owned(),
+            )
+        }));
+        match page["next"].as_str() {
+            Some(next) => token = Some(next.to_owned()),
+            None => return paged,
+        }
+    }
+    panic!("{id}'s edges did not end within twenty pages: {paged:?}");
+}
+
 #[test]
 fn a_public_task_s_edges_page_with_what_every_private_source_records_of_it() {
     // `vault` applies the match itself; `memory` declares it unsupported, so the engine
@@ -4194,6 +4230,15 @@ fn a_public_task_s_edges_page_with_what_every_private_source_records_of_it() {
         PLAIN,
     );
 
+    // A task beside it depends on it natively, so its reverse read has both kinds to merge.
+    store.record(
+        "vault",
+        "tasks",
+        "sibling",
+        "title: Sibling\nstatus: todo\ndepends_on: [hidden]",
+        PLAIN,
+    );
+
     // The source's own edge and one edge from each private source, merged into one answer.
     let mut whole = edges_of(&store, "site:rollout", "depends-on");
     whole.sort();
@@ -4208,27 +4253,7 @@ fn a_public_task_s_edges_page_with_what_every_private_source_records_of_it() {
     );
 
     // A page of one at a time walks to exhaustion with every edge once.
-    let mut paged = Vec::new();
-    let mut token: Option<String> = None;
-    for _ in 0..10 {
-        let mut arguments = vec!["task", "deps", "site:rollout", "--limit", "1", "--json"];
-        if let Some(token) = &token {
-            arguments.extend(["--page", token.as_str()]);
-        }
-        let page: Value = serde_json::from_str(&store.ok(&arguments)).expect("a page");
-        let items = page["items"].as_array().expect("the edges");
-        assert!(items.len() <= 1, "{page:#}");
-        paged.extend(items.iter().map(|edge| {
-            (
-                edge["from"]["id"].as_str().expect("a near end").to_owned(),
-                edge["to"]["id"].as_str().expect("a far end").to_owned(),
-            )
-        }));
-        match page["next"].as_str() {
-            Some(next) => token = Some(next.to_owned()),
-            None => break,
-        }
-    }
+    let mut paged = paged_edges(&store, "site:rollout", "depends-on");
     paged.sort();
     assert_eq!(paged, whole, "paged and whole agree");
 
@@ -4237,39 +4262,21 @@ fn a_public_task_s_edges_page_with_what_every_private_source_records_of_it() {
         edges_of(&store, "memory:M-1", "depended-on-by"),
         vec![(rollout(), "memory:M-1".to_owned())]
     );
-    let first: Value = serde_json::from_str(&store.ok(&[
-        "task",
-        "deps",
-        "vault:hidden",
-        "--direction",
-        "depended-on-by",
-        "--limit",
-        "1",
-        "--json",
-    ]))
-    .expect("a page");
-    let token = first["next"].as_str().expect("a second page");
-    let second: Value = serde_json::from_str(&store.ok(&[
-        "task",
-        "deps",
-        "vault:hidden",
-        "--direction",
-        "depended-on-by",
-        "--limit",
-        "1",
-        "--page",
-        token,
-        "--json",
-    ]))
-    .expect("a page");
-    let mut froms: Vec<&str> = [&first, &second]
-        .iter()
-        .flat_map(|page| page["items"].as_array().expect("the edges"))
-        .map(|edge| edge["from"]["id"].as_str().expect("a near end"))
-        .collect();
-    froms.sort_unstable();
-    assert_eq!(froms, vec!["site:other", "site:rollout"]);
-    assert!(second["next"].is_null(), "{second:#}");
+    // What it records merges with what its own source holds, a page at a time.
+    let mut reverse = paged_edges(&store, "vault:hidden", "depended-on-by");
+    reverse.sort();
+    let hidden = || "vault:hidden".to_owned();
+    assert_eq!(
+        reverse,
+        vec![
+            ("site:other".to_owned(), hidden()),
+            (rollout(), hidden()),
+            ("vault:sibling".to_owned(), hidden()),
+        ]
+    );
+    let mut whole_reverse = edges_of(&store, "vault:hidden", "depended-on-by");
+    whole_reverse.sort();
+    assert_eq!(whole_reverse, reverse, "paged and whole agree");
 }
 
 // A folder's permissions are Unix's to refuse a write with.
@@ -4499,4 +4506,43 @@ fn a_project_graph_draws_every_page_of_what_a_private_source_records_of_its_task
     wanted.push("site:library".to_owned());
     wanted.sort();
     assert_eq!(froms, wanted, "{graph:#}");
+}
+
+#[test]
+fn a_dry_run_of_a_routed_plan_records_nothing_on_either_side() {
+    let store = routed_plan();
+    let site = tree(&store.folder("site"));
+    let vault = tree(&store.folder("vault"));
+    store.ok(&["project", "copy", "draft:goal", "--to", "site", "--dry-run"]);
+    assert_eq!(tree(&store.folder("site")), site, "site is untouched");
+    assert_eq!(tree(&store.folder("vault")), vault, "and so is vault");
+
+    // Nor over a plan already copied without the edge, which the next real copy would add.
+    let draft = store.folder("draft").join("tasks/rollout.md");
+    let authored = std::fs::read_to_string(&draft).expect("the draft rollout");
+    std::fs::write(
+        &draft,
+        authored.replace("depends_on: [consumer]", "depends_on: []"),
+    )
+    .expect("the edge left out");
+    let landed =
+        landed_ids(&store.ok(&["project", "copy", "draft:goal", "--to", "site", "--json"]));
+    std::fs::write(&draft, &authored).expect("the edge put back");
+    let site = tree(&store.folder("site"));
+    let vault = tree(&store.folder("vault"));
+    store.ok(&["project", "copy", "draft:goal", "--to", "site", "--dry-run"]);
+    assert_eq!(tree(&store.folder("site")), site, "site is untouched");
+    assert_eq!(tree(&store.folder("vault")), vault, "and so is vault");
+    assert_eq!(
+        edges_of(&store, &landed["draft:consumer"], "depended-on-by"),
+        Vec::new()
+    );
+    store.ok(&["project", "copy", "draft:goal", "--to", "site"]);
+    assert_eq!(
+        edges_of(&store, &landed["draft:consumer"], "depended-on-by"),
+        vec![(
+            landed["draft:rollout"].clone(),
+            landed["draft:consumer"].clone()
+        )]
+    );
 }

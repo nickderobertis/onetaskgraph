@@ -1238,7 +1238,6 @@ struct LandedTask {
 /// A task a copy landed somewhere not declared private, with its forward edges as its source
 /// reported them.
 struct Dependent {
-    /// Where it landed.
     destination: GlobalId,
     /// The source it was read from, which a bare far end names a task of.
     origin: SourceName,
@@ -1249,7 +1248,6 @@ struct Dependent {
 /// What one task of a source declared private records once a copy has landed: what it held,
 /// less every dependent the copy landed, plus each of those whose edges name it.
 struct Recording {
-    /// The task, where it is held.
     at: GlobalId,
     /// The dependents this copy landed whose edges name it.
     named: Dependents,
@@ -1264,13 +1262,6 @@ struct Recordings {
     decided: Dependents,
     /// One per task of a source declared private the copy landed or a landed edge names.
     each: Vec<Recording>,
-}
-
-impl Recordings {
-    /// What a task holding `held` records afterwards.
-    fn applied(&self, recording: &Recording, held: &Dependents) -> Dependents {
-        held.applied(&self.decided, &recording.named)
-    }
 }
 
 /// A task a copy landed, with the tasks it delivers now and delivered before, qualified.
@@ -4868,7 +4859,7 @@ impl Engine {
             // A task this copy landed was read as it landed, so one already recording what it
             // is to is not read again.
             if let Some(held) = &recording.held
-                && recordings.applied(recording, held) == *held
+                && held.applied(&recordings.decided, &recording.named) == *held
             {
                 continue;
             }
@@ -4887,7 +4878,7 @@ impl Engine {
                     },
                 )
             })?;
-            let dependents = recordings.applied(recording, &current);
+            let dependents = current.applied(&recordings.decided, &recording.named);
             if dependents == current {
                 continue;
             }

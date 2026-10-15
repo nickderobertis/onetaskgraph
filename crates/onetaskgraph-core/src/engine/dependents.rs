@@ -49,7 +49,6 @@ impl Dependents {
         self.0.insert(dependent.to_string(), dependent);
     }
 
-    /// Whether `dependent` is one of them.
     pub(crate) fn contains(&self, dependent: &GlobalId) -> bool {
         self.0.contains_key(&dependent.to_string())
     }
