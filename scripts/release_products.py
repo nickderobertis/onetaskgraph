@@ -4,6 +4,7 @@ import json
 from typing import Literal, NewType
 import re
 import shutil
+import subprocess
 from pathlib import Path
 from product_versions import SemanticVersion
 
@@ -22,17 +23,23 @@ def bash_executable(system: str) -> str:
     if system == 'Windows':
         git = shutil.which('git')
         if git is not None:
-            directory = Path(git).resolve().parent
-            # Git Bash exposes git from usr/bin or mingw*/bin; native PATH
-            # commonly exposes the same installation from cmd or bin.
-            if directory.name == 'bin' and directory.parent.name in ('usr', 'mingw64', 'mingw32'):
-                installation = directory.parent.parent
-            else:
-                installation = directory.parent
-            for relative in ('bin/bash.exe', 'usr/bin/bash.exe'):
-                candidate = installation / relative
-                if candidate.is_file():
-                    return str(candidate)
+            # The git on PATH may be a shim outside the installation, so git's
+            # own exec path (mingw64/libexec/git-core) is asked as well.
+            starts = [Path(git).resolve().parent]
+            try:
+                exec_path = subprocess.run([git, '--exec-path'], capture_output=True, text=True, check=True).stdout.strip()
+            except (OSError, subprocess.CalledProcessError):
+                exec_path = ''
+            if exec_path and Path(exec_path).is_absolute():
+                starts.append(Path(exec_path).resolve())
+            for start in starts:
+                # Git Bash exposes git from usr/bin or mingw*/bin; native PATH
+                # from cmd or bin; the exec path sits three levels down.
+                for directory in [start, *start.parents][:4]:
+                    for relative in ('bin/bash.exe', 'usr/bin/bash.exe'):
+                        candidate = directory / relative
+                        if candidate.is_file():
+                            return str(candidate)
         raise ValueError('Git Bash could not be found beside git; install Git for Windows before packaging')
     bash = shutil.which('bash')
     if bash is None:

@@ -206,6 +206,21 @@ else:
             assert resolved == str(selected), directory
             subprocess.run([resolved, '-c', 'printf Git-Bash-selected'], check=True)
             assert subprocess.run([resolved, '-c', 'exit 37'], check=False).returncode == 37
+        # A package-manager shim outside the installation answers through git's own exec path.
+        shim = root / 'shims/git'
+        shim.parent.mkdir()
+        shim.write_text('#!/bin/sh\\n[ "$1" = --exec-path ] && echo ' + str(root / 'Git/mingw64/libexec/git-core') + '\\nexit 0\\n')
+        shim.chmod(0o755)
+        os.environ['PATH'] = str(wsl.parent) + os.pathsep + str(shim.parent)
+        assert bash_executable('Windows') == str(selected)
+        shim.write_text('#!/bin/sh\\nexit 0\\n')
+        try:
+            bash_executable('Windows')
+        except ValueError as error:
+            assert 'install Git for Windows' in str(error)
+        else:
+            raise AssertionError('a shim naming no installation resolved a bash')
+        shim.write_text('#!/bin/sh\\n[ "$1" = --exec-path ] && echo ' + str(root / 'Git/mingw64/libexec/git-core') + '\\nexit 0\\n')
         selected.unlink()
         try:
             bash_executable('Windows')
