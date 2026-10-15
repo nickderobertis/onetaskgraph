@@ -205,7 +205,7 @@ import tarfile
 import zipfile
 root, tree, tag = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
 version = tag[1:]
-workflow = (root / '.github/workflows/release.yml').read_text()
+workflow = (root / '.github/workflows/release.yml').read_text(encoding='utf-8')
 windows, = [row for row in re.findall(r'target: ([a-z0-9_-]+), ext: ([a-z.]+), npm: ([a-z0-9-]+)', workflow) if row[1] == 'zip']
 target, extension, npm = windows
 binary = 'onetaskgraph.exe'
@@ -239,12 +239,15 @@ def refused(args, reason):
         raise SystemExit(f'product boundary did not refuse {reason}: {result.stderr}; repair the production verifier')
 for flags, reason in [(['--target', '../invalid'], 'invalid Rust target'), (['--npm', '../invalid'], 'invalid npm platform'), (['--tag', 'invalid'], 'invalid semantic release tag'), (['--ext', 'invalid'], 'invalid choice'), (['--npm', 'darwin-arm64'], 'inconsistent target'), (['--ext', 'tar.gz'], 'inconsistent target')]:
     refused(command + flags, reason)
-foreign = command
-if platform.system() == 'Windows':
-    pair = re.search(r'^      TARGETS: ([^ ]+)', workflow, re.M)[1]
-    darwin_target, darwin_npm = pair.split('=')
-    foreign = [sys.executable, str(root / 'scripts/verify-release-products.py'), '--target', darwin_target, '--npm', darwin_npm, '--tag', tag]
-refused(foreign + ['--install'], 'cannot execute a non-native release target')
+# \S+ rather than [^ ]+: the latter also takes the newline and the next line's indent,
+# which the verifier rightly refuses as an invalid npm platform before it reaches this case.
+pair = re.search(r'^      TARGETS: (\S+)$', workflow, re.M)[1]
+darwin_target, darwin_npm = pair.split('=')
+foreign = [sys.executable, str(root / 'scripts/verify-release-products.py'), '--target', darwin_target, '--npm', darwin_npm, '--tag', tag]
+if platform.system() != 'Windows':
+    refused(command + ['--install'], 'cannot execute a non-native release target')
+if platform.system() != 'Darwin':
+    refused(foreign + ['--install'], 'cannot execute a non-native release target')
 wheel_path, = wheels.glob('*.whl')
 original_wheel = wheel_path.read_bytes()
 wheel_path.unlink()
