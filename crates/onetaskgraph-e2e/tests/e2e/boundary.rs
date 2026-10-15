@@ -4156,6 +4156,69 @@ fn a_dependency_read_a_private_source_cannot_answer_fails_rather_than_dropping_t
         "{}",
         stderr(&output)
     );
+
+    // So is a record that is not an object of dependents, an entry that is no endpoint at all,
+    // and one naming its dependent by an unqualified id: each fails the read of the private
+    // task's dependents, and the copy that would land on it, rather than reading as none.
+    let entry = format!("    '{rollout}':\n      id: {rollout}\n      kind: task\n");
+    assert!(held.contains(&entry), "{held}");
+    let site = tree(&store.folder("site"));
+    for (spoiled, why) in [
+        (
+            held.replace(
+                &format!("  onetaskgraph.depended_on_by:\n{entry}"),
+                &format!("  onetaskgraph.depended_on_by: ['{rollout}']\n"),
+            ),
+            "not an object",
+        ),
+        (
+            held.replace(&entry, &format!("    '{rollout}': rollout\n")),
+            "no endpoint",
+        ),
+        (
+            held.replace(
+                &entry,
+                "    rollout:\n      id: rollout\n      kind: task\n",
+            ),
+            "unqualified",
+        ),
+    ] {
+        assert_ne!(spoiled, held, "{why}: the entry spoiled");
+        std::fs::write(&path, &spoiled).expect("the entry spoiled");
+        for arguments in [
+            vec![
+                "task",
+                "deps",
+                consumer.as_str(),
+                "--direction",
+                "depended-on-by",
+            ],
+            vec!["project", "copy", "draft:goal", "--to", "site"],
+        ] {
+            let output = store.run(&arguments);
+            assert_ne!(
+                output.status.code(),
+                Some(0),
+                "{why}: {arguments:?}\n{}",
+                stdout(&output)
+            );
+            assert!(
+                stderr(&output).contains("onetaskgraph.depended_on_by"),
+                "{why}: {arguments:?}\n{}",
+                stderr(&output)
+            );
+        }
+        assert_eq!(
+            tree(&store.folder("site")),
+            site,
+            "{why}: the refused copy wrote nothing to site"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("the consumer"),
+            spoiled,
+            "{why}: the refused copy left the private task as it found it"
+        );
+    }
 }
 
 /// Every `(from, to)` pair `task deps` answers for `id` in `direction`, one edge to a page,
