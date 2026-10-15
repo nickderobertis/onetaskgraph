@@ -3,7 +3,7 @@
   "name": "pool-maintenance",
   "projectType": "library",
   "tags": ["lang:bash", "layer:host"],
-  "//": "The budget domain of the pool maintenance onevcs.toml declares: its budgets.yaml and the measurement that exists only for it. That measurement builds the workspace twice and times a real prune, so it is `budgets-host` alone, which no per-change path reaches: neither this project's `check` nor `just check`, `just test` or `just gate` names it (its `test` drives the same measurement over a scratch workspace instead), and the release pull request runs the same check after its gate (`just pool-maintenance-budget`, which runs this command directly, in .github/workflows/ci.yml). It depends on no other project; the only edge is the one `workspace` has to every project.",
+  "//": "The budget domain of the pool maintenance onevcs.toml declares: its budgets.yaml and the measurement that exists only for it. That measurement builds the workspace twice and times a real prune, so it is `budgets-host` alone, which no per-change path reaches: neither this project's `check` nor `just check`, `just test` or `just gate` names it, and the release pull request runs the same check after its gate (`just pool-maintenance-budget`, which runs this command directly, in .github/workflows/ci.yml). It depends on no other project; the only edge is the one `workspace` has to every project.",
   "targets": {
     "bootstrap": {
       "executor": "nx:noop",
@@ -36,7 +36,7 @@
         ],
         "parallel": false
       },
-      "//": "Parses the measurement and its check without running either; running the check is `test`."
+      "//": "Syntax only: running the check builds a scratch workspace, so it is `test`."
     },
     "typecheck": {
       "executor": "nx:noop",
@@ -52,7 +52,7 @@
         "{workspaceRoot}/justfile",
         { "externalDependencies": ["@onebudgetspec/cli"] }
       ],
-      "//": "Drives the measurement, through onebudgetspec and the pinned pruner, over a scratch workspace of three tiny crates warmed as a cache restore leaves a target directory: the figure, and each refusal as an error. It never builds or prunes this repository's own target directory — that is `budgets-host`, which builds the workspace twice and so stays off every per-change path. The justfile is an input because the pruner's pin and the recipe the measurement runs are there. It skips with a notice off Linux, where the measurement never runs."
+      "//": "Runs the measurement over a scratch workspace of three tiny crates, never this repository's own target directory, so it costs seconds and can sit on the per-change path `budgets-host` stays off. The justfile is an input because the pruner's pin and the recipe the measurement runs are there."
     },
     "coverage": {
       "executor": "nx:noop",

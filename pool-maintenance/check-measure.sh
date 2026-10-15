@@ -52,9 +52,9 @@ unset CARGO_TARGET_DIR CARGO_BUILD_TARGET_DIR ONEBUDGETSPEC_RESULT
 # alternative build to, as a cache restored from an earlier run is.
 readonly RESTORED_AT="2020-01-01T00:00:00"
 
-# A fresh warm workspace at $1: the measurement and the justfile whose recipe it runs, a
-# workspace crate `a` whose build script and library use `c` under different features, and
-# `b` depending on `a`; built once, then every file but `b`'s source dated $RESTORED_AT.
+# A warm workspace at $1. `c` under two feature sets gives the pruner rival builds of one
+# unit name, and dating everything but the workspace member `b`'s source $RESTORED_AT is
+# what a cache restore leaves: together they are the state one backlog pass cannot settle.
 make_fixture() {
   local fx="$1"
   mkdir -p "$fx/.cargo" "$fx/pool-maintenance" "$fx/crates/a/src" "$fx/crates/b/src" \
@@ -163,12 +163,13 @@ EOF
   chmod +x "$scratch/bin/cargo-prune-superseded"
 }
 
-# Run the budget over the fixture at $1 as `just pool-maintenance-budget` runs it over this
-# repository; its combined output goes to $scratch/out and its status is echoed.
+# As `just pool-maintenance-budget` runs it; any further arguments go to onebudgetspec.
 measure() {
-  local status=0
-  (cd "$ROOT" && bun run onebudgetspec check "$1/pool-maintenance/budgets.yaml" --label host) \
-    >"$scratch/out" 2>&1 || status=$?
+  local fixture="$1" status=0
+  shift
+  (cd "$ROOT" && bun run onebudgetspec check "$fixture/pool-maintenance/budgets.yaml" --label host "$@") \
+    >"$scratch/out" 2>"$scratch/err" || status=$?
+  cat "$scratch/err" >>"$scratch/out"
   echo "$status"
 }
 
@@ -182,14 +183,34 @@ warm_fatal() {
   fatal "$1" "read the evidence lists measure.sh wrote, kept in $KEPT, then $2"
 }
 make_fixture "$scratch/warm"
-status="$(measure "$scratch/warm")"
+status="$(measure "$scratch/warm" --json)"
 [ "$status" -eq 0 ] || warm_fatal \
   "the measurement over a warm, cache-restored workspace exited $status, not 0: $(cat "$scratch/out")" \
   "fix measure.sh's setup so the timed pass faces one run's superseded builds and nothing else"
-grep -q "budget onetaskgraph-pool-maintenance-seconds: actual .* — within" "$scratch/out" || warm_fatal \
-  "onebudgetspec did not report the figure within its budget: $(cat "$scratch/out")" \
-  "check that measure.sh still leaves the pruner's own report as the figure"
 evidence="$scratch/warm/target/pool-maintenance-evidence"
+# The figure is the timed pass's own report, within its budget, and its detail carries one
+# untimed figure per backlog pass, so the settling is visible beside the figure it excludes.
+backlog_passes="$(find "$evidence" -name 'backlog-removed-*.txt' | wc -l | tr -d ' ')"
+report_problem="$(python3 - "$scratch/out" "$backlog_passes" <<'PY'
+import json
+import re
+import sys
+
+text = open(sys.argv[1], encoding="utf-8").read()
+result = json.loads(text[: text.rindex("}") + 1])["results"][0]
+detail = result["detail"] or ""
+untimed = re.search(r"untimed backlog passes before it, not counted: (.*) s$", detail)
+removed = re.search(r"builds removed: (\d+);", detail)
+if result["verdict"] != "within" or not isinstance(result["actual"], float):
+    print(f"verdict {result['verdict']!r}, actual {result['actual']!r}")
+elif not removed or int(removed.group(1)) == 0:
+    print(f"the timed pass's own report is not the figure: {detail!r}")
+elif not untimed or len(untimed.group(1).split(", ")) != int(sys.argv[2]):
+    print(f"the detail does not carry {sys.argv[2]} untimed figures: {detail!r}")
+PY
+)" || report_problem="the report could not be read: $(cat "$scratch/out")"
+[ -z "$report_problem" ] || warm_fatal "onebudgetspec's result is not the figure measure.sh owes: $report_problem" \
+  "check that measure.sh still leaves the pruner's own report as the figure and appends each untimed pass's seconds"
 # The fixture faced what it exists for: the first untimed pass removed builds, and so did
 # one after it, which a single pass would have left for the timed pass to remove.
 if ! { [ -s "$evidence/backlog-removed-1.txt" ] && [ -s "$evidence/backlog-removed-2.txt" ]; }; then
