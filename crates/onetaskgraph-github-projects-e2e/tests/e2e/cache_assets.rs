@@ -275,7 +275,7 @@ fn a_picture_the_cache_cannot_keep_is_read_from_the_board_at_every_render_until_
     let assets = Assets::new();
     // A read of the document reads no picture, and makes the board's cache directory.
     let _ = assets.held("document");
-    let bytes = assets.board_cache().join("bytes-v1");
+    let bytes = assets.board_cache().join("bytes-v2");
     std::fs::create_dir_all(&bytes).unwrap();
     std::fs::set_permissions(&bytes, std::fs::Permissions::from_mode(0o555)).unwrap();
     let refused: Vec<usize> = ["first", "second"]
@@ -324,7 +324,7 @@ fn a_manifest_naming_other_bytes_reads_them_and_bytes_that_no_longer_hash_are_re
 
     // A byte entry that no longer hashes to its own name is never answered with: the bytes are
     // read from the board again, and what the board keeps is what it held.
-    let entry = walk(&assets.board_cache().join("bytes-v1"))
+    let entry = walk(&assets.board_cache().join("bytes-v2"))
         .into_iter()
         .find(|path| path.file_name().unwrap().to_string_lossy() == asset_sha256(&replaced))
         .expect("the replacement's verified bytes are kept under their digest");
@@ -365,7 +365,7 @@ fn cache_clear_reclaims_a_sources_items_and_bytes_and_leaves_another_sources_alo
                 })
                 .count()
         };
-        (named("documents-v1"), named("bytes-v1"))
+        (named("documents-v2"), named("bytes-v2"))
     };
     assert!(
         held(&board).0 >= 1 && held(&board).1 >= 1,
@@ -380,7 +380,7 @@ fn cache_clear_reclaims_a_sources_items_and_bytes_and_leaves_another_sources_alo
 
     // A file carrying the board's schema, kind and remote but not the rest of an entry is not
     // one this store wrote, and is left where it is.
-    let documents = board.join("documents-v1");
+    let documents = board.join("documents-v2");
     let remote = walk(&documents)
         .iter()
         .find_map(|path| {
@@ -397,7 +397,7 @@ fn cache_clear_reclaims_a_sources_items_and_bytes_and_leaves_another_sources_alo
     .unwrap();
 
     // Every item entry the store wrote, of every kind — and no byte entry, which is not an item.
-    let items: usize = ["tasks", "projects-v1", "documents-v1", "edges-v1"]
+    let items: usize = ["tasks", "projects-v2", "documents-v2", "edges-v2"]
         .iter()
         .map(|directory| {
             walk(&board.join(directory))

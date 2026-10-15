@@ -17,6 +17,7 @@ use serde_json::{Value, json};
 
 use crate::cache::{Cached, sdk};
 use crate::cache_kinds::{kind_entries, listed, show, version};
+use onetaskgraph_e2e_support::sdk::Sdk;
 
 /// Where the cache keeps the `directory` entry of the native id `native`.
 fn entry_path(cached: &Cached, directory: &str, native: &str) -> PathBuf {
@@ -92,7 +93,7 @@ fn a_project_or_document_metadata_write_or_render_removes_its_entry_and_the_next
         (
             "project",
             "board:P-1".to_owned(),
-            "projects-v1",
+            "projects-v2",
             [
                 "project",
                 "metadata",
@@ -108,7 +109,7 @@ fn a_project_or_document_metadata_write_or_render_removes_its_entry_and_the_next
         (
             "document",
             "board:D-1".to_owned(),
-            "documents-v1",
+            "documents-v2",
             [
                 "document",
                 "metadata",
@@ -124,7 +125,7 @@ fn a_project_or_document_metadata_write_or_render_removes_its_entry_and_the_next
         (
             "project",
             rendered_project.clone(),
-            "projects-v1",
+            "projects-v2",
             vec![
                 "project".to_owned(),
                 "render".to_owned(),
@@ -138,7 +139,7 @@ fn a_project_or_document_metadata_write_or_render_removes_its_entry_and_the_next
         (
             "document",
             rendered_document.clone(),
-            "documents-v1",
+            "documents-v2",
             vec![
                 "document".to_owned(),
                 "render".to_owned(),
@@ -221,7 +222,7 @@ fn a_copy_that_cannot_finish_takes_the_entries_of_what_it_writes_back_out_of_ser
     assert_ne!(failed.status.code(), Some(0), "the copy could not finish");
     let native = project.strip_prefix("board:").unwrap();
     assert!(
-        !entry_path(&cached, "projects-v1", native).exists(),
+        !entry_path(&cached, "projects-v2", native).exists(),
         "the project the copy wrote and wrote back is out of service"
     );
     let (current, sent) = show(&cached, "project", &project, Some(&held));
@@ -237,17 +238,18 @@ fn an_entry_this_build_cannot_read_as_its_own_is_a_miss_and_the_read_succeeds() 
     let cached = Cached::new();
     let (first, _) = show(&cached, "project", "board:P-1", None);
     let held = version(&first);
-    let path = entry_path(&cached, "projects-v1", "P-1");
+    let path = entry_path(&cached, "projects-v2", "P-1");
     let entry: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     let mut other_schema = entry.clone();
-    other_schema["schema"] = json!(2);
+    let next = onetaskgraph_core::cache::KIND_ENTRY_SCHEMA + 1;
+    other_schema["schema"] = json!(next);
     let mut other_remote = entry.clone();
     other_remote["remote"] = json!("another remote");
     // A document entry for the very same id, under the project's path: an id names one kind's
     // entry, never another's.
     let (document, _) = show(&cached, "document", "board:D-1", None);
     let mut other_kind: Value =
-        serde_json::from_slice(&std::fs::read(entry_path(&cached, "documents-v1", "D-1")).unwrap())
+        serde_json::from_slice(&std::fs::read(entry_path(&cached, "documents-v2", "D-1")).unwrap())
             .unwrap();
     other_kind["document"]["id"] = json!("P-1");
     other_kind["document"]["version"] = json!(held);
@@ -277,7 +279,7 @@ fn an_entry_this_build_cannot_read_as_its_own_is_a_miss_and_the_read_succeeds() 
 
     // A release of another schema keeps its entries in a directory of its own, which this build
     // neither reads nor writes nor clears.
-    let newer = cached.default_dir().join("projects-v2");
+    let newer = cached.default_dir().join(format!("projects-v{next}"));
     std::fs::create_dir_all(&newer).unwrap();
     let theirs = newer.join(format!("{}.json", asset_sha256(b"P-1")));
     std::fs::write(&theirs, b"a newer release's entry").unwrap();
@@ -290,7 +292,7 @@ fn an_entry_this_build_cannot_read_as_its_own_is_a_miss_and_the_read_succeeds() 
         b"a newer release's entry",
         "nor written or cleared"
     );
-    assert!(kind_entries(&cached.default_dir(), "projects-v1").is_empty());
+    assert!(kind_entries(&cached.default_dir(), "projects-v2").is_empty());
 }
 
 #[test]
@@ -298,7 +300,7 @@ fn two_processes_writing_one_project_entry_never_leave_a_reader_part_of_it() {
     let cached = Cached::new();
     let (first, _) = show(&cached, "project", "board:P-1", None);
     let held = version(&first);
-    let path = entry_path(&cached, "projects-v1", "P-1");
+    let path = entry_path(&cached, "projects-v2", "P-1");
     let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let reader = {
         let stop = stop.clone();
@@ -345,7 +347,7 @@ fn two_processes_writing_one_project_entry_never_leave_a_reader_part_of_it() {
             .any(|file| file.file_name().to_string_lossy().starts_with(".staged"))
     };
     assert!(
-        !staged(&cached.default_dir().join("projects-v1")),
+        !staged(&cached.default_dir().join("projects-v2")),
         "no staging file is left behind"
     );
 }
@@ -369,18 +371,13 @@ fn a_pin_reaches_the_cache_through_both_sdks_and_a_rust_caller() {
         );
         let typescript =
             format!("console.log(JSON.stringify(await client.{method}Show(id, {{pin}})));");
-        for (on_typescript, script) in [(false, python), (true, typescript)] {
+        for (which, script) in [(Sdk::Python, python), (Sdk::TypeScript, typescript)] {
             let before = cached.board.served().len();
-            let shown = sdk(&cached, on_typescript, &script, id, Some(pin));
+            let shown = sdk(&cached, which, &script, id, Some(pin));
             assert_eq!(
                 cached.board.served().len(),
                 before,
-                "{id} through the {} SDK sends nothing",
-                if on_typescript {
-                    "TypeScript"
-                } else {
-                    "Python"
-                }
+                "{id} through the {which:?} SDK sends nothing"
             );
             assert_eq!(shown["items"][0]["item"]["version"], json!(pin));
         }

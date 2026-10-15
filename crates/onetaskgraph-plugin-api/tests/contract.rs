@@ -2626,3 +2626,101 @@ async fn a_source_that_says_nothing_about_assets_holds_none_and_refuses_every_as
         Err(refused)
     );
 }
+
+/// A source whose forward-edge reads spell a token, and that says nothing else to a cache.
+struct Spelling;
+
+#[async_trait::async_trait]
+impl TaskSource for Spelling {
+    fn kind(&self) -> &'static str {
+        "spelling"
+    }
+    fn capabilities(&self) -> Capabilities {
+        Silent("spelling").capabilities()
+    }
+    fn forward_edges_version(&self, id: &NativeId) -> Option<String> {
+        Some(format!("v|{id}"))
+    }
+    async fn health(&self) -> Result<Health, SourceError> {
+        Silent("spelling").health().await
+    }
+    async fn get_task(&self, _id: &NativeId) -> Result<Option<Task>, SourceError> {
+        Ok(None)
+    }
+    async fn get_project(&self, _id: &NativeId) -> Result<Option<Project>, SourceError> {
+        Ok(None)
+    }
+    async fn query_tasks(
+        &self,
+        _query: &TaskQuery,
+        _page: &PageRequest,
+    ) -> Result<Page<Task>, SourceError> {
+        Ok(Page::last(Vec::new()))
+    }
+    async fn query_projects(
+        &self,
+        _query: &ProjectQuery,
+        _page: &PageRequest,
+    ) -> Result<Page<Project>, SourceError> {
+        Ok(Page::last(Vec::new()))
+    }
+    async fn labels(&self, _page: &PageRequest) -> Result<Page<Label>, SourceError> {
+        Ok(Page::last(Vec::new()))
+    }
+    async fn task_dependencies(
+        &self,
+        _id: &NativeId,
+        _direction: Direction,
+        _page: &PageRequest,
+    ) -> Result<Page<DependencyEdge>, SourceError> {
+        Ok(Page::last(Vec::new()))
+    }
+    async fn project_dependencies(
+        &self,
+        _id: &NativeId,
+        _direction: Direction,
+        _page: &PageRequest,
+    ) -> Result<Page<DependencyEdge>, SourceError> {
+        Ok(Page::last(Vec::new()))
+    }
+}
+
+#[test]
+fn a_source_that_declares_nothing_more_keeps_reverse_and_project_edges_remote() {
+    let id = NativeId::from("t-1");
+    for source in [
+        Box::new(Silent("silent")) as Box<dyn TaskSource>,
+        Box::new(Spelling),
+    ] {
+        assert_eq!(
+            source.edges_version(ItemKind::Project, &id, Direction::DependsOn),
+            None,
+            "{}",
+            source.kind()
+        );
+        assert_eq!(
+            source.edges_version(ItemKind::Task, &id, Direction::DependedOnBy),
+            None
+        );
+        for (kind, named) in [(ItemKind::Task, "task"), (ItemKind::Project, "project")] {
+            let reason = source
+                .reverse_edges_coverage(kind)
+                .reason()
+                .map(str::to_owned)
+                .expect("reverse edges are not covered");
+            assert!(
+                reason.contains(source.kind()) && reason.contains(named),
+                "{reason}"
+            );
+        }
+    }
+    // A task's forward edges answer what the older hook answers.
+    assert_eq!(
+        Silent("silent").edges_version(ItemKind::Task, &id, Direction::DependsOn),
+        None
+    );
+    assert_eq!(
+        Spelling.edges_version(ItemKind::Task, &id, Direction::DependsOn),
+        Some("v|t-1".to_owned())
+    );
+}

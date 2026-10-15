@@ -1,0 +1,19 @@
+# How long one steady-state pass of the pool maintenance onevcs.toml declares takes.
+# Labelled `host`: the figure is wall-clock time on the machine that runs it, so only the
+# uncached `budgets-host` target of this project checks it, and no per-change target does.
+schema_version: 1
+budgets:
+  - id: onetaskgraph-pool-maintenance-seconds
+    description: >-
+      Wall-clock seconds one steady-state run of this repository's declared pool maintenance
+      takes, after one ordinary run's worth of new superseded builds, as cargo-prune-superseded
+      reports it. It protects how long a regular post-run pass holds one of this repository's
+      warm pool slots out of service.
+    labels: [host]
+    measure: reported
+    command: ["./measure.sh"]
+    unit: seconds
+    direction: max
+    threshold: 20
+    # The measurement builds the workspace's test targets twice before the timed pass.
+    timeout_seconds: 3600

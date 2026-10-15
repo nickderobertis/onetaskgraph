@@ -161,6 +161,8 @@ NOT_METHODS = {
     "document_version_coverage": CACHE_ONLY_REASON,
     "attach_cache": CACHE_ONLY_REASON,
     "forward_edges_version": CACHE_ONLY_REASON,
+    "edges_version": CACHE_ONLY_REASON,
+    "reverse_edges_coverage": CACHE_ONLY_REASON,
     "write_context": CACHE_ONLY_REASON,
     "board_context": CACHE_ONLY_REASON,
     "prime_write": CACHE_ONLY_REASON,

@@ -1,0 +1,71 @@
+{
+  "$schema": "../node_modules/nx/schemas/project-schema.json",
+  "name": "pool-maintenance",
+  "projectType": "library",
+  "tags": ["lang:bash", "layer:host"],
+  "//": "The budget domain of the pool maintenance onevcs.toml declares: its budgets.yaml and the measurement that exists only for it. That measurement builds the workspace twice and times a real prune, so it is `budgets-host` alone, which no per-change path reaches: neither this project's `check` nor `just check`, `just test` or `just gate` names it, and the release pull request runs the same check after its gate (`just pool-maintenance-budget`, which runs this command directly, in .github/workflows/ci.yml). It depends on no other project; the only edge is the one `workspace` has to every project.",
+  "targets": {
+    "bootstrap": {
+      "executor": "nx:noop",
+      "//": "The pinned pruner is installed by the justfile's own `bootstrap` recipe, from the one pin the `pool-maintenance` recipe runs, rather than by a target here."
+    },
+    "check": {
+      "executor": "nx:noop"
+    },
+    "format": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bun run biome format --write pool-maintenance"
+      },
+      "cache": false,
+      "//": "Uncached: it rewrites the tree in place."
+    },
+    "format-check": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bun run biome format pool-maintenance"
+      },
+      "inputs": ["{workspaceRoot}/biome.json", "{workspaceRoot}/pool-maintenance/project.json"]
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "options": {
+        "commands": [
+          "bash -n pool-maintenance/measure.sh",
+          "bash -n pool-maintenance/check-measure.sh"
+        ],
+        "parallel": false
+      },
+      "//": "Syntax only: running the check builds a scratch workspace, so it is `test`."
+    },
+    "typecheck": {
+      "executor": "nx:noop",
+      "//": "Declared and empty, because `nx affected` fans out by target name; a shell script has no type-checking step."
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bash pool-maintenance/check-measure.sh"
+      },
+      "inputs": [
+        "default",
+        "{workspaceRoot}/justfile",
+        { "externalDependencies": ["@onebudgetspec/cli"] }
+      ],
+      "//": "Runs the measurement over a scratch workspace of three tiny crates, never this repository's own target directory, so it costs seconds and can sit on the per-change path `budgets-host` stays off. The justfile is an input because the pruner's pin and the recipe the measurement runs are there."
+    },
+    "coverage": {
+      "executor": "nx:noop",
+      "//": "Declared and empty: there is no line coverage for a shell script."
+    },
+    "budgets-host": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bun run onebudgetspec check pool-maintenance/budgets.yaml --label host"
+      },
+      "cache": false,
+      "inputs": ["default", { "externalDependencies": ["@onebudgetspec/cli"] }],
+      "//": "Wall-clock time on the host that runs it, so never cached. Not a dependency of `check` and not a target `just test` selects. Its settings are declared here rather than as nx.json target defaults: Nx treats any nx.json edit as touching every project, which would open the live lanes for a change to this project alone. There is no cached `budgets` target here, because `just test` selects that name on every affected project and this project's only budget is host-labelled."
+    }
+  }
+}

@@ -399,6 +399,16 @@ pub const KIND: &str = "linear";
 /// cannot see it. What guards it is the live journey, which walks a real `projects` page at
 /// exactly this size.
 pub const MAX_PAGE_SIZE: u32 = 100;
+
+/// The rows a projects listing asks for at most while the store's cache stands in front of this
+/// source.
+///
+/// Linear prices `projects` by the rows a request asks for: 70 a row plain, 95 with the relations
+/// page a project's token is read from (`spike-linear-coverage`, about 9,491 at 100 rows), and,
+/// taking the inverse relations page at the relations page's 25, 120 with both. Seventy-four rows
+/// price at 8,880, under the `linear-cache-largest-query-complexity` guard of 9,000; a listing of
+/// more than seventy-four projects takes another request a page, which the hour budgets count.
+pub const PROJECTS_CACHED_PAGE: u32 = 74;
 const DEFAULT_ENDPOINT: &str = "https://api.linear.app/graphql";
 
 /// Exact GraphQL query documents issued by this plugin.
@@ -555,26 +565,59 @@ pub mod graphql {
     /// the issue beside it, so the copy can tell the issue changed between two of them.
     pub const ISSUE_DETAIL: &str = "query($id:String!,$last:Int,$before:String){ issue(id:$id){ id identifier title description url createdAt updatedAt archivedAt state{name type} priority labels{nodes{id name color}} project{id} comments(last:$last,before:$before){ nodes{id body url createdAt updatedAt user{displayName}} pageInfo{hasPreviousPage startCursor} } } }";
     /// The first page of an issue's relations a `lin1` token's relations part is spelled from:
-    /// what [`ISSUES_CACHED`], [`ISSUE_CACHED`] and [`ISSUE_DETAIL_CACHED`] add to the documents
-    /// they stand in for, and nothing else.
+    /// one of what [`ISSUES_CACHED`], [`ISSUE_CACHED`] and [`ISSUE_DETAIL_CACHED`] add to the
+    /// documents they stand in for.
     pub const RELATIONS_PAGE: &str =
         "relations(first:10){nodes{id type relatedIssue{id}} pageInfo{hasNextPage}}";
+    /// The first page of an issue's inverse relations — what depends on it — a `lin1` token's
+    /// inverse part is spelled from, added beside [`RELATIONS_PAGE`].
+    pub const INVERSE_RELATIONS_PAGE: &str =
+        "inverseRelations(first:10){nodes{id type issue{id}} pageInfo{hasNextPage}}";
+    /// The first page of an issue's comments, each its id and when it last changed, a `lin1`
+    /// token's comments part is spelled from: what [`ISSUES_CACHED`], [`ISSUE_CACHED`] and
+    /// [`ISSUE_RELATIONS_CACHED`] add for it. [`ISSUE_DETAIL_CACHED`] spells it from the comments
+    /// page it already reads.
+    pub const COMMENTS_PAGE: &str = "comments(first:10){nodes{id updatedAt} pageInfo{hasNextPage}}";
+    /// The first page of a project's relations a project's `lin1` token's relations part is
+    /// spelled from: one of what [`PROJECTS_CACHED`] and [`PROJECT_CACHED`] add.
+    pub const PROJECT_RELATIONS_PAGE: &str =
+        "relations(first:10){nodes{id type relatedProject{id}} pageInfo{hasNextPage}}";
+    /// The first page of a project's inverse relations — what depends on it — a project's
+    /// `lin1` token's inverse part is spelled from, added beside [`PROJECT_RELATIONS_PAGE`].
+    pub const PROJECT_INVERSE_RELATIONS_PAGE: &str =
+        "inverseRelations(first:10){nodes{id type project{id}} pageInfo{hasNextPage}}";
     /// What [`ISSUE_RELATIONS_CACHED`] adds to [`ISSUE_RELATIONS`]: every part of a task's
-    /// `lin1` token beside the relations page that document already reads, and nothing else.
-    pub const TOKEN_PARTS: &str =
-        "updatedAt identifier url state{name type} labels{nodes{id name color}} project{id}";
+    /// `lin1` token beside the two relations pages that document already reads, and nothing
+    /// else.
+    pub const TOKEN_PARTS: &str = "updatedAt identifier url state{name type} labels{nodes{id name color}} project{id} comments(first:10){nodes{id updatedAt} pageInfo{hasNextPage}}";
+    /// What [`PROJECT_RELATIONS_CACHED`] adds to [`PROJECT_RELATIONS`]: every part of a
+    /// project's `lin1` token beside the relations page that document already reads.
+    pub const PROJECT_TOKEN_PARTS: &str =
+        "updatedAt status{name type} labels{nodes{id name color}}";
     /// [`ISSUES`], sent in its place while the store's cache stands in front of this source:
-    /// with [`RELATIONS_PAGE`], so a listing pins each task to the token a read of it fills.
-    pub const ISSUES_CACHED: &str = "query($first:Int!,$after:String,$filter:IssueFilter){ issues(first:$first,after:$after,filter:$filter){ nodes{id identifier title description url createdAt updatedAt state{name type} priority labels{nodes{id name color}} project{id} relations(first:10){nodes{id type relatedIssue{id}} pageInfo{hasNextPage}}} pageInfo{hasNextPage endCursor} } }";
+    /// with [`COMMENTS_PAGE`], [`RELATIONS_PAGE`] and [`INVERSE_RELATIONS_PAGE`], so a listing
+    /// pins each task to the token a read of it fills.
+    pub const ISSUES_CACHED: &str = "query($first:Int!,$after:String,$filter:IssueFilter){ issues(first:$first,after:$after,filter:$filter){ nodes{id identifier title description url createdAt updatedAt state{name type} priority labels{nodes{id name color}} project{id} comments(first:10){nodes{id updatedAt} pageInfo{hasNextPage}} relations(first:10){nodes{id type relatedIssue{id}} pageInfo{hasNextPage}} inverseRelations(first:10){nodes{id type issue{id}} pageInfo{hasNextPage}}} pageInfo{hasNextPage endCursor} } }";
     /// [`ISSUE`], sent in its place while the store's cache stands in front of this source.
-    pub const ISSUE_CACHED: &str = "query($id:String!){ issue(id:$id){ id identifier title description url createdAt updatedAt archivedAt state{name type} priority labels{nodes{id name color}} project{id} relations(first:10){nodes{id type relatedIssue{id}} pageInfo{hasNextPage}} } }";
+    pub const ISSUE_CACHED: &str = "query($id:String!){ issue(id:$id){ id identifier title description url createdAt updatedAt archivedAt state{name type} priority labels{nodes{id name color}} project{id} comments(first:10){nodes{id updatedAt} pageInfo{hasNextPage}} relations(first:10){nodes{id type relatedIssue{id}} pageInfo{hasNextPage}} inverseRelations(first:10){nodes{id type issue{id}} pageInfo{hasNextPage}} } }";
     /// [`ISSUE_DETAIL`], sent in its place while the store's cache stands in front of this
-    /// source.
-    pub const ISSUE_DETAIL_CACHED: &str = "query($id:String!,$last:Int,$before:String){ issue(id:$id){ id identifier title description url createdAt updatedAt archivedAt state{name type} priority labels{nodes{id name color}} project{id} relations(first:10){nodes{id type relatedIssue{id}} pageInfo{hasNextPage}} comments(last:$last,before:$before){ nodes{id body url createdAt updatedAt user{displayName}} pageInfo{hasPreviousPage startCursor} } } }";
+    /// source: its comments part is spelled from the comments page it already reads.
+    pub const ISSUE_DETAIL_CACHED: &str = "query($id:String!,$last:Int,$before:String){ issue(id:$id){ id identifier title description url createdAt updatedAt archivedAt state{name type} priority labels{nodes{id name color}} project{id} relations(first:10){nodes{id type relatedIssue{id}} pageInfo{hasNextPage}} inverseRelations(first:10){nodes{id type issue{id}} pageInfo{hasNextPage}} comments(last:$last,before:$before){ nodes{id body url createdAt updatedAt user{displayName}} pageInfo{hasPreviousPage startCursor} } } }";
     /// [`ISSUE_RELATIONS`], sent in its place while the store's cache stands in front of this
-    /// source: with [`TOKEN_PARTS`], so a dependency read spells the token its forward edges
-    /// are kept at.
-    pub const ISSUE_RELATIONS_CACHED: &str = "query($id:String!,$first:Int!,$after:String){ issue(id:$id){ updatedAt identifier url state{name type} labels{nodes{id name color}} project{id} description relations(first:$first,after:$after){nodes{id type relatedIssue{id}} pageInfo{hasNextPage endCursor}} inverseRelations(first:$first,after:$after){nodes{id type issue{id}} pageInfo{hasNextPage endCursor}} } }";
+    /// source: with [`TOKEN_PARTS`], so a dependency read in either direction spells the token
+    /// its edges are kept at.
+    pub const ISSUE_RELATIONS_CACHED: &str = "query($id:String!,$first:Int!,$after:String){ issue(id:$id){ updatedAt identifier url state{name type} labels{nodes{id name color}} project{id} comments(first:10){nodes{id updatedAt} pageInfo{hasNextPage}} description relations(first:$first,after:$after){nodes{id type relatedIssue{id}} pageInfo{hasNextPage endCursor}} inverseRelations(first:$first,after:$after){nodes{id type issue{id}} pageInfo{hasNextPage endCursor}} } }";
+    /// [`PROJECTS`], sent in its place while the store's cache stands in front of this source:
+    /// with [`PROJECT_RELATIONS_PAGE`] and [`PROJECT_INVERSE_RELATIONS_PAGE`], so a listing pins
+    /// each project to the token its edges are kept at. Sent at most
+    /// [`super::PROJECTS_CACHED_PAGE`] rows a page.
+    pub const PROJECTS_CACHED: &str = "query($first:Int!,$after:String,$filter:ProjectFilter){ projects(first:$first,after:$after,filter:$filter){ nodes{id name content url createdAt updatedAt status{name type} labels{nodes{id name color}} relations(first:10){nodes{id type relatedProject{id}} pageInfo{hasNextPage}} inverseRelations(first:10){nodes{id type project{id}} pageInfo{hasNextPage}}} pageInfo{hasNextPage endCursor} } }";
+    /// [`PROJECT`], sent in its place while the store's cache stands in front of this source.
+    pub const PROJECT_CACHED: &str = "query($id:String!){ project(id:$id){ id name content url createdAt updatedAt archivedAt status{name type} labels{nodes{id name color}} relations(first:10){nodes{id type relatedProject{id}} pageInfo{hasNextPage}} inverseRelations(first:10){nodes{id type project{id}} pageInfo{hasNextPage}} } }";
+    /// [`PROJECT_RELATIONS`], sent in its place while the store's cache stands in front of this
+    /// source: with [`PROJECT_TOKEN_PARTS`], so a dependency read in either direction spells the
+    /// token its edges are kept at.
+    pub const PROJECT_RELATIONS_CACHED: &str = "query($id:String!,$first:Int!,$after:String){ project(id:$id){ updatedAt status{name type} labels{nodes{id name color}} content relations(first:$first,after:$after){nodes{id type relatedProject{id}} pageInfo{hasNextPage endCursor}} inverseRelations(first:$first,after:$after){nodes{id type project{id}} pageInfo{hasNextPage endCursor}} } }";
     /// Place one comment: which issue it is on, if any.
     ///
     /// `$id` is a nullable `String` because that is what `Query.comment` declares — it also
@@ -1300,10 +1343,14 @@ struct LinearSource {
     /// Whether the store's cache stands in front of this source — [`TaskSource::attach_cache`]
     /// — so its issue reads carry the relations page a `lin1` token's third part is read from.
     attached: std::sync::atomic::AtomicBool,
-    /// The token the response answering the last forward-edge walk of each issue spelled, while
-    /// that walk's pages agree on it; see [`TaskSource::forward_edges_version`].
-    edges_versions: std::sync::Mutex<std::collections::HashMap<NativeId, String>>,
+    /// The token the response answering the last dependency read of each item in each
+    /// direction spelled, while that walk's pages agree on it; see
+    /// [`TaskSource::edges_version`].
+    edges_versions: std::sync::Mutex<std::collections::HashMap<EdgesRead, String>>,
 }
+
+/// One item's dependency read in one direction, as [`LinearSource::edges_versions`] keys it.
+type EdgesRead = (DependencyRoot, Direction, NativeId);
 
 impl LinearSource {
     fn new(
@@ -2197,9 +2244,11 @@ impl LinearSource {
         let mut edges = Vec::new();
         let mut cursor = None;
         loop {
+            // The plain document even with the cache attached: a write's own read of the edges
+            // it replaces fills no entry.
             let page = self
                 .dependencies(
-                    self.issue_document(ISSUE_RELATIONS),
+                    ISSUE_RELATIONS,
                     DependencyRoot::Issue,
                     id,
                     Direction::DependsOn,
@@ -2274,7 +2323,7 @@ impl LinearSource {
                 task,
             }));
         }
-        let Some((before, description)) = self.issue_held(id).await? else {
+        let Some((before, description)) = self.issue_held(id, Read::ForWrite).await? else {
             return Ok(None);
         };
         let (visible, held) = metadata_description(description)?;
@@ -2449,7 +2498,7 @@ impl LinearSource {
             written_is(issue, asked)?;
         }
         optional(&json!({ "issue": issue }), "issue", |v| {
-            map_task(v, &self.name, &self.statuses, self.attached())
+            map_task(v, &self.name, &self.statuses, self.spelling())
         })
     }
 
@@ -2548,10 +2597,12 @@ impl LinearSource {
             let relations = if page.is_null() {
                 let data = self
                     .send(
+                        // The plain documents even with the cache attached: this read neither fills
+                        // an entry nor pins a read, so the token's parts would only add complexity.
                         if matches!(kind, WriteKind::Project) {
                             PROJECT_RELATIONS
                         } else {
-                            self.issue_document(ISSUE_RELATIONS)
+                            ISSUE_RELATIONS
                         },
                         json!({"id":near.0,"first":MAX_PAGE_SIZE,"after":cursor.as_ref().map(|cursor|&cursor.0)}),
                     )
@@ -2749,8 +2800,9 @@ impl LinearSource {
                     // an entry nor pins a read, so the relations page would only add complexity.
                     let data = self.send(if matches!(kind, WriteKind::Project) { PROJECTS } else { ISSUES }, json!({"first":MAX_PAGE_SIZE,"after":cursor.as_ref().map(|cursor|&cursor.0),"filter":filter})).await?;
                     let (items, next) = if matches!(kind, WriteKind::Project) {
-                        let page =
-                            connection(&data, "projects", |v| map_project(v, &self.statuses))?;
+                        let page = connection(&data, "projects", |v| {
+                            map_project(v, &self.statuses, self.spelling())
+                        })?;
                         (
                             page.items
                                 .into_iter()
@@ -2760,7 +2812,7 @@ impl LinearSource {
                         )
                     } else {
                         let page = connection(&data, "issues", |v| {
-                            map_task(v, &self.name, &self.statuses, self.attached())
+                            map_task(v, &self.name, &self.statuses, self.spelling())
                         })?;
                         (
                             page.items
@@ -2787,21 +2839,30 @@ impl LinearSource {
     }
 }
 
-/// Why a Linear task's token does not vouch for its comments, as `spike-linear-coverage`
-/// measured it.
-const COMMENTS_UNCOVERED: &str = "a linear issue's updatedAt moved for none of a comment added, \
-     edited or deleted (0 of 3 in spike-linear-coverage), a digest of its comments fails the \
-     plan's hourly cost test, and an author's display name has no token, so its comments are \
-     always read from linear";
+/// Why a Linear task's token does not vouch for its comments while no cache is attached.
+const COMMENTS_UNATTACHED: &str = "a linear issue's updatedAt moved for none of a comment added, \
+     edited or deleted (0 of 3 in spike-linear-coverage), so its token vouches for its comments \
+     only once the cache attaches the comments page its comments part is read from";
 
 /// Why a Linear task's token does not vouch for its forward edges while no cache is attached.
 const EDGES_UNATTACHED: &str = "a linear issue's relations moved no part of its token \
      (spike-linear-coverage) until the cache attaches the relations page its token is read from";
 
-/// Why a Linear project's token does not vouch for its forward edges.
-const PROJECT_EDGES_UNCOVERED: &str = "a digest of a linear project's relations on the projects \
-     listing would bring it to about 9,491 of linear's 10,000 per-query complexity at 100 rows \
-     (spike-linear-coverage), so its forward edges are always read from linear";
+/// Why a Linear task's token does not vouch for its reverse edges while no cache is attached.
+const REVERSE_EDGES_UNATTACHED: &str = "a relation another linear issue records with this one \
+     moves no part of this issue's token until the cache attaches the inverse relations page its \
+     inverse part is read from";
+
+/// Why a Linear project's token does not vouch for its reverse edges while no cache is attached.
+const PROJECT_REVERSE_EDGES_UNATTACHED: &str = "a linear project's updatedAt moved for 0 of 2 \
+     relation changes another project made with it (spike-linear-coverage), so its token vouches \
+     for its reverse edges only once the cache attaches the inverse relations page its inverse \
+     part is read from";
+
+/// Why a Linear project's token does not vouch for its forward edges while no cache is attached.
+const PROJECT_EDGES_UNATTACHED: &str = "a linear project's updatedAt moved for 0 of 2 relation \
+     changes (spike-linear-coverage), so its token vouches for its forward edges only once the \
+     cache attaches the relations page its relations part is read from";
 
 /// Why a Linear document's token does not vouch for its assets.
 const DOCUMENT_ASSETS_UNCOVERED: &str =
@@ -2812,33 +2873,31 @@ impl TaskSource for LinearSource {
     fn kind(&self) -> &'static str {
         KIND
     }
-    /// A task's fields always, and its forward edges once the cache is attached; never its
-    /// comments. §4.13d of `docs/plugin-protocol.md` states each with what
-    /// `spike-linear-coverage` measured.
+    /// A task's fields always, and its comments and forward edges once the cache is attached.
+    /// §4.13d of `docs/plugin-protocol.md` states each with what `spike-linear-coverage`
+    /// measured.
     fn version_coverage(&self) -> onetaskgraph_plugin_api::VersionCoverage {
-        use onetaskgraph_plugin_api::Coverage;
         onetaskgraph_plugin_api::VersionCoverage {
-            fields: Coverage::Covered,
-            comments: Coverage::Uncovered {
-                reason: COMMENTS_UNCOVERED.to_owned(),
-            },
-            forward_edges: if self.attached() {
-                Coverage::Covered
-            } else {
-                Coverage::Uncovered {
-                    reason: EDGES_UNATTACHED.to_owned(),
-                }
-            },
+            fields: onetaskgraph_plugin_api::Coverage::Covered,
+            comments: self.attached_coverage(COMMENTS_UNATTACHED),
+            forward_edges: self.attached_coverage(EDGES_UNATTACHED),
         }
     }
-    /// A project's fields; never its forward edges.
+    /// A project's fields always, and its forward edges once the cache is attached.
     fn project_version_coverage(&self) -> onetaskgraph_plugin_api::ProjectVersionCoverage {
         onetaskgraph_plugin_api::ProjectVersionCoverage {
             fields: onetaskgraph_plugin_api::Coverage::Covered,
-            forward_edges: onetaskgraph_plugin_api::Coverage::Uncovered {
-                reason: PROJECT_EDGES_UNCOVERED.to_owned(),
-            },
+            forward_edges: self.attached_coverage(PROJECT_EDGES_UNATTACHED),
         }
+    }
+    /// A task's and a project's reverse edges once the cache is attached: the token then carries
+    /// the digest of its first page of inverse relations, which moves for every relation another
+    /// item adds or removes with it.
+    fn reverse_edges_coverage(&self, kind: ItemKind) -> onetaskgraph_plugin_api::Coverage {
+        self.attached_coverage(match kind {
+            ItemKind::Task => REVERSE_EDGES_UNATTACHED,
+            ItemKind::Project => PROJECT_REVERSE_EDGES_UNATTACHED,
+        })
     }
     /// A document's fields; never its asset manifest.
     fn document_version_coverage(&self) -> onetaskgraph_plugin_api::DocumentVersionCoverage {
@@ -2852,15 +2911,26 @@ impl TaskSource for LinearSource {
     fn order_versions(&self, a: &str, b: &str) -> Option<std::cmp::Ordering> {
         change_token::order(a, b)
     }
-    /// From here on, every issue read carries its first page of relations — see
-    /// [`graphql::RELATIONS_PAGE`] — and a dependency read the token's other parts, so a task's
-    /// token covers its forward edges.
+    /// From here on, every issue read carries its first page of comments, relations and inverse
+    /// relations, every project read its first page of relations, and a dependency read the
+    /// token's other parts — see [`graphql::ISSUES_CACHED`] and the documents beside it
+    /// — so a task's token covers its comments and its edges both ways, and a project's its
+    /// forward edges.
     fn attach_cache(&self) {
         self.attached
             .store(true, std::sync::atomic::Ordering::Relaxed);
     }
     fn forward_edges_version(&self, id: &NativeId) -> Option<String> {
-        self.edges_versions().get(id).cloned()
+        self.edges_version(ItemKind::Task, id, Direction::DependsOn)
+    }
+    fn edges_version(&self, kind: ItemKind, id: &NativeId, direction: Direction) -> Option<String> {
+        let root = match kind {
+            ItemKind::Task => DependencyRoot::Issue,
+            ItemKind::Project => DependencyRoot::Project,
+        };
+        self.edges_versions()
+            .get(&(root, direction, id.clone()))
+            .cloned()
     }
     fn capabilities(&self) -> Capabilities {
         Capabilities {
@@ -2932,7 +3002,7 @@ impl TaskSource for LinearSource {
         })
     }
     async fn get_task(&self, id: &NativeId) -> Result<Option<Task>, SourceError> {
-        Ok(self.issue_held(id).await?.map(|(task, _)| task))
+        Ok(self.issue_held(id, Read::Load).await?.map(|(task, _)| task))
     }
     /// Each issue with the page of its comments `comments` names in one request,
     /// [`graphql::ISSUE_DETAIL`]; an issue alone, as [`get_task`](Self::get_task) reads it,
@@ -2946,7 +3016,7 @@ impl TaskSource for LinearSource {
         for id in ids {
             read.push(match comments {
                 Some(page) => self.issue_detail(id, page).await,
-                None => self.issue_held(id).await.map(|held| {
+                None => self.issue_held(id, Read::Load).await.map(|held| {
                     held.map(|(task, _)| TaskDetailRead {
                         task,
                         comments: None,
@@ -2957,16 +3027,19 @@ impl TaskSource for LinearSource {
         read
     }
     async fn get_project(&self, id: &NativeId) -> Result<Option<Project>, SourceError> {
-        Ok(self.project_held(id).await?.map(|(project, _)| project))
+        Ok(self
+            .project_held(id, Read::Load)
+            .await?
+            .map(|(project, _)| project))
     }
     async fn query_tasks(
         &self,
         query: &TaskQuery,
         page: &PageRequest,
     ) -> Result<Page<Task>, SourceError> {
-        let d=self.send(self.issue_document(ISSUES),json!({"first":page.limit.min(MAX_PAGE_SIZE),"after":page.cursor.as_ref().map(|c|&c.0),"filter":self.issue_filter(query)?})).await?;
+        let d=self.send(self.read_document(ISSUES),json!({"first":page.limit.min(MAX_PAGE_SIZE),"after":page.cursor.as_ref().map(|c|&c.0),"filter":self.issue_filter(query)?})).await?;
         let page = connection(&d, "issues", |v| {
-            map_task(v, &self.name, &self.statuses, self.attached())
+            map_task(v, &self.name, &self.statuses, self.spelling())
         })?;
         Ok(Page {
             items: page
@@ -2983,8 +3056,10 @@ impl TaskSource for LinearSource {
         page: &PageRequest,
     ) -> Result<Page<Project>, SourceError> {
         // llmlint: ignore[changed_behavior_has_e2e] The shared CLI journey `every_complete_dataset_source_filters_projects_by_label_status_and_text` asserts that Linear status filtering returns only P-2 and reports native pushdown; `item_reads_and_transport_error_boundaries_are_exercised` separately asserts the serialized `status:{name:{eqIgnoreCase:…}}` predicate the mapping names.
-        let d=self.send(PROJECTS,json!({"first":page.limit.min(MAX_PAGE_SIZE),"after":page.cursor.as_ref().map(|c|&c.0),"filter":self.project_filter(&query.labels,&query.statuses)})).await?;
-        let page = connection(&d, "projects", |v| map_project(v, &self.statuses))?;
+        let d=self.send(self.read_document(PROJECTS),json!({"first":page.limit.min(self.projects_page()),"after":page.cursor.as_ref().map(|c|&c.0),"filter":self.project_filter(&query.labels,&query.statuses)})).await?;
+        let page = connection(&d, "projects", |v| {
+            map_project(v, &self.statuses, self.spelling())
+        })?;
         // A project's text is applied here, over the page Linear answered: `search_title` and
         // `search_content` are declared for every level, and `ProjectFilter` is not asked for
         // a content match — so the rule decides, over every row of the page.
@@ -3018,7 +3093,7 @@ impl TaskSource for LinearSource {
         page: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
         self.dependencies(
-            self.issue_document(ISSUE_RELATIONS),
+            self.read_document(ISSUE_RELATIONS),
             DependencyRoot::Issue,
             id,
             direction,
@@ -3033,7 +3108,7 @@ impl TaskSource for LinearSource {
         page: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
         self.dependencies(
-            PROJECT_RELATIONS,
+            self.read_document(PROJECT_RELATIONS),
             DependencyRoot::Project,
             id,
             direction,
@@ -3576,7 +3651,7 @@ impl TaskSource for LinearSource {
         // go back byte for byte: re-encoding it would be a metadata write nobody asked for.
         // The whole issue is read as `get_task` reads it first, so an issue this source could
         // not read is refused before anything is written rather than overwritten blind.
-        let Some((task, description)) = self.issue_held(id).await? else {
+        let Some((task, description)) = self.issue_held(id, Read::ForWrite).await? else {
             return Ok(None);
         };
         let issue = task.id;
@@ -3642,7 +3717,7 @@ impl TaskSource for LinearSource {
             delivered_by.to_vec(),
         )
         .map_err(|message| SourceError::Refused { message })?;
-        let Some((task, description)) = self.issue_held(id).await? else {
+        let Some((task, description)) = self.issue_held(id, Read::ForWrite).await? else {
             return Ok(None);
         };
         let (_, held) = metadata_description(description.clone())?;
@@ -3665,7 +3740,7 @@ impl TaskSource for LinearSource {
         key: &MetadataKey,
         value: &Value,
     ) -> Result<Option<Task>, SourceError> {
-        let Some((task, description)) = self.issue_held(id).await? else {
+        let Some((task, description)) = self.issue_held(id, Read::ForWrite).await? else {
             return Ok(None);
         };
         let (_, mut slot) = metadata_description(description.clone())?;
@@ -3694,7 +3769,7 @@ impl TaskSource for LinearSource {
         key: &MetadataKey,
         value: &Value,
     ) -> Result<Option<Project>, SourceError> {
-        let Some((project, description)) = self.project_held(id).await? else {
+        let Some((project, description)) = self.project_held(id, Read::ForWrite).await? else {
             return Ok(None);
         };
         let (_, mut slot) = metadata_description(description.clone())?;
@@ -3756,7 +3831,7 @@ impl TaskSource for LinearSource {
         provenance: &Value,
         _answers: &std::collections::BTreeMap<String, Value>,
     ) -> Result<Option<()>, SourceError> {
-        let Some((task, description)) = self.issue_held(id).await? else {
+        let Some((task, description)) = self.issue_held(id, Read::ForWrite).await? else {
             return Ok(None);
         };
         let (_, mut slot) = metadata_description(description.clone())?;
@@ -3800,7 +3875,7 @@ impl TaskSource for LinearSource {
         _answers: &std::collections::BTreeMap<String, Value>,
         assets: &onetaskgraph_plugin_api::AssetWrite,
     ) -> Result<Option<onetaskgraph_plugin_api::AssetsWritten>, SourceError> {
-        let Some((item, held)) = self.issue_held(id).await? else {
+        let Some((item, held)) = self.issue_held(id, Read::ForWrite).await? else {
             return Ok(None);
         };
         let (_, mut metadata) = metadata_description(held)?;
@@ -3849,7 +3924,7 @@ impl TaskSource for LinearSource {
         provenance: &Value,
         _answers: &std::collections::BTreeMap<String, Value>,
     ) -> Result<Option<()>, SourceError> {
-        let Some((project, description)) = self.project_held(id).await? else {
+        let Some((project, description)) = self.project_held(id, Read::ForWrite).await? else {
             return Ok(None);
         };
         let (_, mut slot) = metadata_description(description.clone())?;
@@ -3871,7 +3946,7 @@ impl TaskSource for LinearSource {
         self.targeted_update(id, update).await
     }
 
-    /// The tokens its forward-edge walks spelled, and nothing else: what this source holds
+    /// The tokens its dependency walks spelled, and nothing else: what this source holds
     /// across a command is its [`Vocabulary`] — the team's id, its workflow states and the
     /// workspace's project statuses — which stays valid in normal use and is read afresh when a
     /// name misses. No issue, project, document or search answer outlives the call that read it,
@@ -4010,14 +4085,24 @@ impl LinearSource {
 }
 
 impl LinearSource {
+    /// The spelling this source's tokens take: [`change_token::Spelling::Attached`] while the
+    /// store's cache stands in front of it.
+    fn spelling(&self) -> change_token::Spelling {
+        if self.attached() {
+            change_token::Spelling::Attached
+        } else {
+            change_token::Spelling::Plain
+        }
+    }
+
     /// Whether the store's cache stands in front of this source.
     fn attached(&self) -> bool {
         self.attached.load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    /// The document an issue read sends: `plain`, or — while the cache stands in front of this
-    /// source — its counterpart carrying what a `lin1` token's relations part is read from.
-    fn issue_document(&self, plain: &'static str) -> &'static str {
+    /// The document a read sends: `plain`, or — while the cache stands in front of this source
+    /// — its counterpart carrying what a `lin1` token's parts are read from.
+    fn read_document(&self, plain: &'static str) -> &'static str {
         if !self.attached() {
             return plain;
         }
@@ -4026,53 +4111,106 @@ impl LinearSource {
             ISSUE => graphql::ISSUE_CACHED,
             graphql::ISSUE_DETAIL => graphql::ISSUE_DETAIL_CACHED,
             ISSUE_RELATIONS => graphql::ISSUE_RELATIONS_CACHED,
+            PROJECTS => graphql::PROJECTS_CACHED,
+            PROJECT => graphql::PROJECT_CACHED,
+            PROJECT_RELATIONS => graphql::PROJECT_RELATIONS_CACHED,
             other => other,
+        }
+    }
+
+    /// The most rows a projects listing asks for: [`PROJECTS_CACHED_PAGE`] while the cache
+    /// stands in front of this source, whose relations page prices each row higher, and
+    /// [`MAX_PAGE_SIZE`] otherwise.
+    fn projects_page(&self) -> u32 {
+        if self.attached() {
+            PROJECTS_CACHED_PAGE
+        } else {
+            MAX_PAGE_SIZE
+        }
+    }
+
+    /// [`Coverage::Covered`](onetaskgraph_plugin_api::Coverage::Covered) while the cache stands
+    /// in front of this source, and uncovered for `reason` otherwise.
+    fn attached_coverage(&self, reason: &str) -> onetaskgraph_plugin_api::Coverage {
+        if self.attached() {
+            onetaskgraph_plugin_api::Coverage::Covered
+        } else {
+            onetaskgraph_plugin_api::Coverage::Uncovered {
+                reason: reason.to_owned(),
+            }
         }
     }
 
     fn edges_versions(
         &self,
-    ) -> std::sync::MutexGuard<'_, std::collections::HashMap<NativeId, String>> {
+    ) -> std::sync::MutexGuard<'_, std::collections::HashMap<EdgesRead, String>> {
         // A memo of what responses spelled: one a panic left behind is read as it stands.
         self.edges_versions
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// Note what one page of a forward-edge walk of issue `id` answered, `data` being the
-    /// response: its token, for the walk's first page; and, for a later one, whether it still
-    /// agrees with the token the first page spelled — the recorded far ends' page, read from a
-    /// description a change of which moves the time the token carries, keeps it only while the
-    /// rest of the token is the same, and a page of relations past the first ends it.
-    fn note_edges_version(&self, id: &NativeId, data: &Value, page: WalkPage) {
+    /// Note what one page of a dependency walk of the `root` item `id` in `direction` answered,
+    /// `data` being the response: its token, for the walk's first page; and, for a later one,
+    /// whether it still agrees with the token the first page spelled — the recorded far ends'
+    /// page, read from a long form a change of which moves the time the token carries, keeps it
+    /// only while the rest of the token before its relations part is the same, and a page of
+    /// relations past the first ends it.
+    fn note_edges_version(
+        &self,
+        root: DependencyRoot,
+        direction: Direction,
+        id: &NativeId,
+        data: &Value,
+        page: WalkPage,
+    ) {
         if !self.attached() {
             return;
         }
-        let issue = data.get("issue").unwrap_or(&Value::Null);
+        let item = data.get(root.as_str()).unwrap_or(&Value::Null);
+        let (whole, before_relations) = match root {
+            DependencyRoot::Issue => (
+                change_token::task(item, change_token::Spelling::Attached),
+                change_token::task_before_relations(item),
+            ),
+            DependencyRoot::Project => (
+                change_token::project_token(item, change_token::Spelling::Attached),
+                change_token::project_before_relations(item),
+            ),
+        };
+        let read = (root, direction, id.clone());
         let mut versions = self.edges_versions();
         match page {
-            WalkPage::First => match change_token::task(issue, true) {
+            WalkPage::First => match whole {
                 Some(token) => {
-                    versions.insert(id.clone(), token);
+                    versions.insert(read, token);
                 }
                 None => {
-                    versions.remove(id);
+                    versions.remove(&read);
                 }
             },
             WalkPage::Recorded => {
-                let agrees = versions.get(id).is_some_and(|held| {
-                    change_token::task(issue, false).as_deref()
-                        == Some(change_token::without_relations(held))
+                let agrees = versions.get(&read).is_some_and(|held| {
+                    before_relations.as_deref() == Some(change_token::without_relations(held))
                 });
                 if !agrees {
-                    versions.remove(id);
+                    versions.remove(&read);
                 }
             }
             WalkPage::Later => {
-                versions.remove(id);
+                versions.remove(&read);
             }
         }
     }
+}
+
+/// What one read of an item by id is for, which decides whether an attached cache widens it.
+#[derive(Clone, Copy)]
+enum Read {
+    /// A load a caller asked for, whose answer the cache fills an entry from.
+    Load,
+    /// A write's own read of its target, which fills nothing.
+    ForWrite,
 }
 
 /// Which page of a forward-edge walk a response answered.
@@ -4092,17 +4230,23 @@ impl LinearSource {
     /// scoped to.
     ///
     /// Every read of one issue goes through here, so a status, a content, a metadata and a
-    /// rendering write all answer "no such task" on exactly the terms `get_task` does.
+    /// rendering write all answer "no such task" on exactly the terms `get_task` does. Only a
+    /// [`Read::Load`] sends the document an attached cache widens: a write's own read of its
+    /// target fills no entry, so the token's parts would only add complexity, and the task it
+    /// answers carries no version while the cache is attached.
     async fn issue_held(
         &self,
         id: &NativeId,
+        read: Read,
     ) -> Result<Option<(Task, Option<String>)>, SourceError> {
-        let data = self
-            .send(self.issue_document(ISSUE), json!({"id":id.0}))
-            .await?;
+        let document = match read {
+            Read::Load => self.read_document(ISSUE),
+            Read::ForWrite => ISSUE,
+        };
+        let data = self.send(document, json!({"id":id.0})).await?;
         Ok(optional(&data, "issue", |v| {
             Ok((
-                map_task(v, &self.name, &self.statuses, self.attached())?,
+                map_task(v, &self.name, &self.statuses, self.spelling())?,
                 optional_string(v, "description")?,
             ))
         })?
@@ -4123,15 +4267,18 @@ impl LinearSource {
         }
         let data = self
             .send(
-                self.issue_document(graphql::ISSUE_DETAIL),
+                self.read_document(graphql::ISSUE_DETAIL),
                 json!({"id":id.0,"last":page.limit.min(MAX_PAGE_SIZE),"before":page.cursor.as_ref().map(|c|&c.0)}),
             )
             .await?;
         Ok(optional(&data, "issue", |v| {
-            Ok((
-                map_task(v, &self.name, &self.statuses, self.attached())?,
-                comment_page(v)?,
-            ))
+            let mut task = map_task(v, &self.name, &self.statuses, self.spelling())?;
+            // A page resumed from a cursor is not the whole of the comments, so with the cache
+            // attached — whose token carries their digest — it vouches for no version.
+            if self.attached() && page.cursor.is_some() {
+                task.version = None;
+            }
+            Ok((task, comment_page(v)?))
         })?
         .filter(|(task, _)| self.in_scope(task.project.as_ref()))
         .map(|(task, comments)| TaskDetailRead {
@@ -4145,11 +4292,16 @@ impl LinearSource {
     async fn project_held(
         &self,
         id: &NativeId,
+        read: Read,
     ) -> Result<Option<(Project, Option<String>)>, SourceError> {
-        let data = self.send(PROJECT, json!({"id":id.0})).await?;
+        let document = match read {
+            Read::Load => self.read_document(PROJECT),
+            Read::ForWrite => PROJECT,
+        };
+        let data = self.send(document, json!({"id":id.0})).await?;
         Ok(optional(&data, "project", |v| {
             Ok((
-                map_project(v, &self.statuses)?,
+                map_project(v, &self.statuses, self.spelling())?,
                 optional_string(v, "content")?,
             ))
         })?
@@ -4502,7 +4654,19 @@ impl LinearSource {
         direction: Direction,
         page: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
-        let limit = page.limit.min(MAX_PAGE_SIZE);
+        // A cached document's token vouches only for a first page of at most
+        // `change_token::PAGE` rows, and Linear prices a relations connection by the rows it is
+        // asked for, so a cached read asks for that many: a wider page buys the cache nothing.
+        // An item with more takes another request per page, which the hour budget counts.
+        let ceiling = if matches!(
+            query,
+            graphql::ISSUE_RELATIONS_CACHED | graphql::PROJECT_RELATIONS_CACHED
+        ) {
+            u32::try_from(change_token::PAGE).unwrap_or(MAX_PAGE_SIZE)
+        } else {
+            MAX_PAGE_SIZE
+        };
+        let limit = page.limit.min(ceiling);
         let cursor = page.cursor.as_ref().map(|c| c.0.as_str());
         if let Some(offset) = cursor.and_then(|c| c.strip_prefix(RECORDED_CURSOR)) {
             // This cursor resumes the *forward* tail and only a forward walk ever issues
@@ -4523,9 +4687,7 @@ impl LinearSource {
             let d = self
                 .send(query, json!({"id":id.0,"first":1,"after":null}))
                 .await?;
-            if root == DependencyRoot::Issue {
-                self.note_edges_version(id, &d, WalkPage::Recorded);
-            }
+            self.note_edges_version(root, direction, id, &d, WalkPage::Recorded);
             return Ok(recorded_page(
                 recorded(&d, root, id, &self.name)?,
                 offset,
@@ -4535,14 +4697,12 @@ impl LinearSource {
         let d = self
             .send(query, json!({"id":id.0,"first":limit,"after":cursor}))
             .await?;
-        if root == DependencyRoot::Issue && direction == Direction::DependsOn {
-            let page = if cursor.is_none() {
-                WalkPage::First
-            } else {
-                WalkPage::Later
-            };
-            self.note_edges_version(id, &d, page);
-        }
+        let walked = if cursor.is_none() {
+            WalkPage::First
+        } else {
+            WalkPage::Later
+        };
+        self.note_edges_version(root, direction, id, &d, walked);
         let mut answered = relation_page(&d, root, id, direction)?;
         // Only forwards: the reverse of a recorded edge is derived from the far end, never
         // written down on the near item.
@@ -4655,7 +4815,7 @@ fn map_task(
     v: &Value,
     source: &SourceName,
     statuses: &StatusMapping,
-    attached: bool,
+    spelling: change_token::Spelling,
 ) -> Result<Task, SourceError> {
     let (content, mut metadata) = metadata_description(optional_string(v, "description")?)?;
     let repositories = Repository::from_metadata(&metadata)
@@ -4668,7 +4828,7 @@ fn map_task(
     let delivers = delivery_list(&mut metadata, TaskRef::DELIVERS_KEY, &id, source)?;
     let delivered_by = delivery_list(&mut metadata, TaskRef::DELIVERED_BY_KEY, &id, source)?;
     Ok(Task {
-        version: change_token::task(v, attached),
+        version: change_token::task(v, spelling),
         id,
         // `Issue.identifier` is `String!` and every read of an issue selects it, so a
         // response without one is a response this source cannot read rather than an issue
@@ -4757,7 +4917,13 @@ fn strip_delivery_keys(metadata: &mut std::collections::BTreeMap<String, Value>)
     metadata.remove(TaskRef::DELIVERS_KEY);
     metadata.remove(TaskRef::DELIVERED_BY_KEY);
 }
-fn map_project(v: &Value, statuses: &StatusMapping) -> Result<Project, SourceError> {
+/// Its version is the project's `lin1` token in `spelling`, absent when the response does not
+/// carry every part whole.
+fn map_project(
+    v: &Value,
+    statuses: &StatusMapping,
+    spelling: change_token::Spelling,
+) -> Result<Project, SourceError> {
     let (content, mut metadata) = metadata_description(optional_string(v, "content")?)?;
     strip_delivery_keys(&mut metadata);
     let repositories = Repository::from_metadata(&metadata)
@@ -4765,7 +4931,7 @@ fn map_project(v: &Value, statuses: &StatusMapping) -> Result<Project, SourceErr
     let classification = classification_of(&mut metadata)?;
     let url = optional_string(v, "url")?;
     Ok(Project {
-        version: change_token::project_token(v),
+        version: change_token::project_token(v, spelling),
         id: NativeId(str_at(v, "id")?.into()),
         title: str_at(v, "name")?.into(),
         content,
@@ -4930,7 +5096,7 @@ fn connection<T>(
     let next = page_next(c)?;
     Ok(Page { items, next })
 }
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum DependencyRoot {
     Issue,
     Project,

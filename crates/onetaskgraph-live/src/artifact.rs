@@ -80,7 +80,7 @@
 //! and how a machine fixes `GH_PROJECTS_REPOSITORY` — is that lane's own policy, stated in
 //! `onetaskgraph-github-live`. The janitor's ownership rule is enforced in
 //! `onetaskgraph-live-janitor`: a scratch CI stamp's run must read back `completed`.
-//! Its 24-hour waiting period is a margin, never the authorisation. It is scheduled
+//! That read alone decides; it keeps no waiting period. It is scheduled
 //! cleanup rather than a test lane, so no `test` or `coverage` target runs it.
 //! Linear's machine stamps and lock sweep are unchanged; the janitor never reads Linear.
 

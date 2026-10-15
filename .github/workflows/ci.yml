@@ -199,6 +199,14 @@ jobs:
         # llmlint: ignore[external_service_suite_stays_out_of_the_affected_tier] These targets run only when their own plugin changed, which is the edge; AGENTS.md records why an edge of their own was removed.
         run: just check-generated
 
+      # The release pull request alone, after the gate above passed: the pass-time budget of
+      # the pool maintenance onevcs.toml declares. Its measurement builds the workspace twice,
+      # so no per-change path runs it (pool-maintenance/project.json). The pinned pruner it
+      # runs is already installed by the Bootstrap step above, as on every leg.
+      - name: Pool-maintenance pass-time budget on the release pull request
+        if: github.event_name == 'pull_request' && matrix.os == 'ubuntu-latest' && startsWith(github.head_ref, 'release-plz-')
+        run: just pool-maintenance-budget
+
       # On the default branch, the same gate against the commit this push replaced. A cache
       # is for speed and must never be what makes a broken clean build look green, which is
       # why `just gate` keeps the supply-chain and distribution stages outside selection.

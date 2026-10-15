@@ -11,6 +11,7 @@
 //! - [`linear_vocabulary`]: the one Linear team's vocabulary more than one suite configures;
 //! - [`images`]: the test images every asset journey stores or copies, generated in the test;
 //! - [`clock`]: the simulated clock a spawned binary's pacing and backoff run on;
+//! - [`sdk`]: one script run through either SDK, as a caller of it reads through the binary;
 //!
 //! Not published, and depended on only by path from the test-only e2e members.
 
@@ -22,6 +23,7 @@ pub mod common;
 pub mod fixtures;
 pub mod images;
 pub mod linear_vocabulary;
+pub mod sdk;
 pub mod telemetry;
 
 /// The `onetaskgraph` executable every journey spawns.

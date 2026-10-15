@@ -1069,6 +1069,9 @@ struct Running {
     /// Keyed by the source project and the source the item lands in, because a routed task
     /// lands in its home's member project rather than in the home.
     filings: BTreeMap<(String, SourceName), Option<NativeId>>,
+    /// Every source whose first page of projects this command read to pin them — see
+    /// [`Engine::pin_filing_projects`] — so it is read at most once.
+    projects_paged: BTreeSet<SourceName>,
     /// Every home project this copy has learned the member projects of, by the home's
     /// qualified id: which members it holds, and whether this copy added one.
     homes: BTreeMap<String, Home>,
@@ -3162,6 +3165,9 @@ impl Engine {
             .await?;
         }
 
+        if project.is_none() {
+            self.pin_filing_projects(&planned, running).await;
+        }
         // Resolved once per item, and used by both passes: the repair pass writes the
         // same item again, and re-deriving this there could file it somewhere else.
         let mut filed = Vec::new();
@@ -4512,6 +4518,60 @@ impl Engine {
         Ok(filed)
     }
 
+    /// Pin the projects the items of `planned` are filed under, so the filing lookup's read of
+    /// each — [`Engine::linked_project`] — is answered from the source's cache while unchanged.
+    ///
+    /// Only for a source whose cache stands in front of it, only when the items name at least
+    /// two of its projects this command has not already looked up, and only one page: a
+    /// listing pins every project it carries, and the rest are read by id as they always were.
+    /// So it never costs more than one request over reading each project, and saves one per
+    /// project the page carried beyond the first. A page that fails costs only that request:
+    /// every read it would have pinned is made as before, and reports its own failure.
+    async fn pin_filing_projects(&self, planned: &[Planned], running: &mut Running) {
+        let mut named: BTreeMap<SourceName, BTreeSet<NativeId>> = BTreeMap::new();
+        for item in planned.iter().filter(|item| !item.skipped) {
+            let project = match &item.item {
+                Item::Task(task) => task.project.as_ref(),
+                Item::Document(document) => document.project.as_ref(),
+                Item::Project(_) => None,
+            };
+            let Some(project) = project else { continue };
+            let qualified = GlobalId::new(item.source.source.clone(), project.clone());
+            if running.counterparts.contains_key(&qualified.to_string())
+                || running
+                    .filings
+                    .contains_key(&(qualified.to_string(), item.to.clone()))
+            {
+                continue;
+            }
+            named
+                .entry(item.source.source.clone())
+                .or_default()
+                .insert(project.clone());
+        }
+        for (name, projects) in named {
+            if projects.len() < 2 || !self.caches(&name) || running.projects_paged.contains(&name) {
+                continue;
+            }
+            let Ok(source) = self.readable(&name) else {
+                continue;
+            };
+            let capabilities = source.source().capabilities();
+            if !capabilities.projects.is_native() {
+                continue;
+            }
+            running.projects_paged.insert(name);
+            let page = PageRequest {
+                cursor: None,
+                limit: capabilities.max_page_size.max(1),
+            };
+            let _ = source
+                .source()
+                .query_projects(&ProjectQuery::default(), &page)
+                .await;
+        }
+    }
+
     /// The counterpart a source project has in some source this copy can reach — its home —
     /// when it has one: the one this command landed, the one its own link names, or the one a
     /// walk of each reachable source finds recording it as its origin.
@@ -4707,13 +4767,17 @@ impl Engine {
 
     /// The home project a source project's own `onetaskgraph.copies` names in a source this
     /// copy can reach, when the project it names there still records that source project as
-    /// its origin.
+    /// its origin — or records none, where the source is declared private and the source
+    /// it names is not, because that copy withheld the origin (see [`Engine::target`]).
     ///
     /// The filing lookup's half of following a link: one read of the project at its source
     /// and one of its counterpart by id, in place of a walk of the destination's projects.
     /// A link that names nothing there, or names a project somebody re-pointed, is not a
     /// refusal here as it is for a copy's own target — this only decides where an item is
-    /// filed — so the walk answers instead, exactly as it did before there were links.
+    /// filed — so the walk answers instead, exactly as it did before there were links. A
+    /// withheld link naming nothing is the exception: no origin there can name a private
+    /// project, so the walk would only file the item under an id the destination never held,
+    /// and it is refused as a copy's own stale link is, unless the caller asked to recreate.
     async fn linked_project(
         &self,
         request: &CopyRequest,
@@ -4741,8 +4805,23 @@ impl Engine {
                 .get_project(&link.native)
                 .await
                 .map_err(|error| refused(there, error))?;
-            if named.is_some_and(|there| origin_of(&there.metadata).as_ref() == Some(project)) {
-                return Ok(Some(link));
+            let withheld = self.declared(&project.source)
+                == crate::config::SourceVisibility::Private
+                && self.declared(&reachable) != crate::config::SourceVisibility::Private;
+            match named {
+                Some(there)
+                    if origin_of(&there.metadata).as_ref() == Some(project)
+                        || (withheld && origin_of(&there.metadata).is_none()) =>
+                {
+                    return Ok(Some(link));
+                }
+                None if withheld && !request.recreate => {
+                    return Err(EngineError::StaleLink {
+                        item: project.to_string(),
+                        link: link.to_string(),
+                    });
+                }
+                _ => {}
             }
         }
         Ok(None)

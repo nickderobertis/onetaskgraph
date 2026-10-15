@@ -172,3 +172,117 @@ fn the_telemetry_the_journeys_write_is_what_test_declares_and_budgets_hashes() {
         );
     }
 }
+
+#[test]
+fn the_query_guard_the_cache_journey_reports_is_the_threshold_onebudgetspec_enforces() {
+    let file: Value = serde_saphyr::from_str(&manifest("budgets.yaml")).expect("budgets.yaml");
+    let guard = file["budgets"]
+        .as_array()
+        .expect("a list of budgets")
+        .iter()
+        .find(|budget| budget["id"] == crate::cache_budget::GUARD)
+        .expect("the guard is declared");
+    assert_eq!(
+        guard["threshold"].as_u64(),
+        Some(crate::cache_budget::price::GUARD),
+        "cache_budget::price::GUARD is what {} enforces",
+        crate::cache_budget::GUARD
+    );
+    assert_eq!(guard["direction"], "max");
+}
+
+/// `n` spelled as the protocol document spells a figure: with a comma between each three digits.
+fn grouped(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::new();
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(digit);
+    }
+    out
+}
+
+#[test]
+fn the_protocols_price_table_and_budget_thresholds_are_the_ones_the_budgets_use() {
+    use crate::cache_budget::price as p;
+    let protocol = manifest("../../docs/plugin-protocol.md");
+    let page = onetaskgraph_linear::change_token::PAGE as u64;
+    let projects = u64::from(onetaskgraph_linear::PROJECTS_CACHED_PAGE);
+    let task_pages = p::RELATIONS_PAGE + p::INVERSE_RELATIONS_PAGE + p::COMMENTS_PAGE;
+    let at = |at_100: u64, first: u64| (at_100 * first).div_ceil(100);
+    let row = p::ISSUES_ROW + task_pages;
+    let project_row =
+        p::PROJECTS_ROW + p::PROJECT_RELATIONS_PAGE + p::PROJECT_INVERSE_RELATIONS_PAGE;
+    for line in [
+        format!(
+            "| `ISSUES`, at 100 rows | {} + {} a row: {} | {} + {row} a row: **{}** |",
+            p::ISSUES_BASE,
+            p::ISSUES_ROW,
+            grouped(p::ISSUES_BASE + p::ISSUES_ROW * 100),
+            p::ISSUES_BASE,
+            grouped(p::ISSUES_BASE + row * 100)
+        ),
+        format!("| `ISSUE` | {} | {} |", p::ISSUE, p::ISSUE + task_pages),
+        format!(
+            "| `ISSUE_DETAIL`, at `last:100` | {} | {} |",
+            p::ISSUE_DETAIL,
+            p::ISSUE_DETAIL + p::RELATIONS_PAGE + p::INVERSE_RELATIONS_PAGE
+        ),
+        format!(
+            "| `ISSUE_RELATIONS` | {}, at `first:100` | {}, at `first:{page}` |",
+            p::RELATIONS_AT_100,
+            at(p::RELATIONS_CACHED_AT_100, page) + p::COMMENTS_PAGE
+        ),
+        format!(
+            "| `PROJECTS` | {} a row asked for: {} at 100 | {project_row} a row asked for, at most \
+             {projects}: **{}** |",
+            p::PROJECTS_ROW,
+            grouped(p::PROJECTS_ROW * 100),
+            grouped(project_row * projects)
+        ),
+        format!(
+            "| `PROJECT` | {} | {} |",
+            p::PROJECT,
+            p::PROJECT + p::PROJECT_RELATIONS_PAGE + p::PROJECT_INVERSE_RELATIONS_PAGE
+        ),
+        format!(
+            "| `PROJECT_RELATIONS` | {}, at `first:100` | {}, at `first:{page}` |",
+            p::RELATIONS_AT_100,
+            at(p::RELATIONS_CACHED_AT_100, page)
+        ),
+    ] {
+        assert!(
+            protocol.contains(&line),
+            "docs/plugin-protocol.md §4.13e states `{line}`, the price the hour budget uses"
+        );
+    }
+
+    let file: Value = serde_saphyr::from_str(&manifest("budgets.yaml")).expect("budgets.yaml");
+    let threshold = |id: &str| {
+        file["budgets"]
+            .as_array()
+            .expect("a list of budgets")
+            .iter()
+            .find(|budget| budget["id"] == id)
+            .and_then(|budget| budget["threshold"].as_u64())
+            .unwrap_or_else(|| panic!("{id} has a whole threshold"))
+    };
+    let mut ids: Vec<&str> = crate::cache_budget::ABSOLUTE
+        .iter()
+        .map(|(id, _, _)| *id)
+        .collect();
+    ids.push(crate::cache_budget::GUARD);
+    for id in ids {
+        let stated = protocol
+            .find(&format!("`{id}`"))
+            .map(|at| &protocol[at..(at + id.len() + 80).min(protocol.len())])
+            .unwrap_or_else(|| panic!("docs/plugin-protocol.md names `{id}`"));
+        assert!(
+            stated.contains(&grouped(threshold(id))),
+            "docs/plugin-protocol.md states `{id}`'s threshold, {}, beside it: {stated}",
+            grouped(threshold(id))
+        );
+    }
+}

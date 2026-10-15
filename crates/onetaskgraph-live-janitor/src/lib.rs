@@ -1,7 +1,10 @@
 //! Scheduled residue cleanup, separate from the credentialed test lane.
 //!
 //! Scratch CI artifacts require their owning Actions run to read `completed` immediately
-//! before their delete batch. Machine stamps stay the writing machine's lock sweep's.
+//! before their delete batch, and that read is the whole of the rule: there is no waiting
+//! period, so a finished run's artifacts go on the first pass after it completes, whatever
+//! their age. A board refused for its item count by the live lane must not wait a day for
+//! residue whose run is already over. Machine stamps stay the writing machine's lock sweep's.
 //! Linear keeps its machine stamps and lock sweep everywhere; this janitor never reads it.
 //!
 //! Every REST route, query parameter and response field this crate uses is held to GitHub's
@@ -26,8 +29,6 @@ use onetaskgraph_live::artifact::CiStamp;
 use onetaskgraph_live::{Allowance, Credential, Demand, Metered, affordable};
 use serde_json::{Value, json};
 
-/// A generous delay, never the authorisation for a deletion.
-pub const WAITING_PERIOD: Duration = Duration::from_secs(24 * 60 * 60);
 /// Runtime limits; these are not performance budgets.
 pub const WRITE_LIMIT: usize = 150;
 pub const REST_READ_LIMIT: usize = 250;
@@ -36,7 +37,7 @@ pub const GRAPHQL_READ_LIMIT: usize = 50;
 pub const WRITE_INTERVAL: Duration = Duration::from_secs(1);
 const BATCH_SIZE: usize = 25;
 
-/// The monotonic clock used by pacing. Ownership age uses the invocation's fixed wall clock.
+/// The monotonic clock used by pacing. Ownership reads no clock at all.
 pub trait Clock: Send + Sync {
     fn monotonic(&self) -> Duration;
     fn wait(&self, duration: Duration) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
@@ -75,25 +76,18 @@ pub struct Config {
     graphql: reqwest::Url,
     write_token: Credential,
     actions_token: Credential,
-    now_micros: u64,
 }
 
 impl Config {
-    pub fn github(write_token: &str, actions_token: &str, now_micros: u64) -> Result<Self, String> {
+    pub fn github(write_token: &str, actions_token: &str) -> Result<Self, String> {
         Self::at(
             reqwest::Url::parse("https://api.github.com/").map_err(|e| e.to_string())?,
             write_token,
             actions_token,
-            now_micros,
         )
     }
 
-    pub fn loopback(
-        origin: &str,
-        write_token: &str,
-        actions_token: &str,
-        now_micros: u64,
-    ) -> Result<Self, String> {
+    pub fn loopback(origin: &str, write_token: &str, actions_token: &str) -> Result<Self, String> {
         let origin = reqwest::Url::parse(origin).map_err(|e| e.to_string())?;
         if origin.scheme() != "http"
             || origin.host_str() != Some("127.0.0.1")
@@ -105,21 +99,15 @@ impl Config {
         {
             return Err("offline endpoint must be an HTTP IPv4 loopback origin".into());
         }
-        Self::at(origin, write_token, actions_token, now_micros)
+        Self::at(origin, write_token, actions_token)
     }
 
-    fn at(
-        rest: reqwest::Url,
-        write_token: &str,
-        actions_token: &str,
-        now_micros: u64,
-    ) -> Result<Self, String> {
+    fn at(rest: reqwest::Url, write_token: &str, actions_token: &str) -> Result<Self, String> {
         Ok(Self {
             graphql: rest.join("graphql").map_err(|e| e.to_string())?,
             rest,
             write_token: Credential::new(write_token).ok_or("GH_PROJECTS_TOKEN is required")?,
             actions_token: Credential::new(actions_token).ok_or("GITHUB_TOKEN is required")?,
-            now_micros,
         })
     }
 }
@@ -463,15 +451,10 @@ impl Janitor {
         }
     }
 
-    /// Lists a scratch CI artifact when it has waited at least a day.
+    /// Lists every scratch CI artifact, whatever its age: whether it may go is decided by its
+    /// run's status, read immediately before its delete batch, and by nothing else.
     fn list(&self, stamp: &str, delete: Delete, listed: &mut Listed) {
-        let waited = |micros: u64| {
-            self.config
-                .now_micros
-                .checked_sub(micros)
-                .is_some_and(|age| age >= WAITING_PERIOD.as_micros() as u64)
-        };
-        if let Some(owner) = CiStamp::read(stamp).filter(|o| waited(o.micros())) {
+        if let Some(owner) = CiStamp::read(stamp) {
             listed.push(Artifact { owner, delete });
         }
     }

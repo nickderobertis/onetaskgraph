@@ -17,6 +17,7 @@ mod budget_runner;
 mod cache;
 mod cache_budget;
 mod cache_documents;
+mod cache_parts;
 mod copy_skip;
 mod health;
 mod linear;

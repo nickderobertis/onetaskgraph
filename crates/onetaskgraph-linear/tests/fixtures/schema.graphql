@@ -110,6 +110,13 @@
 # then on and neither selects nor sends a project's `description`, which stays here only as
 # the member Linear still publishes.
 # Only the read/write contract exercised by this plugin is retained.
+#
+# `Issue.comments` gains `first: Int` on 2026-10-14, from the real API's own answer: session 3
+# of `spike-linear-coverage` (branch `nick/otg-cache-everything-versioned-plan/spike-linear-coverage`
+# at 087d4097) sent `ISSUES` selecting `comments(first:10){nodes{id updatedAt}
+# pageInfo{hasNextPage}}` on each row, and Linear answered it with no error and scored it. It is
+# the comments page an attached cache's documents read a token's comments part from, and the
+# published SDK schema the comment contract above was pinned from declares it among the seven.
 type Query {
   "The user's organization."
   organization: Organization!
@@ -171,7 +178,7 @@ type Issue {
   project: Project
   relations(first: Int!, after: String): IssueRelationConnection!
   inverseRelations(first: Int!, after: String): IssueRelationConnection!
-  comments(before: String, last: Int): CommentConnection!
+  comments(before: String, last: Int, first: Int): CommentConnection!
 }
 type Project {
   id: ID!

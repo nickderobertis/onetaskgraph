@@ -19,7 +19,7 @@ use onetaskgraph_plugin_api::{
     Capabilities, Comment, CommentBody, DependencyEdge, Direction, Health, ItemWrite, Label,
     MetadataKey, NativeId, NewComment, Page, PageRequest, Project, ProjectQuery, SecretResolver,
     SourceError, SourceName, SourcePlugin, Task, TaskDetailRead, TaskQuery, TaskRef, TaskSource,
-    TaskUpdate, TaskUpdateOutcome, Visibility, WriteSupport, WriteTarget,
+    TaskUpdate, TaskUpdateOutcome, VersionCoverage, Visibility, WriteSupport, WriteTarget,
 };
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -76,6 +76,11 @@ impl TaskSource for Unsteady {
     }
     fn capabilities(&self) -> Capabilities {
         self.inner.capabilities()
+    }
+    /// Every part: [`Mode::Shifting`] stands for a source whose token moves with its comments,
+    /// which only a token declared to cover them can be taken as.
+    fn version_coverage(&self) -> VersionCoverage {
+        VersionCoverage::whole()
     }
     fn writes(&self) -> WriteSupport {
         self.inner.writes()
