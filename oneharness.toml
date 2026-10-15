@@ -9,7 +9,7 @@ run_mode = "fallback"
 harnesses = ["codex", "claude-code"]
 
 [harness.codex]
-model = "gpt-5.5"
+model = "gpt-6.1-sol"
 
 [harness.claude-code]
 model = "claude-opus-4-8"
