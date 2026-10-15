@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.7.0...onetaskgraph-core-v0.7.1) - 2026-10-15
+
+### Added
+
+- *(cache)* serve Linear comments and dependency reads from the cache ([#3619](https://github.com/nickderobertis/onetaskgraph/pull/3619))
+
+### Fixed
+
+- *(plans)* keep a public task's dependency on a private source's task ([#3630](https://github.com/nickderobertis/onetaskgraph/pull/3630))
+- *(copy)* file a private source's documents under the home its copy link names ([#3625](https://github.com/nickderobertis/onetaskgraph/pull/3625))
+
 ## [0.7.0](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.6.1...onetaskgraph-core-v0.7.0) - 2026-10-14
 
 ### Added

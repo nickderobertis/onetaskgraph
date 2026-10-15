@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1](https://github.com/nickderobertis/onetaskgraph/compare/v0.7.0...v0.7.1) - 2026-10-15
+
+### Added
+
+- *(cache)* serve Linear comments and dependency reads from the cache ([#3619](https://github.com/nickderobertis/onetaskgraph/pull/3619))
+
 ## [0.7.0](https://github.com/nickderobertis/onetaskgraph/compare/v0.6.1...v0.7.0) - 2026-10-14
 
 ### Added
