@@ -581,7 +581,7 @@ copied from, which is what makes the next copy of it an update.
 | `--recreate` | An origin or a link naming an item the destination no longer holds refuses by default, because creating there would duplicate work somebody deleted. This says create instead. |
 | `--create` | `task copy` only: you assert the destination holds no counterpart of any task named — typically because you have just asked it — so each is created without the correspondence lookup, and a GitHub board is sent no origin query. Sound because that query reads an index that lags a fresh write by the same amount whoever asks, so repeating yours could find nothing yours did not. Refused beside `--match-by` or `--recreate`, and for a task whose own link or origin already names an item at the destination, naming that item. |
 | `--match-by KEY` | Delete or corrupt the origin key and neither rule can find the counterpart, so the next copy back creates a new item. This re-establishes the lost correspondence by matching on `title`, or on a metadata key of your choosing, without hand-editing ids. |
-| `--no-tasks` | Copy a project on its own. By default `project copy` copies the project and every task in it, matching each task independently. |
+| `--no-tasks` | Copy a project on its own. By default `project copy` copies the project and every task in it — a home's members' tasks included — matching each task independently. |
 | `--comments` | `task copy` and `project copy`: keep the destination's copies of each task's comments in step with the source's, as [below](#carrying-comments-and-copying-only-what-changed). Without it a copy reads and writes no comment. |
 | `--no-link` | Write nothing at all to the source — no `onetaskgraph.copies` link — and report every link `skipped`. The next copy finds each counterpart by the destination's own `onetaskgraph.origin`. |
 | `--source S`, `--commented-since RFC3339`, `--metadata KEY=VALUE` | `task copy` only, in place of ids: copy what `task list` with the same narrowing answers. Refused beside ids. |
@@ -1587,6 +1587,10 @@ in the response's errors, as any source failure is, never left out in silence. `
 of a home prints its members, and of a member its home. The SDKs spell it
 `task_list(project=..., members=True)` and `taskList({ project, members: true })`.
 
+`project copy` of a home reads its tasks the same way, so the home copied on carries every
+member's tasks with it, and the destination's own routes file each one — under the home there,
+or under the member they create or find.
+
 ## The public boundary
 
 Private work may inform public work, but nothing of it may reach a public destination. Three
@@ -1708,6 +1712,25 @@ source does not hold or cannot read — is refused before anything is written. A
 source read as private, with what it inherits, or one it cannot classify — is the caller asking
 for it to be written, so that write is refused before anything is written rather than quietly
 answering something else.
+
+**A public task's dependency on a private task is kept on the private side.** A copy that
+withholds an edge from a task it lands somewhere not declared private to a task of the copied
+set that lands in a source declared private records that edge on the private task instead,
+under the reserved key `onetaskgraph.depended_on_by`, one entry per dependent's qualified id.
+So a plan whose home is on a public board and whose member project is in a private source keeps
+its order both ways. `task deps` of the public task also asks every source declared private
+which of its tasks record it, a copy of a task filed under a home naming a member in such a
+source asks that source and carries the edge to the private task's counterpart, `task deps
+--direction depended-on-by` of the private task reads what it records, and `project graph`
+draws the edge; a source that cannot answer fails the read rather than leaving the edge out. An
+edge naming a private task the copy does not carry is withheld as before, recorded nowhere,
+because the copy was not asked to write to that task's source. A later copy keeps exactly one
+entry per dependent, takes off a dependent it landed whose edges no longer name that task —
+asking every source declared private which of its tasks record it, so a dependent copied on its
+own with `--member` takes its dropped edge off a task the copy does not carry — and leaves every entry naming a task it did not land as it was; a copy whose dependent names a
+private task its source no longer holds, or holds with a record it cannot read, is refused and
+taken back. Nothing of this reaches the public destination; the home's own
+`onetaskgraph.members` list is unchanged by it.
 
 **Term scope.** Which private repositories a check derives terms from is the caller's to say.
 Every verb that writes takes `--term-scope <host/owner/name>`, repeatable, or

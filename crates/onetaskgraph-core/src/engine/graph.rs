@@ -8,8 +8,9 @@
 //! reports and of the request, so two calls over an unchanged project agree byte for byte.
 //!
 //! Nothing is written down: the tasks are read through the source's own project listing and
-//! each task's forward edges through its own dependency read, exactly as `task list
-//! --project` and `task deps` read them, and the whole graph lives for one call.
+//! each task's forward edges through its own dependency read and what a task of a source
+//! declared private records of it, exactly as `task list --project` and `task deps` read
+//! them, and the whole graph lives for one call.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -432,6 +433,11 @@ impl Engine {
                 if to.kind == ItemKind::Task {
                     edges.insert((to.id, task.id.clone()));
                 }
+            }
+            // And what a task of a source declared private records of this one, which this
+            // task's own source cannot hold without naming it.
+            for prerequisite in self.recorded_prerequisites(&task.id).await? {
+                edges.insert((prerequisite, task.id.clone()));
             }
         }
 
