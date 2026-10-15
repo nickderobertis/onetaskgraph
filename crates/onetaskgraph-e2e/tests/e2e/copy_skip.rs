@@ -120,28 +120,6 @@ impl Stores {
         self.task(id)["metadata"].clone()
     }
 
-    /// Write `key` into the metadata the destination task `id` holds, as its own store keeps
-    /// it — a key nothing a caller types may set.
-    fn plant(&self, id: &str, key: &str, value: &Value) {
-        let (source, native) = id.split_once(':').expect("a qualified id");
-        if source == "second" {
-            self.second.set_metadata(native, key, value.clone());
-            return;
-        }
-        let path = self.task(id)["location"]["path"]
-            .as_str()
-            .expect("a folder task's path")
-            .to_owned();
-        let held = std::fs::read_to_string(&path).expect("the task file");
-        let planted = held.replacen(
-            "\nmetadata:\n",
-            &format!("\nmetadata:\n  {key}: {value}\n"),
-            1,
-        );
-        assert_ne!(planted, held, "the task file holds metadata: {held}");
-        std::fs::write(&path, planted).expect("the task file written");
-    }
-
     fn task(&self, id: &str) -> Value {
         self.json(&["task", "show", id, "--no-comments"])["items"][0]["item"].clone()
     }
@@ -893,25 +871,14 @@ fn canonical(value: &Value) -> String {
 /// recomputed from what the binary reads back of the destination task `id` — its comments
 /// counted when `with_comments`.
 fn documented_digest(stores: &Stores, id: &str, with_comments: bool) -> String {
-    let mut excluded = RECORD_KEYS.to_vec();
-    excluded.push("onetaskgraph.depended_on_by");
-    digest_without(stores, id, with_comments, &excluded)
-}
-
-/// The three keys recording a copy, which the digest never counts.
-const RECORD_KEYS: [&str; 3] = [
-    "onetaskgraph.copied_version",
-    "onetaskgraph.copied_with_comments",
-    "onetaskgraph.copied_destination_version",
-];
-
-/// The documented digest's formula over the destination task `id`, its `metadata` without
-/// each of `excluded`.
-fn digest_without(stores: &Stores, id: &str, with_comments: bool, excluded: &[&str]) -> String {
     let item = stores.json(&["task", "show", id, "--no-comments"])["items"][0]["item"].clone();
     let mut metadata = item["metadata"].as_object().expect("metadata").clone();
-    for key in excluded {
-        metadata.remove(*key);
+    for key in [
+        "onetaskgraph.copied_version",
+        "onetaskgraph.copied_with_comments",
+        "onetaskgraph.copied_destination_version",
+    ] {
+        metadata.remove(key);
     }
     // Each forward edge's far end as the destination itself reports it: its native id for an
     // item of the destination, and its qualified id for one of another source.
@@ -1003,25 +970,10 @@ fn the_recorded_destination_digest_is_the_documented_digest_of_the_destination_a
             "{to}: the comments are inside the digest"
         );
 
-        // The dependents a private task records are kept in step after the copy, so they are
-        // outside the digest: one held at the destination when the copy records it leaves the
-        // record what the formula without them says.
-        let depended_on_by = json!({"board:T-1": {"id": "board:T-1", "kind": "task"}});
-        stores.plant(&copy, "onetaskgraph.depended_on_by", &depended_on_by);
-
         // A copy without `--comments` takes `copied_with_comments` away, and records a digest
         // that leaves the comments out.
         assert_eq!(narrowed(false), copy);
         let metadata = stores.metadata(&copy);
-        assert_eq!(
-            metadata["onetaskgraph.depended_on_by"], depended_on_by,
-            "{to}: the copy keeps the store's own record"
-        );
-        assert_ne!(
-            metadata["onetaskgraph.copied_destination_version"],
-            json!(digest_without(&stores, &copy, false, &RECORD_KEYS)),
-            "{to}: counting the record would have moved the digest"
-        );
         assert!(
             metadata.get("onetaskgraph.copied_with_comments").is_none(),
             "{to}: {metadata:#}"

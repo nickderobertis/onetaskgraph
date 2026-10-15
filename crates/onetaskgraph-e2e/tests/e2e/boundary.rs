@@ -4050,28 +4050,54 @@ fn a_public_task_s_dependency_on_a_private_member_task_is_kept_on_the_private_si
     assert_eq!(edges_of(&store, rollout, "depends-on"), kept);
     assert_eq!(edges_of(&store, consumer, "depended-on-by"), kept);
 
+    // The dependents the private task records are the store's, kept in step after the copy,
+    // so they are outside the digest its copy record holds: a copy by query skips it.
+    let report: Value = serde_json::from_str(&store.ok(&[
+        "task", "copy", "--to", "site", "--source", "draft", "--json",
+    ]))
+    .expect("a copy report");
+    let consumer_outcome = report["items"]
+        .as_array()
+        .expect("the copied items")
+        .iter()
+        .find(|item| item["source"] == "draft:consumer")
+        .expect("the consumer's outcome");
+    assert_eq!(consumer_outcome["skipped"], true, "{consumer_outcome:#}");
+    assert_eq!(tree(&store.folder("vault")), vault, "vault is as it was");
+
     // An entry naming a dependent this copy does not land is the private task's own, and
-    // outlives every copy; the entries for what the copy lands are the copy's to decide.
-    let consumer_file = store
-        .folder("vault")
-        .join("tasks")
-        .join(format!("{consumer_native}.md"));
-    let held = std::fs::read_to_string(&consumer_file).expect("the consumer");
-    std::fs::write(
-        &consumer_file,
-        held.replace(
-            "  onetaskgraph.depended_on_by:\n",
-            "  onetaskgraph.depended_on_by:\n    site:elsewhere:\n      id: site:elsewhere\n      kind: task\n",
-        ),
-    )
-    .expect("a dependent recorded by hand");
-    assert_eq!(
-        edges_of(&store, consumer, "depended-on-by"),
-        vec![
-            ("site:elsewhere".to_owned(), consumer.clone()),
-            (rollout.clone(), consumer.clone())
-        ]
+    // outlives every copy; the entries for what the copy lands are the copy's to decide. A
+    // member copy records one for a dependent that then leaves the plan.
+    store.record(
+        "draft",
+        "tasks",
+        "announce",
+        "title: Announce\nstatus: todo\nproject: goal\ndepends_on: [consumer]",
+        PLAIN,
     );
+    let added = landed_ids(&store.ok(&[
+        "project",
+        "copy",
+        "draft:goal",
+        "--member",
+        "draft:announce",
+        "--member",
+        "draft:consumer",
+        "--to",
+        "site",
+        "--json",
+    ]));
+    let announce = &added["draft:announce"];
+    std::fs::remove_file(store.folder("draft").join("tasks/announce.md"))
+        .expect("the dependent leaves the plan");
+    let mut dependents = edges_of(&store, consumer, "depended-on-by");
+    dependents.sort();
+    let mut wanted = vec![
+        (announce.clone(), consumer.clone()),
+        (rollout.clone(), consumer.clone()),
+    ];
+    wanted.sort();
+    assert_eq!(dependents, wanted);
 
     // Dropping the edge at the draft takes it off the private task on the next copy.
     let draft = store.folder("draft").join("tasks/rollout.md");
@@ -4085,7 +4111,7 @@ fn a_public_task_s_dependency_on_a_private_member_task_is_kept_on_the_private_si
     assert_eq!(edges_of(&store, rollout, "depends-on"), Vec::new());
     assert_eq!(
         edges_of(&store, consumer, "depended-on-by"),
-        vec![("site:elsewhere".to_owned(), consumer.clone())],
+        vec![(announce.clone(), consumer.clone())],
         "only the entry the copy decides is taken off"
     );
 }
