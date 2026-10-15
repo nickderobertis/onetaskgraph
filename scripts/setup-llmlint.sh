@@ -21,8 +21,8 @@
 #   2. In a Claude Code session, persists PATH (so the freshly installed binary
 #      resolves) into CLAUDE_ENV_FILE so later Bash calls inherit it.
 #
-# Harness selection: the committed `oneharness.toml` is in fallback mode (codex
-# primary, claude-code secondary, each on the model it names), so llmlint runs the primary
+# Harness selection: the committed `oneharness.toml` is in fallback mode (codex +
+# gpt-6.1-sol primary, claude-code + opus-4.8 secondary), so llmlint runs the primary
 # for a contributor with Codex authenticated and falls through to claude-code in a
 # Claude Code session where codex is absent — no `ONEHARNESS_*` override needed
 # (one would only clobber the fallback list). If your fallback order can't select
