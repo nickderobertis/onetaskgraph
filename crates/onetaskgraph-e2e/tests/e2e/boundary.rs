@@ -4412,6 +4412,71 @@ fn a_member_copy_records_its_dependency_on_a_private_task_an_earlier_copy_landed
 }
 
 #[test]
+fn a_member_copy_of_a_dependent_alone_takes_its_dropped_edge_off_the_private_task() {
+    let store = routed_plan_in("plan");
+    let landed = landed_ids(&store.ok(&["project", "copy", "plan:goal", "--to", "site", "--json"]));
+    let (consumer, rollout) = (&landed["plan:consumer"], &landed["plan:rollout"]);
+    assert_eq!(
+        edges_of(&store, consumer, "depended-on-by"),
+        vec![(rollout.clone(), consumer.clone())]
+    );
+
+    // The edge is dropped at the draft, and only its dependent is copied again: the private
+    // task it named is not in the copy, and still has the entry taken off.
+    let draft = store.folder("plan").join("tasks/rollout.md");
+    let authored = std::fs::read_to_string(&draft).expect("the draft rollout");
+    std::fs::write(
+        &draft,
+        authored.replace("depends_on: [consumer]", "depends_on: []"),
+    )
+    .expect("the edge dropped");
+    let vault = store.folder("vault");
+    let consumer_file = vault.join("tasks").join(format!(
+        "{}.md",
+        consumer.strip_prefix("vault:").expect("a vault id")
+    ));
+    let before = std::fs::read_to_string(&consumer_file).expect("the consumer");
+    assert!(before.contains("depended_on_by"), "{before}");
+    let again = landed_ids(&store.ok(&[
+        "project",
+        "copy",
+        "plan:goal",
+        "--member",
+        "plan:rollout",
+        "--to",
+        "site",
+        "--json",
+    ]));
+    assert!(!again.contains_key("plan:consumer"), "{again:?}");
+    assert_eq!(&again["plan:rollout"], rollout);
+    assert_eq!(edges_of(&store, rollout, "depends-on"), Vec::new());
+    assert_eq!(edges_of(&store, consumer, "depended-on-by"), Vec::new());
+    let after = std::fs::read_to_string(&consumer_file).expect("the consumer");
+    assert!(!after.contains("depended_on_by"), "{after}");
+    assert!(after.contains("Quiet consumer"), "{after}");
+    for (path, bytes) in tree(&store.folder("site")) {
+        let text = String::from_utf8(bytes).expect("a text record");
+        if path.contains("tasks") {
+            assert!(!text.contains("vault"), "{path}:\n{text}");
+        }
+    }
+
+    // A third copy of the dependent alone finds nothing left to take off, and writes nothing
+    // to the private side.
+    let held = tree(&vault);
+    store.ok(&[
+        "project",
+        "copy",
+        "plan:goal",
+        "--member",
+        "plan:rollout",
+        "--to",
+        "site",
+    ]);
+    assert_eq!(tree(&vault), held, "vault is as the second copy left it");
+}
+
+#[test]
 fn a_copy_onto_a_private_task_whose_record_cannot_be_read_is_refused_and_taken_back() {
     let store = routed_plan();
     let landed =

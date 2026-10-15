@@ -4973,15 +4973,34 @@ impl Engine {
     /// of the task and one write of it, through its own source, every other member as the
     /// source holds it.
     ///
+    /// A task of a source declared private that an earlier copy recorded a dependent this copy
+    /// landed on, and that this copy neither landed nor found named, is found by asking each
+    /// source that may record one, and has that dependent taken off: the dependent's edges no
+    /// longer name it, and this copy decides that dependent's entries wherever they are kept —
+    /// so a dependent copied on its own, without the task it used to depend on, does not leave
+    /// the removed edge readable from the far end.
+    ///
     /// # Errors
     ///
     /// [`EngineError::NoSuchTask`] for a task its source no longer holds that a dependent this
-    /// copy landed depends on, and whatever its source refuses.
+    /// copy landed depends on, a record that does not say what it names, and whatever its
+    /// source refuses.
     async fn record_dependents(
         &self,
-        recordings: Recordings,
+        mut recordings: Recordings,
         journal: &mut Journal,
     ) -> Result<(), EngineError> {
+        for dependent in recordings.decided.iter() {
+            for at in self.recorded_prerequisites(dependent).await? {
+                if !recordings.each.iter().any(|recording| recording.at == at) {
+                    recordings.each.push(Recording {
+                        at,
+                        named: Dependents::default(),
+                        held: None,
+                    });
+                }
+            }
+        }
         for recording in &recordings.each {
             // A task this copy landed was read as it landed, so one already recording what it
             // is to is not read again.
