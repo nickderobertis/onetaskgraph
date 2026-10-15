@@ -14,11 +14,18 @@
 //!   never served.
 //! - **A task's forward edges** are served only where the source's token covers them: from the
 //!   task's entry, or from an entry of their own kept at the version the source's dependency
-//!   read spelled ([`TaskSource::forward_edges_version`]). Every reverse read is sent.
+//!   read spelled ([`TaskSource::edges_version`]). **A project's forward edges, and a task's
+//!   and a project's reverse ones,** are served on the same terms from an entry of their own,
+//!   where the source's coverage says its token covers them
+//!   ([`ProjectVersionCoverage::forward_edges`], [`TaskSource::reverse_edges_coverage`]).
+//! - **A task's comments** are served from the task's entry where the source's token covers
+//!   them. A later page of comments is never served or kept, since no one page past the first is
+//!   the whole of them.
 //! - **An image asset's bytes** are served only for a manifest the cache holds at a covered
 //!   version, by the digest it names, and only when the kept bytes still hash to it.
-//! - **A write** is sent, and leaves every entry naming its item unserveable — unless it was an
-//!   expected task write, when the source is primed with what the entry kept so it need not read
+//! - **A write** is sent, and leaves every entry naming its item unserveable — and, where it can
+//!   change a relation recorded on another item, every entry of the edges that relation reaches
+//!   — unless it was an expected task write, when the source is primed with what the entry kept so it need not read
 //!   first, and the entry is advanced to what the write's own last response showed whole, when it
 //!   showed it.
 
@@ -38,7 +45,7 @@ use onetaskgraph_plugin_api::{
 };
 use serde_json::Value;
 
-use super::kinds::{ByteDigest, DocumentEntry, KIND_ENTRY_SCHEMA};
+use super::kinds::{ByteDigest, DocumentEntry, EdgeKind, KIND_ENTRY_SCHEMA};
 use super::{
     CacheLocation, CacheUse, ENTRY_SCHEMA, Entry, ExpectedWrite, Priming, SourceCache,
     WriteFallback, WritePart, WriteResult,
@@ -255,8 +262,16 @@ impl CachedSource {
             Vec::with_capacity(ids.len());
         let mut unread = Vec::new();
         let mut misses = Vec::new();
+        // A later page of comments is never the whole of them, so it is neither served from an
+        // entry, which holds them whole, nor kept as if it were.
+        let later = page.is_some_and(|page| page.cursor.is_some());
         for id in ids {
-            let usable = self.servable(id, page.is_some()).and_then(|entry| {
+            let usable = if later {
+                Err(Miss::Behind)
+            } else {
+                self.servable(id, page.is_some())
+            };
+            let usable = usable.and_then(|entry| {
                 let fits = page.is_none_or(|page| {
                     entry
                         .comments
@@ -328,7 +343,9 @@ impl CachedSource {
                     // the engine's to refuse, and nothing of it reaches this task's entry.
                     Ok(Some(detail)) if detail.task.id == *id => {
                         let comments = match &detail.comments {
-                            Some(Ok(Some(page))) if page.next.is_none() => Some(page.items.clone()),
+                            Some(Ok(Some(page))) if page.next.is_none() && !later => {
+                                Some(page.items.clone())
+                            }
                             _ => None,
                         };
                         self.missed(id, miss, detail.task.version.as_deref());
@@ -687,8 +704,97 @@ impl CachedSource {
             return Some(edges);
         }
         let pin = self.pin(id)?;
-        let entry = self.cache.read_edges(id)?;
+        let entry = self.cache.read_edges(EdgeKind::TaskForward, id)?;
         self.fresh(&entry.version, &pin).then_some(entry.edges)
+    }
+
+    /// The `kind` item `id`'s reverse edges, when the source's token covers them and the cache
+    /// holds them, in an entry of their own, at a version a pin of the item vouches for.
+    fn held_reverse_edges(&self, kind: ItemKind, id: &NativeId) -> Option<Vec<DependencyEdge>> {
+        self.inner
+            .reverse_edges_coverage(kind)
+            .reason()
+            .is_none()
+            .then_some(())?;
+        let (pin, edges) = match kind {
+            ItemKind::Task => (self.pin(id)?, EdgeKind::TaskReverse),
+            ItemKind::Project => (self.project_pin(id)?, EdgeKind::ProjectReverse),
+        };
+        let entry = self.cache.read_edges(edges, id)?;
+        self.fresh(&entry.version, &pin).then_some(entry.edges)
+    }
+
+    /// One reverse-edge read of the `kind` item `id`: answered from the cache only from its first
+    /// page, which is all an entry of them holds, and kept only when one response answered every
+    /// edge.
+    async fn read_reverse(
+        &self,
+        kind: ItemKind,
+        id: &NativeId,
+        page: &PageRequest,
+    ) -> Result<Page<DependencyEdge>, SourceError> {
+        if page.cursor.is_none()
+            && let Some(edges) = self
+                .held_reverse_edges(kind, id)
+                .filter(|edges| edges.len() <= page.limit as usize)
+        {
+            return Ok(Page {
+                items: edges,
+                next: None,
+            });
+        }
+        let read = match kind {
+            ItemKind::Task => {
+                self.inner
+                    .task_dependencies(id, Direction::DependedOnBy, page)
+                    .await?
+            }
+            ItemKind::Project => {
+                self.inner
+                    .project_dependencies(id, Direction::DependedOnBy, page)
+                    .await?
+            }
+        };
+        let edges = match kind {
+            ItemKind::Task => EdgeKind::TaskReverse,
+            ItemKind::Project => EdgeKind::ProjectReverse,
+        };
+        if page.cursor.is_none()
+            && read.next.is_none()
+            && self.inner.reverse_edges_coverage(kind).reason().is_none()
+            && let Some(version) = self.inner.edges_version(kind, id, Direction::DependedOnBy)
+        {
+            self.cache.write_edges(edges, id, &version, &read.items);
+        }
+        Ok(read)
+    }
+
+    /// Project `id`'s forward edges, when the source's token covers them and the cache holds
+    /// them, in an entry of their own, at a version a pin of the project vouches for.
+    fn held_project_edges(&self, id: &NativeId) -> Option<Vec<DependencyEdge>> {
+        self.cache
+            .project_coverage
+            .forward_edges
+            .reason()
+            .is_none()
+            .then_some(())?;
+        let pin = self.project_pin(id)?;
+        let entry = self.cache.read_edges(EdgeKind::ProjectForward, id)?;
+        self.fresh(&entry.version, &pin).then_some(entry.edges)
+    }
+
+    /// Run one write that can change a relation recorded on items other than the one it names,
+    /// every `kind` edges entry taken out of service before anything is sent — the write
+    /// refused, sending nothing, when that cannot be done — and left unserveable after it.
+    async fn relating<T>(
+        &self,
+        kind: EdgeKind,
+        write: impl Future<Output = Result<T, SourceError>>,
+    ) -> Result<T, SourceError> {
+        self.cache.retire_edges_before_write(kind)?;
+        let written = write.await;
+        self.cache.invalidate_every(kind);
+        written
     }
 
     /// Record one page of a forward-edge walk of task `id` from the source, `so_far` the edges
@@ -698,8 +804,12 @@ impl CachedSource {
     /// answered the whole walk, with the task's entry at the version it was read at in this
     /// command. A walk of several pages that spelled no version may have read them at several,
     /// so it is kept nowhere.
+    ///
+    /// A project's walk is kept only in an entry of its own: a project has no task entry to keep
+    /// it beside.
     fn walked(
         &self,
+        kind: ItemKind,
         id: &NativeId,
         so_far: Option<Vec<DependencyEdge>>,
         read: &Page<DependencyEdge>,
@@ -707,19 +817,68 @@ impl CachedSource {
         let one_response = so_far.is_none();
         let mut so_far = so_far.unwrap_or_default();
         so_far.extend(read.items.iter().cloned());
+        let walk = (kind, id.clone());
         if let Some(next) = &read.next {
             self.cache
                 .command()
                 .walking
-                .insert(id.clone(), (so_far, next.clone()));
+                .insert(walk, (so_far, next.clone()));
             return;
         }
-        self.cache.command().walking.remove(id);
-        match self.inner.forward_edges_version(id) {
-            Some(version) => self.cache.write_edges(id, &version, &so_far),
-            None if one_response => self.complete(id, None, Some(&so_far)),
+        self.cache.command().walking.remove(&walk);
+        let edges = match kind {
+            ItemKind::Project => EdgeKind::ProjectForward,
+            ItemKind::Task => EdgeKind::TaskForward,
+        };
+        match self.inner.edges_version(kind, id, Direction::DependsOn) {
+            Some(version) => self.cache.write_edges(edges, id, &version, &so_far),
+            None if one_response && kind == ItemKind::Task => {
+                self.complete(id, None, Some(&so_far));
+            }
             None => {}
         }
+    }
+
+    /// One forward-edge read of the `kind` item `id` from the source, continuing — and, once it
+    /// ends, keeping — the walk its first page began in this command, when it resumes exactly
+    /// where that page left off.
+    async fn walk_forward(
+        &self,
+        kind: ItemKind,
+        id: &NativeId,
+        page: &PageRequest,
+    ) -> Result<Page<DependencyEdge>, SourceError> {
+        let read = |page| async move {
+            match kind {
+                ItemKind::Task => {
+                    self.inner
+                        .task_dependencies(id, Direction::DependsOn, page)
+                        .await
+                }
+                ItemKind::Project => {
+                    self.inner
+                        .project_dependencies(id, Direction::DependsOn, page)
+                        .await
+                }
+            }
+        };
+        let Some(cursor) = &page.cursor else {
+            let answered = read(page).await?;
+            self.walked(kind, id, None, &answered);
+            return Ok(answered);
+        };
+        let so_far = {
+            let mut command = self.cache.command();
+            match command.walking.remove(&(kind, id.clone())) {
+                Some((so_far, next)) if next == *cursor => Some(so_far),
+                _ => None,
+            }
+        };
+        let answered = read(page).await?;
+        if let Some(so_far) = so_far {
+            self.walked(kind, id, Some(so_far), &answered);
+        }
+        Ok(answered)
     }
 
     /// Run one write naming `id`, every entry naming it taken out of service before anything is
@@ -796,6 +955,14 @@ impl TaskSource for CachedSource {
 
     fn forward_edges_version(&self, id: &NativeId) -> Option<String> {
         self.inner.forward_edges_version(id)
+    }
+
+    fn edges_version(&self, kind: ItemKind, id: &NativeId, direction: Direction) -> Option<String> {
+        self.inner.edges_version(kind, id, direction)
+    }
+
+    fn reverse_edges_coverage(&self, kind: ItemKind) -> onetaskgraph_plugin_api::Coverage {
+        self.inner.reverse_edges_coverage(kind)
     }
 
     fn write_context(&self, id: &NativeId) -> Option<Value> {
@@ -948,41 +1115,25 @@ impl TaskSource for CachedSource {
         page: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
         self.prime_expected(id);
-        // A reverse read, and every read of a source whose token does not cover a task's
-        // forward edges, goes to the source — which answers a write expecting the task from
-        // what it was primed with.
-        if direction != Direction::DependsOn || self.cache.coverage.forward_edges.reason().is_some()
-        {
+        if direction == Direction::DependedOnBy {
+            return self.read_reverse(ItemKind::Task, id, page).await;
+        }
+        // Every read of a source whose token does not cover a task's forward edges goes to the
+        // source — which answers a write expecting the task from what it was primed with.
+        if self.cache.coverage.forward_edges.reason().is_some() {
             return self.inner.task_dependencies(id, direction, page).await;
         }
-        let Some(cursor) = &page.cursor else {
-            if let Some(edges) = self
+        if page.cursor.is_none()
+            && let Some(edges) = self
                 .held_edges(id)
                 .filter(|edges| edges.len() <= page.limit as usize)
-            {
-                return Ok(Page {
-                    items: edges,
-                    next: None,
-                });
-            }
-            let read = self.inner.task_dependencies(id, direction, page).await?;
-            self.walked(id, None, &read);
-            return Ok(read);
-        };
-        // A later page continues the walk its first page began only when it resumes exactly
-        // where that page left off.
-        let so_far = {
-            let mut command = self.cache.command();
-            match command.walking.remove(id) {
-                Some((so_far, next)) if next == *cursor => Some(so_far),
-                _ => None,
-            }
-        };
-        let read = self.inner.task_dependencies(id, direction, page).await?;
-        if let Some(so_far) = so_far {
-            self.walked(id, Some(so_far), &read);
+        {
+            return Ok(Page {
+                items: edges,
+                next: None,
+            });
         }
-        Ok(read)
+        self.walk_forward(ItemKind::Task, id, page).await
     }
 
     async fn project_dependencies(
@@ -991,7 +1142,25 @@ impl TaskSource for CachedSource {
         direction: Direction,
         page: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
-        self.inner.project_dependencies(id, direction, page).await
+        if direction == Direction::DependedOnBy {
+            return self.read_reverse(ItemKind::Project, id, page).await;
+        }
+        // Every forward read of a source whose token does not cover a project's goes to the
+        // source.
+        if self.cache.project_coverage.forward_edges.reason().is_some() {
+            return self.inner.project_dependencies(id, direction, page).await;
+        }
+        if page.cursor.is_none()
+            && let Some(edges) = self
+                .held_project_edges(id)
+                .filter(|edges| edges.len() <= page.limit as usize)
+        {
+            return Ok(Page {
+                items: edges,
+                next: None,
+            });
+        }
+        self.walk_forward(ItemKind::Project, id, page).await
     }
 
     fn writes(&self) -> WriteSupport {
@@ -999,15 +1168,21 @@ impl TaskSource for CachedSource {
     }
 
     async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
-        self.write(write.target.as_ref(), || {
-            Box::pin(self.inner.write_task(write))
-        })
+        self.relating(
+            EdgeKind::TaskReverse,
+            self.write(write.target.as_ref(), || {
+                Box::pin(self.inner.write_task(write))
+            }),
+        )
         .await
     }
 
     async fn write_project(&self, write: &ItemWrite<Project>) -> Result<NativeId, SourceError> {
-        self.retiring(write.target.as_ref(), self.inner.write_project(write))
-            .await
+        self.relating(
+            EdgeKind::ProjectReverse,
+            self.retiring(write.target.as_ref(), self.inner.write_project(write)),
+        )
+        .await
     }
 
     async fn check_status_write(
@@ -1113,8 +1288,13 @@ impl TaskSource for CachedSource {
         id: &NativeId,
         update: &TaskUpdate,
     ) -> Result<Option<TaskUpdateOutcome>, SourceError> {
-        self.write(Some(id), || Box::pin(self.inner.update_task(id, update)))
-            .await
+        let write = self.write(Some(id), || Box::pin(self.inner.update_task(id, update)));
+        // Only an update naming dependencies writes a relation, which the far end records too.
+        if update.depends_on.is_some() {
+            self.relating(EdgeKind::TaskReverse, write).await
+        } else {
+            write.await
+        }
     }
 
     async fn set_project_metadata(
@@ -1138,12 +1318,22 @@ impl TaskSource for CachedSource {
     }
 
     async fn delete_task(&self, id: &NativeId) -> Result<(), SourceError> {
-        self.write(Some(id), || Box::pin(self.inner.delete_task(id)))
-            .await
+        self.relating(
+            EdgeKind::TaskReverse,
+            self.write(Some(id), || Box::pin(self.inner.delete_task(id))),
+        )
+        .await
     }
 
     async fn delete_project(&self, id: &NativeId) -> Result<(), SourceError> {
-        self.retiring(Some(id), self.inner.delete_project(id)).await
+        self.relating(
+            EdgeKind::ProjectReverse,
+            self.relating(
+                EdgeKind::ProjectForward,
+                self.retiring(Some(id), self.inner.delete_project(id)),
+            ),
+        )
+        .await
     }
 
     async fn get_document(&self, id: &NativeId) -> Result<Option<Document>, SourceError> {
@@ -1312,9 +1502,12 @@ impl TaskSource for CachedSource {
         write: &ItemWrite<Task>,
         answers: &BTreeMap<String, Value>,
     ) -> Result<NativeId, SourceError> {
-        self.write(write.target.as_ref(), || {
-            Box::pin(self.inner.write_task_rendered(write, answers))
-        })
+        self.relating(
+            EdgeKind::TaskReverse,
+            self.write(write.target.as_ref(), || {
+                Box::pin(self.inner.write_task_rendered(write, answers))
+            }),
+        )
         .await
     }
 
@@ -1335,9 +1528,12 @@ impl TaskSource for CachedSource {
         write: &ItemWrite<Project>,
         answers: &BTreeMap<String, Value>,
     ) -> Result<NativeId, SourceError> {
-        self.retiring(
-            write.target.as_ref(),
-            self.inner.write_project_rendered(write, answers),
+        self.relating(
+            EdgeKind::ProjectReverse,
+            self.retiring(
+                write.target.as_ref(),
+                self.inner.write_project_rendered(write, answers),
+            ),
         )
         .await
     }
@@ -1457,9 +1653,12 @@ impl TaskSource for CachedSource {
         answers: Option<&BTreeMap<String, Value>>,
         assets: &AssetWrite,
     ) -> Result<AssetsWritten, SourceError> {
-        self.write(write.target.as_ref(), || {
-            Box::pin(self.inner.write_task_with_assets(write, answers, assets))
-        })
+        self.relating(
+            EdgeKind::TaskReverse,
+            self.write(write.target.as_ref(), || {
+                Box::pin(self.inner.write_task_with_assets(write, answers, assets))
+            }),
+        )
         .await
     }
 
@@ -1771,7 +1970,9 @@ mod tests {
             .expect("the second page");
         (
             first.items.len() + second.items.len(),
-            cache.read_edges(&id("T-1")).is_some(),
+            cache
+                .read_edges(EdgeKind::TaskForward, &id("T-1"))
+                .is_some(),
         )
     }
 
@@ -1788,6 +1989,179 @@ mod tests {
             walk_resumed_from(dir.path(), "elsewhere").await,
             (2, false),
             "one resumed from another cursor answers what the source answers and keeps nothing"
+        );
+    }
+
+    /// An in-memory source whose detail read of any task answers it at `v1` with one comment,
+    /// `C-<page>`: the first page's `C-1` with no further page, and a page resumed from a cursor
+    /// `C-2`, the last of them.
+    struct Paged {
+        inner: InMemorySource,
+        reads: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl TaskSource for Paged {
+        fn kind(&self) -> &'static str {
+            self.inner.kind()
+        }
+        fn capabilities(&self) -> Capabilities {
+            self.inner.capabilities()
+        }
+        async fn health(&self) -> Result<Health, SourceError> {
+            self.inner.health().await
+        }
+        async fn get_task(&self, id: &NativeId) -> Result<Option<Task>, SourceError> {
+            Ok(Some(task(id.as_str(), "v1")))
+        }
+        async fn get_task_details(
+            &self,
+            ids: &[NativeId],
+            comments: Option<&PageRequest>,
+        ) -> Vec<Result<Option<TaskDetailRead>, SourceError>> {
+            self.reads
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let page = if comments.is_some_and(|page| page.cursor.is_some()) {
+                "C-2"
+            } else {
+                "C-1"
+            };
+            ids.iter()
+                .map(|id| {
+                    Ok(Some(TaskDetailRead {
+                        task: task(id.as_str(), "v1"),
+                        comments: comments.map(|_| {
+                            Ok(Some(Page {
+                                items: vec![Comment {
+                                    id: NativeId::from(page),
+                                    author: None,
+                                    created_at: None,
+                                    updated_at: None,
+                                    body: page.to_owned(),
+                                    url: None,
+                                    origin: None,
+                                }],
+                                next: None,
+                            }))
+                        }),
+                    }))
+                })
+                .collect()
+        }
+        async fn get_project(&self, id: &NativeId) -> Result<Option<Project>, SourceError> {
+            self.inner.get_project(id).await
+        }
+        async fn query_tasks(
+            &self,
+            query: &TaskQuery,
+            page: &PageRequest,
+        ) -> Result<Page<Task>, SourceError> {
+            self.inner.query_tasks(query, page).await
+        }
+        async fn query_projects(
+            &self,
+            query: &ProjectQuery,
+            page: &PageRequest,
+        ) -> Result<Page<Project>, SourceError> {
+            self.inner.query_projects(query, page).await
+        }
+        async fn labels(&self, page: &PageRequest) -> Result<Page<Label>, SourceError> {
+            self.inner.labels(page).await
+        }
+        async fn task_dependencies(
+            &self,
+            id: &NativeId,
+            direction: Direction,
+            page: &PageRequest,
+        ) -> Result<Page<DependencyEdge>, SourceError> {
+            self.inner.task_dependencies(id, direction, page).await
+        }
+        async fn project_dependencies(
+            &self,
+            id: &NativeId,
+            direction: Direction,
+            page: &PageRequest,
+        ) -> Result<Page<DependencyEdge>, SourceError> {
+            self.inner.project_dependencies(id, direction, page).await
+        }
+    }
+
+    #[tokio::test]
+    async fn a_later_page_of_comments_is_never_served_from_an_entry_or_kept_as_the_whole() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let cache = SourceCache::new(
+            CacheLocation {
+                dir: dir.path().to_path_buf(),
+                remote: "remote".to_owned(),
+            },
+            VersionCoverage::whole(),
+            ProjectVersionCoverage::whole(),
+            DocumentVersionCoverage::whole(),
+        );
+        let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let paged = Paged {
+            inner: InMemorySource::new(InMemoryConfig::default()).expect("an empty source"),
+            reads: reads.clone(),
+        };
+        let source = CachedSource::over(Box::new(paged), cache.clone());
+        let sent = || reads.load(std::sync::atomic::Ordering::Relaxed);
+        let bodies = |answer: &[Result<Option<TaskDetailRead>, SourceError>]| -> Vec<String> {
+            match &answer[0] {
+                Ok(Some(TaskDetailRead {
+                    comments: Some(Ok(Some(page))),
+                    ..
+                })) => page
+                    .items
+                    .iter()
+                    .map(|comment| comment.body.clone())
+                    .collect(),
+                other => panic!("a page of comments: {other:?}"),
+            }
+        };
+        let first = PageRequest {
+            cursor: None,
+            limit: 10,
+        };
+        let later = PageRequest {
+            cursor: Some(Cursor("C-1".to_owned())),
+            limit: 10,
+        };
+
+        // A later page, with nothing kept: read from the source, and not kept as every comment.
+        cache.pin(&id("T-1"), "v1");
+        let read = source.get_task_details(&[id("T-1")], Some(&later)).await;
+        assert_eq!(bodies(&read), ["C-2"]);
+        assert_eq!(sent(), 1);
+        assert_eq!(
+            cache.read(&id("T-1")).map(|entry| entry.comments),
+            Some(None),
+            "the task is kept, and its comments are not"
+        );
+
+        // The first page fills them whole; a later page pinned to the same version is still the
+        // source's, never the entry's whole list.
+        assert_eq!(
+            bodies(&source.get_task_details(&[id("T-1")], Some(&first)).await),
+            ["C-1"]
+        );
+        assert_eq!(sent(), 2, "the first page fills");
+        // As `task show` completes it: a detail read is served only beside the assets after it.
+        source.task_assets(&id("T-1")).await.expect("its assets");
+        assert_eq!(
+            bodies(&source.get_task_details(&[id("T-1")], Some(&first)).await),
+            ["C-1"]
+        );
+        assert_eq!(sent(), 2, "and is then served");
+        let read = source.get_task_details(&[id("T-1")], Some(&later)).await;
+        assert_eq!(bodies(&read), ["C-2"], "a later page is the source's");
+        assert_eq!(sent(), 3);
+        assert_eq!(
+            cache
+                .read(&id("T-1"))
+                .and_then(|entry| entry.comments)
+                .map(|comments| comments.len()),
+            Some(1),
+            "and leaves the whole comments it kept as they were"
         );
     }
 
@@ -2535,12 +2909,12 @@ mod tests {
             repositories: Vec::new(),
             classification: Default::default(),
         });
-        let Some(_refusing) = refusing_in(&dir.path().join("projects-v1")) else {
+        let Some(_refusing) = refusing_in(&dir.path().join("projects-v2")) else {
             return;
         };
         let _read_only = Mode::set(
             &dir.path()
-                .join("projects-v1")
+                .join("projects-v2")
                 .join(format!("{}.json", super::super::digest("P-1"))),
             0o444,
         );

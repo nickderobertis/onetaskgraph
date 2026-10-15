@@ -620,6 +620,7 @@ class GeneratedClient:
         limit: int | None = None,
         page: str | None = None,
         page_size: int | None = None,
+        pin: VersionToken | None = None,
         set: list[str] | tuple[str, ...] | None = None,
     ) -> QueryResponseOfQualifiedEdge:
         """Run ``onetaskgraph project deps``."""
@@ -634,6 +635,7 @@ class GeneratedClient:
             limit=limit,
             page=page,
             page_size=page_size,
+            pin=pin,
             set=set,
         )
 
@@ -1157,6 +1159,7 @@ class GeneratedClient:
         limit: int | None = None,
         page: str | None = None,
         page_size: int | None = None,
+        pin: VersionToken | None = None,
         set: list[str] | tuple[str, ...] | None = None,
     ) -> QueryResponseOfQualifiedEdge:
         """Run ``onetaskgraph task deps``."""
@@ -1171,6 +1174,7 @@ class GeneratedClient:
             limit=limit,
             page=page,
             page_size=page_size,
+            pin=pin,
             set=set,
         )
 

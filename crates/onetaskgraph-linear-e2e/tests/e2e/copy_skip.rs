@@ -1,10 +1,12 @@
 //! A repeat copy out of Linear skips a task only when its `lin1` token covers every part the
 //! copy carries.
 //!
-//! A Linear task's token never covers its comments — no time moves for one added, edited or
-//! deleted — and covers its forward edges only with the store's cache attached. So a copy
-//! carrying comments, and any copy from a source with the cache off, reads such a task again
-//! rather than skip it on an unchanged token, and carries what changed.
+//! A Linear task's token covers its comments and its forward edges only with the store's cache
+//! attached — no time moves for a comment added, edited or deleted, nor for a relation added —
+//! when it carries the digests of their first pages. So any copy from a source with the cache off
+//! reads such a task again rather than skip it on an unchanged token, and carries what changed;
+//! with it on, an unchanged task is skipped and a comment added moves the token, so the next
+//! `--comments` copy carries it.
 
 use serde_json::{Value, json};
 
@@ -121,5 +123,45 @@ fn a_repeat_copy_by_query_skips_a_linear_task_only_where_its_token_covers_the_ed
         notes(&uncached).contains("linear:L-3") || notes(&uncached).contains("notes:L-3"),
         "the new edge is carried: {}",
         notes(&uncached)
+    );
+}
+
+#[test]
+fn with_the_cache_on_an_unchanged_comments_copy_skips_and_a_comment_added_is_carried() {
+    let cached = Cached::new(dataset());
+    let copy = [
+        "task",
+        "copy",
+        "linear:L-1",
+        "--to",
+        "notes",
+        "--comments",
+        "--no-link",
+        "--json",
+    ];
+    cached.ok(&copy);
+    let (again, _) = cached.ok(&copy);
+    assert_eq!(
+        outcome(&again, "L-1")["skipped"],
+        true,
+        "an unchanged task whose token covers its comments is skipped: {again}"
+    );
+    let before = cached
+        .listed("task", "linear:L-1")
+        .expect("L-1 carries a token");
+    cached
+        .workspace
+        .add_comment("L-1", "a comment added in Linear after the copy");
+    assert_ne!(
+        cached.listed("task", "linear:L-1").as_deref(),
+        Some(before.as_str()),
+        "with the cache on, a comment moves the token's comments part"
+    );
+    let (carried, _) = cached.ok(&copy);
+    assert_ne!(outcome(&carried, "L-1")["skipped"], true, "{carried}");
+    assert!(
+        notes(&cached).contains("a comment added in Linear after the copy"),
+        "the new comment is carried: {}",
+        notes(&cached)
     );
 }

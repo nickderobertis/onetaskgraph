@@ -1448,6 +1448,15 @@ pub struct DependencyArgs {
     #[arg(long, value_name = "DIRECTION", default_value = "depends-on")]
     pub direction: DirectionArg,
 
+    /// A version of the task or project the caller already holds: its edges in that direction
+    /// are answered from the source's local cache, with no request, where its change token
+    /// covers them and the cache holds them at that version or a later one — which may predate
+    /// a change nobody has read yet — and from the source otherwise, as `task show --pin` is.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `ExpectArgs::expect`.
+    #[arg(long, value_name = "VERSION")]
+    pub pin: Option<String>,
+
     #[command(flatten)]
     pub paging: PageArgs,
 }

@@ -11,6 +11,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
+use onetaskgraph_e2e_support::sdk::Sdk;
 use onetaskgraph_github_projects::graphql;
 use serde_json::{Value, json};
 
@@ -1426,61 +1427,19 @@ fn a_bound_copy_with_expect_reports_each_part_landed_rejected_or_unknown_and_ret
 /// the task named, answering what it printed.
 pub(crate) fn sdk(
     cached: &Cached,
-    typescript: bool,
+    which: Sdk,
     script: &str,
     task: &str,
     pin: Option<&str>,
 ) -> Value {
-    let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let mut command = if typescript {
-        let mut command = std::process::Command::new("bun");
-        command.args([
-            "-e",
-            &format!(
-                "import {{ OnetaskgraphClient }} from {}; delete process.env.HOME; \
-                 const client = new OnetaskgraphClient({{binaryPath: process.env.CACHED_BINARY, \
-                 cwd: process.cwd()}}); const id = process.env.CACHED_TASK; \
-                 const pin = process.env.CACHED_PIN; {script}",
-                serde_json::to_string(&workspace.join("sdks/typescript/src/client.ts")).unwrap()
-            ),
-        ]);
-        command
-    } else {
-        let mut command = std::process::Command::new("uv");
-        command
-            .args(["run", "--frozen", "--project"])
-            .arg(workspace.join("sdks/python"))
-            .args([
-                "python",
-                "-c",
-                &format!(
-                    "import asyncio,os\nfrom onetaskgraph_sdk import Client\nasync def run():\n \
-                     os.environ.pop('HOME',None)\n c=Client(os.environ['CACHED_BINARY'],cwd=os.getcwd())\n \
-                     task=os.environ['CACHED_TASK']\n pin=os.environ.get('CACHED_PIN')\n {script}\n\
-                     asyncio.run(run())"
-                ),
-            ]);
-        command
-    };
-    // `uv` and `bun` keep HOME to find their runtimes; each script drops it before its SDK
-    // spawns the binary.
-    for (key, _) in std::env::vars() {
-        if key.starts_with("ONETASKGRAPH_") {
-            command.env_remove(key);
-        }
-    }
-    command
-        .current_dir(cached.sandbox.project())
-        .env("XDG_CONFIG_HOME", cached.sandbox.config_home())
-        .env("XDG_CACHE_HOME", &cached.cache_home)
-        .env("CACHED_BINARY", onetaskgraph_e2e_support::binary())
-        .env("CACHED_TASK", task);
-    if let Some(pin) = pin {
-        command.env("CACHED_PIN", pin);
-    }
-    let output = command.output().expect("the SDK runs");
-    assert!(output.status.success(), "{}", stderr(&output));
-    serde_json::from_str(&stdout(&output)).expect("the SDK printed JSON")
+    onetaskgraph_e2e_support::sdk::run(
+        &cached.sandbox,
+        &cached.cache_home,
+        which,
+        script,
+        task,
+        pin,
+    )
 }
 
 const PYTHON_SHOW: &str =
@@ -1527,22 +1486,17 @@ fn one_sources_cache_is_shared_by_the_command_line_both_sdks_and_a_rust_caller()
     // Written by the command line, served to every other caller with nothing sent.
     let (first, _) = cached.ok(&["task", "show", "board:T-3", "--json"]);
     let v = version_of(&first);
-    for typescript in [false, true] {
+    for which in [Sdk::Python, Sdk::TypeScript] {
         let before = cached.board.served().len();
-        let script = if typescript {
-            TYPESCRIPT_SHOW
-        } else {
-            PYTHON_SHOW
+        let script = match which {
+            Sdk::TypeScript => TYPESCRIPT_SHOW,
+            Sdk::Python => PYTHON_SHOW,
         };
-        let shown = sdk(&cached, typescript, script, "board:T-3", Some(&v));
-        assert_eq!(
-            cached.board.served().len(),
-            before,
-            "typescript={typescript}"
-        );
+        let shown = sdk(&cached, which, script, "board:T-3", Some(&v));
+        assert_eq!(cached.board.served().len(), before, "{which:?}");
         // The Python SDK leaves a null member out of what it prints, so the two are compared
         // by what a caller acts on: where the read was answered from, and what it answered.
-        assert_eq!(shown["cache"]["served"], "cache", "typescript={typescript}");
+        assert_eq!(shown["cache"]["served"], "cache", "{which:?}");
         assert_eq!(shown["items"][0]["id"], first["items"][0]["id"]);
         assert_eq!(version_of(&shown), v);
     }
@@ -1566,8 +1520,8 @@ fn one_sources_cache_is_shared_by_the_command_line_both_sdks_and_a_rust_caller()
         ("rust", "board:T-4"),
     ] {
         let written = match writer {
-            "python" => sdk(&cached, false, PYTHON_SHOW, task, None),
-            "typescript" => sdk(&cached, true, TYPESCRIPT_SHOW, task, None),
+            "python" => sdk(&cached, Sdk::Python, PYTHON_SHOW, task, None),
+            "typescript" => sdk(&cached, Sdk::TypeScript, TYPESCRIPT_SHOW, task, None),
             _ => engine_read(&cached, task, None).0,
         };
         assert_eq!(written["cache"]["served"], "remote", "{writer}");
@@ -2305,7 +2259,7 @@ fn the_typescript_sdk_pins_expects_and_clears_through_the_binary() {
          let refused = false; try { await client.taskShowMany([id], {pins: [pin]}); } \
          catch (error) { refused = error instanceof TypeError; } \
          console.log(JSON.stringify({many, comments, written, cleared, refused}));";
-    let answered = sdk(&cached, true, script, "board:T-3", Some(&v));
+    let answered = sdk(&cached, Sdk::TypeScript, script, "board:T-3", Some(&v));
     assert_eq!(answered["many"]["details"][0]["cache"]["served"], "cache");
     assert_eq!(answered["comments"]["cache"]["served"], "cache");
     assert_eq!(
@@ -2577,7 +2531,7 @@ fn the_python_sdk_pins_expects_and_clears_through_the_binary() {
                   every=await c.cache_clear()\n \
                   import json\n \
                   print(json.dumps({'many':many.model_dump(mode='json'),'written':written.model_dump(mode='json'),'cleared':cleared.model_dump(mode='json'),'every':every.model_dump(mode='json')}))";
-    let answered = sdk(&cached, false, script, "board:T-3", Some(&v));
+    let answered = sdk(&cached, Sdk::Python, script, "board:T-3", Some(&v));
     assert_eq!(answered["many"]["details"][0]["cache"]["served"], "cache");
     assert_eq!(
         answered["written"]["result"]["parts"][0]["outcome"],
@@ -2942,7 +2896,7 @@ fn every_typescript_sdk_write_forwards_expect_and_sends_only_its_mutation() {
          console.log(JSON.stringify(steps));",
         serde_json::to_string(&body).unwrap()
     );
-    let steps = sdk(&cached, true, &script, "board:T-3", Some(&v));
+    let steps = sdk(&cached, Sdk::TypeScript, &script, "board:T-3", Some(&v));
     for step in steps.as_array().unwrap() {
         assert_eq!(step["result"]["parts"][0]["outcome"], "landed", "{step}");
         assert_eq!(

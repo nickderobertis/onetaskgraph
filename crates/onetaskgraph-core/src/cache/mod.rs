@@ -2,14 +2,16 @@
 //!
 //! **Opt-in, one source at a time, and keyed on nothing but the change token a source gives.**
 //! A source configured with `cache.enabled` has its tasks — each one's fields, metadata,
-//! comments, assets and forward edges — its projects, its documents with the manifest of their
-//! image assets, and the verified bytes of those assets kept on this host, one file per item,
+//! comments, assets and forward and reverse edges — its projects with their forward edges, its
+//! documents with the manifest of their image assets, and the verified bytes of those assets kept
+//! on this host, one file per item,
 //! under a directory named for the remote it reads; `kinds` says how each kind beside a task's
 //! is laid out. Every process that configures the same remote shares it: the
 //! command line, both SDKs and a Rust caller of the engine.
 //!
-//! The rule it may never break is that **it never adds a request and never serves stale data**.
-//! Freshness comes only from tokens the store already holds — a caller's pin, or the version a
+//! The rule it may never break is that **it never serves stale data**; what it costs is held over
+//! an hour of the assumed workload, which it must spend fewer requests on than no cache, rather
+//! than read by read. Freshness comes only from tokens the store already holds — a caller's pin, or the version a
 //! listing in the same command carried — and an entry is served only when it is at that version
 //! or a later one, by the ordering of the source that spelled both. Nothing expires by age, and
 //! nothing asks the source whether something changed. A part of a task the source's token does
@@ -35,8 +37,8 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use onetaskgraph_plugin_api::{
-    Asset, Comment, Cursor, DependencyEdge, DocumentVersionCoverage, NativeId, PartOutcome,
-    ProjectVersionCoverage, SourceError, SourceName, Task, VersionCoverage,
+    Asset, Comment, Cursor, DependencyEdge, DocumentVersionCoverage, ItemKind, NativeId,
+    PartOutcome, ProjectVersionCoverage, SourceError, SourceName, Task, VersionCoverage,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -362,9 +364,9 @@ struct Command {
     document_read: HashMap<NativeId, String>,
     /// Document entries served in this command, whose manifest is served with them.
     document_served: HashMap<NativeId, kinds::DocumentEntry>,
-    /// A forward-edge walk of a task under way at the source: the edges it has answered so far,
-    /// and the cursor that continues it.
-    walking: HashMap<NativeId, (Vec<DependencyEdge>, Cursor)>,
+    /// A forward-edge walk of a task or a project under way at the source: the edges it has
+    /// answered so far, and the cursor that continues it.
+    walking: HashMap<(ItemKind, NativeId), (Vec<DependencyEdge>, Cursor)>,
     /// Versions callers pinned reads to.
     pins: HashMap<NativeId, String>,
     /// Versions a listing in this command carried.
@@ -564,7 +566,8 @@ impl SourceCache {
         let mut command = self.command();
         command.served.remove(id);
         command.read.remove(id);
-        command.walking.remove(id);
+        command.walking.remove(&(ItemKind::Task, id.clone()));
+        command.walking.remove(&(ItemKind::Project, id.clone()));
     }
 
     /// Take the entry for `id` out of service for every process before a write of it is
@@ -597,6 +600,27 @@ impl SourceCache {
                 ),
             }),
         }
+    }
+
+    /// Take every `kind` edges entry out of service for every process before a write that can
+    /// change edges recorded on other items than the one it names is sent — a relation is
+    /// recorded at both of its ends, and a deleted item takes its relations with it — or refuse
+    /// the write, on the terms of [`Self::retire_before_write`].
+    pub(crate) fn retire_edges_before_write(
+        &self,
+        kind: kinds::EdgeKind,
+    ) -> Result<(), SourceError> {
+        self.retire_every_before_write(kind)
+            .map_err(|error| SourceError::Config {
+                message: format!(
+                    "a cache entry of another item's edges under {} could not be removed, \
+                     emptied or made writable ({error}), so the write was not sent: it can \
+                     change those edges, and another process pinned to the entry's version \
+                     would be served them. Make the cache directory writable, then run the \
+                     command again",
+                    self.dir.display()
+                ),
+            })
     }
 
     /// The board context, when one is kept.

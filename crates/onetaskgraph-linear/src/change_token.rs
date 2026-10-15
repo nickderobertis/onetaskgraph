@@ -7,14 +7,15 @@
 //! the source already receives: the item's `updatedAt`, and the digest of its *facets* — what a
 //! person can change about it without moving that time, which `spike-linear-coverage` measured
 //! `updatedAt` alone missing: a label renamed or recoloured, a workflow state renamed, a
-//! document's content and slot edited. With the store's cache attached a task's token carries a
-//! third part, the digest of its first page of relations, because a relation added or removed
-//! moved no time the spike could see.
+//! document's content and slot edited. With the store's cache attached a task's token also
+//! carries digests of its first page of comments, relations and inverse relations, and a
+//! project's of its first page of relations and inverse relations — the parts §4.13d says each
+//! covers.
 //!
 //! An item whose labels came back as 50 nodes or more — Linear's default page, which the
-//! documents here select without a `first` or a `pageInfo` — gives no token, and so does a task
-//! whose relations page reports another page or holds more than [`RELATIONS_PAGE`] rows: a part
-//! read from part of a connection vouches for nothing.
+//! documents here select without a `first` or a `pageInfo` — gives no token, and so does an item
+//! whose comments, relations or inverse relations page reports another page or holds more than
+//! [`PAGE`] rows: a part read from part of a connection vouches for nothing.
 
 use std::cmp::Ordering;
 
@@ -26,16 +27,50 @@ use serde_json::Value;
 /// What every token this plugin gives starts with.
 pub const PREFIX: &str = "lin1|";
 
-/// What the relations part of a task's token starts with.
-const RELATIONS: &str = "r:";
-
-/// The rows the relations page a task's token is spelled from holds at most: the `first` of the
-/// page the cache's documents select.
-pub const RELATIONS_PAGE: usize = 10;
+/// The rows a comments, relations or inverse relations page a token is spelled from holds at
+/// most: the `first` of the pages the cache's documents select.
+pub const PAGE: usize = 10;
 
 /// The labels Linear answers a `labels` connection with when it names no `first`: a response
 /// holding this many may be a first page of more, so it gives no token.
 pub const DEFAULT_LABEL_PAGE: usize = 50;
+
+/// Which spelling of a token a response is read as: the one a source with no cache attached gives,
+/// or the one the cache's widened reads let it give, carrying their first pages' digests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Spelling {
+    /// `lin1|<updatedAt>|<facets>`, from what every read selects.
+    Plain,
+    /// With the parts the cache's widened reads carry: a task's comments, relations and inverse
+    /// relations, a project's relations and inverse relations.
+    Attached,
+}
+
+/// One of the parts the cache's widened reads add to a token, each the digest of one first page.
+///
+/// Spelled in this order, which is the only order a token holds them in, so the part a later
+/// page of one walk is held to — everything before [`Part::Relations`] — is a prefix of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Part {
+    /// A task's comments, as `[id, updatedAt]` rows.
+    Comments,
+    /// A task's or a project's relations, as `[id, type, far end]` rows.
+    Relations,
+    /// A task's or a project's inverse relations, as `[id, type, near end]` rows.
+    Inverse,
+}
+
+impl Part {
+    const ALL: [Self; 3] = [Self::Comments, Self::Relations, Self::Inverse];
+
+    fn tag(self) -> &'static str {
+        match self {
+            Self::Comments => "c:",
+            Self::Relations => "r:",
+            Self::Inverse => "i:",
+        }
+    }
+}
 
 /// One label as a facet spells it: its id, its name and its colour, which Linear may leave null.
 type LabelFacet<'a> = (&'a str, &'a str, Option<&'a str>);
@@ -61,7 +96,7 @@ struct ProjectFacets<'a> {
 }
 
 /// A lowercase hex SHA-256 — of a document's content, of a facets part's canonical JSON, of a
-/// relations page — made only by hashing, or read back out of a token and refused when it is not
+/// first page — made only by hashing, or read back out of a token and refused when it is not
 /// one.
 #[derive(Debug, PartialEq, Eq, Serialize)]
 #[serde(transparent)]
@@ -155,42 +190,79 @@ fn named_type(status: &Value) -> Option<NamedType<'_>> {
     Some((text(status, "name")?, text(status, "type")?))
 }
 
-/// `updatedAt`, read as an instant and spelled back the one way this module spells it.
-fn updated(item: &Value) -> Option<String> {
-    let at: DateTime<Utc> = item.get("updatedAt")?.as_str()?.parse().ok()?;
+/// An instant, read and spelled back the one way this module spells it.
+fn instant(value: &Value) -> Option<String> {
+    let at: DateTime<Utc> = value.as_str()?.parse().ok()?;
     Some(at.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true))
 }
 
-/// The digest of a task's first page of relations, or `None` when the page reports another or
-/// holds more than [`RELATIONS_PAGE`] rows, or is missing.
-fn relations(issue: &Value) -> Option<Sha256Hex> {
-    let page = issue.get("relations")?;
-    if page.pointer("/pageInfo/hasNextPage") != Some(&Value::Bool(false)) {
+/// `updatedAt`, read as an instant and spelled back the one way this module spells it.
+fn updated(item: &Value) -> Option<String> {
+    instant(item.get("updatedAt")?)
+}
+
+/// The nodes of the connection `key` of `item` when they are the whole of it — a page reporting
+/// no further page either way it walks, of at most [`PAGE`] rows — or `None`.
+///
+/// A page walked forwards says so with `hasNextPage`, one walked backwards with
+/// `hasPreviousPage`; the caller of a page that resumed from a cursor knows it is not the whole
+/// and asks for none.
+fn whole_page<'a>(item: &'a Value, key: &str) -> Option<&'a Vec<Value>> {
+    let page = item.get(key)?;
+    let info = page.get("pageInfo")?;
+    let more = info
+        .get("hasNextPage")
+        .or_else(|| info.get("hasPreviousPage"))?;
+    if more != &Value::Bool(false) {
         return None;
     }
     let nodes = page.get("nodes")?.as_array()?;
-    if nodes.len() > RELATIONS_PAGE {
-        return None;
-    }
-    let mut rows = nodes
-        .iter()
-        .map(|node| {
-            Some((
-                node.get("id")?.as_str()?,
-                node.get("type")?.as_str()?,
-                node.pointer("/relatedIssue/id")?.as_str()?,
-            ))
-        })
-        .collect::<Option<Vec<_>>>()?;
+    (nodes.len() <= PAGE).then_some(nodes)
+}
+
+/// The digest of `rows`, sorted.
+fn rows_digest<T: Ord + Serialize>(mut rows: Vec<T>) -> Option<Sha256Hex> {
     rows.sort_unstable();
     Some(Sha256Hex::of(serde_json::to_string(&rows).ok()?.as_bytes()))
 }
 
-/// The token of the issue `issue`, as one response answered it — with the digest of its first
-/// page of relations when `attached`, and none at all when that page is not whole — or `None`
-/// when the response does not carry every part whole.
-#[must_use]
-pub fn task(issue: &Value, attached: bool) -> Option<String> {
+/// The digest of the relations page `key` of `item`, each row `[id, type, <far>.id]`.
+fn relation_digest(item: &Value, key: &str, far: &str) -> Option<Sha256Hex> {
+    rows_digest(
+        whole_page(item, key)?
+            .iter()
+            .map(|node| {
+                Some((
+                    node.get("id")?.as_str()?,
+                    node.get("type")?.as_str()?,
+                    node.get(far)?.get("id")?.as_str()?,
+                ))
+            })
+            .collect::<Option<Vec<_>>>()?,
+    )
+}
+
+/// The digest of an issue's comments page, each row `[id, updatedAt]`.
+fn comment_digest(issue: &Value) -> Option<Sha256Hex> {
+    rows_digest(
+        whole_page(issue, "comments")?
+            .iter()
+            .map(|node| Some((node.get("id")?.as_str()?, instant(node.get("updatedAt")?)?)))
+            .collect::<Option<Vec<_>>>()?,
+    )
+}
+
+/// The digest one part of a task's token is spelled from, read from `issue`.
+fn task_part(issue: &Value, part: Part) -> Option<Sha256Hex> {
+    match part {
+        Part::Comments => comment_digest(issue),
+        Part::Relations => relation_digest(issue, "relations", "relatedIssue"),
+        Part::Inverse => relation_digest(issue, "inverseRelations", "issue"),
+    }
+}
+
+/// `lin1|<updatedAt>|<facets>` of the issue `issue`.
+fn task_base(issue: &Value) -> Option<String> {
     let facets = TaskFacets {
         key: text(issue, "identifier")?,
         labels: labels(issue)?,
@@ -198,17 +270,67 @@ pub fn task(issue: &Value, attached: bool) -> Option<String> {
         state: named_type(issue.get("state")?)?,
         url: nullable_text(issue, "url")?,
     };
-    let base = format!("{PREFIX}{}|{}", updated(issue)?, digest(&facets)?);
-    if attached {
-        Some(format!("{base}|{RELATIONS}{}", relations(issue)?))
-    } else {
-        Some(base)
+    Some(format!("{PREFIX}{}|{}", updated(issue)?, digest(&facets)?))
+}
+
+/// `base` with each of `parts` of `item` appended, or `None` when any is not whole.
+fn with_parts(
+    base: String,
+    parts: &[Part],
+    read: impl Fn(Part) -> Option<Sha256Hex>,
+) -> Option<String> {
+    let mut token = base;
+    for part in parts {
+        token.push('|');
+        token.push_str(part.tag());
+        token.push_str(&read(*part)?.0);
+    }
+    Some(token)
+}
+
+/// The token of the issue `issue`, as one response answered it — with the digests of its first
+/// page of comments, relations and inverse relations when [`Spelling::Attached`], and none at all when any of
+/// those pages is not whole — or `None` when the response does not carry every part whole.
+#[must_use]
+pub fn task(issue: &Value, spelling: Spelling) -> Option<String> {
+    let base = task_base(issue)?;
+    match spelling {
+        Spelling::Attached => with_parts(base, &Part::ALL, |part| task_part(issue, part)),
+        Spelling::Plain => Some(base),
     }
 }
 
-/// The token of the project `project`, as one response answered it.
+/// The part of the attached token of the issue `issue` that a page of a forward-edge walk past
+/// its first is held to: the token up to its relations part, which a page answering only part of
+/// the relations cannot spell.
 #[must_use]
-pub fn project_token(project: &Value) -> Option<String> {
+pub fn task_before_relations(issue: &Value) -> Option<String> {
+    with_parts(task_base(issue)?, &[Part::Comments], |part| {
+        task_part(issue, part)
+    })
+}
+
+/// The token of the project `project`, as one response answered it — with the digests of its
+/// first page of relations and of inverse relations when [`Spelling::Attached`], and none at all
+/// when either page is not whole.
+#[must_use]
+pub fn project_token(project: &Value, spelling: Spelling) -> Option<String> {
+    let base = project_before_relations(project)?;
+    match spelling {
+        Spelling::Attached => {
+            with_parts(base, &[Part::Relations, Part::Inverse], |part| match part {
+                Part::Inverse => relation_digest(project, "inverseRelations", "project"),
+                _ => relation_digest(project, "relations", "relatedProject"),
+            })
+        }
+        Spelling::Plain => Some(base),
+    }
+}
+
+/// The part of the attached token of the project `project` that a page of a forward-edge walk
+/// past its first is held to: the token without its relations part.
+#[must_use]
+pub fn project_before_relations(project: &Value) -> Option<String> {
     let facets = ProjectFacets {
         labels: labels(project)?,
         status: named_type(project.get("status")?)?,
@@ -241,20 +363,43 @@ pub fn document_token(document: &Value) -> Option<String> {
     ))
 }
 
-/// The token `token` with its relations part taken off: what a later page of one task's walk,
-/// read with no relations page of its own, is held to.
+/// The token `token` with its relations part and every part after it taken off: what a later
+/// page of one walk, read with no whole relations page of its own, is held to.
 #[must_use]
 pub fn without_relations(token: &str) -> &str {
     token
-        .split_once(&format!("|{RELATIONS}"))
+        .split_once(&format!("|{}", Part::Relations.tag()))
         .map_or(token, |(base, _)| base)
+}
+
+/// The parts a token carries beside its time and its facets: none, as every plain token and a
+/// document's; a relations and an inverse relations part, as an attached project's; or, as an
+/// attached task's, a comments, a relations and an inverse relations part, in that order.
+/// Nothing else is a token.
+#[derive(Debug, PartialEq, Eq)]
+enum Extra {
+    None,
+    Project {
+        relations: Sha256Hex,
+        inverse: Sha256Hex,
+    },
+    Task {
+        comments: Sha256Hex,
+        relations: Sha256Hex,
+        inverse: Sha256Hex,
+    },
 }
 
 /// What one token of this plugin is made of.
 struct Parts {
     updated: DateTime<Utc>,
     facets: Sha256Hex,
-    relations: Option<Sha256Hex>,
+    extra: Extra,
+}
+
+/// The digest `text` spells after `part`'s tag, when it spells one.
+fn tagged(text: &str, part: Part) -> Option<Sha256Hex> {
+    Sha256Hex::parse(text.strip_prefix(part.tag())?)
 }
 
 fn parts(token: &str) -> Option<Parts> {
@@ -263,25 +408,39 @@ fn parts(token: &str) -> Option<Parts> {
         .ok()?
         .with_timezone(&Utc);
     let facets = Sha256Hex::parse(parts.next()?)?;
-    let relations = match parts.next() {
-        None => None,
-        Some(part) => Some(Sha256Hex::parse(part.strip_prefix(RELATIONS)?)?),
+    let rest: Vec<&str> = parts.collect();
+    let extra = match rest.as_slice() {
+        [] => Extra::None,
+        [relations, inverse] => Extra::Project {
+            relations: tagged(relations, Part::Relations)?,
+            inverse: tagged(inverse, Part::Inverse)?,
+        },
+        [comments, relations, inverse] => Extra::Task {
+            comments: tagged(comments, Part::Comments)?,
+            relations: tagged(relations, Part::Relations)?,
+            inverse: tagged(inverse, Part::Inverse)?,
+        },
+        _ => return None,
     };
-    parts.next().is_none().then_some(Parts {
+    Some(Parts {
         updated,
         facets,
-        relations,
+        extra,
     })
 }
 
 /// How the version `a` of one item stands to its version `b`: by `updatedAt` as an instant when
-/// their facets and their relations parts — present or absent, and their value — are equal,
-/// `Equal` only when every part is, and `None` when either is not a token of this plugin or any
-/// of those differ, which says nothing about which reading came first.
+/// their facets and every other part — which parts are present, and each one's value — are
+/// equal, `Equal` only when every part is, and `None` when either is not a token of this plugin
+/// or any of those differ, which says nothing about which reading came first.
+///
+/// So a token of the spelling an earlier release gave a task or a project with the cache
+/// attached — a relations part alone — is never ordered beside one of this spelling, and an entry
+/// that release wrote is read again.
 #[must_use]
 pub fn order(a: &str, b: &str) -> Option<Ordering> {
     let (a, b) = (parts(a)?, parts(b)?);
-    (a.facets == b.facets && a.relations == b.relations).then(|| a.updated.cmp(&b.updated))
+    (a.facets == b.facets && a.extra == b.extra).then(|| a.updated.cmp(&b.updated))
 }
 
 #[cfg(test)]
@@ -289,13 +448,17 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// An issue as the cache's widened reads answer it: no comments, no inverse relations, and
+    /// `relations` as given.
     fn issue(updated: &str, label: &str, relations: Value) -> Value {
         json!({
             "id": "i1", "identifier": "ENG-1", "url": "https://linear.app/x/issue/ENG-1",
             "updatedAt": updated, "state": {"name": "Todo", "type": "unstarted"},
             "project": {"id": "p1"},
             "labels": {"nodes": [{"id": "l1", "name": label, "color": "#ff0000"}]},
+            "comments": {"nodes": [], "pageInfo": {"hasNextPage": false}},
             "relations": relations,
+            "inverseRelations": inverse(&[], false),
         })
     }
 
@@ -308,47 +471,136 @@ mod tests {
         })
     }
 
+    fn inverse(rows: &[(&str, &str)], more: bool) -> Value {
+        json!({
+            "nodes": rows.iter().map(|(id, near)| json!({"id": id, "type": "blocks",
+                                                         "issue": {"id": near}}))
+                .collect::<Vec<_>>(),
+            "pageInfo": {"hasNextPage": more},
+        })
+    }
+
+    fn comments(rows: &[(&str, &str)], more: bool) -> Value {
+        json!({
+            "nodes": rows.iter().map(|(id, updated)| json!({"id": id, "updatedAt": updated}))
+                .collect::<Vec<_>>(),
+            "pageInfo": {"hasNextPage": more},
+        })
+    }
+
     #[test]
-    fn a_later_time_with_the_same_facets_and_relations_orders_after() {
+    fn a_later_time_with_the_same_facets_and_parts_orders_after() {
         let none = page(&[], false);
-        let before = task(&issue("2026-10-01T00:00:00Z", "bug", none.clone()), true).unwrap();
-        let after = task(&issue("2026-10-01T00:00:01Z", "bug", none), true).unwrap();
+        let before = task(
+            &issue("2026-10-01T00:00:00Z", "bug", none.clone()),
+            Spelling::Attached,
+        )
+        .unwrap();
+        let after = task(
+            &issue("2026-10-01T00:00:01Z", "bug", none),
+            Spelling::Attached,
+        )
+        .unwrap();
         assert_eq!(order(&after, &before), Some(Ordering::Greater));
         assert_eq!(order(&before, &after), Some(Ordering::Less));
         assert_eq!(order(&before, &before), Some(Ordering::Equal));
     }
 
     #[test]
-    fn another_facet_or_relations_part_is_never_ordered() {
+    fn another_facet_or_part_is_never_ordered() {
         let none = page(&[], false);
-        let before = task(&issue("2026-10-01T00:00:00Z", "bug", none.clone()), true).unwrap();
-        let renamed = task(&issue("2026-10-01T00:00:05Z", "defect", none.clone()), true).unwrap();
+        let held = issue("2026-10-01T00:00:00Z", "bug", none.clone());
+        let before = task(&held, Spelling::Attached).unwrap();
+        let renamed = task(
+            &issue("2026-10-01T00:00:05Z", "defect", none.clone()),
+            Spelling::Attached,
+        )
+        .unwrap();
         assert_eq!(order(&renamed, &before), None, "a label renamed");
         let related = task(
             &issue("2026-10-01T00:00:05Z", "bug", page(&[("r1", "i2")], false)),
-            true,
+            Spelling::Attached,
         )
         .unwrap();
         assert_eq!(order(&related, &before), None, "a relation added");
-        let unattached = task(&issue("2026-10-01T00:00:00Z", "bug", none), false).unwrap();
-        assert!(!unattached.contains("|r:"));
+        let mut depended = held.clone();
+        depended["inverseRelations"] = inverse(&[("r2", "i3")], false);
+        assert_eq!(
+            order(&task(&depended, Spelling::Attached).unwrap(), &before),
+            None,
+            "an inverse relation added"
+        );
+        let mut commented = held.clone();
+        commented["comments"] = comments(&[("c1", "2026-10-01T00:00:00Z")], false);
+        let commented_token = task(&commented, Spelling::Attached).unwrap();
+        assert_eq!(order(&commented_token, &before), None, "a comment added");
+        let mut edited = commented.clone();
+        edited["comments"] = comments(&[("c1", "2026-10-01T00:00:09Z")], false);
+        assert_eq!(
+            order(
+                &task(&edited, Spelling::Attached).unwrap(),
+                &commented_token
+            ),
+            None,
+            "a comment edited"
+        );
+        assert_eq!(order(&before, &commented_token), None, "a comment deleted");
+        let unattached =
+            task(&issue("2026-10-01T00:00:00Z", "bug", none), Spelling::Plain).unwrap();
+        assert!(!unattached.contains("|r:") && !unattached.contains("|c:"));
         assert_eq!(
             order(&unattached, &before),
             None,
-            "a token with relations and one without"
+            "a token with the cache's parts and one without"
         );
         assert_eq!(order("gh3|x", &before), None);
         assert_eq!(order(&format!("{before}|extra"), &before), None);
     }
 
     #[test]
+    fn the_earlier_spelling_of_an_attached_token_is_never_ordered_beside_this_one() {
+        let held = issue("2026-10-01T00:00:00Z", "bug", page(&[], false));
+        let now = task(&held, Spelling::Attached).unwrap();
+        // What the release before this one spelled for the same issue: its relations part alone.
+        let relations = relation_digest(&held, "relations", "relatedIssue").unwrap();
+        let earlier = format!("{}|r:{relations}", task(&held, Spelling::Plain).unwrap());
+        assert!(
+            parts(&earlier).is_none(),
+            "a relations part alone is no shape of this one"
+        );
+        assert_eq!(order(&earlier, &now), None);
+        assert_eq!(order(&now, &earlier), None);
+        // A part out of its one order, or twice, is no token of this plugin.
+        let (base, rest) = now.split_once("|c:").unwrap();
+        let comments_part = rest.split('|').next().unwrap();
+        assert_eq!(
+            order(&format!("{base}|r:{relations}|c:{comments_part}"), &now),
+            None
+        );
+        assert!(parts(&format!("{base}|r:{relations}|c:{comments_part}")).is_none());
+        assert!(parts(&format!("{base}|c:{comments_part}|c:{comments_part}")).is_none());
+        // Nor is any combination that is neither a project's two parts nor a task's three.
+        for incomplete in [
+            format!("{base}|c:{comments_part}"),
+            format!("{base}|c:{comments_part}|r:{relations}"),
+            format!("{base}|i:{relations}"),
+        ] {
+            assert!(parts(&incomplete).is_none(), "{incomplete}");
+            assert_eq!(order(&incomplete, &incomplete), None, "{incomplete}");
+        }
+    }
+
+    #[test]
     fn a_part_read_from_part_of_a_connection_gives_no_token() {
         let more = page(&[("r1", "i2")], true);
         assert_eq!(
-            task(&issue("2026-10-01T00:00:00Z", "bug", more), true),
+            task(
+                &issue("2026-10-01T00:00:00Z", "bug", more),
+                Spelling::Attached
+            ),
             None
         );
-        let rows: Vec<(String, String)> = (0..=RELATIONS_PAGE)
+        let rows: Vec<(String, String)> = (0..=PAGE)
             .map(|n| (format!("r{n}"), format!("i{n}")))
             .collect();
         let eleven: Vec<(&str, &str)> = rows
@@ -358,24 +610,83 @@ mod tests {
         assert_eq!(
             task(
                 &issue("2026-10-01T00:00:00Z", "bug", page(&eleven, false)),
-                true
+                Spelling::Attached
             ),
             None
         );
-        let mut crowded = issue("2026-10-01T00:00:00Z", "bug", page(&[], false));
+        let whole = issue("2026-10-01T00:00:00Z", "bug", page(&[], false));
+        for (connection, value) in [
+            ("inverseRelations", inverse(&[("r1", "i2")], true)),
+            ("inverseRelations", inverse(&eleven, false)),
+            (
+                "comments",
+                comments(&[("c1", "2026-10-01T00:00:00Z")], true),
+            ),
+            (
+                "comments",
+                json!({"nodes": [], "pageInfo": {"hasPreviousPage": true}}),
+            ),
+        ] {
+            let mut partial = whole.clone();
+            partial[connection] = value.clone();
+            assert_eq!(
+                task(&partial, Spelling::Attached),
+                None,
+                "{connection}: {value}"
+            );
+            assert!(
+                task(&partial, Spelling::Plain).is_some(),
+                "{connection}: a token without the cache's parts reads none of them"
+            );
+        }
+        let stamps: Vec<String> = (0..=PAGE).map(|n| format!("c{n}")).collect();
+        let crowd: Vec<(&str, &str)> = stamps
+            .iter()
+            .map(|id| (id.as_str(), "2026-10-01T00:00:00Z"))
+            .collect();
+        let mut crowded = whole.clone();
+        crowded["comments"] = comments(&crowd, false);
+        assert_eq!(task(&crowded, Spelling::Attached), None, "eleven comments");
+        let mut crowded = whole;
         crowded["labels"]["nodes"] = Value::Array(
             (0..DEFAULT_LABEL_PAGE)
                 .map(|n| json!({"id": format!("l{n}"), "name": "x", "color": null}))
                 .collect(),
         );
-        assert_eq!(task(&crowded, true), None);
-        assert_eq!(task(&crowded, false), None);
+        assert_eq!(task(&crowded, Spelling::Attached), None);
+        assert_eq!(task(&crowded, Spelling::Plain), None);
+    }
+
+    #[test]
+    fn a_comments_page_read_backwards_or_forwards_spells_one_part() {
+        let mut forwards = issue("2026-10-01T00:00:00Z", "bug", page(&[], false));
+        forwards["comments"] = comments(
+            &[
+                ("c1", "2026-10-01T00:00:00Z"),
+                ("c2", "2026-10-01T00:00:01.000Z"),
+            ],
+            false,
+        );
+        let mut backwards = forwards.clone();
+        backwards["comments"] = json!({
+            "nodes": [
+                {"id": "c2", "body": "two", "updatedAt": "2026-10-01T00:00:01Z",
+                 "user": {"displayName": "a person"}},
+                {"id": "c1", "body": "one", "updatedAt": "2026-10-01T00:00:00Z", "user": null},
+            ],
+            "pageInfo": {"hasPreviousPage": false, "startCursor": "c1"},
+        });
+        assert_eq!(
+            task(&forwards, Spelling::Attached),
+            task(&backwards, Spelling::Attached)
+        );
+        assert!(task(&forwards, Spelling::Attached).is_some());
     }
 
     #[test]
     fn a_part_of_another_json_type_than_linears_schema_gives_no_token() {
         let whole = issue("2026-10-01T00:00:00Z", "bug", page(&[], false));
-        assert!(task(&whole, true).is_some());
+        assert!(task(&whole, Spelling::Attached).is_some());
         for (part, value) in [
             ("/identifier", json!(7)),
             ("/url", json!(["a"])),
@@ -389,8 +700,15 @@ mod tests {
         ] {
             let mut broken = whole.clone();
             *broken.pointer_mut(part).expect("the part") = value.clone();
-            assert_eq!(task(&broken, true), None, "{part} as {value}");
+            assert_eq!(task(&broken, Spelling::Attached), None, "{part} as {value}");
         }
+        let mut broken = whole;
+        broken["comments"] = comments(&[("c1", "yesterday")], false);
+        assert_eq!(
+            task(&broken, Spelling::Attached),
+            None,
+            "a comment time that is no instant"
+        );
         let document = json!({"title": "Design", "url": "https://linear.app/x/document/design",
                               "project": null, "updatedAt": "2026-10-01T00:00:00Z",
                               "content": null});
@@ -410,16 +728,65 @@ mod tests {
     }
 
     #[test]
-    fn the_relations_page_a_token_is_read_from_is_the_one_the_cache_selects() {
-        assert!(
-            crate::graphql::RELATIONS_PAGE.contains(&format!("relations(first:{RELATIONS_PAGE})")),
-            "{} selects a page of {RELATIONS_PAGE}",
-            crate::graphql::RELATIONS_PAGE
+    fn the_pages_a_token_is_read_from_are_the_ones_the_cache_selects() {
+        for selected in [
+            crate::graphql::RELATIONS_PAGE,
+            crate::graphql::INVERSE_RELATIONS_PAGE,
+            crate::graphql::COMMENTS_PAGE,
+            crate::graphql::PROJECT_RELATIONS_PAGE,
+            crate::graphql::PROJECT_INVERSE_RELATIONS_PAGE,
+        ] {
+            assert!(
+                selected.contains(&format!("(first:{PAGE})")),
+                "{selected} selects a page of {PAGE}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_projects_token_carries_its_relations_and_inverse_relations_only_attached() {
+        let none = json!({"nodes": [], "pageInfo": {"hasNextPage": false}});
+        let with = |relations: Value, inverse: Value| {
+            json!({"updatedAt": "2026-10-01T00:00:00Z", "status": {"name": "Doing", "type": "started"},
+                   "labels": {"nodes": []}, "relations": relations, "inverseRelations": inverse})
+        };
+        let project = |relations: Value| with(relations, none.clone());
+        let related = json!({"nodes": [{"id": "pr1", "type": "dependency",
+                                        "relatedProject": {"id": "p2"}}],
+                             "pageInfo": {"hasNextPage": false}});
+        let none = json!({"nodes": [], "pageInfo": {"hasNextPage": false}});
+        let plain = project_token(&project(none.clone()), Spelling::Plain).unwrap();
+        assert!(!plain.contains("|r:"));
+        let attached = project_token(&project(none.clone()), Spelling::Attached).unwrap();
+        let added = project_token(&project(related), Spelling::Attached).unwrap();
+        assert_eq!(order(&attached, &added), None, "a project relation added");
+        assert_eq!(order(&plain, &attached), None);
+        assert_eq!(without_relations(&added), plain);
+        let depended = with(
+            none.clone(),
+            json!({"nodes": [{"id": "pr2", "type": "dependency", "project": {"id": "p3"}}],
+                   "pageInfo": {"hasNextPage": false}}),
+        );
+        let depended = project_token(&depended, Spelling::Attached).unwrap();
+        assert_eq!(
+            order(&attached, &depended),
+            None,
+            "a project depending on it added"
+        );
+        assert_eq!(without_relations(&depended), plain);
+        let more = json!({"nodes": [], "pageInfo": {"hasNextPage": true}});
+        assert_eq!(
+            project_token(&project(more.clone()), Spelling::Attached),
+            None
+        );
+        assert_eq!(
+            project_token(&with(none.clone(), more), Spelling::Attached),
+            None
         );
     }
 
     #[test]
-    fn a_documents_token_moves_with_its_content_and_the_relations_part_comes_off() {
+    fn a_documents_token_moves_with_its_content_and_the_relations_parts_come_off() {
         let document = |content: &str| {
             json!({"title": "Design", "url": "https://linear.app/x/document/design", "project": null,
                    "updatedAt": "2026-10-01T00:00:00Z", "content": content})
@@ -427,18 +794,13 @@ mod tests {
         let one = document_token(&document("a")).unwrap();
         let other = document_token(&document("a, edited")).unwrap();
         assert_eq!(order(&one, &other), None);
-        let token = task(
-            &issue("2026-10-01T00:00:00Z", "bug", page(&[], false)),
-            true,
-        )
-        .unwrap();
+        let held = issue("2026-10-01T00:00:00Z", "bug", page(&[], false));
+        let token = task(&held, Spelling::Attached).unwrap();
         assert_eq!(
             without_relations(&token),
-            task(
-                &issue("2026-10-01T00:00:00Z", "bug", page(&[], false)),
-                false
-            )
-            .unwrap()
+            task_before_relations(&held).unwrap()
         );
+        assert!(without_relations(&token).contains("|c:"));
+        assert!(!without_relations(&token).contains("|i:"));
     }
 }

@@ -83,16 +83,89 @@ budgets:
     threshold: 0
   - id: linear-cache-cost-not-above-uncached
     description: >-
-      An inner measure of the shared Linear key's allowance that no check may spend: one hour of
-      the assumed workload — three hosts, each a cold and a warm pass over 10 projects, 40
-      documents and 60 issues — driven through the binary against the loopback Linear with the
-      cache on and off, each request priced from the complexity table spike-linear-coverage-report
-      measured, the larger of 1x and 10x of cache on minus cache off. It protects every manager's
-      share of that key from complexity the cache adds.
+      The requests one hour of the assumed workload saves with the Linear cache on — three hosts,
+      each a cold and a warm pass over 10 projects, 40 documents and 60 issues against the
+      loopback Linear — the smaller of 1x and 10x of cache off minus cache on. It protects the
+      shared key's 2,500 requests an hour from what the cache adds.
     labels: [linear]
     measure: reported
     # llmlint: ignore[budget_commands_measure_directly] Every budget of this file names the crate's one shared report-only runner, budget_runner::report, which reads the record ONEBUDGETSPEC_BUDGET_ID selects; this one follows that convention, as its task fixes. The runner reads only the telemetry the journey recorded and hands it to onebudgetspec, which alone judges it.
     command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
+    unit: requests
+    direction: min
+    threshold: 1
+  # llmlint: ignore[budgets_track_product_owner_outcomes] A different limit from the hourly complexity quota: Linear refuses any one query above 10,000 complexity outright, whatever the hour has spent, so the dearest single query is an outcome of its own (a read that fails), not a share of the hourly total; the task fixes it as its own budget at 9,000.
+  - id: linear-cache-largest-query-complexity
+    description: >-
+      The dearest single query any Linear read sends with the cache on over the same hour at 1x
+      and 10x. It protects every widened read from Linear's per-query complexity cap of 10,000,
+      which refuses a query outright.
+    labels: [linear]
+    measure: reported
+    # llmlint: ignore[budget_commands_measure_directly] As the cache cost budget above: the crate's one shared report-only runner reads the record ONEBUDGETSPEC_BUDGET_ID selects and hands it to onebudgetspec, which alone judges it.
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
     unit: points
     direction: max
-    threshold: 0
+    threshold: 9000
+  # llmlint: ignore-block[budget_descriptions_durable_and_terse] The manager's ruling of 2026-10-14 sets this threshold at its measured figure plus 20%, rounded up, within the user's ceiling, and requires the description to state the measured figure, the headroom and the ceiling, so a reader can tell a tightened threshold from the share it protects.
+  - id: linear-hourly-requests-1x
+    description: >-
+      The requests one hour of the assumed workload at 1x sends Linear with the cache on, the
+      first pass of each host cold and its second warm: 207 measured, plus 20% headroom, rounded
+      up to a multiple of 10, within the ceiling of 250 (10% of the 2,500 an hour the key allows).
+      It protects the share of the key this workload may take from people and other tools.
+    # llmlint: ignore-end[budget_descriptions_durable_and_terse]
+    labels: [linear]
+    measure: reported
+    # llmlint: ignore[budget_commands_measure_directly] As the cache cost budget above: the crate's one shared report-only runner reads the record ONEBUDGETSPEC_BUDGET_ID selects and hands it to onebudgetspec, which alone judges it.
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
+    unit: requests
+    direction: max
+    threshold: 250
+  # llmlint: ignore-block[budget_descriptions_durable_and_terse] The manager's ruling of 2026-10-14 sets this threshold at its measured figure plus 20%, rounded up, within the user's ceiling, and requires the description to state the measured figure, the headroom and the ceiling, so a reader can tell a tightened threshold from the share it protects.
+  - id: linear-hourly-requests-10x
+    description: >-
+      The requests the same cold-then-warm hour sends Linear with the cache on at 10x: 1,944
+      measured, plus 20% headroom, rounded up to a multiple of 50, within the ceiling of 2,500
+      (the whole hour the key allows). It protects the requests of the key from this workload at
+      its largest scale.
+    # llmlint: ignore-end[budget_descriptions_durable_and_terse]
+    labels: [linear]
+    measure: reported
+    # llmlint: ignore[budget_commands_measure_directly] As the cache cost budget above: the crate's one shared report-only runner reads the record ONEBUDGETSPEC_BUDGET_ID selects and hands it to onebudgetspec, which alone judges it.
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
+    unit: requests
+    direction: max
+    threshold: 2350
+  # llmlint: ignore-block[budget_descriptions_durable_and_terse] The manager's ruling of 2026-10-14 sets this threshold at its measured figure plus 20%, rounded up, within the user's ceiling, and requires the description to state the measured figure, the headroom and the ceiling, so a reader can tell a tightened threshold from the share it protects.
+  - id: linear-hourly-requests-10x-warm
+    description: >-
+      The requests an hour at 10x sends Linear with the cache on when every pass is warm, as on a
+      host whose cache an earlier hour filled: 612 measured, plus 20% headroom, rounded up to a
+      multiple of 50, within the ceiling of 1,250 (50% of the 2,500 an hour the key allows). It
+      protects the share of the key a settled host may take.
+    # llmlint: ignore-end[budget_descriptions_durable_and_terse]
+    labels: [linear]
+    measure: reported
+    # llmlint: ignore[budget_commands_measure_directly] As the cache cost budget above: the crate's one shared report-only runner reads the record ONEBUDGETSPEC_BUDGET_ID selects and hands it to onebudgetspec, which alone judges it.
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
+    unit: requests
+    direction: max
+    threshold: 750
+  # llmlint: ignore[budgets_track_product_owner_outcomes] Linear meters a key by two separate hourly quotas, 2,500 requests and 3,000,000 complexity, and either can run out first; this budget is the complexity quota's share, which the request budgets cannot see, and the manager's ruling of 2026-10-14 sets it as its own budget at that share.
+  # llmlint: ignore-block[budget_descriptions_durable_and_terse] The manager's ruling of 2026-10-14 sets this threshold at its measured figure plus 20%, rounded up, within the user's ceiling, and requires the description to state the measured figure, the headroom and the ceiling, so a reader can tell a tightened threshold from the share it protects.
+  - id: linear-hourly-complexity-10x
+    description: >-
+      The complexity the cold-then-warm hour at 10x spends with the Linear cache on, each request
+      priced as the cache cost budget prices it: 546,504 measured, plus 20% headroom, rounded up
+      to a multiple of 25,000, within the ceiling of 750,000 (25% of the 3,000,000 an hour the
+      key allows). It protects the share of the key this workload may take from people and other
+      tools.
+    # llmlint: ignore-end[budget_descriptions_durable_and_terse]
+    labels: [linear]
+    measure: reported
+    # llmlint: ignore[budget_commands_measure_directly] As the cache cost budget above: the crate's one shared report-only runner reads the record ONEBUDGETSPEC_BUDGET_ID selects and hands it to onebudgetspec, which alone judges it.
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
+    unit: points
+    direction: max
+    threshold: 675000

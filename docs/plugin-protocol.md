@@ -643,8 +643,10 @@ whose comments could not be read — not refused as a whole — is answered with
 
 A copy reads a task whose comments run past one page a page at a time through this method, and
 compares the task each answer carries with the first: when they differ, the task changed while
-it was being read, and the copy reads it again (§4.13d). For a task carrying no `version`, which
-says nothing of a comment edited alone, the copy also reads every page again from the first,
+it was being read, and the copy reads it again (§4.13d). The `version`s are compared only where
+the source's version coverage says its token covers comments; otherwise — and for a task carrying
+no `version` — nothing the task carries moves for a comment edited alone, so the copy also reads
+every page again from the first,
 until two full passes in a row agree on every comment's id, body and `updated_at`, at most three
 passes; a task that never settles is written nowhere and reported failed.
 
@@ -1168,7 +1170,7 @@ write may still hold its source's token, and a destination ignores it.
 What each plugin of this build keys its token on is stated here once, as what the journeys
 named below hold it to:
 
-<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by the journeys it names: every row of the GitHub member table below names its leg in `every_change_kind_moves_the_changed_tasks_token_and_no_other` in `crates/onetaskgraph-e2e/tests/e2e/change_tokens.rs`, which makes that change to one loopback board task and holds its token to moving (to a later one, or for a transfer to an unordered one) and both ends of a relationship with it, and in `every_change_kind_moves_a_tasks_token` and `every_facet_change_moves_a_projects_and_a_documents_token` in the GitHub Projects plugin's credentialed `tests/journey`, which re-take each live leg against GitHub; the `gh3` facet rows are held on the loopback by `a_label_or_option_renamed_or_recoloured_is_read_again_for_a_task_a_project_and_a_document`, `a_far_end_deleted_lowers_the_count_and_the_pinned_read_is_never_the_entry`, `an_items_own_kind_change_is_never_answered_with_the_entry_of_its_old_kind` and `a_far_ends_kind_flip_or_retitle_into_a_document_is_read_from_the_board_in_every_edge` in `crates/onetaskgraph-github-projects-e2e/tests/e2e/cache_kinds.rs`; every `lin1` row by `every_change_measured_or_covered_by_construction_is_read_again_pinned_to_the_new_token`, `a_relation_added_removed_or_whose_far_end_is_trashed_reads_as_an_uncached_read_does` and `a_token_linear_cannot_vouch_for_is_never_kept_or_served` in `crates/onetaskgraph-linear-e2e/tests/e2e/cache.rs`, and by `every_field_change_moves_a_linear_tasks_token` in the Linear plugin's credentialed `tests/live.rs`; `a_recopy_by_query_of_unchanged_board_items_skips_each_and_sends_nothing_but_the_listing` in `crates/onetaskgraph-e2e/tests/e2e/copy_skip.rs` makes the task changes and holds the copy to reading exactly the tasks each reaches; `two_digests_of_one_task_file_are_equal_until_it_changes_and_then_incomparable` in `crates/onetaskgraph-core/tests/version.rs` holds the folder's; `two_edits_inside_one_second_are_never_served_from_a_skip` and `a_board_read_without_the_servers_clock_gives_no_token_and_is_never_skipped` in that `copy_skip.rs` hold the settling rule; `a_later_time_beside_fewer_relationship_events_is_no_version_read_after_the_other` in that `change_tokens.rs` puts a crossed pair to the engine's own ordering; `a_destination_recorded_under_the_tokens_older_spelling_is_read_again_once_and_then_skipped` in that `copy_skip.rs` and `an_entry_a_release_before_gh3_left_is_read_again_rather_than_served` in that `cache_kinds.rs` hold the older spellings; and the plugin's `tests/point_cost.rs` holds the unchanged prices. The spike evidence each table cites is the two spike branches' retained session records. -->
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by the journeys it names: every row of the GitHub member table below names its leg in `every_change_kind_moves_the_changed_tasks_token_and_no_other` in `crates/onetaskgraph-e2e/tests/e2e/change_tokens.rs`, which makes that change to one loopback board task and holds its token to moving (to a later one, or for a transfer to an unordered one) and both ends of a relationship with it, and in `every_change_kind_moves_a_tasks_token` and `every_facet_change_moves_a_projects_and_a_documents_token` in the GitHub Projects plugin's credentialed `tests/journey`, which re-take each live leg against GitHub; the `gh3` facet rows are held on the loopback by `a_label_or_option_renamed_or_recoloured_is_read_again_for_a_task_a_project_and_a_document`, `a_far_end_deleted_lowers_the_count_and_the_pinned_read_is_never_the_entry`, `an_items_own_kind_change_is_never_answered_with_the_entry_of_its_old_kind` and `a_far_ends_kind_flip_or_retitle_into_a_document_is_read_from_the_board_in_every_edge` in `crates/onetaskgraph-github-projects-e2e/tests/e2e/cache_kinds.rs`; every `lin1` row by `every_change_measured_or_covered_by_construction_is_read_again_pinned_to_the_new_token`, `a_relation_added_removed_or_whose_far_end_is_trashed_reads_as_an_uncached_read_does` and `a_token_linear_cannot_vouch_for_is_never_kept_or_served` in `crates/onetaskgraph-linear-e2e/tests/e2e/cache.rs` and the comment, inverse-relation and project-relation rows by `every_comment_and_relation_change_is_read_again_pinned_to_the_new_token`, `a_comment_or_edge_read_its_token_cannot_vouch_for_is_never_kept_or_served` and `a_comment_authors_renamed_display_name_is_the_one_member_served_older_than_its_token` in `cache_parts.rs` beside it, and by `every_field_change_moves_a_linear_tasks_token` in the Linear plugin's credentialed `tests/live.rs`; `a_recopy_by_query_of_unchanged_board_items_skips_each_and_sends_nothing_but_the_listing` in `crates/onetaskgraph-e2e/tests/e2e/copy_skip.rs` makes the task changes and holds the copy to reading exactly the tasks each reaches; `two_digests_of_one_task_file_are_equal_until_it_changes_and_then_incomparable` in `crates/onetaskgraph-core/tests/version.rs` holds the folder's; `two_edits_inside_one_second_are_never_served_from_a_skip` and `a_board_read_without_the_servers_clock_gives_no_token_and_is_never_skipped` in that `copy_skip.rs` hold the settling rule; `a_later_time_beside_fewer_relationship_events_is_no_version_read_after_the_other` in that `change_tokens.rs` puts a crossed pair to the engine's own ordering; `a_destination_recorded_under_the_tokens_older_spelling_is_read_again_once_and_then_skipped` in that `copy_skip.rs` and `an_entry_a_release_before_gh3_left_is_read_again_rather_than_served` in that `cache_kinds.rs` hold the older spellings; and the plugin's `tests/point_cost.rs` holds the unchanged prices. The spike evidence each table cites is the two spike branches' retained session records. -->
 | Plugin | Tasks | Projects | Documents |
 | --- | --- | --- | --- |
 | `github-projects` | `gh3` (below) | `gh3` | `gh3` |
@@ -1272,24 +1274,41 @@ each against GitHub's own `cost`.
 Every part is spelled from the response the plugin already receives; only a cache attached to
 the source (§4.13e) widens a request.
 
-- **A task:** `lin1|<Issue.updatedAt>|<facets>[|r:<relations>]`, the facets being
+- **A task:** `lin1|<Issue.updatedAt>|<facets>[|c:<comments>|r:<relations>|i:<inverse>]`, the
+  facets being
   `{"key":<identifier>,"labels":[[<id>,<name>,<color>],...],"project":<id|null>,"state":[<name>,<type>],"url":<url>}`.
-- **A project:** `lin1|<Project.updatedAt>|<facets>`, the facets being
+- **A project:** `lin1|<Project.updatedAt>|<facets>[|r:<relations>|i:<inverse>]`, the facets being
   `{"labels":[[<id>,<name>,<color>],...],"status":[<name>,<type>]}`.
 - **A document:** `lin1|<Document.updatedAt>|<facets>`, the facets being
   `{"content":<SHA-256 of its content>,"project":<id|null>,"title":<title>,"url":<url>}`.
 - Each facets part is the lowercase hex SHA-256 of that canonical JSON, labels sorted by id.
-- **`<relations>`, only with the cache attached**, is the lowercase hex SHA-256 of
-  `[[<relation id>,<type>,<relatedIssue id>],...]`, sorted by relation id, from a
-  `relations(first:10){nodes{id type relatedIssue{id}} pageInfo{hasNextPage}}` page.
+- **The bracketed parts are spelled only with the cache attached, and all of them or none.**
+  Each is the lowercase hex SHA-256 of the canonical JSON of one first page's rows, sorted:
+  - `c:` — a task's comments, `[[<comment id>,<updatedAt>],...]`, from
+    `comments(first:10){nodes{id updatedAt} pageInfo{hasNextPage}}`; a detail read spells it
+    from the `comments(last:…)` page it already reads, when that page was not resumed from a
+    cursor and reports no earlier one;
+  - `r:` — a task's relations, `[[<relation id>,<type>,<relatedIssue id>],...]`, from
+    `relations(first:10){nodes{id type relatedIssue{id}} pageInfo{hasNextPage}}`, or a project's,
+    `[[<relation id>,<type>,<relatedProject id>],...]`, from
+    `relations(first:10){nodes{id type relatedProject{id}} pageInfo{hasNextPage}}`;
+  - `i:` — a task's inverse relations, `[[<relation id>,<type>,<issue id>],...]`, from
+    `inverseRelations(first:10){nodes{id type issue{id}} pageInfo{hasNextPage}}`, or a project's,
+    `[[<relation id>,<type>,<project id>],...]`, from
+    `inverseRelations(first:10){nodes{id type project{id}} pageInfo{hasNextPage}}`: the relations
+    other items record with it, which is what a `DependedOnBy` read answers.
 - **Completeness.** A labels connection names no `first` and no `pageInfo`, so a response
   returning 50 or more label nodes — Linear's default page — gives no token, and so does one
-  whose relations page reports `hasNextPage` or holds more than 10 rows. Nothing is selected to
-  learn more.
-- **Ordering.** Two tokens whose kinds, facets, or presence or value of the relations part
-  differ are never ordered; otherwise the later `updatedAt`, as an instant, is the later
-  version, and two are `equal` only when every part is. A value of any other spelling is never
-  ordered. No settling margin applies: the spike measured none.
+  whose comments, relations or inverse relations page reports another page or holds more than
+  10 rows. Nothing is selected to learn more. So, with the cache on, a task with more than ten
+  comments, relations or dependents, or a project with more than ten relations, is read every
+  time.
+- **Ordering.** Two tokens whose kinds, facets, or presence or value of any bracketed part differ
+  are never ordered; otherwise the later `updatedAt`, as an instant, is the later version, and
+  two are `equal` only when every part is. A value of any other spelling is never ordered —
+  among them the spelling 0.6.1 gave with the cache attached, a task's relations part alone and a
+  project's none, so an entry a release of that spelling wrote is read again once. No settling
+  margin applies: the spike measured none.
 
 **Why `lin1` has those parts.** `spike-linear-coverage` (branch
 `nick/otg-cache-everything-versioned-plan/spike-linear-coverage`, three sessions on a scratch
@@ -1302,10 +1321,11 @@ below) made each change and read each part before and after:
 | an issue's label added or removed, its state changed, or its project removed or added | moved | the facets too | s09, s12, s33, s34 (session 1); s04, s06 (session 2) |
 | a label renamed or recoloured, a workflow state renamed | **missed, 3 of 3** | the facets | s10, s11 (session 1); s05 (session 2) |
 | a `blocks` or `related` relation added | **missed, 3 of 3** | the relations digest, on all 10 adds and removes | s26, s28 (session 1); s26 (session 2) |
-| a comment added, edited or deleted | **missed, 0 of 3 moved** | only a comments digest, which the hourly cost test refuses | s15–s17 (session 1) |
+| a `blocks`, `related` or `duplicate` relation added or removed, read on the issue it names | moved, 8 of 8 | that issue's inverse relations digest, 8 of 8 | s26–s31 (session 1); s26, s27 (session 2) |
+| a comment added, edited or deleted | **missed, 0 of 3 moved** | the comments digest | s15–s17 (session 1) |
 | a project's name or content | moved | — | s35, s36 (session 1) |
 | a project's status changed, a label added or removed | moved | the facets too | s37–s39 (session 1) |
-| a project relation added or removed | **missed, 0 of 2 moved** | only a relations digest, which `PROJECTS` cannot carry under the cap | s40, s41 (session 1) |
+| a project relation added or removed | **missed, 0 of 2 moved, on either project** | the near project's relations digest, and the far project's inverse relations digest, 2 of 2 | s40, s41 (session 1) |
 | a document's title, or its project | moved | the facets too, for its project | s42, s45 (session 1) |
 | a document's content, or an asset reference in its slot | **missed, 4 of 4** | the content digest the facets carry | s43, s44 (sessions 1 and 2) |
 
@@ -1315,14 +1335,29 @@ document's title and refiling, and a workflow state renamed. The loopback journe
 row's change and every one of those, and hold a read pinned to the new token to the changed
 value.
 
+**The one member a token does not cover: a comment author's display name.** `c:` digests each
+comment's id and `updatedAt`, which move for a comment added, edited or deleted, and the comment
+set; an author renaming themselves in Linear moves neither, nor any time of the issue. Renames
+are rare and the name is a label for a person rather than work, so by the user's ruling of
+2026-10-14 a comment served from the cache may name its author as they were named when the entry
+was filled — the one member a served read may answer older than its token. Every other member of
+a comment — its id, body, creation and update times, and which comments there are — is served no
+older than the caller's token. **A task's reverse edges are covered by `i:` by construction** —
+it digests the very rows a `DependedOnBy` read answers — and the issue a relation names moved its
+`updatedAt` too on each of those 8 changes. **A project's reverse edges are covered by its `i:`
+part alone**: neither project's `updatedAt` moved for a project relation added or removed (0 of
+2), and the far project's inverse relations digest moved on both.
+
 **What a copy's skip takes a token as vouching for.** A repeat copy, or a copy by query, skips a
 task whose source token is the one its destination counterpart records only when the source's
 `copy_version_coverage` covers every part the copy would write: the task's fields, its forward
 edges, and its comments when the copy carries them. It defaults to the cache's
 `version_coverage` and, like it, is read in process and never carried over this protocol, so a
-task read from a hosted plugin is never skipped. So a `--comments` copy out of Linear never
-skips — its token never covers comments — and a copy out of a Linear source with no cache never
-skips either, its token not covering forward edges then. A folder of Markdown covers every part:
+task read from a hosted plugin is never skipped. So a copy out of a Linear source with no cache
+never skips — its token then covers neither forward edges nor comments — and one with the cache
+on skips an unchanged task, `--comments` or not, since its token's `c:` and `r:` parts then move
+for every comment and relation change; a comment author renamed since the last copy is the one
+change such a skip does not carry, as above. A folder of Markdown covers every part:
 `md1` digests the task's one file. A GitHub board reports every part for a copy's skip, though
 its cache serves no forward edge: the relationship count moves for an edge added or removed and
 for a far end deleted, so its token sees every change to a task's edges but one. **That one
@@ -1349,10 +1384,17 @@ rule — a copy's skip, and the board cache built on the same token.
 
 ### 4.13e The store's local cache
 
-A source configured with `cache.enabled` has its tasks, projects and documents, a task's
-forward edges, and the verified bytes of image assets kept on the host the engine runs on,
-keyed on the `version` of §4.13d and on nothing else. The rule it may never break is that **it
-never adds a request and never serves stale data**: an entry is served only when the version a
+A source configured with `cache.enabled` has its tasks with their comments, a task's forward and
+reverse edges, its projects with their forward and reverse edges, its documents, and the verified
+bytes of
+image assets kept on the host the engine runs on, keyed on the `version` of §4.13d and on
+nothing else. The rule it may never break is that **it never serves stale data**, and its cost
+is held over an hour rather than per read: over an hour of the assumed workload it sends fewer
+requests than no cache (`linear-cache-cost-not-above-uncached`, and on GitHub
+`github-cache-points-not-above-uncached`), though one read may cost more than it did — a widened
+query, a Linear projects listing of more than 74 rows taking one more page, or a copy's one
+page of projects (below) that pins none of the projects it files under. An entry is
+served only when the version a
 caller pinned — explicitly, or by a listing in the same command — is that entry's version or an
 earlier one, by the source's own `order_versions`, and never when the two are `incomparable`.
 Nothing asks a source whether a record changed. **A pin means "at least as fresh as the version
@@ -1369,16 +1411,26 @@ subprocess-hosted plugin has no remote identity, so the engine keeps no cache of
   leaves out reads as `Uncovered` with a reason, and the defaults leave every part uncovered. A
   part it does not cover is never served: the read goes to the source and its `cache.bypassed`
   says why. A record its source gives no token — a draft, a GitHub item changed within the
-  minute before its read, a Linear item whose labels or relations came back as only a first
-  page — is read every time.
+  minute before its read, a Linear item whose labels, comments, relations or inverse relations
+  came back as only a first page — is read every time.
 - `attach_cache` — called exactly once, when the engine wraps the source in its cache, before
   any read and before any coverage is read. A source not overriding it behaves exactly as
-  before. `linear` uses it to widen the four documents named below, which is what lets its
-  task tokens carry their relations part and so cover forward edges.
+  before. `linear` uses it to widen the seven documents named below, which is what lets its
+  task tokens carry their comments, relations and inverse relations parts and its project tokens
+  their relations part, and so cover a task's comments and edges both ways and a project's
+  forward edges.
 - `forward_edges_version` — the token the response that answered the source's last
   `DependsOn` read of a task spelled, so a dependency read can fill an entry when nothing else
   in the command read the task. Those edges are served only to a pin that version is at or
   after, and never vouch for the task's own fields. Defaulted to none.
+- `edges_version` — the same, for any item kind and either direction: the token the response
+  that answered the source's last first-page dependency read of that item in that direction
+  spelled. A project's forward edges and a task's reverse ones are kept only at a version it
+  gives, and served only to a pin that version is at or after. Defaulted to
+  `forward_edges_version` for a task's forward edges and none otherwise.
+- `reverse_edges_coverage` — whether a task's or a project's token vouches for its reverse
+  edges, which are recorded on the items that depend on it. Defaulted to not covering them, with
+  a reason.
 - `remote_identity`, on `SourcePlugin` — what names the remote it reads, which the cache
   directory is a digest of.
 - `write_context`, `board_context`, `prime_write` and `unprime` — opaque records the cache
@@ -1388,47 +1440,81 @@ subprocess-hosted plugin has no remote identity, so the engine keeps no cache of
   came to and, for a mutation, the version and the whole task its own response shows.
 
 **Every read, and why the ones kept remote are.** A pin comes from the caller —
-`task show`, `task comment list`, `task show-many`, `project show` and `document show`, each
-with `--pin`, or `Engine::pin`, `Engine::pin_project` and `Engine::pin_document` — or from a
+`task show`, `task comment list`, `task show-many`, `task deps`, `project show`, `project deps`
+and `document show`, each with `--pin`, or `Engine::pin`, `Engine::pin_project` and `Engine::pin_document` — or from a
 listing earlier in the same command. A listing only pins: it never fills an entry. An entry is
 filled lazily, by a load, and nothing is pre-warmed.
 
-<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by the journeys that drive each row through the binary: `crates/onetaskgraph-github-projects-e2e/tests/e2e/cache.rs`, `cache_kinds.rs`, `cache_assets.rs` and `cache_writes.rs` for the board, and `crates/onetaskgraph-linear-e2e/tests/e2e/cache.rs` — whose `every_linear_read_kept_remote_reaches_linear_every_time_and_costs_what_it_did` makes each remote read twice and counts both — and `cache_documents.rs` for Linear; the reasons are the plugins' own `Uncovered` strings, which every bypassed read prints. -->
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by the journeys that drive each row through the binary: `crates/onetaskgraph-github-projects-e2e/tests/e2e/cache.rs`, `cache_kinds.rs`, `cache_assets.rs` and `cache_writes.rs` for the board, and `crates/onetaskgraph-linear-e2e/tests/e2e/cache.rs` — whose `every_linear_read_kept_remote_reaches_linear_every_time_and_costs_what_it_did` makes each remote read twice and counts both — `cache_parts.rs`, whose `every_comment_and_edge_read_is_a_cold_load_a_hit_on_an_unchanged_pin_and_a_miss_on_a_newer_one` drives each newly served Linear read, and `cache_documents.rs` for Linear, with `a_declared_sources_verification_reaches_linear_with_its_cache_on_as_it_does_without` in `linear_boundary.rs` for `visibility` and `every_health_read_through_the_plugin_host_reaches_linear_with_the_cache_on_or_off` in `health.rs` for `health`; the reasons are the plugins' own `Uncovered` strings, which every bypassed read prints. -->
 | Read | `github-projects` | `linear` |
 | --- | --- | --- |
 | a task's fields: `task show`, `task show-many`, a copy's loads | served | served |
-| a task's comments | served | remote: no issue time moved for a comment added, edited or deleted (0 of 3), a comments digest fails the hourly cost test, and an author's display name has no token |
+| a task's comments | served | served, with the cache attached; the comments part is what vouches for them, all but each author's display name (§4.13d) |
 | a task's forward edges (`DependsOn`), native and recorded | remote: an item's token does not attest a far end's kind, whether it became a document, or its deletion (a far end's kind flip and its retitle into a document each left the near token equal, 1 of 1) | served, with the cache attached; the relations part is what vouches for them |
 | a project's fields | served | served |
-| a project's forward edges | remote, for a task's reason | remote: `Project.updatedAt` moved for 0 of 2 relation changes, and a relations digest on `PROJECTS` would bring it to about 9,491 of Linear's 10,000 per-query complexity at 100 rows |
+| a project's forward edges | remote, for a task's reason | served, with the cache attached; the project's relations part is what vouches for them |
 | a document's fields | served | served |
 | a document's asset manifest, and a task's | served, at the version its record was served at | remote: Linear's asset reads send no request, so there is nothing to save |
 | an asset's bytes | served by digest, below | — |
-| every `DependedOnBy` read | remote: a reverse edge is another record's | remote |
+| a task's reverse edges (`DependedOnBy`) | remote: a reverse edge is another record's | served, with the cache attached; the inverse relations part is what vouches for them |
+| a project's reverse edges | remote | served, with the cache attached; the project's inverse relations part is what vouches for them |
 | `query_tasks`, `query_projects`, `query_documents` | remote: they pin, and fill nothing | remote |
 | `labels`, `health`, `visibility`, and Linear's `status_names` | remote | remote |
 <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
-**What `attach_cache` widens on Linear, and what it costs.** With the cache attached, `ISSUES`,
-`ISSUE` and `ISSUE_DETAIL` gain exactly the relations page of §4.13d, so every response that
-fills or pins a task carries the same parts; `ISSUE_RELATIONS` gains exactly `updatedAt`,
-`identifier`, `url`, `state{name type}`, `labels{nodes{id name color}}` and `project{id}`, the
-token's other parts, so a forward-edge read can fill. Every other document is unchanged, and
-with no cache attached each is byte for byte the one 0.6.0 sent. Linear's complexity for each,
-as `spike-linear-coverage` priced them, against its per-query cap of 10,000:
+**What `attach_cache` widens on Linear, and what it costs.** With the cache attached, `ISSUES`
+and `ISSUE` gain exactly the comments, relations and inverse relations pages of §4.13d,
+`ISSUE_DETAIL` the relations and inverse relations pages — its comments part is spelled from the
+comments page it already reads — and `PROJECTS` and `PROJECT` the project relations and inverse
+relations pages, so
+every response that fills or pins an item carries the same parts. `ISSUE_RELATIONS` gains exactly
+`updatedAt`, `identifier`, `url`, `state{name type}`, `labels{nodes{id name color}}`,
+`project{id}` and the comments page, and `PROJECT_RELATIONS` exactly `updatedAt`,
+`status{name type}` and `labels{nodes{id name color}}`, the tokens' other parts, so a dependency
+read in either direction can fill; each asks for at most 10 rows a page, the most a token
+vouches for, so an item with more takes a request a page. `PROJECTS` asks for at most 74 rows a
+page. Every other
+document is unchanged — `ISSUE_COMMENTS` among them, since a caching source's comment listing is
+the detail read, which already fills the comments and the fields together — and so is the read a
+write makes of its own target, whose answer fills nothing. With no cache attached each is byte
+for byte the one 0.6.0 sent. Linear's complexity for each, against its per-query cap of 10,000,
+priced from `spike-linear-coverage`: the plain documents, the relations page on `ISSUE` (+25),
+the comments page on each `ISSUES` row (+3) and the relations page on each `PROJECTS` row asked
+for (+25) are measured; each inverse relations page is taken as its relations page's 25, the
+comments page as the same 3 wherever it is added, a project's relations page on `PROJECT` as on
+`PROJECTS`, and `PROJECT_RELATIONS`' token parts as the 3 `ISSUE_RELATIONS`' were measured at:
 
 | Document | Plain | Widened |
 | --- | --- | --- |
-| `ISSUES`, at 100 rows | 8 + 6 a row: 608 | 8 + 31 a row: **3,108** |
-| `ISSUE` | 6 | 31 |
-| `ISSUE_DETAIL`, at `last:100` | 11 | 36 |
-| `ISSUE_RELATIONS`, at `first:100` | 522 | 525 |
+| `ISSUES`, at 100 rows | 8 + 6 a row: 608 | 8 + 59 a row: **5,908** |
+| `ISSUE` | 6 | 59 |
+| `ISSUE_DETAIL`, at `last:100` | 11 | 61 |
+| `ISSUE_RELATIONS` | 522, at `first:100` | 56, at `first:10` |
+| `PROJECTS` | 70 a row asked for: 7,000 at 100 | 120 a row asked for, at most 74: **8,880** |
+| `PROJECT` | 69 | 119 |
+| `PROJECT_RELATIONS` | 522, at `first:100` | 53, at `first:10` |
 
-So a widened query costs more than the one it replaces, and the cache earns it back by the
-reads it answers: the `linear-cache-cost-not-above-uncached` budget holds it to spending no more
-complexity than no cache over an hour of three hosts, each a cold and a warm pass over 10
-projects, 40 documents and 60 issues, and at ten times that, and records by how much it spends
-less. On GitHub nothing is widened:
+So a widened query costs more than the one it replaces, and one listing of more than 74 projects
+takes one request more; the cache earns both back by the reads it answers.
+
+**A copy's one page of projects.** A copy files each task or document under its source project's
+counterpart, which reads that project by id to follow its link. When the copy's source caches,
+and the items it files name at least two of that source's projects it has not already looked
+up in the command, the copy reads the first page of that source's projects once, which pins
+every project it carries, so each of those reads is answered from the cache while unchanged. It
+reads one page and no more, and the rest are read by id as before, so it costs at most one request
+over reading each project, and only when that page pins none of them. A listing narrowed to the
+projects the copy names would make the saving hold at every workspace size; it needs an id
+predicate the engine's `ProjectQuery` does not have. The
+`linear-cache-cost-not-above-uncached` budget holds it to sending strictly fewer requests than no
+cache — what Linear's key runs out of first, at 2,500 an hour per user — over an hour of three
+hosts, each a cold and a warm pass over 10 projects, 40 documents and 60 issues, and at ten times
+that; and `linear-cache-largest-query-complexity` holds the dearest single query any read sends
+with the cache on to 9,000, 90% of the cap. Four more hold the cache-on hour to absolute shares
+of the key, each its measured figure plus 20% within a ceiling the user set:
+`linear-hourly-requests-1x` (250 requests, ceiling 250), `linear-hourly-requests-10x` (2,350,
+ceiling 2,500), `linear-hourly-requests-10x-warm` (750, every pass warm, ceiling 1,250) and
+`linear-hourly-complexity-10x` (675,000 of the key's 3,000,000 complexity, ceiling 750,000). On GitHub nothing is widened:
 `github-cache-points-not-above-uncached` holds every kind, sequence and scale to adding no
 point.
 
@@ -1440,14 +1526,15 @@ version: the manifest says which bytes, and the digest says they are those bytes
 or two versions of one, naming the same digest share one entry.
 
 **How large it grows.** Each record is one file, written whole and replaced in place, so the
-item entries hold at most one file per task, task's forward edges, project and document a load
-has ever read — the board's or team's size at most, and usually what was loaded rather than
+item entries hold at most one file per task, task's forward edges, task's reverse edges,
+project, project's forward edges and document a load has ever read — the board's or team's size at most, and usually what was loaded rather than
 what exists. Byte entries hold one file per distinct digest ever read and are never replaced,
 so an image edited ten times leaves eleven. Nothing expires by age and nothing caps the total.
 At the GitHub budget's workload a pass loads 5 projects, 20 documents and 20 tasks, at most 45
 item files, and its 8 images of 256 KiB are 2 MiB of bytes, growing by 256 KiB for each image
 replaced; at ten times the size, 450 files and 20 MiB. At the Linear budget's, at most 60
-task, 60 edge, 10 project and 40 document files, and 1,700 at ten times. **`onetaskgraph cache
+task, 60 forward edge, 60 reverse edge, 10 project, 10 project forward edge, 10 project reverse
+edge and 40 document files, and 2,500 at ten times. **`onetaskgraph cache
 clear [<SOURCE>]` reclaims a source's item and byte entries together**, removing only files
 this store wrote.
 
@@ -1503,7 +1590,7 @@ concurrent edit to a field the write does not set is never touched.
 | any of them, after `cache clear` or with the entry older than expected | one read (ISSUE), then the mutations above |
 | any of them, a cached option or id re-minted since it was cached | the refused mutation, one ISSUE read, and that part once more |
 
-**The one named exception to "the cache never adds a request".** When a board option was
+**The one write that sends a request more than it would without a cache.** When a board option was
 deleted or renamed after the cache kept its id — `sources fields --apply` re-mints an option it
 renames — GitHub refuses the mutation that sends it. The write then makes one read, which
 refreshes the board's cached field and option ids so the same stale option cannot recur, and

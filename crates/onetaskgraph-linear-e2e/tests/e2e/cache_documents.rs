@@ -4,9 +4,10 @@
 //! `fixtures/documents-0.6.0.json` is every document of the plugin's `graphql` module at the tag
 //! `v0.6.0`, extracted verbatim. With the cache off — `attach_cache` never having run — every
 //! document the read and write verbs below send is one of those, byte for byte. With it on, the
-//! only documents that differ are the four the cache sends in place of `ISSUES`, `ISSUE`,
-//! `ISSUE_DETAIL` and `ISSUE_RELATIONS`, each the one it stands in for with exactly the
-//! selection the cache adds and nothing else.
+//! only documents that differ are the seven the cache sends in place of `ISSUES`, `ISSUE`,
+//! `ISSUE_DETAIL`, `ISSUE_RELATIONS`, `PROJECTS`, `PROJECT` and `PROJECT_RELATIONS`, each the one it stands in for with exactly the selections the cache's
+//! token reads and nothing else — and a write's own read of its target sends the plain one,
+//! since its answer fills no entry.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -159,43 +160,53 @@ fn with_the_cache_off_every_document_is_one_0_6_0_sent_byte_for_byte() {
 }
 
 #[test]
-fn with_the_cache_on_only_four_documents_differ_each_by_exactly_what_the_cache_adds() {
+fn with_the_cache_on_only_seven_documents_differ_each_by_exactly_what_the_cache_adds() {
     let released: BTreeSet<String> = released().into_values().collect();
     let cached = Cached::new(dataset());
     let sent = sent(&cached);
-    let widened = [
-        (
-            graphql::ISSUES_CACHED,
-            graphql::ISSUES,
-            graphql::RELATIONS_PAGE,
-        ),
-        (
-            graphql::ISSUE_CACHED,
-            graphql::ISSUE,
-            graphql::RELATIONS_PAGE,
-        ),
+    // Each widened document, the plain one it stands in for, and every selection it adds — each
+    // one a page or a part `change_token` spells a token from, as its own tests hold.
+    let task_pages = [
+        graphql::COMMENTS_PAGE,
+        graphql::RELATIONS_PAGE,
+        graphql::INVERSE_RELATIONS_PAGE,
+    ];
+    let project_pages = [
+        graphql::PROJECT_RELATIONS_PAGE,
+        graphql::PROJECT_INVERSE_RELATIONS_PAGE,
+    ];
+    let widened: [(&str, &str, &[&str]); 7] = [
+        (graphql::ISSUES_CACHED, graphql::ISSUES, &task_pages),
+        (graphql::ISSUE_CACHED, graphql::ISSUE, &task_pages),
         (
             graphql::ISSUE_DETAIL_CACHED,
             graphql::ISSUE_DETAIL,
-            graphql::RELATIONS_PAGE,
+            &[graphql::RELATIONS_PAGE, graphql::INVERSE_RELATIONS_PAGE],
         ),
         (
             graphql::ISSUE_RELATIONS_CACHED,
             graphql::ISSUE_RELATIONS,
-            graphql::TOKEN_PARTS,
+            &[graphql::TOKEN_PARTS],
+        ),
+        (graphql::PROJECTS_CACHED, graphql::PROJECTS, &project_pages),
+        (graphql::PROJECT_CACHED, graphql::PROJECT, &project_pages),
+        (
+            graphql::PROJECT_RELATIONS_CACHED,
+            graphql::PROJECT_RELATIONS,
+            &[graphql::PROJECT_TOKEN_PARTS],
         ),
     ];
     for (cache, plain, added) in widened {
-        assert_eq!(
-            cache.matches(added).count(),
-            1,
-            "{cache} carries what the cache adds once"
-        );
-        assert_eq!(
-            cache.replacen(&format!(" {added}"), "", 1),
-            plain,
-            "{cache} is {plain} with exactly `{added}`"
-        );
+        let mut stripped = cache.to_owned();
+        for added in added {
+            assert_eq!(
+                stripped.matches(&format!(" {added}")).count(),
+                1,
+                "{cache} carries `{added}` once"
+            );
+            stripped = stripped.replacen(&format!(" {added}"), "", 1);
+        }
+        assert_eq!(stripped, plain, "{cache} is {plain} with exactly {added:?}");
         assert!(sent.contains(cache), "the verbs send {cache}");
     }
     let other: Vec<&String> = sent

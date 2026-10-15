@@ -168,6 +168,50 @@ pub trait TaskSource: Send + Sync {
         None
     }
 
+    /// The change token the response that answered this source's last dependency read of the
+    /// `kind` item `id` in `direction`, from its first page, spelled — or `None` when it spelled
+    /// none — on the terms of [`forward_edges_version`](Self::forward_edges_version), which is
+    /// what it answers for a task's [`Direction::DependsOn`].
+    ///
+    /// What lets the store's cache keep a project's forward edges, and either kind's reverse
+    /// ones, by the version they were read at: a project's forward edges are served only where
+    /// [`project_version_coverage`](Self::project_version_coverage) covers them, reverse ones only
+    /// where [`reverse_edges_coverage`](Self::reverse_edges_coverage) covers that kind's, and each
+    /// only to a pin that version is at or after. Synchronous, and never
+    /// carried over the plugin protocol.
+    ///
+    /// Defaulted to [`forward_edges_version`](Self::forward_edges_version) for a task's forward
+    /// edges and to `None` for every other read, which keeps those remote.
+    fn edges_version(&self, kind: ItemKind, id: &NativeId, direction: Direction) -> Option<String> {
+        match (kind, direction) {
+            (ItemKind::Task, Direction::DependsOn) => self.forward_edges_version(id),
+            _ => None,
+        }
+    }
+
+    /// Whether this source's token for a `kind` item — [`Task::version`] or
+    /// [`Project::version`] — vouches for its reverse edges, what a [`Direction::DependedOnBy`]
+    /// read answers, so the store's cache may serve them.
+    ///
+    /// A reverse edge is recorded on another item, so a token vouches for one only where it
+    /// carries a part that moves whenever one is added to or removed from that other item —
+    /// which no part of an item's own fields does. Never carried over the plugin protocol.
+    ///
+    /// Defaulted to not covering them, with that reason.
+    fn reverse_edges_coverage(&self, kind: ItemKind) -> crate::Coverage {
+        crate::Coverage::Uncovered {
+            reason: format!(
+                "the {} plugin does not declare that its change token covers a {}'s reverse \
+                 edges, which are recorded on the items that depend on it",
+                self.kind(),
+                match kind {
+                    ItemKind::Task => "task",
+                    ItemKind::Project => "project",
+                }
+            ),
+        }
+    }
+
     /// What this source holds about task `id` — the item it read last in this process — that
     /// a later write expecting that version of it could take instead of reading it again, or
     /// `None` when it holds nothing of the kind.

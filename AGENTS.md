@@ -552,7 +552,12 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   A seat was always a file on one machine, which excluded nothing on another, and the hosted
   check runs on three. The Linear lane keeps one for a different reason: it is the one
   precondition that can decline that lane without a credential and without reaching Linear,
-  which is what `scripts/check-live-decline.sh` drives through to a red check. That script
+  which is what `scripts/check-live-decline.sh` drives through to a red check.
+  Two crates take that seat — the plugin's live journey and `onetaskgraph-linear-e2e`'s asset
+  journey — so `onetaskgraph-linear:test` is `parallelism: false`: run side by side in one
+  `just check`, the second to start was declined and the required check went red.
+  `scripts/check-live-seat-serialised.sh`, in `scripts:test`, finds every seat-holder by scan
+  and proves against real Nx that none overlap. That script
   reads the lane to find out which precondition it has, and **refuses a lane that opens
   `Shared` unless another `check-*-decline.sh` in that crate's own `test` target drives its
   decline** — for GitHub Projects that is `scripts/check-budget-decline.sh` — so a lane
@@ -951,7 +956,8 @@ them do; this is the inventory of what is owed, not a status board.
 79. A Linear source reads its team, workflow states and project statuses once per instance,
     reads them once more on a miss, and holds nothing a failed call answered; a status write is
     one mutation and no read once they are held, a settlement-shaped update one read and one
-    mutation, and `crates/onetaskgraph-linear-e2e/budgets.yaml` holds each of those figures.
+    mutation, and `crates/onetaskgraph-linear-e2e/budgets.yaml` holds each of those figures —
+    beside the cache-on hour's absolute shares of the key's hourly requests and complexity.
 80. `Engine::end_command`, called between two units of work on one engine, makes every source
     drop what a person can change: a GitHub board settlement after it keeps a body a person
     edited and moves a card from where they left it — in process and over the stdio plugin
@@ -1076,12 +1082,27 @@ them do; this is the inventory of what is owed, not a status board.
     document's fields are a cold load, a hit on an unchanged pin and a miss on a newer one; every
     change `spike-linear-coverage` measured or the facets cover by construction is read again
     pinned to the new `lin1` token; a token Linear cannot vouch for — 50 labels, a relations page
-    past 10 rows or reporting another — is never kept or served; comments, project edges and every
-    listing reach Linear every time; and with the cache off every document sent is 0.6.0's.
+    past 10 rows or reporting another — is never kept or served; every listing, `labels`,
+    `health`, `visibility` and `status_names` reach Linear every time; with the
+    cache off every document sent is 0.6.0's, and with it on every document that differs adds only
+    what a token reads.
 102. A repeat copy skips a task only when its source's token covers every part the copy writes:
     a comment added in Linear, and a relation added to a Linear source with no cache, are each
     carried by the next copy; and a board's far end turned into a project is kept as it was by a
-    skipping recopy and carried by the next copy that reads the task depending on it.
+    skipping recopy and carried by the next copy that reads the task depending on it; with a
+    Linear source's cache on, a comment added is carried by the next `--comments` copy and an
+    unchanged one is skipped.
+103. On a loopback Linear with the cache on, a task's comments — listed, and read beside the task
+    by `task show` and a copy — its reverse edges and a project's edges both ways are a cold load,
+    a hit on an unchanged pin and a miss on a newer one; a comment added, edited or deleted, a
+    project relation added or removed from either end, and a relation another issue adds or
+    removes with the task are each read again pinned to the new token as an uncached read answers
+    them, and a trashed far end reads as an uncached read does; a copy filing under two or more
+    projects reads one page of them, served thereafter, and one filing under a single project
+    reads none; more than ten comments, relations or inverse
+    relations, an unordered pin and the earlier spelling are never kept or served; a comment
+    author renamed is the one member served as it was; and every comment write, relation write
+    and copy taken back takes the entries it can change out of service.
 
 ## The public boundary
 
