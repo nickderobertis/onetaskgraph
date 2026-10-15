@@ -3872,3 +3872,213 @@ fn a_create_under_a_project_held_private_by_its_members_or_not_held_at_all_write
         &body,
     ]);
 }
+
+/// A plan authored in the public `draft` folder whose `openco` task `site` routes to `vault`:
+/// a home on `site` with a member on `vault`, and an edge each way across the two.
+fn routed_plan() -> Store {
+    let store = Store::laid(Some(registered), |sandbox| {
+        json!({
+            "draft": folder(sandbox, "draft", "public"),
+            "site": {"routes": [{"repositories": ["github.com/openco/*"], "to": "vault"}]},
+        })
+    });
+    store.record(
+        "draft",
+        "projects",
+        "goal",
+        "title: Goal\nstatus: todo",
+        PLAIN,
+    );
+    store.record(
+        "draft",
+        "tasks",
+        "library",
+        "title: Library\nstatus: todo\nproject: goal",
+        PLAIN,
+    );
+    store.record(
+        "draft",
+        "tasks",
+        "consumer",
+        &format!(
+            "title: Quiet consumer\nstatus: todo\nproject: goal\nrepositories: [{OPEN}]\n\
+             depends_on: [library]"
+        ),
+        PLAIN,
+    );
+    store.record(
+        "draft",
+        "tasks",
+        "rollout",
+        "title: Rollout\nstatus: todo\nproject: goal\ndepends_on: [consumer]",
+        PLAIN,
+    );
+    store
+}
+
+/// Where each draft item of a project copy landed, by its draft id.
+fn landed_ids(report: &str) -> BTreeMap<String, String> {
+    let report: Value = serde_json::from_str(report).expect("a copy report");
+    report["items"]
+        .as_array()
+        .expect("the copied items")
+        .iter()
+        .map(|item| {
+            (
+                item["source"].as_str().expect("a source id").to_owned(),
+                item["destination"]
+                    .as_str()
+                    .expect("a destination id")
+                    .to_owned(),
+            )
+        })
+        .collect()
+}
+
+/// The `(from, to)` pairs `task deps` answers for `id` in `direction`.
+fn edges_of(store: &Store, id: &str, direction: &str) -> Vec<(String, String)> {
+    let answer: Value =
+        serde_json::from_str(&store.ok(&["task", "deps", id, "--direction", direction, "--json"]))
+            .expect("a dependency answer");
+    answer["items"]
+        .as_array()
+        .expect("the edges")
+        .iter()
+        .map(|edge| {
+            (
+                edge["from"]["id"].as_str().expect("a near end").to_owned(),
+                edge["to"]["id"].as_str().expect("a far end").to_owned(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn a_public_task_s_dependency_on_a_private_member_task_is_kept_on_the_private_side() {
+    let store = routed_plan();
+    let landed =
+        landed_ids(&store.ok(&["project", "copy", "draft:goal", "--to", "site", "--json"]));
+    let (home, library, consumer, rollout) = (
+        &landed["draft:goal"],
+        &landed["draft:library"],
+        &landed["draft:consumer"],
+        &landed["draft:rollout"],
+    );
+    assert!(
+        home.starts_with("site:") && rollout.starts_with("site:"),
+        "{landed:?}"
+    );
+    assert!(
+        consumer.starts_with("vault:"),
+        "the openco task is routed: {landed:?}"
+    );
+
+    // The edge reads from either end, and the private task's own edge to a public one is
+    // where it always was.
+    let kept = vec![(rollout.clone(), consumer.clone())];
+    assert_eq!(edges_of(&store, rollout, "depends-on"), kept);
+    assert_eq!(edges_of(&store, consumer, "depended-on-by"), kept);
+    assert_eq!(
+        edges_of(&store, consumer, "depends-on"),
+        vec![(consumer.clone(), library.clone())]
+    );
+    // And so does the home's graph, the private task drawn outside it.
+    let graph: Value =
+        serde_json::from_str(&store.ok(&["project", "graph", home, "--format", "json"]))
+            .expect("a graph");
+    assert!(
+        graph["edges"]
+            .as_array()
+            .expect("the graph's edges")
+            .contains(&json!({"from": consumer, "to": rollout})),
+        "{graph:#}"
+    );
+
+    // Nothing on `site` names the private task: not its id, its title, where it is, its
+    // origin, or the project it is filed under. The home's own member list is the one record
+    // there that names `vault`, and it names the member project alone.
+    let consumer_native = consumer.strip_prefix("vault:").expect("a vault id");
+    let vault_root = store.folder("vault").display().to_string();
+    for (path, bytes) in tree(&store.folder("site")) {
+        let text = String::from_utf8(bytes).expect("a text record");
+        for named in [
+            consumer.as_str(),
+            "Quiet consumer",
+            "draft:consumer",
+            &vault_root,
+        ] {
+            assert!(!text.contains(named), "{path} names {named}:\n{text}");
+        }
+        if path.contains("tasks") {
+            assert!(!text.contains("vault"), "{path}:\n{text}");
+            assert!(!text.contains(consumer_native), "{path}:\n{text}");
+        }
+    }
+
+    // A second copy of the same plan writes nothing to `site` and keeps exactly one edge.
+    let site = tree(&store.folder("site"));
+    let vault = tree(&store.folder("vault"));
+    let again = landed_ids(&store.ok(&["project", "copy", "draft:goal", "--to", "site", "--json"]));
+    assert_eq!(again, landed, "the second copy finds every counterpart");
+    assert_eq!(
+        tree(&store.folder("site")),
+        site,
+        "site is as the first copy left it"
+    );
+    assert_eq!(tree(&store.folder("vault")), vault, "and so is vault");
+    assert_eq!(edges_of(&store, rollout, "depends-on"), kept);
+    assert_eq!(edges_of(&store, consumer, "depended-on-by"), kept);
+
+    // Dropping the edge at the draft takes it off the private task on the next copy.
+    let draft = store.folder("draft").join("tasks/rollout.md");
+    let authored = std::fs::read_to_string(&draft).expect("the draft rollout");
+    std::fs::write(
+        &draft,
+        authored.replace("depends_on: [consumer]", "depends_on: []"),
+    )
+    .expect("the edge dropped");
+    store.ok(&["project", "copy", "draft:goal", "--to", "site"]);
+    assert_eq!(edges_of(&store, rollout, "depends-on"), Vec::new());
+    assert_eq!(edges_of(&store, consumer, "depended-on-by"), Vec::new());
+    assert!(
+        !held_text(&store, "vault").contains("depended_on_by"),
+        "{}",
+        held_text(&store, "vault")
+    );
+}
+
+#[test]
+fn a_dependency_read_a_private_source_cannot_answer_fails_rather_than_dropping_the_edge() {
+    let store = routed_plan();
+    let landed =
+        landed_ids(&store.ok(&["project", "copy", "draft:goal", "--to", "site", "--json"]));
+    let (consumer, rollout) = (&landed["draft:consumer"], &landed["draft:rollout"]);
+
+    // A record `vault` cannot read leaves the read of a public task's edges failed, naming
+    // the source, rather than answered without what `vault` holds.
+    store.record("vault", "tasks", "unreadable", "title: [", PLAIN);
+    let output = store.run(&["task", "deps", rollout]);
+    assert_ne!(output.status.code(), Some(0), "{}", stdout(&output));
+    assert!(stderr(&output).contains("vault"), "{}", stderr(&output));
+    std::fs::remove_file(store.folder("vault").join("tasks/unreadable.md"))
+        .expect("the unreadable record removed");
+
+    // And a recorded entry that does not say what it names is refused, never read as none.
+    let path = store.folder("vault").join("tasks").join(format!(
+        "{}.md",
+        consumer.strip_prefix("vault:").expect("a vault id")
+    ));
+    let held = std::fs::read_to_string(&path).expect("the consumer");
+    std::fs::write(
+        &path,
+        held.replace(&format!("id: {rollout}"), "id: site:someone-else"),
+    )
+    .expect("the entry spoiled");
+    let output = store.run(&["task", "deps", consumer, "--direction", "depended-on-by"]);
+    assert_ne!(output.status.code(), Some(0), "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("onetaskgraph.depended_on_by"),
+        "{}",
+        stderr(&output)
+    );
+}

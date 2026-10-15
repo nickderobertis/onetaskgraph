@@ -28,6 +28,9 @@ pub(crate) enum StreamKind {
     Tasks,
     /// The project half of a search over both entities.
     Projects,
+    /// The dependents a task of a source declared private records on itself, which a reverse
+    /// dependency read of it merges beside its source's own answer.
+    Recorded,
 }
 
 impl StreamKind {
@@ -37,6 +40,7 @@ impl StreamKind {
             Self::Items => "a single-entity listing",
             Self::Tasks => "the task half of a search",
             Self::Projects => "the project half of a search",
+            Self::Recorded => "the dependents a private task records",
         }
     }
 }

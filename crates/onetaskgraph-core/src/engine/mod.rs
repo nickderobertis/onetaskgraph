@@ -21,6 +21,7 @@ mod cached;
 mod comment;
 mod copy;
 mod delivery;
+mod dependents;
 mod fetch;
 mod graph;
 mod join;
@@ -2107,32 +2108,47 @@ impl Engine {
 
     /// Both dependency verbs, which differ only in which of a source's two edge sets
     /// they read and which of its two declarations governs the reverse direction.
+    ///
+    /// A task's edges are also what the private side records of them (see
+    /// [`dependents`]): a forward read of a task in a source not declared private reads, as
+    /// one more stream each, the tasks of every source declared private that record it as
+    /// depending on them, and a reverse read of a task in a source declared private reads the
+    /// dependents it records on itself beside its source's own answer.
     async fn dependencies(
         &self,
         request: &DependencyRequest,
         entity: Entity,
     ) -> Result<QueryResponse<QualifiedEdge>, EngineError> {
         let name = self.known(&request.id.source)?;
+        let recording = match (entity, request.direction) {
+            (Entity::Task, Direction::DependsOn) => self.recording_sources(&name),
+            _ => Vec::new(),
+        };
+        let records_its_own = entity == Entity::Task
+            && request.direction == Direction::DependedOnBy
+            && self.declared(&name) == crate::config::SourceVisibility::Private;
+        let mut names = vec![name.clone()];
+        names.extend(recording.iter().cloned());
         let query = shape(
             "dependencies",
-            std::slice::from_ref(&name),
+            &names,
             &(entity, &request.id.native, request.direction),
         );
-        let states = resumption(
-            self,
-            request.paging.token.as_ref(),
-            &[StreamKind::Items],
-            &query,
-        )?;
+        let reads: &[StreamKind] = if records_its_own {
+            &[StreamKind::Items, StreamKind::Recorded]
+        } else {
+            &[StreamKind::Items]
+        };
+        let states = resumption(self, request.paging.token.as_ref(), reads, &query)?;
         let budget = request.paging.limit.get();
 
         let mut answer = Answer::new();
-        let (ready, starts) = walking(
-            answer.split(self, std::slice::from_ref(&name)),
-            &states,
-            StreamKind::Items,
-        );
-        let Some(source) = ready.first() else {
+        let selected = answer.split(self, &names);
+        let Some(source) = selected
+            .iter()
+            .copied()
+            .find(|source| source.name() == &name)
+        else {
             return answer.nothing();
         };
 
@@ -2145,29 +2161,68 @@ impl Engine {
         // answered natively or emulated by the scan below, never abandoned and never
         // silently empty.
         let emulating = request.direction == Direction::DependedOnBy && !support.answers_reverse();
-        let mut outcomes = Outcomes::default();
+        let mut own = Outcomes::default();
         if request.direction == Direction::DependedOnBy {
             if emulating {
-                outcomes.record(Predicate::ReverseDependencies, Outcome::Emulated);
+                own.record(Predicate::ReverseDependencies, Outcome::Emulated);
             } else {
-                outcomes.record(Predicate::ReverseDependencies, Outcome::PushedDown);
+                own.record(Predicate::ReverseDependencies, Outcome::PushedDown);
             }
         }
 
-        let counters = vec![AtomicU32::new(0)];
-        let walked = fetch_edges(
-            source,
-            &request.id.native,
-            request.direction,
-            entity,
-            emulating,
-            &starts[0],
-            budget,
-            &counters[0],
-        )
-        .await;
+        // Every stream still walking, in one order: the source's own, the dependents the task
+        // records on itself, then each recording source's.
+        let mut streams: Vec<(&ResolvedSource, StreamKind, Resume)> = Vec::new();
+        if let Some(start) = resume_at(&states, &name, StreamKind::Items) {
+            streams.push((source, StreamKind::Items, start));
+        }
+        if records_its_own && let Some(start) = resume_at(&states, &name, StreamKind::Recorded) {
+            streams.push((source, StreamKind::Recorded, start));
+        }
+        for recorder in selected
+            .iter()
+            .copied()
+            .filter(|other| other.name() != &name)
+        {
+            if let Some(start) = resume_at(&states, recorder.name(), StreamKind::Items) {
+                streams.push((recorder, StreamKind::Items, start));
+            }
+        }
 
-        let streams = answer.collect(&ready, vec![walked], &counters, vec![outcomes]);
+        let counters: Vec<AtomicU32> = streams.iter().map(|_| AtomicU32::new(0)).collect();
+        let mut walked = Vec::new();
+        let mut outcomes = Vec::new();
+        for ((stream, kind, start), calls) in streams.iter().zip(&counters) {
+            let near = GlobalId::new(name.clone(), request.id.native.clone());
+            walked.push(match kind {
+                StreamKind::Recorded => {
+                    recorded_on(stream, &request.id.native, start, budget, calls).await
+                }
+                _ if stream.name() == &name => {
+                    fetch_edges(
+                        stream,
+                        &request.id.native,
+                        request.direction,
+                        entity,
+                        emulating,
+                        start,
+                        budget,
+                        calls,
+                    )
+                    .await
+                }
+                _ => recorded_for(stream, &near, start, budget, calls).await,
+            });
+            outcomes.push(if stream.name() == &name && *kind == StreamKind::Items {
+                own.clone()
+            } else {
+                Outcomes::default()
+            });
+        }
+        let ready: Vec<&ResolvedSource> = streams.iter().map(|(stream, _, _)| *stream).collect();
+        let kinds: Vec<StreamKind> = streams.iter().map(|(_, kind, _)| *kind).collect();
+
+        let streams = answer.collect_streams(&ready, &kinds, walked, &counters, outcomes);
         answer.finish(
             streams,
             budget,
@@ -3026,7 +3081,7 @@ fn shape_hits(capabilities: &Capabilities, filters: &Filters, stream: StreamKind
                 outcomes: shaped.outcomes,
             }
         }
-        StreamKind::Items | StreamKind::Tasks => {
+        StreamKind::Items | StreamKind::Tasks | StreamKind::Recorded => {
             let shaped = shape_tasks(
                 capabilities,
                 filters,
@@ -3202,7 +3257,7 @@ async fn fetch_hits(
             )
             .await
         }
-        StreamKind::Items | StreamKind::Tasks => {
+        StreamKind::Items | StreamKind::Tasks | StreamKind::Recorded => {
             let compensating = shape.local_tasks != LocalTasks::default();
             walk(
                 start,
@@ -3266,6 +3321,107 @@ async fn forward_edges(
               into a struct would name the same eight values one indirection further from \
               the loop that reads them."
 )]
+/// Walk the tasks of `recorder`, a source declared private, that record `near` as depending
+/// on them, each as the edge `near` → that task.
+///
+/// The match goes down when the source applies metadata matches itself, and is applied here
+/// either way, so a source that ignores it still answers only what matches.
+async fn recorded_for(
+    recorder: &ResolvedSource,
+    near: &GlobalId,
+    start: &Resume,
+    budget: u32,
+    calls: &AtomicU32,
+) -> Result<Fetched<DependencyEdge>, SourceError> {
+    let wanted = dependents::naming(near);
+    let pushed = recorder
+        .source()
+        .capabilities()
+        .filter_by_metadata
+        .is_native();
+    let query = TaskQuery {
+        metadata: if pushed {
+            vec![wanted.clone()]
+        } else {
+            Vec::new()
+        },
+        ..TaskQuery::default()
+    };
+    let fetched = walk(
+        start,
+        budget,
+        page_size(!pushed, budget, ceiling(recorder)),
+        |task: &Task| wanted.holds(&task.metadata),
+        |cursor, limit| {
+            calls.fetch_add(1, Ordering::Relaxed);
+            let query = &query;
+            async move {
+                recorder
+                    .source()
+                    .query_tasks(query, &PageRequest { cursor, limit })
+                    .await
+            }
+        },
+    )
+    .await?;
+    Ok(Fetched {
+        rows: fetched
+            .rows
+            .into_iter()
+            .map(|row| fetch::Row {
+                item: dependents::edge(near, row.item.id),
+                resume: row.resume,
+            })
+            .collect(),
+        after: fetched.after,
+    })
+}
+
+/// Walk the dependents task `native` of `source`, a source declared private, records on
+/// itself, each as the edge that dependent → `native`.
+///
+/// One read of the task per page, paged by position: the record is one value of the task's
+/// own, so a page boundary is an offset into it.
+async fn recorded_on(
+    source: &ResolvedSource,
+    native: &NativeId,
+    start: &Resume,
+    budget: u32,
+    calls: &AtomicU32,
+) -> Result<Fetched<DependencyEdge>, SourceError> {
+    walk(
+        start,
+        budget,
+        budget.min(ceiling(source)),
+        |_| true,
+        |cursor: Option<Cursor>, limit| async move {
+            calls.fetch_add(1, Ordering::Relaxed);
+            let Some(task) = source.source().get_task(native).await? else {
+                return Ok(Page {
+                    items: Vec::new(),
+                    next: None,
+                });
+            };
+            let edges =
+                dependents::recorded_edges(&task).map_err(|message| SourceError::Malformed {
+                    message: format!("task {native}: {message}"),
+                })?;
+            let at = cursor
+                .as_ref()
+                .map_or(Ok(0), |cursor| cursor.0.parse::<usize>())
+                .map_err(|_| SourceError::Malformed {
+                    message: "a page of recorded dependents resumed at no position".to_owned(),
+                })?;
+            let until = at.saturating_add(limit as usize).min(edges.len());
+            Ok(Page {
+                items: edges.get(at..until).unwrap_or_default().to_vec(),
+                next: (until < edges.len()).then(|| Cursor(until.to_string())),
+            })
+        },
+    )
+    .await
+}
+
 async fn fetch_edges(
     source: &ResolvedSource,
     native: &NativeId,

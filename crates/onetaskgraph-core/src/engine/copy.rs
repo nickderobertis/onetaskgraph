@@ -68,6 +68,7 @@ use crate::{Failure, GlobalId};
 use super::assets;
 use super::boundary::{Exposure, Outbound};
 use super::delivery::{Delivered, targets};
+use super::dependents;
 use super::fetch::{fits, unrepeated};
 use super::local::ProjectSelector;
 use super::narrow::holds_priority;
@@ -1079,6 +1080,13 @@ struct Running {
     delivers_rewritten: u64,
     /// Every task this copy landed, for the relation rule once the whole copy is complete.
     landed: Vec<LandedTask>,
+    /// Every task this copy landed somewhere not declared private, with its forward edges as
+    /// its source reported them: an edge of one to a task of a source declared private is
+    /// withheld from it and recorded on that task once the whole copy has landed.
+    dependents: Vec<Dependent>,
+    /// Every task this copy landed in a source declared private, by its destination id, with
+    /// the dependents it held there before: the record a copy keeps as it found it.
+    recorders: BTreeMap<String, (GlobalId, BTreeSet<String>)>,
     /// Every item this copy landed, in the order it landed them, for the link each records
     /// once the whole copy has landed.
     linking: Vec<Linking>,
@@ -1225,6 +1233,47 @@ struct LandedTask {
     category: StatusCategory,
     /// Who may read it, as the copy wrote it.
     classification: Classification,
+}
+
+/// A task a copy landed somewhere not declared private, with its forward edges as its source
+/// reported them.
+struct Dependent {
+    /// Where it landed.
+    destination: GlobalId,
+    /// The source it was read from, which a bare far end names a task of.
+    origin: SourceName,
+    /// Its forward edges, as its source reported them.
+    edges: Vec<DependencyEdge>,
+}
+
+/// What one task of a source declared private records once a copy has landed: what it held,
+/// less every dependent the copy landed, plus each of those whose edges name it.
+struct Recording {
+    /// The task, where it is held.
+    at: GlobalId,
+    /// The dependents this copy landed whose edges name it.
+    named: BTreeSet<String>,
+    /// What it held before, when this copy landed it and so already read it.
+    held: Option<BTreeSet<String>>,
+}
+
+/// Every dependent a copy landed, whose entries that copy decides, and what each task of a
+/// source declared private it touches is to record.
+struct Recordings {
+    /// The destination ids of every task the copy landed somewhere not declared private.
+    decided: BTreeSet<String>,
+    /// One per task of a source declared private the copy landed or a landed edge names.
+    each: Vec<Recording>,
+}
+
+impl Recordings {
+    /// What a task holding `held` records afterwards.
+    fn applied(&self, recording: &Recording, held: &BTreeSet<String>) -> BTreeSet<String> {
+        held.difference(&self.decided)
+            .chain(&recording.named)
+            .cloned()
+            .collect()
+    }
 }
 
 /// A task a copy landed, with the tasks it delivers now and delivered before, qualified.
@@ -1735,8 +1784,10 @@ impl Engine {
             .collect();
         let linking = std::mem::take(&mut running.linking);
         let homes = std::mem::take(&mut running.homes);
+        let recordings = self.recordings(&running);
         self.repair(request, running, journal).await?;
         if !request.dry_run {
+            self.record_dependents(recordings, journal).await?;
             self.record_members(homes, journal).await?;
         }
         let mut items = items;
@@ -3259,6 +3310,33 @@ impl Engine {
                     journal,
                 )
                 .await?;
+            if let Some(id) = outcome.destination()
+                && !request.dry_run
+                && let Item::Task(_) = &item.item
+            {
+                if self.declared(&item.to) == crate::config::SourceVisibility::Private {
+                    let held = match item.held.as_ref().map(|held| &held.item) {
+                        Some(Item::Task(held)) => {
+                            dependents::recorded(&held.metadata).map_err(|message| {
+                                refused(
+                                    destination,
+                                    SourceError::Malformed {
+                                        message: format!("task {id}: {message}"),
+                                    },
+                                )
+                            })?
+                        }
+                        _ => BTreeSet::new(),
+                    };
+                    running.recorders.insert(id.to_string(), (id.clone(), held));
+                } else {
+                    running.dependents.push(Dependent {
+                        destination: id.clone(),
+                        origin: item.source.source.clone(),
+                        edges: item.edges.clone(),
+                    });
+                }
+            }
             if let Some(id) = outcome.destination() {
                 running
                     .counterparts
@@ -4705,6 +4783,136 @@ impl Engine {
         Ok(Some(created))
     }
 
+    /// What every task of a source declared private that this copy touches is to record of the
+    /// tasks depending on it from somewhere not declared private, once every destination id is
+    /// known.
+    ///
+    /// An edge from a task this copy landed somewhere not declared private, to a task of a
+    /// source declared private, is withheld from the first (see [`Engine::withholds`]); it is
+    /// recorded on the second instead, under the first's destination id, by the second's own
+    /// source. A dependent this copy landed whose edges no longer name it is taken off, because
+    /// this copy wrote those edges; one this copy did not land is kept as it was.
+    fn recordings(&self, running: &Running) -> Recordings {
+        let decided: BTreeSet<String> = running
+            .dependents
+            .iter()
+            .map(|dependent| dependent.destination.to_string())
+            .collect();
+        let mut named: BTreeMap<String, (GlobalId, BTreeSet<String>)> = BTreeMap::new();
+        for dependent in &running.dependents {
+            let near = &dependent.destination.source;
+            let ends = mapped_edges(
+                &dependent.edges,
+                &dependent.origin,
+                near,
+                &running.resolvable,
+                &running.counterparts,
+            );
+            for end in ends.into_iter().flatten() {
+                let Some(far) = far_end(&end.to, near) else {
+                    continue;
+                };
+                if end.kind != DependencyKind::Blocks
+                    || end.to.kind != ItemKind::Task
+                    || self.declared(&far.source) != crate::config::SourceVisibility::Private
+                    || !self.withholds(near, &far, &[])
+                {
+                    continue;
+                }
+                named
+                    .entry(far.to_string())
+                    .or_insert_with(|| (far.clone(), BTreeSet::new()))
+                    .1
+                    .insert(dependent.destination.to_string());
+            }
+        }
+        let mut each = Vec::new();
+        for (key, (at, held)) in &running.recorders {
+            each.push(Recording {
+                at: at.clone(),
+                named: named
+                    .remove(key)
+                    .map(|(_, named)| named)
+                    .unwrap_or_default(),
+                held: Some(held.clone()),
+            });
+        }
+        each.extend(named.into_values().map(|(at, named)| Recording {
+            at,
+            named,
+            held: None,
+        }));
+        Recordings { decided, each }
+    }
+
+    /// Write each of `recordings` whose task does not already record what it is to: one read
+    /// of the task and one write of it, through its own source, every other member as the
+    /// source holds it. A task its source no longer holds records nothing.
+    async fn record_dependents(
+        &self,
+        recordings: Recordings,
+        journal: &mut Journal,
+    ) -> Result<(), EngineError> {
+        for recording in &recordings.each {
+            // A task this copy landed was read as it landed, so one already recording what it
+            // is to is not read again.
+            if let Some(held) = &recording.held
+                && recordings.applied(recording, held) == *held
+            {
+                continue;
+            }
+            let at = self.writable(&recording.at.source)?;
+            let Some(prior) = self.prior(at, Level::Task, &recording.at.native).await? else {
+                continue;
+            };
+            let Item::Task(mut task) = prior.item.clone() else {
+                continue;
+            };
+            let current = dependents::recorded(&task.metadata).map_err(|message| {
+                refused(
+                    at,
+                    SourceError::Malformed {
+                        message: format!("task {}: {message}", recording.at),
+                    },
+                )
+            })?;
+            let dependents = recordings.applied(recording, &current);
+            if dependents == current {
+                continue;
+            }
+            dependents::record(&mut task.metadata, &dependents);
+            at.source()
+                .check_status_write(
+                    ItemKind::Task,
+                    task.status.category,
+                    Some(&recording.at.native),
+                )
+                .await
+                .map_err(|error| refused(at, error))?;
+            self.at_write(
+                at,
+                &recording.at.to_string(),
+                &WriteTarget::Existing(&recording.at.native),
+            )
+            .await?;
+            let edges = prior.edges.clone();
+            journal.record(Undo::Updated {
+                at: recording.at.source.clone(),
+                id: recording.at.native.clone(),
+                prior,
+            });
+            at.source()
+                .write_task(&ItemWrite {
+                    target: Some(recording.at.native.clone()),
+                    item: *task,
+                    depends_on: edges,
+                })
+                .await
+                .map_err(|error| refused(at, error))?;
+        }
+        Ok(())
+    }
+
     /// Write each home's grown `onetaskgraph.members` through its own project write, once the
     /// whole copy has landed.
     ///
@@ -5102,7 +5310,8 @@ impl Engine {
 const FOR_A_COPY: &str = "for a copy";
 
 /// How many tasks of a project are read at once while walking it.
-const PROJECT_PAGE: std::num::NonZeroU32 = std::num::NonZeroU32::new(50).expect("50 is not zero");
+pub(super) const PROJECT_PAGE: std::num::NonZeroU32 =
+    std::num::NonZeroU32::new(50).expect("50 is not zero");
 
 /// Each source's own running totals, in the order the sources were given.
 ///
@@ -6068,6 +6277,7 @@ fn carried(
         MetadataKey::MEMBERS_KEY,
         MetadataKey::MEMBER_OF_KEY,
         MetadataKey::ASSETS_KEY,
+        dependents::DEPENDED_ON_BY_KEY,
     ]
     .into_iter()
     .chain(record::KEYS)
