@@ -3879,28 +3879,35 @@ fn a_create_under_a_project_held_private_by_its_members_or_not_held_at_all_write
 /// A plan authored in the public `draft` folder whose `openco` task `site` routes to `vault`:
 /// a home on `site` with a member on `vault`, and an edge each way across the two.
 fn routed_plan() -> Store {
+    routed_plan_in("draft")
+}
+
+/// [`routed_plan`], authored in the folder `author` — `draft`, or the private `plan`, which
+/// keeps the links a copy records — beside a second private folder, `archive`.
+fn routed_plan_in(author: &str) -> Store {
     let store = Store::laid(Some(registered), |sandbox| {
         json!({
             "draft": folder(sandbox, "draft", "public"),
+            "archive": folder(sandbox, "archive", "private"),
             "site": {"routes": [{"repositories": ["github.com/openco/*"], "to": "vault"}]},
         })
     });
     store.record(
-        "draft",
+        author,
         "projects",
         "goal",
         "title: Goal\nstatus: todo",
         PLAIN,
     );
     store.record(
-        "draft",
+        author,
         "tasks",
         "library",
         "title: Library\nstatus: todo\nproject: goal",
         PLAIN,
     );
     store.record(
-        "draft",
+        author,
         "tasks",
         "consumer",
         &format!(
@@ -3910,7 +3917,7 @@ fn routed_plan() -> Store {
         PLAIN,
     );
     store.record(
-        "draft",
+        author,
         "tasks",
         "rollout",
         "title: Rollout\nstatus: todo\nproject: goal\ndepends_on: [consumer]",
@@ -4317,4 +4324,179 @@ fn a_copy_whose_record_on_the_private_task_cannot_be_written_leaves_both_folders
         vault,
         "and vault holds no record"
     );
+}
+
+#[test]
+fn a_member_copy_records_its_dependency_on_a_private_task_an_earlier_copy_landed() {
+    // Authored in `plan`, which keeps the link to where its consumer landed, so a member copy
+    // resolves that counterpart without carrying it.
+    let store = routed_plan_in("plan");
+    let landed = landed_ids(&store.ok(&["project", "copy", "plan:goal", "--to", "site", "--json"]));
+    let (consumer, rollout) = (&landed["plan:consumer"], &landed["plan:rollout"]);
+    store.record(
+        "plan",
+        "tasks",
+        "announce",
+        "title: Announce\nstatus: todo\nproject: goal\ndepends_on: [consumer]",
+        PLAIN,
+    );
+
+    // Only the new task is copied: the private task it depends on is the counterpart the
+    // first copy recorded, and records the new dependent beside the one it already held.
+    let added = landed_ids(&store.ok(&[
+        "project",
+        "copy",
+        "plan:goal",
+        "--member",
+        "plan:announce",
+        "--to",
+        "site",
+        "--json",
+    ]));
+    let announce = &added["plan:announce"];
+    assert!(announce.starts_with("site:"), "{added:?}");
+    assert_eq!(
+        edges_of(&store, announce, "depends-on"),
+        vec![(announce.clone(), consumer.clone())]
+    );
+    let mut dependents = edges_of(&store, consumer, "depended-on-by");
+    dependents.sort();
+    let mut wanted = vec![
+        (announce.clone(), consumer.clone()),
+        (rollout.clone(), consumer.clone()),
+    ];
+    wanted.sort();
+    assert_eq!(dependents, wanted);
+    let announce_file = std::fs::read_to_string(store.folder("site").join("tasks").join(format!(
+        "{}.md",
+        announce.strip_prefix("site:").expect("a site id")
+    )))
+    .expect("the announce copy");
+    assert!(!announce_file.contains("vault"), "{announce_file}");
+
+    // A copy of the private task elsewhere carries none of what it records: those entries
+    // name the dependents of the task they are on, not of its copy.
+    store.ok(&["task", "copy", consumer, "--to", "archive"]);
+    let copied = held_text(&store, "archive");
+    assert!(copied.contains("Quiet consumer"), "{copied}");
+    assert!(!copied.contains("depended_on_by"), "{copied}");
+}
+
+#[test]
+fn a_copy_onto_a_private_task_whose_record_cannot_be_read_is_refused_and_taken_back() {
+    let store = routed_plan();
+    let landed =
+        landed_ids(&store.ok(&["project", "copy", "draft:goal", "--to", "site", "--json"]));
+    let consumer = &landed["draft:consumer"];
+    let path = store.folder("vault").join("tasks").join(format!(
+        "{}.md",
+        consumer.strip_prefix("vault:").expect("a vault id")
+    ));
+    let held = std::fs::read_to_string(&path).expect("the consumer");
+    assert!(held.contains("      kind: task"), "{held}");
+    std::fs::write(
+        &path,
+        held.replace("      kind: task", "      kind: project"),
+    )
+    .expect("the record spoiled");
+    let draft = store.folder("draft").join("tasks/rollout.md");
+    let authored = std::fs::read_to_string(&draft).expect("the draft rollout");
+    std::fs::write(
+        &draft,
+        authored.replace("title: Rollout", "title: Rollout, revised"),
+    )
+    .expect("a new title");
+
+    let site = tree(&store.folder("site"));
+    let vault = tree(&store.folder("vault"));
+    let output = store.run(&["project", "copy", "draft:goal", "--to", "site"]);
+    assert_ne!(output.status.code(), Some(0), "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("onetaskgraph.depended_on_by"),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(
+        tree(&store.folder("site")),
+        site,
+        "the revised title is taken back"
+    );
+    assert_eq!(
+        tree(&store.folder("vault")),
+        vault,
+        "and vault is as it was"
+    );
+}
+
+#[test]
+fn a_project_graph_draws_every_page_of_what_a_private_source_records_of_its_tasks() {
+    // More recorders than one page of a project-sized read, in a source that ignores the
+    // match, one task to a source page, so the engine narrows every page itself.
+    let recorders: Vec<Value> = (0..55)
+        .map(|index| {
+            json!({
+                "id": format!("M-{index:02}"),
+                "title": format!("Recorder {index:02}"),
+                "status": {"category": "todo", "name": "Todo"},
+                "labels": [],
+                "metadata": {"onetaskgraph.depended_on_by": {
+                    "site:rollout": {"id": "site:rollout", "kind": "task"},
+                }},
+            })
+        })
+        .chain([json!({
+            "id": "M-decoy",
+            "title": "Decoy",
+            "status": {"category": "todo", "name": "Todo"},
+            "labels": [],
+            "metadata": {"onetaskgraph.depended_on_by": {
+                "site:other": {"id": "site:other", "kind": "task"},
+            }},
+        })])
+        .collect();
+    let store = Store::laid(Some(registered), |_| {
+        json!({
+            "memory": {
+                "plugin": "in-memory",
+                "visibility": "private",
+                "config": {
+                    "capabilities": {"filter_by_metadata": "unsupported", "max_page_size": 1},
+                    "tasks": recorders,
+                },
+            },
+        })
+    });
+    store.public_project_p();
+    store.record(
+        "site",
+        "tasks",
+        "library",
+        "title: Library\nstatus: todo\nproject: p",
+        PLAIN,
+    );
+    store.record(
+        "site",
+        "tasks",
+        "rollout",
+        "title: Rollout\nstatus: todo\nproject: p\ndepends_on: [library]",
+        PLAIN,
+    );
+
+    let graph: Value =
+        serde_json::from_str(&store.ok(&["project", "graph", "site:p", "--format", "json"]))
+            .expect("a graph");
+    let mut froms: Vec<String> = graph["edges"]
+        .as_array()
+        .expect("the graph's edges")
+        .iter()
+        .filter(|edge| edge["to"] == "site:rollout")
+        .map(|edge| edge["from"].as_str().expect("a prerequisite").to_owned())
+        .collect();
+    froms.sort();
+    let mut wanted: Vec<String> = (0..55)
+        .map(|index| format!("memory:M-{index:02}"))
+        .collect();
+    wanted.push("site:library".to_owned());
+    wanted.sort();
+    assert_eq!(froms, wanted, "{graph:#}");
 }
