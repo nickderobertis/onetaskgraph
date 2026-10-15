@@ -6,8 +6,15 @@
 # new superseded builds — never a first pass over accumulated history, so this sets that
 # state up before it times anything:
 #   (a) runs the ordinary gate build, so a build a source change since this checkout last
-#       built has superseded is backlog too, and then the declared maintenance once,
-#       untimed, to clear that backlog;
+#       built has superseded is backlog too, and then the declared maintenance, untimed, to
+#       clear that backlog — repeating the two until a pass removes nothing, because one
+#       pass over a warm directory is not a steady state. The pruner groups every build
+#       named for one unit (a crate's library, its test binary, its build script and its
+#       run, and each feature set it is built with), and of those older than the window
+#       keeps only the newest; a directory restored from a cache holds the ordinary builds
+#       at their old modification times, so a pass removes some the gate still needs, the
+#       next build makes them anew, and that build supersedes the old sibling the pass
+#       had kept. Left there, the timed pass in (d) removed those siblings too;
 #   (b) builds the workspace's test targets under an alternative profile setting that gives
 #       every unit, this repository's own crates included, a new metadata hash in the same
 #       profile directory, then backdates exactly the entries that build created to a date
@@ -74,10 +81,29 @@ seconds_reported() {
   python3 -c 'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["value"])' "$1"
 }
 
-# (a) Clear any backlog, untimed: its seconds go to a file of this run's own.
-ordinary_build
-ONEBUDGETSPEC_RESULT="$scratch/backlog.json" just pool-maintenance >&2
-backlog_seconds="$(seconds_reported "$scratch/backlog.json" | tr -d '\r')"
+# (a) Clear any backlog, untimed, until a pass over a fresh ordinary build removes nothing:
+# each pass's seconds go to a file of this run's own. A pass after the first removes only an
+# old build the build before it superseded by making a sibling anew, and what a build makes
+# stays inside the window from then on, so this settles within a few passes; a directory
+# that does not is an error, not a figure.
+readonly BACKLOG_PASSES_AT_MOST=5
+backlog_seconds=""
+pass=0
+while :; do
+  pass=$((pass + 1))
+  if [ "$pass" -gt "$BACKLOG_PASSES_AT_MOST" ]; then
+    echo "pool-maintenance/measure.sh: $BACKLOG_PASSES_AT_MOST untimed passes each removed builds, so the target directory never reached a steady state to time a pass from; see $EVIDENCE/backlog-removed-$BACKLOG_PASSES_AT_MOST.txt for the last pass's removals." >&2
+    exit 1
+  fi
+  ordinary_build
+  list_entries > "$EVIDENCE/backlog-before-$pass.txt"
+  ONEBUDGETSPEC_RESULT="$scratch/backlog-$pass.json" just pool-maintenance >&2
+  list_entries > "$EVIDENCE/backlog-after-$pass.txt"
+  backlog_seconds="${backlog_seconds:+$backlog_seconds, }$(seconds_reported "$scratch/backlog-$pass.json" | tr -d '\r')"
+  LC_ALL=C comm -23 "$EVIDENCE/backlog-before-$pass.txt" "$EVIDENCE/backlog-after-$pass.txt" \
+    > "$EVIDENCE/backlog-removed-$pass.txt"
+  [ -s "$EVIDENCE/backlog-removed-$pass.txt" ] || break
+done
 
 # (b) One run's worth of builds that the next ordinary build supersedes.
 list_entries > "$EVIDENCE/before-alternative.txt"
@@ -130,7 +156,7 @@ path, backlog = sys.argv[1], sys.argv[2]
 with open(path, encoding="utf-8") as handle:
     result = json.load(handle)
 result["detail"] = (
-    f"{result.get('detail', '')}; untimed backlog pass before it, not counted: {backlog} s"
+    f"{result.get('detail', '')}; untimed backlog passes before it, not counted: {backlog} s"
 )
 with open(path, "w", encoding="utf-8", newline="\n") as handle:
     json.dump(result, handle)

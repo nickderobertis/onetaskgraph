@@ -30,17 +30,29 @@
     "lint": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "bash -n pool-maintenance/measure.sh"
+        "commands": [
+          "bash -n pool-maintenance/measure.sh",
+          "bash -n pool-maintenance/check-measure.sh"
+        ],
+        "parallel": false
       },
-      "//": "Parses the measurement without running it, which is all a per-change path may do with it."
+      "//": "Syntax only: running the check builds a scratch workspace, so it is `test`."
     },
     "typecheck": {
       "executor": "nx:noop",
       "//": "Declared and empty, because `nx affected` fans out by target name; a shell script has no type-checking step."
     },
     "test": {
-      "executor": "nx:noop",
-      "//": "Declared and empty: what this project holds is a measurement, and running it is `budgets-host`, which builds the workspace twice and so stays off every per-change path."
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bash pool-maintenance/check-measure.sh"
+      },
+      "inputs": [
+        "default",
+        "{workspaceRoot}/justfile",
+        { "externalDependencies": ["@onebudgetspec/cli"] }
+      ],
+      "//": "Runs the measurement over a scratch workspace of three tiny crates, never this repository's own target directory, so it costs seconds and can sit on the per-change path `budgets-host` stays off. The justfile is an input because the pruner's pin and the recipe the measurement runs are there."
     },
     "coverage": {
       "executor": "nx:noop",
