@@ -457,6 +457,7 @@ def analyse(args, client: Client) -> dict:
             "workflow": entry["workflow"], "event": entry["event"], "job": entry["job"], "os": entry["os"],
             "conclusions": entry["conclusions"],
             "failed_or_cancelled": sum(v for k, v in entry["conclusions"].items() if k in ("failure", "cancelled", "timed_out")),
+            "over_1800_s_success": sum(1 for d in entry["_dur"] if d > 1800),
             "duration_s_success": stats(entry.pop("_dur")),
             "wait_from_run_created_s_success": stats(entry.pop("_wait")),
             "queue_from_job_created_s_success": stats(entry.pop("_pure_queue")),

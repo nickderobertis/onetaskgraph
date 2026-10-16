@@ -24,12 +24,12 @@ def triple(st):
 def main() -> None:
     figures = json.loads(Path(sys.argv[1]).read_text())
     print("### Per job and matrix leg (seconds; median / p90 / max over successful runs)\n")
-    print("| Workflow | Event | Job | OS | Successful | Duration | Wait from run created | Failed or cancelled |")
-    print("| --- | --- | --- | --- | --- | --- | --- | --- |")
+    print("| Workflow | Event | Job | OS | Successful | Duration | Over 1,800 s | Wait from run created | Failed or cancelled |")
+    print("| --- | --- | --- | --- | --- | --- | --- | --- | --- |")
     for j in figures["per_job"]:
         d = j["duration_s_success"]
         print(f"| {j['workflow']} | {j['event']} | {j['job']} | {j['os']} | {d['n'] if d else 0} | {triple(d)} | "
-              f"{triple(j['wait_from_run_created_s_success'])} | {j['failed_or_cancelled']} |")
+              f"{j['over_1800_s_success']} | {triple(j['wait_from_run_created_s_success'])} | {j['failed_or_cancelled']} |")
 
     pr = figures["per_run"]
     ci = pr["ci_pull_request_runs"]
