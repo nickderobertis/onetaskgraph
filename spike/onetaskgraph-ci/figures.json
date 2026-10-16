@@ -10843,8 +10843,8 @@
     "check (windows-latest)": 25,
     "publish-npm": 7,
     "publish-python": 6,
-    "check (ubuntu-latest)": 4,
-    "check (macos-latest)": 4
+    "check (macos-latest)": 4,
+    "check (ubuntu-latest)": 4
    },
    "prs_per_release": {
     "n": 46,

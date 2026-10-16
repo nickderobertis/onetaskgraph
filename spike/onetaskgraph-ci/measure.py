@@ -630,7 +630,7 @@ def analyse(args, client: Client) -> dict:
                                                    if c.get("merge_to_release_workflows_end_s") is not None]),
         "cd_last_job": dict(sorted(((k, sum(1 for c in cd.values() if c["complete"] and c["last_job"] == k))
                                     for k in {c["last_job"] for c in cd.values() if c["complete"]}),
-                                   key=lambda kv: -kv[1])),
+                                   key=lambda kv: (-kv[1], kv[0]))),
         "prs_per_release": stats([sum(1 for c in eligible if c["release"] == t) for t in per_release_max]),
     }
 
