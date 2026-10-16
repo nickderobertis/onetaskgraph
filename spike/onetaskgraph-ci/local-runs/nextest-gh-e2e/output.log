@@ -1,0 +1,366 @@
+   Compiling cfg-if v1.0.4
+   Compiling itoa v1.0.18
+   Compiling bytes v1.12.1
+   Compiling stable_deref_trait v1.2.1
+   Compiling pin-project-lite v0.2.17
+   Compiling bitflags v2.13.1
+   Compiling percent-encoding v2.3.2
+   Compiling litemap v0.8.3
+   Compiling writeable v0.6.4
+   Compiling futures-core v0.3.34
+   Compiling utf8_iter v1.0.4
+   Compiling typenum v1.20.1
+   Compiling regex-syntax v0.8.11
+   Compiling base64 v0.22.1
+   Compiling serde_json v1.0.151
+   Compiling yoke v0.8.3
+   Compiling log v0.4.34
+   Compiling iana-time-zone v0.1.65
+   Compiling scopeguard v1.2.0
+   Compiling futures-task v0.3.34
+   Compiling slab v0.4.12
+   Compiling zeroize v1.9.0
+   Compiling tokio v1.53.1
+   Compiling http v1.5.0
+   Compiling foreign-types-shared v0.1.1
+   Compiling dyn-clone v1.0.20
+   Compiling try-lock v0.2.5
+   Compiling zerovec v0.11.8
+   Compiling zerotrie v0.2.5
+   Compiling chrono v0.4.45
+   Compiling tower-service v0.3.3
+   Compiling futures-util v0.3.34
+   Compiling foreign-types v0.3.2
+   Compiling getrandom v0.3.4
+   Compiling futures-channel v0.3.34
+   Compiling want v0.3.1
+   Compiling generic-array v0.14.7
+   Compiling form_urlencoded v1.2.2
+   Compiling openssl-probe v0.2.1
+   Compiling http-body v1.1.0
+   Compiling unicase v2.9.0
+   Compiling openssl v0.10.81
+   Compiling regex-automata v0.4.18
+   Compiling tinystr v0.8.4
+   Compiling potential_utf v0.1.6
+   Compiling atomic-waker v1.1.2
+   Compiling tracing v0.1.44
+   Compiling secrecy v0.10.3
+   Compiling sync_wrapper v1.0.2
+   Compiling crypto-common v0.1.7
+   Compiling block-buffer v0.10.4
+   Compiling pulldown-cmark v0.13.4
+   Compiling icu_collections v2.3.0
+   Compiling icu_locale_core v2.3.0
+   Compiling schemars v1.2.2
+   Compiling ipnet v2.12.1
+   Compiling tower-layer v0.3.3
+   Compiling http-body-util v0.1.5
+   Compiling digest v0.10.7
+   Compiling ryu v1.0.23
+   Compiling simdutf8 v0.1.5
+   Compiling rustls-pki-types v1.15.1
+   Compiling combine v4.6.7
+   Compiling unicode-width v0.2.2
+   Compiling arraydeque v0.5.1
+   Compiling encoding_rs v0.8.42
+   Compiling serde_urlencoded v0.7.1
+   Compiling ahash v0.8.12
+   Compiling sha2 v0.10.9
+   Compiling parking_lot_core v0.9.12
+   Compiling lock_api v0.4.14
+   Compiling icu_provider v2.3.1
+   Compiling borrow-or-share v0.2.4
+   Compiling granit-parser v1.3.0
+   Compiling bit-vec v0.8.0
+   Compiling equivalent v1.0.2
+   Compiling allocator-api2 v0.2.21
+   Compiling hyper v1.11.0
+   Compiling onetaskgraph-plugin-api v0.7.1 (/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-onetaskgraph-9c94c67fcf19/pool/1/worktree/crates/onetaskgraph-plugin-api)
+   Compiling tower v0.5.3
+   Compiling annotate-snippets v0.12.16
+   Compiling bstr v1.13.1
+   Compiling nohash-hasher v0.2.0
+   Compiling predicates-core v1.0.10
+   Compiling icu_normalizer v2.3.0
+   Compiling icu_properties v2.3.0
+   Compiling linux-raw-sys v0.12.1
+   Compiling foldhash v0.2.0
+   Compiling bit-set v0.8.0
+   Compiling fluent-uri v0.4.1
+   Compiling native-tls v0.2.18
+   Compiling regex v1.13.1
+   Compiling parking_lot v0.12.5
+   Compiling hyper-util v0.1.20
+   Compiling serde_path_to_error v0.1.20
+   Compiling graphql-parser v0.4.1
+   Compiling hashbrown v0.17.1
+   Compiling outref v0.5.2
+   Compiling encoding_rs_io v0.1.8
+   Compiling rustix v1.1.4
+   Compiling fastrand v2.5.0
+   Compiling tokio-native-tls v0.3.1
+   Compiling num-cmp v0.1.0
+   Compiling termtree v0.5.1
+   Compiling same-file v1.0.6
+   Compiling micromap v0.3.0
+   Compiling idna_adapter v1.2.2
+   Compiling bytecount v0.6.9
+   Compiling vsimd v0.8.0
+   Compiling serde-saphyr v1.3.0
+   Compiling difflib v0.4.0
+   Compiling github-graphql-node-count v0.0.1
+   Compiling predicates-tree v1.0.13
+   Compiling hyper-tls v0.6.0
+   Compiling walkdir v2.5.0
+   Compiling fancy-regex v0.19.0
+   Compiling idna v1.1.0
+   Compiling jsonschema-value v0.50.1
+   Compiling globset v0.4.20
+   Compiling referencing v0.50.1
+   Compiling predicates v3.1.4
+   Compiling jsonschema-regex v0.50.1
+   Compiling memo-map v0.3.4
+   Compiling data-encoding v2.11.1
+   Compiling url v2.5.8
+   Compiling onetaskgraph-github-live v0.7.1 (/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-onetaskgraph-9c94c67fcf19/pool/1/worktree/crates/onetaskgraph-github-live)
+   Compiling uuid-simd v0.8.0
+   Compiling ignore v0.4.33
+   Compiling assert_cmd v2.2.2
+   Compiling minijinja v2.24.0
+   Compiling tempfile v3.27.0
+   Compiling jsonschema v0.50.1
+   Compiling tower-http v0.6.11
+   Compiling onebudgetspec-core v0.1.5
+   Compiling reqwest v0.12.28
+   Compiling onetaskgraph-local-md v0.7.1 (/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-onetaskgraph-9c94c67fcf19/pool/1/worktree/crates/onetaskgraph-local-md)
+   Compiling onetaskgraph-in-memory v0.7.1 (/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-onetaskgraph-9c94c67fcf19/pool/1/worktree/crates/onetaskgraph-in-memory)
+   Compiling onetaskgraph-github-projects v0.7.1 (/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-onetaskgraph-9c94c67fcf19/pool/1/worktree/crates/onetaskgraph-github-projects)
+   Compiling onetaskgraph-linear v0.7.1 (/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-onetaskgraph-9c94c67fcf19/pool/1/worktree/crates/onetaskgraph-linear)
+   Compiling onetaskgraph-e2e-support v0.7.1 (/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-onetaskgraph-9c94c67fcf19/pool/1/worktree/crates/onetaskgraph-e2e-support)
+   Compiling onetaskgraph-core v0.7.1 (/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-onetaskgraph-9c94c67fcf19/pool/1/worktree/crates/onetaskgraph-core)
+   Compiling onetaskgraph-github-projects-e2e v0.7.1 (/home/nick.guest/.onevcs/workspaces/github.com-nickderobertis-onetaskgraph-9c94c67fcf19/pool/1/worktree/crates/onetaskgraph-github-projects-e2e)
+    Finished `test` profile [unoptimized] target(s) in 7.83s
+────────────
+ Nextest run ID a5357b72-b9b7-4d22-b721-79a1f8a61ccc with nextest profile: default
+    Starting 207 tests across 4 binaries
+        PASS [   0.164s] (  1/207) onetaskgraph-github-projects-e2e::e2e assets::github_signed_storage_redirect_reaches_the_proxy_and_refuses_a_transport_failure
+        PASS [   0.190s] (  2/207) onetaskgraph-github-projects-e2e::e2e assets::attachment_retry_records_both_http_outcomes_and_the_recovered_attempt
+        PASS [   0.035s] (  3/207) onetaskgraph-github-projects-e2e::e2e boundary::a_board_item_whose_stored_classification_is_malformed_is_refused_rather_than_read_public
+        PASS [   0.078s] (  4/207) onetaskgraph-github-projects-e2e::e2e boundary::a_board_made_public_after_a_routed_creates_member_project_refuses_the_task_and_removes_it
+        PASS [   0.306s] (  5/207) onetaskgraph-github-projects-e2e::e2e boundary::a_board_item_two_carried_tasks_reference_is_read_once_for_its_classification
+        PASS [   0.037s] (  6/207) onetaskgraph-github-projects-e2e::e2e boundary::a_board_with_no_declared_visibility_spends_nothing_learning_it
+        PASS [   0.188s] (  7/207) onetaskgraph-github-projects-e2e::e2e boundary::a_board_made_public_part_way_through_a_copy_refuses_the_next_write_and_undoes_the_ones_before
+        PASS [   0.048s] (  8/207) onetaskgraph-github-projects-e2e::e2e boundary::a_copy_whose_link_back_to_a_board_made_public_is_refused_is_undone
+        PASS [   0.134s] (  9/207) onetaskgraph-github-projects-e2e::e2e boundary::a_board_whose_project_or_issue_repository_is_public_is_refused_before_any_mutation
+        PASS [   0.032s] ( 10/207) onetaskgraph-github-projects-e2e::e2e boundary::a_credential_without_the_project_read_scope_refuses_naming_the_scope
+        PASS [   0.424s] ( 11/207) onetaskgraph-github-projects-e2e::e2e assets::malformed_stored_assets_refuse_reads_and_assets_without_content_are_persisted
+        PASS [   0.062s] ( 12/207) onetaskgraph-github-projects-e2e::e2e boundary::a_create_routed_onto_the_board_is_held_to_the_repository_its_issue_lands_in
+        PASS [   0.039s] ( 13/207) onetaskgraph-github-projects-e2e::e2e boundary::a_dry_run_reads_every_issue_repository_it_would_write_to
+        PASS [   0.078s] ( 14/207) onetaskgraph-github-projects-e2e::e2e boundary::a_draft_belongs_to_no_repository_so_the_board_alone_decides
+        PASS [   0.065s] ( 15/207) onetaskgraph-github-projects-e2e::e2e boundary::a_dry_run_reads_the_board_it_would_write_to_and_reports_the_refusal_its_copy_would_meet
+        PASS [   0.031s] ( 16/207) onetaskgraph-github-projects-e2e::e2e boundary::a_new_task_filed_under_a_project_is_held_to_that_projects_repository
+        PASS [   0.495s] ( 17/207) onetaskgraph-github-projects-e2e::e2e assets::changed_assets_follow_the_existing_issues_repository_after_a_transfer
+        PASS [   0.070s] ( 18/207) onetaskgraph-github-projects-e2e::e2e boundary::a_narrow_write_to_an_existing_issue_is_held_to_that_issues_own_repository
+        PASS [   0.032s] ( 19/207) onetaskgraph-github-projects-e2e::e2e boundary::a_project_read_refused_for_another_grant_is_not_reported_as_a_missing_scope
+        PASS [   0.050s] ( 20/207) onetaskgraph-github-projects-e2e::e2e boundary::a_private_task_lands_on_a_board_whose_project_and_repository_are_both_private
+        PASS [   0.029s] ( 21/207) onetaskgraph-github-projects-e2e::e2e boundary::a_repository_named_by_the_task_is_the_one_whose_visibility_is_read
+        PASS [   0.569s] ( 22/207) onetaskgraph-github-projects-e2e::e2e assets::refused_uploads_and_broken_verified_urls_never_write_an_issue_body
+        PASS [   0.086s] ( 23/207) onetaskgraph-github-projects-e2e::e2e boundary::a_project_visibility_answer_without_a_boolean_public_is_refused_before_any_mutation
+        PASS [   0.604s] ( 24/207) onetaskgraph-github-projects-e2e::e2e assets::hosted_asset_reads_and_rendering_updates_cross_the_real_source_boundary
+        PASS [   0.080s] ( 25/207) onetaskgraph-github-projects-e2e::e2e boundary::a_routed_copy_whose_home_members_cannot_be_recorded_is_undone_on_both_sides
+        PASS [   0.004s] ( 26/207) onetaskgraph-github-projects-e2e::e2e budget_runner::nx_tracks_the_reporter_telemetry_directory
+        PASS [   0.006s] ( 27/207) onetaskgraph-github-projects-e2e::e2e budget_runner::report_cache_points
+        PASS [   0.004s] ( 28/207) onetaskgraph-github-projects-e2e::e2e budget_runner::report_concurrent
+        PASS [   0.015s] ( 29/207) onetaskgraph-github-projects-e2e::e2e budget_runner::refusal_report_rejects_fractional_and_impossible_counts
+        PASS [   0.005s] ( 30/207) onetaskgraph-github-projects-e2e::e2e budget_runner::report_concurrent_refusals
+        PASS [   0.043s] ( 31/207) onetaskgraph-github-projects-e2e::e2e budget_runner::live_session_report_boundary
+        PASS [   0.625s] ( 32/207) onetaskgraph-github-projects-e2e::e2e assets::truncated_asset_responses_are_refused_and_accounted_without_changing_issue_bodies
+        PASS [   0.006s] ( 33/207) onetaskgraph-github-projects-e2e::e2e budget_runner::report_live_session
+        PASS [   0.006s] ( 34/207) onetaskgraph-github-projects-e2e::e2e budget_runner::report_metadata_fields
+        PASS [   0.006s] ( 35/207) onetaskgraph-github-projects-e2e::e2e budget_runner::report_new
+        PASS [   0.004s] ( 36/207) onetaskgraph-github-projects-e2e::e2e budget_runner::report_single
+        PASS [   0.008s] ( 37/207) onetaskgraph-github-projects-e2e::e2e budget_runner::report_unchanged
+        PASS [   0.009s] ( 38/207) onetaskgraph-github-projects-e2e::e2e budget_runner::report_visibility_reads
+        PASS [   0.150s] ( 39/207) onetaskgraph-github-projects-e2e::e2e boundary::an_internal_repository_is_private_and_an_answer_without_a_visibility_reads_its_flag
+        PASS [   0.051s] ( 40/207) onetaskgraph-github-projects-e2e::e2e budget_runner::the_metadata_field_share_is_the_larger_of_the_minute_and_the_hour
+        PASS [   0.138s] ( 41/207) onetaskgraph-github-projects-e2e::e2e boundary::an_unreadable_visibility_is_never_guessed
+        PASS [   0.064s] ( 42/207) onetaskgraph-github-projects-e2e::e2e budget_runner::the_cache_report_takes_the_whole_matrix_and_refuses_any_cell_or_figure_it_cannot_vouch_for
+        PASS [   0.061s] ( 43/207) onetaskgraph-github-projects-e2e::e2e budget_runner::the_visibility_report_refuses_a_missing_or_foreign_recording_without_a_figure
+        PASS [   0.157s] ( 44/207) onetaskgraph-github-projects-e2e::e2e boundary::visibility_is_read_again_at_every_write_and_a_change_between_writes_never_passes
+        PASS [   0.092s] ( 45/207) onetaskgraph-github-projects-e2e::e2e budget_runner::the_real_report_boundary_refuses_invalid_telemetry_without_a_figure
+        PASS [   0.080s] ( 46/207) onetaskgraph-github-projects-e2e::e2e cache::a_cache_that_cannot_be_emptied_is_refused_naming_where_and_what_to_check
+        PASS [   0.314s] ( 47/207) onetaskgraph-github-projects-e2e::e2e boundary::a_private_task_project_and_document_read_back_private_from_the_board
+        PASS [   0.824s] ( 48/207) onetaskgraph-github-projects-e2e::e2e assets::attachment_redirects_preserve_trusted_reads_and_refuse_foreign_destinations
+        PASS [   0.881s] ( 49/207) onetaskgraph-github-projects-e2e::e2e assets::attachment_accounting_matches_the_real_http_responses
+        PASS [   0.097s] ( 50/207) onetaskgraph-github-projects-e2e::e2e cache::a_github_task_with_no_change_token_is_read_every_time_and_says_why
+        PASS [   0.221s] ( 51/207) onetaskgraph-github-projects-e2e::e2e cache::a_bound_copy_with_expect_sends_only_the_parts_whose_fields_differ_and_no_read
+        PASS [   0.242s] ( 52/207) onetaskgraph-github-projects-e2e::e2e cache::a_bound_copy_carrying_comments_with_expect_reads_neither_the_task_nor_its_comments
+        PASS [   0.115s] ( 53/207) onetaskgraph-github-projects-e2e::e2e cache::a_lost_answer_is_reported_unknown_and_never_sent_again
+        PASS [   0.217s] ( 54/207) onetaskgraph-github-projects-e2e::e2e cache::a_context_another_release_wrote_is_declined_and_the_write_reads_once_instead
+        PASS [   0.240s] ( 55/207) onetaskgraph-github-projects-e2e::e2e cache::a_cache_that_cannot_be_written_costs_nothing_but_the_cache
+        PASS [   0.114s] ( 56/207) onetaskgraph-github-projects-e2e::e2e cache::a_malformed_pin_and_an_expect_no_cache_can_take_are_refused_before_anything_is_read
+        PASS [   0.349s] ( 57/207) onetaskgraph-github-projects-e2e::e2e cache::a_bound_copy_with_expect_reports_each_part_landed_rejected_or_unknown_and_retries_none
+        PASS [   0.459s] ( 58/207) onetaskgraph-github-projects-e2e::e2e cache::a_pin_is_at_least_as_fresh_as_the_version_held_and_never_discovers_a_change_nobody_read
+        PASS [   0.452s] ( 59/207) onetaskgraph-github-projects-e2e::e2e cache::a_pinned_read_of_a_task_cached_at_that_version_sends_nothing_and_an_unpinned_one_goes_to_the_board
+        PASS [   0.755s] ( 60/207) onetaskgraph-github-projects-e2e::e2e cache::a_bound_copy_whose_response_shows_the_task_whole_advances_the_entry_and_one_that_does_not_leaves_it
+        PASS [   0.610s] ( 61/207) onetaskgraph-github-projects-e2e::e2e cache::a_project_copy_reads_its_tasks_edges_from_the_board_however_the_cache_holds_them
+        PASS [   0.555s] ( 62/207) onetaskgraph-github-projects-e2e::e2e cache::a_rust_callers_listing_pins_the_reads_that_follow_it_in_the_same_engine
+        PASS [   0.686s] ( 63/207) onetaskgraph-github-projects-e2e::e2e cache::a_pinned_read_the_cache_cannot_vouch_for_makes_exactly_the_one_remote_read
+        PASS [   0.726s] ( 64/207) onetaskgraph-github-projects-e2e::e2e cache::a_re_minted_option_costs_the_refused_mutation_one_read_and_one_retry_and_then_nothing_more
+        PASS [   0.320s] ( 65/207) onetaskgraph-github-projects-e2e::e2e cache::a_stale_id_refused_after_an_earlier_part_landed_retries_that_part_alone
+        PASS [   0.273s] ( 66/207) onetaskgraph-github-projects-e2e::e2e cache::a_stale_id_retry_that_is_refused_too_reports_both_and_is_never_sent_a_third_time
+        PASS [   0.302s] ( 67/207) onetaskgraph-github-projects-e2e::e2e cache::a_stale_option_in_a_multi_part_write_retries_the_refused_part_once_and_never_resends_a_landed_one
+        PASS [   0.275s] ( 68/207) onetaskgraph-github-projects-e2e::e2e cache::a_write_whose_response_shows_only_what_it_wrote_leaves_the_entry_unserved_at_its_version
+        PASS [   0.250s] ( 69/207) onetaskgraph-github-projects-e2e::e2e cache::an_edit_expecting_a_task_read_without_its_comments_reads_which_issue_the_comment_is_on
+        PASS [   0.285s] ( 70/207) onetaskgraph-github-projects-e2e::e2e cache::a_write_without_expect_reads_as_it_always_did_and_leaves_the_entry_unserved
+        PASS [   0.960s] ( 71/207) onetaskgraph-github-projects-e2e::e2e cache::a_response_carrying_its_token_but_only_a_first_page_of_one_connection_is_not_taken_whole
+        PASS [   0.229s] ( 72/207) onetaskgraph-github-projects-e2e::e2e cache::an_expected_write_sends_only_the_field_it_sets_and_leaves_a_persons_edit_to_another_alone
+        PASS [   0.268s] ( 73/207) onetaskgraph-github-projects-e2e::e2e cache::an_expected_priority_clear_sends_only_the_clear_and_advances_the_entry
+        PASS [   0.505s] ( 74/207) onetaskgraph-github-projects-e2e::e2e cache::an_entry_missing_what_a_read_needs_is_not_served_to_it
+        PASS [   0.315s] ( 75/207) onetaskgraph-github-projects-e2e::e2e cache::an_expected_write_answered_before_its_task_settles_gives_no_version_and_leaves_the_entry_unserved
+        PASS [   0.702s] ( 76/207) onetaskgraph-github-projects-e2e::e2e cache::a_write_whose_entry_nothing_can_retire_is_refused_unsent_and_no_later_reader_is_served_it
+        PASS [   0.508s] ( 77/207) onetaskgraph-github-projects-e2e::e2e cache::an_entry_of_an_unknown_schema_or_of_bytes_that_do_not_parse_is_a_miss_and_the_read_succeeds
+        PASS [   0.021s] ( 78/207) onetaskgraph-github-projects-e2e::e2e cache::cache_clear_refuses_a_source_that_keeps_none_and_one_nothing_configures_naming_the_next_step
+        PASS [   0.537s] ( 79/207) onetaskgraph-github-projects-e2e::e2e cache::an_expected_comment_write_sends_only_its_mutation_and_advances_the_entry_its_response_shows_whole
+        PASS [   0.231s] ( 80/207) onetaskgraph-github-projects-e2e::e2e cache::an_expected_write_with_nothing_cached_reads_once_then_writes_and_says_so
+        PASS [   0.145s] ( 81/207) onetaskgraph-github-projects-e2e::e2e cache::cache_clear_leaves_another_remotes_entries_another_releases_and_their_staging_alone
+        PASS [   0.104s] ( 82/207) onetaskgraph-github-projects-e2e::e2e cache::cache_clear_removes_a_staging_file_this_remote_left_behind
+        PASS [   0.123s] ( 83/207) onetaskgraph-github-projects-e2e::e2e cache::cache_clear_removes_only_what_the_store_wrote_in_a_directory_holding_other_files
+        PASS [   0.343s] ( 84/207) onetaskgraph-github-projects-e2e::e2e cache::an_older_entry_a_racing_writer_left_is_never_served_to_a_later_pin
+        PASS [   0.466s] ( 85/207) onetaskgraph-github-projects-e2e::e2e cache::an_expected_write_the_cache_holds_only_older_or_unordered_reads_once_then_writes
+        PASS [   1.919s] ( 86/207) onetaskgraph-github-projects-e2e::e2e cache::a_copy_by_query_reads_its_tasks_edges_from_the_board_in_the_one_batch_that_carries_them
+        PASS [   2.727s] ( 87/207) onetaskgraph-github-projects-e2e::e2e assets::malformed_asset_inputs_and_http_answers_refuse_writes_and_renders_without_changing_the_issue
+        PASS [   1.856s] ( 88/207) onetaskgraph-github-projects-e2e::e2e cache::a_response_carrying_its_token_but_leaving_out_one_member_is_not_taken_for_the_whole_task
+        PASS [   0.445s] ( 89/207) onetaskgraph-github-projects-e2e::e2e cache::cache_enabled_is_read_from_every_layer_and_a_later_false_turns_it_off
+        PASS [   0.631s] ( 90/207) onetaskgraph-github-projects-e2e::e2e cache::cache_clear_empties_exactly_what_it_names_and_the_next_pinned_read_refills_it
+        PASS [   0.197s] ( 91/207) onetaskgraph-github-projects-e2e::e2e cache::the_default_cache_lives_under_home_without_xdg_cache_home_and_nowhere_without_either
+        PASS [   0.489s] ( 92/207) onetaskgraph-github-projects-e2e::e2e cache::cache_dir_from_every_layer_relocates_the_cache_and_a_pinned_read_is_served_from_there
+        PASS [   0.179s] ( 93/207) onetaskgraph-github-projects-e2e::e2e cache::the_human_rendering_of_an_expected_delete_says_it_read_first
+        PASS [   0.131s] ( 94/207) onetaskgraph-github-projects-e2e::e2e cache::with_caching_off_nothing_is_written_and_every_read_goes_to_the_board
+        PASS [   0.258s] ( 95/207) onetaskgraph-github-projects-e2e::e2e cache::the_human_rendering_says_when_a_write_read_first_and_what_clear_emptied
+        PASS [   1.848s] ( 96/207) onetaskgraph-github-projects-e2e::e2e cache::a_show_many_fed_by_a_listing_pinned_to_its_versions_reads_only_what_changed
+        PASS [   0.805s] ( 97/207) onetaskgraph-github-projects-e2e::e2e cache::each_expected_task_write_sends_one_mutation_and_a_read_pinned_to_its_version_sends_nothing
+        PASS [   0.793s] ( 98/207) onetaskgraph-github-projects-e2e::e2e cache::every_verb_the_cache_does_not_serve_answers_and_costs_exactly_what_it_does_without_it
+        PASS [   0.612s] ( 99/207) onetaskgraph-github-projects-e2e::e2e cache::two_processes_writing_one_cache_never_leave_a_reader_a_partial_entry
+        PASS [   0.715s] (100/207) onetaskgraph-github-projects-e2e::e2e cache::with_caching_on_the_cache_directory_is_the_only_place_a_file_changes
+        PASS [   1.036s] (101/207) onetaskgraph-github-projects-e2e::e2e cache_assets::a_picture_the_cache_cannot_keep_is_read_from_the_board_at_every_render_until_it_can
+        PASS [   1.154s] (102/207) onetaskgraph-github-projects-e2e::e2e cache_assets::a_manifest_naming_other_bytes_reads_them_and_bytes_that_no_longer_hash_are_read_again
+        PASS [   0.961s] (103/207) onetaskgraph-github-projects-e2e::e2e cache_assets::cache_clear_reclaims_a_sources_items_and_bytes_and_leaves_another_sources_alone
+        PASS [   1.062s] (104/207) onetaskgraph-github-projects-e2e::e2e cache_assets::a_render_keeping_an_unchanged_picture_reads_no_attachment_twice
+        PASS [   0.120s] (105/207) onetaskgraph-github-projects-e2e::e2e cache_kinds::a_listing_of_any_kind_fills_no_entry
+        PASS [   1.649s] (106/207) onetaskgraph-github-projects-e2e::e2e cache::the_python_sdk_pins_expects_and_clears_through_the_binary
+        PASS [   1.946s] (107/207) onetaskgraph-github-projects-e2e::e2e cache::every_write_whose_response_shows_only_what_it_wrote_leaves_its_new_version_unserved
+        PASS [   1.731s] (108/207) onetaskgraph-github-projects-e2e::e2e cache::the_typescript_sdk_pins_expects_and_clears_through_the_binary
+        PASS [   0.299s] (109/207) onetaskgraph-github-projects-e2e::e2e cache_kinds::a_pinned_document_read_serves_its_fields_and_manifest_from_its_entry
+        PASS [   0.156s] (110/207) onetaskgraph-github-projects-e2e::e2e cache_kinds::an_entry_a_release_before_gh3_left_is_read_again_rather_than_served
+        PASS [   0.325s] (111/207) onetaskgraph-github-projects-e2e::e2e cache_kinds::a_pinned_project_read_is_answered_from_its_entry_and_a_newer_pin_from_the_board
+        PASS [   0.162s] (112/207) onetaskgraph-github-projects-e2e::e2e cache_kinds::an_item_whose_labels_go_on_past_one_page_is_refused_and_leaves_the_entry_at_the_version_held
+        PASS [   0.176s] (113/207) onetaskgraph-github-projects-e2e::e2e cache_kinds::an_item_read_too_soon_after_its_change_gives_no_token_and_fills_no_entry
+        PASS [   2.455s] (114/207) onetaskgraph-github-projects-e2e::e2e cache::every_typescript_sdk_write_forwards_expect_and_sends_only_its_mutation
+        PASS [   1.151s] (115/207) onetaskgraph-github-projects-e2e::e2e cache_kinds::a_far_end_deleted_lowers_the_count_and_the_pinned_read_is_never_the_entry
+        PASS [   0.675s] (116/207) onetaskgraph-github-projects-e2e::e2e cache_kinds::a_pin_the_board_cannot_order_beside_the_entry_is_the_one_read
+        PASS [   0.477s] (117/207) onetaskgraph-github-projects-e2e::e2e cache_kinds::an_entry_the_cache_directory_will_not_replace_is_served_to_no_pin_after_its_item_changed
+        PASS [   0.950s] (118/207) onetaskgraph-github-projects-e2e::e2e cache_kinds::a_far_ends_kind_flip_or_retitle_into_a_document_is_read_from_the_board_in_every_edge
+        PASS [   0.473s] (119/207) onetaskgraph-github-projects-e2e::e2e cache_writes::a_copy_that_cannot_finish_takes_the_entries_of_what_it_writes_back_out_of_service
+        PASS [   0.418s] (120/207) onetaskgraph-github-projects-e2e::e2e cache_writes::two_processes_writing_one_project_entry_never_leave_a_reader_part_of_it
+        PASS [   0.194s] (121/207) onetaskgraph-github-projects-e2e::e2e copy_cost::a_create_copy_sends_no_origin_lookup_and_refuses_what_it_cannot_assert
+        PASS [   0.591s] (122/207) onetaskgraph-github-projects-e2e::e2e cache_writes::an_entry_this_build_cannot_read_as_its_own_is_a_miss_and_the_read_succeeds
+        PASS [   0.795s] (123/207) onetaskgraph-github-projects-e2e::e2e cache_kinds::an_items_own_kind_change_is_never_answered_with_the_entry_of_its_old_kind
+        PASS [   3.331s] (124/207) onetaskgraph-github-projects-e2e::e2e cache::one_sources_cache_is_shared_by_the_command_line_both_sdks_and_a_rust_caller
+        PASS [   6.030s] (125/207) onetaskgraph-github-projects-e2e::e2e assets::task_and_document_assets_are_uploaded_verified_reused_and_replaced
+        PASS [   0.597s] (126/207) onetaskgraph-github-projects-e2e::e2e copy_cost::follow_up_writes_resolve_each_item_once_and_batch_the_copy_fields
+        PASS [   1.311s] (127/207) onetaskgraph-github-projects-e2e::e2e cache_writes::a_project_or_document_metadata_write_or_render_removes_its_entry_and_the_next_pinned_read_is_the_boards
+        PASS [   1.198s] (128/207) onetaskgraph-github-projects-e2e::e2e copy_cost::a_batched_detail_read_costs_one_request_and_one_point_per_detail_batch
+        PASS [   0.129s] (129/207) onetaskgraph-github-projects-e2e::e2e fields::a_board_already_set_up_is_a_plan_that_writes_nothing_and_an_unchanged_apply
+        PASS [   0.199s] (130/207) onetaskgraph-github-projects-e2e::e2e copy_unsettled::a_task_whose_comments_never_settle_is_written_nowhere_and_reported_failed
+        PASS [   0.051s] (131/207) onetaskgraph-github-projects-e2e::e2e fields::a_board_with_no_priority_mapping_sets_up_its_status_field_alone
+        PASS [   0.064s] (132/207) onetaskgraph-github-projects-e2e::e2e fields::a_board_without_status_and_a_source_that_is_not_a_board_are_refused_by_name
+        PASS [   0.238s] (133/207) onetaskgraph-github-projects-e2e::e2e fields::a_board_answering_two_status_or_two_priority_fields_is_refused_rather_than_one_chosen
+        PASS [   0.156s] (134/207) onetaskgraph-github-projects-e2e::e2e fields::a_missing_option_of_either_field_is_added_with_every_existing_option_and_value_preserved
+        PASS [   0.162s] (135/207) onetaskgraph-github-projects-e2e::e2e fields::a_persons_own_field_is_read_past_whatever_it_holds
+        PASS [   0.098s] (136/207) onetaskgraph-github-projects-e2e::e2e fields::a_priority_field_of_another_type_is_refused_rather_than_created_beside
+        PASS [   0.271s] (137/207) onetaskgraph-github-projects-e2e::e2e fields::a_missing_priority_field_is_planned_then_created_with_the_mapped_options_in_order
+        PASS [   0.819s] (138/207) onetaskgraph-github-projects-e2e::e2e copy_recopy::a_recopy_by_query_reads_only_the_listing_and_then_only_what_changed
+        PASS [   0.041s] (139/207) onetaskgraph-github-projects-e2e::e2e fields::a_second_field_failing_after_the_first_changed_is_refused_with_the_recovery_data
+        PASS [   0.138s] (140/207) onetaskgraph-github-projects-e2e::e2e fields::a_priority_field_status_options_does_not_own_cannot_refuse_it
+        PASS [   6.903s] (141/207) onetaskgraph-github-projects-e2e::e2e assets::measure_single_and_three_concurrent_project_copies_in_virtual_time
+        PASS [   0.054s] (142/207) onetaskgraph-github-projects-e2e::e2e fields::a_verification_read_that_fails_after_the_write_is_refused_with_the_recovery_data
+        PASS [   0.084s] (143/207) onetaskgraph-github-projects-e2e::e2e fields::a_reminted_or_dropped_priority_option_is_refused_with_the_recovery_data
+        PASS [   1.721s] (144/207) onetaskgraph-github-projects-e2e::e2e copy_cost::a_bound_recopy_adds_one_project_read_and_batches_the_dependencies_it_newly_names
+        PASS [   2.086s] (145/207) onetaskgraph-github-projects-e2e::e2e cache_writes::a_pin_reaches_the_cache_through_both_sdks_and_a_rust_caller
+        PASS [   0.130s] (146/207) onetaskgraph-github-projects-e2e::e2e fields::drift_after_the_write_is_refused_with_the_pre_write_assignments
+        PASS [   0.140s] (147/207) onetaskgraph-github-projects-e2e::e2e fields::the_human_rendering_says_what_an_apply_added_and_verified
+        PASS [   0.206s] (148/207) onetaskgraph-github-projects-e2e::e2e github_status_by_kind::a_project_copy_over_an_item_at_an_option_the_board_lacks_sends_no_mutation_or_restore
+        PASS [   0.215s] (149/207) onetaskgraph-github-projects-e2e::e2e github_status_by_kind::a_copy_refused_after_it_overwrote_a_board_project_puts_that_project_back
+        PASS [   0.162s] (150/207) onetaskgraph-github-projects-e2e::e2e github_status_by_kind::sources_fields_names_each_kinds_missing_options_and_apply_adds_both_keeping_every_id
+        PASS [   0.343s] (151/207) onetaskgraph-github-projects-e2e::e2e fields::an_item_answered_with_two_values_of_one_field_is_refused_rather_than_one_kept
+        PASS [   0.108s] (152/207) onetaskgraph-github-projects-e2e::e2e graph::a_board_refusing_the_read_of_the_project_itself_prints_nothing
+        PASS [   0.159s] (153/207) onetaskgraph-github-projects-e2e::e2e graph::a_board_refusing_a_later_listing_page_prints_no_part_of_the_graph
+        PASS [   0.068s] (154/207) onetaskgraph-github-projects-e2e::e2e metadata_fields::a_copy_onto_a_board_without_the_field_is_refused_naming_the_setup_that_creates_it
+        PASS [   0.031s] (155/207) onetaskgraph-github-projects-e2e::e2e metadata_fields::a_created_text_field_the_board_does_not_hold_afterwards_is_refused_as_drift
+        PASS [   0.309s] (156/207) onetaskgraph-github-projects-e2e::e2e graph::a_board_refusing_a_dependency_read_after_the_listing_prints_no_part_of_the_graph
+        PASS [   0.064s] (157/207) onetaskgraph-github-projects-e2e::e2e metadata_fields::a_first_text_field_create_refused_changes_nothing_and_a_rerun_creates_them_all
+        PASS [   0.475s] (158/207) onetaskgraph-github-projects-e2e::e2e github_status_by_kind::a_status_its_kind_has_no_option_for_is_refused_on_every_verb_before_any_mutation
+        PASS [   0.054s] (159/207) onetaskgraph-github-projects-e2e::e2e metadata_fields::a_verification_read_refused_after_a_create_says_what_changed_and_a_rerun_verifies_it
+        PASS [   0.101s] (160/207) onetaskgraph-github-projects-e2e::e2e metadata_fields::a_refused_text_field_create_names_what_landed_and_a_rerun_creates_only_what_is_missing
+        PASS [   1.379s] (161/207) onetaskgraph-github-projects-e2e::e2e copy_unsettled::a_comment_edited_on_an_earlier_page_between_page_reads_lands_as_it_now_reads
+        PASS [   0.072s] (162/207) onetaskgraph-github-projects-e2e::e2e metadata_fields::sources_fields_names_a_conflict_without_a_data_type_by_its_graphql_type
+        PASS [   0.069s] (163/207) onetaskgraph-github-projects-e2e::e2e metadata_fields::sources_fields_refuses_a_field_type_it_cannot_read_before_any_mutation
+        PASS [   0.077s] (164/207) onetaskgraph-github-projects-e2e::e2e metadata_fields::sources_fields_reports_a_same_named_field_of_another_type_and_changes_nothing
+        PASS [   3.207s] (165/207) onetaskgraph-github-projects-e2e::e2e cache_kinds::a_label_or_option_renamed_or_recoloured_is_read_again_for_a_task_a_project_and_a_document
+        PASS [   0.092s] (166/207) onetaskgraph-github-projects-e2e::e2e metadata_fields::sources_fields_says_in_words_what_it_would_create_and_what_it_created
+        PASS [   0.131s] (167/207) onetaskgraph-github-projects-e2e::e2e metadata_fields::sources_fields_plans_creates_and_then_leaves_a_projected_text_field
+        PASS [   0.357s] (168/207) onetaskgraph-github-projects-e2e::e2e metadata_fields::a_copied_follow_up_lands_its_host_on_the_board_and_keeps_it_in_step
+        PASS [   2.092s] (169/207) onetaskgraph-github-projects-e2e::e2e copy_cost::a_narrowed_cli_list_limits_fetches_and_resumes_in_a_new_process
+        PASS [   0.574s] (170/207) onetaskgraph-github-projects-e2e::e2e github_status_by_kind::each_kind_is_written_read_and_narrowed_through_its_own_half_of_the_mapping
+        PASS [   0.189s] (171/207) onetaskgraph-github-projects-e2e::e2e write_order::a_bound_recopy_whose_project_move_is_refused_leaves_the_body_and_metadata_as_they_stood
+        PASS [   2.084s] (172/207) onetaskgraph-github-projects-e2e::e2e copy_cost::detail_and_record_only_reads_reuse_one_issue_resolution_through_cli_and_sdks
+        PASS [   0.020s] (173/207) onetaskgraph-github-projects-e2e::live a_rendering_read_answered_not_found_fails_at_once
+        PASS [   0.024s] (174/207) onetaskgraph-github-projects-e2e::live a_rendering_read_rides_out_a_gateway_timeout_and_reads_the_image
+        PASS [   0.091s] (175/207) onetaskgraph-github-projects-e2e::live a_rendering_read_that_keeps_meeting_server_errors_fails_after_its_bound
+        PASS [   2.258s] (176/207) onetaskgraph-github-projects-e2e::e2e copy_cost::a_project_copy_into_a_board_costs_what_the_record_beside_the_session_record_says
+        PASS [   0.019s] (177/207) onetaskgraph-github-projects-e2e::live a_rendering_transport_failure_retains_its_rest_call
+        PASS [   0.007s] (178/207) onetaskgraph-github-projects-e2e::live credentialless_asset_entry_point_never_writes_live_evidence
+        PASS [   0.006s] (179/207) onetaskgraph-github-projects-e2e::live disposable_task_and_document_asset_copies
+        PASS [   0.006s] (180/207) onetaskgraph-github-projects-e2e::live malformed_live_demand_is_refused_before_admission
+        PASS [   0.033s] (181/207) onetaskgraph-github-projects-e2e::live propagated_selection_prevents_the_asset_entry_point_from_opening_a_session
+        PASS [   0.057s] (182/207) onetaskgraph-github-projects-e2e::live board_admission_rejects_non_success_even_with_valid_board_json
+        PASS [   0.018s] (183/207) onetaskgraph-github-projects-e2e::live the_actual_asset_entry_point_refuses_missing_main_before_any_request
+        PASS [   0.006s] (184/207) onetaskgraph-github-projects-e2e::live_pair a_dep_info_file_names_its_source_in_either_separator
+        PASS [   0.450s] (185/207) onetaskgraph-github-projects-e2e::e2e write_order::a_task_update_applies_each_field_alone_and_all_together_in_one_read_and_two_writes
+        PASS [   0.175s] (186/207) onetaskgraph-github-projects-e2e::live raw_asset_queries_retain_actual_prices_and_failure_outcomes
+        PASS [   0.542s] (187/207) onetaskgraph-github-projects-e2e::e2e write_order::every_write_of_an_update_refused_leaves_the_body_and_metadata_as_they_stood
+        PASS [   0.212s] (188/207) onetaskgraph-github-projects-e2e::live_pair a_scalar_graphql_response_with_a_date_refuses_the_entry_point_without_a_parser_panic
+        PASS [   0.739s] (189/207) onetaskgraph-github-projects-e2e::e2e write_order::a_bound_recopy_applies_each_change_alone_and_all_together_in_three_requests
+        PASS [   8.230s] (190/207) onetaskgraph-github-projects-e2e::e2e assets::asset_requests_take_mutation_slots_and_each_limiter_recovers_or_exhausts_its_budget
+        PASS [   1.257s] (191/207) onetaskgraph-github-projects-e2e::e2e graph::a_plans_requests_grow_with_its_listing_pages_and_not_with_its_tasks_or_edges
+        PASS [   0.957s] (192/207) onetaskgraph-github-projects-e2e::lane_wiring real_nx_orders_both_contributions_and_keeps_one_main_task
+        PASS [   1.141s] (193/207) onetaskgraph-github-projects-e2e::lane_wiring test_recipe_launches_the_real_nx_script_through_bash
+        PASS [   1.232s] (194/207) onetaskgraph-github-projects-e2e::e2e write_order::every_write_of_a_bound_recopy_refused_leaves_the_body_and_metadata_as_they_stood
+        PASS [   3.077s] (195/207) onetaskgraph-github-projects-e2e::lane_wiring the_real_policy_gives_each_invocation_a_fresh_directory_and_refuses_unsafe_identities
+        PASS [   3.667s] (196/207) onetaskgraph-github-projects-e2e::e2e visibility_cost::a_whole_plan_copy_spends_two_visibility_reads_per_write
+        PASS [   3.880s] (197/207) onetaskgraph-github-projects-e2e::lane_wiring budget_adapter_uses_the_real_checker_and_never_substitutes_missing_live_evidence
+        PASS [   3.819s] (198/207) onetaskgraph-github-projects-e2e::live_pair later_phase_refusal_retains_the_real_owned_cleanup_in_a_partial_record
+        PASS [   3.803s] (199/207) onetaskgraph-github-projects-e2e::live_pair malformed_errors_cannot_establish_the_page_ceiling_or_inherit_its_price_model
+        PASS [   3.664s] (200/207) onetaskgraph-github-projects-e2e::live_pair missing_or_unadmitted_board_observations_never_start_the_fixture_or_make_a_bill
+        PASS [  21.757s] (201/207) onetaskgraph-github-projects-e2e::live_pair ignored_actual_cost_alias_executes_the_read_only_fallback_and_refuses_a_numeric_bill
+        PASS [  21.980s] (202/207) onetaskgraph-github-projects-e2e::live_pair an_attachment_that_declares_core_without_an_allowance_refuses_after_owned_cleanup
+        PASS [  21.996s] (203/207) onetaskgraph-github-projects-e2e::live_pair actual_entry_points_complete_one_loopback_session
+        PASS [  22.123s] (204/207) onetaskgraph-github-projects-e2e::live_pair a_shared_board_smaller_than_the_measured_one_runs_and_bills_within_the_budget
+        PASS [  21.674s] (205/207) onetaskgraph-github-projects-e2e::live_pair unsupported_pricing_aliases_execute_all_contracts_but_never_hide_the_unpriced_refusal
+        PASS [  21.911s] (206/207) onetaskgraph-github-projects-e2e::live_pair the_deliberate_ceiling_refusal_uses_only_the_approved_disclosed_minimum_model
+        SLOW [> 60.000s] (───────) onetaskgraph-github-projects-e2e::e2e cache_budget::the_cache_spends_no_more_board_points_than_no_cache_over_every_kind_sequence_and_scale
+  Cancelling due to signal: 1 test still running
+     SIGTERM [  98.116s] (207/207) onetaskgraph-github-projects-e2e::e2e cache_budget::the_cache_spends_no_more_board_points_than_no_cache_over_every_kind_sequence_and_scale
+  stdout ───
+
+    running 1 test
+    test cache_budget::the_cache_spends_no_more_board_points_than_no_cache_over_every_kind_sequence_and_scale has been running for over 60 seconds
+
+    (test aborted with signal 15: SIGTERM)
+
+────────────
+     Summary [ 101.658s] 207 tests run: 206 passed, 1 failed, 0 skipped
+     SIGTERM [  98.116s] (207/207) onetaskgraph-github-projects-e2e::e2e cache_budget::the_cache_spends_no_more_board_points_than_no_cache_over_every_kind_sequence_and_scale
+error: test run failed

@@ -65,11 +65,31 @@ def main() -> None:
                        ("cycle_s", "Sum"), ("release_cycle_time_max_per_release_s", "Max over one release's PRs")):
         print(f"| {label} | {s(c[key], 'median')} | {s(c[key], 'p90')} | {s(c[key], 'max')} |")
 
+    r = figures["repeats_and_serialization"]
+    print("\n### Repeated checks and serialization (seconds; median / p90 / max)\n")
+    print("| Figure | n | Median / p90 / max |\n| --- | --- | --- |")
+    for key, st in r.items():
+        if isinstance(st, dict) and "median" in st:
+            print(f"| `{key}` | {st['n']} | {triple(st)} |")
+    w = r["release_workflow"]
+    for key in ("measured_wall_s", "projected_wall_s_without_needless_needs", "projected_saving_s"):
+        print(f"| `release_workflow.{key}` | {w[key]['n']} | {triple(w[key])} |")
+
     for run_dir in sys.argv[2:]:
         wall = json.loads((Path(run_dir) / "wall.json").read_text())
         tasks = json.loads((Path(run_dir) / "tasks.json").read_text())
         print(f"\n### Local `{wall['command']}` ({Path(run_dir).name}): exit {wall['exit']}, {wall['wall_s']} s\n")
-        print("| Nx task | Status | Seconds |\n| --- | --- | --- |")
+        print("| Nx tier (target) | Tasks | Span s (first start to last end) | Sum of task s | Cache hits |")
+        print("| --- | --- | --- | --- | --- |")
+        tiers = {}
+        for t in tasks:
+            tiers.setdefault(t["task"].split(":", 1)[1], []).append(t)
+        for tier, ts in sorted(tiers.items(), key=lambda kv: min(t["start_offset_s"] for t in kv[1])):
+            first = min(t["start_offset_s"] for t in ts)
+            last = max(t["start_offset_s"] + t["seconds"] for t in ts)
+            hits = sum(1 for t in ts if t["status"].startswith("local-cache"))
+            print(f"| `{tier}` | {len(ts)} | {round(last - first, 1)} | {round(sum(t['seconds'] for t in ts), 1)} | {hits} |")
+        print("\n| Nx task | Status | Seconds |\n| --- | --- | --- |")
         for t in sorted(tasks, key=lambda t: -t["seconds"]):
             print(f"| `{t['task']}` | {t['status']} | {t['seconds']} |")
 

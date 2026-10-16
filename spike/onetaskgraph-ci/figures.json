@@ -2,6 +2,350 @@
  "repo": "nickderobertis/onetaskgraph",
  "since": "2026-09-15",
  "until": "2026-10-15",
+ "repeats_and_serialization": {
+  "pr_ci_run_install_path_runner_s": {
+   "n": 127,
+   "median": 2636.0,
+   "p90": 3027.0,
+   "max": 3198.0
+  },
+  "pr_ci_run_deny_job_s": {
+   "n": 127,
+   "median": 30.0,
+   "p90": 36.0,
+   "max": 85.0
+  },
+  "push_main_ci_runner_s": {
+   "n": 68,
+   "median": 6050.5,
+   "p90": 10432.0,
+   "max": 14736.0
+  },
+  "push_main_ci_wall_s": {
+   "n": 68,
+   "median": 2278.5,
+   "p90": 6039.0,
+   "max": 18500.0
+  },
+  "push_main_ci_install_path_runner_s": {
+   "n": 68,
+   "median": 1996.5,
+   "p90": 2903.0,
+   "max": 3307.0
+  },
+  "push_main_ci_deny_job_s": {
+   "n": 68,
+   "median": 30.5,
+   "p90": 37.0,
+   "max": 45.0
+  },
+  "push_main_ci_successful_commits": 68,
+  "push_main_visual_docs_runner_s": {
+   "n": 89,
+   "median": 0,
+   "p90": 289.0,
+   "max": 425.0
+  },
+  "release_pr_ci_runner_s_per_run": {
+   "n": 43,
+   "median": 8053.0,
+   "p90": 9923.0,
+   "max": 11787.0
+  },
+  "release_workflow": {
+   "successful_runs": 45,
+   "measured_wall_s": {
+    "n": 45,
+    "median": 886.0,
+    "p90": 5334.0,
+    "max": 27286.0
+   },
+   "projected_wall_s_without_needless_needs": {
+    "n": 45,
+    "median": 690.0,
+    "p90": 4593.0,
+    "max": 21586.0
+   },
+   "projected_saving_s": {
+    "n": 45,
+    "median": 116.0,
+    "p90": 993.0,
+    "max": 5700.0
+   },
+   "runs": [
+    {
+     "run_id": 35011339588,
+     "tag": "v0.2.32",
+     "measured_wall_s": 592.0,
+     "projected_wall_s_without_needless_needs": 324.0
+    },
+    {
+     "run_id": 35063349533,
+     "tag": "v0.2.33",
+     "measured_wall_s": 1140.0,
+     "projected_wall_s_without_needless_needs": 765.0
+    },
+    {
+     "run_id": 35166223631,
+     "tag": "v0.2.34",
+     "measured_wall_s": 27286.0,
+     "projected_wall_s_without_needless_needs": 21586.0
+    },
+    {
+     "run_id": 35204344202,
+     "tag": "v0.2.35",
+     "measured_wall_s": 12956.0,
+     "projected_wall_s_without_needless_needs": 7719.0
+    },
+    {
+     "run_id": 35241186984,
+     "tag": "v0.2.36",
+     "measured_wall_s": 10972.0,
+     "projected_wall_s_without_needless_needs": 6962.0
+    },
+    {
+     "run_id": 35297062303,
+     "tag": "v0.2.37",
+     "measured_wall_s": 5826.0,
+     "projected_wall_s_without_needless_needs": 4334.0
+    },
+    {
+     "run_id": 35392795047,
+     "tag": "v0.2.38",
+     "measured_wall_s": 3300.0,
+     "projected_wall_s_without_needless_needs": 2735.0
+    },
+    {
+     "run_id": 35399480313,
+     "tag": "v0.2.39",
+     "measured_wall_s": 940.0,
+     "projected_wall_s_without_needless_needs": 551.0
+    },
+    {
+     "run_id": 35473996176,
+     "tag": "v0.2.40",
+     "measured_wall_s": 789.0,
+     "projected_wall_s_without_needless_needs": 462.0
+    },
+    {
+     "run_id": 35493192851,
+     "tag": "v0.2.41",
+     "measured_wall_s": 886.0,
+     "projected_wall_s_without_needless_needs": 885.0
+    },
+    {
+     "run_id": 35822163358,
+     "tag": "v0.2.42",
+     "measured_wall_s": 639.0,
+     "projected_wall_s_without_needless_needs": 510.0
+    },
+    {
+     "run_id": 35926873763,
+     "tag": "v0.2.43",
+     "measured_wall_s": 577.0,
+     "projected_wall_s_without_needless_needs": 461.0
+    },
+    {
+     "run_id": 36224893943,
+     "tag": "v0.2.44",
+     "measured_wall_s": 571.0,
+     "projected_wall_s_without_needless_needs": 367.0
+    },
+    {
+     "run_id": 36274247546,
+     "tag": "v0.2.45",
+     "measured_wall_s": 642.0,
+     "projected_wall_s_without_needless_needs": 559.0
+    },
+    {
+     "run_id": 36307887041,
+     "tag": "v0.2.46",
+     "measured_wall_s": 718.0,
+     "projected_wall_s_without_needless_needs": 476.0
+    },
+    {
+     "run_id": 36335295735,
+     "tag": "v0.2.47",
+     "measured_wall_s": 641.0,
+     "projected_wall_s_without_needless_needs": 536.0
+    },
+    {
+     "run_id": 36373757106,
+     "tag": "v0.2.48",
+     "measured_wall_s": 661.0,
+     "projected_wall_s_without_needless_needs": 497.0
+    },
+    {
+     "run_id": 36394844741,
+     "tag": "v0.2.49",
+     "measured_wall_s": 669.0,
+     "projected_wall_s_without_needless_needs": 593.0
+    },
+    {
+     "run_id": 36521070724,
+     "tag": "v0.2.50",
+     "measured_wall_s": 734.0,
+     "projected_wall_s_without_needless_needs": 384.0
+    },
+    {
+     "run_id": 36535382791,
+     "tag": "v0.2.51",
+     "measured_wall_s": 743.0,
+     "projected_wall_s_without_needless_needs": 422.0
+    },
+    {
+     "run_id": 36650544830,
+     "tag": "v0.2.52",
+     "measured_wall_s": 799.0,
+     "projected_wall_s_without_needless_needs": 525.0
+    },
+    {
+     "run_id": 36845882264,
+     "tag": "v0.2.53",
+     "measured_wall_s": 756.0,
+     "projected_wall_s_without_needless_needs": 555.0
+    },
+    {
+     "run_id": 36896581243,
+     "tag": "v0.2.54",
+     "measured_wall_s": 1469.0,
+     "projected_wall_s_without_needless_needs": 476.0
+    },
+    {
+     "run_id": 36991583707,
+     "tag": "v0.2.55",
+     "measured_wall_s": 1568.0,
+     "projected_wall_s_without_needless_needs": 1568.0
+    },
+    {
+     "run_id": 37039197267,
+     "tag": "v0.2.57",
+     "measured_wall_s": 611.0,
+     "projected_wall_s_without_needless_needs": 594.0
+    },
+    {
+     "run_id": 37124064940,
+     "tag": "v0.2.58",
+     "measured_wall_s": 992.0,
+     "projected_wall_s_without_needless_needs": 992.0
+    },
+    {
+     "run_id": 37443372991,
+     "tag": "v0.3.0",
+     "measured_wall_s": 703.0,
+     "projected_wall_s_without_needless_needs": 690.0
+    },
+    {
+     "run_id": 37476769272,
+     "tag": "v0.3.1",
+     "measured_wall_s": 793.0,
+     "projected_wall_s_without_needless_needs": 664.0
+    },
+    {
+     "run_id": 37502467563,
+     "tag": "v0.3.2",
+     "measured_wall_s": 641.0,
+     "projected_wall_s_without_needless_needs": 633.0
+    },
+    {
+     "run_id": 37576563892,
+     "tag": "v0.3.3",
+     "measured_wall_s": 3300.0,
+     "projected_wall_s_without_needless_needs": 3299.0
+    },
+    {
+     "run_id": 37612754016,
+     "tag": "v0.3.4",
+     "measured_wall_s": 4240.0,
+     "projected_wall_s_without_needless_needs": 4240.0
+    },
+    {
+     "run_id": 37632782529,
+     "tag": "v0.3.5",
+     "measured_wall_s": 5334.0,
+     "projected_wall_s_without_needless_needs": 5334.0
+    },
+    {
+     "run_id": 37659625301,
+     "tag": "v0.3.6",
+     "measured_wall_s": 954.0,
+     "projected_wall_s_without_needless_needs": 953.0
+    },
+    {
+     "run_id": 37710349443,
+     "tag": "v0.3.7",
+     "measured_wall_s": 919.0,
+     "projected_wall_s_without_needless_needs": 918.0
+    },
+    {
+     "run_id": 37738349909,
+     "tag": "v0.3.8",
+     "measured_wall_s": 821.0,
+     "projected_wall_s_without_needless_needs": 690.0
+    },
+    {
+     "run_id": 37751522626,
+     "tag": "v0.3.9",
+     "measured_wall_s": 916.0,
+     "projected_wall_s_without_needless_needs": 915.0
+    },
+    {
+     "run_id": 37876249882,
+     "tag": "v0.3.10",
+     "measured_wall_s": 1757.0,
+     "projected_wall_s_without_needless_needs": 1756.0
+    },
+    {
+     "run_id": 38009055679,
+     "tag": "v0.3.11",
+     "measured_wall_s": 851.0,
+     "projected_wall_s_without_needless_needs": 806.0
+    },
+    {
+     "run_id": 38073674476,
+     "tag": "v0.3.12",
+     "measured_wall_s": 690.0,
+     "projected_wall_s_without_needless_needs": 683.0
+    },
+    {
+     "run_id": 38089112089,
+     "tag": "v0.4.0",
+     "measured_wall_s": 787.0,
+     "projected_wall_s_without_needless_needs": 480.0
+    },
+    {
+     "run_id": 38207749645,
+     "tag": "v0.5.0",
+     "measured_wall_s": 3401.0,
+     "projected_wall_s_without_needless_needs": 3400.0
+    },
+    {
+     "run_id": 38313234061,
+     "tag": "v0.6.0",
+     "measured_wall_s": 4594.0,
+     "projected_wall_s_without_needless_needs": 4593.0
+    },
+    {
+     "run_id": 38519458763,
+     "tag": "v0.6.1",
+     "measured_wall_s": 2923.0,
+     "projected_wall_s_without_needless_needs": 2921.0
+    },
+    {
+     "run_id": 38557999958,
+     "tag": "v0.7.0",
+     "measured_wall_s": 2718.0,
+     "projected_wall_s_without_needless_needs": 2718.0
+    },
+    {
+     "run_id": 38777489466,
+     "tag": "v0.7.1",
+     "measured_wall_s": 951.0,
+     "projected_wall_s_without_needless_needs": 741.0
+    }
+   ]
+  }
+ },
  "runs_listed": {
   "ci.yml": 386,
   "release-plz.yml": 126,

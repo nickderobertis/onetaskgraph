@@ -333,6 +333,88 @@ def executed(job: dict) -> bool:
     return job.get("conclusion") != "skipped" and bool(job.get("runner_name"))
 
 
+def job_seconds(job: dict) -> float:
+    return seconds(job["started_at"], job["completed_at"]) or 0.0
+
+
+# release.yml jobs whose `needs` names a job they take no artifact from.
+NEEDLESS_RELEASE_EDGE = ("build-wheels", "build-distributions", "publish-crates")
+# release.yml jobs whose `needs` they do consume, and the job-name prefixes they wait on.
+RELEASE_CONSUMERS = {
+    "publish-python": ("build-wheels", "macos-assets-carriers-and-wheels", "build-distributions"),
+    "publish-npm": ("native-assets-and-carriers", "macos-assets-carriers-and-wheels", "build-distributions"),
+}
+
+
+def release_projection(run: dict, jobs: list[dict]) -> dict | None:
+    """Measured wall clock of one successful release.yml run, and the wall clock it would have
+    had with the needless `needs` edges removed — a projection from that run's own job
+    durations and each job's own runner wait (job created_at to started_at), nothing else."""
+    ran = [j for j in jobs if executed(j) and j["conclusion"] == "success"]
+    if not ran or run["conclusion"] != "success":
+        return None
+    t0 = iso(run["created_at"])
+    measured = max((iso(j["completed_at"]) - t0).total_seconds() for j in ran)
+    end: dict[int, float] = {}
+    for j in ran:
+        if not any(j["name"].startswith(p) for p in (*NEEDLESS_RELEASE_EDGE, *RELEASE_CONSUMERS)):
+            end[j["id"]] = (iso(j["completed_at"]) - t0).total_seconds()
+        elif j["name"].startswith(NEEDLESS_RELEASE_EDGE):
+            end[j["id"]] = seconds(j["created_at"], j["started_at"]) + job_seconds(j)
+    for j in ran:
+        for consumer, prefixes in RELEASE_CONSUMERS.items():
+            if j["name"] == consumer:
+                ready = max((end[k["id"]] for k in ran if k["id"] in end and k["name"].startswith(prefixes)), default=0)
+                end[j["id"]] = ready + seconds(j["created_at"], j["started_at"]) + job_seconds(j)
+    return {"run_id": run["id"], "tag": run["head_branch"], "measured_wall_s": measured,
+            "projected_wall_s_without_needless_needs": max(end.values())}
+
+
+def repeat_costs(runs, run_by_id, jobs_by_run, per_push, rp_runs) -> dict:
+    """Runner seconds each repeated check costs, as measured, and the release.yml critical
+    path with its needless `needs` edges removed (a projection, labelled as one)."""
+    def leg_seconds(run_ids, prefix):
+        return sum(job_seconds(j) for r in run_ids for j in jobs_by_run.get(r, [])
+                   if executed(j) and j["conclusion"] == "success" and j["name"].startswith(prefix))
+
+    pr_ci = [r for r in runs if r["_workflow_file"] == "ci.yml" and r["event"] == "pull_request"
+             and r["conclusion"] == "success" and r["id"] in jobs_by_run]
+    push_ci = {sha: [i for i in ids if run_by_id[i]["_workflow_file"] == "ci.yml"] for sha, ids in per_push.items()}
+    push_vd = {sha: [i for i in ids if run_by_id[i]["_workflow_file"] == "visual-docs.yml"] for sha, ids in per_push.items()}
+    push_ok = {sha: ids for sha, ids in push_ci.items() if ids and all(run_by_id[i]["conclusion"] == "success" for i in ids)}
+
+    def runner_s(ids):
+        return sum(job_seconds(j) for r in ids for j in jobs_by_run.get(r, []) if executed(j))
+
+    def wall_s(ids):
+        ends = [j["completed_at"] for r in ids for j in jobs_by_run.get(r, []) if executed(j) and j["completed_at"]]
+        return seconds(min(run_by_id[r]["created_at"] for r in ids), max(ends)) if ends else None
+
+    projections = [p for r in runs if r["_workflow_file"] == "release.yml" and r["id"] in jobs_by_run
+                   for p in [release_projection(r, jobs_by_run[r["id"]])] if p]
+    return {
+        "pr_ci_run_install_path_runner_s": stats([leg_seconds([r["id"]], "install path") for r in pr_ci]),
+        "pr_ci_run_deny_job_s": stats([leg_seconds([r["id"]], "deny") for r in pr_ci]),
+        "push_main_ci_runner_s": stats([runner_s(ids) for ids in push_ok.values()]),
+        "push_main_ci_wall_s": stats([wall_s(ids) for ids in push_ok.values() if wall_s(ids) is not None]),
+        "push_main_ci_install_path_runner_s": stats([leg_seconds(ids, "install path") for ids in push_ok.values()]),
+        "push_main_ci_deny_job_s": stats([leg_seconds(ids, "deny") for ids in push_ok.values()]),
+        "push_main_ci_successful_commits": len(push_ok),
+        "push_main_visual_docs_runner_s": stats([runner_s(ids) for ids in push_vd.values() if ids]),
+        "release_pr_ci_runner_s_per_run": stats([runner_s([i]) for i in rp_runs
+                                                  if run_by_id[i]["conclusion"] == "success"]),
+        "release_workflow": {
+            "successful_runs": len(projections),
+            "measured_wall_s": stats([p["measured_wall_s"] for p in projections]),
+            "projected_wall_s_without_needless_needs": stats(
+                [p["projected_wall_s_without_needless_needs"] for p in projections]),
+            "projected_saving_s": stats([p["measured_wall_s"] - p["projected_wall_s_without_needless_needs"]
+                                         for p in projections]),
+            "runs": projections,
+        },
+    }
+
+
 def analyse(args, client: Client) -> dict:
     since = dt.date.fromisoformat(args.since)
     until = dt.date.fromisoformat(args.until)
@@ -634,8 +716,13 @@ def analyse(args, client: Client) -> dict:
         "prs_per_release": stats([sum(1 for c in eligible if c["release"] == t) for t in per_release_max]),
     }
 
+    repeats = repeat_costs(runs, run_by_id, jobs_by_run, per_push, rp_runs=[
+        r["id"] for r in runs if r["_workflow_file"] == "ci.yml" and r["event"] == "pull_request"
+        and (r["head_branch"] or "").startswith("release-plz-") and r["id"] in jobs_by_run])
+
     return {
         "repo": args.repo, "since": args.since, "until": args.until,
+        "repeats_and_serialization": repeats,
         "runs_listed": {wf: sum(1 for r in runs if r["_workflow_file"] == wf) for wf in WORKFLOWS},
         "runs_with_jobs_read": len(jobs_by_run),
         "sampling": {"live-janitor.yml": f"jobs read for every {args.janitor_every}th completed run "
