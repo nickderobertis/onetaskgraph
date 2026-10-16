@@ -75,7 +75,7 @@ target=x86_64-unknown-linux-gnu
 ext=tar.gz
 binary=onetaskgraph
 case "$(uname -s):$(uname -m)" in
-  Darwin:x86_64) target=x86_64-apple-darwin;;
+  Darwin:x86_64) echo "distribution test cannot run on Intel macOS, which is no longer released; next: run it on Apple Silicon, Linux or Windows" >&2; exit 1;;
   Darwin:arm64|Darwin:aarch64) target=aarch64-apple-darwin;;
   Linux:aarch64|Linux:arm64) target=aarch64-unknown-linux-gnu;;
   MINGW*:x86_64|MSYS*:x86_64|CYGWIN*:x86_64) target=x86_64-pc-windows-msvc; ext=zip; binary=onetaskgraph.exe;;
@@ -164,6 +164,34 @@ printf '#!/bin/sh\nprintf '\''Unsupported\\n'\''\n' > "$tmp/shims/uname"
 chmod +x "$tmp/shims/uname"
 if PATH="$tmp/shims:$PATH" ONETASKGRAPH_VERSION="$tag" "$root/scripts/install.sh" 2>"$tmp/error"; then echo "unsupported installer platform was accepted; next: inspect platform selection" >&2; exit 1; fi
 grep -q 'no prebuilt binary' "$tmp/error" || { cat "$tmp/error" >&2; echo "unsupported-installer-platform failure omitted its reason; next: inspect platform diagnostics" >&2; exit 1; }
+# A Windows host names a local archive base file:///C:/..., which Git Bash reads only as
+# C:/... — the hosted install-path lane failed `cp: cannot stat '/C:/...'`. Off Windows a
+# MINGW uname and a relative directory literally named `C:` reproduce it: the archive is
+# found only if the installer converted the URL. Windows itself installs from a real drive
+# URL in scripts/verify-release-products.py, so the simulation would only write to C:\ there.
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) ;;
+  *)
+    drive="$tmp/drive"
+    windows_name="onetaskgraph-${tag}-x86_64-pc-windows-msvc.zip"
+    mkdir -p "$drive/C:/releases/$tag" "$drive/C:/canonical/$tag" "$drive/payload"
+    printf 'windows payload\n' > "$drive/payload/onetaskgraph.exe"
+    (cd "$drive/payload" && "$python_bin" -m zipfile -c "$drive/C:/releases/$tag/$windows_name" onetaskgraph.exe)
+    (cd "$drive/C:/releases/$tag" && if command -v sha256sum >/dev/null; then sha256sum "$windows_name"; else shasum -a 256 "$windows_name"; fi) > "$drive/C:/canonical/$tag/$windows_name.sha256"
+    printf '#!/bin/sh\ncase "$1" in -s) echo MINGW64_NT-10.0-26100;; -m) echo x86_64;; esac\n' > "$tmp/shims/uname"
+    chmod +x "$tmp/shims/uname"
+    (cd "$drive" && PATH="$tmp/shims:$PATH" ONETASKGRAPH_CHECKSUM_BASE_URL="file:///C:/canonical" "$root/scripts/install.sh" --version "$tag" --to "$drive/bin" --archive-base-url "file:///C:/releases" >/dev/null 2>"$tmp/error") || { cat "$tmp/error" >&2; echo "a file:///C:/ archive URL was not read as its drive path on Windows bash; next: inspect local_path in scripts/install.sh" >&2; exit 1; }
+    cmp -s "$drive/payload/onetaskgraph.exe" "$drive/bin/onetaskgraph.exe" || { echo "the drive-letter install did not install the archived payload; next: inspect local_path in scripts/install.sh" >&2; exit 1; }
+    ;;
+esac
+# Intel macOS is no longer released, so the installer refuses it by name rather than
+# fetching an archive that does not exist.
+printf '#!/bin/sh\ncase "$1" in -s) echo Darwin;; -m) echo x86_64;; esac\n' > "$tmp/shims/uname"
+chmod +x "$tmp/shims/uname"
+if PATH="$tmp/shims:$PATH" ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL="file://$tmp/releases" ONETASKGRAPH_CHECKSUM_BASE_URL="file://$tmp/canonical" ONETASKGRAPH_INSTALL_DIR="$tmp/intel-mac-bin" "$root/scripts/install.sh" 2>"$tmp/error"; then intel_mac_status=0; else intel_mac_status=$?; fi
+[[ $intel_mac_status -eq 69 ]] || { cat "$tmp/error" >&2; echo "Intel macOS install exited $intel_mac_status, expected 69; next: inspect the Darwin:x86_64 branch of scripts/install.sh" >&2; exit 1; }
+grep -q 'Intel macOS is no longer supported' "$tmp/error" || { cat "$tmp/error" >&2; echo "Intel macOS refusal did not say Intel macOS is no longer supported; next: inspect platform diagnostics" >&2; exit 1; }
+[[ ! -e "$tmp/intel-mac-bin" ]] || { echo "the Intel macOS refusal created an installation directory; next: refuse before any download or write" >&2; exit 1; }
 rm "$tmp/shims/uname" "$tmp/shims/curl"
 printf 'not a directory' > "$tmp/not-a-directory"
 if ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL="file://$tmp/releases" ONETASKGRAPH_CHECKSUM_BASE_URL="file://$tmp/canonical" ONETASKGRAPH_INSTALL_DIR="$tmp/not-a-directory/child" "$root/scripts/install.sh" 2>"$tmp/error"; then echo "uncreatable installation directory was accepted; next: inspect directory creation" >&2; exit 1; fi
@@ -308,9 +336,13 @@ grep -q 'permission denied; reinstall the platform package' "$tmp/error" || { ca
 if node -e 'Object.defineProperty(process,"platform",{value:"unsupported"}); require(process.argv[1])' "$root/npm/cli/bin/onetaskgraph.js" 2>"$tmp/error"; then unsupported_status=0; else unsupported_status=$?; fi
 [[ $unsupported_status -eq 64 ]] || { echo "unsupported launcher platform exited $unsupported_status, expected 64; next: inspect platform validation" >&2; exit 1; }
 grep -q 'unsupported platform' "$tmp/error" || { cat "$tmp/error" >&2; echo "unsupported-platform failure omitted its reason; next: inspect launcher diagnostics" >&2; exit 1; }
+if node -e 'Object.defineProperty(process,"platform",{value:"darwin"}); Object.defineProperty(process,"arch",{value:"x64"}); require(process.argv[1])' "$root/npm/cli/bin/onetaskgraph.js" 2>"$tmp/error"; then intel_launcher_status=0; else intel_launcher_status=$?; fi
+[[ $intel_launcher_status -eq 64 ]] || { cat "$tmp/error" >&2; echo "Intel macOS launcher exited $intel_launcher_status, expected 64; next: inspect the darwin-x64 refusal in npm/cli/bin/onetaskgraph.js" >&2; exit 1; }
+grep -q 'Intel macOS is no longer supported' "$tmp/error" || { cat "$tmp/error" >&2; echo "Intel macOS launcher refusal did not say Intel macOS is no longer supported; next: inspect launcher diagnostics" >&2; exit 1; }
 uv run --quiet --locked --package onetaskgraph-sdk onetaskgraph --help | grep -q 'Usage:' || { echo "Python SDK dependency did not supply the real command; next: inspect the SDK carrier dependency" >&2; exit 1; }
 mkdir -p "$tmp/python-wheel"
-uv build --quiet --wheel "$root" --out-dir "$tmp/python-wheel"
+(cd "$root" && uv tool run --from 'maturin>=1.9,<2' maturin build --release --locked --target "$target" --out "$tmp/python-wheel")
+"$python_bin" "$root/scripts/test-release-products.py" --wheel-dir "$tmp/python-wheel" --target "$target"
 cli_wheel=$(find "$tmp/python-wheel" -maxdepth 1 -type f -name 'onetaskgraph_cli-*.whl' -print -quit)
 [[ -n $cli_wheel ]] || { echo "Python CLI build produced no wheel; next: inspect the maturin package configuration" >&2; exit 1; }
 uv run --quiet --isolated --no-project --with "$cli_wheel" onetaskgraph --help | grep -q 'Usage:' || { echo "installed Python CLI wheel did not render help; next: inspect the wheel's binary entry point" >&2; exit 1; }

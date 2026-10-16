@@ -16,7 +16,15 @@ source_identity() {
     *) die 64 "download base must use https://, http://, or file://";;
   esac
 }
-download() { case "$1" in file://*) cp "${1#file://}" "$2";; *) curl -fsSL "$1" -o "$2";; esac; }
+# file:///C:/dir names a Windows drive; Git Bash and Cygwin read it as C:/dir, not /C:/dir.
+local_path() {
+  path=${1#file://}
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) case "$path" in /[A-Za-z]:/*) path=${path#/};; esac;;
+  esac
+  printf '%s\n' "$path"
+}
+download() { case "$1" in file://*) cp "$(local_path "$1")" "$2";; *) curl -fsSL "$1" -o "$2";; esac; }
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -42,8 +50,7 @@ case "$(uname -s):$(uname -m)" in
   Linux:x86_64|Linux:amd64) target=x86_64-unknown-linux-gnu; ext=tar.gz; binary=onetaskgraph;;
   # llmlint: ignore[changed_behavior_has_e2e] Executing this native branch requires a Linux ARM64 runner, another platform action unavailable to this pre-publication dispatch.
   Linux:aarch64|Linux:arm64) target=aarch64-unknown-linux-gnu; ext=tar.gz; binary=onetaskgraph;;
-  # llmlint: ignore[changed_behavior_has_e2e] Executing this native branch requires a Darwin x64 runner, another platform action unavailable to this pre-publication dispatch.
-  Darwin:x86_64) target=x86_64-apple-darwin; ext=tar.gz; binary=onetaskgraph;;
+  Darwin:x86_64) die 69 "Intel macOS is no longer supported; onetaskgraph releases macOS binaries for Apple Silicon only. On this machine, build it with 'cargo install onetaskgraph'";;
   Darwin:arm64|Darwin:aarch64) target=aarch64-apple-darwin; ext=tar.gz; binary=onetaskgraph;;
   MINGW*:x86_64|MSYS*:x86_64|CYGWIN*:x86_64) target=x86_64-pc-windows-msvc; ext=zip; binary=onetaskgraph.exe;;
   *) die 69 "no prebuilt binary for $(uname -s) $(uname -m)";;

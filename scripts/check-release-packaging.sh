@@ -1,14 +1,9 @@
 #!/usr/bin/env bash
-# Drive the release workflow's packaging step, as written, over both macOS architectures.
+# Drive the release workflow's packaging step, as written, over the macOS job's targets.
 #
-# The step is a `run: |` block inside .github/workflows/release.yml, and a release is the
-# only thing that runs it — so a defect in it was discoverable only by cutting a version.
-# Folding both macOS targets into one job (#1991) turned that block into a loop over
-# `TARGETS` pairs, and this reads the block out of the workflow and runs it here, against a
-# stand-in binary per target and a `gh` that records what it was asked to upload, so what
-# the fold packages is proven rather than read: one archive and one checksum uploaded per
-# target, under the names scripts/install.sh downloads, and one carrier tarball per npm
-# platform, in the directory and under the name scripts/publish-npm.sh reads.
+# Only a release runs that `run: |` block in .github/workflows/release.yml, so this runs
+# the production body offline, against stand-in binaries, to find a packaging defect
+# without cutting a version.
 set -euo pipefail
 
 fatal() {
@@ -31,6 +26,28 @@ if [ ! -r "$ROOT/scripts/scratch-clone.sh" ] || ! source "$ROOT/scripts/scratch-
     "restore it with 'git checkout -- scripts/scratch-clone.sh' and rerun"
 fi
 readonly WORKFLOW=".github/workflows/release.yml"
+python_bin=$(command -v python3 || true)
+[ -n "$python_bin" ] || fatal "python3 is not on PATH" "install Python 3 and rerun this packaging proof"
+case $python_bin in
+  /* | ?:[\\/]*) ;;
+  *) python_bin=$(cd "$(dirname "$python_bin")" && pwd)/$(basename "$python_bin") ;;
+esac
+
+
+# The installer journey must use the build backend requirement declared by the product.
+if ! "$python_bin" - "$ROOT" <<'PYREQUIREMENT'
+import pathlib, re, sys, tomllib
+root = pathlib.Path(sys.argv[1])
+requires = tomllib.loads((root / 'pyproject.toml').read_text(encoding='utf-8'))['build-system']['requires']
+script = (root / 'scripts/test-distribution.sh').read_text(encoding='utf-8')
+selected = re.findall(r"uv tool run --from '([^']+)' maturin build", script)
+if selected != requires:
+    sys.exit('distribution maturin requirement disagrees with pyproject.toml')
+PYREQUIREMENT
+then
+  fatal "distribution maturin requirement disagrees with pyproject.toml" "use the manifest build-system requirement in scripts/test-distribution.sh"
+fi
+
 
 for tool in npm python3 tar; do
   command -v "$tool" >/dev/null 2>&1 || fatal \
@@ -55,9 +72,9 @@ job = re.search(r"(?ms)^  macos-assets-carriers-and-wheels:\n(.*?)(?=^  [a-z-]+:
 if not job:
     print("check-release-packaging: the release workflow has no macos-assets-carriers-and-wheels job", file=sys.stderr)
     raise SystemExit(1)
-body = re.search(r"(?ms)^      - name: Archive, checksum, and attach\n.*?^        run: \|\n(.*?)(?=^      - )", job.group(1))
+body = re.search(r"(?ms)^      - name: Archive, checksum, and stage\n.*?^        run: \|\n(.*?)(?=^      - )", job.group(1))
 if not body:
-    print("check-release-packaging: the macOS job has no 'Archive, checksum, and attach' step with a `run: |` body", file=sys.stderr)
+    print("check-release-packaging: the macOS job has no 'Archive, checksum, and stage' step with a `run: |` body", file=sys.stderr)
     raise SystemExit(1)
 lines = body.group(1).splitlines()
 margin = min((len(line) - len(line.lstrip()) for line in lines if line.strip()), default=0)
@@ -77,10 +94,10 @@ targets="$(cd "$ROOT" && sed -n 's/^      TARGETS: \(.*\)$/\1/p' "$WORKFLOW" | h
 for pair in $targets; do
   [[ $pair =~ ^[a-z0-9_]+(-[a-z0-9_]+)+=[a-z0-9]+-[a-z0-9]+$ ]] || fatal \
     "the macOS job's TARGETS entry '$pair' is not <rust target triple>=<npm platform>" \
-    "restore the job's TARGETS to pairs like x86_64-apple-darwin=darwin-x64"
+    "restore the job's TARGETS to pairs like aarch64-apple-darwin=darwin-arm64"
 done
 
-# A stand-in binary per target, and a `gh` that records each upload rather than making it.
+# A stand-in binary per target, and a `gh` that records any premature upload.
 readonly TREE="$scratch/tree"
 mkdir -p "$TREE" "$scratch/bin" || fatal "could not create $TREE" "check the permissions of \$TMPDIR, then rerun"
 copy_tracked_files "$ROOT" "$TREE" npm/platforms || fatal \
@@ -124,8 +141,7 @@ report_unless_archive_lists() {
   grep -qx -- "$2" <<<"$listing" || report "$3"
 }
 
-# 1. The step over both targets, exactly as the job runs it.
-if ! (cd "$TREE" && PATH="$scratch/bin:$PATH" TARGETS="$targets" EXT=tar.gz TAG="$tag" GH_TOKEN=stand-in \
+if ! (cd "$TREE" && PATH="$scratch/bin:$PATH" TARGETS="$targets" EXT=tar.gz TAG="$tag" \
   bash "$scratch/package.sh") > "$scratch/package.log" 2>&1; then
   sed 's/^/    /' "$scratch/package.log" >&2
   report "the packaging step failed over TARGETS='$targets' (its output is above)"
@@ -139,8 +155,8 @@ for pair in $targets; do
     report_unless_archive_lists "$TREE/$asset" onetaskgraph \
       "$asset does not carry a bare 'onetaskgraph' at its root, which is what the installer extracts"
   fi
-  grep -qF -- "release upload $tag $asset $asset.sha256 --clobber" "$UPLOADS" 2>/dev/null || report \
-    "the step never asked gh to upload $asset and its checksum to $tag with --clobber"
+  cmp "$TREE/$asset" "$TREE/dist/assets/$asset" >&2 || report "the staged archive differs from $asset"
+  cmp "$TREE/$asset.sha256" "$TREE/dist/assets/$asset.sha256" >&2 || report "the staged checksum differs from $asset.sha256"
   carrier="$TREE/dist/carriers/$npm_platform/onetaskgraph-cli-$npm_platform-$version.tgz"
   [ -f "$carrier" ] || report "the step left no carrier at dist/carriers/$npm_platform/onetaskgraph-cli-$npm_platform-$version.tgz, which is the path and name scripts/publish-npm.sh reads after the carrier-$npm_platform artifact is downloaded"
   if [ -f "$carrier" ]; then
@@ -149,14 +165,215 @@ for pair in $targets; do
     [ "$packed_name" = "@onetaskgraph/cli-$npm_platform" ] || report "the $npm_platform carrier's manifest names '$packed_name', expected @onetaskgraph/cli-$npm_platform"
   fi
 done
-if [ -f "$UPLOADS" ] && [ "$(wc -l < "$UPLOADS" | tr -d ' ')" -ne 2 ]; then
-  report "the step made $(wc -l < "$UPLOADS" | tr -d ' ') gh calls over two targets, expected exactly two uploads:"
-  sed 's/^/    /' "$UPLOADS" >&2
-fi
+[ ! -f "$UPLOADS" ] || report "the builder published an asset before install verification"
+
+# Foreign payloads are compared by wheel/archive/npm hashes; only the native
+# product journey installs and executes the host-compatible target.
+for pair in $targets; do
+  target="${pair%%=*}"; npm_platform="${pair#*=}"
+  if ! "$python_bin" - "$TREE" "$target" "$version" <<'PYWHEEL'
+from pathlib import Path
+import sys
+import zipfile
+root, target, version = sys.argv[1:]
+root = Path(root)
+arch = "arm64" if target.startswith("aarch64") else "x86_64"
+platform = "macosx_11_0_" + arch
+wheel_dir = root / "dist/wheels" / target
+wheel_dir.mkdir(parents=True, exist_ok=True)
+with zipfile.ZipFile(wheel_dir / f"onetaskgraph_cli-{version}-py3-none-{platform}.whl", "w") as wheel:
+    wheel.writestr(f"onetaskgraph_cli-{version}.data/scripts/onetaskgraph", (root / "target" / target / "release/onetaskgraph").read_bytes())
+    wheel.writestr(f"onetaskgraph_cli-{version}.dist-info/METADATA", f"Name: onetaskgraph-cli\nVersion: {version}\n")
+    wheel.writestr(f"onetaskgraph_cli-{version}.dist-info/WHEEL", f"Tag: py3-none-{platform}\n")
+PYWHEEL
+  then report "could not stage the $target wheel fixture"; fi
+  (cd "$TREE" && "$python_bin" "$ROOT/scripts/verify-release-products.py" --target "$target" --npm "$npm_platform" --tag "$tag" > /dev/null) || report "the production verifier refused the $target artifact contract"
+done
+
+
+# The verifier's trust boundary is portable: no foreign executable runs in these cases.
+if ! "$python_bin" - "$ROOT" "$TREE" "$tag" <<'PYREFUSALS'
+from pathlib import Path
+import io
+import json
+import os
+import platform
+import re
+import subprocess
+import sys
+import tarfile
+import zipfile
+root, tree, tag = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+version = tag[1:]
+workflow = (root / '.github/workflows/release.yml').read_text(encoding='utf-8')
+windows, = [row for row in re.findall(r'target: ([a-z0-9_-]+), ext: ([a-z.]+), npm: ([a-z0-9-]+)', workflow) if row[1] == 'zip']
+target, extension, npm = windows
+binary = 'onetaskgraph.exe'
+payload = b'foreign artifact contract payload; never executed'
+canonical = tree / f'target/{target}/release/{binary}'
+canonical.parent.mkdir(parents=True, exist_ok=True)
+canonical.write_bytes(payload)
+archive = tree / f'onetaskgraph-{tag}-{target}.zip'
+native = re.search(r'(?ms)^  native-assets-carriers-and-wheels:\n(.*?)(?=^  [a-z-]+:)', workflow)
+step = re.search(r'(?ms)^      - name: Archive, checksum, and stage\n.*?^        run: \|\n(.*?)(?=^      - )', native[1])
+body = '\n'.join(line[10:] for line in step[1].splitlines())
+sys.path.insert(0, str(root / 'scripts'))
+from release_products import bash_executable
+subprocess.run([bash_executable(platform.system()), '-e', '-c', body], cwd=tree,
+               env={**os.environ, 'TARGETS': f'{target}={npm}', 'EXT': extension, 'TAG': tag}, check=True)
+with zipfile.ZipFile(archive) as packed:
+    entries = packed.infolist()
+    if len(entries) != 1 or entries[0].filename != binary or packed.read(entries[0]) != payload:
+        raise SystemExit('production Windows ZIP must contain only the canonical CLI at its root')
+wheels = tree / f'dist/wheels/{target}'
+wheels.mkdir(parents=True, exist_ok=True)
+with zipfile.ZipFile(wheels / f'onetaskgraph_cli-{version}-py3-none-win_amd64.whl', 'w') as wheel:
+    wheel.writestr(f'onetaskgraph_cli-{version}.data/scripts/{binary}', payload)
+    wheel.writestr(f'onetaskgraph_cli-{version}.dist-info/METADATA', f'Name: onetaskgraph-cli\nVersion: {version}\n')
+    wheel.writestr(f'onetaskgraph_cli-{version}.dist-info/WHEEL', 'Tag: py3-none-win_amd64\n')
+carriers = tree / f'dist/carriers/{npm}'
+command = [sys.executable, str(root / 'scripts/verify-release-products.py'), '--target', target, '--npm', npm, '--tag', tag, '--ext', extension]
+def refused(args, reason):
+    result = subprocess.run(args, cwd=tree, capture_output=True, text=True)
+    if result.returncode == 0 or reason not in result.stderr:
+        raise SystemExit(f'product boundary did not refuse {reason}: {result.stderr}; repair the production verifier')
+for flags, reason in [(['--target', '../invalid'], 'invalid Rust target'), (['--npm', '../invalid'], 'invalid npm platform'), (['--tag', 'invalid'], 'invalid semantic release tag'), (['--ext', 'invalid'], 'invalid choice'), (['--npm', 'darwin-arm64'], 'inconsistent target'), (['--ext', 'tar.gz'], 'inconsistent target')]:
+    refused(command + flags, reason)
+# \S+ rather than [^ ]+: the latter also takes the newline and the next line's indent,
+# which the verifier rightly refuses as an invalid npm platform before it reaches this case.
+pair = re.search(r'^      TARGETS: (\S+)$', workflow, re.M)[1]
+darwin_target, darwin_npm = pair.split('=')
+foreign = [sys.executable, str(root / 'scripts/verify-release-products.py'), '--target', darwin_target, '--npm', darwin_npm, '--tag', tag]
+if platform.system() != 'Windows':
+    refused(command + ['--install'], 'cannot execute a non-native release target')
+if platform.system() != 'Darwin':
+    refused(foreign + ['--install'], 'cannot execute a non-native release target')
+wheel_path, = wheels.glob('*.whl')
+original_wheel = wheel_path.read_bytes()
+wheel_path.unlink()
+refused(command, 'expected exactly one wheel')
+wheel_path.write_bytes(original_wheel)
+duplicate = wheels / 'duplicate.whl'
+duplicate.write_bytes(original_wheel)
+refused(command, 'expected exactly one wheel')
+duplicate.unlink()
+with zipfile.ZipFile(wheel_path) as packed:
+    original_entries = [(entry, packed.read(entry.filename)) for entry in packed.infolist()]
+for suffix, kind in [('/onetaskgraph.exe', 'wheel CLI entry'), ('/METADATA', 'wheel METADATA entry'), ('/WHEEL', 'wheel WHEEL entry')]:
+    for duplicate_entry in [False, True]:
+        with zipfile.ZipFile(wheel_path, 'w') as packed:
+            for entry, data in original_entries:
+                if not entry.filename.endswith(suffix) or duplicate_entry:
+                    packed.writestr(entry, data)
+                if entry.filename.endswith(suffix) and duplicate_entry:
+                    packed.writestr('duplicate' + entry.filename, data)
+        refused(command, 'expected exactly one ' + kind)
+    wheel_path.write_bytes(original_wheel)
+with zipfile.ZipFile(wheel_path, 'w') as packed:
+    for entry, data in original_entries:
+        packed.writestr(entry, f'Name: foreign-cli\nVersion: {version}\n'.encode() if entry.filename.endswith('/METADATA') else data)
+refused(command, 'wheel identity or version mismatch')
+wheel_path.write_bytes(original_wheel)
+wrong_arch = wheel_path.with_name(wheel_path.name.replace('win_amd64', 'win_arm64'))
+wheel_path.rename(wrong_arch)
+with zipfile.ZipFile(wrong_arch, 'w') as packed:
+    for entry, data in original_entries:
+        packed.writestr(entry, b'Tag: py3-none-win_arm64\n' if entry.filename.endswith('/WHEEL') else data)
+refused(command, 'wheel architecture or OS mismatch')
+wrong_arch.unlink()
+wheel_path.write_bytes(original_wheel)
+malformed_name = wheel_path.with_name(f'onetaskgraph_cli-{version}-broken.whl')
+wheel_path.rename(malformed_name)
+refused(command, 'invalid wheel filename tags')
+malformed_name.rename(wheel_path)
+carrier_path, = carriers.glob('*.tgz')
+original_carrier = carrier_path.read_bytes()
+carrier_path.unlink()
+refused(command, 'expected exactly one npm carrier')
+carrier_path.write_bytes(original_carrier)
+extra_carrier = carriers / 'duplicate.tgz'
+extra_carrier.write_bytes(original_carrier)
+refused(command, 'expected exactly one npm carrier')
+extra_carrier.unlink()
+
+with tarfile.open(carrier_path) as packed:
+    carrier_members = [(info, packed.extractfile(info).read() if info.isfile() else None) for info in packed.getmembers()]
+for key, bad in [('name', None), ('version', 1), ('os', 'windows'), ('cpu', [1])]:
+    with tarfile.open(carrier_path, 'w:gz') as packed:
+        for info, data in carrier_members:
+            if info.name == 'package/package.json':
+                manifest = json.loads(data)
+                manifest[key] = bad
+                data = json.dumps(manifest).encode()
+                info.size = len(data)
+            packed.addfile(info, io.BytesIO(data) if data is not None else None)
+    refused(command, 'invalid carrier identity fields' if key in ('name', 'version') else 'invalid carrier platform fields')
+carrier_path.write_bytes(original_carrier)
+sys.path.insert(0, str(root / 'scripts'))
+from release_products import VerificationReport
+verified = subprocess.run(command, cwd=tree, capture_output=True, text=True)
+if verified.returncode:
+    raise SystemExit(verified.stderr)
+report = json.loads(verified.stdout)
+VerificationReport.parse(verified.stdout)
+for broken in [None, {}, {**report, 'target': '../invalid'}, {**report, 'tag': 'invalid'}, {**report, 'payloadHashes': {}}, {**report, 'payloadHashes': {**report['payloadHashes'], 'binary': 'not-a-digest'}}]:
+    try:
+        VerificationReport.parse(json.dumps(broken))
+    except ValueError:
+        continue
+    raise SystemExit('malformed verification report was accepted; repair its typed boundary parser')
+if platform.system() == 'Linux':
+    host_arm = platform.machine().lower() in ('aarch64', 'arm64')
+    candidate, = [row for row in re.findall(r'target: ([a-z0-9_-]+), ext: ([a-z.]+), npm: ([a-z0-9-]+)', workflow) if row[0].endswith('unknown-linux-gnu') and row[0].startswith('aarch64') != host_arm]
+    other_target, other_extension, other_npm = candidate
+    other_payload = b'foreign architecture artifact; never executed'
+    other_binary = tree / f'target/{other_target}/release/onetaskgraph'
+    other_binary.parent.mkdir(parents=True, exist_ok=True)
+    other_binary.write_bytes(other_payload)
+    with tarfile.open(tree / f'onetaskgraph-{tag}-{other_target}.tar.gz', 'w:gz') as packed:
+        info = tarfile.TarInfo('onetaskgraph')
+        info.size = len(other_payload)
+        packed.addfile(info, io.BytesIO(other_payload))
+    other_wheels = tree / f'dist/wheels/{other_target}'
+    other_wheels.mkdir(parents=True, exist_ok=True)
+    wheel_arch = 'aarch64' if other_target.startswith('aarch64') else 'x86_64'
+    wheel_platform = 'linux_' + wheel_arch
+    with zipfile.ZipFile(other_wheels / f'onetaskgraph_cli-{version}-py3-none-{wheel_platform}.whl', 'w') as packed:
+        packed.writestr(f'onetaskgraph_cli-{version}.data/scripts/onetaskgraph', other_payload)
+        packed.writestr(f'onetaskgraph_cli-{version}.dist-info/METADATA', f'Name: onetaskgraph-cli\nVersion: {version}\n')
+        packed.writestr(f'onetaskgraph_cli-{version}.dist-info/WHEEL', f'Tag: py3-none-{wheel_platform}\n')
+    other_carriers = tree / f'dist/carriers/{other_npm}'
+    other_carriers.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(other_carriers / 'fixture.tgz', 'w:gz') as packed:
+        for name, data in [('package/package.json', (root / f'npm/platforms/{other_npm}/package.json').read_bytes()), ('package/bin/onetaskgraph', other_payload)]:
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            packed.addfile(info, io.BytesIO(data))
+    refused([sys.executable, str(root / 'scripts/verify-release-products.py'), '--target', other_target, '--npm', other_npm, '--tag', tag, '--install'], 'cannot execute a foreign architecture')
+archive_bytes = archive.read_bytes()
+archive.write_bytes(b'corrupt ZIP')
+refused(command, 'File is not a zip file')
+archive.write_bytes(archive_bytes)
+for entries in [[], [binary, 'nested/' + binary]]:
+    with zipfile.ZipFile(archive, 'w') as packed:
+        for entry in entries:
+            packed.writestr(entry, payload)
+    refused(command, 'expected exactly one archive CLI entry')
+with zipfile.ZipFile(archive, 'w') as packed:
+    packed.writestr('nested/' + binary, payload)
+refused(command, 'archive must contain only the root regular CLI file')
+with zipfile.ZipFile(archive, 'w') as packed:
+    entry = zipfile.ZipInfo(binary)
+    entry.create_system = 3
+    entry.external_attr = 0o120777 << 16
+    packed.writestr(entry, payload)
+refused(command, 'archive must contain only the root regular CLI file')
+PYREFUSALS
+then report "the production verifier accepted an invalid release product input"; fi
 
 # 2. A tag the installer would refuse is refused here first, before anything is built.
 rm -f "$UPLOADS"
-if (cd "$TREE" && PATH="$scratch/bin:$PATH" TARGETS="$targets" EXT=tar.gz TAG="not-a-release" GH_TOKEN=stand-in \
+if (cd "$TREE" && PATH="$scratch/bin:$PATH" TARGETS="$targets" EXT=tar.gz TAG="not-a-release" \
   bash "$scratch/package.sh") > "$scratch/package.log" 2>&1; then
   report "the packaging step accepted the tag 'not-a-release'"
 elif ! grep -qF "invalid release tag: not-a-release" "$scratch/package.log"; then
@@ -167,6 +384,6 @@ fi
 
 if [ "$failures" -ne 0 ]; then
   echo "check-release-packaging: $failures finding(s)." >&2
-  echo "check-release-packaging: repair the 'Archive, checksum, and attach' step of $WORKFLOW rather than these cases." >&2
+  echo "check-release-packaging: repair the 'Archive, checksum, and stage' step of $WORKFLOW rather than these cases." >&2
   exit 1
 fi

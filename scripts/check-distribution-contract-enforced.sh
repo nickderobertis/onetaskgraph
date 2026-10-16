@@ -276,6 +276,15 @@ expect_refused "a caret requirement between two published crates" \
   "sibling requirements must be exact" "onetaskgraph-local-md requires onetaskgraph-plugin-api as ^"
 restore Cargo.toml
 
+# Missing staging must explain the repair rather than exiting at its lookup pipeline.
+substitute .github/workflows/release.yml \
+  'name: Archive, checksum, and stage' 'name: Missing staging proof'
+substitute .github/workflows/release.yml \
+  'name: Archive, checksum, and stage' 'name: Missing staging proof'
+run_guard
+expect_refused "missing archive staging step" "must name its archive staging step" "next:"
+restore .github/workflows/release.yml
+
 if [ "$failures" -ne 0 ]; then
   echo "check-distribution-contract-enforced: $failures case(s) failed." >&2
   echo "check-distribution-contract-enforced: a release with an invalid registry query or package" >&2

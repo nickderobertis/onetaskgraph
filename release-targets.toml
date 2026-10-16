@@ -29,7 +29,7 @@
 # spelled. They are not `[[retired]]` either: that records something no longer
 # published, and these ship on every release. A consumer that installs them
 # (scripts/install.sh does) waits on `pypi`, which is sound because that job uploads
-# the archives before the wheels it then publishes are built from the same run.
+# the installed archives before publishing the wheels built from the same run.
 #
 # `schema_version` states what shape this document is written in; it is not a second
 # gate the identifiers are put through. `2` is the version that admits npm's scoped
@@ -63,7 +63,7 @@ covers = [
 id = "pypi:onetaskgraph-cli"
 name = "pypi"
 what = "The standalone `onetaskgraph` binary as a wheel, so `pip install onetaskgraph-cli` puts it on PATH without compiling anything."
-published_by = ".github/workflows/release.yml — the publish-python job, from the build-wheels artifacts, under pyproject.toml's [project] name."
+published_by = ".github/workflows/release.yml — the publish-python job, from the per-target wheel artifacts, under pyproject.toml's [project] name."
 manifest = "pyproject.toml"
 
 # The Python SDK, which drives the `pypi:onetaskgraph-cli` release it pins by
@@ -76,7 +76,7 @@ published_by = ".github/workflows/release.yml — the publish-python job, from t
 manifest = "sdks/python/pyproject.toml"
 
 # The launcher an `npm install @onetaskgraph/cli` resolves, published after the
-# five per-platform carriers it pins at its own exact version.
+# four per-platform carriers it pins at its own exact version.
 [[target]]
 id = "npm:@onetaskgraph/cli"
 name = "npm"
@@ -86,7 +86,6 @@ manifest = "npm/cli/package.json"
 covers = [
     "npm:@onetaskgraph/cli-linux-x64",
     "npm:@onetaskgraph/cli-linux-arm64",
-    "npm:@onetaskgraph/cli-darwin-x64",
     "npm:@onetaskgraph/cli-darwin-arm64",
     "npm:@onetaskgraph/cli-win32-x64",
 ]

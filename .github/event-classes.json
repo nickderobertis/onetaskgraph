@@ -1,0 +1,14 @@
+[
+  { "id": "pr-opened", "event": "pull_request", "action": "opened" },
+  { "id": "pr-synchronize", "event": "pull_request", "action": "synchronize" },
+  { "id": "pr-reopened", "event": "pull_request", "action": "reopened" },
+  { "id": "base-push", "event": "push", "branch": "main" },
+  { "id": "release-pr-merge", "event": "push", "branch": "main" },
+  { "id": "release-tag", "event": "push", "tag": "v1.2.4" },
+  { "id": "release-published", "event": "release", "action": "published" },
+  { "id": "downstream", "event": "workflow_run", "action": "completed" },
+  { "id": "dispatch", "event": "repository_dispatch", "action": "release-smoke" },
+  { "id": "schedule", "event": "schedule" },
+  { "id": "manual-default", "event": "workflow_dispatch", "inputs": { "macos": false } },
+  { "id": "manual-opt-in", "event": "workflow_dispatch", "inputs": { "macos": true } }
+]

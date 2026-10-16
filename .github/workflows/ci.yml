@@ -20,6 +20,12 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      macos:
+        description: Run the combined macOS diagnostic proofs
+        type: boolean
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -31,61 +37,37 @@ permissions:
   contents: read
 
 jobs:
-  # Which platforms the two matrices below schedule. On a pull request every one of them,
-  # unconditionally: this job is skipped there, its output is empty, and the matrices fall
-  # back to the full list — so the three required `check (<os>)` names a pull request
-  # reports are exactly what they were. On a push to main it asks
-  # scripts/macos-lane-selection.sh, the one implementation of the question, whether this
-  # commit is the squash of a pull request whose macOS lanes already passed over the very
-  # same tree; if so the macOS lanes are not scheduled again. The account has one small
-  # macOS runner pool, and every merge queued a second copy of a proven run on it, ahead of
-  # the release that merge was for (#1991). Any question the decision cannot answer is
-  # `run`, and the matrices carry `!cancelled()` so a failure here schedules everything
-  # rather than nothing.
   macos-lanes:
     name: macOS lanes
-    if: github.event_name == 'push'
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      checks: read
-      pull-requests: read
     outputs:
-      os: ${{ steps.select.outputs.os }}
+      macosRequired: ${{ steps.select.outputs.macosRequired }}
+      reason: ${{ steps.select.outputs.reason }}
+      diagnostic: ${{ github.event_name == 'workflow_dispatch' && inputs.macos }}
     steps:
       - uses: actions/checkout@v7
-        with:
-          # The decision compares this commit's tree with the pull request head's, which
-          # it fetches; a shallow checkout cannot resolve either.
-          fetch-depth: 0
-      - name: Decide whether this commit's macOS lanes already passed on its pull request
+        with: { fetch-depth: 0 }
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version-file: package.json }
+      - uses: extractions/setup-just@v4
+      - run: just github-workflows-bootstrap
+      - name: Classify the semantic release diff
         id: select
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPOSITORY: ${{ github.repository }}
-          COMMIT: ${{ github.sha }}
-        run: |
-          full='["ubuntu-latest","macos-latest","windows-latest"]'
-          without_macos='["ubuntu-latest","windows-latest"]'
-          answer="$(bash scripts/macos-lane-selection.sh "$REPOSITORY" "$COMMIT" "check (macos-latest)" "install path (macos-latest)")" || answer=run
-          if [ "$answer" = proven ]; then
-            echo "os=$without_macos" >> "$GITHUB_OUTPUT"
-            echo "The macOS lanes already passed on this commit's pull request over this same tree; not scheduling them again."
-          else
-            echo "os=$full" >> "$GITHUB_OUTPUT"
-            echo "Scheduling the macOS lanes."
-          fi
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: node .github/macos-policy.mjs classify --event "$GITHUB_EVENT_PATH" --base "$BASE" --head "$HEAD"
 
   install-path:
     name: install path (${{ matrix.os }})
     needs: [macos-lanes]
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJson(needs.macos-lanes.outputs.os || '["ubuntu-latest","macos-latest","windows-latest"]') }}
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v7
       - uses: extractions/setup-just@v4
@@ -101,19 +83,19 @@ jobs:
         shell: bash
         run: just distribution-test
 
-  # The three required OS lanes. All three are required because this ships a
-  # cross-platform command-line tool whose install path CI has to prove on the real
+  # The Linux and Windows required lanes; macOS runs in the one combined job below and
+  # reaches `check (macos-latest)` through its carrier. All three are required because this
+  # ships a cross-platform command-line tool whose install path CI has to prove on the real
   # matrix; affected selection is what keeps that affordable.
   check:
     name: check (${{ matrix.os }})
     needs: [macos-lanes]
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        # llmlint: ignore[no_second_broader_sweep_over_an_already_gated_commit] Only the macOS lane is withheld from a proven push, on purpose: it is the one lane on the account's contended runner pool, which is the whole of what #1991 accepted. The Linux and Windows copies on main are the default branch's own record of green, and whether they are worth their (uncontended) minutes is a separate decision for the workflow's owner, drafted as a follow-up rather than taken here.
-        os: ${{ fromJson(needs.macos-lanes.outputs.os || '["ubuntu-latest","macos-latest","windows-latest"]') }}
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -259,10 +241,113 @@ jobs:
           NX_HEAD: HEAD
         run: just gate-generated
 
+  macos:
+    name: macOS check and install proofs
+    needs: [macos-lanes]
+    if: (github.event_name == 'pull_request' && needs.macos-lanes.outputs.macosRequired == 'true') || (github.event_name == 'workflow_dispatch' && inputs.macos)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The merge base is derived explicitly below; a shallow checkout cannot resolve it.
+          fetch-depth: 0
+
+      - uses: extractions/setup-just@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      # v7 is the newest floating major tag this action publishes: its releases run on to
+      # v10.0.1, but it stopped moving a major tag after v7, so v8, v9 and v10 resolve to
+      # nothing.
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      # Reads rust-toolchain.toml, so CI and local compile with byte-identical rustc,
+      # clippy and rustfmt, and the version is pinned in exactly one place.
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      # cargo-deny is not only the `deny` job's tool: `just check` runs
+      # check-isolation-enforced.sh, whose fifth case asserts cargo-deny refuses a
+      # dev-dependency edge to the engine, so without it here that guard cannot run.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov,cargo-nextest,cargo-machete,cargo-deny
+
+      - name: Bootstrap
+        run: just bootstrap
+
+      # Use the PR merge base for the same affected selection as the Linux/Windows lanes.
+      - name: Derive the comparison base
+        id: macos-base
+        shell: bash
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          zero=0000000000000000000000000000000000000000
+          if [ -n "${BASE_SHA:-}" ]; then
+            git fetch --no-tags origin "$BASE_REF"
+            merge_base="$(git merge-base "$BASE_SHA" HEAD)"
+            echo "base=$merge_base" >> "$GITHUB_OUTPUT"
+            echo "Affected against the merge base with $BASE_REF: $merge_base"
+          elif [ -n "${BEFORE_SHA:-}" ] && [ "${BEFORE_SHA}" != "$zero" ] \
+            && git rev-parse --verify --quiet "${BEFORE_SHA}^{commit}" >/dev/null; then
+            echo "base=$BEFORE_SHA" >> "$GITHUB_OUTPUT"
+            echo "Affected against the commit this push replaced: $BEFORE_SHA"
+          elif git rev-parse --verify --quiet 'HEAD~1^{commit}' >/dev/null; then
+            fallback="$(git rev-parse HEAD~1)"
+            echo "base=$fallback" >> "$GITHUB_OUTPUT"
+            echo "Affected against HEAD~1, this push having no readable predecessor: $fallback"
+          else
+            echo "No base could be derived; Nx will fall back to its own defaultBase."
+          fi
+
+      # llmlint: ignore-block[live_tier_compiles_and_requires_credential,no_second_broader_sweep_over_an_already_gated_commit] The Linux lane alone carries live credentials; this Mac proof runs without them exactly as before. The task explicitly permits an opted-in manual diagnostic rerun outside the automatic lifecycle.
+      - name: Check the affected projects
+        if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+        env:
+          # Nx's own mechanism for "compare against this commit". Setting it here rather
+          # than threading an argument through every recipe keeps one source of truth for
+          # the base across all five phases of the gate.
+          NX_BASE: ${{ steps.macos-base.outputs.base }}
+          NX_HEAD: HEAD
+        # just check includes distribution-test, preserving the former install-path proof once.
+        run: just check
+      # llmlint: ignore-end[live_tier_compiles_and_requires_credential,no_second_broader_sweep_over_an_already_gated_commit]
+
+  macos-check:
+    name: check (macos-latest)
+    needs: [macos-lanes, macos]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Report the required macOS proof outcome
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          printf '%s' "$NEEDS_JSON" > needs.json
+          node .github/macos-result.mjs needs.json
+
+  macos-install:
+    name: install path (macos-latest)
+    needs: [macos-lanes, macos]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Report the required macOS proof outcome
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          printf '%s' "$NEEDS_JSON" > needs.json
+          node .github/macos-result.mjs needs.json
+
   # Supply chain, Linux-only: the graph is the same on every platform, so running it three
   # times would buy nothing. This is where the two mechanically-enforced invariants fail —
   # the banned-store list and the onetaskgraph-core wrapper restriction. See deny.toml.
   deny:
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

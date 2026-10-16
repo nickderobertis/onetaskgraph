@@ -1,0 +1,27 @@
+schema_version: 1
+budgets:
+  # llmlint: ignore[budgets_track_product_owner_outcomes] The brief explicitly requests jobs/run and Mac-spending runs/change bounds; the manager approved separate budgets for these scheduling constraints.
+  - id: onetaskgraph-macos-jobs-per-run
+    description: >-
+      Records Mac job instances from resolved workflow telemetry to protect the shared
+      five-runner pool. It is bounded inside each run because one run can occupy several
+      shared Mac slots while the lifecycle run count stays within its bound.
+    measure: reported
+    # llmlint: ignore[budget_commands_measure_directly] The task fixes this exact `node .github/macos-budget.mjs --metric ... --telemetry ...` surface; it reads the one telemetry file the github-workflows:test journey records and reports one figure through the SDK, re-running nothing.
+    command: [node, macos-budget.mjs, --metric, jobs-per-run, --telemetry, .telemetry/macos-policy.json]
+    unit: jobs
+    direction: max
+    threshold: 1
+    timeout_seconds: 30
+  # llmlint: ignore[budgets_track_product_owner_outcomes] The brief explicitly requests jobs/run and Mac-spending runs/change bounds; the manager approved separate budgets for these scheduling constraints.
+  - id: onetaskgraph-macos-runs-per-change
+    description: >-
+      Records distinct Mac-spending runs across the complete single-push lifecycle to
+      protect queue capacity shared with dependent releases.
+    measure: reported
+    # llmlint: ignore[budget_commands_measure_directly] The task fixes this exact `node .github/macos-budget.mjs --metric ... --telemetry ...` surface; it reads the one telemetry file the github-workflows:test journey records and reports one figure through the SDK, re-running nothing.
+    command: [node, macos-budget.mjs, --metric, runs-per-change, --telemetry, .telemetry/macos-policy.json]
+    unit: runs
+    direction: max
+    threshold: 2
+    timeout_seconds: 30

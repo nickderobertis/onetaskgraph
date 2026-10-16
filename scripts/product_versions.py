@@ -103,7 +103,6 @@ RECONCILED_VERSION_FILES: Tuple[VersionFile, ...] = (
                 for name in (
                     "@onetaskgraph/cli-linux-x64",
                     "@onetaskgraph/cli-linux-arm64",
-                    "@onetaskgraph/cli-darwin-x64",
                     "@onetaskgraph/cli-darwin-arm64",
                     "@onetaskgraph/cli-win32-x64",
                 )
@@ -114,7 +113,6 @@ RECONCILED_VERSION_FILES: Tuple[VersionFile, ...] = (
         JsonVersionFile(Path(f"npm/platforms/{platform}/package.json"), (("version",),))
         for platform in (
             "darwin-arm64",
-            "darwin-x64",
             "linux-arm64",
             "linux-x64",
             "win32-x64",

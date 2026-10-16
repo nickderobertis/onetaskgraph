@@ -1,0 +1,11 @@
+{
+  "name": "onetaskgraph-github-workflows",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@actions/expressions": "0.3.0",
+    "@onebudgetspec/sdk": "0.1.3",
+    "yaml": "2.8.1"
+  },
+  "//": "llmlint: ignore-file[projects_stay_in_one_js_workspace] This dispatch explicitly requires a private locked .github package containing only YAML parsing, the published Actions evaluator and budget SDK; adding it to public SDK workspace resolution would contradict that isolation."
+}
