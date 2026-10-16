@@ -131,10 +131,12 @@ class Client:
     def path_file(self, path: str) -> Path:
         return self.raw / (re.sub(r"[^A-Za-z0-9._=-]+", "_", path.strip("/")) + ".json")
 
-    def get(self, path: str):
+    def get(self, path: str, text: bool = False):
         target = self.path_file(path)
+        if text:
+            target = target.with_suffix(".txt")
         if target.exists():
-            return json.loads(target.read_text())
+            return target.read_text() if text else json.loads(target.read_text())
         if self.offline:
             return None
         if self.last_reported is None or self.since_report >= POLL_EVERY:
@@ -155,6 +157,9 @@ class Client:
         if out.returncode != 0:
             self._write_log({"kind": "error", "seq": self.count, "path": path, "stderr": out.stderr.strip()[:500]})
             raise RuntimeError(f"GET {path} failed: {out.stderr.strip()}")
+        if text:
+            target.write_text(out.stdout)
+            return out.stdout
         data = json.loads(out.stdout)
         target.write_text(json.dumps(data, indent=1, sort_keys=True))
         return data
@@ -272,11 +277,60 @@ def tag_commit(tag: str, git_dir: Path) -> str | None:
 
 
 # --------------------------------------------------------------------------------------------
+# Job logs: the phases of a `check` job, read off the markers the recipes print.
+
+LOG_LINE = re.compile(r"^\ufeff?(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(\.\d+)?Z (.*)")
+PHASE_MARKERS = [
+    (re.compile(r"^##\[group\]Run just bootstrap"), "bootstrap"),
+    (re.compile(r"^##\[group\]Run zero="), "derive-base"),
+    (re.compile(r"^##\[group\]Run just (check-generated|gate-generated)"), "generate-check"),
+    (re.compile(r"^nx: run workspace:deny"), "deny"),
+    (re.compile(r"^nx: affected -t format-check"), "format-check"),
+    (re.compile(r"^nx: affected -t lint"), "lint"),
+    (re.compile(r"^nx: affected -t typecheck"), "typecheck"),
+    (re.compile(r"^nx: affected -t test"), "test"),
+    (re.compile(r"^nx: affected -t coverage"), "coverage"),
+    (re.compile(r"^nx: run scripts:distribution-check"), "distribution-check"),
+    (re.compile(r"^nx: run scripts:distribution-test"), "distribution-test"),
+]
+
+
+def log_phases(text: str) -> dict[str, float]:
+    """Seconds per phase: from one marker to the next, the last ending at the next step."""
+    marks: list[tuple[dt.datetime, str]] = []
+    end = None
+    for line in text.splitlines():
+        m = LOG_LINE.match(line)
+        if not m:
+            continue
+        t = dt.datetime.fromisoformat(m.group(1) + "+00:00") + dt.timedelta(seconds=float(m.group(2) or 0))
+        body = m.group(3)
+        hit = next((label for rx, label in PHASE_MARKERS if rx.match(body)), None)
+        if hit:
+            # `just bootstrap` and the gate's own `just check` print the generate marker's
+            # step; within the step, only the first marker of each label counts.
+            if hit not in (label for _, label in marks):
+                marks.append((t, hit))
+            end = None
+        elif marks and end is None and body.startswith("##[group]Run") and marks[-1][1] != "bootstrap":
+            end = t
+        elif marks and body.startswith("Post job cleanup") and end is None:
+            end = t
+    phases = {}
+    for (a, label), nxt in zip(marks, marks[1:] + [(end, None)]):
+        if nxt[0] is not None:
+            phases[label] = round((nxt[0] - a).total_seconds(), 1)
+    return phases
+
+
+# --------------------------------------------------------------------------------------------
 # Analysis.
 
 
 def executed(job: dict) -> bool:
-    return job.get("conclusion") != "skipped" and job.get("started_at") is not None
+    """A job that ran on a runner: skipped jobs and jobs cancelled before a runner took them
+    (no runner_name) are excluded, because neither occupied a runner."""
+    return job.get("conclusion") != "skipped" and bool(job.get("runner_name"))
 
 
 def analyse(args, client: Client) -> dict:
@@ -326,6 +380,58 @@ def analyse(args, client: Client) -> dict:
             "queue_from_job_created_s_success": stats(entry.pop("_pure_queue")),
         })
 
+    # ---- per step, for the jobs whose time the report attributes ----------------------------
+    step_groups: dict[tuple, list[float]] = {}
+    for run_id, jobs in jobs_by_run.items():
+        run = run_by_id[run_id]
+        if run["_workflow_file"] not in ("ci.yml", "release.yml", "release-plz.yml"):
+            continue
+        kind = "release-pr" if (run["head_branch"] or "").startswith("release-plz-") else "other"
+        for job in jobs:
+            if job.get("conclusion") != "success":
+                continue
+            for step in job.get("steps") or []:
+                d = seconds(step.get("started_at"), step.get("completed_at"))
+                if d is None or step.get("conclusion") != "success":
+                    continue
+                key = (run["name"], run["event"], kind, job["name"], step["name"])
+                step_groups.setdefault(key, []).append(d)
+    per_step = [{"workflow": k[0], "event": k[1], "branch_kind": k[2], "job": k[3], "step": k[4],
+                 "duration_s": stats(v)} for k, v in sorted(step_groups.items())
+                if max(v) >= 30]
+
+    # ---- phases of the `check` jobs whose logs were read ----------------------------------------
+    phase_values: dict[tuple, list[float]] = {}
+    logs_read = []
+    for run_id, jobs in jobs_by_run.items():
+        for job in jobs:
+            text = client.get(f"repos/{args.repo}/actions/jobs/{job['id']}/logs", text=True) \
+                if client.path_file(f"repos/{args.repo}/actions/jobs/{job['id']}/logs").with_suffix(".txt").exists() else None
+            if text is None:
+                continue
+            phases = log_phases(text)
+            logs_read.append({"job_id": job["id"], "run_id": run_id, "job": job["name"],
+                              "event": run_by_id[run_id]["event"], "phases_s": phases})
+            for label, value in phases.items():
+                phase_values.setdefault((job["name"], label), []).append(value)
+    check_phases = {"logs": logs_read,
+                    "summary": [{"job": k[0], "phase": k[1], "seconds": stats(v)}
+                                for k, v in sorted(phase_values.items())]}
+
+    # ---- per job, release PR against every other PR -----------------------------------------
+    split: dict[tuple, list[float]] = {}
+    for run_id, jobs in jobs_by_run.items():
+        run = run_by_id[run_id]
+        if run["_workflow_file"] != "ci.yml":
+            continue
+        kind = "release-pr" if (run["head_branch"] or "").startswith("release-plz-") else "other"
+        for job in jobs:
+            if job.get("conclusion") == "success":
+                split.setdefault((run["event"], kind, job["name"]), []).append(
+                    seconds(job["started_at"], job["completed_at"]))
+    per_job_by_branch_kind = [{"event": k[0], "branch_kind": k[1], "job": k[2], "duration_s": stats(v)}
+                              for k, v in sorted(split.items())]
+
     # ---- per run --------------------------------------------------------------------------
     def job_counts(run_ids) -> dict:
         by_wf: dict[str, int] = {}
@@ -356,9 +462,15 @@ def analyse(args, client: Client) -> dict:
                         best = {"seconds": d, "job": j["name"], "workflow": run_by_id[r]["name"], "run_id": r}
         return best
 
+    # A pull_request run created after its PR closed (visual-docs' closed-event cleanup) is not
+    # one of that head commit's checks.
+    pulls = collect_pulls(client, args.repo, since, missing)
+    closed_at = {p["head"]["sha"]: p["closed_at"] for p in pulls if p.get("closed_at")}
     pr_runs: dict[str, list[int]] = {}
     for run in runs:
         if run["event"] == "pull_request" and run["id"] in jobs_by_run:
+            if run["head_sha"] in closed_at and run["created_at"] > closed_at[run["head_sha"]]:
+                continue
             pr_runs.setdefault(run["head_sha"], []).append(run["id"])
 
     ci_pr_runs = []
@@ -387,6 +499,22 @@ def analyse(args, client: Client) -> dict:
             "by_os": {os_: stats([job_counts(ids)["by_os"].get(os_, 0) for ids in pr_runs.values()])
                       for os_ in ("Linux", "Windows", "macOS")},
         },
+    }
+    rp: dict[str, dict] = {}
+    for run in runs:
+        if run["_workflow_file"] == "ci.yml" and run["event"] == "pull_request" \
+                and (run["head_branch"] or "").startswith("release-plz-"):
+            entry = rp.setdefault(run["head_branch"], {"runs": 0, "head_commits": set(), "conclusions": {}})
+            entry["runs"] += 1
+            entry["head_commits"].add(run["head_sha"])
+            key = run["conclusion"] or run["status"]
+            entry["conclusions"][key] = entry["conclusions"].get(key, 0) + 1
+    per_run["release_pr_ci_runs"] = {
+        "release_prs": len(rp),
+        "ci_runs_per_release_pr": stats([e["runs"] for e in rp.values()]),
+        "head_commits_per_release_pr": stats([len(e["head_commits"]) for e in rp.values()]),
+        "conclusions": {k: sum(e["conclusions"].get(k, 0) for e in rp.values())
+                        for k in sorted({k for e in rp.values() for k in e["conclusions"]})},
     }
     push_main = [r for r in runs if r["event"] == "push" and r["head_branch"] == "main" and r["id"] in jobs_by_run]
     per_push: dict[str, list[int]] = {}
@@ -426,6 +554,8 @@ def analyse(args, client: Client) -> dict:
             "last_job_completed_at": last, "last_job": last_job,
             "jobs": job_counts(ids), "jobs_release_workflows_only": job_counts(release_only),
             "longest_job": longest(ids), "longest_job_release_workflows_only": longest(release_only),
+            "last_job_completed_at_release_workflows_only": span(release_only)[1],
+            "release_workflows_last_job": span(release_only)[3],
         }
     complete_cd = [c for c in cd.values() if c["complete"]]
     cd_summary = {
@@ -442,7 +572,6 @@ def analyse(args, client: Client) -> dict:
     }
 
     # ---- cycle time -----------------------------------------------------------------------
-    pulls = collect_pulls(client, args.repo, since, missing)
     merged = [p for p in pulls if p.get("merged_at") and p["base"]["ref"] == "main"
               and since <= iso(p["merged_at"]).date() <= until]
     cycles = []
@@ -469,6 +598,16 @@ def analyse(args, client: Client) -> dict:
             record["merge_to_release_s"] = seconds(pr["merged_at"], rel["last_job_completed_at"])
             record["release_last_job_completed_at"] = rel["last_job_completed_at"]
             record["cycle_s"] = checks_s + record["merge_to_release_s"]
+            # The merge-to-release phase split at the release PR's own merge (the tagged
+            # commit), and the same phase ended at the release workflows' last job alone.
+            release_pr = next((p for p in merged if p["merge_commit_sha"] == rel["commit"]), None)
+            if release_pr is not None:
+                record["wait_for_release_pr_merge_s"] = seconds(pr["merged_at"], release_pr["merged_at"])
+                record["release_pr_merge_to_cd_end_s"] = seconds(release_pr["merged_at"], rel["last_job_completed_at"])
+                record["release_pr_merge_to_release_workflows_end_s"] = seconds(
+                    release_pr["merged_at"], rel["last_job_completed_at_release_workflows_only"])
+            record["merge_to_release_workflows_end_s"] = seconds(pr["merged_at"], rel["last_job_completed_at_release_workflows_only"])
+            record["cd_last_job"] = rel["last_job"]
         cycles.append(record)
     eligible = [c for c in cycles if "cycle_s" in c]
     per_release_max: dict[str, float] = {}
@@ -480,6 +619,18 @@ def analyse(args, client: Client) -> dict:
         "merge_to_release_s": stats([c["merge_to_release_s"] for c in eligible]),
         "cycle_s": stats([c["cycle_s"] for c in eligible]),
         "release_cycle_time_max_per_release_s": stats(list(per_release_max.values())),
+        "wait_for_release_pr_merge_s": stats([c["wait_for_release_pr_merge_s"] for c in eligible
+                                              if "wait_for_release_pr_merge_s" in c]),
+        "release_pr_merge_to_cd_end_s": stats([c["release_pr_merge_to_cd_end_s"] for c in eligible
+                                               if "release_pr_merge_to_cd_end_s" in c]),
+        "release_pr_merge_to_release_workflows_end_s": stats([c["release_pr_merge_to_release_workflows_end_s"]
+                                                             for c in eligible
+                                                             if c.get("release_pr_merge_to_release_workflows_end_s") is not None]),
+        "merge_to_release_workflows_end_s": stats([c["merge_to_release_workflows_end_s"] for c in eligible
+                                                   if c.get("merge_to_release_workflows_end_s") is not None]),
+        "cd_last_job": dict(sorted(((k, sum(1 for c in cd.values() if c["complete"] and c["last_job"] == k))
+                                    for k in {c["last_job"] for c in cd.values() if c["complete"]}),
+                                   key=lambda kv: -kv[1])),
         "prs_per_release": stats([sum(1 for c in eligible if c["release"] == t) for t in per_release_max]),
     }
 
@@ -489,7 +640,9 @@ def analyse(args, client: Client) -> dict:
         "runs_with_jobs_read": len(jobs_by_run),
         "sampling": {"live-janitor.yml": f"jobs read for every {args.janitor_every}th completed run "
                                          f"({len(sampled_janitor)} of {len(janitor)})"},
-        "per_job": per_job, "per_run": per_run,
+        "per_job": per_job, "per_job_by_branch_kind": per_job_by_branch_kind, "per_step": per_step,
+        "check_phases_from_logs": check_phases,
+        "per_run": per_run,
         "cd": {"summary": cd_summary, "releases": list(cd.values())},
         "cycle": {"summary": cycle_summary, "prs": cycles},
         "missing": sorted(set(missing)),
@@ -513,13 +666,14 @@ def main() -> int:
     one.add_argument("path")
     one.add_argument("--raw-dir", required=True, type=Path)
     one.add_argument("--log", required=True, type=Path)
+    one.add_argument("--text", action="store_true", help="keep the response as text (a job log)")
     args = parser.parse_args()
 
     client = Client(args.raw_dir, args.log, getattr(args, "offline", False))
     try:
         if args.cmd == "fetch":
-            data = client.get(args.path)
-            print(client.path_file(args.path))
+            data = client.get(args.path, text=args.text)
+            print(client.path_file(args.path).with_suffix(".txt" if args.text else ".json"))
             return 0 if data is not None else 1
         figures = analyse(args, client)
     except Budget as stop:

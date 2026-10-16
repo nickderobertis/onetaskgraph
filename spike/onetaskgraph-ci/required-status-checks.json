@@ -1,0 +1,51 @@
+{
+ "checks": [
+  {
+   "app_id": null,
+   "context": "check (ubuntu-latest)"
+  },
+  {
+   "app_id": null,
+   "context": "check (windows-latest)"
+  },
+  {
+   "app_id": null,
+   "context": "deny"
+  },
+  {
+   "app_id": null,
+   "context": "llmlint"
+  },
+  {
+   "app_id": null,
+   "context": "pr-title"
+  },
+  {
+   "app_id": 15368,
+   "context": "install path (ubuntu-latest)"
+  },
+  {
+   "app_id": 15368,
+   "context": "install path (windows-latest)"
+  },
+  {
+   "app_id": 15368,
+   "context": "visual-docs / report (x86_64, shots/current, shots/verify, Visual docs)"
+  }
+ ],
+ "contexts": [
+  "check (ubuntu-latest)",
+  "check (windows-latest)",
+  "deny",
+  "llmlint",
+  "pr-title",
+  "install path (ubuntu-latest)",
+  "install path (windows-latest)",
+  "visual-docs / report (x86_64, shots/current, shots/verify, Visual docs)"
+ ],
+ "contexts_url": "https://api.github.com/repos/nickderobertis/onetaskgraph/branches/main/protection/required_status_checks/contexts",
+ "strict": false,
+ "url": "https://api.github.com/repos/nickderobertis/onetaskgraph/branches/main/protection/required_status_checks",
+ "snapshot_taken_at": "2026-10-16T00:50:15+00:00",
+ "snapshot_source": "GET repos/nickderobertis/onetaskgraph/branches/main/protection/required_status_checks, read-only, through spike/onetaskgraph-ci/measure.py fetch; every other key is GitHub response verbatim"
+}

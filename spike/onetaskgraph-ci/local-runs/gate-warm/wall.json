@@ -1,0 +1,8 @@
+{
+ "command": "just gate",
+ "exit": 0,
+ "wall_s": 1535.1,
+ "realtime_s": 1521.5,
+ "frozen_s": -13.6,
+ "nx_cache_entries_before": 96
+}

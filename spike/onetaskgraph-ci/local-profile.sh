@@ -9,6 +9,11 @@
 # the pool's clone is never touched. Every credential and nomination a live lane reads is
 # unset, so no live tier can run. Writes <out-dir>/output.log, <out-dir>/wall.json and
 # <out-dir>/tasks.json (every Nx task this run recorded: project, target, status, seconds).
+#
+# The wall clock is the monotonic clock, and the realtime clock is recorded beside it: on this
+# host (a VM) the guest can be frozen while its realtime clock is later stepped forward, which
+# inflates every realtime figure — Nx's own task timestamps included — and leaves the monotonic
+# one alone. `frozen_s` is the difference; every Nx task whose span holds the step is flagged.
 set -uo pipefail
 
 out="${1:?out-dir}"
@@ -25,15 +30,18 @@ unset GH_PROJECTS_TOKEN LINEAR_API_KEY ONETASKGRAPH_LIVE_REQUIRED GH_PROJECTS_OW
   GITHUB_LIVE_SESSION_DIR
 
 cache_entries_before="$(find "$NX_CACHE_DIRECTORY" -maxdepth 1 2>/dev/null | wc -l | tr -d ' ')"
-start_ms="$(python3 -c 'import time; print(int(time.time()*1000))')"
+stamp() { python3 -c 'import time; print(int(time.time()*1000), int(time.monotonic()*1000))'; }
+read -r start_ms start_mono <<<"$(stamp)"
 "$@" >"$out/output.log" 2>&1
 code=$?
-end_ms="$(python3 -c 'import time; print(int(time.time()*1000))')"
+read -r end_ms end_mono <<<"$(stamp)"
 
-python3 - "$out" "$NX_WORKSPACE_DATA_DIRECTORY" "$start_ms" "$end_ms" "$code" "$cache_entries_before" "$*" <<'EOF'
+python3 - "$out" "$NX_WORKSPACE_DATA_DIRECTORY" "$start_ms" "$end_ms" "$code" "$cache_entries_before" "$*" "$start_mono" "$end_mono" <<'EOF'
 import glob, json, sqlite3, sys
-out, data, start, end, code, before, command = sys.argv[1:]
+out, data, start, end, code, before, command, mono_a, mono_b = sys.argv[1:]
 start, end = int(start), int(end)
+monotonic_s = (int(mono_b) - int(mono_a)) / 1000
+frozen_s = round((end - start) / 1000 - monotonic_s, 1)
 tasks = []
 for db in glob.glob(f"{data}/*.db"):
     con = sqlite3.connect(db)
@@ -43,9 +51,14 @@ for db in glob.glob(f"{data}/*.db"):
     for project, target, status, rc, a, b in rows:
         tasks.append({"task": f"{project}:{target}", "status": status, "code": rc,
                       "start_offset_s": round((a - start) / 1000, 1), "seconds": round((b - a) / 1000, 1)})
-json.dump({"command": command, "exit": int(code), "wall_s": round((end - start) / 1000, 1),
+if frozen_s > 5:
+    # A task spanning the step reads long by up to frozen_s; mark every task that could.
+    for t in tasks:
+        t["may_span_freeze"] = True if t["seconds"] >= frozen_s else t.get("may_span_freeze", False)
+json.dump({"command": command, "exit": int(code), "wall_s": round(monotonic_s, 1),
+           "realtime_s": round((end - start) / 1000, 1), "frozen_s": frozen_s,
            "nx_cache_entries_before": int(before)}, open(f"{out}/wall.json", "w"), indent=1)
 json.dump(tasks, open(f"{out}/tasks.json", "w"), indent=1)
-print(f"{command}: exit {code}, {round((end - start) / 1000)} s, {len(tasks)} Nx tasks")
+print(f"{command}: exit {code}, {round(monotonic_s)} s monotonic ({frozen_s} s frozen), {len(tasks)} Nx tasks")
 EOF
 exit "$code"

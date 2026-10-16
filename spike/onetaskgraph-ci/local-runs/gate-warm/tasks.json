@@ -1,0 +1,856 @@
+[
+ {
+  "task": "workspace:deny",
+  "status": "success",
+  "code": 0,
+  "start_offset_s": 1.7,
+  "seconds": 6.3
+ },
+ {
+  "task": "onetaskgraph-plugin-api:format-check",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 9.3,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-live:format-check",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 9.3,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-github-live:format-check",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 9.3,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-github-projects:format-check",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 9.3,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-linear:format-check",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 9.3,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-local-md:format-check",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 9.3,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-in-memory:format-check",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 9.3,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-status-options:format-check",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 9.3,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-core:format-check",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 9.3,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph:format-check",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 9.3,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-e2e-support:format-check",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 9.3,
+  "seconds": 0.0
+ },
+ {
+  "task": "sdk-python:format-check",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 9.3,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-e2e:format-check",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 9.3,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-github-projects-e2e:format-check",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 9.3,
+  "seconds": 0.0
+ },
+ {
+  "task": "sdk-typescript:format-check",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 9.3,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-status-options-e2e:format-check",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 9.3,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-linear-e2e:format-check",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 9.3,
+  "seconds": 0.0
+ },
+ {
+  "task": "pool-maintenance:format-check",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 9.3,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-live-janitor:format-check",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 9.3,
+  "seconds": 0.0
+ },
+ {
+  "task": "screenshots:format-check",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 9.3,
+  "seconds": 0.0
+ },
+ {
+  "task": "scripts:format-check",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 9.3,
+  "seconds": 0.0
+ },
+ {
+  "task": "workspace:format-check",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 9.3,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-plugin-api:lint",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 10.3,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-live:lint",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 10.3,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-github-live:lint",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 10.3,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-github-projects:lint",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 10.3,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-linear:lint",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 10.3,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-status-options:lint",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 10.3,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-in-memory:lint",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 10.3,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-local-md:lint",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 10.3,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-core:lint",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 10.3,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph:lint",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 10.3,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-e2e-support:lint",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 10.3,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-linear-e2e:lint",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 10.3,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-live-janitor:lint",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 10.3,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-github-projects-e2e:lint",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 10.3,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-status-options-e2e:lint",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 10.3,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-e2e:lint",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 10.3,
+  "seconds": 0.0
+ },
+ {
+  "task": "sdk-python:lint",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 10.3,
+  "seconds": 0.0
+ },
+ {
+  "task": "screenshots:lint",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 10.3,
+  "seconds": 0.0
+ },
+ {
+  "task": "sdk-typescript:lint",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 10.3,
+  "seconds": 0.0
+ },
+ {
+  "task": "scripts:lint",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 10.3,
+  "seconds": 0.0
+ },
+ {
+  "task": "pool-maintenance:lint",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 10.3,
+  "seconds": 0.0
+ },
+ {
+  "task": "workspace:lint",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 10.3,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-plugin-api:typecheck",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 11.2,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-live:typecheck",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 11.2,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-github-live:typecheck",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 11.2,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-github-projects:typecheck",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 11.2,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-linear:typecheck",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 11.2,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-status-options:typecheck",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 11.2,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-in-memory:typecheck",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 11.2,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-local-md:typecheck",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 11.2,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-core:typecheck",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 11.2,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph:typecheck",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 11.2,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-e2e-support:typecheck",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 11.2,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-e2e:typecheck",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 11.2,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-github-projects-e2e:typecheck",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 11.2,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-status-options-e2e:typecheck",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 11.2,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-live-janitor:typecheck",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 11.2,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-linear-e2e:typecheck",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 11.2,
+  "seconds": 0.0
+ },
+ {
+  "task": "sdk-typescript:typecheck",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 11.2,
+  "seconds": 0.0
+ },
+ {
+  "task": "sdk-python:typecheck",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 11.2,
+  "seconds": 0.0
+ },
+ {
+  "task": "pool-maintenance:typecheck",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 11.2,
+  "seconds": 0.0
+ },
+ {
+  "task": "scripts:typecheck",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 11.2,
+  "seconds": 0.0
+ },
+ {
+  "task": "screenshots:typecheck",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 11.2,
+  "seconds": 0.0
+ },
+ {
+  "task": "workspace:typecheck",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 11.2,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-live-janitor:budgets",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 13.2,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph:build",
+  "status": "success",
+  "code": 0,
+  "start_offset_s": 13.3,
+  "seconds": 1.2
+ },
+ {
+  "task": "screenshots:test",
+  "status": "success",
+  "code": 0,
+  "start_offset_s": 13.3,
+  "seconds": 19.9
+ },
+ {
+  "task": "workspace:test",
+  "status": "success",
+  "code": 0,
+  "start_offset_s": 13.3,
+  "seconds": 22.0
+ },
+ {
+  "task": "onetaskgraph-github-projects:test",
+  "status": "local-cache",
+  "code": 0,
+  "start_offset_s": 13.4,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-live-janitor:test",
+  "status": "local-cache",
+  "code": 0,
+  "start_offset_s": 13.4,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-plugin-api:test",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 13.4,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-live:test",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 13.4,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-github-live:test",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 13.4,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-local-md:test",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 13.4,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-status-options:test",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 13.4,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-in-memory:test",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 13.4,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-core:test",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 13.4,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-e2e-support:test",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 13.4,
+  "seconds": 0.0
+ },
+ {
+  "task": "pool-maintenance:test",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 13.4,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-github-projects-e2e:test",
+  "status": "local-cache",
+  "code": 0,
+  "start_offset_s": 14.5,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-linear-e2e:test",
+  "status": "local-cache",
+  "code": 0,
+  "start_offset_s": 14.5,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph:test",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 14.5,
+  "seconds": 0.0
+ },
+ {
+  "task": "sdk-python:test",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 14.5,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-e2e:test",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 14.5,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-status-options-e2e:test",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 14.5,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-github-projects-e2e:budgets",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 14.6,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-linear-e2e:budgets",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 14.6,
+  "seconds": 0.0
+ },
+ {
+  "task": "sdk-typescript:generate-check",
+  "status": "success",
+  "code": 0,
+  "start_offset_s": 14.6,
+  "seconds": 2.2
+ },
+ {
+  "task": "sdk-typescript:test",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 16.9,
+  "seconds": 0.0
+ },
+ {
+  "task": "scripts:test",
+  "status": "success",
+  "code": 0,
+  "start_offset_s": 16.9,
+  "seconds": 222.1
+ },
+ {
+  "task": "onetaskgraph-linear:test",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 239.1,
+  "seconds": 0.0
+ },
+ {
+  "task": "pool-maintenance:coverage",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 241.1,
+  "seconds": 0.0
+ },
+ {
+  "task": "screenshots:coverage",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 241.1,
+  "seconds": 0.0
+ },
+ {
+  "task": "scripts:coverage",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 241.1,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph:build",
+  "status": "success",
+  "code": 0,
+  "start_offset_s": 241.1,
+  "seconds": 0.8
+ },
+ {
+  "task": "workspace:coverage-clear",
+  "status": "success",
+  "code": 0,
+  "start_offset_s": 241.1,
+  "seconds": 6.8
+ },
+ {
+  "task": "sdk-python:coverage",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 241.9,
+  "seconds": 0.0
+ },
+ {
+  "task": "sdk-typescript:generate-check",
+  "status": "success",
+  "code": 0,
+  "start_offset_s": 241.9,
+  "seconds": 2.4
+ },
+ {
+  "task": "sdk-typescript:coverage",
+  "status": "local-cache-kept-existing",
+  "code": 0,
+  "start_offset_s": 244.4,
+  "seconds": 0.0
+ },
+ {
+  "task": "onetaskgraph-github-projects:coverage",
+  "status": "success",
+  "code": 0,
+  "start_offset_s": 247.9,
+  "seconds": 88.6
+ },
+ {
+  "task": "onetaskgraph:coverage",
+  "status": "success",
+  "code": 0,
+  "start_offset_s": 247.9,
+  "seconds": 174.1
+ },
+ {
+  "task": "onetaskgraph-plugin-api:coverage",
+  "status": "success",
+  "code": 0,
+  "start_offset_s": 247.9,
+  "seconds": 11.5
+ },
+ {
+  "task": "onetaskgraph-live:coverage",
+  "status": "success",
+  "code": 0,
+  "start_offset_s": 259.4,
+  "seconds": 163.7
+ },
+ {
+  "task": "onetaskgraph-github-live:coverage",
+  "status": "success",
+  "code": 0,
+  "start_offset_s": 336.6,
+  "seconds": 88.1
+ },
+ {
+  "task": "onetaskgraph-linear:coverage",
+  "status": "success",
+  "code": 0,
+  "start_offset_s": 422.1,
+  "seconds": 65.5
+ },
+ {
+  "task": "onetaskgraph-status-options:coverage",
+  "status": "success",
+  "code": 0,
+  "start_offset_s": 423.1,
+  "seconds": 94.5
+ },
+ {
+  "task": "onetaskgraph-in-memory:coverage",
+  "status": "success",
+  "code": 0,
+  "start_offset_s": 424.8,
+  "seconds": 106.6
+ },
+ {
+  "task": "onetaskgraph-local-md:coverage",
+  "status": "success",
+  "code": 0,
+  "start_offset_s": 487.6,
+  "seconds": 83.2
+ },
+ {
+  "task": "onetaskgraph-core:coverage",
+  "status": "success",
+  "code": 0,
+  "start_offset_s": 517.7,
+  "seconds": 170.4
+ },
+ {
+  "task": "onetaskgraph-e2e-support:coverage",
+  "status": "success",
+  "code": 0,
+  "start_offset_s": 531.4,
+  "seconds": 167.7
+ },
+ {
+  "task": "onetaskgraph-github-projects-e2e:coverage",
+  "status": "success",
+  "code": 0,
+  "start_offset_s": 570.9,
+  "seconds": 482.7
+ },
+ {
+  "task": "onetaskgraph-linear-e2e:coverage",
+  "status": "success",
+  "code": 0,
+  "start_offset_s": 688.1,
+  "seconds": 312.8
+ },
+ {
+  "task": "onetaskgraph-live-janitor:coverage",
+  "status": "success",
+  "code": 0,
+  "start_offset_s": 699.2,
+  "seconds": 202.2
+ },
+ {
+  "task": "onetaskgraph-e2e:coverage",
+  "status": "success",
+  "code": 0,
+  "start_offset_s": 901.4,
+  "seconds": 64.4
+ },
+ {
+  "task": "onetaskgraph-status-options-e2e:coverage",
+  "status": "success",
+  "code": 0,
+  "start_offset_s": 965.9,
+  "seconds": 5.0
+ },
+ {
+  "task": "workspace:coverage",
+  "status": "success",
+  "code": 0,
+  "start_offset_s": 1053.6,
+  "seconds": 24.8
+ },
+ {
+  "task": "scripts:distribution-check",
+  "status": "success",
+  "code": 0,
+  "start_offset_s": 1079.1,
+  "seconds": 69.3
+ },
+ {
+  "task": "onetaskgraph:build",
+  "status": "success",
+  "code": 0,
+  "start_offset_s": 1149.5,
+  "seconds": 0.4
+ },
+ {
+  "task": "scripts:distribution-test",
+  "status": "success",
+  "code": 0,
+  "start_offset_s": 1149.9,
+  "seconds": 370.6
+ }
+]
