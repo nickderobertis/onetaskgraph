@@ -776,6 +776,10 @@ jobs:
     env:
       ONETASKGRAPH_SDK_WITHOUT_CLI: "1"
       UV_NO_SYNC: "1"
+      # With the distribution phases beside the tests, the journeys that run Nx inside a test
+      # saw its plugin workers miss Nx's ten-second load handshake on this runner and fail; a
+      # worker that never loads still ends at the job's timeout.
+      NX_PLUGIN_NO_TIMEOUTS: "true"
     steps:
       - uses: actions/checkout@v7
         with:
