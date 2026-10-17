@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Watch scripts/file-lock.sh hold: two processes taking one lock never overlap, a holder killed
 # while a process it started is still running keeps the lock until that process ends, a lock
-# file left behind is no lock, and a lock that cannot be taken fails by name.
+# file left behind is no lock, and a lock that cannot be taken or a program that cannot be run
+# fails by name.
 set -euo pipefail
 
 readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -80,3 +81,10 @@ if output="$(with_file_lock "$scratch/a-directory" true 2>&1)"; then
 fi
 grep -qF "file-lock: could not open $scratch/a-directory" <<<"$output" \
   || fail "a lock that could not be opened failed without saying so: $output"
+
+# 6. A program that cannot be run fails, naming it and what to do.
+if output="$(with_file_lock "$lock" "$scratch/no-such-program" 2>&1)"; then
+  fail "a program that could not be run read as a success"
+fi
+grep -qF "file-lock: could not run $scratch/no-such-program" <<<"$output" && grep -qF "next:" <<<"$output" \
+  || fail "a program that could not be run failed without saying so: $output"

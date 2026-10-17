@@ -29,6 +29,6 @@ with_file_lock() {
     my $lock = shift;
     open(my $handle, ">>", $lock) or die "file-lock: could not open $lock: $!; next: make it writable, then rerun.\n";
     flock($handle, LOCK_EX) or die "file-lock: could not lock $lock: $!; next: check the filesystem supports locks, then rerun.\n";
-    exec { $ARGV[0] } @ARGV or die "file-lock: could not run $ARGV[0]: $!\n";
+    exec { $ARGV[0] } @ARGV or die "file-lock: could not run $ARGV[0]: $!; next: install it or put it on PATH, then rerun.\n";
   ' "$lock" "$@"
 }
