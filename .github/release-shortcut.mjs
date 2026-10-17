@@ -34,7 +34,8 @@ export function decide({ base, head, main, cwd = process.cwd() }) {
   try {
     baseTree = tree(base, cwd);
     tree(head, cwd);
-    passed = new Set(git(["log", "--first-parent", "--format=%T", main, "--"], cwd).split("\n"));
+    const tip = git(["rev-parse", "--verify", "--end-of-options", `${main}^{commit}`], cwd);
+    passed = new Set(git(["log", "--first-parent", "--format=%T", tip, "--"], cwd).split("\n"));
   } catch {
     return { tests: RUN, reason: "Unreadable base, head or main requires the tests" };
   }

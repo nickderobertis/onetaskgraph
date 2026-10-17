@@ -78,7 +78,8 @@
           "bash scripts/check-metadata-slot-encoding.sh",
           "bash scripts/check-design-prefix-spelling.sh",
           "bash scripts/check-capability-verdicts.sh",
-          "bash scripts/check-copy-pagination-guards.sh"
+          "bash scripts/check-copy-pagination-guards.sh",
+          "bash scripts/check-test-in-coverage.sh"
         ],
         "parallel": false
       },
@@ -96,6 +97,7 @@
         "{workspaceRoot}/sdks/*/project.json",
         "{workspaceRoot}/sdks/*/*.json",
         "{workspaceRoot}/scripts/check-nx-graph.sh",
+        "{workspaceRoot}/scripts/check-test-in-coverage.sh",
         "{workspaceRoot}/scripts/check-plugin-isolation.sh",
         "{workspaceRoot}/scripts/check-plugin-isolation-concurrent.sh",
         "{workspaceRoot}/AGENTS.md",

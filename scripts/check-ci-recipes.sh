@@ -127,6 +127,48 @@ readonly DEPENDENT=onetaskgraph-core
 readonly UNAFFECTED=onetaskgraph-plugin-api
 readonly NOTHING_FILE=LICENSE
 
+# 0. The tag that makes a job skip a project's uninstrumented `test` is held to its claim, and
+#    the check that holds it is watched refusing each way the claim can stop being true.
+tag_refused() {
+  local case_name="$1" expected="$2" guard
+  guard="$(cd "$REPO" && bash scripts/check-test-in-coverage.sh 2>&1)" \
+    && fail "$case_name: check-test-in-coverage passed it" \
+    || grep -qF "$expected" <<<"$guard" \
+    || fail "$case_name: check-test-in-coverage refused it without saying '$expected': $guard"
+  git -C "$REPO" checkout --quiet -- .
+}
+(cd "$REPO" && bash scripts/check-test-in-coverage.sh) \
+  || fail "check-test-in-coverage does not pass on the committed tree, so the cases below prove nothing"
+python3 - "$REPO/crates/$CHANGED/project.json" <<'PY'
+import json, sys
+project = json.load(open(sys.argv[1]))
+project["targets"]["test"]["options"]["command"] += " && bash scripts/never-run-elsewhere.sh"
+json.dump(project, open(sys.argv[1], "w"))
+PY
+tag_refused "a tagged crate's test gaining a command nothing else runs" "never-run-elsewhere.sh"
+python3 - "$REPO/crates/$DEPENDENT/project.json" <<'PY'
+import json, sys
+project = json.load(open(sys.argv[1]))
+commands = project["targets"]["test-uncovered"]["options"]["commands"]
+project["targets"]["test-uncovered"]["options"]["commands"] = [c for c in commands if "--doc" not in c]
+json.dump(project, open(sys.argv[1], "w"))
+PY
+tag_refused "a crate with doctests losing its doctest run" "has doctests"
+python3 - "$REPO/crates/onetaskgraph-github-projects/project.json" <<'PY'
+import json, sys
+project = json.load(open(sys.argv[1]))
+project["tags"].append("test-in-coverage:unix")
+json.dump(project, open(sys.argv[1], "w"))
+PY
+tag_refused "a crate with a live lane tagged" "has a live lane"
+python3 - "$REPO/sdks/python/project.json" <<'PY'
+import json, sys
+project = json.load(open(sys.argv[1]))
+project["targets"]["coverage"]["options"]["command"] = "uv run --frozen pytest -q tests/smoke"
+json.dump(project, open(sys.argv[1], "w"))
+PY
+tag_refused "an SDK whose coverage runs fewer tests than its test" "coverage switched on"
+
 record_targets
 git -C "$REPO" commit --quiet --no-verify -am "test: record every target"
 BASE="$(git -C "$REPO" rev-parse HEAD)"

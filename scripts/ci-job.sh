@@ -5,8 +5,8 @@
 #
 # Each of ci.yml's four jobs runs exactly one `just ci-<job>` recipe, and each recipe is this
 # script, so a contributor runs what CI runs. A job is a list of phases, each one Nx
-# invocation. A phase that passes prints one line naming the tasks it ran; one that fails
-# prints the whole of Nx's output. `--select-only` prints every task each phase selects and
+# invocation. A phase that fails prints the whole of Nx's output, and the job ends with one
+# line naming every task it ran. `--select-only` prints every task each phase selects and
 # runs nothing, which is how a host that is not Windows or macOS proves those jobs' selection.
 #
 # `--exclude=` is what scripts/live-lane-selection.sh answers through lane_runner.py: a live
@@ -125,7 +125,7 @@ while IFS=' ' read -r kind targets excluded; do
     exit 1
   fi
   if [ -z "$plan" ]; then
-    echo "ci-job: $JOB: nx ${arguments[*]} selects nothing"
+    ! "$select_only" || echo "ci-job: $JOB: nx ${arguments[*]} selects nothing"
     continue
   fi
   if "$select_only"; then
@@ -133,9 +133,7 @@ while IFS=' ' read -r kind targets excluded; do
     continue
   fi
   if FORCE_COLOR=0 NO_COLOR=1 node_modules/.bin/nx "${arguments[@]}" --outputStyle=static >"$scratch/run.log" 2>&1; then
-    # One line per phase: which tasks it proved, which is what a reader of a green job needs.
-    ran="$(sed -n 's/^.*> nx run \([^ ]*\).*$/\1/p' "$scratch/run.log" | tr -d '\r' | sort -u | tr '\n' ' ')"
-    echo "ci-job: $JOB: ran ${ran% }"
+    sed -n 's/^.*> nx run \([^ ]*\).*$/\1/p' "$scratch/run.log" | tr -d '\r' >>"$scratch/ran"
   else
     cat "$scratch/run.log" >&2
     echo "ci-job: $JOB: nx ${arguments[*]} failed — the failing tasks are named above." >&2
@@ -145,4 +143,9 @@ while IFS=' ' read -r kind targets excluded; do
 done <<EOF
 $phases
 EOF
+# One line for the whole job: which tasks it proved, which is what a reader of a green job
+# needs to know of it.
+if ! "$select_only" && [ -s "$scratch/ran" ]; then
+  echo "ci-job: $JOB: ran $(sort -u "$scratch/ran" | tr '\n' ' ' | sed 's/ $//')"
+fi
 exit "$status"

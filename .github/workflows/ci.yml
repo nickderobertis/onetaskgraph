@@ -390,8 +390,10 @@ jobs:
 
       # Deterministic and model-free, so it runs first and fails a config, suppression or
       # version-bump slip in milliseconds rather than after a paid harness call.
+      # llmlint: ignore-block[no_second_broader_sweep_over_an_already_gated_commit] Transitional by the task's order: the jobs behind today's required contexts stay in place and passing until branch protection names the four new jobs, and onetaskgraph-ci-budgets removes them; until then both run on one commit.
       - name: Validate the llmlint config (no model)
         run: just lint-llm-validate --diff-base origin/main
+      # llmlint: ignore-end[no_second_broader_sweep_over_an_already_gated_commit]
 
       - name: Lint the changed files
         env:
@@ -529,8 +531,10 @@ jobs:
       # setup-llmlint.sh installs no harness, so without this the lint would skip every file.
       - name: Install the coding harness (claude-code)
         run: npm i -g @anthropic-ai/claude-code
+      # llmlint: ignore-block[no_second_broader_sweep_over_an_already_gated_commit] Transitional by the task's order: the jobs behind today's required contexts stay in place and passing until branch protection names the four new jobs, and onetaskgraph-ci-budgets removes them; until then both run on one commit.
       - name: Validate the llmlint config (no model)
         run: just lint-llm-validate --diff-base origin/main
+      # llmlint: ignore-end[no_second_broader_sweep_over_an_already_gated_commit]
       # llmlint: ignore-block[no_second_broader_sweep_over_an_already_gated_commit] Transitional by the task's order: the jobs behind today's required contexts stay in place and passing until branch protection names the four new jobs, and onetaskgraph-ci-budgets removes them; until then both run on one commit.
       - name: Lint the changed files with llmlint
         env:
@@ -556,6 +560,7 @@ jobs:
             echo "::error::the visual docs capture exited $status; its log is above. Reproduce it with 'just screenshots'." >&2
             exit 1
           fi
+      # llmlint: ignore-block[no_second_broader_sweep_over_an_already_gated_commit] Transitional by the task's order: the jobs behind today's required contexts stay in place and passing until branch protection names the four new jobs, and onetaskgraph-ci-budgets removes them; until then both run on one commit, visual-docs.yml's capture and report included.
       # screencomp's own composite actions, as steps of this job rather than its reusable
       # workflow, which would add five jobs: the same CLI pin and inputs visual-docs.yml
       # passes, one lane (`x86_64`, screencomp.toml), the strict drift gate.
@@ -582,6 +587,7 @@ jobs:
           matrix: '[{"project":"","arch":"x86_64","current":"shots/current","verify":"shots/verify","manifest":"","gallery_title":"Visual docs"}]'
           publish: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
           github-token: ${{ github.token }}
+      # llmlint: ignore-end[no_second_broader_sweep_over_an_already_gated_commit]
 
   test-linux:
     if: github.event_name == 'pull_request'
@@ -597,13 +603,9 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
-      # The release shortcut reads semantic-json.mjs, which is this private tooling's.
       - name: Install the workflow tooling
         run: just github-workflows-bootstrap
-      # On release-plz's release pull request alone the tests are not run a second time: the
-      # tree under test is a tree main already passed plus nothing but version and changelog
-      # edits. The script decides from that tree comparison and nothing else; `lint` never
-      # consults it.
+      # .github/release-shortcut.mjs says when the tests need not run again, and why.
       - name: Decide whether the release shortcut applies
         id: release
         shell: bash
@@ -710,13 +712,9 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
-      # The release shortcut reads semantic-json.mjs, which is this private tooling's.
       - name: Install the workflow tooling
         run: just github-workflows-bootstrap
-      # On release-plz's release pull request alone the tests are not run a second time: the
-      # tree under test is a tree main already passed plus nothing but version and changelog
-      # edits. The script decides from that tree comparison and nothing else; `lint` never
-      # consults it.
+      # .github/release-shortcut.mjs says when the tests need not run again, and why.
       - name: Decide whether the release shortcut applies
         id: release
         shell: bash
@@ -812,13 +810,9 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
-      # The release shortcut reads semantic-json.mjs, which is this private tooling's.
       - name: Install the workflow tooling
         run: just github-workflows-bootstrap
-      # On release-plz's release pull request alone the tests are not run a second time: the
-      # tree under test is a tree main already passed plus nothing but version and changelog
-      # edits. The script decides from that tree comparison and nothing else; `lint` never
-      # consults it.
+      # .github/release-shortcut.mjs says when the tests need not run again, and why.
       - name: Decide whether the release shortcut applies
         id: release
         shell: bash

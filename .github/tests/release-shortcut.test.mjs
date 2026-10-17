@@ -122,3 +122,37 @@ test("an unreadable ref runs the tests, and a malformed invocation fails rather 
   assert.match(malformed.stderr, /usage: release-shortcut\.mjs decide/);
   assert.equal(malformed.output, "");
 });
+
+test("an unreadable main, or one spelled as an option, runs the tests", () => {
+  // `--all` would read every branch's history, the unmerged one's included, as main's.
+  for (const main of ["no-such-branch", "--all", "--branches"]) {
+    const result = spawnSync(
+      process.execPath,
+      [program, "decide", "--base", unmerged, "--head", releaseOnUnmerged, "--main", main],
+      { cwd: repository, encoding: "utf8" },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).tests, "run", main);
+  }
+});
+
+test("a comparator that fails, prints malformed JSON or answers other than a boolean runs the tests", () => {
+  const comparator = resolve(repository, ".github/semantic-release.py");
+  const real = readFileSync(comparator, "utf8");
+  try {
+    for (const body of [
+      "raise SystemExit(1)\n",
+      "print('{not json')\n",
+      "print('\"true\"')\n",
+      "print('null')\n",
+    ]) {
+      writeFileSync(comparator, body);
+      const decision = tests(mainTip, release);
+      assert.equal(decision.tests, "run", body);
+      assert.match(decision.reason, /Unreadable release diff/);
+    }
+  } finally {
+    writeFileSync(comparator, real);
+  }
+  assert.equal(tests(mainTip, release).tests, "skip");
+});
