@@ -87,8 +87,9 @@ recipe() {
     just "$@" 2>&1)" && STATUS=0 || STATUS=$?
 }
 
-# expect <case> <ran|selects> <task> [absent]: the recipe's own output names (or never names)
-# that task in that verb.
+# expect <case> <ran|selects> <task> [absent]: the recipe's own output names (or, given
+# `absent`, never names) that task in that verb — a task the change does not reach, or one the
+# job runs another way.
 expect() {
   local case_name="$1" verb="$2" task="$3" absent="${4:-}" job line
   job="${case_name%% *}"
@@ -97,7 +98,7 @@ expect() {
     fail "$case_name: expected '$line' in the recipe's output, which was:"
     printf '%s\n' "$OUTPUT" >&2
   elif [ -n "$absent" ] && grep -qxF "$line" <<<"$OUTPUT"; then
-    fail "$case_name: '$line' is in the recipe's output, but $task is not affected by the change"
+    fail "$case_name: '$line' is in the recipe's output, but this job must not $verb $task for this change"
   fi
 }
 
