@@ -68,8 +68,6 @@ test("the guard enables the job exactly when both release secrets are present, a
   }
 });
 
-// ------------------------------------------------------------------------------ auto-merge
-
 let double;
 let ports;
 before(async () => {
@@ -117,6 +115,7 @@ test("the auto-merge step asks GitHub to merge release-plz's pull request once i
   const result = automerge([
     pull(41, "feature/unrelated"),
     pull(42, "release-plz-2026-10-01", "someone/fork"),
+    pull(39, "release-plz-0.7.9"),
     pull(43, "release-plz-0.8.0"),
     pull(44, "renovate/release-plz-action"),
   ]);
@@ -163,8 +162,6 @@ test("the auto-merge step fails visibly when GitHub refuses it or cannot be aske
   assert.match(unreachable.output, /HTTP 502/);
   assert.equal(unreachable.sent.filter((r) => r.action === "graphql").length, 0);
 });
-
-// --------------------------------------------------------------------- release preparation
 
 // The pinned release-plz, which `just bootstrap` provisions where every script resolves it.
 const pinned = spawnSync("bash", ["scripts/scoped-release-plz.sh", "resolve"], {

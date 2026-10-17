@@ -43,7 +43,8 @@ import urllib.request
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Literal, NoReturn
+import math
+from typing import Iterable, Literal, NewType, NoReturn
 
 from product_versions import read_reconciled_versions
 from release_products import (
@@ -60,6 +61,12 @@ ROOT = Path(__file__).resolve().parents[1]
 PYTHON_EXECUTABLE = str(Path(sys.executable).resolve())
 
 Registry = Literal["github", "pypi", "npm", "crates"]
+ArtifactKind = Literal["archive", "checksum", "wheel", "sdist", "npm-platform", "npm", "crate"]
+PackageName = NewType("PackageName", str)
+# A release-targets.toml identifier, `<registry>:<name>`.
+ReleaseTargetId = NewType("ReleaseTargetId", str)
+RepositoryName = NewType("RepositoryName", str)
+Token = NewType("Token", str)
 PlanPlatform = Literal["linux", "macos", "windows", "independent"]
 BUILD_PLATFORMS = ("linux", "macos", "windows")
 PLATFORM_REGISTRIES: tuple[Registry, ...] = ("github", "pypi", "npm")
@@ -80,7 +87,20 @@ CRATE_PUBLICATION_ORDER = (
     "onetaskgraph-core",
     "onetaskgraph",
 )
-ROOT_NPM_PACKAGES = (("@onetaskgraph/cli", "onetaskgraph-cli"), ("@onetaskgraph/sdk", "onetaskgraph-sdk"))
+
+
+@dataclass(frozen=True)
+class RootNpmPackage:
+    """A platform-independent npm package and the stem `npm pack` names its tarball with."""
+
+    name: PackageName
+    tarball_stem: str
+
+
+ROOT_NPM_PACKAGES = (
+    RootNpmPackage(PackageName("@onetaskgraph/cli"), "onetaskgraph-cli"),
+    RootNpmPackage(PackageName("@onetaskgraph/sdk"), "onetaskgraph-sdk"),
+)
 
 DEFAULT_GITHUB_API = "https://api.github.com"
 DEFAULT_PYPI_UPLOAD = "https://upload.pypi.org/legacy/"
@@ -112,12 +132,12 @@ class Artifact:
 
     platform: PlanPlatform
     registry: Registry
-    kind: str
+    kind: ArtifactKind
     file: str
-    package: str | None = None
+    package: PackageName | None = None
     # The release-targets.toml identifier this file is published under: a target's own id,
     # or one its `covers` names. GitHub Release archives belong to no registry, so none.
-    release_target: str | None = None
+    release_target: ReleaseTargetId | None = None
     target: str | None = None
     wheel_tags: tuple[str, ...] = ()
 
@@ -129,6 +149,11 @@ class Artifact:
         if self.wheel_tags:
             value["wheel_tags"] = list(self.wheel_tags)
         return value
+
+    @property
+    def staged(self) -> bool:
+        """Whether the build stages this file; cargo and npm pack crates and root packages at publication."""
+        return self.registry != "crates" and not (self.registry == "npm" and self.platform == "independent")
 
 
 def version_of(tag: ReleaseTag) -> str:
@@ -142,10 +167,11 @@ def archive_name(tag: ReleaseTag, row: PlatformTarget) -> str:
 def plan(platform: PlanPlatform, tag: ReleaseTag) -> list[Artifact]:
     version = version_of(tag)
     if platform == "independent":
-        artifacts = [Artifact("independent", "crates", "crate", f"{crate}-{version}.crate", crate, f"crate:{crate}") for crate in CRATE_PUBLICATION_ORDER]
-        artifacts.append(Artifact("independent", "pypi", "sdist", f"onetaskgraph_sdk-{version}.tar.gz", SDK_DISTRIBUTION, f"pypi:{SDK_DISTRIBUTION}"))
-        artifacts.append(Artifact("independent", "pypi", "wheel", f"onetaskgraph_sdk-{version}-py3-none-any.whl", SDK_DISTRIBUTION, f"pypi:{SDK_DISTRIBUTION}", wheel_tags=("py3-none-any",)))
-        artifacts.extend(Artifact("independent", "npm", "npm", f"{stem}-{version}.tgz", name, f"npm:{name}") for name, stem in ROOT_NPM_PACKAGES)
+        artifacts = [Artifact("independent", "crates", "crate", f"{crate}-{version}.crate", PackageName(crate), ReleaseTargetId(f"crate:{crate}")) for crate in CRATE_PUBLICATION_ORDER]
+        sdk = PackageName(SDK_DISTRIBUTION)
+        artifacts.append(Artifact("independent", "pypi", "sdist", f"onetaskgraph_sdk-{version}.tar.gz", sdk, ReleaseTargetId(f"pypi:{sdk}")))
+        artifacts.append(Artifact("independent", "pypi", "wheel", f"onetaskgraph_sdk-{version}-py3-none-any.whl", sdk, ReleaseTargetId(f"pypi:{sdk}"), wheel_tags=("py3-none-any",)))
+        artifacts.extend(Artifact("independent", "npm", "npm", f"{package.tarball_stem}-{version}.tgz", package.name, ReleaseTargetId(f"npm:{package.name}")) for package in ROOT_NPM_PACKAGES)
         return artifacts
     artifacts = []
     for row in platform_targets(platform):
@@ -153,9 +179,9 @@ def plan(platform: PlanPlatform, tag: ReleaseTag) -> list[Artifact]:
         wheel_tag = f"{WHEEL_INTERPRETER_TAGS}-{row.wheel_platform_tag}"
         artifacts.append(Artifact(platform, "github", "archive", archive, target=row.target))
         artifacts.append(Artifact(platform, "github", "checksum", f"{archive}.sha256", target=row.target))
-        artifacts.append(Artifact(platform, "pypi", "wheel", f"onetaskgraph_cli-{version}-{wheel_tag}.whl", CLI_DISTRIBUTION, f"pypi:{CLI_DISTRIBUTION}", row.target, (wheel_tag,)))
-        package = f"@onetaskgraph/cli-{row.npm_platform}"
-        artifacts.append(Artifact(platform, "npm", "npm-platform", f"onetaskgraph-cli-{row.npm_platform}-{version}.tgz", package, f"npm:{package}", row.target))
+        artifacts.append(Artifact(platform, "pypi", "wheel", f"onetaskgraph_cli-{version}-{wheel_tag}.whl", PackageName(CLI_DISTRIBUTION), ReleaseTargetId(f"pypi:{CLI_DISTRIBUTION}"), row.target, (wheel_tag,)))
+        package = PackageName(f"@onetaskgraph/cli-{row.npm_platform}")
+        artifacts.append(Artifact(platform, "npm", "npm-platform", f"onetaskgraph-cli-{row.npm_platform}-{version}.tgz", package, ReleaseTargetId(f"npm:{package}"), row.target))
     return artifacts
 
 
@@ -212,9 +238,6 @@ def require_tree_version(tag: ReleaseTag) -> None:
         fail(f"the tree is not at the release version {version_of(tag)}: {', '.join(wrong)} disagree", f"check out the commit {tag} was cut from, or run scripts/set-version.sh {version_of(tag)} on a release branch")
 
 
-# ---------------------------------------------------------------------------------------
-# build
-
 
 def maturin_requirement() -> str:
     """The maturin the release builds with: pyproject.toml's own build requirement."""
@@ -231,7 +254,6 @@ def build_target(row: PlatformTarget, tag: ReleaseTag, dist: Path) -> None:
     wheels = dist / "wheels" / row.target
     shutil.rmtree(wheels, ignore_errors=True)
     wheels.mkdir(parents=True)
-    say(f"building {row.target} once, with maturin")
     run(
         [tool("uv"), "tool", "run", "--from", maturin_requirement(), "maturin", "build", "--release", "--locked", "--target", row.target, "--out", str(wheels)],
         f"maturin could not build the {row.target} wheel",
@@ -239,7 +261,6 @@ def build_target(row: PlatformTarget, tag: ReleaseTag, dist: Path) -> None:
         env={**os.environ, "RUSTFLAGS": "-D warnings"},
     )
     package_target(row, tag, dist)
-    say(f"installing and running every {row.target} artifact before anything is published")
     run(
         [PYTHON_EXECUTABLE, "scripts/verify-release-products.py", "--target", row.target, "--npm", row.npm_platform, "--tag", tag, "--ext", row.extension, "--dist", str(dist), "--install"],
         f"the {row.target} artifacts did not install and run",
@@ -297,15 +318,40 @@ def manifest_path(dist: Path, platform: PlanPlatform) -> Path:
     return dist / f"release-{platform}.json"
 
 
+@dataclass(frozen=True)
+class StagedFile:
+    file: str
+    sha256: str | None
+
+
+@dataclass(frozen=True)
+class BuildManifest:
+    """What one build staged, written by the build and read by every publication after it."""
+
+    tag: ReleaseTag
+    platform: PlanPlatform
+    files: tuple[StagedFile, ...]
+
+    @classmethod
+    def parse(cls, value: object) -> "BuildManifest":
+        if not isinstance(value, dict) or not isinstance(value.get("tag"), str) or value.get("platform") not in (*BUILD_PLATFORMS, "independent") or not isinstance(value.get("artifacts"), list):
+            raise ValueError("not a build manifest: it needs a tag, a platform and a list of artifacts")
+        files = []
+        for entry in value["artifacts"]:
+            digest = entry.get("sha256") if isinstance(entry, dict) else None
+            if not isinstance(entry, dict) or not isinstance(entry.get("file"), str) or not (digest is None or (isinstance(digest, str) and len(digest) == 64 and all(c in "0123456789abcdef" for c in digest))):
+                raise ValueError(f"an artifact entry is not a file and an optional SHA-256: {entry!r:.200}")
+            files.append(StagedFile(entry["file"], digest))
+        return cls(validate_tag(value["tag"]), value["platform"], tuple(files))
+
+
 def write_manifest(dist: Path, platform: PlanPlatform, tag: ReleaseTag) -> None:
     entries = []
     for artifact in plan(platform, tag):
-        path = staged_path(dist, artifact)
-        if artifact.registry == "crates" or (artifact.registry == "npm" and platform == "independent"):
-            # cargo and npm package these themselves at publication, from the tree this
-            # build checked; there is no file of theirs to hash beforehand.
+        if not artifact.staged:
             entries.append(artifact.record())
             continue
+        path = staged_path(dist, artifact)
         if not path.is_file():
             fail(f"the build left no {path.relative_to(dist)}", "rerun the build; the release publishes exactly the files it stages")
         entries.append({**artifact.record(), "sha256": sha256(path)})
@@ -335,26 +381,24 @@ def build_independent(tag: ReleaseTag, dist: Path) -> None:
     run([tool("bun"), "run", "--cwd", "sdks/typescript", "build"], "the TypeScript SDK did not build", "fix the build error above and rerun")
 
 
-# ---------------------------------------------------------------------------------------
-# publish
-
 
 def load_manifest(dist: Path, platform: PlanPlatform, tag: ReleaseTag) -> list[Artifact]:
     path = manifest_path(dist, platform)
+    rebuild = f"run `just release-{platform if platform != 'independent' else 'publish'} build --tag {tag}`; a publication sends only what a build produced and recorded"
     try:
-        recorded = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        fail(f"no build of {platform} to publish ({path}: {error})", f"run `just release-{platform if platform != 'independent' else 'publish'} build --tag {tag}` first; a publication sends only what a build produced")
-    if recorded.get("tag") != tag:
-        fail(f"{path} records a build of {recorded.get('tag')}, not {tag}", "rebuild at the release tag before publishing")
+        recorded = BuildManifest.parse(json.loads(path.read_text(encoding="utf-8")))
+    except (OSError, ValueError) as error:
+        fail(f"no usable build of {platform} to publish ({path}: {error})", rebuild)
+    if recorded.tag != tag or recorded.platform != platform:
+        fail(f"{path} records a {recorded.platform} build of {recorded.tag}, not a {platform} build of {tag}", rebuild)
     artifacts = plan(platform, tag)
-    by_file = {entry["file"]: entry for entry in recorded.get("artifacts", [])}
+    by_file = {entry.file: entry for entry in recorded.files}
     if sorted(by_file) != sorted(artifact.file for artifact in artifacts):
-        fail(f"{path} does not list exactly the files {platform} releases", "rebuild; the manifest is written by the build and nothing else")
+        fail(f"{path} does not list exactly the files {platform} releases", rebuild)
     for artifact in artifacts:
-        digest = by_file[artifact.file].get("sha256")
-        if digest is not None and (not staged_path(dist, artifact).is_file() or sha256(staged_path(dist, artifact)) != digest):
-            fail(f"{staged_path(dist, artifact)} is not the file the build produced", "rebuild rather than publish a file the test-install did not run")
+        digest = by_file[artifact.file].sha256
+        if artifact.staged and (digest is None or not staged_path(dist, artifact).is_file() or sha256(staged_path(dist, artifact)) != digest):
+            fail(f"{staged_path(dist, artifact)} is not the file the build produced and installed", rebuild)
     return artifacts
 
 
@@ -377,21 +421,50 @@ def publish(platform: PlanPlatform, tag: ReleaseTag, dist: Path, registry: Regis
             publish_crates(tag)
 
 
-@dataclass
+@dataclass(frozen=True)
+class ReleaseAsset:
+    id: int
+    name: str
+    size: int
+    uploaded: bool
+
+    @classmethod
+    def parse(cls, value: object) -> "ReleaseAsset":
+        if not isinstance(value, dict) or not isinstance(value.get("id"), int) or not isinstance(value.get("name"), str) or not isinstance(value.get("size"), int):
+            raise ValueError(f"not a release asset: {value!r:.200}")
+        return cls(value["id"], value["name"], value["size"], value.get("state") == "uploaded")
+
+
+@dataclass(frozen=True)
+class Release:
+    upload_url: str
+    assets: tuple[ReleaseAsset, ...]
+
+
+@dataclass(frozen=True)
 class GitHub:
     api: str
-    repository: str
-    token: str
+    repository: RepositoryName
+    token: Token
 
     @classmethod
     def from_environment(cls) -> "GitHub":
         token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN") or ""
         repository = os.environ.get("GITHUB_REPOSITORY", "")
+        api = os.environ.get("GITHUB_API_URL", DEFAULT_GITHUB_API).rstrip("/")
         if not token:
             fail("no GitHub token: GH_TOKEN and GITHUB_TOKEN are both empty", "set GH_TOKEN from secrets.GITHUB_TOKEN, as the release workflow does")
         if repository.count("/") != 1:
             fail(f"GITHUB_REPOSITORY is {repository!r}, not owner/name", "run this in GitHub Actions, or set GITHUB_REPOSITORY")
-        return cls(os.environ.get("GITHUB_API_URL", DEFAULT_GITHUB_API).rstrip("/"), repository, token)
+        if urllib.parse.urlsplit(api).scheme not in ("http", "https"):
+            fail(f"GITHUB_API_URL is {api!r}, not an http(s) URL", "unset it to use https://api.github.com")
+        return cls(api, RepositoryName(repository), Token(token))
+
+    def trusts(self, url: str) -> bool:
+        """Whether a URL GitHub handed back may be sent this token: the API's own host, or its upload host."""
+        api, given = urllib.parse.urlsplit(self.api), urllib.parse.urlsplit(url)
+        hosts = {api.netloc, api.netloc.replace("api.", "uploads.", 1)}
+        return given.scheme == api.scheme and given.netloc in hosts
 
     def request(self, method: str, url: str, body: bytes | None = None, content_type: str | None = None) -> object:
         headers = {"Authorization": f"Bearer {self.token}", "Accept": "application/vnd.github+json", "User-Agent": USER_AGENT, "X-GitHub-Api-Version": "2022-11-28"}
@@ -405,30 +478,40 @@ class GitHub:
             fail(f"GitHub answered {method} {url} with HTTP {error.code}: {error.read()[:500].decode('utf-8', 'replace')}", "rerun the step once GitHub answers; assets already uploaded are skipped")
         except (urllib.error.URLError, TimeoutError, OSError) as error:
             fail(f"could not reach GitHub for {method} {url}: {error}", "rerun the step once GitHub is reachable; assets already uploaded are skipped")
-        return json.loads(payload) if payload else None
+        try:
+            return json.loads(payload) if payload else None
+        except json.JSONDecodeError as error:
+            fail(f"GitHub answered {method} {url} with something that is not JSON: {error}", "rerun the step once GitHub answers")
 
-    def release(self, tag: ReleaseTag) -> dict:
+    def release(self, tag: ReleaseTag) -> Release:
         found = self.request("GET", f"{self.api}/repos/{self.repository}/releases/tags/{urllib.parse.quote(tag)}")
-        if not isinstance(found, dict) or not isinstance(found.get("upload_url"), str) or not isinstance(found.get("assets"), list):
-            fail(f"GitHub's answer for the {tag} release is not a release", "check that the release-plz job cut the GitHub Release for this tag")
-        return found
+        try:
+            if not isinstance(found, dict) or not isinstance(found.get("upload_url"), str) or not isinstance(found.get("assets"), list):
+                raise ValueError("it has no upload_url and assets list")
+            release = Release(found["upload_url"].split("{", 1)[0], tuple(ReleaseAsset.parse(asset) for asset in found["assets"]))
+        except ValueError as error:
+            fail(f"GitHub's answer for the {tag} release is not a release: {error}", "check that the release-plz job cut the GitHub Release for this tag")
+        if not self.trusts(release.upload_url):
+            fail(f"the {tag} release names {release.upload_url} to upload to, which is neither GitHub's API nor its upload host", "check GITHUB_API_URL; the token is sent nowhere else")
+        return release
 
 
 def publish_github(tag: ReleaseTag, files: list[Path]) -> None:
     github = GitHub.from_environment()
     release = github.release(tag)
-    assets = {asset["name"]: asset for asset in release["assets"] if isinstance(asset, dict) and isinstance(asset.get("name"), str)}
-    upload = release["upload_url"].split("{", 1)[0]
+    assets = {asset.name: asset for asset in release.assets}
+    sent, kept = [], []
     for path in files:
         existing = assets.get(path.name)
-        if existing is not None and existing.get("state") == "uploaded" and existing.get("size") == path.stat().st_size:
-            say(f"{path.name} is already on the {tag} release; left alone")
+        if existing is not None and existing.uploaded and existing.size == path.stat().st_size:
+            kept.append(path.name)
             continue
         if existing is not None:
             # A partial asset from an interrupted upload holds the name; take it away first.
-            github.request("DELETE", f"{github.api}/repos/{github.repository}/releases/assets/{existing['id']}")
-        github.request("POST", f"{upload}?name={urllib.parse.quote(path.name)}", path.read_bytes(), "application/octet-stream")
-        say(f"uploaded {path.name} to the {tag} release")
+            github.request("DELETE", f"{github.api}/repos/{github.repository}/releases/assets/{existing.id}")
+        github.request("POST", f"{release.upload_url}?name={urllib.parse.quote(path.name)}", path.read_bytes(), "application/octet-stream")
+        sent.append(path.name)
+    say(f"the {tag} release holds {len(files)} file(s) of this build: uploaded {', '.join(sent) or 'none'}; already there {', '.join(kept) or 'none'}")
 
 
 def pypi_simple_base() -> str:
@@ -473,10 +556,11 @@ def publish_crates(tag: ReleaseTag) -> None:
     if not alternate and not os.environ.get("CARGO_REGISTRY_TOKEN"):
         fail("CARGO_REGISTRY_TOKEN is required", "set it from the CARGO_REGISTRY_TOKEN repository secret")
     bash = bash_executable(host_platform.system())
+    kept = []
     for crate in CRATE_PUBLICATION_ORDER:
         status = run([bash, "scripts/crate-publication-status.sh", crate, version_of(tag)], f"could not learn whether {crate} {version_of(tag)} is on the registry", "rerun once the registry answers", capture=True).strip()
         if status == "published":
-            say(f"{crate} {version_of(tag)} is already published; left alone")
+            kept.append(crate)
             continue
         if status != "absent":
             fail(f"unusable registry answer for {crate} {version_of(tag)}: {status}", "rerun once the registry answers 200 or 404")
@@ -485,10 +569,9 @@ def publish_crates(tag: ReleaseTag) -> None:
         if alternate:
             command += ["--registry", alternate]
         run(command, f"cargo could not publish {crate}", "fix what cargo reported above and rerun; published crates are skipped", env={**os.environ, "RUSTFLAGS": "-D warnings"})
+    if kept:
+        say(f"already on the registry, left alone: {', '.join(kept)}")
 
-
-# ---------------------------------------------------------------------------------------
-# verify and available
 
 
 def retrying(what: str, wait: float, attempt) -> None:
@@ -585,9 +668,12 @@ def install_from_npm(row: PlatformTarget, version: str, directory: Path) -> None
     if completed.returncode != 0:
         fail(f"npm could not install {package}@{version}: {completed.stderr.strip()[-800:]}", "check what the registry serves for this version; the build job publishes the package")
     installed = prefix / "node_modules" / package
-    manifest = json.loads((installed / "package.json").read_text(encoding="utf-8"))
-    if manifest.get("version") != version:
-        fail(f"npm installed {package}@{manifest.get('version')} for {version}", "check what the registry serves for this version")
+    try:
+        manifest = json.loads((installed / "package.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        fail(f"npm installed {package} without a readable package.json: {error}", "check what the registry serves for this version")
+    if not isinstance(manifest, dict) or manifest.get("version") != version:
+        fail(f"npm installed {package} as {manifest!r:.200} for {version}", "check what the registry serves for this version")
     run_installed(installed / "bin" / ("onetaskgraph.exe" if row.extension == "zip" else "onetaskgraph"), version, "npm")
 
 
@@ -665,8 +751,8 @@ def resolve_npm_package(package: str, version: str, directory: Path, row: Platfo
             names = packed.getnames()
     except (tarfile.TarError, KeyError, json.JSONDecodeError) as error:
         fail(f"{package}@{version} as served is not a readable package: {error}", "re-run the job that publishes it")
-    if manifest.get("name") != package or manifest.get("version") != version:
-        fail(f"npm serves {manifest.get('name')}@{manifest.get('version')} for {package}@{version}", "re-run the job that publishes it")
+    if not isinstance(manifest, dict) or manifest.get("name") != package or manifest.get("version") != version:
+        fail(f"npm serves {manifest!r:.200} for {package}@{version}", "re-run the job that publishes it")
     if row is not None and f"package/bin/{'onetaskgraph.exe' if row.extension == 'zip' else 'onetaskgraph'}" not in names:
         fail(f"{package}@{version} as served carries no binary", f"re-run build-{row.platform}, which publishes it")
 
@@ -687,13 +773,21 @@ def resolve_independent(tag: ReleaseTag, registry: Registry) -> None:
                     fail(f"PyPI does not resolve {SDK_DISTRIBUTION}=={version}: {completed.stderr.strip()[-400:]}", "rerun the publish job's PyPI step")
         case "npm":
             with tempfile.TemporaryDirectory(prefix="release-root-npm-") as scratch:
-                for package, _ in ROOT_NPM_PACKAGES:
-                    resolve_npm_package(package, version, Path(scratch))
+                for package in ROOT_NPM_PACKAGES:
+                    resolve_npm_package(package.name, version, Path(scratch))
         case _:
             fail(f"the publish job publishes nothing to {registry}", "choose crates, pypi or npm")
 
 
-# ---------------------------------------------------------------------------------------
+
+def seconds(value: str) -> float:
+    try:
+        parsed = float(value)
+    except ValueError:
+        parsed = math.nan
+    if not math.isfinite(parsed) or parsed < 0:
+        raise argparse.ArgumentTypeError(f"{value!r} is not a finite, non-negative number of seconds")
+    return parsed
 
 
 def main(argv: Iterable[str] | None = None) -> int:
@@ -716,7 +810,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     for name, help_text in (("verify", "install the release from one registry on this OS and run it"), ("available", "confirm one registry serves the release for every platform")):
         sub = command(name, help_text)
         sub.add_argument("--from", dest="registry", required=True, choices=["github", "pypi", "npm", "crates"])
-        sub.add_argument("--wait", type=float, default=600.0, help="seconds to keep asking a registry that has not caught up (default 600)")
+        sub.add_argument("--wait", type=seconds, default=600.0, help="seconds to keep asking a registry that has not caught up (default 600)")
     command("run", "build, test-install, then publish to every registry in dry-run mode").add_argument("--dry-run", action="store_true", required=True)
     args = parser.parse_args(None if argv is None else list(argv))
     try:
@@ -753,6 +847,10 @@ def main(argv: Iterable[str] | None = None) -> int:
     except ReleaseStepFailed as error:
         say(error.problem)
         say(f"next: {error.next_action}")
+        return 1
+    except (OSError, ValueError, KeyError, TypeError, tarfile.TarError, zipfile.BadZipFile) as error:
+        say(f"{args.command} for {args.platform} stopped on an input it could not read: {type(error).__name__}: {error}")
+        say(f"next: rerun the `build` phase, which rewrites everything under {dist}, then this one; if it recurs, the input named above is what to repair")
         return 1
     return 0
 

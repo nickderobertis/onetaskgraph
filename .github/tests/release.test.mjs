@@ -222,7 +222,7 @@ test("Linux arm64 and Intel macOS are neither built, published, verified nor dec
   assert.equal(releasePlz.workspace.git_tag_name, "v{{ version }}");
 });
 
-// llmlint: ignore[plan_criteria_require_realistic_tests] The macOS and Windows build recipes need native macOS and Windows toolchains this Linux host cannot run, so inside the dispatch their proof is the recipes' plan mode checked against the last release's published artifacts; the Linux recipe is driven for real end to end, and the hosted build jobs build and run the foreign artifacts on every release.
+// Plan mode, not a build: The macOS and Windows build recipes need native macOS and Windows toolchains this Linux host cannot run, so inside the dispatch their proof is the recipes' plan mode checked against the last release's published artifacts; the Linux recipe is driven for real end to end, and the hosted build jobs build and run the foreign artifacts on every release.
 test("each platform's plan is what v0.7.1 published for its targets, at any version", () => {
   const published = JSON.parse(read(".github/tests/fixtures/v0.7.1-published.json"));
   const retired = ["x86_64-apple-darwin", "aarch64-unknown-linux-gnu"];

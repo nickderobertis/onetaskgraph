@@ -23,13 +23,15 @@ it is killed. Each registry sits under its own prefix of `main`:
 What the double answers is controlled per request by `<state>/control.json`, which the
 journeys rewrite between runs: `releases` (tags that have a GitHub Release), `pulls` (the
 open pull requests), `refuse` (uploads and calls answered with an error: entries name a
-`registry` and a `file`, `package` or `action`), `hide` (names read as absent), `corrupt`
+`registry` and a `file`, `package` or `action`, and a GitHub upload marked `partial` leaves a
+short asset behind, as an interrupted one does), `hide` (names read as absent), `corrupt`
 (files served as garbage), and `relabel` (`{"from": v1, "to": v2}`: every read lists v1 as
 v2). Every request is one JSON line in `<state>/requests.jsonl`, with the file or package a
 publication carried, so a journey can assert exactly what was sent.
 """
 
 # llmlint: ignore-file[boundary_inputs_validated] The one argument is a directory the release journeys create and pass. The wire input is each registry's own protocol, read only as far as the double needs to answer it, and a request it cannot read is answered 400 — the journeys exercise it with the real uv, npm, cargo and pip clients rather than hand-built bodies.
+# llmlint: ignore-file[async_typed_clients_at_boundaries] The one outbound call, the index.crates.io proxy, answers one cargo request at a time inside a ThreadingHTTPServer handler; the double is a test fixture whose fidelity is to the registry protocols, so it uses the standard library rather than a service client.
 # llmlint: ignore-file[modern_domain_modeling] What the shapes below model is four registries' own JSON and form protocols, which this file stands in for; a typed model here would restate those protocols inside the double whose fidelity to them is the whole point.
 
 import base64
@@ -75,6 +77,10 @@ def refused(registry, **names):
     return None
 
 
+def partial(name):
+    return any(entry.get("partial") and entry.get("file") == name for entry in control().get("refuse", []))
+
+
 def hidden(name):
     return name in control().get("hide", [])
 
@@ -116,10 +122,11 @@ class Handler(BaseHTTPRequestHandler):
         return self.rfile.read(int(length)) if length.isdigit() else b""
 
     def send(self, status, payload=b"", content_type="application/json", headers=None):
-        if isinstance(payload, (dict, list)):
-            payload = json.dumps(payload).encode()
-        elif isinstance(payload, str):
-            payload = payload.encode()
+        match payload:
+            case dict() | list():
+                payload = json.dumps(payload).encode()
+            case str():
+                payload = payload.encode()
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(payload)))
@@ -133,7 +140,6 @@ class Handler(BaseHTTPRequestHandler):
     def base(self):
         return f"http://127.0.0.1:{ports['main']}"
 
-    # ---------------------------------------------------------------- dispatch
 
     def route(self):
         path = urllib.parse.urlsplit(self.path).path
@@ -156,7 +162,6 @@ class Handler(BaseHTTPRequestHandler):
 
     do_GET = do_PUT = do_POST = do_DELETE = do_HEAD = route
 
-    # ---------------------------------------------------------------- GitHub
 
     def github_api(self, path):
         if path == "/graphql" and self.command == "POST":
@@ -187,7 +192,7 @@ class Handler(BaseHTTPRequestHandler):
             release_id = abs(hash(tag)) % 100000
             with lock:
                 assets = [
-                    {"id": asset["id"], "name": relabel(name), "size": len(asset["bytes"]), "state": "uploaded"}
+                    {"id": asset["id"], "name": relabel(name), "size": len(asset["bytes"]), "state": asset.get("state", "uploaded")}
                     for (asset_tag, name), asset in sorted(github_assets.items())
                     if asset_tag == tag and not hidden(name)
                 ]
@@ -228,6 +233,13 @@ class Handler(BaseHTTPRequestHandler):
         tag = next((tag for tag in control().get("releases", []) if abs(hash(tag)) % 100000 == int(match.group(1))), None)
         status = refused("github", file=name)
         self.record(registry="github", action="upload", file=name, refused=bool(status))
+        if status and tag is not None and partial(name):
+            # An upload interrupted part of the way: GitHub keeps the asset, short and not
+            # `uploaded`, under the name a re-run has to take back first.
+            with lock:
+                asset_id = next(asset_ids)
+                github_assets[(tag, name)] = {"id": asset_id, "bytes": payload[: len(payload) // 2], "state": "starter"}
+                github_ids[asset_id] = (tag, name)
         if status or tag is None:
             self.send(status or 404, {"message": "upload refused"})
             return
@@ -254,18 +266,17 @@ class Handler(BaseHTTPRequestHandler):
             return
         self.send(200, served_bytes(stored, asset["bytes"]), "application/octet-stream")
 
-    # ---------------------------------------------------------------- PyPI
 
     def pypi(self, path):
         if path in ("/legacy/", "/legacy") and self.command == "POST":
             message = email.message_from_bytes(b"Content-Type: " + self.headers["Content-Type"].encode() + b"\r\n\r\n" + self.body(), policy=email.policy.HTTP)
             fields, content, filename = {}, None, None
             for part in message.iter_parts():
-                name = part.get_param("name", header="content-disposition")
-                if name == "content":
-                    content, filename = part.get_payload(decode=True), part.get_filename()
-                elif name:
-                    fields[name] = part.get_content().strip() if part.get_content_maintype() == "text" else part.get_payload(decode=True).decode()
+                match part.get_param("name", header="content-disposition"):
+                    case "content":
+                        content, filename = part.get_payload(decode=True), part.get_filename()
+                    case str() as name if name:
+                        fields[name] = part.get_content().strip() if part.get_content_maintype() == "text" else part.get_payload(decode=True).decode()
             if content is None or not filename:
                 self.send(400, "no file was uploaded", "text/plain")
                 return
@@ -313,7 +324,6 @@ class Handler(BaseHTTPRequestHandler):
             return
         self.send(404, "Not Found", "text/plain")
 
-    # ---------------------------------------------------------------- npm
 
     def npm(self, path):
         decoded = urllib.parse.unquote(path.lstrip("/"))
@@ -373,7 +383,6 @@ class Handler(BaseHTTPRequestHandler):
             return
         self.send(405, {"error": "method not allowed"})
 
-    # ---------------------------------------------------------------- crates.io
 
     def crates(self, path):
         if path == "/index/config.json":

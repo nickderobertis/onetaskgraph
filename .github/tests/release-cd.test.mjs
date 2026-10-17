@@ -253,8 +253,12 @@ test("the Linux job publishes exactly what it built, re-runs only what is missin
   const planned = plan("linux");
   const file = (kind) => planned.find((artifact) => artifact.kind === kind).file;
   const env = registries();
-  // A failed upload: the archive lands, its checksum is refused, and the step fails.
-  control({ releases: [tag], refuse: [{ registry: "github", file: file("checksum") }] });
+  // A failed upload: the archive lands, its checksum is interrupted part of the way — GitHub
+  // keeps a short asset under its name — and the step fails.
+  control({
+    releases: [tag],
+    refuse: [{ registry: "github", file: file("checksum"), partial: true }],
+  });
   expectStatus(
     recipe("linux", ["publish", "--to", "github", "--tag", tag, "--dist", dist], env),
     1,
@@ -268,7 +272,7 @@ test("the Linux job publishes exactly what it built, re-runs only what is missin
       [file("checksum"), true],
     ],
   );
-  // Re-run: only what is missing is sent.
+  // Re-run: only what is missing is sent, the interrupted asset taken back first.
   control({ releases: [tag] });
   let mark = requests().length;
   expectStatus(
@@ -279,9 +283,12 @@ test("the Linux job publishes exactly what it built, re-runs only what is missin
   assert.deepEqual(
     requests()
       .slice(mark)
-      .filter((r) => r.action === "upload")
-      .map((r) => r.file),
-    [file("checksum")],
+      .filter((r) => ["upload", "delete-asset"].includes(r.action))
+      .map((r) => [r.action, r.file]),
+    [
+      ["delete-asset", file("checksum")],
+      ["upload", file("checksum")],
+    ],
   );
   for (const registry of ["pypi", "npm"]) {
     mark = requests().length;
@@ -556,4 +563,119 @@ test("the publish job waits for every platform, then publishes the crates, SDKs 
       0,
       `the publish job's ${registry} check`,
     );
+});
+
+test("a publication refuses a build it cannot vouch for before it sends anything", { skip }, () => {
+  const wheel = plan("linux").find((artifact) => artifact.kind === "wheel");
+  const manifest = JSON.parse(readFileSync(join(dist, "release-linux.json"), "utf8"));
+  const copy = (name, change) => {
+    const directory = join(scratch, `refused-${name.replaceAll(" ", "-")}`);
+    execFileSync("cp", ["-R", dist, directory]);
+    change(directory);
+    return directory;
+  };
+  const rewrite = (directory, value) =>
+    writeFileSync(join(directory, "release-linux.json"), JSON.stringify(value));
+  const cases = [
+    ["no build", (d) => rmSync(join(d, "release-linux.json")), /no usable build of linux/],
+    [
+      "another tag",
+      (d) => rewrite(d, { ...manifest, tag: "v0.0.1" }),
+      /records a linux build of v0\.0\.1/,
+    ],
+    [
+      "a file the build did not produce",
+      (d) => writeFileSync(join(d, "wheels/x86_64-unknown-linux-gnu", wheel.file), "tampered"),
+      /is not the file the build produced/,
+    ],
+    [
+      "a file with no recorded digest",
+      (d) =>
+        rewrite(d, {
+          ...manifest,
+          artifacts: manifest.artifacts.map(({ sha256: _, ...entry }) => entry),
+        }),
+      /is not the file the build produced/,
+    ],
+    [
+      "a list that is not the plan",
+      (d) => rewrite(d, { ...manifest, artifacts: manifest.artifacts.slice(1) }),
+      /does not list exactly the files linux releases/,
+    ],
+  ];
+  for (const [name, change, reason] of cases) {
+    writeFileSync(log, "");
+    const result = recipe(
+      "linux",
+      ["publish", "--to", "pypi", "--tag", tag, "--dist", copy(name, change)],
+      registries(),
+    );
+    assert.equal(result.status, 1, `${name}:\n${result.output}`);
+    assert.match(result.output, reason, name);
+    assert.match(result.output, /next: run `just release-linux build/, name);
+    assert.ok(!invocations().some((line) => line.startsWith("uv publish")), `${name} reached uv`);
+  }
+});
+
+test("registry verification waits out a registry that has not caught up, and fails at its deadline", {
+  skip,
+}, async () => {
+  const wheel = plan("linux").find((artifact) => artifact.kind === "wheel").file;
+  control({ releases: [tag], hide: [wheel] });
+  const deadline = recipe(
+    "linux",
+    ["verify", "--from", "pypi", "--tag", tag, "--wait", "1"],
+    registries(),
+  );
+  // Past its deadline the step fails, naming what the index lacks, rather than waiting on.
+  assert.equal(deadline.status, 1, deadline.output);
+  assert.match(deadline.output, /No matching distribution found for onetaskgraph-cli==/);
+  assert.match(deadline.output, /next: check what the index serves/);
+  const waiting = spawn(
+    "just",
+    ["release-linux", "verify", "--from", "pypi", "--tag", tag, "--wait", "120"],
+    { cwd: checkout, env: { ...process.env, ...registries() } },
+  );
+  let output = "";
+  for (const stream of [waiting.stdout, waiting.stderr])
+    stream.on("data", (chunk) => {
+      output += chunk;
+    });
+  const exited = new Promise((resolve) => waiting.on("exit", resolve));
+  while (!output.includes("asking again")) await new Promise((resolve) => setTimeout(resolve, 200));
+  control({ releases: [tag] });
+  assert.equal(await exited, 0, output);
+  assert.match(output, /installed v[\d.]+ for x86_64-unknown-linux-gnu from pypi and ran it/);
+});
+
+test("the npm publication refuses a package set or platform it does not publish", {
+  skip:
+    process.platform === "win32" && "a Linux-shaped scratch directory stands in for the carriers",
+}, () => {
+  for (const [env, reason] of [
+    [{ NPM_PUBLISH_SET: "everything" }, /NPM_PUBLISH_SET must be all, carriers or root/],
+    [
+      { NPM_PUBLISH_SET: "carriers", NPM_PLATFORMS: "../platforms/linux-x64" },
+      /not one of the platforms under npm\/platforms/,
+    ],
+    [
+      { NPM_PUBLISH_SET: "carriers", NPM_PLATFORMS: "linux-arm64" },
+      /not one of the platforms under npm\/platforms/,
+    ],
+  ]) {
+    const result = spawnSync("bash", ["scripts/publish-npm.sh"], {
+      cwd: checkout,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        NODE_AUTH_TOKEN: "fixture-token",
+        NPM_CARRIERS: scratch,
+        NPM_REGISTRY: "http://127.0.0.1:9/",
+        ...env,
+      },
+    });
+    assert.equal(result.status, 64, result.stderr);
+    assert.match(result.stderr, reason);
+    assert.match(result.stderr, /next: /);
+  }
 });

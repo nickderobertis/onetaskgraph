@@ -66,8 +66,9 @@ selected_platforms=""
 for package in npm/platforms/*; do selected_platforms="$selected_platforms ${package##*/}"; done
 if [ -n "${NPM_PLATFORMS:-}" ]; then
   for platform in $NPM_PLATFORMS; do
-    [ -f "npm/platforms/$platform/package.json" ] || {
-      echo "NPM_PLATFORMS names $platform, which has no npm/platforms/$platform/package.json" >&2
+    # A name from the inventory, never a path: `../` would reach a manifest outside it.
+    [[ " $selected_platforms " == *" $platform "* ]] || {
+      echo "NPM_PLATFORMS names $platform, which is not one of the platforms under npm/platforms" >&2
       echo "next: name only platforms this repository releases:$selected_platforms" >&2
       exit 64
     }

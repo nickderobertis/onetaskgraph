@@ -49,13 +49,10 @@ def verify_installed_cli(executable: Path, version: str) -> None:
     require('Usage:' in subprocess.check_output([str(executable), '--help'], text=True), 'installed CLI did not render help')
 
 
-def verify(product: ReleaseProduct, install: bool, dist: Path | None = None) -> None:
+def verify(product: ReleaseProduct, install: bool, staging: Path) -> None:
     binary = product.binary_name
     canonical = Path(f'target/{product.target}/release/{binary}').read_bytes()
-    # Without --dist the archive sits at the checkout's root, where scripts/check-release-packaging.sh
-    # and scripts/test-release-products.py stage it; scripts/release_cd.py stages under dist/assets.
-    staging = dist if dist is not None else Path('dist')
-    archive = (dist / 'assets' if dist is not None else Path('.')) / f'onetaskgraph-{product.tag}-{product.target}.{product.extension}'
+    archive = staging / 'assets' / f'onetaskgraph-{product.tag}-{product.target}.{product.extension}'
     if product.extension == 'zip':
         with zipfile.ZipFile(archive) as packed:
             entry = only(packed.infolist(), 'archive CLI entry')
@@ -147,7 +144,7 @@ def main() -> None:
     parser.add_argument('--tag', required=True)
     parser.add_argument('--ext', choices=['tar.gz', 'zip'], default='tar.gz')
     parser.add_argument('--install', action='store_true')
-    parser.add_argument('--dist', type=Path, help='the staging directory holding assets/, wheels/ and carriers/ (default: the archive at the root, the rest under dist/)')
+    parser.add_argument('--dist', type=Path, default=Path('dist'), help='the staging directory holding assets/, wheels/ and carriers/, as scripts/release_cd.py lays it out (default: dist)')
     args = parser.parse_args()
     try:
         product = ReleaseProduct(RustTarget(args.target), NpmPlatform(args.npm), ReleaseTag(args.tag), args.ext)
