@@ -27,7 +27,8 @@ open pull requests), `refuse` (uploads and calls answered with an error: entries
 short asset behind, as an interrupted one does), `hide` (names read as absent), `corrupt`
 (files served as garbage), and `relabel` (`{"from": v1, "to": v2}`: every read lists v1 as
 v2), `replace` (a file name served as the bytes of another file, its index hashes with it),
-`pulls_raw` (the pull-request list answered as this text), and `release_answer`, `upload_host` and `automerge_answer`, which replace what GitHub
+`pulls_raw` (the pull-request list answered as this text), `redirect_api` (every GitHub API
+call redirected to the other port, another origin), and `release_answer`, `upload_host` and `automerge_answer`, which replace what GitHub
 answers. Every request is one JSON line in `<state>/requests.jsonl`, with the file or package a
 publication carried, so a journey can assert exactly what was sent.
 """
@@ -120,8 +121,9 @@ class Handler(BaseHTTPRequestHandler):
         """Quiet: the journeys read requests.jsonl."""
 
     def record(self, **fields):
+        origin = {"port": self.server.server_address[1], "authorized": bool(self.headers.get("Authorization"))}
         with lock, open(state / "requests.jsonl", "a", encoding="utf-8") as log:
-            log.write(json.dumps({"method": self.command, "path": self.path, **fields}) + "\n")
+            log.write(json.dumps({"method": self.command, "path": self.path, **origin, **fields}) + "\n")
 
     def body(self):
         length = self.headers.get("Content-Length", "0")
@@ -149,6 +151,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def route(self):
         path = urllib.parse.urlsplit(self.path).path
+        if control().get("redirect_api") and path.startswith("/github/api") and self.server.server_address[1] == ports["main"]:
+            # A GitHub API call redirected to another origin, the double's other port.
+            self.record(registry="github", action="redirected")
+            self.body()
+            self.send(307, b"", headers={"Location": f"http://127.0.0.1:{ports['checksums']}{self.path}"})
+            return
         for prefix, handler in (
             ("/github/api", self.github_api),
             ("/github/uploads", self.github_upload),

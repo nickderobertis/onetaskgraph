@@ -198,6 +198,20 @@ test("the auto-merge step fails visibly when GitHub refuses it or cannot be aske
       /GITHUB_API_URL is 'ftp:\/\/example\.invalid', not an http\(s\) URL/,
     ],
     [
+      "a redirect to another origin",
+      [],
+      { redirect_api: true },
+      {},
+      /refusing to follow a redirect to http:\/\/127\.0\.0\.1:\d+ with credentials/,
+    ],
+    [
+      "an API URL that cannot be parsed",
+      [],
+      {},
+      { GITHUB_API_URL: "http://[broken" },
+      /GITHUB_API_URL is 'http:\/\/\[broken', not an http\(s\) URL/,
+    ],
+    [
       "a pull list that is not a list",
       [],
       { pulls_raw: { message: "moved" } },
@@ -217,6 +231,8 @@ test("the auto-merge step fails visibly when GitHub refuses it or cannot be aske
     assert.equal(result.status, 1, `${name}: ${result.output}`);
     assert.match(result.output, reason, name);
     assert.match(result.output, /enable-release-automerge: next: /, name);
+    // The token never reaches an origin other than the API it was given for.
+    assert.ok(!result.sent.some((r) => r.port === ports.checksums && r.authorized), name);
   }
 });
 

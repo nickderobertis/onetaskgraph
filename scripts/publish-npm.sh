@@ -74,6 +74,11 @@ if [ -n "${NPM_PLATFORMS:-}" ]; then
     }
   done
   selected_platforms=" $NPM_PLATFORMS"
+  [ -n "${NPM_PLATFORMS//[[:space:]]/}" ] || {
+    echo "NPM_PLATFORMS names no platform, so no carrier would be published" >&2
+    echo "next: name one or more of:$(for package in npm/platforms/*; do printf ' %s' "${package##*/}"; done), or unset it for every one" >&2
+    exit 64
+  }
 fi
 readonly selected_platforms
 registry=${NPM_REGISTRY:-https://registry.npmjs.org/}

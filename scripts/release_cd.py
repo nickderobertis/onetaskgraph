@@ -132,8 +132,13 @@ def endpoint(variable: str, default: str) -> str:
     names is handed a token, so a value with credentials, a query or no host is refused.
     """
     value = os.environ.get(variable) or default
-    parts = urllib.parse.urlsplit(value)
-    if parts.scheme not in ("http", "https") or not parts.hostname or "@" in parts.netloc or parts.query or parts.fragment:
+    try:
+        parts = urllib.parse.urlsplit(value)
+        usable = parts.scheme in ("http", "https") and bool(parts.hostname) and "@" not in parts.netloc and not parts.query and not parts.fragment
+        parts.port  # noqa: B018 - raises ValueError on a port that is not 0-65535
+    except ValueError:
+        usable = False
+    if not usable:
         fail(f"{variable} is {value!r}, not an http(s) URL naming a host", f"unset {variable} to use {default}")
     return value
 
@@ -480,6 +485,24 @@ def publish(platform: PlanPlatform, tag: ReleaseTag, dist: Path, registry: Regis
             publish_crates(tag)
 
 
+class SameOriginRedirects(urllib.request.HTTPRedirectHandler):
+    """Follow a redirect only within the origin a token was sent to.
+
+    urllib copies every header but the body's onto the redirected request, Authorization
+    included, so a redirect to another host would hand it the token. Such a redirect is
+    refused instead, as the HTTP error it arrived as.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        before, after = urllib.parse.urlsplit(req.full_url), urllib.parse.urlsplit(newurl)
+        if (before.scheme, before.netloc) != (after.scheme, after.netloc):
+            raise urllib.error.HTTPError(req.full_url, code, f"refusing to follow a redirect to {after.scheme}://{after.netloc} with credentials", headers, fp)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+AUTHENTICATED = urllib.request.build_opener(SameOriginRedirects)
+
+
 @dataclass(frozen=True)
 class ReleaseAsset:
     id: AssetId
@@ -528,10 +551,10 @@ class GitHub:
             headers["Content-Type"] = content_type
         request = urllib.request.Request(url, data=body, method=method, headers=headers)
         try:
-            with urllib.request.urlopen(request, timeout=300) as response:
+            with AUTHENTICATED.open(request, timeout=300) as response:
                 payload = response.read()
         except urllib.error.HTTPError as error:
-            fail(f"GitHub answered {method} {url} with HTTP {error.code}: {error.read()[:500].decode('utf-8', 'replace')}", "rerun the step once GitHub answers; assets already uploaded are skipped")
+            fail(f"GitHub answered {method} {url} with HTTP {error.code}: {error.msg}: {(error.read() if error.fp else b'')[:500].decode('utf-8', 'replace')}", "rerun the step once GitHub answers; assets already uploaded are skipped")
         except (urllib.error.URLError, TimeoutError, OSError) as error:
             fail(f"could not reach GitHub for {method} {url}: {error}", "rerun the step once GitHub is reachable; assets already uploaded are skipped")
         try:

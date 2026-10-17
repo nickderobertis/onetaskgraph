@@ -757,6 +757,12 @@ test("the GitHub upload refuses a missing token, a malformed release and an untr
       /it is the release of 'v0\.0\.1'/,
     ],
     [
+      "a redirect to another origin",
+      {},
+      { releases: [tag], redirect_api: true },
+      /refusing to follow a redirect to http:\/\/127\.0\.0\.1:\d+ with credentials/,
+    ],
+    [
       "an untrusted upload host",
       {},
       { releases: [tag], upload_host: "http://198.51.100.7:9/uploads" },
@@ -780,6 +786,13 @@ test("the GitHub upload refuses a missing token, a malformed release and an untr
         .slice(mark)
         .filter((r) => r.action === "upload"),
       [],
+      name,
+    );
+    // The token never reaches an origin other than the API it was given for.
+    assert.ok(
+      !requests()
+        .slice(mark)
+        .some((r) => r.port === ports.checksums && r.authorized),
       name,
     );
   }
@@ -879,6 +892,7 @@ test("the npm publication refuses a package set or platform it does not publish"
       { NPM_PUBLISH_SET: "carriers", NPM_PLATFORMS: "../platforms/linux-x64" },
       /not one of the platforms under npm\/platforms/,
     ],
+    [{ NPM_PUBLISH_SET: "carriers", NPM_PLATFORMS: "   " }, /NPM_PLATFORMS names no platform/],
     [
       { NPM_PUBLISH_SET: "carriers", NPM_PLATFORMS: "linux-arm64" },
       /not one of the platforms under npm\/platforms/,

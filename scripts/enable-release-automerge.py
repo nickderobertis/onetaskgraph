@@ -44,6 +44,24 @@ class Refused(Exception):
     pass
 
 
+class SameOriginRedirects(urllib.request.HTTPRedirectHandler):
+    """Follow a redirect only within the origin a token was sent to.
+
+    urllib copies every header but the body's onto the redirected request, Authorization
+    included, so a redirect to another host would hand it the token. Such a redirect is
+    refused instead, as the HTTP error it arrived as.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        before, after = urllib.parse.urlsplit(req.full_url), urllib.parse.urlsplit(newurl)
+        if (before.scheme, before.netloc) != (after.scheme, after.netloc):
+            raise urllib.error.HTTPError(req.full_url, code, f"refusing to follow a redirect to {after.scheme}://{after.netloc} with credentials", headers, fp)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+AUTHENTICATED = urllib.request.build_opener(SameOriginRedirects)
+
+
 @dataclass(frozen=True)
 class PullRequest:
     number: PullNumber
@@ -73,10 +91,10 @@ def call(url: str, token: Token, body: dict | None = None) -> object:
         headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json", "Content-Type": "application/json", "User-Agent": "onetaskgraph-release-plz"},
     )
     try:
-        with urllib.request.urlopen(request, timeout=60) as response:
+        with AUTHENTICATED.open(request, timeout=60) as response:
             return json.loads(response.read() or b"null")
     except urllib.error.HTTPError as error:
-        raise Refused(f"GitHub answered HTTP {error.code} to {url}: {error.read()[:300].decode('utf-8', 'replace')}") from error
+        raise Refused(f"GitHub answered HTTP {error.code} to {url}: {error.msg}: {(error.read() if error.fp else b'')[:300].decode('utf-8', 'replace')}") from error
     except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as error:
         raise Refused(f"could not ask GitHub at {url}: {error}") from error
 
@@ -87,8 +105,13 @@ def main() -> int:
     api = os.environ.get("GITHUB_API_URL", "https://api.github.com").rstrip("/")
     graphql = os.environ.get("GITHUB_GRAPHQL_URL", f"{api}/graphql")
     for name, url in (("GITHUB_API_URL", api), ("GITHUB_GRAPHQL_URL", graphql)):
-        parts = urllib.parse.urlsplit(url)
-        if parts.scheme not in ("http", "https") or not parts.hostname or "@" in parts.netloc or parts.query or parts.fragment:
+        try:
+            parts = urllib.parse.urlsplit(url)
+            usable = parts.scheme in ("http", "https") and bool(parts.hostname) and "@" not in parts.netloc and not parts.query and not parts.fragment
+            parts.port  # noqa: B018 - raises ValueError on a port that is not 0-65535
+        except ValueError:
+            usable = False
+        if not usable:
             print(f"enable-release-automerge: {name} is {url!r}, not an http(s) URL naming a host", file=sys.stderr)
             print(f"enable-release-automerge: next: unset {name}; GitHub Actions sets it to GitHub's own", file=sys.stderr)
             return 1
