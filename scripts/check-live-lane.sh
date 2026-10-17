@@ -71,6 +71,10 @@ CLEARERS = {
         "twice in a scratch copy, on every gate, from outside the affected-selection "
         "fan-out it deliberately sits beyond"
     ),
+    Path("scripts/warm-rust-cache.sh"): (
+        "It builds every crate's tests, the live journeys among them, on every push to main for "
+        "the Rust cache warmer, and one edit dropping `--no-run` would run them there"
+    ),
 }
 DEMAND = "ONETASKGRAPH_LIVE_REQUIRED"
 # The one run where the demand is legitimately not made, spelled as GitHub Actions spells

@@ -99,6 +99,17 @@ case "$(uname -s):$(uname -m)" in
   MINGW*:x86_64|MSYS*:x86_64|CYGWIN*:x86_64) target=x86_64-pc-windows-msvc; ext=zip; binary=onetaskgraph.exe;;
 esac
 name="onetaskgraph-${tag}-${target}.${ext}"
+# The release build this journey packages, in one place: the Rust cache warmer
+# (.github/workflows/rust-cache-warm.yml) runs it alone, `--release-build-only`, so the units
+# it leaves for the pull-request jobs to restore are exactly the ones built here.
+build_release_wheel() {
+  (cd "$root" && uv tool run --from 'maturin>=1.9,<2' maturin build --release --locked --target "$target" --out "$1")
+}
+case "${1:-}" in
+  "") ;;
+  --release-build-only) build_release_wheel "$tmp/python-wheel"; exit 0 ;;
+  *) echo "distribution test takes no argument but --release-build-only, not '$1'; next: run scripts/test-distribution.sh with none" >&2; exit 2 ;;
+esac
 # The binary is what onetaskgraph:build produced and this target depends on; nothing here
 # builds it, because a cargo invocation of that package from anywhere else replaces the
 # file while the Rust integration tests are spawning it (scripts/check-workspace-config.sh).
@@ -358,7 +369,7 @@ if node -e 'Object.defineProperty(process,"platform",{value:"darwin"}); Object.d
 [[ $intel_launcher_status -eq 64 ]] || { cat "$tmp/error" >&2; echo "Intel macOS launcher exited $intel_launcher_status, expected 64; next: inspect the darwin-x64 refusal in npm/cli/bin/onetaskgraph.js" >&2; exit 1; }
 grep -q 'Intel macOS is no longer supported' "$tmp/error" || { cat "$tmp/error" >&2; echo "Intel macOS launcher refusal did not say Intel macOS is no longer supported; next: inspect launcher diagnostics" >&2; exit 1; }
 mkdir -p "$tmp/python-wheel"
-(cd "$root" && uv tool run --from 'maturin>=1.9,<2' maturin build --release --locked --target "$target" --out "$tmp/python-wheel")
+build_release_wheel "$tmp/python-wheel"
 "$python_bin" "$root/scripts/test-release-products.py" --wheel-dir "$tmp/python-wheel" --target "$target"
 cli_wheel=$(find "$tmp/python-wheel" -maxdepth 1 -type f -name 'onetaskgraph_cli-*.whl' -print -quit)
 [[ -n $cli_wheel ]] || { echo "Python CLI build produced no wheel; next: inspect the maturin package configuration" >&2; exit 1; }

@@ -189,6 +189,39 @@ export function problems(all) {
           }
         }
       }
+  found.push(...warmerProblems(all, jobs));
+  return found;
+}
+
+// The Rust cache a new pull request can restore is the one rust-cache-warm.yml saves on main,
+// under the shared key test-linux and test-windows each restore: a push to main alone, and
+// never a Mac.
+const WARMED = { "test-linux": "ubuntu-latest", "test-windows": "windows-latest" };
+const toolchainOf = (job) =>
+  steps(job).find((step) => uses(step).startsWith("actions-rust-lang/setup-rust-toolchain"));
+function warmerProblems(all, jobs) {
+  const found = [];
+  const warmer = all["rust-cache-warm.yml"];
+  const warm = warmer?.jobs?.warm;
+  if (!warm) return ["rust-cache-warm.yml has no job `warm`"];
+  if (
+    JSON.stringify(Object.keys(warmer.on ?? {})) !== '["push"]' ||
+    JSON.stringify(warmer.on.push?.branches) !== '["main"]'
+  )
+    found.push("the Rust cache warmer runs on something other than a push to main");
+  const legs = warm.strategy?.matrix?.include ?? [];
+  if (toolchainOf(warm)?.with?.["cache-shared-key"] !== `\${{ matrix.job }}`)
+    found.push("the Rust cache warmer does not save under its leg's job key");
+  for (const [id, os] of Object.entries(WARMED)) {
+    if (toolchainOf(jobs[id])?.with?.["cache-shared-key"] !== id)
+      found.push(`${id} does not restore the Rust cache under the shared key ${id}`);
+    if (!legs.some((leg) => leg.job === id && leg.os === os))
+      found.push(`the Rust cache warmer has no ${os} leg saving ${id}'s cache`);
+  }
+  if (legs.some((leg) => !Object.values(WARMED).includes(leg.os)))
+    found.push("the Rust cache warmer runs on a runner no warmed job uses, a Mac among them");
+  if (!steps(warm).some((step) => String(step.run ?? "").includes("scripts/warm-rust-cache.sh")))
+    found.push("the Rust cache warmer does not build through scripts/warm-rust-cache.sh");
   return found;
 }
 
@@ -358,4 +391,27 @@ test("the spec's cached target is keyed on every file outside .github the run gr
       outside.includes(input.slice("{workspaceRoot}/".length)),
       `ci-jobs is keyed on ${input}, which the run graph does not read`,
     );
+});
+
+test("the Rust cache warmer parting from the key a test job restores is refused", () => {
+  refuses((all) => {
+    all["ci.yml"].jobs["test-windows"].steps.find((step) =>
+      uses(step).startsWith("actions-rust-lang/setup-rust-toolchain"),
+    ).with = {};
+  }, /test-windows does not restore the Rust cache under the shared key/);
+  refuses((all) => {
+    all["rust-cache-warm.yml"].jobs.warm.strategy.matrix.include[0].job = "test-linux-renamed";
+  }, /no ubuntu-latest leg saving test-linux's cache/);
+  refuses((all) => {
+    all["rust-cache-warm.yml"].jobs.warm.strategy.matrix.include.push({
+      os: "macos-latest",
+      job: "test-macos",
+    });
+  }, /a Mac among them/);
+  refuses((all) => {
+    all["rust-cache-warm.yml"].on = { push: { branches: ["main"] }, pull_request: null };
+  }, /other than a push to main/);
+  refuses((all) => {
+    delete all["rust-cache-warm.yml"];
+  }, /has no job `warm`/);
 });
