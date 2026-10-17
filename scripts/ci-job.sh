@@ -5,7 +5,7 @@
 #
 # Each of ci.yml's four jobs runs exactly one `just ci-<job>` recipe, and each recipe is this
 # script, so a contributor runs what CI runs. A job is a list of phases, each one Nx
-# invocation. A phase that fails prints the whole of Nx's output (in Actions every phase's
+# invocation, all run at once. A phase that fails prints the whole of Nx's output (in Actions every phase's
 # streams, one collapsed group per task), and the job ends with one line naming every task
 # it ran. `--select-only` runs nothing and ends with one line naming
 # every task the job selects, which is how a host that is not Windows or macOS proves those
@@ -85,10 +85,13 @@ esac
 scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT
 
-# The tasks an Nx invocation selects, one `project:target` per line, from its task graph.
+# The tasks an Nx invocation selects, one `project:target` per line, from its task graph:
+# selected_tasks <phase> <nx arguments...>.
 selected_tasks() {
-  if ! node_modules/.bin/nx "$@" --graph=stdout >"$scratch/graph.json" 2>"$scratch/graph.err"; then
-    cat "$scratch/graph.err" >&2
+  local phase="$1"
+  shift
+  if ! node_modules/.bin/nx "$@" --graph=stdout >"$scratch/graph.$phase.json" 2>"$scratch/graph.$phase.err"; then
+    cat "$scratch/graph.$phase.err" >&2
     echo "ci-job: Nx could not plan '$*'; fix what it reports above, then re-run." >&2
     return 1
   fi
@@ -107,16 +110,16 @@ except (OSError, ValueError, KeyError, TypeError) as error:
 sys.stdout.reconfigure(newline="\n")
 for name in sorted(tasks):
     print(name)
-' "$scratch/graph.json"; then
+ ' "$scratch/graph.$phase.json"; then
     echo "ci-job: Nx answered '$*' with something other than a task graph; check the Nx version node_modules holds, then re-run." >&2
     return 1
   fi
 }
 
-status=0
-while IFS=' ' read -r kind targets excluded; do
-  [ -n "$kind" ] || continue
-  exclusions=""
+# One phase, in the background beside the job's others: its selection, then its run, each
+# recorded under its index for the summary below. run_phase <index> <kind> <targets> <excluded>.
+run_phase() {
+  local phase="$1" kind="$2" targets="$3" excluded="$4" exclusions="" plan phase_status
   [ "$excluded" = "-" ] || exclusions="$excluded"
   if [ "$kind" = "affected" ] && [ -n "$live_exclusions" ] && [[ ",$targets," == *",test,"* ]]; then
     exclusions="${exclusions:+$exclusions,}$live_exclusions"
@@ -128,41 +131,63 @@ while IFS=' ' read -r kind targets excluded; do
   else
     arguments=(run "$targets")
   fi
-  if ! plan="$(selected_tasks "${arguments[@]}" | tr -d '\r')"; then
-    exit 1
+  echo "nx ${arguments[*]}" >"$scratch/command.$phase"
+  if ! plan="$(selected_tasks "$phase" "${arguments[@]}" | tr -d '\r')"; then
+    return 1
   fi
   if "$select_only"; then
-    [ -z "$plan" ] || printf '%s\n' "$plan" >>"$scratch/selected"
-    continue
+    [ -z "$plan" ] || printf '%s\n' "$plan" >"$scratch/selected.$phase"
+    return 0
   fi
-  [ -n "$plan" ] || continue
-  # In Actions the output streams, each task in the collapsed group Nx opens for it there, so a
-  # job the timeout cuts short still shows how far it got; elsewhere it is held until the
-  # phase ends.
+  [ -n "$plan" ] || return 0
+  # In Actions the output streams, tagged with its phase because the phases run at once, so
+  # a job the timeout cuts short still shows how far each got (Nx's per-task groups are
+  # flattened: groups cannot interleave). Elsewhere it is held until the phase ends.
   if [ "${GITHUB_ACTIONS:-}" = true ]; then
     FORCE_COLOR=0 NO_COLOR=1 node_modules/.bin/nx "${arguments[@]}" --outputStyle=static 2>&1 \
-      | tee "$scratch/run.log"
+      | tee "$scratch/run.$phase.log" \
+      | awk -v tag="[$targets] " '/^::endgroup::/ { next } { sub(/^::group::/, ""); print tag $0; fflush() }'
     phase_status="${PIPESTATUS[0]}"
   else
     FORCE_COLOR=0 NO_COLOR=1 node_modules/.bin/nx "${arguments[@]}" --outputStyle=static \
-      >"$scratch/run.log" 2>&1 && phase_status=0 || phase_status=$?
+      >"$scratch/run.$phase.log" 2>&1 && phase_status=0 || phase_status=$?
   fi
-  if [ "$phase_status" -eq 0 ]; then
-    sed -n 's/^.*> nx run \([^ ]*\).*$/\1/p' "$scratch/run.log" | tr -d '\r' >>"$scratch/ran"
-  else
-    [ "${GITHUB_ACTIONS:-}" = true ] || cat "$scratch/run.log" >&2
-    echo "ci-job: $JOB: nx ${arguments[*]} failed — the failing tasks are named above." >&2
-    echo "ci-job: next: run 'just ci-$JOB' again after fixing them; every phase still runs, so one report names every failure." >&2
-    status=1
-  fi
+  sed -n 's/^.*> nx run \([^ ]*\).*$/\1/p' "$scratch/run.$phase.log" | tr -d '\r' >"$scratch/ran.$phase"
+  return "$phase_status"
+}
+
+# Every phase of a job at once: they select disjoint work, and the instrumented build is
+# cargo-llvm-cov's own target directory, so it and the plain build do not wait on one lock.
+pids=()
+phase=0
+while IFS=' ' read -r kind targets excluded; do
+  [ -n "$kind" ] || continue
+  phase=$((phase + 1))
+  run_phase "$phase" "$kind" "$targets" "$excluded" &
+  pids+=("$!")
 done <<EOF
 $phases
 EOF
+status=0
+for index in "${!pids[@]}"; do
+  phase=$((index + 1))
+  wait "${pids[$index]}" && continue
+  status=1
+  [ "${GITHUB_ACTIONS:-}" = true ] || cat "$scratch/run.$phase.log" >&2 2>/dev/null || true
+  echo "ci-job: $JOB: $(cat "$scratch/command.$phase" 2>/dev/null || echo "phase $phase") failed — the failing tasks are named above." >&2
+done
+if [ "$status" -ne 0 ]; then
+  echo "ci-job: next: run 'just ci-$JOB' again after fixing them; every phase runs to the end, so one report names every failure." >&2
+fi
 # One line for the whole job: which tasks it proved, which is what a reader of a green job
 # needs to know of it.
+summary() {
+  cat "$scratch"/"$1".* 2>/dev/null | sort -u | tr '\n' ' ' | sed 's/ $//'
+}
 if "$select_only"; then
-  echo "ci-job: $JOB: selects $( { sort -u "$scratch/selected" 2>/dev/null || true; } | tr '\n' ' ' | sed 's/ $//')"
-elif [ -s "$scratch/ran" ]; then
-  echo "ci-job: $JOB: ran $(sort -u "$scratch/ran" | tr '\n' ' ' | sed 's/ $//')"
+  [ "$status" -ne 0 ] || echo "ci-job: $JOB: selects $(summary selected)"
+else
+  ran="$(summary ran)"
+  [ -z "$ran" ] || echo "ci-job: $JOB: ran $ran"
 fi
 exit "$status"
