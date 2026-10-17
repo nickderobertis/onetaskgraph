@@ -13,6 +13,17 @@
 set -euo pipefail
 
 readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Absolute, because every case runs it from inside the scratch clone, where a relative PATH
+# entry such as a virtualenv's resolves to nothing (AGENTS.md).
+PYTHON="$(command -v python3)" || {
+  echo "check-ci-recipes: python3 is not on PATH; next: install Python 3, then re-run." >&2
+  exit 1
+}
+case "$PYTHON" in
+  /*) ;;
+  *) PYTHON="$(cd "$(dirname "$PYTHON")" && pwd)/$(basename "$PYTHON")" ;;
+esac
+readonly PYTHON
 
 # The scratch tree needs a real copy of node_modules, which the Windows runner cannot make
 # (scripts/check-affected-selection.sh says why); the Linux and macOS lanes run this.
@@ -46,7 +57,7 @@ unset GH_PROJECTS_TOKEN LINEAR_API_KEY ONETASKGRAPH_LIVE_REQUIRED
 # Every run-commands target becomes a recorder that succeeds, uncached; `FAILING` names the
 # one task (`project:target`) that fails instead.
 record_targets() {
-  (cd "$REPO" && FAILING="${1:-}" python3 - <<'PY'
+  (cd "$REPO" && FAILING="${1:-}" "$PYTHON" - <<'PY'
 import json, os, subprocess
 failing = os.environ["FAILING"]
 for path in subprocess.check_output(["git", "ls-files", "*project.json"], text=True).split():
@@ -139,14 +150,14 @@ tag_refused() {
 }
 (cd "$REPO" && bash scripts/check-test-in-coverage.sh) \
   || fail "check-test-in-coverage does not pass on the committed tree, so the cases below prove nothing"
-python3 - "$REPO/crates/$CHANGED/project.json" <<'PY'
+"$PYTHON" - "$REPO/crates/$CHANGED/project.json" <<'PY'
 import json, sys
 project = json.load(open(sys.argv[1]))
 project["targets"]["test"]["options"]["command"] += " && bash scripts/never-run-elsewhere.sh"
 json.dump(project, open(sys.argv[1], "w"))
 PY
 tag_refused "a tagged crate's test gaining a command nothing else runs" "never-run-elsewhere.sh"
-python3 - "$REPO/crates/$DEPENDENT/project.json" <<'PY'
+"$PYTHON" - "$REPO/crates/$DEPENDENT/project.json" <<'PY'
 import json, sys
 project = json.load(open(sys.argv[1]))
 commands = project["targets"]["test-uncovered"]["options"]["commands"]
@@ -154,14 +165,14 @@ project["targets"]["test-uncovered"]["options"]["commands"] = [c for c in comman
 json.dump(project, open(sys.argv[1], "w"))
 PY
 tag_refused "a crate with doctests losing its doctest run" "has doctests"
-python3 - "$REPO/crates/onetaskgraph-github-projects/project.json" <<'PY'
+"$PYTHON" - "$REPO/crates/onetaskgraph-github-projects/project.json" <<'PY'
 import json, sys
 project = json.load(open(sys.argv[1]))
 project["tags"].append("test-in-coverage:unix")
 json.dump(project, open(sys.argv[1], "w"))
 PY
 tag_refused "a crate with a live lane tagged" "has a live lane"
-python3 - "$REPO/sdks/python/project.json" <<'PY'
+"$PYTHON" - "$REPO/sdks/python/project.json" <<'PY'
 import json, sys
 project = json.load(open(sys.argv[1]))
 project["targets"]["coverage"]["options"]["command"] = "uv run --frozen pytest -q tests/smoke"

@@ -74,6 +74,11 @@ PYTHON="$(command -v python3)" || {
   echo "ci-job: next: install Python 3 (bootstrap provides it), then re-run." >&2
   exit 1
 }
+# Absolute, so a relative PATH entry such as a virtualenv's still names it (AGENTS.md).
+case "$PYTHON" in
+  /*) ;;
+  *) PYTHON="$(cd "$(dirname "$PYTHON")" && pwd)/$(basename "$PYTHON")" ;;
+esac
 
 scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT

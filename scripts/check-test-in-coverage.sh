@@ -32,8 +32,14 @@ RUN = {"", "rust", "no_run", "should_panic", "compile_fail"}
 problems = []
 
 
+INCLUDED_DOC = re.compile(r"#!?\[doc\s*=\s*include_str!")
+
+
 def has_doctest(text):
-    """Whether a doc comment opens a code block rustdoc runs: one tagged rust, or untagged."""
+    """Whether a doc comment opens a code block rustdoc runs — one tagged rust, or untagged —
+    or documentation is included from a file, whose blocks this cannot see and so counts."""
+    if INCLUDED_DOC.search(text):
+        return True
     opened = False
     for line in text.splitlines():
         fence = FENCE.match(line)
