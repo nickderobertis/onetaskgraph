@@ -8,11 +8,21 @@
 # Prints the merge base, and writes it to $GITHUB_OUTPUT as `base=` when Actions sets that.
 set -euo pipefail
 
-if [ "$#" -ne 2 ] || [ -z "$1" ] || [ -z "$2" ]; then
+usage() {
   echo "usage: scripts/ci-pr-base.sh <base-branch> <base-sha>" >&2
-  echo "ci-pr-base: next: pass github.base_ref and github.event.pull_request.base.sha" >&2
+  echo "ci-pr-base: $1; next: pass github.base_ref and github.event.pull_request.base.sha" >&2
   exit 2
-fi
+}
+[ "$#" -eq 2 ] || usage "expected two arguments, got $#"
+# Both go to git, so neither may read as an option or a range: a plain branch name, and a
+# full commit id.
+case "$1" in
+  "" | -* | *..* | *[!A-Za-z0-9._/-]*) usage "'$1' is not a plain branch name" ;;
+esac
+case "$2" in
+  *[!0-9a-f]*) usage "'$2' is not a commit id" ;;
+esac
+[ "${#2}" -eq 40 ] || [ "${#2}" -eq 64 ] || usage "'$2' is not a full commit id"
 if ! fetched="$(git fetch --quiet --no-tags origin "$1" 2>&1)"; then
   printf '%s\n' "$fetched" >&2
   echo "ci-pr-base: could not fetch $1 from origin; check out with fetch-depth: 0 and re-run." >&2

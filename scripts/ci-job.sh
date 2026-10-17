@@ -6,8 +6,9 @@
 # Each of ci.yml's four jobs runs exactly one `just ci-<job>` recipe, and each recipe is this
 # script, so a contributor runs what CI runs. A job is a list of phases, each one Nx
 # invocation. A phase that fails prints the whole of Nx's output, and the job ends with one
-# line naming every task it ran. `--select-only` prints every task each phase selects and
-# runs nothing, which is how a host that is not Windows or macOS proves those jobs' selection.
+# line naming every task it ran. `--select-only` runs nothing and ends with one line naming
+# every task the job selects, which is how a host that is not Windows or macOS proves those
+# jobs' selection.
 #
 # `--exclude=` is what scripts/live-lane-selection.sh answers through lane_runner.py: a live
 # plugin a version-only diff cannot reach. It narrows the phase that runs `test` and
@@ -129,14 +130,11 @@ while IFS=' ' read -r kind targets excluded; do
   if ! plan="$(selected_tasks "${arguments[@]}" | tr -d '\r')"; then
     exit 1
   fi
-  if [ -z "$plan" ]; then
-    ! "$select_only" || echo "ci-job: $JOB: nx ${arguments[*]} selects nothing"
-    continue
-  fi
   if "$select_only"; then
-    printf '%s\n' "$plan" | sed "s/^/ci-job: $JOB: selects /"
+    [ -z "$plan" ] || printf '%s\n' "$plan" >>"$scratch/selected"
     continue
   fi
+  [ -n "$plan" ] || continue
   if FORCE_COLOR=0 NO_COLOR=1 node_modules/.bin/nx "${arguments[@]}" --outputStyle=static >"$scratch/run.log" 2>&1; then
     sed -n 's/^.*> nx run \([^ ]*\).*$/\1/p' "$scratch/run.log" | tr -d '\r' >>"$scratch/ran"
   else
@@ -150,7 +148,9 @@ $phases
 EOF
 # One line for the whole job: which tasks it proved, which is what a reader of a green job
 # needs to know of it.
-if ! "$select_only" && [ -s "$scratch/ran" ]; then
+if "$select_only"; then
+  echo "ci-job: $JOB: selects $( { sort -u "$scratch/selected" 2>/dev/null || true; } | tr '\n' ' ' | sed 's/ $//')"
+elif [ -s "$scratch/ran" ]; then
   echo "ci-job: $JOB: ran $(sort -u "$scratch/ran" | tr '\n' ' ' | sed 's/ $//')"
 fi
 exit "$status"

@@ -302,13 +302,22 @@ pins() {
 sed -i.bak 's/^readonly RELEASE_PLZ_VERSION=.*/readonly RELEASE_PLZ_VERSION=9.8.7/' "$REPO/scripts/scoped-release-plz.sh"
 sed -i.bak 's/^prune_superseded_version := .*/prune_superseded_version := "6.5.4"/' "$REPO/justfile"
 pins
-[ "$PINS_STATUS" -eq 0 ] && [ "$PINS" = "release-plz=9.8.7
-prune-superseded=6.5.4" ] && [ "$(cat "$scratch/pins-output")" = "$PINS" ] \
-  || fail "the tool pins did not follow the moved pins to stdout and \$GITHUB_OUTPUT: exit $PINS_STATUS, $PINS"
-sed -i.bak '/^readonly RELEASE_PLZ_VERSION=/d' "$REPO/scripts/scoped-release-plz.sh"
-pins
-[ "$PINS_STATUS" -ne 0 ] && grep -qF "no pinned version for release-plz" <<<"$PINS" \
-  || fail "a missing release-plz pin did not fail the tool pins: exit $PINS_STATUS, $PINS"
+[ "$PINS_STATUS" -eq 0 ] && [ "$(cat "$scratch/pins-output")" = "release-plz=9.8.7
+prune-superseded=6.5.4" ] \
+  || fail "the tool pins did not follow the moved pins to \$GITHUB_OUTPUT: exit $PINS_STATUS, $PINS"
+for broken in "" "9.8" "9.8.7 9.8.8" "--all"; do
+  : >"$scratch/pins-output"
+  if [ -z "$broken" ]; then
+    sed -i.bak '/^readonly RELEASE_PLZ_VERSION=/d' "$REPO/scripts/scoped-release-plz.sh"
+  else
+    sed -i.bak "s/^readonly RELEASE_PLZ_VERSION=.*/readonly RELEASE_PLZ_VERSION=$broken/" "$REPO/scripts/scoped-release-plz.sh"
+  fi
+  pins
+  [ "$PINS_STATUS" -ne 0 ] && grep -qF "no single pinned version for release-plz" <<<"$PINS" \
+    && [ ! -s "$scratch/pins-output" ] \
+    || fail "a release-plz pin of '$broken' did not fail the tool pins before writing a key: exit $PINS_STATUS, $PINS"
+  git -C "$REPO" checkout --quiet -- scripts/scoped-release-plz.sh
+done
 rm -f "$REPO/scripts/scoped-release-plz.sh.bak" "$REPO/justfile.bak"
 git -C "$REPO" checkout --quiet -- .
 
@@ -337,6 +346,13 @@ derived="$(cd "$work" && bash "$REPO/scripts/ci-pr-base.sh" main "$(printf '%040
   && derived_status=0 || derived_status=$?
 [ "$derived_status" -ne 0 ] && grep -qF "share no merge base" <<<"$derived" \
   || fail "a base sha the checkout does not hold did not fail the comparison base: exit $derived_status, $derived"
+for arguments in "--all $tip" "main..feature $tip" "main ${tip:0:12}" "main HEAD" "main"; do
+  # shellcheck disable=SC2086 # each case is two words, or deliberately one
+  derived="$(cd "$work" && bash "$REPO/scripts/ci-pr-base.sh" $arguments 2>&1)" \
+    && derived_status=0 || derived_status=$?
+  [ "$derived_status" -eq 2 ] && grep -qF "usage: scripts/ci-pr-base.sh" <<<"$derived" \
+    || fail "the comparison base accepted '$arguments' rather than refusing it before git: exit $derived_status, $derived"
+done
 
 if [ "$failures" -ne 0 ]; then
   echo "check-ci-recipes: $failures expectation(s) about the pull-request job recipes failed — see above." >&2

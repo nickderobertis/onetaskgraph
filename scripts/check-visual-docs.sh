@@ -402,6 +402,30 @@ for script in ("scripts/screenshots-freeze.sh ensure", "scripts/screenshots.sh")
             f".github/workflows/ci.yml: the lint job's capture does not run `{script}`, which "
             "visual-docs.yml's capture-command and the recipes run."
         )
+# Its screencomp is visual-docs.yml's, its lane is read from screencomp.toml as the reusable
+# workflow reads it, and the trees it captures into are the ones it reports from.
+pinned = used.group(1) if used else None
+for ref in re.findall(r"nickderobertis/screencomp(?:/[\w-]+)?@(\S+)", ci) + re.findall(
+    r"(?m)^\s*version:\s*(v\S+)\s*$", ci
+):
+    if ref != pinned:
+        problems.append(
+            f".github/workflows/ci.yml: uses screencomp {ref} while visual-docs.yml pins "
+            f"{pinned}. One screencomp classifies every capture; bring ci.yml's to that pin."
+        )
+if lane and re.search(rf"\b{re.escape(lane)}\b", ci):
+    problems.append(
+        f".github/workflows/ci.yml: names the lane {lane!r}. The one place it is declared is "
+        "[capture].arches in screencomp.toml; read it with `screencomp arches`, as the lint "
+        "job's lane step does."
+    )
+for tree, given in (("shots/current", "current"), ("shots/verify", "verify-second")):
+    if f"SHOTS_OUT={tree}/" not in ci or not re.search(rf"(?m)^\s*{given}:\s*{tree}\s*$", ci):
+        problems.append(
+            f".github/workflows/ci.yml: the lint job does not capture into {tree}/<lane> and "
+            f"report from it as `{given}: {tree}`, so its report reads a tree its capture "
+            "never wrote."
+        )
 
 for tree in ("/shots/current/", "/shots/verify/", f"/{gallery.strip('/')}/"):
     if tree not in ignored:

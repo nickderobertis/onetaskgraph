@@ -437,6 +437,19 @@ jobs:
           # The merge base, llmlint's diff and notignored's scan all need the full history.
           fetch-depth: 0
           persist-credentials: false
+      # The CLI first, because the lane the capture writes is the one screencomp reads out of
+      # screencomp.toml's [capture].arches, the one place it is declared.
+      - uses: nickderobertis/screencomp@v0.4.8
+        with:
+          version: v0.4.8
+      - name: Read the visual docs lane
+        id: lane
+        shell: bash
+        run: |
+          lanes="$(screencomp arches --format json)"
+          lane="$(jq -er 'if length == 1 then .[0] else error("exactly one lane") end' <<<"$lanes")"
+          echo "lane=$lane" >> "$GITHUB_OUTPUT"
+          jq -cn --arg lane "$lane" '"matrix=" + ([{project: "", arch: $lane, current: "shots/current", verify: "shots/verify", manifest: "", gallery_title: "Visual docs"}] | tojson)' -r >> "$GITHUB_OUTPUT"
       # The capture builds the release binary inside the Rust image matching
       # rust-toolchain.toml, exactly as visual-docs.yml's capture-command does, and runs
       # beside the checks below rather than after them. Its `target` is a directory of its
@@ -448,15 +461,17 @@ jobs:
       # `just` on it; the recipes `just screenshots-tools` and `just screenshots` wrap them.
       - name: Start the visual docs capture
         shell: bash
+        env:
+          LANE: ${{ steps.lane.outputs.lane }}
         run: |
           mkdir -p "$RUNNER_TEMP/capture/target" target
           nohup bash -c '
             docker run --rm -v "$PWD:/w" -v "$RUNNER_TEMP/capture/target:/w/target" -w /w \
-              rust:1.97.1-bookworm bash -c "
+              -e LANE rust:1.97.1-bookworm bash -c "
                 status=0
                 { bash scripts/screenshots-freeze.sh ensure &&
-                  SHOTS_OUT=shots/current/x86_64 bash scripts/screenshots.sh &&
-                  SHOTS_OUT=shots/verify/x86_64 bash scripts/screenshots.sh; } || status=\$?
+                  SHOTS_OUT=shots/current/\$LANE bash scripts/screenshots.sh &&
+                  SHOTS_OUT=shots/verify/\$LANE bash scripts/screenshots.sh; } || status=\$?
                 chown -R $(id -u):$(id -g) shots docs/screenshots
                 exit \$status"
             echo $? > "$RUNNER_TEMP/capture/exit"' > "$RUNNER_TEMP/capture/log" 2>&1 < /dev/null &
@@ -562,21 +577,22 @@ jobs:
           fi
       # llmlint: ignore-block[no_second_broader_sweep_over_an_already_gated_commit] Transitional by the task's order: the jobs behind today's required contexts stay in place and passing until branch protection names the four new jobs, and onetaskgraph-ci-budgets removes them; until then both run on one commit, visual-docs.yml's capture and report included.
       # screencomp's own composite actions, as steps of this job rather than its reusable
-      # workflow, which would add five jobs: the same CLI pin and inputs visual-docs.yml
-      # passes, one lane (`x86_64`, screencomp.toml), the strict drift gate.
-      - uses: nickderobertis/screencomp@v0.4.8
-        with:
-          version: v0.4.8
+      # workflow, which would add five jobs: the CLI pin, the inputs and the strict drift gate
+      # visual-docs.yml passes, for the one lane screencomp.toml declares.
+      # A capture-to-gallery integration proof is GitHub's alone: these actions push to
+      # gh-pages, wait on its Pages build and comment through the pull request's token, none of
+      # which a host reaches. The pull request's own run of this job is that proof;
+      # ci-jobs.spec.mjs and check-visual-docs.sh hold the composition to its sources.
       - uses: nickderobertis/screencomp/visual-docs@v0.4.8
         with:
-          arch: x86_64
+          arch: ${{ steps.lane.outputs.lane }}
           current: shots/current
           verify-second: shots/verify
           gallery-title: Visual docs
           fail-on-drift: true
           publish: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
           comment-mode: aggregated
-          pages-artifact: screencomp-gallery-x86_64
+          pages-artifact: screencomp-gallery-${{ steps.lane.outputs.lane }}
           github-token: ${{ github.token }}
       - uses: nickderobertis/screencomp/visual-docs-pages@v0.4.8
         if: github.event.pull_request.head.repo.full_name == github.repository
@@ -584,7 +600,7 @@ jobs:
           github-token: ${{ github.token }}
       - uses: nickderobertis/screencomp/visual-docs-aggregate@v0.4.8
         with:
-          matrix: '[{"project":"","arch":"x86_64","current":"shots/current","verify":"shots/verify","manifest":"","gallery_title":"Visual docs"}]'
+          matrix: ${{ steps.lane.outputs.matrix }}
           publish: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
           github-token: ${{ github.token }}
       # llmlint: ignore-end[no_second_broader_sweep_over_an_already_gated_commit]

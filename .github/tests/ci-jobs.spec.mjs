@@ -124,7 +124,6 @@ export function problems(all) {
     const recipe = steps(job).filter((step) => step.run === `just ci-${id}`);
     if (recipe.length !== 1) found.push(`${id} does not run its checks through \`just ci-${id}\``);
   }
-  // The visual docs capture runs as steps of `lint`, through screencomp's composite actions.
   for (const [file, workflow] of Object.entries(all))
     for (const [id, job] of Object.entries(workflow?.jobs ?? {}))
       if (file === "ci.yml" && typeof job?.uses === "string" && job.uses.includes("screencomp"))
@@ -148,7 +147,6 @@ export function problems(all) {
     ["pages", "read"],
   ])
     if (granted[scope] !== level) found.push(`lint does not grant itself ${scope}: ${level}`);
-  // The release shortcut: the three test jobs consult it before their tests; lint never does.
   for (const id of TESTS) {
     const decided = steps(jobs[id]).findIndex(
       (step) =>
@@ -168,7 +166,6 @@ export function problems(all) {
   const reported = contexts(all);
   for (const context of REQUIRED_CONTEXTS)
     if (!reported.includes(context)) found.push(`no job reports the required context ${context}`);
-  // Every cache is keyed on every input that produced it.
   for (const [file, workflow] of Object.entries(all))
     for (const [id, job] of Object.entries(workflow?.jobs ?? {}))
       for (const step of steps(job)) {

@@ -5,10 +5,10 @@ import { fileURLToPath } from "node:url";
 // Whether a pull request's platform test jobs may succeed without running their tests.
 //
 // They may only when the tree under test is a tree `main` already passed plus nothing but
-// release-plz's version and changelog edits — which is the release pull request, whose
-// second full checks phase is what kept the release cycle over 90 minutes. The decision is
-// the tree comparison alone: a branch name, a title or an author says nothing about what the
-// tree holds, so none of them is read.
+// release-plz's version and changelog edits — the release pull request, whose checks would
+// otherwise prove again what main's already proved. The decision is the tree comparison
+// alone: a branch name, a title or an author says nothing about what the tree holds, so none
+// of them is read.
 //
 // "A tree main passed" is a tree of a commit on `main`'s first-parent history: branch
 // protection admits a commit there only once its required checks concluded success.
