@@ -4,8 +4,8 @@ on:
     branches: [main]
 permissions: {}
 jobs:
-  # One job. Its first step is the guard that was a job of its own: without both tokens a
-  # fork or an unconfigured clone does nothing, and every later step reads its answer.
+  # The first step is the guard: without both tokens a fork or an unconfigured clone does
+  # nothing, and every later step reads its answer.
   # .github/tests/release-plz.test.mjs drives these steps over a scratch repository.
   release-plz:
     runs-on: ubuntu-latest

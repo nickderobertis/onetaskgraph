@@ -496,6 +496,48 @@ test("the publish job waits for every platform, then publishes the crates, SDKs 
     );
     assert.match(result.output, /release-cd: next: re-run/);
   }
+  // Readable but wrong: a wheel naming another version, and npm packages naming another
+  // version or carrying no binary, each served under the macOS name.
+  const wrong = join(scratch, "wrong");
+  mkdirSync(wrong, { recursive: true });
+  execFileSync("python3", [
+    "-c",
+    `import io, json, sys, tarfile, zipfile
+from pathlib import Path
+out, version = Path(sys.argv[1]), sys.argv[2]
+with zipfile.ZipFile(out / 'wheel.whl', 'w') as packed:
+    packed.writestr('onetaskgraph_cli-0.0.1.dist-info/METADATA', 'Metadata-Version: 2.1\\nName: onetaskgraph-cli\\nVersion: 0.0.1\\n')
+for name, manifest, binary in [('version.tgz', {'name': '@onetaskgraph/cli-darwin-arm64', 'version': '0.0.1'}, True), ('binary.tgz', {'name': '@onetaskgraph/cli-darwin-arm64', 'version': version}, False)]:
+    with tarfile.open(out / name, 'w:gz') as packed:
+        for path, data in [('package/package.json', json.dumps(manifest).encode())] + ([('package/bin/onetaskgraph', b'stand-in')] if binary else []):
+            info = tarfile.TarInfo(path); info.size = len(data)
+            packed.addfile(info, io.BytesIO(data))`,
+    wrong,
+    version,
+  ]);
+  const carrierFile = `cli-darwin-arm64-${version}.tgz`;
+  for (const [registry, replace, reason] of [
+    [
+      "pypi",
+      { [macos.wheel]: join(wrong, "wheel.whl") },
+      /as served is onetaskgraph-cli 0\.0\.1|has an invalid wheel|inconsistent version/,
+    ],
+    ["npm", { [carrierFile]: join(wrong, "version.tgz") }, /npm serves .*0\.0\.1/],
+    ["npm", { [carrierFile]: join(wrong, "binary.tgz") }, /as served carries no binary/],
+  ]) {
+    control({ releases: [tag], replace });
+    const result = recipe(
+      "publish",
+      ["available", "--from", registry, "--tag", tag, "--wait", "0"],
+      env,
+    );
+    assert.equal(
+      result.status,
+      1,
+      `${registry} ${JSON.stringify(replace)}:\n${result.output.slice(-2000)}`,
+    );
+    assert.match(result.output, reason);
+  }
   control({ releases: [tag] });
   // Nothing platform-independent reached a registry before this point.
   const independentNames = plan("independent").map((artifact) => artifact.package);
@@ -510,6 +552,48 @@ test("the publish job waits for every platform, then publishes the crates, SDKs 
     0,
     "the publish job's build",
   );
+  // What cargo and npm pack at publication is held to what the build checked: a crate's
+  // sources, the launcher or the SDK changed since are refused before anything is sent.
+  for (const [registry, path, packedFrom] of [
+    ["crates", "README.md", /the source onetaskgraph-plugin-api-[\d.]+\.crate is packed from/],
+    [
+      "npm",
+      "npm/cli/bin/onetaskgraph.js",
+      /the source onetaskgraph-cli-[\d.]+\.tgz is packed from/,
+    ],
+    [
+      "npm",
+      "sdks/typescript/dist/index.js",
+      /the source onetaskgraph-sdk-[\d.]+\.tgz is packed from/,
+    ],
+  ]) {
+    const changed = join(checkout, path);
+    const original = readFileSync(changed);
+    writeFileSync(
+      changed,
+      Buffer.concat([original, Buffer.from("\n// changed after the build\n")]),
+    );
+    try {
+      const before = requests().length;
+      const moved = recipe(
+        "publish",
+        ["publish", "--to", registry, "--tag", tag, "--dist", independent],
+        env,
+      );
+      assert.equal(moved.status, 1, `${path}: ${moved.output}`);
+      assert.match(moved.output, packedFrom, path);
+      assert.match(moved.output, /is not what the build produced/, path);
+      assert.deepEqual(
+        requests()
+          .slice(before)
+          .filter((r) => ["publish", "upload"].includes(r.action)),
+        [],
+        path,
+      );
+    } finally {
+      writeFileSync(changed, original);
+    }
+  }
   // A crate refused part of the way through: those before it land, and the re-run sends only
   // the rest.
   control({ releases: [tag], refuse: [{ registry: "crates", package: "onetaskgraph-core" }] });
@@ -544,67 +628,65 @@ test("the publish job waits for every platform, then publishes the crates, SDKs 
     sent().map((r) => r.package),
     order.slice(6),
   );
+  // The SDK's sdist refused after its wheel landed (uv sends wheels first); the re-run sends
+  // the sdist alone.
+  const [sdist, sdkWheel] = plan("independent")
+    .filter((a) => a.registry === "pypi")
+    .map((a) => a.file);
+  control({ releases: [tag], refuse: [{ registry: "pypi", file: sdist, status: 403 }] });
+  mark = requests().length;
+  expectStatus(
+    recipe("publish", ["publish", "--to", "pypi", "--tag", tag, "--dist", independent], env),
+    1,
+    "a refused SDK sdist",
+  );
+  const uploads = () =>
+    requests()
+      .slice(mark)
+      .filter((r) => r.action === "upload")
+      .map((r) => [r.file, r.refused]);
+  assert.deepEqual(uploads(), [
+    [sdkWheel, false],
+    [sdist, true],
+  ]);
+  control({ releases: [tag] });
   mark = requests().length;
   expectStatus(
     recipe("publish", ["publish", "--to", "pypi", "--tag", tag, "--dist", independent], env),
     0,
-    "the Python SDK",
+    "the Python SDK re-run",
   );
-  assert.deepEqual(
-    requests()
-      .slice(mark)
-      .filter((r) => r.action === "upload")
-      .map((r) => r.file)
-      .sort(),
-    plan("independent")
-      .filter((a) => a.registry === "pypi")
-      .map((a) => a.file)
-      .sort(),
-  );
+  assert.deepEqual(uploads(), [[sdist, false]]);
   for (const artifact of plan("independent").filter((a) => a.registry === "pypi"))
     assert.ok(existsSync(join(independent, "python-sdk", artifact.file)), artifact.file);
-  // What npm packs at publication is held to what the build made: an SDK rebuilt or edited
-  // since is refused before anything is sent, and the build's own output is then published.
-  const built = join(checkout, "sdks/typescript/dist/index.js");
-  const original = readFileSync(built);
-  writeFileSync(built, Buffer.concat([original, Buffer.from("\n// changed after the build\n")]));
-  try {
-    mark = requests().length;
-    const moved = recipe(
-      "publish",
-      ["publish", "--to", "npm", "--tag", tag, "--dist", independent],
-      env,
-    );
-    assert.equal(moved.status, 1, moved.output);
-    assert.match(
-      moved.output,
-      /the source onetaskgraph-sdk-[\d.]+\.tgz is packed from is not what the build produced/,
-    );
-    assert.deepEqual(
-      requests()
-        .slice(mark)
-        .filter((r) => r.action === "publish"),
-      [],
-    );
-  } finally {
-    writeFileSync(built, original);
-  }
+  // The TypeScript SDK refused after the launcher landed; the re-run sends the SDK alone.
+  control({
+    releases: [tag],
+    refuse: [{ registry: "npm", package: "@onetaskgraph/sdk", status: 403 }],
+  });
+  mark = requests().length;
+  expectStatus(
+    recipe("publish", ["publish", "--to", "npm", "--tag", tag, "--dist", independent], env),
+    1,
+    "a refused TypeScript SDK",
+  );
+  const published = () =>
+    requests()
+      .slice(mark)
+      .filter((r) => r.action === "publish")
+      .map((r) => [r.package, r.versions, r.refused]);
+  assert.deepEqual(published(), [
+    ["@onetaskgraph/cli", [version], false],
+    ["@onetaskgraph/sdk", [version], true],
+  ]);
+  control({ releases: [tag] });
   mark = requests().length;
   expectStatus(
     recipe("publish", ["publish", "--to", "npm", "--tag", tag, "--dist", independent], env),
     0,
-    "the launcher and TypeScript SDK",
+    "the launcher and TypeScript SDK re-run",
   );
-  assert.deepEqual(
-    requests()
-      .slice(mark)
-      .filter((r) => r.action === "publish")
-      .map((r) => [r.package, r.versions]),
-    [
-      ["@onetaskgraph/cli", [version]],
-      ["@onetaskgraph/sdk", [version]],
-    ],
-  );
+  assert.deepEqual(published(), [["@onetaskgraph/sdk", [version], false]]);
   for (const registry of ["crates", "pypi", "npm"])
     expectStatus(
       recipe("publish", ["verify", "--from", registry, "--tag", tag, "--wait", "0"], env),
@@ -651,6 +733,28 @@ test("the GitHub upload refuses a missing token, a malformed release and an untr
       {},
       { releases: [tag], release_answer: { assets: "none" } },
       /is not a release/,
+    ],
+    [
+      "a malformed asset",
+      {},
+      {
+        releases: [tag],
+        release_answer: {
+          tag_name: tag,
+          upload_url: "http://127.0.0.1:9/u",
+          assets: [{ name: 5 }],
+        },
+      },
+      /not a release asset/,
+    ],
+    [
+      "another tag's release",
+      {},
+      {
+        releases: [tag],
+        release_answer: { tag_name: "v0.0.1", upload_url: "http://127.0.0.1:9/u", assets: [] },
+      },
+      /it is the release of 'v0\.0\.1'/,
     ],
     [
       "an untrusted upload host",

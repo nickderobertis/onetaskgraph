@@ -91,7 +91,7 @@ const pull = (number, ref, owner = repository) => ({
   node_id: `PR_${number}`,
   head: { ref, repo: { full_name: owner } },
 });
-function automerge(pulls, refuse = [], answers = {}) {
+function automerge(pulls, refuse = [], answers = {}, env = {}) {
   const state = join(scratch, "github");
   writeFileSync(join(state, "control.json"), JSON.stringify({ pulls, refuse, ...answers }));
   const before = existsSync(join(state, "requests.jsonl"))
@@ -102,6 +102,7 @@ function automerge(pulls, refuse = [], answers = {}) {
     GITHUB_REPOSITORY: repository,
     GITHUB_API_URL: `http://127.0.0.1:${ports.main}/github/api`,
     GITHUB_GRAPHQL_URL: `http://127.0.0.1:${ports.main}/github/api/graphql`,
+    ...env,
   });
   const sent = readFileSync(join(state, "requests.jsonl"), "utf8")
     .slice(before.length)
@@ -171,6 +172,52 @@ test("the auto-merge step fails visibly when GitHub refuses it or cannot be aske
   assert.equal(unset.status, 1);
   assert.match(unset.output, /without a squash auto-merge request on it/);
   assert.match(unset.output, /next: the release pull request will not merge itself/);
+  // Its own inputs, and every answer GitHub could give that is not a list of pull requests
+  // or a squash auto-merge request, end the step red with a next action.
+  const release = [pull(43, "release-plz-0.8.0")];
+  for (const [name, refused, answers, env, reason] of [
+    [
+      "no token",
+      [],
+      {},
+      { GH_TOKEN: "" },
+      /GH_TOKEN and an owner\/name GITHUB_REPOSITORY are required/,
+    ],
+    [
+      "a repository that is not owner/name",
+      [],
+      {},
+      { GITHUB_REPOSITORY: "onetaskgraph" },
+      /owner\/name GITHUB_REPOSITORY/,
+    ],
+    [
+      "an API that is not http(s)",
+      [],
+      {},
+      { GITHUB_API_URL: "ftp://example.invalid" },
+      /GITHUB_API_URL is 'ftp:\/\/example\.invalid', not an http\(s\) URL/,
+    ],
+    [
+      "a pull list that is not a list",
+      [],
+      { pulls_raw: { message: "moved" } },
+      {},
+      /open pull requests is not a list/,
+    ],
+    ["a pull list that is not JSON", [], { pulls_raw: "<html>" }, {}, /could not ask GitHub/],
+    [
+      "a GraphQL answer that is not an envelope",
+      [],
+      { automerge_answer: { data: [] } },
+      {},
+      /enable-release-automerge: /,
+    ],
+  ]) {
+    const result = automerge(release, refused, answers, env);
+    assert.equal(result.status, 1, `${name}: ${result.output}`);
+    assert.match(result.output, reason, name);
+    assert.match(result.output, /enable-release-automerge: next: /, name);
+  }
 });
 
 // The pinned release-plz, which `just bootstrap` provisions where every script resolves it.

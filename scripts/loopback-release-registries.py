@@ -26,7 +26,8 @@ open pull requests), `refuse` (uploads and calls answered with an error: entries
 `registry` and a `file`, `package` or `action`, and a GitHub upload marked `partial` leaves a
 short asset behind, as an interrupted one does), `hide` (names read as absent), `corrupt`
 (files served as garbage), and `relabel` (`{"from": v1, "to": v2}`: every read lists v1 as
-v2), and `release_answer`, `upload_host` and `automerge_answer`, which replace what GitHub
+v2), `replace` (a file name served as the bytes of another file, its index hashes with it),
+`pulls_raw` (the pull-request list answered as this text), and `release_answer`, `upload_host` and `automerge_answer`, which replace what GitHub
 answers. Every request is one JSON line in `<state>/requests.jsonl`, with the file or package a
 publication carried, so a journey can assert exactly what was sent.
 """
@@ -92,6 +93,10 @@ def relabel(text):
 
 
 def served_bytes(name, payload):
+    """What a read of a file gets: garbage when `corrupt`, another file when `replace` names one."""
+    substitute = control().get("replace", {}).get(name)
+    if substitute:
+        return Path(substitute).read_bytes()
     return b"this is not the file that was published\n" if name in control().get("corrupt", []) else payload
 
 
@@ -185,7 +190,8 @@ class Handler(BaseHTTPRequestHandler):
             if refused("github", action="list-pulls"):
                 self.send(502, {"message": "Server Error"})
                 return
-            self.send(200, control().get("pulls", []))
+            raw = control().get("pulls_raw")
+            self.send(200, raw) if raw is not None else self.send(200, control().get("pulls", []))
             return
         match = re.fullmatch(r"/repos/([^/]+/[^/]+)/releases/tags/(.+)", path)
         if match and self.command == "GET":
@@ -308,7 +314,7 @@ class Handler(BaseHTTPRequestHandler):
             project = normalise(match.group(1))
             self.record(registry="pypi", action="read-index", package=project)
             with lock:
-                files = sorted((name, entry["sha256"]) for name, entry in pypi_files.items() if entry["project"] == project and not hidden(name))
+                files = sorted((name, hashlib.sha256(served_bytes(name, entry["bytes"])).hexdigest()) for name, entry in pypi_files.items() if entry["project"] == project and not hidden(name))
             if "application/vnd.pypi.simple.v1+json" in self.headers.get("Accept", ""):
                 listing = {"meta": {"api-version": "1.0"}, "name": project, "files": [{"filename": relabel(name), "url": f"{self.base()}/pypi/files/{relabel(name)}", "hashes": {"sha256": digest}} for name, digest in files]}
                 self.send(200, listing, "application/vnd.pypi.simple.v1+json")
@@ -384,7 +390,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         versions = {}
         for version, record in held.items():
-            payload = record["bytes"]
+            payload = served_bytes(record["file"], record["bytes"])
             served = relabel(version)
             manifest = {**record["manifest"], "version": served}
             manifest["dist"] = {

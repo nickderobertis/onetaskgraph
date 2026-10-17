@@ -44,6 +44,7 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 import math
+import re
 from typing import Iterable, Literal, NewType, NoReturn
 
 from product_versions import read_reconciled_versions
@@ -107,6 +108,7 @@ DEFAULT_GITHUB_API = "https://api.github.com"
 DEFAULT_PYPI_UPLOAD = "https://upload.pypi.org/legacy/"
 DEFAULT_PYPI_SIMPLE = "https://pypi.org/simple/"
 DEFAULT_NPM_REGISTRY = "https://registry.npmjs.org/"
+RELEASE_DOWNLOADS = "https://github.com/nickderobertis/onetaskgraph/releases/download"
 USER_AGENT = "onetaskgraph-release (https://github.com/nickderobertis/onetaskgraph)"
 
 
@@ -121,6 +123,22 @@ class ReleaseStepFailed(Exception):
 
 def fail(problem: str, next_action: str) -> NoReturn:
     raise ReleaseStepFailed(problem, next_action)
+
+
+def endpoint(variable: str, default: str) -> str:
+    """A registry address from the environment, held to an http(s) URL naming a host and nothing else.
+
+    Each override exists so the journeys can stand a double in for a registry; whatever it
+    names is handed a token, so a value with credentials, a query or no host is refused.
+    """
+    value = os.environ.get(variable) or default
+    parts = urllib.parse.urlsplit(value)
+    if parts.scheme not in ("http", "https") or not parts.hostname or "@" in parts.netloc or parts.query or parts.fragment:
+        fail(f"{variable} is {value!r}, not an http(s) URL naming a host", f"unset {variable} to use {default}")
+    return value
+
+
+REPOSITORY_NAME = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 
 
 def say(message: str) -> None:
@@ -211,11 +229,13 @@ def source_digest(artifact: Artifact) -> str:
     """
     match artifact.registry, artifact.package:
         case "crates", crate:
-            roots = [ROOT / "crates" / str(crate), ROOT / "Cargo.toml", ROOT / "Cargo.lock"]
+            # README.md is the one file outside a crate's directory a crate packs (`readme`).
+            roots = [ROOT / "crates" / str(crate), ROOT / "Cargo.toml", ROOT / "Cargo.lock", ROOT / "README.md"]
         case "npm", "@onetaskgraph/cli":
             roots = [ROOT / "npm" / "cli"]
         case "npm", _:
-            roots = [ROOT / "sdks" / "typescript" / "package.json", ROOT / "sdks" / "typescript" / "dist"]
+            sdk = ROOT / "sdks" / "typescript"
+            roots = [sdk / "package.json", sdk / "README.md", sdk / "dist"]
         case _:
             raise ValueError(f"{artifact.file} is staged by the build, not packed at publication")
     digest = hashlib.sha256()
@@ -274,7 +294,10 @@ def maturin_requirement() -> str:
     """The maturin the release builds with: pyproject.toml's own build requirement."""
     import tomllib
 
-    requirements = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["build-system"]["requires"]
+    system = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8")).get("build-system")
+    requirements = system.get("requires") if isinstance(system, dict) else None
+    if not isinstance(requirements, list) or not all(isinstance(requirement, str) for requirement in requirements):
+        fail("pyproject.toml's [build-system] has no list of requirements", "restore `requires = [\"maturin>=…\"]` under [build-system]")
     selected = [requirement for requirement in requirements if requirement.startswith("maturin")]
     if len(selected) != 1:
         fail("pyproject.toml's build-system names no single maturin requirement", "restore `requires = [\"maturin>=…\"]` under [build-system]")
@@ -404,9 +427,15 @@ def build_independent(tag: ReleaseTag, dist: Path) -> None:
     shutil.rmtree(sdk, ignore_errors=True)
     run([tool("uv"), "build", "sdks/python", "--out-dir", str(sdk)], "uv could not build the Python SDK", "fix the build error above and rerun")
     # The TypeScript SDK publishes what it built — its manifest names dist/ — so it is built
-    # here, in the job that publishes it, rather than in a job whose output nothing reads.
-    run([tool("bun"), "install", "--frozen-lockfile"], "bun could not install the TypeScript SDK's build dependencies", "fix what bun reported above and rerun")
-    run([tool("bun"), "run", "--cwd", "sdks/typescript", "build"], "the TypeScript SDK did not build", "fix the build error above and rerun")
+    # here, in the job that publishes it, through its own Nx target. One Nx command is all a
+    # release runs, so no daemon is started for it: one left by another checkout on the same
+    # host has stalled this step indefinitely.
+    run(
+        [bash_executable(host_platform.system()), "scripts/nx.sh", "run", "sdk-typescript:build"],
+        "the TypeScript SDK did not build",
+        "fix the build error above and rerun",
+        env={**os.environ, "NX_DAEMON": "false"},
+    )
 
 
 
@@ -481,14 +510,11 @@ class GitHub:
     def from_environment(cls) -> "GitHub":
         token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN") or ""
         repository = os.environ.get("GITHUB_REPOSITORY", "")
-        api = os.environ.get("GITHUB_API_URL", DEFAULT_GITHUB_API).rstrip("/")
         if not token:
             fail("no GitHub token: GH_TOKEN and GITHUB_TOKEN are both empty", "set GH_TOKEN from secrets.GITHUB_TOKEN, as the release workflow does")
-        if repository.count("/") != 1:
+        if not REPOSITORY_NAME.fullmatch(repository):
             fail(f"GITHUB_REPOSITORY is {repository!r}, not owner/name", "run this in GitHub Actions, or set GITHUB_REPOSITORY")
-        if urllib.parse.urlsplit(api).scheme not in ("http", "https"):
-            fail(f"GITHUB_API_URL is {api!r}, not an http(s) URL", "unset it to use https://api.github.com")
-        return cls(api, RepositoryName(repository), Token(token))
+        return cls(endpoint("GITHUB_API_URL", DEFAULT_GITHUB_API).rstrip("/"), RepositoryName(repository), Token(token))
 
     def trusts(self, url: str) -> bool:
         """Whether a URL GitHub handed back may be sent this token: the API's own host, or its upload host."""
@@ -518,6 +544,8 @@ class GitHub:
         try:
             if not isinstance(found, dict) or not isinstance(found.get("upload_url"), str) or not isinstance(found.get("assets"), list):
                 raise ValueError("it has no upload_url and assets list")
+            if found.get("tag_name") != tag:
+                raise ValueError(f"it is the release of {found.get('tag_name')!r}")
             release = Release(found["upload_url"].split("{", 1)[0], tuple(ReleaseAsset.parse(asset) for asset in found["assets"]))
         except ValueError as error:
             fail(f"GitHub's answer for the {tag} release is not a release: {error}", "check that the release-plz job cut the GitHub Release for this tag")
@@ -545,13 +573,13 @@ def publish_github(tag: ReleaseTag, files: list[Path]) -> None:
 
 
 def pypi_simple_base() -> str:
-    return os.environ.get("ONETASKGRAPH_PYPI_SIMPLE_URL", DEFAULT_PYPI_SIMPLE).rstrip("/") + "/"
+    return endpoint("ONETASKGRAPH_PYPI_SIMPLE_URL", DEFAULT_PYPI_SIMPLE).rstrip("/") + "/"
 
 
 def publish_pypi(files: list[Path]) -> None:
     if not os.environ.get("UV_PUBLISH_TOKEN"):
         fail("PYPI_TOKEN is required: UV_PUBLISH_TOKEN is empty", "set UV_PUBLISH_TOKEN from the PYPI_TOKEN repository secret — gh-secrets.json declares it")
-    upload = os.environ.get("ONETASKGRAPH_PYPI_UPLOAD_URL", DEFAULT_PYPI_UPLOAD)
+    upload = endpoint("ONETASKGRAPH_PYPI_UPLOAD_URL", DEFAULT_PYPI_UPLOAD)
     # --check-url skips a file the index already holds with these bytes, so a re-run after a
     # failed upload sends only what is missing. It names the index root: uv appends the
     # project, so a project page here is a page nobody serves and nothing is ever skipped.
@@ -563,7 +591,7 @@ def publish_pypi(files: list[Path]) -> None:
 
 
 def npm_registry() -> str:
-    return os.environ.get("NPM_REGISTRY", DEFAULT_NPM_REGISTRY)
+    return endpoint("NPM_REGISTRY", DEFAULT_NPM_REGISTRY)
 
 
 def publish_npm(platform: PlanPlatform, artifacts: list[Artifact], dist: Path) -> None:
@@ -733,8 +761,8 @@ def resolve_every_platform(tag: ReleaseTag, registry: Registry) -> None:
             artifacts = {artifact.kind: artifact for artifact in plan(row.platform, tag) if artifact.target == row.target}
             match registry:
                 case "github":
-                    base = os.environ.get("ONETASKGRAPH_RELEASE_BASE_URL", "https://github.com/nickderobertis/onetaskgraph/releases/download").rstrip("/")
-                    checksums = os.environ.get("ONETASKGRAPH_CHECKSUM_BASE_URL", "https://github.com/nickderobertis/onetaskgraph/releases/download").rstrip("/")
+                    base = endpoint("ONETASKGRAPH_RELEASE_BASE_URL", RELEASE_DOWNLOADS).rstrip("/")
+                    checksums = endpoint("ONETASKGRAPH_CHECKSUM_BASE_URL", RELEASE_DOWNLOADS).rstrip("/")
                     archive = fetch(f"{base}/{tag}/{artifacts['archive'].file}", f"the {row.target} archive")
                     recorded = fetch(f"{checksums}/{tag}/{artifacts['checksum'].file}", f"the {row.target} checksum").decode("utf-8", "replace").split()
                     if not recorded or recorded[0] != hashlib.sha256(archive).hexdigest():

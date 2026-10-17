@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import urllib.parse
 import sys
 import urllib.error
 import urllib.request
@@ -84,7 +86,13 @@ def main() -> int:
     repository = RepositoryName(os.environ.get("GITHUB_REPOSITORY", ""))
     api = os.environ.get("GITHUB_API_URL", "https://api.github.com").rstrip("/")
     graphql = os.environ.get("GITHUB_GRAPHQL_URL", f"{api}/graphql")
-    if not token or repository.count("/") != 1:
+    for name, url in (("GITHUB_API_URL", api), ("GITHUB_GRAPHQL_URL", graphql)):
+        parts = urllib.parse.urlsplit(url)
+        if parts.scheme not in ("http", "https") or not parts.hostname or "@" in parts.netloc or parts.query or parts.fragment:
+            print(f"enable-release-automerge: {name} is {url!r}, not an http(s) URL naming a host", file=sys.stderr)
+            print(f"enable-release-automerge: next: unset {name}; GitHub Actions sets it to GitHub's own", file=sys.stderr)
+            return 1
+    if not token or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
         print("enable-release-automerge: GH_TOKEN and an owner/name GITHUB_REPOSITORY are required", file=sys.stderr)
         print("enable-release-automerge: next: set GH_TOKEN from RELEASE_PLZ_TOKEN, as .github/workflows/release-plz.yml does", file=sys.stderr)
         return 1
