@@ -441,14 +441,15 @@ jobs:
       # rust-toolchain.toml, exactly as visual-docs.yml's capture-command does, and runs
       # beside the checks below rather than after them. Its `target` is a directory of its
       # own, so the host's restored build cache and its builds never meet the container's;
-      # it runs as root there, and hands what it wrote in the tree back before exiting.
+      # it runs as root there, and hands what it wrote in the tree back before exiting. The
+      # host's `target` exists first, so the mount point Docker needs is not created as root.
       # llmlint: ignore-block[work_goes_through_command_surface] These are the two lines
       # visual-docs.yml's capture-command runs, inside the same plain Rust image with no
       # `just` on it; the recipes `just screenshots-tools` and `just screenshots` wrap them.
       - name: Start the visual docs capture
         shell: bash
         run: |
-          mkdir -p "$RUNNER_TEMP/capture/target"
+          mkdir -p "$RUNNER_TEMP/capture/target" target
           nohup bash -c '
             docker run --rm -v "$PWD:/w" -v "$RUNNER_TEMP/capture/target:/w/target" -w /w \
               rust:1.97.1-bookworm bash -c "
