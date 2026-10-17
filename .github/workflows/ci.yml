@@ -706,14 +706,10 @@ jobs:
       - name: Bootstrap
         if: steps.release.outputs.tests == 'run'
         env:
-          # cargo-binstall reads GitHub's releases; anonymously a shared runner's address is
-          # rate-limited and it falls back to building release-plz from source.
           GITHUB_TOKEN: ${{ github.token }}
           MATURIN_PEP517_ARGS: --profile dev
         run: just bootstrap --outputStyle=static
-      # Saved as soon as Bootstrap has installed them, rather than after the job: a cache saves
-      # only from a job that passed, and a tool built from source is the cost worth keeping
-      # even when a later step fails or the timeout ends the job.
+      # Saved straight after Bootstrap, as lint's are.
       - uses: actions/cache/save@v6
         if: steps.release.outputs.tests == 'run' && steps.release-plz-cache.outputs.cache-hit != 'true'
         with:
@@ -838,14 +834,10 @@ jobs:
       - name: Bootstrap
         if: steps.release.outputs.tests == 'run'
         env:
-          # cargo-binstall reads GitHub's releases; anonymously a shared runner's address is
-          # rate-limited and it falls back to building release-plz from source.
           GITHUB_TOKEN: ${{ github.token }}
           MATURIN_PEP517_ARGS: --profile dev
         run: just bootstrap --outputStyle=static
-      # Saved as soon as Bootstrap has installed them, rather than after the job: a cache saves
-      # only from a job that passed, and a tool built from source is the cost worth keeping
-      # even when a later step fails or the timeout ends the job.
+      # Saved straight after Bootstrap, as lint's are.
       - uses: actions/cache/save@v6
         if: steps.release.outputs.tests == 'run' && steps.release-plz-cache.outputs.cache-hit != 'true'
         with:
@@ -952,14 +944,10 @@ jobs:
       - name: Bootstrap
         if: steps.release.outputs.tests == 'run'
         env:
-          # cargo-binstall reads GitHub's releases; anonymously a shared runner's address is
-          # rate-limited and it falls back to building release-plz from source.
           GITHUB_TOKEN: ${{ github.token }}
           MATURIN_PEP517_ARGS: --profile dev
         run: just bootstrap --outputStyle=static
-      # Saved as soon as Bootstrap has installed them, rather than after the job: a cache saves
-      # only from a job that passed, and a tool built from source is the cost worth keeping
-      # even when a later step fails or the timeout ends the job.
+      # Saved straight after Bootstrap, as lint's are.
       - uses: actions/cache/save@v6
         if: steps.release.outputs.tests == 'run' && steps.release-plz-cache.outputs.cache-hit != 'true'
         with:
