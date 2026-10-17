@@ -515,6 +515,9 @@ test("the publish job waits for every platform, then publishes the crates, SDKs 
   // A platform there but unusable is refused like a missing one: an archive that is not its
   // checksum's, a wheel or an npm package that is not what was published.
   const macos = Object.fromEntries(plan("macos").map((artifact) => [artifact.kind, artifact.file]));
+  const windows = Object.fromEntries(
+    plan("windows").map((artifact) => [artifact.kind, artifact.file]),
+  );
   for (const [registry, corrupt] of [
     ["github", macos.archive],
     ["pypi", macos.wheel],
@@ -565,6 +568,36 @@ with tarfile.open(out / 'two-members.tar.gz', 'w:gz') as packed:
     for path in ('onetaskgraph', 'extra'):
         info = tarfile.TarInfo(path); info.size = 1
         packed.addfile(info, io.BytesIO(b'x'))
+def zipped(name, members, wheel=False):
+    with zipfile.ZipFile(out / name, 'w') as packed:
+        for member in members:
+            if isinstance(member, zipfile.ZipInfo):
+                packed.writestr(member, b'')
+            else:
+                packed.writestr(member[0], member[1])
+    (out / (name + '.sha256')).write_text(hashlib.sha256((out / name).read_bytes()).hexdigest() + '  archive\\n')
+folder = zipfile.ZipInfo('onetaskgraph.exe/'); folder.external_attr = 0o40755 << 16
+link = zipfile.ZipInfo('onetaskgraph.exe'); link.create_system = 3; link.external_attr = 0o120777 << 16
+zipped('extra.zip', [('onetaskgraph.exe', b'x'), ('extra', b'x')])
+zipped('folder.zip', [folder])
+zipped('link.zip', [link])
+(out / 'not-a-zip').write_bytes(b'not a zip archive')
+(out / 'not-a-zip.sha256').write_text(hashlib.sha256(b'not a zip archive').hexdigest() + '  archive\\n')
+info = f'onetaskgraph_cli-{version}.dist-info'
+good_metadata = f'Metadata-Version: 2.1\\nName: onetaskgraph-cli\\nVersion: {version}\\n'
+good_wheel = 'Wheel-Version: 1.0\\nRoot-Is-Purelib: false\\nTag: py3-none-macosx_11_0_arm64\\n'
+binary = (f'onetaskgraph_cli-{version}.data/scripts/onetaskgraph', b'stand-in')
+for name, members in [
+    ('wrong-tag.whl', [(f'{info}/METADATA', good_metadata), (f'{info}/WHEEL', good_wheel.replace('macosx_11_0_arm64', 'macosx_10_12_x86_64')), binary]),
+    ('two-metadata.whl', [(f'{info}/METADATA', good_metadata), (f'other.dist-info/METADATA', good_metadata), (f'{info}/WHEEL', good_wheel), binary]),
+    ('wrong-name.whl', [(f'{info}/METADATA', good_metadata.replace('Name: onetaskgraph-cli', 'Name: someone-else')), (f'{info}/WHEEL', good_wheel), binary]),
+    ('two-binaries.whl', [(f'{info}/METADATA', good_metadata), (f'{info}/WHEEL', good_wheel), binary, (f'other.data/scripts/onetaskgraph', b'stand-in')]),
+]:
+    with zipfile.ZipFile(out / name, 'w') as packed:
+        for path, data in members:
+            packed.writestr(path, data)
+    with zipfile.ZipFile(out / name, 'a') as packed:
+        packed.writestr(f'{info}/RECORD', '')
 (out / 'two-members.sha256').write_text(hashlib.sha256((out / 'two-members.tar.gz').read_bytes()).hexdigest() + '  archive\\n')
 (out / 'not-an-archive.sha256').write_text(hashlib.sha256(b'not a gzip archive').hexdigest() + '  archive\\n')`,
     wrong,
@@ -589,6 +622,25 @@ with tarfile.open(out / 'two-members.tar.gz', 'w:gz') as packed:
       },
       /archive on the release is not a readable archive/,
     ],
+    ...[
+      ["not-a-zip", /archive on the release is not a readable archive/],
+      ["extra.zip", /holds .*'extra'.*, not the one regular file onetaskgraph\.exe/],
+      ["folder.zip", /not the one regular file onetaskgraph\.exe/],
+      ["link.zip", /not the one regular file onetaskgraph\.exe/],
+    ].map(([file, reason]) => [
+      "github",
+      { [windows.archive]: join(wrong, file), [windows.checksum]: join(wrong, `${file}.sha256`) },
+      reason,
+    ]),
+    ...[
+      ["wrong-tag.whl", /as served is tagged \['py3-none-macosx_10_12_x86_64'\]|invalid wheel/],
+      ["two-metadata.whl", /has 2 METADATA and 1 WHEEL files|invalid wheel|multiple \.dist-info/],
+      [
+        "wrong-name.whl",
+        /as served is \['someone-else'\]|invalid wheel|inconsistent name|No matching distribution/,
+      ],
+      ["two-binaries.whl", /carries no onetaskgraph it could install|invalid wheel/],
+    ].map(([file, reason]) => ["pypi", { [macos.wheel]: join(wrong, file) }, reason]),
     [
       "github",
       {
