@@ -359,7 +359,9 @@ reset_fixture
 # 13b. A new script re-running a live crate's package that is no crate's `test` target
 #      command. The script a live crate's `test` target runs is that target and is left to
 #      itself; anything else is a step outside it, held to clearing the credentials.
-printf 'cargo test --quiet -p onetaskgraph-linear --all-features --locked\n' \
+# The fixture's one command, written in two parts so this script is not itself read as one.
+rerun="cargo test --quiet"
+printf '%s -p onetaskgraph-linear --all-features --locked\n' "$rerun" \
   >"$scratch/repo/scripts/rerun-linear.sh"
 run_guard
 expect_refused "a new script re-running a live crate's package from outside its test target" \
