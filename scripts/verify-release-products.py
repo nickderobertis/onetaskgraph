@@ -49,10 +49,13 @@ def verify_installed_cli(executable: Path, version: str) -> None:
     require('Usage:' in subprocess.check_output([str(executable), '--help'], text=True), 'installed CLI did not render help')
 
 
-def verify(product: ReleaseProduct, install: bool) -> None:
+def verify(product: ReleaseProduct, install: bool, dist: Path | None = None) -> None:
     binary = product.binary_name
     canonical = Path(f'target/{product.target}/release/{binary}').read_bytes()
-    archive = Path(f'onetaskgraph-{product.tag}-{product.target}.{product.extension}')
+    # Without --dist the archive sits at the checkout's root, where scripts/check-release-packaging.sh
+    # and scripts/test-release-products.py stage it; scripts/release_cd.py stages under dist/assets.
+    staging = dist if dist is not None else Path('dist')
+    archive = (dist / 'assets' if dist is not None else Path('.')) / f'onetaskgraph-{product.tag}-{product.target}.{product.extension}'
     if product.extension == 'zip':
         with zipfile.ZipFile(archive) as packed:
             entry = only(packed.infolist(), 'archive CLI entry')
@@ -63,7 +66,7 @@ def verify(product: ReleaseProduct, install: bool) -> None:
             entry = only(packed.getmembers(), 'archive CLI entry')
             require(entry.name == binary, 'archive CLI must be at the root')
             archived = tar_payload(packed, binary, 'archive CLI entry')
-    wheel_path = only(Path(f'dist/wheels/{product.target}').glob('*.whl'), 'wheel')
+    wheel_path = only((staging / 'wheels' / product.target).glob('*.whl'), 'wheel')
     with zipfile.ZipFile(wheel_path) as packed:
         entry = only([p for p in packed.namelist() if '.data/scripts/' in p and Path(p).name == binary], 'wheel CLI entry')
         wheeled = packed.read(entry)
@@ -84,7 +87,7 @@ def verify(product: ReleaseProduct, install: bool) -> None:
         filename = WheelFilename.parse(wheel_path)
         declared_tags = {line.removeprefix('Tag: ') for line in packed.read(wheel_metadata).decode().splitlines() if line.startswith('Tag: ')}
         require(filename.tags() == declared_tags, 'wheel filename tags mismatch')
-    carrier = only(Path(f'dist/carriers/{product.npm_platform}').glob('*.tgz'), 'npm carrier')
+    carrier = only((staging / 'carriers' / product.npm_platform).glob('*.tgz'), 'npm carrier')
     with tarfile.open(carrier) as packed:
         carried = tar_payload(packed, f'package/bin/{binary}', 'carrier CLI entry')
         manifest = CarrierManifest.parse(json.loads(tar_payload(packed, 'package/package.json', 'carrier manifest entry')))
@@ -144,16 +147,14 @@ def main() -> None:
     parser.add_argument('--tag', required=True)
     parser.add_argument('--ext', choices=['tar.gz', 'zip'], default='tar.gz')
     parser.add_argument('--install', action='store_true')
+    parser.add_argument('--dist', type=Path, help='the staging directory holding assets/, wheels/ and carriers/ (default: the archive at the root, the rest under dist/)')
     args = parser.parse_args()
     try:
         product = ReleaseProduct(RustTarget(args.target), NpmPlatform(args.npm), ReleaseTag(args.tag), args.ext)
     except ValueError as error:
-        parser.error(f'{error}; next: choose a target/npm/archive mapping and tag admitted by .github/workflows/release.yml')
-    except OSError as error:
-        print(f'release workflow could not be read: {error}; next: restore .github/workflows/release.yml before verifying products', file=sys.stderr)
-        sys.exit(1)
+        parser.error(f'{error}; next: choose a target/npm/archive mapping and tag PLATFORM_TARGETS in scripts/release_products.py admits')
     try:
-        verify(product, args.install)
+        verify(product, args.install, args.dist)
     except (ValueError, KeyError, OSError, subprocess.CalledProcessError, zipfile.BadZipFile, tarfile.TarError, TypeError, AttributeError) as error:
         print(f'release product verification failed: {error}; next: rebuild the named wheel and its archive/carrier from the canonical wheel binary, then rerun this command before publishing', file=sys.stderr)
         sys.exit(1)

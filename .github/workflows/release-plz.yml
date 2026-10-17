@@ -4,21 +4,12 @@ on:
     branches: [main]
 permissions: {}
 jobs:
-  guard:
-    runs-on: ubuntu-latest
-    outputs:
-      enabled: ${{ steps.check.outputs.enabled }}
-    steps:
-      - id: check
-        env:
-          RELEASE_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
-          CARGO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        # llmlint: ignore[changed_behavior_has_e2e] This branch depends on GitHub's secret boundary, which a pre-publication dispatch cannot exercise.
-        run: echo "enabled=$([ -n "$RELEASE_TOKEN" ] && [ -n "$CARGO_TOKEN" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+  # One job. Its first step is the guard that was a job of its own: without both tokens a
+  # fork or an unconfigured clone does nothing, and every later step reads its answer.
+  # .github/tests/release-plz.test.mjs drives these steps over a scratch repository.
   release-plz:
-    needs: guard
-    if: needs.guard.outputs.enabled == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: write
       pull-requests: write
@@ -26,16 +17,25 @@ jobs:
       group: release-plz
       cancel-in-progress: false
     steps:
+      - id: guard
+        name: Decide whether this repository can release
+        env:
+          RELEASE_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+          CARGO_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: echo "enabled=$([ -n "$RELEASE_TOKEN" ] && [ -n "$CARGO_TOKEN" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v7
+        if: steps.guard.outputs.enabled == 'true'
         with:
           fetch-depth: 0
           token: ${{ secrets.RELEASE_PLZ_TOKEN }}
       - uses: actions-rust-lang/setup-rust-toolchain@v1
+        if: steps.guard.outputs.enabled == 'true'
       # scripts/prepare-release-pr.sh runs scripts/set-version.sh, which relocks the Python
       # side; without uv on PATH the release pull request could not carry a uv.lock that
       # agrees with the version it proposes. v7 is the newest floating major tag this action
       # publishes.
       - uses: astral-sh/setup-uv@v7
+        if: steps.guard.outputs.enabled == 'true'
       # cargo-binstall rather than release-plz itself: the pinned release-plz is provisioned
       # by scripts/scoped-release-plz.sh into the repository-scoped tool location every
       # script of this repository resolves it from — the same provisioning `just bootstrap`
@@ -46,16 +46,19 @@ jobs:
       # version it was recorded from and fails when they part, so moving the pin means
       # re-observing the real tool rather than hoping it still behaves the same.
       - uses: taiki-e/install-action@v2
+        if: steps.guard.outputs.enabled == 'true'
         with:
           tool: cargo-semver-checks,cargo-binstall
       - name: Provision the pinned release-plz into the repository-scoped tool location
+        if: steps.guard.outputs.enabled == 'true'
         env:
           # cargo-binstall fetches the binary from release-plz's own GitHub Releases, and an
           # anonymous fetch from a shared runner address is what its rate limit refuses.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: scripts/scoped-release-plz.sh ensure
-      # llmlint: ignore-block[changed_behavior_has_e2e] Proving these steps requires publishing crates and a GitHub Release and auto-merging its pull request, which a pre-publication dispatch cannot perform.
+      # llmlint: ignore-block[changed_behavior_has_e2e] .github/tests/release-plz.test.mjs drives each run step below over a scratch repository and a GitHub double; what is left is GitHub itself creating the tag, the release and the merge, which a pre-publication dispatch cannot perform.
       - name: Tag and cut the GitHub Release with the PAT
+        if: steps.guard.outputs.enabled == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
@@ -67,13 +70,15 @@ jobs:
       # the pull request. GIT_TOKEN rather than an argument: release-plz reads the token from
       # there, and an argument list is readable by every process on the runner.
       - name: Open or update the release pull request
+        if: steps.guard.outputs.enabled == 'true'
         env:
           GIT_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
         run: scripts/prepare-release-pr.sh
+      # The release pull request merges itself once its required checks pass: auto-merge,
+      # never a merge, and for release-plz's own pull request and no other.
       - name: Enable auto-merge
+        if: steps.guard.outputs.enabled == 'true'
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
-        run: |
-          pr=$(gh pr list --json number,headRefName --jq 'map(select(.headRefName | startswith("release-plz-"))) | .[0].number // empty')
-          [ -z "$pr" ] || gh pr merge "$pr" --auto --squash --delete-branch
+        run: python3 scripts/enable-release-automerge.py
       # llmlint: ignore-end[changed_behavior_has_e2e]

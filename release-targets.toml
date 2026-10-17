@@ -16,7 +16,7 @@
 # both SDKs are targets: `sdk-npm` is to `npm` what `sdk-pypi` is to `pypi`.
 #
 # Everything else this repository publishes is a `covers` entry under the target
-# whose release carries it — the five `@onetaskgraph/cli-<platform>` carriers, which
+# whose release carries it — the three `@onetaskgraph/cli-<platform>` carriers, which
 # exist only so the launcher can resolve one at its own exact version, and the six
 # sibling crates, which publish at the one `[workspace.package]` version in the same
 # run. Nothing names either kind on its own, so a target apiece would be several
@@ -28,8 +28,13 @@
 # `<registry>:<name>` that names one, so a sixth target for them could not be
 # spelled. They are not `[[retired]]` either: that records something no longer
 # published, and these ship on every release. A consumer that installs them
-# (scripts/install.sh does) waits on `pypi`, which is sound because that job uploads
-# the installed archives before publishing the wheels built from the same run.
+# (scripts/install.sh does) waits on `pypi`, which is sound because each build job
+# uploads its platform's archive before it publishes the wheel built from the same binary.
+#
+# **`published_by` names the jobs of .github/workflows/release.yml that publish a
+# target and everything it covers**, and .github/tests/release.test.mjs holds each to the
+# steps that really upload it: a target spread across platforms — the CLI wheels, the
+# carriers — is published by each build job together, one platform apiece.
 #
 # `schema_version` states what shape this document is written in; it is not a second
 # gate the identifiers are put through. `2` is the version that admits npm's scoped
@@ -45,7 +50,7 @@ probe = "scripts/release-probe.sh"
 id = "crate:onetaskgraph"
 name = "crate"
 what = "The engine, the plugin API and the `onetaskgraph` binary, as a Rust dependent takes them from crates.io."
-published_by = ".github/workflows/release.yml — the publish-crates job, which publishes every crate the workspace names, under crates/onetaskgraph/Cargo.toml's [package] name."
+published_by = ".github/workflows/release.yml — the publish job, which publishes every crate the workspace names through `just release-publish publish --to crates`, under crates/onetaskgraph/Cargo.toml's [package] name."
 manifest = "crates/onetaskgraph/Cargo.toml"
 covers = [
     "crate:onetaskgraph-plugin-api",
@@ -63,7 +68,7 @@ covers = [
 id = "pypi:onetaskgraph-cli"
 name = "pypi"
 what = "The standalone `onetaskgraph` binary as a wheel, so `pip install onetaskgraph-cli` puts it on PATH without compiling anything."
-published_by = ".github/workflows/release.yml — the publish-python job, from the per-target wheel artifacts, under pyproject.toml's [project] name."
+published_by = ".github/workflows/release.yml — the build-linux, build-macos and build-windows jobs, each publishing its own platform's wheel through `just release-<platform> publish --to pypi`, under pyproject.toml's [project] name."
 manifest = "pyproject.toml"
 
 # The Python SDK, which drives the `pypi:onetaskgraph-cli` release it pins by
@@ -72,20 +77,19 @@ manifest = "pyproject.toml"
 id = "pypi:onetaskgraph-sdk"
 name = "sdk-pypi"
 what = "The typed Python SDK, imported as `onetaskgraph_sdk`, which drives the pinned `onetaskgraph-cli` release as a subprocess."
-published_by = ".github/workflows/release.yml — the publish-python job, from the distribution build-distributions produces, under sdks/python/pyproject.toml's [project] name."
+published_by = ".github/workflows/release.yml — the publish job, from the distribution its own build step produces, through `just release-publish publish --to pypi`, under sdks/python/pyproject.toml's [project] name."
 manifest = "sdks/python/pyproject.toml"
 
 # The launcher an `npm install @onetaskgraph/cli` resolves, published after the
-# four per-platform carriers it pins at its own exact version.
+# three per-platform carriers it pins at its own exact version.
 [[target]]
 id = "npm:@onetaskgraph/cli"
 name = "npm"
 what = "The `onetaskgraph` binary as an npm launcher, which resolves and execs the carrier for the host it is installed on."
-published_by = ".github/workflows/release.yml — the publish-npm job, through scripts/publish-npm.sh, under npm/cli/package.json's name."
+published_by = ".github/workflows/release.yml — the build-linux, build-macos and build-windows jobs for the carriers, one platform apiece, and then the publish job for the launcher, each through scripts/publish-npm.sh, under npm/cli/package.json's name."
 manifest = "npm/cli/package.json"
 covers = [
     "npm:@onetaskgraph/cli-linux-x64",
-    "npm:@onetaskgraph/cli-linux-arm64",
     "npm:@onetaskgraph/cli-darwin-arm64",
     "npm:@onetaskgraph/cli-win32-x64",
 ]
@@ -97,5 +101,5 @@ covers = [
 id = "npm:@onetaskgraph/sdk"
 name = "sdk-npm"
 what = "The typed TypeScript SDK, imported as `@onetaskgraph/sdk`, which drives the `onetaskgraph` binary it ships beside as a subprocess."
-published_by = ".github/workflows/release.yml — the publish-npm job, through scripts/publish-npm.sh, under sdks/typescript/package.json's name."
+published_by = ".github/workflows/release.yml — the publish job, through scripts/publish-npm.sh, under sdks/typescript/package.json's name."
 manifest = "sdks/typescript/package.json"

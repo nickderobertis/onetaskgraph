@@ -2,144 +2,299 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { test } from "node:test";
-import { graph, matrices, read, resolve, root, workflows } from "../workflow-graph.mjs";
+import { graph, read, root, workflows } from "../workflow-graph.mjs";
 
-function ancestors(jobs, id, seen = new Set()) {
-  const needs = typeof jobs[id].needs === "string" ? [jobs[id].needs] : jobs[id].needs || [];
-  for (const parent of needs) {
-    if (!seen.has(parent)) {
-      seen.add(parent);
-      ancestors(jobs, parent, seen);
-    }
-  }
-  return seen;
+// The four CD jobs, the recipe each one's steps call, and the plan that recipe publishes.
+const RELEASE_JOBS = {
+  "build-linux": { runner: "ubuntu-latest", recipe: "linux", platform: "linux" },
+  "build-macos": { runner: "macos-latest", recipe: "macos", platform: "macos" },
+  "build-windows": { runner: "windows-latest", recipe: "windows", platform: "windows" },
+  publish: { runner: "ubuntu-latest", recipe: "publish", platform: "independent" },
+};
+const PLATFORM_OF = { linux: "linux", macos: "macos", windows: "windows", publish: "independent" };
+const CONTROL_OF = { pypi: "PYPI_PUBLISH", npm: "NPM_PUBLISH", crates: "CARGO_PUBLISH" };
+const version = JSON.parse(read("npm/cli/package.json")).version;
+const plans = new Map();
+function plan(platform, tag = `v${version}`) {
+  const key = `${platform}@${tag}`;
+  if (!plans.has(key))
+    plans.set(
+      key,
+      JSON.parse(
+        execFileSync(
+          "python3",
+          ["scripts/release_cd.py", "--platform", platform, "plan", "--tag", tag],
+          { cwd: root, encoding: "utf8" },
+        ),
+      ),
+    );
+  return plans.get(key);
 }
-test("actual release declarations retain every released platform, package and independent crate tag", () => {
-  const release = workflows()["release.yml"];
-  const native = release.jobs["native-assets-carriers-and-wheels"];
-  const mac = release.jobs["macos-assets-carriers-and-wheels"];
-  const targets = [
-    ...matrices(native.strategy.matrix, {}),
-    ...mac.env.TARGETS.split(" ").map((pair) => {
-      const [target, npm] = pair.split("=");
-      return { target, npm, os: mac["runs-on"], ext: "tar.gz" };
-    }),
-  ];
-  const carriers = readdirSync(new URL("npm/platforms/", root));
-  assert.deepEqual(targets.map((t) => t.npm).sort(), carriers.sort());
-  for (const target of targets) {
-    const manifest = JSON.parse(read(`npm/platforms/${target.npm}/package.json`));
-    assert.equal(
-      manifest.os[0],
-      target.target.endsWith("apple-darwin")
-        ? "darwin"
-        : target.target.endsWith("windows-msvc")
-          ? "win32"
-          : "linux",
+// One step is one phase of one recipe, or it is setup; nothing else runs in a CD job.
+function phase(step) {
+  const match =
+    /^just release-(linux|macos|windows|publish) (plan|build|publish|verify|available)(?: --(?:to|from) (github|pypi|npm|crates))? --tag "\$TAG"$/.exec(
+      (step.run || "").trim(),
     );
-    assert.equal(manifest.cpu[0], target.target.startsWith("aarch64") ? "arm64" : "x64");
-    assert.match(
-      read("scripts/install.sh"),
-      new RegExp(`${target.target}; ext=${target.ext.replace(".", "\\.")}`),
-    );
-    const job = target.os === "macos-latest" ? mac : native;
-    const context = { matrix: target };
-    assert.ok(
-      job.steps.some(
-        (s) =>
-          s.uses === "PyO3/maturin-action@v1" && resolve(s.with.target, context) === target.target,
-      ),
-    );
-    assert.ok(
-      job.steps.some(
-        (s) =>
-          s.uses === "actions/upload-artifact@v4" &&
-          resolve(s.with.name, context) === `wheels-${target.target}`,
-      ),
-    );
-    assert.ok(
-      job.steps.some(
-        (s) =>
-          s.uses === "actions/upload-artifact@v4" &&
-          resolve(s.with.name, context) === `carrier-${target.npm}`,
-      ),
-    );
-  }
-  for (const [id, job] of Object.entries(release.jobs).filter(([id]) =>
-    id.startsWith("publish-"),
-  )) {
-    assert.equal(job["runs-on"], "ubuntu-latest", id);
-    const needs = ancestors(release.jobs, id);
-    assert.ok(needs.has("macos-assets-carriers-and-wheels"), id);
-    assert.ok(needs.has("native-assets-carriers-and-wheels"), id);
-  }
-  for (const id of ["publish-python", "publish-npm", "publish-crates"])
-    assert.ok(ancestors(release.jobs, id).has("publish-assets"), id);
-  for (const job of [mac, native]) {
-    const wheel = job.steps.findIndex((s) => s.uses === "PyO3/maturin-action@v1");
-    const extract = job.steps.findIndex((s) => s.run?.includes("scripts/release-wheel-binary.py"));
-    const pack = job.steps.findIndex((s) => s.name === "Archive, checksum, and stage");
-    const install = job.steps.findIndex(
-      (s) => s.run?.includes("scripts/verify-release-products.py") && s.run.includes("--install"),
-    );
-    const upload = job.steps.findIndex((s) => s.uses === "actions/upload-artifact@v4");
-    assert.ok(
-      wheel >= 0 && wheel < extract && extract < pack && pack < install && install < upload,
-    );
-    assert.ok(!job.steps.some((s) => s.run?.includes("gh release upload")));
-    assert.ok(
-      job.steps.some((s) => s.uses === "actions/checkout@v7" && !s.with?.ref),
-      "build consumes the release event exact tag",
-    );
-  }
-  assert.equal(mac["runs-on"], "macos-latest");
-  // Intel macOS is discontinued: the one Mac job builds, packs and proves arm64 natively,
-  // with no x86_64 cross-compilation or Rosetta step, and nothing declares the old target.
-  assert.equal(mac.env.TARGETS, "aarch64-apple-darwin=darwin-arm64");
-  assert.ok(mac.steps.some((s) => s.name === "Install and run the Apple Silicon products"));
-  for (const source of [
-    read(".github/workflows/release.yml"),
-    read("release-targets.toml"),
-    read("npm/cli/package.json"),
-    read("scripts/product_versions.py"),
-  ])
-    assert.doesNotMatch(source, /x86_64-apple-darwin|darwin-x64|rosetta/i);
-  assert.ok(!carriers.includes("darwin-x64"));
-  assert.match(
-    read("scripts/install.sh"),
-    /Darwin:x86_64\) die 69 "Intel macOS is no longer supported/,
-  );
-  const config = JSON.parse(
+  return match && { recipe: match[1], phase: match[2], registry: match[3] };
+}
+function tomlDocument(path) {
+  return JSON.parse(
     execFileSync(
       "python3",
       [
         "-c",
-        'import tomllib,json; print(json.dumps(tomllib.load(open("release-targets.toml","rb"))))',
+        "import json, sys, tomllib; print(json.dumps(tomllib.load(open(sys.argv[1], 'rb'))))",
+        path,
       ],
       { cwd: root, encoding: "utf8" },
     ),
   );
-  const ids = config.target.flatMap((t) => [t.id, ...(t.covers || [])]);
-  for (const carrier of carriers) assert.ok(ids.includes(`npm:@onetaskgraph/cli-${carrier}`));
-  for (const id of [
-    "pypi:onetaskgraph-cli",
-    "pypi:onetaskgraph-sdk",
-    "npm:@onetaskgraph/cli",
-    "npm:@onetaskgraph/sdk",
-  ])
-    assert.ok(ids.includes(id));
-  const releasePlz = JSON.parse(
-    execFileSync(
-      "python3",
-      ["-c", 'import tomllib,json; print(json.dumps(tomllib.load(open("release-plz.toml","rb"))))'],
-      { cwd: root, encoding: "utf8" },
-    ),
+}
+// The steps that send artifacts somewhere, each with exactly the artifacts it sends.
+function uploads() {
+  const release = workflows()["release.yml"];
+  const found = [];
+  for (const [job, definition] of Object.entries(release.jobs))
+    definition.steps.forEach((step, index) => {
+      const parsed = phase(step);
+      if (parsed?.phase !== "publish") return;
+      const artifacts = plan(PLATFORM_OF[parsed.recipe]).filter(
+        (artifact) => artifact.registry === parsed.registry,
+      );
+      found.push({ job, index, step, registry: parsed.registry, artifacts });
+    });
+  return found;
+}
+
+test("the release is four jobs on the runners their names say, and release-plz is one", () => {
+  const all = workflows();
+  const release = all["release.yml"];
+  assert.deepEqual(Object.keys(release.jobs).sort(), Object.keys(RELEASE_JOBS).sort());
+  for (const [id, expected] of Object.entries(RELEASE_JOBS)) {
+    const job = release.jobs[id];
+    assert.equal(job["runs-on"], expected.runner, id);
+    assert.equal(job["timeout-minutes"], 30, id);
+    for (const step of job.steps.filter((step) => step.run !== undefined)) {
+      const parsed = phase(step);
+      assert.ok(parsed, `${id} runs '${step.run}', which is not a phase of its recipe`);
+      assert.equal(parsed.recipe, expected.recipe, `${id} runs another job's recipe`);
+    }
+  }
+  for (const id of ["build-linux", "build-macos", "build-windows"])
+    assert.equal(release.jobs[id].needs, undefined, `${id} waits on another build`);
+  assert.deepEqual([...release.jobs.publish.needs].sort(), [
+    "build-linux",
+    "build-macos",
+    "build-windows",
+  ]);
+  assert.deepEqual(Object.keys(all["release-plz.yml"].jobs), ["release-plz"]);
+  assert.ok(!Object.keys(all).includes("published-smoke.yml"));
+  for (const [name, workflow] of Object.entries(all)) {
+    const downstream = typeof workflow.on === "object" && workflow.on?.workflow_run;
+    assert.ok(
+      !downstream || !(downstream.workflows || []).includes("Release"),
+      `${name} triggers on the Release workflow`,
+    );
+  }
+  // CI already proved the tree; a CD job re-running its checks or test tiers proves it again.
+  for (const name of ["release.yml", "release-plz.yml"])
+    for (const [id, job] of Object.entries(all[name].jobs))
+      for (const step of job.steps)
+        assert.doesNotMatch(
+          step.run || "",
+          /\bjust (check|gate|test|coverage|distribution-check|distribution-test)\b|nx(\.sh)? (affected|run-many)|cargo (test|nextest|llvm-cov)/,
+          `${name}/${id} re-runs a check tier`,
+        );
+});
+
+test("every artifact is uploaded by exactly one step of the job release-targets.toml names", () => {
+  const sent = uploads();
+  const owners = new Map();
+  for (const upload of sent) {
+    assert.ok(upload.artifacts.length, `${upload.job} publishes nothing to ${upload.registry}`);
+    for (const artifact of upload.artifacts) {
+      assert.equal(artifact.job, upload.job, `${artifact.file} is published by the wrong job`);
+      owners.set(artifact.file, [...(owners.get(artifact.file) || []), upload]);
+    }
+  }
+  const everything = Object.values(RELEASE_JOBS).flatMap(({ platform }) => plan(platform));
+  assert.ok(everything.length);
+  for (const artifact of everything)
+    assert.equal(owners.get(artifact.file)?.length, 1, `${artifact.file} is not uploaded once`);
+  const jobsOf = (ids) =>
+    new Set(
+      sent.filter((u) => u.artifacts.some((a) => ids.includes(a.release_target))).map((u) => u.job),
+    );
+  for (const target of tomlDocument("release-targets.toml").target) {
+    const ids = [target.id, ...(target.covers || [])];
+    for (const id of ids)
+      assert.ok(
+        everything.some((artifact) => artifact.release_target === id),
+        `release-targets.toml declares ${id}, which no job uploads`,
+      );
+    const named = new Set(
+      [
+        ...target.published_by.matchAll(
+          /((?:(?:build-[a-z]+|publish)(?:, and |, | and ))*(?:build-[a-z]+|publish)) jobs?\b/g,
+        ),
+      ].flatMap((match) => match[1].split(/, and |, | and /)),
+    );
+    assert.deepEqual([...named].sort(), [...jobsOf(ids)].sort(), `${target.id}'s published_by`);
+  }
+  // The publish job carries what is the same on every platform, and nothing that is not.
+  for (const upload of sent.filter((u) => u.job === "publish"))
+    for (const artifact of upload.artifacts) {
+      assert.equal(artifact.platform, "independent", artifact.file);
+      assert.equal(artifact.target, undefined, artifact.file);
+    }
+});
+
+test("each build job test-installs before it publishes and installs back from every registry after", () => {
+  const release = workflows()["release.yml"];
+  for (const [id, { recipe }] of Object.entries(RELEASE_JOBS)) {
+    const steps = release.jobs[id].steps.map((step, index) => ({ step, index, ...phase(step) }));
+    const of = (name) => steps.filter((s) => s.phase === name);
+    const [build] = of("build");
+    assert.ok(build, `${id} has no build step`);
+    assert.equal(build.step.if, undefined, `${id} builds conditionally`);
+    const publications = of("publish");
+    const verifications = of("verify");
+    assert.ok(publications.length && verifications.length, id);
+    const firstPublication = Math.min(...publications.map((s) => s.index));
+    assert.ok(build.index < firstPublication, `${id} publishes before it test-installs`);
+    assert.ok(
+      Math.max(...publications.map((s) => s.index)) <
+        Math.min(...verifications.map((s) => s.index)),
+      `${id} verifies a registry before it has published everything`,
+    );
+    assert.deepEqual(
+      verifications.map((s) => s.registry).sort(),
+      publications.map((s) => s.registry).sort(),
+      `${id} does not verify every registry it publishes to`,
+    );
+    // A registry the repository has not switched on is neither published to nor read back.
+    for (const s of [...publications, ...verifications, ...of("available")]) {
+      const control = CONTROL_OF[s.registry];
+      assert.equal(
+        s.step.if,
+        control ? `\${{ vars.${control} == 'true' }}` : undefined,
+        `${id}: ${s.step.name}`,
+      );
+    }
+    if (recipe === "publish") {
+      const available = of("available");
+      assert.deepEqual(available.map((s) => s.registry).sort(), ["github", "npm", "pypi"]);
+      assert.ok(Math.max(...available.map((s) => s.index)) < firstPublication);
+    }
+  }
+});
+
+test("Linux arm64 and Intel macOS are neither built, published, verified nor declared", () => {
+  const sources = [
+    ...Object.keys(workflows()).map((name) => read(`.github/workflows/${name}`)),
+    read("justfile"),
+    read("release-targets.toml"),
+    read("npm/cli/package.json"),
+    read("scripts/release_products.py"),
+    read("scripts/release_cd.py"),
+    JSON.stringify(Object.values(RELEASE_JOBS).flatMap(({ platform }) => plan(platform))),
+  ];
+  for (const source of sources) {
+    assert.doesNotMatch(source, /aarch64-unknown-linux-gnu|linux-arm64|ubuntu-24\.04-arm/i);
+    assert.doesNotMatch(source, /x86_64-apple-darwin|darwin-x64|rosetta/i);
+  }
+  const carriers = readdirSync(new URL("npm/platforms/", root)).sort();
+  assert.deepEqual(carriers, ["darwin-arm64", "linux-x64", "win32-x64"]);
+  assert.match(
+    read("scripts/install.sh"),
+    /Linux:aarch64\|Linux:arm64\) die 69 "Linux arm64 is no longer supported/,
   );
+  assert.match(
+    read("scripts/install.sh"),
+    /Darwin:x86_64\) die 69 "Intel macOS is no longer supported/,
+  );
+  const releasePlz = tomlDocument("release-plz.toml");
   for (const p of releasePlz.package) {
     assert.equal(p.git_tag_name, `${p.name}-v{{ version }}`);
     assert.equal(p.git_release_enable, false);
   }
   assert.equal(releasePlz.workspace.git_tag_name, "v{{ version }}");
+});
+
+// llmlint: ignore[plan_criteria_require_realistic_tests] The macOS and Windows build recipes need native macOS and Windows toolchains this Linux host cannot run, so inside the dispatch their proof is the recipes' plan mode checked against the last release's published artifacts; the Linux recipe is driven for real end to end, and the hosted build jobs build and run the foreign artifacts on every release.
+test("each platform's plan is what v0.7.1 published for its targets, at any version", () => {
+  const published = JSON.parse(read(".github/tests/fixtures/v0.7.1-published.json"));
+  const retired = ["x86_64-apple-darwin", "aarch64-unknown-linux-gnu"];
+  const expected = (golden, from, to) => JSON.parse(JSON.stringify(golden).replaceAll(from, to));
+  for (const releaseVersion of [published.version, "9.8.7"]) {
+    const golden = expected(published, published.version, releaseVersion);
+    const tag = `v${releaseVersion}`;
+    const planned = {};
+    for (const platform of ["linux", "macos", "windows"])
+      for (const artifact of plan(platform, tag)) {
+        planned[artifact.target] ??= { platform, assets: [], wheel: null, npm: null };
+        if (artifact.registry === "github") planned[artifact.target].assets.push(artifact.file);
+        if (artifact.kind === "wheel") {
+          planned[artifact.target].wheel = artifact.file;
+          assert.deepEqual(artifact.wheel_tags, [
+            artifact.file
+              .split("-")
+              .slice(2)
+              .join("-")
+              .replace(/\.whl$/, ""),
+          ]);
+          assert.equal(artifact.package, "onetaskgraph-cli");
+        }
+        if (artifact.kind === "npm-platform") planned[artifact.target].npm = artifact;
+      }
+    assert.deepEqual(
+      Object.keys(planned).sort(),
+      Object.keys(golden.targets)
+        .filter((target) => !retired.includes(target))
+        .sort(),
+    );
+    for (const [target, row] of Object.entries(planned)) {
+      const before = golden.targets[target];
+      assert.deepEqual(row.assets.sort(), [...before.assets].sort(), target);
+      assert.equal(row.wheel, before.wheel, target);
+      assert.equal(row.npm.package, before.npm.name, target);
+      // npm pack names a scoped package's tarball <scope>-<name>-<version>.tgz.
+      assert.equal(
+        row.npm.file,
+        `${before.npm.name.slice(1).replace("/", "-")}-${releaseVersion}.tgz`,
+      );
+      const manifest = JSON.parse(
+        read(`npm/platforms/${before.npm.name.split("cli-")[1]}/package.json`),
+      );
+      assert.deepEqual([manifest.os, manifest.cpu], [before.npm.os, before.npm.cpu], target);
+      assert.equal(
+        row.platform,
+        { "apple-darwin": "macos", "pc-windows-msvc": "windows" }[
+          target.split("-").slice(1).join("-")
+        ] || "linux",
+      );
+    }
+    const independent = plan("independent", tag);
+    assert.deepEqual(
+      independent.filter((a) => a.registry === "crates").map((a) => a.package),
+      golden.independent.crates,
+    );
+    assert.deepEqual(
+      independent
+        .filter((a) => a.registry === "pypi")
+        .map((a) => a.file)
+        .sort(),
+      [...golden.independent.pypi["onetaskgraph-sdk"]].sort(),
+    );
+    assert.deepEqual(
+      independent
+        .filter((a) => a.registry === "npm")
+        .map((a) => a.package)
+        .sort(),
+      [...golden.independent.npm].sort(),
+    );
+  }
 });
 
 test("release routing prefix agrees with the production PR builder", () => {
@@ -160,16 +315,14 @@ test("Mac comparison base is the exact production body and environment exercised
   assert.ok(!ci.jobs.macos.steps.some((step) => step.run === "just distribution-test"));
 });
 
-test("telemetry records the Apple Silicon target alone on the single runner row", () => {
-  const release = workflows()["release.yml"];
-  const row = graph({ event: "release", action: "published" }, { macosRequired: false })
+test("telemetry records build-macos as the one Mac job of a release", () => {
+  const rows = graph({ event: "release", action: "published" }, { macosRequired: false })
     .find((run) => run.workflow === "release.yml")
-    .rows.find((row) => row.job === "macos-assets-carriers-and-wheels");
-  const declared = release.jobs["macos-assets-carriers-and-wheels"].env.TARGETS.split(" ").map(
-    (pair) => pair.split("=")[0],
+    .rows.filter((row) => row.macos);
+  assert.deepEqual(
+    rows.map((row) => row.job),
+    ["build-macos"],
   );
-  assert.deepEqual(row.target.split(",").sort(), declared.sort());
-  assert.deepEqual(declared, ["aarch64-apple-darwin"]);
 });
 
 test("release subprocesses choose Git Bash over a WSL launcher and refuse missing Git Bash", () => {

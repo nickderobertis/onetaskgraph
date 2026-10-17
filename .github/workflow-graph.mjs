@@ -2,7 +2,8 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
 import { isMacosRunner } from "./telemetry.ts";
 import { data, Evaluator, Lexer, Parser } from "./actions-expressions.mjs";
@@ -262,7 +263,11 @@ export function digest() {
       .map((p) => `.github/${p}`),
     ...readdirSync(new URL(".github/workflows/", root)).map((p) => `.github/workflows/${p}`),
     ...readdirSync(new URL(".github/reusable/", root)).map((p) => `.github/reusable/${p}`),
-    ...readdirSync(new URL(".github/tests/", root)).map((p) => `.github/tests/${p}`),
+    ...readdirSync(new URL(".github/tests/", root), { recursive: true, withFileTypes: true })
+      .filter((entry) => entry.isFile())
+      .map((entry) =>
+        relative(fileURLToPath(root), join(entry.parentPath, entry.name)).replaceAll("\\", "/"),
+      ),
   ];
   return createHash("sha256")
     .update(

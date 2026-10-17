@@ -1,16 +1,13 @@
-# llmlint: ignore-file[async_typed_clients_at_boundaries] This subprocess journey deliberately executes the production workflow bodies sequentially and doubles only transport; an async service client would replace the actual CLI boundaries the task requires it to prove.
-"""Drive the release workflow's packaging and installation over a real host-native wheel."""
+# llmlint: ignore-file[async_typed_clients_at_boundaries] This subprocess journey deliberately executes the production release phases sequentially and doubles only transport; an async service client would replace the actual CLI boundaries the task requires it to prove.
+"""Drive the release's packaging and installation over a real host-native wheel."""
 import argparse
 import base64
 import csv
 import hashlib
 import platform
-from dataclasses import dataclass
 import io
 import json
-import os
 from pathlib import Path
-import re
 import shutil
 import subprocess
 import sys
@@ -18,53 +15,18 @@ import tarfile
 import tempfile
 import tomllib
 import zipfile
-from release_products import bash_executable, RustTarget, NpmPlatform, RunnerLabel, ArchiveFormat, VerificationReport, validate_target, validate_npm_platform
+from release_products import PLATFORM_TARGETS, RustTarget, VerificationReport, validate_target
 from product_versions import SEMANTIC_VERSION_RE, SemanticVersion
 
 PYTHON_EXECUTABLE = str(Path(sys.executable).resolve())
 
 
-@dataclass(frozen=True)
-class ReleaseTarget:
-    runner_label: RunnerLabel
-    target: RustTarget
-    extension: ArchiveFormat
-    npm_platform: NpmPlatform
-
-    def __post_init__(self) -> None:
-        validate_target(self.target)
-        validate_npm_platform(self.npm_platform)
-        if self.extension not in ('tar.gz', 'zip'):
-            raise ValueError('invalid release archive extension')
-
-
 def run(wheel_dir: Path, target: RustTarget) -> None:
     root = Path(__file__).resolve().parents[1]
-    workflow = (root / '.github/workflows/release.yml').read_text()
-    native = re.search(r'(?ms)^  native-assets-carriers-and-wheels:\n(.*?)(?=^  [a-z-]+:)', workflow)
-    mac = re.search(r'(?ms)^  macos-assets-carriers-and-wheels:\n(.*?)(?=^  [a-z-]+:)', workflow)
-    if native is None or mac is None:
-        raise ValueError('release build jobs missing; restore their declared packaging paths')
-    rows = [ReleaseTarget(*row) for row in re.findall(r'- \{ os: ([^,]+), target: ([^,]+), ext: ([^,]+), npm: ([^ }]+) \}', native.group(1))]
-    mac_pairs = re.search(r'^      TARGETS: (.*)$', mac.group(1), re.M)
-    if mac_pairs is None:
-        raise ValueError('Darwin TARGETS missing; restore the Rust/npm platform mapping')
-    for pair in mac_pairs[1].split():
-        if pair.count('=') != 1:
-            raise ValueError('invalid Darwin TARGETS pair; restore target=npm-platform before packaging')
-        rust_target, npm_platform = pair.split('=')
-        validate_target(rust_target)
-        validate_npm_platform(npm_platform)
-        rows.append(ReleaseTarget(RunnerLabel('macos-latest'), RustTarget(rust_target), 'tar.gz', NpmPlatform(npm_platform)))
-    candidates = [row for row in rows if row.target == target]
+    candidates = [row for row in PLATFORM_TARGETS if row.target == target]
     if len(candidates) != 1:
-        raise argparse.ArgumentError(None, 'unsupported --target; choose one declared in release.yml')
+        raise argparse.ArgumentError(None, 'unsupported --target; choose one PLATFORM_TARGETS in scripts/release_products.py declares')
     selected = candidates[0]
-    job = mac.group(1) if selected.runner_label == 'macos-latest' else native.group(1)
-    step = re.search(r'(?ms)^      - name: Archive, checksum, and stage\n.*?^        run: \|\n(.*?)(?=^      - )', job)
-    if step is None:
-        raise ValueError('release packaging body missing; retain the drivable run block')
-    body = '\n'.join(line[10:] for line in step[1].splitlines())
     manifest = tomllib.loads((root / 'pyproject.toml').read_text())
     project = manifest.get('project')
     if not isinstance(project, dict):
@@ -76,8 +38,6 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
     with tempfile.TemporaryDirectory(prefix='release-manifest-refusal-') as malformed:
         malformed_root = Path(malformed)
         shutil.copytree(root / 'scripts', malformed_root / 'scripts')
-        (malformed_root / '.github/workflows').mkdir(parents=True)
-        shutil.copy2(root / '.github/workflows/release.yml', malformed_root / '.github/workflows/release.yml')
         (malformed_root / 'pyproject.toml').write_text('project = "invalid table"\n')
         rejected = subprocess.run([PYTHON_EXECUTABLE, 'scripts/test-release-products.py', '--wheel-dir', str(wheel_dir.resolve()), '--target', target], cwd=malformed_root, capture_output=True, text=True)
         if rejected.returncode != 1 or 'invalid manifest project table' not in rejected.stderr:
@@ -86,8 +46,6 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
     with tempfile.TemporaryDirectory(prefix='release-products-') as scratch:
         tree = Path(scratch)
         shutil.copytree(root / 'scripts', tree / 'scripts')
-        (tree / '.github/workflows').mkdir(parents=True)
-        shutil.copy2(root / '.github/workflows/release.yml', tree / '.github/workflows/release.yml')
         shutil.copytree(root / 'npm/platforms', tree / 'npm/platforms')
         wheels = tree / 'dist/wheels' / target
         shutil.copytree(wheel_dir.resolve(), wheels)
@@ -115,9 +73,10 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
                 raise ValueError('malformed wheel scripts were accepted by extraction')
         wheel_path.write_bytes(original_wheel)
         subprocess.run([PYTHON_EXECUTABLE, 'scripts/release-wheel-binary.py', '--wheels', str(wheels), '--binary', str(canonical)], cwd=tree, check=True, stdout=subprocess.DEVNULL)
-        env = {**os.environ, 'TARGETS': f'{target}={selected.npm_platform}', 'EXT': selected.extension, 'TAG': f'v{version}'}
-        subprocess.run([bash_executable(platform.system()), '-c', body], cwd=tree, env=env, check=True)
-        command = [PYTHON_EXECUTABLE, 'scripts/verify-release-products.py', '--target', target, '--npm', selected.npm_platform, '--tag', f'v{version}', '--ext', selected.extension]
+        # The packaging every build job runs, from this wheel: scripts/release_cd.py's own.
+        package = [PYTHON_EXECUTABLE, 'scripts/release_cd.py', '--platform', selected.platform, 'package', '--tag', f'v{version}', '--dist', str(tree / 'dist')]
+        subprocess.run(package, cwd=tree, check=True, stdout=subprocess.DEVNULL)
+        command = [PYTHON_EXECUTABLE, 'scripts/verify-release-products.py', '--target', target, '--npm', selected.npm_platform, '--tag', f'v{version}', '--ext', selected.extension, '--dist', str(tree / 'dist')]
         installed = subprocess.run(command + ['--install'], cwd=tree, capture_output=True, text=True)
         if installed.returncode:
             print(installed.stderr, file=sys.stderr)
@@ -132,17 +91,12 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
             if result.returncode == 0 or reason not in result.stderr:
                 raise ValueError(f'tampered staged product did not fail for {reason}: status={result.returncode}, stderr={result.stderr}; repair the production verifier before publishing')
 
-        release_workflow = tree / '.github/workflows/release.yml'
-        workflow_bytes = release_workflow.read_bytes()
-        release_workflow.unlink()
-        refuses('release workflow could not be read')
-        release_workflow.write_bytes(workflow_bytes)
         for container in [wheel_path, next((tree / f'dist/carriers/{selected.npm_platform}').glob('*.tgz'))]:
             original = container.read_bytes()
             container.write_bytes(b'corrupt container')
             refuses('verification failed')
             container.write_bytes(original)
-        checksum = tree / f'onetaskgraph-v{version}-{target}.{selected.extension}.sha256'
+        checksum = tree / 'dist/assets' / f'onetaskgraph-v{version}-{target}.{selected.extension}.sha256'
         original_checksum = checksum.read_bytes()
         checksum.write_text('0' * 64 + '  incorrect-archive\n')
         refuses('checksum mismatch')
@@ -166,7 +120,7 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
 
         # Each packaged input is independently corrupted while the canonical binary
         # stays intact, so deleting any one comparison makes a journey fail.
-        archive = tree / f'onetaskgraph-v{version}-{target}.{selected.extension}'
+        archive = tree / 'dist/assets' / f'onetaskgraph-v{version}-{target}.{selected.extension}'
         original_archive = archive.read_bytes()
         if selected.extension == 'zip':
             with zipfile.ZipFile(archive, 'w') as packed:
@@ -337,29 +291,29 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
             with zipfile.ZipFile(wheel_path, 'w') as wheel:
                 for info, data in contents.values():
                     wheel.writestr(info, data)
-            subprocess.run([bash_executable(platform.system()), '-c', body], cwd=tree, env=env, check=True, stdout=subprocess.DEVNULL)
+            subprocess.run(package, cwd=tree, check=True, stdout=subprocess.DEVNULL)
             refuses(reason)
             canonical.write_bytes(original_binary)
             wheel_path.write_bytes(original_wheel)
-            subprocess.run([bash_executable(platform.system()), '-c', body], cwd=tree, env=env, check=True, stdout=subprocess.DEVNULL)
+            subprocess.run(package, cwd=tree, check=True, stdout=subprocess.DEVNULL)
         subprocess.run(command, cwd=tree, check=True, stdout=subprocess.DEVNULL)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__, epilog='Exit codes: 0 journey passed; 1 packaging/install/proof failure; 2 invalid invocation. Repair the named workflow body or staged product before retrying.')
+    parser = argparse.ArgumentParser(description=__doc__, epilog='Exit codes: 0 journey passed; 1 packaging/install/proof failure; 2 invalid invocation. Repair the named packaging phase or staged product before retrying.')
     parser.add_argument('--wheel-dir', type=Path, required=True)
     parser.add_argument('--target', required=True)
     args = parser.parse_args()
     try:
         validate_target(args.target)
     except ValueError as error:
-        parser.error(f'{error}; next: choose a Rust target declared in .github/workflows/release.yml')
+        parser.error(f'{error}; next: choose a Rust target scripts/release_products.py declares')
     try:
         run(args.wheel_dir, RustTarget(args.target))
     except argparse.ArgumentError as error:
-        parser.error(f'{error}; next: choose a Rust target declared in .github/workflows/release.yml')
+        parser.error(f'{error}; next: choose a Rust target scripts/release_products.py declares')
     except (ValueError, KeyError, OSError, subprocess.CalledProcessError, zipfile.BadZipFile, tarfile.TarError) as error:
-        print(f'release product journey failed: {error}; next: repair the release workflow packaging or its named product verifier, then rerun scripts/test-distribution.sh', file=sys.stderr)
+        print(f'release product journey failed: {error}; next: repair the packaging in scripts/release_cd.py or its named product verifier, then rerun scripts/test-distribution.sh', file=sys.stderr)
         sys.exit(1)
 
 

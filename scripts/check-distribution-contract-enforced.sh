@@ -3,7 +3,7 @@
 # whose registry query or package operand does not meet the distribution contract.
 #
 # crates.io answers curl's default user agent with 403 — an answer that says nothing about
-# whether a crate is published — so an unidentified query leaves publish-crates unable to
+# whether a crate is published — so an unidentified query leaves the crate publication unable to
 # reach either arm it knows how to act on. A pin nobody has watched fail is a pin nobody
 # knows works: those greps would pass just as quietly if a pattern stopped matching what it
 # describes, or if the query moved somewhere the pin does not read.
@@ -178,24 +178,24 @@ fi
 
 # 1. The defect itself, restored: the job asks crates.io with curl's default agent, which
 #    the registry answers 403 — so no crate is ever seen as absent and none is published.
-substitute .github/workflows/release.yml \
-  'publication=$(scripts/crate-publication-status.sh "$crate" "$version") || exit $?' \
-  'publication=$(curl -sS -o /dev/null -w '"'"'%{http_code}'"'"' "https://crates.io/api/v1/crates/$crate/$version")'
+substitute scripts/release_cd.py \
+  'status = run([bash, "scripts/crate-publication-status.sh", crate, version_of(tag)]' \
+  'status = run(["curl", "-sS", "-o", "/dev/null", "-w", "%{http_code}", f"https://crates.io/api/v1/crates/{crate}/{version_of(tag)}"]'
 run_guard
-expect_refused "the workflow querying crates.io itself, unidentified" \
+expect_refused "the release querying crates.io itself, unidentified" \
   "must decide from scripts/crate-publication-status.sh"
-restore .github/workflows/release.yml
+restore scripts/release_cd.py
 
 # 2. The decision still comes from the script, but an unidentified query is left beside it —
 #    a probe, a retry, a warm-up — and whichever one the job then trusts, the 403 is back.
-substitute .github/workflows/release.yml \
-  'publication=$(scripts/crate-publication-status.sh "$crate" "$version") || exit $?' \
-  'curl -sS -o /dev/null "https://crates.io/api/v1/crates/$crate/$version" || true
-            publication=$(scripts/crate-publication-status.sh "$crate" "$version") || exit $?'
+substitute scripts/release_cd.py \
+  'status = run([bash, "scripts/crate-publication-status.sh", crate, version_of(tag)]' \
+  'subprocess.run(["curl", "-sS", "-o", "/dev/null", f"https://crates.io/api/v1/crates/{crate}"], check=False)
+        status = run([bash, "scripts/crate-publication-status.sh", crate, version_of(tag)]'
 run_guard
 expect_refused "an unidentified query left beside the one that decides" \
   "must stay in scripts/crate-publication-status.sh"
-restore .github/workflows/release.yml
+restore scripts/release_cd.py
 
 # 3. The query stays where the pin reads it, but stops naming a caller — the same 403, one
 #    edit away, and the one a later author is most likely to make while tidying.
@@ -239,18 +239,18 @@ restore scripts/publish-npm.sh
 #    a release is the only thing that runs the job — which is how this repository shipped a
 #    publish-npm job for several versions and stayed absent from npm.
 substitute .github/workflows/release.yml \
-  'run: scripts/publish-npm.sh' \
-  'run: npm publish ./npm/cli --access public'
+  'run: just release-linux publish --to npm --tag "$TAG"' \
+  'run: npm publish ./dist/carriers/linux-x64/*.tgz --access public'
 run_guard
 expect_refused "the publication inlined into the job instead of the script anything can run" \
-  "must run scripts/publish-npm.sh"
+  "must not publish inline"
 restore .github/workflows/release.yml
 
-# 8. The registry override, which exists so the check can point one run at its own stub,
+# 8. The registry override, which exists so the checks can point one run at their own stub,
 #    set in the workflow — where it would send a real release somewhere else entirely.
 substitute .github/workflows/release.yml \
-  '      - env: { NODE_AUTH_TOKEN: "${{ secrets.NPM_TOKEN }}" }' \
-  '      - env: { NODE_AUTH_TOKEN: "${{ secrets.NPM_TOKEN }}", NPM_REGISTRY: "https://example.invalid/" }'
+  'env: { NODE_AUTH_TOKEN: "${{ secrets.NPM_TOKEN }}" }' \
+  'env: { NODE_AUTH_TOKEN: "${{ secrets.NPM_TOKEN }}", NPM_REGISTRY: "https://example.invalid/" }'
 run_guard
 expect_refused "the release workflow choosing a registry of its own" \
   "must not set NPM_REGISTRY"
@@ -258,13 +258,13 @@ restore .github/workflows/release.yml
 
 # 9. A crate published without first asking whether its siblings resolve to the release it
 #    was built with: the lock-step split then surfaces in a consumer's build, not here.
-substitute .github/workflows/release.yml \
-  'absent) scripts/crate-sibling-resolution.sh "$crate" || exit $?; RUSTFLAGS=' \
-  'absent) RUSTFLAGS='
+substitute scripts/release_cd.py \
+  'run([bash, "scripts/crate-sibling-resolution.sh", crate],' \
+  'run([bash, "true", crate],'
 run_guard
 expect_refused "a crate published without the sibling-resolution step" \
   "only after scripts/crate-sibling-resolution.sh"
-restore .github/workflows/release.yml
+restore scripts/release_cd.py
 
 # 10. The defect the step exists for, restored at its source: one sibling required with a
 #     caret, which resolves against any newer patch of it on the registry.
@@ -276,14 +276,24 @@ expect_refused "a caret requirement between two published crates" \
   "sibling requirements must be exact" "onetaskgraph-local-md requires onetaskgraph-plugin-api as ^"
 restore Cargo.toml
 
-# Missing staging must explain the repair rather than exiting at its lookup pipeline.
-substitute .github/workflows/release.yml \
-  'name: Archive, checksum, and stage' 'name: Missing staging proof'
-substitute .github/workflows/release.yml \
-  'name: Archive, checksum, and stage' 'name: Missing staging proof'
+# 11. The test-install dropped from the build: the archive, wheel and carrier would then be
+#     published without ever having been installed and run on their own platform.
+substitute scripts/release_cd.py \
+  '"--dist", str(dist), "--install"],' \
+  '"--dist", str(dist)],'
 run_guard
-expect_refused "missing archive staging step" "must name its archive staging step" "next:"
-restore .github/workflows/release.yml
+expect_refused "a build that publishes artifacts it never installed" "install and run them" "next:"
+restore scripts/release_cd.py
+
+# 12. Linux arm64 declared again, where nothing builds it: a consumer would wait on a carrier
+#     no job publishes.
+substitute release-targets.toml \
+  '    "npm:@onetaskgraph/cli-linux-x64",' \
+  '    "npm:@onetaskgraph/cli-linux-x64",
+    "npm:@onetaskgraph/cli-linux-arm64",'
+run_guard
+expect_refused "Linux arm64 declared after it stopped being released" "Linux arm64 is no longer released"
+restore release-targets.toml
 
 if [ "$failures" -ne 0 ]; then
   echo "check-distribution-contract-enforced: $failures case(s) failed." >&2
