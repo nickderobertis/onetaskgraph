@@ -333,7 +333,9 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   list reconciled against the crates in the tree both ways, so a crate cannot fall out of
   the union in silence. The *measurement* is skipped on Windows with a printed notice
   (instrumentation there does not attribute subprocess coverage); the functional lanes
-  still gate that platform.
+  still gate that platform. **The pull-request jobs measure on Linux alone**, by the user's
+  decision of 2026-10-17: `test-macos` and `test-windows` run every suite once,
+  uninstrumented (`scripts/ci-job.sh`).
 - **One target directory per clone, and the binary the journeys spawn is built once.**
   `.cargo/config.toml` points every cargo invocation inside a clone at `<clone>/target` and
   builds dev and test at `debug = 0`, with no debuginfo; nothing in the tree names a target directory of its
