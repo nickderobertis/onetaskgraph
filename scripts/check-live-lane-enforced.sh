@@ -356,6 +356,17 @@ expect_refused "a step re-running a live crate's package with the credentials in
   "$FIXTURE_STEP" "does not clear GH_PROJECTS_TOKEN"
 reset_fixture
 
+# 13b. A new script re-running a live crate's package that is no crate's `test` target
+#      command. The script a live crate's `test` target runs is that target and is left to
+#      itself; anything else is a step outside it, held to clearing the credentials.
+printf 'cargo test --quiet -p onetaskgraph-linear --all-features --locked\n' \
+  >"$scratch/repo/scripts/rerun-linear.sh"
+run_guard
+expect_refused "a new script re-running a live crate's package from outside its test target" \
+  "scripts/rerun-linear.sh" "is not in the CLEARERS map"
+rm -f "$scratch/repo/scripts/rerun-linear.sh"
+reset_fixture
+
 # 14. The fork exception itself, which the guard must ACCEPT. GitHub hands a fork pull
 #     request no secrets at all, so demanding a credential there would fail every outside
 #     contribution for something its author cannot supply — and without this case, a guard

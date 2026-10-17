@@ -444,8 +444,24 @@ RUNS_A_WHOLE_PACKAGE = re.compile(r"\bcargo\b[^\n]*\b(?:test|nextest)\b")
 NAMES_A_PACKAGE = re.compile(r"(?<!\S)(?:-p|--package)(?!\S)")
 NAMES_A_TEST_TARGET = re.compile(r"(?<!\S)--test(?!\S)")
 
+# A script a crate's `test` target runs as its command IS that target — the place the live
+# journeys belong — rather than a step re-running a package from outside it, so it is not held
+# to clearing the credentials it exists to hand the journey.
+test_target_scripts = set()
+for project_file in sorted(Path("crates").glob("*/project.json")):
+    options = json.loads(read(project_file, "that crate's project configuration")).get(
+        "targets", {}
+    ).get("test", {}).get("options", {})
+    for command in [options.get("command", "")] + list(options.get("commands", [])):
+        if isinstance(command, str):
+            test_target_scripts.update(
+                Path(found) for found in re.findall(r"(?<!\S)bash (scripts/[\w.-]+\.sh)", command)
+            )
+
 runners = set()
 for script in sorted(Path("scripts").glob("*.sh")):
+    if script in test_target_scripts:
+        continue
     joined = re.sub(
         r"\\\n", " ", without_comments(read(script, "a script of this repository"))
     )

@@ -133,6 +133,62 @@ for path in sorted(paths.split()):
                 f"on; test runs `{tested[0]}` and coverage `{covered[0]}`"
             )
 
+# The live crates: on the same platforms their `test` runs only the credentialed journey that
+# scripts/live-crate-test.sh names, and `coverage` runs the rest. So the table there names
+# exactly the crates whose `test` is keyed on a live credential, each entry is a test that
+# opens a live session, every cargo run of their `test` goes through that script, and their
+# coverage is the whole-crate run — or a non-live test would be run by neither target.
+CREDENTIALS = {"GH_PROJECTS_TOKEN", "LINEAR_API_KEY"}
+wrapper = Path("scripts/live-crate-test.sh").read_text(encoding="utf-8")
+table = {
+    crate: (binary, test)
+    for crate, binary, test in re.findall(r"(?m)^\s+([a-z0-9-]+)\) live=\((\S+) (\S+)\) ;;$", wrapper)
+}
+credentialed = set()
+for path in sorted(Path("crates").glob("*/project.json")):
+    project = json.loads(path.read_text(encoding="utf-8"))
+    inputs = project.get("targets", {}).get("test", {}).get("inputs", [])
+    if any(isinstance(entry, dict) and entry.get("env") in CREDENTIALS for entry in inputs):
+        credentialed.add(project["name"])
+for crate in sorted(credentialed - set(table)):
+    problems.append(
+        f"crates/{crate}: its test target is keyed on a live credential, and "
+        "scripts/live-crate-test.sh names no credentialed journey for it"
+    )
+for crate in sorted(set(table) - credentialed):
+    problems.append(
+        f"scripts/live-crate-test.sh: names {crate}, whose test target is keyed on no live credential"
+    )
+for crate, (binary, test) in sorted(table.items()):
+    root = Path("crates") / crate
+    project = json.loads((root / "project.json").read_text(encoding="utf-8"))
+    tested = commands(project, "test")
+    if f"bash scripts/live-crate-test.sh {crate}" not in tested or any(
+        "cargo" in shlex.split(command) for command in tested
+    ):
+        problems.append(
+            f"crates/{crate}: its test target runs {tested}; every cargo run of it goes through "
+            f"`bash scripts/live-crate-test.sh {crate}`, or it runs tests coverage also runs"
+        )
+    if commands(project, "coverage") != [f"bash scripts/rust-coverage.sh {crate}"]:
+        problems.append(
+            f"crates/{crate}: its coverage is not the whole-crate run, so the tests "
+            "scripts/live-crate-test.sh leaves to it would run nowhere"
+        )
+    *module, name = test.split("::")
+    binary_root = root / "tests" / binary
+    source = (binary_root / Path(*module)).with_suffix(".rs") if module else (
+        binary_root / "main.rs" if binary_root.is_dir() else binary_root.with_suffix(".rs")
+    )
+    text = source.read_text(encoding="utf-8") if source.is_file() else ""
+    body = re.search(rf"(?ms)^(?:async )?fn {re.escape(name)}\(\).*?^}}", text)
+    if not body or "Session::open" not in body.group(0):
+        problems.append(
+            f"scripts/live-crate-test.sh: names {crate}'s `{binary}` test `{test}`, which "
+            f"{'is not in ' + source.as_posix() if not body else 'opens no live session'}; "
+            "only a credentialed journey is left out of the coverage run's share"
+        )
+
 if problems:
     print("check-test-in-coverage: a project's tests would stop running where coverage stands in for them.", file=sys.stderr)
     for problem in problems:

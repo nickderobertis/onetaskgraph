@@ -51,6 +51,9 @@ run sdk-python:generate-check -
 run workspace:deny -"
     ;;
   test-linux | test-macos)
+    # And the live crates' `test` runs only their credentialed journeys, coverage running the
+    # rest of them, as it does every tagged crate's (scripts/live-crate-test.sh).
+    export ONETASKGRAPH_TESTS_UNDER_COVERAGE=1
     phases="affected test,budgets tag:test-in-coverage:*
 affected test-uncovered,coverage -
 run scripts:distribution-check -
