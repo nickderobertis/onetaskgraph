@@ -4,8 +4,8 @@
 # The recipes, scripts/ci-job.sh, Nx's affected selection and the live-lane decision are all
 # real; only what a target DOES is not — in a scratch clone each target's command is replaced
 # with one that succeeds or fails on cue, so what a recipe ran is readable from its own output
-# in seconds. The Windows and macOS recipes are driven through `--select-only`, which is all
-# this host can run of them.
+# in seconds. The Windows recipe, and the macOS recipe outside the cases that read what its
+# phases ran with, are driven through `--select-only`.
 set -euo pipefail
 
 readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

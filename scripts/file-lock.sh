@@ -27,8 +27,9 @@ with_file_lock() {
   perl -MFcntl=:flock -e '
     $^F = 1024;
     my $lock = shift;
-    open(my $handle, ">>", $lock) or die "file-lock: could not open $lock: $!; next: make it writable, then rerun.\n";
-    flock($handle, LOCK_EX) or die "file-lock: could not lock $lock: $!; next: check the filesystem supports locks, then rerun.\n";
-    exec { $ARGV[0] } @ARGV or die "file-lock: could not run $ARGV[0]: $!; next: install it or put it on PATH, then rerun.\n";
+    sub refuse { print STDERR "file-lock: $_[0]\n"; exit 1 }
+    open(my $handle, ">>", $lock) or refuse("could not open $lock: $!; next: make it writable, then rerun.");
+    flock($handle, LOCK_EX) or refuse("could not lock $lock: $!; next: check the filesystem supports locks, then rerun.");
+    exec { $ARGV[0] } @ARGV or refuse("could not run $ARGV[0]: $!; next: install it or put it on PATH, then rerun.");
   ' "$lock" "$@"
 }

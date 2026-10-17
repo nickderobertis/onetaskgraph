@@ -78,6 +78,8 @@ bounded "a lock file left behind" with_file_lock "$lock" true
 mkdir "$scratch/a-directory"
 if output="$(with_file_lock "$scratch/a-directory" true 2>&1)"; then
   fail "a lock that could not be opened read as taken"
+else
+  [ "$?" -eq 1 ] || fail "a lock that could not be opened exited other than 1: $output"
 fi
 grep -qF "file-lock: could not open $scratch/a-directory" <<<"$output" \
   || fail "a lock that could not be opened failed without saying so: $output"
@@ -85,6 +87,12 @@ grep -qF "file-lock: could not open $scratch/a-directory" <<<"$output" \
 # 6. A program that cannot be run fails, naming it and what to do.
 if output="$(with_file_lock "$lock" "$scratch/no-such-program" 2>&1)"; then
   fail "a program that could not be run read as a success"
+else
+  [ "$?" -eq 1 ] || fail "a program that could not be run exited other than 1: $output"
 fi
+# 7. A program's own status, whatever it is, is the caller's.
+status=0
+with_file_lock "$lock" bash -c 'exit 37' || status=$?
+[ "$status" -eq 37 ] || fail "a program exiting 37 read as $status"
 grep -qF "file-lock: could not run $scratch/no-such-program" <<<"$output" && grep -qF "next:" <<<"$output" \
   || fail "a program that could not be run failed without saying so: $output"
