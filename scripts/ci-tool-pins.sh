@@ -11,8 +11,12 @@ prune_superseded="$(cd "$ROOT" && just --evaluate prune_superseded_version | tr 
 # One version each, so a key is one value and $GITHUB_OUTPUT gains exactly one record.
 single_version() {
   case "$2" in
-    "" | *[!0-9A-Za-z.+-]* | [!0-9]* | *.) ;;
-    *.*.*) return 0 ;;
+    "" | *[!0-9A-Za-z.+-]*) ;;
+    *)
+      if printf '%s\n' "$2" | grep -Eqx '(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?'; then
+        return 0
+      fi
+      ;;
   esac
   echo "ci-tool-pins: no single pinned version for $1 where it is pinned (read '$2')." >&2
   echo "ci-tool-pins: next: restore RELEASE_PLZ_VERSION in scripts/scoped-release-plz.sh and prune_superseded_version in the justfile." >&2

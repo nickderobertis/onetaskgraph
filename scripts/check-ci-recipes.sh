@@ -313,7 +313,7 @@ pins
 [ "$PINS_STATUS" -eq 0 ] && [ "$(cat "$scratch/pins-output")" = "release-plz=9.8.7
 prune-superseded=6.5.4" ] \
   || fail "the tool pins did not follow the moved pins to \$GITHUB_OUTPUT: exit $PINS_STATUS, $PINS"
-for broken in "" "9.8" "9.8.7 9.8.8" "--all"; do
+for broken in "" "9.8" "9.8.7 9.8.8" "--all" "9..8.7" "9.8.7."; do
   : >"$scratch/pins-output"
   if [ -z "$broken" ]; then
     sed -i.bak '/^readonly RELEASE_PLZ_VERSION=/d' "$REPO/scripts/scoped-release-plz.sh"

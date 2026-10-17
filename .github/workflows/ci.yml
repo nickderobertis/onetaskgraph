@@ -494,8 +494,8 @@ jobs:
           enable-cache: true
       # Reads rust-toolchain.toml; its built-in cache keys `target` and the cargo registry on
       # Cargo.lock, the toolchain and the OS, and cargo's fingerprints refuse a stale unit. An
-      # entry is never re-saved under its key, and this job's first was saved by a run that
-      # failed in Bootstrap, holding no build; `cache-key` starts it afresh.
+      # entry is never re-saved under its key, so a key whose entry holds no build is retired
+      # by naming a new one here.
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           cache-key: lint-afresh

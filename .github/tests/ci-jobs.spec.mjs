@@ -24,8 +24,8 @@ const FOUR = {
   "test-macos": "macos-latest",
 };
 const TESTS = ["test-linux", "test-windows", "test-macos"];
-// Every pull request, and for test-macos every one but release-plz's own release branch: the
-// manager's ruling, so the release pull request allocates no Mac runner at all.
+// Every pull request, and for test-macos every one but release-plz's own release branch, so
+// the release pull request allocates no Mac runner at all.
 const PULL_REQUEST = "github.event_name == 'pull_request'";
 const CONDITIONS = {
   lint: PULL_REQUEST,
