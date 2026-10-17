@@ -41,38 +41,39 @@ for argument in "$@"; do
   esac
 done
 
-# One phase per line: `affected|run`, the comma-separated targets or task, and the projects
-# that phase excludes (or `-`).
-concurrent=true
+# One phase per line: the group it runs in, `affected|run`, the comma-separated targets or
+# task, and the projects that phase excludes (or `-`). Groups run in order, and the phases of
+# one group at once: they select disjoint work, and the instrumented build is cargo-llvm-cov's
+# own target directory, so it and the plain build do not wait on one lock.
 case "$JOB" in
   lint)
-    phases="affected format-check,lint,typecheck -
-run sdk-python:generate-check -
-run workspace:deny -"
+    phases="1 affected format-check,lint,typecheck -
+1 run sdk-python:generate-check -
+1 run workspace:deny -"
     ;;
   test-linux | test-macos)
     # And the live crates' `test` runs only their credentialed journeys, coverage running the
     # rest of them, as it does every tagged crate's (scripts/live-crate-test.sh).
     export ONETASKGRAPH_TESTS_UNDER_COVERAGE=1
-    # Each phase runs beside the others, so work that would queue behind a long one gets a
-    # phase of its own: the two Linear crates, whose credentialed journeys take one seat and so
-    # run one at a time, and the SDKs' coverage, which would otherwise wait for every crate's.
-    phases="affected test,budgets tag:test-in-coverage:*,onetaskgraph-linear,onetaskgraph-linear-e2e
-affected test,budgets *,!onetaskgraph-linear,!onetaskgraph-linear-e2e
-affected test-uncovered,coverage tag:layer:sdk
-affected coverage *,!tag:layer:sdk
-run scripts:distribution-check -
-run scripts:distribution-test -"
+    # Work that would queue behind a long phase gets one of its own: the two Linear crates,
+    # whose credentialed journeys take one seat and so run one at a time, and the SDKs'
+    # coverage, which would otherwise wait for every crate's.
+    phases="1 affected test,budgets tag:test-in-coverage:*,onetaskgraph-linear,onetaskgraph-linear-e2e
+1 affected test,budgets *,!onetaskgraph-linear,!onetaskgraph-linear-e2e
+1 affected test-uncovered,coverage tag:layer:sdk
+1 affected coverage *,!tag:layer:sdk
+1 run scripts:distribution-check -
+1 run scripts:distribution-test -"
     ;;
   test-windows)
-    # In order rather than at once: on the Windows runner the phases' builds and journeys
-    # beside one another took several times longer each, and timing-sensitive loopback
-    # journeys failed under the load.
-    concurrent=false
-    phases="affected test,budgets tag:test-in-coverage:all
-affected coverage -
-run scripts:distribution-check -
-run scripts:distribution-test -"
+    # The tests alone first: on the Windows runner the test builds and journeys beside other
+    # phases took several times longer each, and timing-sensitive loopback journeys failed
+    # under the load. The SDKs' coverage and the distribution journeys share no build, and
+    # run together after.
+    phases="1 affected test,budgets tag:test-in-coverage:all
+2 affected coverage -
+2 run scripts:distribution-check -
+2 run scripts:distribution-test -"
     ;;
   *) usage ;;
 esac
@@ -174,18 +175,15 @@ record_phase() {
   if run_phase "$@"; then echo 0 >"$scratch/exit.$1"; else echo 1 >"$scratch/exit.$1"; fi
 }
 
-# Every phase of a job at once, unless the job says otherwise: they select disjoint work, and
-# the instrumented build is cargo-llvm-cov's own target directory, so it and the plain build
-# do not wait on one lock. Each phase's exit status is kept under its index.
 phase=0
-while IFS=' ' read -r kind targets excluded; do
+group=
+while IFS=' ' read -r in_group kind targets excluded; do
   [ -n "$kind" ] || continue
+  # A new group starts once every phase of the one before has ended.
+  [ "$in_group" = "$group" ] || wait
+  group="$in_group"
   phase=$((phase + 1))
-  if "$concurrent"; then
-    record_phase "$phase" "$kind" "$targets" "$excluded" &
-  else
-    record_phase "$phase" "$kind" "$targets" "$excluded"
-  fi
+  record_phase "$phase" "$kind" "$targets" "$excluded" &
 done <<EOF
 $phases
 EOF
