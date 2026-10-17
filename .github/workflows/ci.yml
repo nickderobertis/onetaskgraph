@@ -565,13 +565,13 @@ jobs:
           NX_BASE: ${{ steps.pr-base.outputs.base }}
           NX_HEAD: HEAD
         run: just ci-lint
-      # llmlint: ignore-end[no_second_broader_sweep_over_an_already_gated_commit]
       # The release pull request alone: the pass-time budget of the pool maintenance
-      # onevcs.toml declares, which `check`'s Linux leg ran after its gate. lint is the one of the
+      # onevcs.toml declares, which `check`'s Linux leg runs after its gate. lint is the one of the
       # four that runs in full there, on Linux, already bootstrapped with the pinned pruner.
       - name: Pool-maintenance pass-time budget on the release pull request
         if: startsWith(github.head_ref, 'release-plz-')
         run: just pool-maintenance-budget
+      # llmlint: ignore-end[no_second_broader_sweep_over_an_already_gated_commit]
       - name: Install oneharness and llmlint
         run: |
           just setup-llmlint
