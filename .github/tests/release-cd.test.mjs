@@ -380,6 +380,43 @@ test("the Linux job's registry verification fails on another version, an unusabl
       );
       assert.match(result.output, /release-cd: next: /, `${registry} ${why}`);
     }
+  // An installable package whose binary will not run, or answers as another release.
+  const binaries = join(scratch, "binaries");
+  mkdirSync(binaries, { recursive: true });
+  execFileSync(
+    "python3",
+    [
+      "-c",
+      `import io, json, sys, tarfile
+from pathlib import Path
+out, version = Path(sys.argv[1]), sys.argv[2]
+manifest = json.loads(Path('npm/platforms/linux-x64/package.json').read_text())
+for name, script in [('another-version.tgz', 'echo onetaskgraph 0.0.1'), ('failing.tgz', 'echo broken >&2; exit 3')]:
+    with tarfile.open(out / name, 'w:gz') as packed:
+        for path, data in [('package/package.json', json.dumps({**manifest, 'version': version}).encode()), ('package/bin/onetaskgraph', f'#!/bin/sh\\n{script}\\n'.encode())]:
+            info = tarfile.TarInfo(path); info.size = len(data); info.mode = 0o755
+            packed.addfile(info, io.BytesIO(data))`,
+      binaries,
+      version,
+    ],
+    { cwd: checkout },
+  );
+  for (const [why, file, reason] of [
+    [
+      "a binary reporting another release",
+      "another-version.tgz",
+      /answered 'onetaskgraph 0\.0\.1', not 'onetaskgraph /,
+    ],
+    ["a binary that fails", "failing.tgz", /answered 'broken', not 'onetaskgraph /],
+  ]) {
+    control({
+      releases: [tag],
+      replace: { [`cli-linux-x64-${version}.tgz`]: join(binaries, file) },
+    });
+    const result = recipe("linux", ["verify", "--from", "npm", "--tag", tag, "--wait", "0"], env);
+    assert.equal(result.status, 1, `npm serving ${why}:\n${result.output.slice(-2000)}`);
+    assert.match(result.output, reason, why);
+  }
   control({ releases: [tag] });
 });
 
@@ -524,6 +561,11 @@ with zipfile.ZipFile(out / 'empty.whl', 'w') as packed:
     packed.writestr(f'onetaskgraph_cli-{version}.dist-info/RECORD', '')
 import hashlib
 (out / 'not-an-archive').write_bytes(b'not a gzip archive')
+with tarfile.open(out / 'two-members.tar.gz', 'w:gz') as packed:
+    for path in ('onetaskgraph', 'extra'):
+        info = tarfile.TarInfo(path); info.size = 1
+        packed.addfile(info, io.BytesIO(b'x'))
+(out / 'two-members.sha256').write_text(hashlib.sha256((out / 'two-members.tar.gz').read_bytes()).hexdigest() + '  archive\\n')
 (out / 'not-an-archive.sha256').write_text(hashlib.sha256(b'not a gzip archive').hexdigest() + '  archive\\n')`,
     wrong,
     version,
@@ -546,6 +588,14 @@ import hashlib
         [macos.checksum]: join(wrong, "not-an-archive.sha256"),
       },
       /archive on the release is not a readable archive/,
+    ],
+    [
+      "github",
+      {
+        [macos.archive]: join(wrong, "two-members.tar.gz"),
+        [macos.checksum]: join(wrong, "two-members.sha256"),
+      },
+      /archive on the release holds .*'extra'.*, not the one regular file onetaskgraph/,
     ],
   ]) {
     control({ releases: [tag], replace });
@@ -858,6 +908,25 @@ test("a publication refuses a build it cannot vouch for before it sends anything
       "a list that is not the plan",
       (d) => rewrite(d, { ...manifest, artifacts: manifest.artifacts.slice(1) }),
       /does not list exactly the files linux releases/,
+    ],
+    [
+      "a manifest that is not an object",
+      (d) => rewrite(d, []),
+      /no usable build of linux.*not a build manifest/,
+    ],
+    [
+      "an entry that is not a file",
+      (d) => rewrite(d, { ...manifest, artifacts: [5, ...manifest.artifacts] }),
+      /no usable build of linux.*an artifact entry is not a file/,
+    ],
+    [
+      "a digest that is not SHA-256",
+      (d) =>
+        rewrite(d, {
+          ...manifest,
+          artifacts: manifest.artifacts.map((entry) => ({ ...entry, sha256: "not-a-digest" })),
+        }),
+      /no usable build of linux.*an artifact entry is not a file/,
     ],
   ];
   for (const [name, change, reason] of cases) {
