@@ -5,8 +5,8 @@
 #
 # Each of ci.yml's four jobs runs exactly one `just ci-<job>` recipe, and each recipe is this
 # script, so a contributor runs what CI runs. A job is a list of phases, each one Nx
-# invocation. Before running a phase it prints every task that phase selects; after, every
-# task Nx ran; on failure, the whole of Nx's output. `--select-only` prints the selection and
+# invocation. A phase that passes prints one line naming the tasks it ran; one that fails
+# prints the whole of Nx's output. `--select-only` prints every task each phase selects and
 # runs nothing, which is how a host that is not Windows or macOS proves those jobs' selection.
 #
 # `--exclude=` is what scripts/live-lane-selection.sh answers through lane_runner.py: a live
@@ -85,15 +85,25 @@ selected_tasks() {
     echo "ci-job: Nx could not plan '$*'; fix what it reports above, then re-run." >&2
     return 1
   fi
-  "$PYTHON" -c '
+  # The envelope is held to its shape: a graph missing its task map is Nx answering something
+  # else, never a phase with nothing to run.
+  if ! "$PYTHON" -c '
 import json, sys
-with open(sys.argv[1], encoding="utf-8") as handle:
-    document = json.load(handle)
-tasks = document.get("tasks", {}).get("tasks", {})
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        document = json.load(handle)
+    tasks = document["tasks"]["tasks"]
+    if not isinstance(tasks, dict) or not all(isinstance(name, str) and ":" in name for name in tasks):
+        raise TypeError("tasks.tasks is not a map of project:target names")
+except (OSError, ValueError, KeyError, TypeError) as error:
+    raise SystemExit(f"ci-job: Nx printed no task graph ({type(error).__name__}: {error})")
 sys.stdout.reconfigure(newline="\n")
 for name in sorted(tasks):
     print(name)
-' "$scratch/graph.json"
+' "$scratch/graph.json"; then
+    echo "ci-job: Nx answered '$*' with something other than a task graph; check the Nx version node_modules holds, then re-run." >&2
+    return 1
+  fi
 }
 
 status=0
@@ -118,13 +128,14 @@ while IFS=' ' read -r kind targets excluded; do
     echo "ci-job: $JOB: nx ${arguments[*]} selects nothing"
     continue
   fi
-  printf '%s\n' "$plan" | sed "s/^/ci-job: $JOB: selects /"
   if "$select_only"; then
+    printf '%s\n' "$plan" | sed "s/^/ci-job: $JOB: selects /"
     continue
   fi
   if FORCE_COLOR=0 NO_COLOR=1 node_modules/.bin/nx "${arguments[@]}" --outputStyle=static >"$scratch/run.log" 2>&1; then
-    sed -n 's/^.*> nx run \([^ ]*\).*$/\1/p' "$scratch/run.log" | tr -d '\r' | sort -u \
-      | sed "s/^/ci-job: $JOB: ran /"
+    # One line per phase: which tasks it proved, which is what a reader of a green job needs.
+    ran="$(sed -n 's/^.*> nx run \([^ ]*\).*$/\1/p' "$scratch/run.log" | tr -d '\r' | sort -u | tr '\n' ' ')"
+    echo "ci-job: $JOB: ran ${ran% }"
   else
     cat "$scratch/run.log" >&2
     echo "ci-job: $JOB: nx ${arguments[*]} failed — the failing tasks are named above." >&2

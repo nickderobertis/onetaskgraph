@@ -93,12 +93,18 @@ recipe() {
 expect() {
   local case_name="$1" verb="$2" task="$3" absent="${4:-}" job line
   job="${case_name%% *}"
-  line="ci-job: $job: $verb $task"
-  if [ -z "$absent" ] && ! grep -qxF "$line" <<<"$OUTPUT"; then
-    fail "$case_name: expected '$line' in the recipe's output, which was:"
+  # A phase that ran says so on one line, `ci-job: <job>: ran <task> <task>...`; a selection
+  # is one task per line. Either way the task is one whole word after the verb.
+  if grep -E "^ci-job: $job: $verb " <<<"$OUTPUT" | tr ' ' '\n' | grep -qxF "$task"; then
+    line=present
+  else
+    line=absent
+  fi
+  if [ -z "$absent" ] && [ "$line" = absent ]; then
+    fail "$case_name: expected the recipe to say it $verb $task; its output was:"
     printf '%s\n' "$OUTPUT" >&2
-  elif [ -n "$absent" ] && grep -qxF "$line" <<<"$OUTPUT"; then
-    fail "$case_name: '$line' is in the recipe's output, but this job must not $verb $task for this change"
+  elif [ -n "$absent" ] && [ "$line" = present ]; then
+    fail "$case_name: the recipe $verb $task, which this job must not do for this change"
   fi
 }
 
@@ -113,7 +119,8 @@ expect_status() {
   fi
 }
 
-# Neither the changed project nor anything that depends on it.
+# The project a one-project change reaches, one project that depends on it, one the change
+# never reaches, and a file no project tests.
 readonly CHANGED=onetaskgraph-local-md
 readonly CHANGED_FILE=crates/onetaskgraph-local-md/src/lib.rs
 readonly DEPENDENT=onetaskgraph-core
@@ -124,7 +131,8 @@ record_targets
 git -C "$REPO" commit --quiet --no-verify -am "test: record every target"
 BASE="$(git -C "$REPO" rev-parse HEAD)"
 
-# 1. A change to one project.
+# 1. A change to one project: its targets and its dependents' run, those of a project it never
+#    reaches do not, and on Linux and macOS its suite runs once, under coverage.
 commit_change "$CHANGED_FILE"
 recipe ci-lint
 expect_status "lint after a change to $CHANGED" 0
@@ -215,6 +223,67 @@ expect_status "test-linux with $CHANGED:coverage failing" 1
 expect "test-linux with $CHANGED:coverage failing" ran "scripts:distribution-test"
 grep -qF "ci-job: test-linux: nx affected -t test-uncovered coverage failed" <<<"$OUTPUT" \
   || fail "test-linux with $CHANGED:coverage failing: the recipe did not name the phase that failed"
+
+# 4. Nx answering with something other than a task graph fails the recipe rather than reading
+#    as a phase with nothing to run. The stand-in is Nx's own executable, so everything the
+#    recipe does around it is still real.
+git -C "$REPO" checkout --quiet -- .
+git -C "$REPO" reset --quiet --hard "$BASE"
+commit_change "$CHANGED_FILE"
+mv "$REPO/node_modules/.bin/nx" "$REPO/node_modules/.bin/nx.real"
+printf '#!/usr/bin/env bash\necho "{\\"graph\\": {}}"\n' >"$REPO/node_modules/.bin/nx"
+chmod +x "$REPO/node_modules/.bin/nx"
+recipe ci-test-macos --select-only
+expect_status "test-macos with Nx printing no task graph" 1
+grep -qF "ci-job: Nx printed no task graph" <<<"$OUTPUT" \
+  || fail "test-macos with Nx printing no task graph: the recipe did not say Nx printed no task graph: $OUTPUT"
+mv "$REPO/node_modules/.bin/nx.real" "$REPO/node_modules/.bin/nx"
+
+# 5. The tool pins ci.yml keys its caches on are read from where each tool is pinned, so a
+#    pin that moves is a different key; a pin that is gone fails rather than keying on nothing.
+pins() {
+  PINS="$(cd "$REPO" && GITHUB_OUTPUT="$scratch/pins-output" bash scripts/ci-tool-pins.sh 2>&1)" \
+    && PINS_STATUS=0 || PINS_STATUS=$?
+}
+: >"$scratch/pins-output"
+sed -i.bak 's/^readonly RELEASE_PLZ_VERSION=.*/readonly RELEASE_PLZ_VERSION=9.8.7/' "$REPO/scripts/scoped-release-plz.sh"
+sed -i.bak 's/^prune_superseded_version := .*/prune_superseded_version := "6.5.4"/' "$REPO/justfile"
+pins
+[ "$PINS_STATUS" -eq 0 ] && [ "$PINS" = "release-plz=9.8.7
+prune-superseded=6.5.4" ] && [ "$(cat "$scratch/pins-output")" = "$PINS" ] \
+  || fail "the tool pins did not follow the moved pins to stdout and \$GITHUB_OUTPUT: exit $PINS_STATUS, $PINS"
+sed -i.bak '/^readonly RELEASE_PLZ_VERSION=/d' "$REPO/scripts/scoped-release-plz.sh"
+pins
+[ "$PINS_STATUS" -ne 0 ] && grep -qF "no pinned version for release-plz" <<<"$PINS" \
+  || fail "a missing release-plz pin did not fail the tool pins: exit $PINS_STATUS, $PINS"
+rm -f "$REPO/scripts/scoped-release-plz.sh.bak" "$REPO/justfile.bak"
+git -C "$REPO" checkout --quiet -- .
+
+# 6. A pull request's comparison base is the merge base of the commit under test with its base
+#    branch's tip, over a real remote whose base branch moved on after the branch was cut.
+remote="$scratch/base-remote.git"
+work="$scratch/base-work"
+git init --quiet --bare "$remote"
+git init --quiet -b main "$work"
+git -C "$work" config user.email "check-ci-recipes@invalid"
+git -C "$work" config user.name "check-ci-recipes"
+git -C "$work" remote add origin "$remote"
+git -C "$work" commit --quiet --allow-empty -m "the fork point"
+fork="$(git -C "$work" rev-parse HEAD)"
+git -C "$work" commit --quiet --allow-empty -m "main moves on"
+tip="$(git -C "$work" rev-parse HEAD)"
+git -C "$work" push --quiet origin main
+git -C "$work" checkout --quiet -b feature "$fork"
+git -C "$work" commit --quiet --allow-empty -m "the pull request"
+: >"$scratch/base-output"
+derived="$(cd "$work" && GITHUB_OUTPUT="$scratch/base-output" bash "$REPO/scripts/ci-pr-base.sh" main "$tip" 2>&1)" \
+  && derived_status=0 || derived_status=$?
+[ "$derived_status" -eq 0 ] && [ "$(cat "$scratch/base-output")" = "base=$fork" ] \
+  || fail "the comparison base was not the fork point $fork: exit $derived_status, $derived, output $(cat "$scratch/base-output")"
+derived="$(cd "$work" && bash "$REPO/scripts/ci-pr-base.sh" main "$(printf '%040d' 0)" 2>&1)" \
+  && derived_status=0 || derived_status=$?
+[ "$derived_status" -ne 0 ] && grep -qF "share no merge base" <<<"$derived" \
+  || fail "a base sha the checkout does not hold did not fail the comparison base: exit $derived_status, $derived"
 
 if [ "$failures" -ne 0 ]; then
   echo "check-ci-recipes: $failures expectation(s) about the pull-request job recipes failed — see above." >&2

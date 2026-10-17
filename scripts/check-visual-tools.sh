@@ -1040,6 +1040,23 @@ run_visual_docs
 names "rust-toolchain.toml" || fail "the check refused the parted container without naming where the version lives:"
 restore .github/workflows/visual-docs.yml
 
+# 34b. ci.yml's lint-job capture parts from that toolchain, or stops running the capture
+#      scripts the recipes and visual-docs.yml run.
+sed -i.bak 's/rust:[0-9][0-9.]*-bookworm/rust:0.0.0-bookworm/' "$CLONE/.github/workflows/ci.yml"
+rm -f "$CLONE/.github/workflows/ci.yml.bak"
+run_visual_docs
+[ "$STATUS" -eq 0 ] && fail "ci.yml's capture image parted from rust-toolchain.toml and the check passed:"
+grep -qF "ci.yml: captures in rust:0.0.0-bookworm" <<<"$OUTPUT" \
+  || fail "the check refused ci.yml's parted capture image without naming it:"
+restore .github/workflows/ci.yml
+sed -i.bak 's#bash scripts/screenshots.sh#bash scripts/screenshots-other.sh#g' "$CLONE/.github/workflows/ci.yml"
+rm -f "$CLONE/.github/workflows/ci.yml.bak"
+run_visual_docs
+[ "$STATUS" -eq 0 ] && fail "ci.yml's capture stopped running scripts/screenshots.sh and the check passed:"
+grep -qF "ci.yml: the lint job's capture does not run" <<<"$OUTPUT" \
+  || fail "the check refused ci.yml's capture without naming the script it no longer runs:"
+restore .github/workflows/ci.yml
+
 # 35. A regenerated capture tree stops being ignored, which is how one gets committed.
 sed -i.bak '\|^/shots/current/$|d' "$CLONE/.gitignore"
 rm -f "$CLONE/.gitignore.bak"

@@ -202,7 +202,6 @@ jobs:
           NX_HEAD: HEAD
         run: just gate
 
-
       - name: Check the affected projects and generated Python SDK on the default branch
         if: github.event_name != 'pull_request' && matrix.os == 'ubuntu-latest'
         env:
@@ -412,7 +411,6 @@ jobs:
           fi
           just lint-llm-diff origin/main
 
-  # ---------------------------------------------------------------------------------------
   # The four pull-request jobs: `lint` once, on Linux, for everything platform-independent,
   # and one test job per platform. None needs another, so all four start at once, and each
   # runs its checks through one `just ci-<job>` recipe (scripts/ci-job.sh) over the projects
@@ -517,11 +515,13 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: bash scripts/ci-pr-base.sh "$BASE_REF" "$BASE_SHA"
+      # llmlint: ignore-block[no_second_broader_sweep_over_an_already_gated_commit] Transitional by the task's order: the jobs behind today's required contexts stay in place and passing until branch protection names the four new jobs, and onetaskgraph-ci-budgets removes them; until then both run on one commit.
       - name: Format, lint and type-check the affected projects, generated code and the supply chain
         env:
           NX_BASE: ${{ steps.pr-base.outputs.base }}
           NX_HEAD: HEAD
         run: just ci-lint
+      # llmlint: ignore-end[no_second_broader_sweep_over_an_already_gated_commit]
       - name: Install oneharness and llmlint
         run: |
           just setup-llmlint
@@ -531,6 +531,7 @@ jobs:
         run: npm i -g @anthropic-ai/claude-code
       - name: Validate the llmlint config (no model)
         run: just lint-llm-validate --diff-base origin/main
+      # llmlint: ignore-block[no_second_broader_sweep_over_an_already_gated_commit] Transitional by the task's order: the jobs behind today's required contexts stay in place and passing until branch protection names the four new jobs, and onetaskgraph-ci-budgets removes them; until then both run on one commit.
       - name: Lint the changed files with llmlint
         env:
           # `claude` reads only CLAUDE_CODE_OAUTH_TOKEN; see the llmlint job above.
@@ -544,6 +545,7 @@ jobs:
             exit 1
           fi
           just lint-llm-diff origin/main
+      # llmlint: ignore-end[no_second_broader_sweep_over_an_already_gated_commit]
       - name: Wait for the visual docs capture
         shell: bash
         run: |
@@ -580,7 +582,6 @@ jobs:
           matrix: '[{"project":"","arch":"x86_64","current":"shots/current","verify":"shots/verify","manifest":"","gallery_title":"Visual docs"}]'
           publish: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
           github-token: ${{ github.token }}
-
 
   test-linux:
     if: github.event_name == 'pull_request'
@@ -670,6 +671,7 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: bash scripts/ci-pr-base.sh "$BASE_REF" "$BASE_SHA"
+      # llmlint: ignore-block[no_second_broader_sweep_over_an_already_gated_commit] Transitional by the task's order: the jobs behind today's required contexts stay in place and passing until branch protection names the four new jobs, and onetaskgraph-ci-budgets removes them; until then both run on one commit.
       - name: Test the affected projects
         if: steps.release.outputs.tests == 'run'
         env:
@@ -690,8 +692,9 @@ jobs:
           ONETASKGRAPH_LIVE_REQUIRED: ${{ github.event.pull_request.head.repo.fork && '0' || '1' }}
           NX_BASE: ${{ steps.pr-base.outputs.base }}
           NX_HEAD: HEAD
+        # llmlint: ignore[external_service_suite_stays_out_of_the_affected_tier] As on check's Linux leg: these suites run only when their own plugin changed, which is the edge; AGENTS.md records why an edge of their own was removed.
         run: just ci-test-linux
-
+      # llmlint: ignore-end[no_second_broader_sweep_over_an_already_gated_commit]
 
   test-windows:
     if: github.event_name == 'pull_request'
@@ -781,14 +784,14 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: bash scripts/ci-pr-base.sh "$BASE_REF" "$BASE_SHA"
-      # llmlint: ignore[live_tier_compiles_and_requires_credential] One live session per run: test-linux alone carries the credentials, so this job's live journeys skip.
+      # llmlint: ignore-block[live_tier_compiles_and_requires_credential,no_second_broader_sweep_over_an_already_gated_commit] One live session per run: test-linux alone carries the credentials, so this job's live journeys skip. And transitional by the task's order: the jobs behind today's required contexts stay in place and passing until branch protection names the four new jobs, and onetaskgraph-ci-budgets removes them; until then both run on one commit.
       - name: Test the affected projects
         if: steps.release.outputs.tests == 'run'
         env:
           NX_BASE: ${{ steps.pr-base.outputs.base }}
           NX_HEAD: HEAD
         run: just ci-test-windows
-
+      # llmlint: ignore-end[live_tier_compiles_and_requires_credential,no_second_broader_sweep_over_an_already_gated_commit]
 
   # Skipped at the job level on release-plz's own release branch, so the release pull request
   # spends no Mac runner (`onetaskgraph-macos-runs-per-change`); a skipped job satisfies a
@@ -883,10 +886,11 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: bash scripts/ci-pr-base.sh "$BASE_REF" "$BASE_SHA"
-      # llmlint: ignore[live_tier_compiles_and_requires_credential] One live session per run: test-linux alone carries the credentials, so this job's live journeys skip.
+      # llmlint: ignore-block[live_tier_compiles_and_requires_credential,no_second_broader_sweep_over_an_already_gated_commit] One live session per run: test-linux alone carries the credentials, so this job's live journeys skip. And transitional by the task's order: the jobs behind today's required contexts stay in place and passing until branch protection names the four new jobs, and onetaskgraph-ci-budgets removes them; until then both run on one commit.
       - name: Test the affected projects
         if: steps.release.outputs.tests == 'run'
         env:
           NX_BASE: ${{ steps.pr-base.outputs.base }}
           NX_HEAD: HEAD
         run: just ci-test-macos
+      # llmlint: ignore-end[live_tier_compiles_and_requires_credential,no_second_broader_sweep_over_an_already_gated_commit]

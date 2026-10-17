@@ -379,6 +379,30 @@ elif channel and container.group(1) != channel.group(1):
         "version is declared; bring the image tag to it."
     )
 
+# ci.yml's `lint` job captures too, by the same two scripts inside the same image, as steps
+# of its own rather than through the reusable workflow. Its image and its scripts are held to
+# the same two sources, so neither capture can drift from the toolchain or from the other.
+ci = read(".github/workflows/ci.yml")
+ci_images = re.findall(r"\brust:([0-9]+\.[0-9]+\.[0-9]+)-bookworm\b", ci)
+if not ci_images:
+    problems.append(
+        ".github/workflows/ci.yml: the lint job's visual docs capture must run in a pinned "
+        "`rust:<X.Y.Z>-bookworm` image, as visual-docs.yml's does."
+    )
+for image in ci_images:
+    if channel and image != channel.group(1):
+        problems.append(
+            f".github/workflows/ci.yml: captures in rust:{image}-bookworm while "
+            f"rust-toolchain.toml pins {channel.group(1)}. rust-toolchain.toml is where that "
+            "version is declared; bring the image tag to it."
+        )
+for script in ("scripts/screenshots-freeze.sh ensure", "scripts/screenshots.sh"):
+    if script not in ci:
+        problems.append(
+            f".github/workflows/ci.yml: the lint job's capture does not run `{script}`, which "
+            "visual-docs.yml's capture-command and the recipes run."
+        )
+
 for tree in ("/shots/current/", "/shots/verify/", f"/{gallery.strip('/')}/"):
     if tree not in ignored:
         problems.append(
