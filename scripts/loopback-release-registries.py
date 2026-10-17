@@ -29,7 +29,7 @@ short asset behind, as an interrupted one does), `hide` (names read as absent), 
 v2), `replace` (a file name served as the bytes of another file, its index hashes with it),
 `pulls_raw` (the pull-request list answered as this text), `redirect_api` (every GitHub API
 call redirected to the other port, another origin), `redirect_api_same_origin` (every
-GitHub API read redirected once to itself on the same origin), and `release_answer`, `upload_host` and `automerge_answer`, which replace what GitHub
+GitHub API read redirected once to itself on the same origin), and `release_answer`, `upload_host`, `upload_answer` (an upload stored nowhere and answered so) and `automerge_answer`, which replace what GitHub
 answers. Every request is one JSON line in `<state>/requests.jsonl`, with the file or package a
 publication carried, so a journey can assert exactly what was sent.
 """
@@ -271,6 +271,9 @@ class Handler(BaseHTTPRequestHandler):
                 github_ids[asset_id] = (tag, name)
         if status or tag is None:
             self.send(status or 404, {"message": "upload refused"})
+            return
+        if "upload_answer" in control():
+            self.send(201, json.dumps(control()["upload_answer"]))
             return
         with lock:
             if (tag, name) in github_assets:

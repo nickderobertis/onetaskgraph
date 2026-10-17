@@ -16,6 +16,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -364,6 +365,30 @@ test("the Linux job publishes exactly what it built, re-runs only what is missin
     redirected.filter((r) => ["upload", "delete-asset"].includes(r.action)),
     [],
   );
+  // An upload GitHub answers with anything but the asset it was sent fails the step.
+  const archive = file("archive");
+  const size = statSync(join(dist, "assets", archive)).size;
+  for (const [name, answer] of [
+    ["no asset", null],
+    ["an empty object", {}],
+    ["another asset", { id: 9, name: "other.tar.gz", size, state: "uploaded" }],
+    ["a short asset", { id: 9, name: archive, size: size - 1, state: "uploaded" }],
+    ["an asset not uploaded", { id: 9, name: archive, size, state: "starter" }],
+  ]) {
+    control({ releases: [tag], hide: [archive], upload_answer: answer });
+    const result = recipe(
+      "linux",
+      ["publish", "--to", "github", "--tag", tag, "--dist", dist],
+      env,
+    );
+    assert.equal(result.status, 1, `${name}:\n${result.output}`);
+    assert.match(
+      result.output,
+      new RegExp(`GitHub answered the upload of ${archive.replaceAll(".", "\\.")}`),
+      name,
+    );
+    assert.match(result.output, /release-cd: next: re-run this step/, name);
+  }
   control({ releases: [tag] });
 });
 

@@ -192,6 +192,17 @@ test("the auto-merge step fails visibly when GitHub refuses it or cannot be aske
   assert.equal(unset.status, 1);
   assert.match(unset.output, /without a squash auto-merge request on it/);
   assert.match(unset.output, /next: the release pull request will not merge itself/);
+  const boolean = automerge([pull(1, "release-plz-0.8.0")], [], {
+    automerge_answer: {
+      data: {
+        enablePullRequestAutoMerge: {
+          pullRequest: { number: true, autoMergeRequest: { mergeMethod: "SQUASH" } },
+        },
+      },
+    },
+  });
+  assert.equal(boolean.status, 1, boolean.output);
+  assert.match(boolean.output, /without a squash auto-merge request on it/);
   // Its own inputs, and every answer GitHub could give that is not a list of pull requests
   // or a squash auto-merge request, end the step red with a next action.
   const release = [pull(43, "release-plz-0.8.0")];

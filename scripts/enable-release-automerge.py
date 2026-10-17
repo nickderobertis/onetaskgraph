@@ -139,7 +139,7 @@ def main() -> int:
             raise Refused(f"GitHub refused auto-merge for #{pull.number}: {json.dumps(errors)[:500]}")
         enabled = ((answer.get("data") or {}).get("enablePullRequestAutoMerge") or {}).get("pullRequest") or {}
         request = enabled.get("autoMergeRequest") if isinstance(enabled, dict) else None
-        if not isinstance(request, dict) or request.get("mergeMethod") != "SQUASH" or enabled.get("number") != pull.number:
+        if not isinstance(request, dict) or request.get("mergeMethod") != "SQUASH" or not is_positive_int(enabled.get("number")) or enabled.get("number") != pull.number:
             raise Refused(f"GitHub answered auto-merge for #{pull.number} without a squash auto-merge request on it: {json.dumps(answer)[:300]}")
     # A malformed GitHub answer is a refusal like any other: it says no auto-merge was set.
     except (Refused, AttributeError, TypeError) as error:

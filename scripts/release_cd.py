@@ -596,7 +596,13 @@ def publish_github(tag: ReleaseTag, files: list[Path]) -> None:
         if existing is not None:
             # A partial asset from an interrupted upload holds the name; take it away first.
             github.request("DELETE", f"{github.api}/repos/{github.repository}/releases/assets/{existing.id}")
-        github.request("POST", f"{release.upload_url}?name={urllib.parse.quote(path.name)}", path.read_bytes(), "application/octet-stream")
+        answer = github.request("POST", f"{release.upload_url}?name={urllib.parse.quote(path.name)}", path.read_bytes(), "application/octet-stream")
+        try:
+            landed = ReleaseAsset.parse(answer)
+        except ValueError as error:
+            fail(f"GitHub answered the upload of {path.name} with {error}", "re-run this step: a re-run takes back whatever asset the upload left and sends it again")
+        if landed.name != path.name or landed.size != path.stat().st_size or not landed.uploaded:
+            fail(f"GitHub answered the upload of {path.name} ({path.stat().st_size} bytes) with {landed.name} ({landed.size} bytes, {'uploaded' if landed.uploaded else 'not uploaded'})", "re-run this step: a re-run takes back whatever asset the upload left and sends it again")
         sent.append(path.name)
     say(f"the {tag} release holds {len(files)} file(s) of this build: uploaded {', '.join(sent) or 'none'}; already there {', '.join(kept) or 'none'}")
 
