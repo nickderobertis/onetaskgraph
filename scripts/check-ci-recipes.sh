@@ -130,8 +130,6 @@ expect_status() {
   fi
 }
 
-# The project a one-project change reaches, one project that depends on it, one the change
-# never reaches, and a file no project tests.
 readonly CHANGED=onetaskgraph-local-md
 readonly CHANGED_FILE=crates/onetaskgraph-local-md/src/lib.rs
 readonly DEPENDENT=onetaskgraph-core

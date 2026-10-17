@@ -183,8 +183,6 @@ done
 if [ "$status" -ne 0 ]; then
   echo "ci-job: next: run 'just ci-$JOB' again after fixing them; every phase runs to the end, so one report names every failure." >&2
 fi
-# One line for the whole job: which tasks it proved, which is what a reader of a green job
-# needs to know of it.
 summary() {
   cat "$scratch"/"$1".* 2>/dev/null | sort -u | tr '\n' ' ' | sed 's/ $//'
 }
