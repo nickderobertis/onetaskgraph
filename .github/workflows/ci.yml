@@ -27,6 +27,10 @@ on:
         description: Run the combined macOS diagnostic proofs
         type: boolean
         default: false
+      distribution:
+        description: Time the distribution journey alone on Linux and macOS
+        type: boolean
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -878,6 +882,57 @@ jobs:
   # required context. The carrier `check (macos-latest)` still goes red when that branch
   # carries more than the version and changelog edits, because macos-lanes classifies the
   # diff itself.
+  # A manual diagnostic, default off: scripts:distribution-test with nothing beside it, on the
+  # two platforms whose test jobs run it beside the coverage union, so its own duration there
+  # is read off the step rather than inferred from a contended run.
+  distribution-diagnostic:
+    if: github.event_name == 'workflow_dispatch' && inputs.distribution
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: extractions/setup-just@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov,cargo-nextest,cargo-machete,cargo-deny,cargo-binstall
+      - name: Read the pinned bootstrap tool versions
+        id: pins
+        shell: bash
+        run: bash scripts/ci-tool-pins.sh
+      - uses: actions/cache/restore@v6
+        with:
+          path: ~/.cache/onetaskgraph/tools/release-plz
+          key: release-plz-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.release-plz }}
+      - uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/.cargo/bin/cargo-prune-superseded
+            ~/.cargo/bin/cargo-prune-superseded.exe
+          key: prune-superseded-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.prune-superseded }}-${{ hashFiles('rust-toolchain.toml') }}
+      - name: Bootstrap
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          MATURIN_PEP517_ARGS: --profile dev
+        run: just bootstrap --outputStyle=static
+      - name: Build the binary the distribution journey packages
+        run: bash scripts/nx.sh run onetaskgraph:build --outputStyle=static
+      - name: The distribution journey, alone
+        run: just distribution-test
+
   test-macos:
     if: github.event_name == 'pull_request' && !(github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'release-plz-'))
     runs-on: macos-latest

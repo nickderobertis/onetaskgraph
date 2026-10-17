@@ -731,7 +731,8 @@ test("workflow matrices, event fan-out and exact release head model record sched
                   policyResult.macosRequired &&
                   run.workflow === "ci.yml") ||
                   (entry.event === "release" && run.workflow === "release.yml") ||
-                  (entry.id === "manual-opt-in" && run.workflow === "ci.yml"),
+                  (["manual-opt-in", "manual-distribution"].includes(entry.id) &&
+                    run.workflow === "ci.yml"),
                 JSON.stringify(row),
               );
             if (entry.event === "pull_request" && run.workflow === "ci.yml")
@@ -739,11 +740,16 @@ test("workflow matrices, event fan-out and exact release head model record sched
                 macs.some((r) => r.job === "test-macos"),
                 policyResult.macosRequired,
               );
-            if (run.workflow === "ci.yml" && ["manual-default", "manual-opt-in"].includes(entry.id))
+            if (run.workflow === "ci.yml" && entry.event === "workflow_dispatch") {
               assert.equal(
                 macs.some((row) => row.job === "macos"),
                 entry.id === "manual-opt-in",
               );
+              assert.equal(
+                macs.some((row) => row.job === "distribution-diagnostic"),
+                entry.id === "manual-distribution",
+              );
+            }
             if (entry.event === "release" && run.workflow === "release.yml")
               assert.ok(macs.some((r) => r.job === "macos-assets-carriers-and-wheels"));
             run.macJobs = macs.length;
