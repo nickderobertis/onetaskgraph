@@ -56,6 +56,23 @@ def commands(project, target):
     return list(options.get("commands") or ([options["command"]] if "command" in options else []))
 
 
+# What a tagged crate's coverage run executes is scripts/rust-coverage.sh's own invocation, read
+# rather than assumed: the whole crate, every feature, nothing filtered. A filter, a narrower
+# feature set or a test selection there would leave the tags below claiming tests nobody runs.
+MEASURED = ["--no-report", "nextest", "--package", '"$CRATE"', "--all-features", "--locked"]
+coverage_script = Path("scripts/rust-coverage.sh").read_text(encoding="utf-8")
+joined = re.sub(r"\\\n\s*", " ", coverage_script)
+runs = [found.split() for found in re.findall(r"cargo llvm-cov (.*?) 2>&1", joined)]
+runs = [words for words in runs if "nextest" in words]
+measured = runs[0] if len(runs) == 1 else None
+if measured != MEASURED:
+    problems.append(
+        "scripts/rust-coverage.sh: a crate's instrumented run is "
+        f"{' '.join(measured) if measured else 'not found'}, not the whole crate with every "
+        f"feature ({' '.join(MEASURED)}), so test-in-coverage:unix claims tests it no longer "
+        "runs; restore the invocation, or take the tags off"
+    )
+
 paths = subprocess.check_output(["git", "ls-files", "*project.json"], text=True, encoding="utf-8")
 for path in sorted(paths.split()):
     project = json.loads(Path(path).read_text(encoding="utf-8"))

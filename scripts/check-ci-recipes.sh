@@ -177,6 +177,12 @@ project["targets"]["coverage"]["options"]["command"] = "uv run --frozen pytest -
 json.dump(project, open(sys.argv[1], "w"))
 PY
 tag_refused "an SDK whose coverage runs fewer tests than its test" "coverage switched on"
+sed -i.bak 's/^  --all-features \\$/  --all-features -E "test(only_one)" \\/' "$REPO/scripts/rust-coverage.sh"
+rm -f "$REPO/scripts/rust-coverage.sh.bak"
+tag_refused "the coverage run filtering its tests" "not the whole crate with every feature"
+sed -i.bak '/^  --all-features \\$/d' "$REPO/scripts/rust-coverage.sh"
+rm -f "$REPO/scripts/rust-coverage.sh.bak"
+tag_refused "the coverage run dropping --all-features" "not the whole crate with every feature"
 
 record_targets
 git -C "$REPO" commit --quiet --no-verify -am "test: record every target"

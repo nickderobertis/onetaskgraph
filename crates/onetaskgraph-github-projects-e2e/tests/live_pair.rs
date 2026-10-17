@@ -400,21 +400,63 @@ fn run_pair(scenario: &str) {
         std::fs::read_to_string(directory.join("fixture.log")).unwrap()
     );
     // Each entry point reports what each of its phases took, live, past the harness's capture:
-    // the one place a credentialed run's log says where the session's time went.
-    for (output, phases) in outputs.iter().zip([
-        &["Admission", "Setup", "ChangeToken", "Cleanup"][..],
-        &["AssetSetup", "AssetTask", "AssetDocument"][..],
-    ]) {
+    // the one place a credentialed run's log says where the session's time went. The figures
+    // are the session's own: its phases' requests add up to every call its record holds, and
+    // its clock only moves forward, each phase within the time the session had taken by then.
+    for ((output, phases), record) in outputs
+        .iter()
+        .zip([
+            &["Admission", "Setup", "ChangeToken", "Cleanup"][..],
+            &["AssetSetup", "AssetTask", "AssetDocument"][..],
+        ])
+        .zip(["main.json", "assets.json"])
+    {
         let said = String::from_utf8_lossy(&output.stderr);
+        let timings: Vec<(String, f64, usize, f64)> = said
+            .lines()
+            .filter_map(|line| line.strip_prefix("live-session timing: "))
+            .map(|line| {
+                let (phase, rest) = line.split_once(" took ").expect("a phase and its time");
+                let (took, rest) = rest.split_once("s and ").expect("its seconds");
+                let (requests, rest) = rest
+                    .split_once(" requests (session at ")
+                    .expect("its requests");
+                let at = rest.strip_suffix("s)").expect("the session's clock");
+                (
+                    phase.rsplit(' ').next().unwrap().to_owned(),
+                    took.parse().expect("seconds"),
+                    requests.parse().expect("a request count"),
+                    at.parse().expect("seconds"),
+                )
+            })
+            .collect();
         for phase in phases {
             assert!(
-                said.lines()
-                    .any(|line| line.starts_with("live-session timing: ")
-                        && line.contains(&format!(" {phase} took "))
-                        && line.contains("s and ")
-                        && line.contains(" requests (session at ")),
+                timings.iter().any(|(timed, ..)| timed == phase),
                 "no timing line for {phase}: {said}"
             );
+        }
+        let recorded: SessionRecord =
+            serde_json::from_slice(&std::fs::read(records.join(record)).unwrap()).unwrap();
+        assert_eq!(
+            timings
+                .iter()
+                .map(|(_, _, requests, _)| requests)
+                .sum::<usize>(),
+            recorded.calls.len(),
+            "the phases' requests are every call {record} holds: {said}"
+        );
+        let mut clock = 0.0;
+        for (phase, took, _, at) in &timings {
+            assert!(
+                *took >= 0.0 && *took <= *at + 0.05,
+                "{phase} took {took}s by {at}s"
+            );
+            assert!(
+                *at >= clock,
+                "the session's clock went back to {at}s at {phase}"
+            );
+            clock = *at;
         }
     }
     let workload = reference_workload();

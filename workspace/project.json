@@ -98,6 +98,7 @@
         "{workspaceRoot}/sdks/*/*.json",
         "{workspaceRoot}/scripts/check-nx-graph.sh",
         "{workspaceRoot}/scripts/check-test-in-coverage.sh",
+        "{workspaceRoot}/scripts/rust-coverage.sh",
         "{workspaceRoot}/scripts/check-plugin-isolation.sh",
         "{workspaceRoot}/scripts/check-plugin-isolation-concurrent.sh",
         "{workspaceRoot}/AGENTS.md",
