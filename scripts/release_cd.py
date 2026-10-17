@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import email.parser
 import hashlib
+import http.client
 import io
 import json
 import os
@@ -553,10 +554,15 @@ class GitHub:
         return cls(endpoint("GITHUB_API_URL", DEFAULT_GITHUB_API).rstrip("/"), RepositoryName(repository), Token(token))
 
     def trusts(self, url: str) -> bool:
-        """Whether a URL GitHub handed back may be sent this token: the API's own host, or its upload host."""
+        """Whether a URL GitHub handed back may be sent this token: the API's own host, or its upload host.
+
+        It is held to what `endpoint` holds an address to as well, because a space or control
+        character would escape as an uncaught InvalidURL, and a query of its own would break
+        the `?name=` an upload appends.
+        """
         api, given = urllib.parse.urlsplit(self.api), urllib.parse.urlsplit(url)
         hosts = {api.netloc, api.netloc.replace("api.", "uploads.", 1)}
-        return given.scheme == api.scheme and given.netloc in hosts
+        return given.scheme == api.scheme and given.netloc in hosts and not URL_DISALLOWED.search(url) and not given.query and not given.fragment
 
     def request(self, method: str, url: str, body: bytes | None = None, content_type: str | None = None) -> object:
         headers = {"Authorization": f"Bearer {self.token}", "Accept": "application/vnd.github+json", "User-Agent": USER_AGENT, "X-GitHub-Api-Version": "2022-11-28"}
@@ -568,7 +574,7 @@ class GitHub:
                 payload = response.read()
         except urllib.error.HTTPError as error:
             fail(f"GitHub answered {method} {url} with HTTP {error.code}: {error.msg}: {(error.read() if error.fp else b'')[:500].decode('utf-8', 'replace')}", "rerun the step once GitHub answers; assets already uploaded are skipped")
-        except (urllib.error.URLError, TimeoutError, OSError) as error:
+        except (urllib.error.URLError, http.client.InvalidURL, TimeoutError, OSError) as error:
             fail(f"could not reach GitHub for {method} {url}: {error}", "rerun the step once GitHub is reachable; assets already uploaded are skipped")
         try:
             return json.loads(payload) if payload else None
@@ -586,7 +592,7 @@ class GitHub:
         except ValueError as error:
             fail(f"GitHub's answer for the {tag} release is not a release: {error}", "check that the release-plz job cut the GitHub Release for this tag")
         if not self.trusts(release.upload_url):
-            fail(f"the {tag} release names {release.upload_url} to upload to, which is neither GitHub's API nor its upload host", "check GITHUB_API_URL; the token is sent nowhere else")
+            fail(f"the {tag} release names {release.upload_url!r} to upload to, which is not a plain URL on GitHub's API or upload host", "check GITHUB_API_URL; the token is sent nowhere else")
         return release
 
 
@@ -784,7 +790,7 @@ def fetch(url: str, what: str) -> bytes:
             return response.read()
     except urllib.error.HTTPError as error:
         fail(f"{what} is not available: HTTP {error.code} for {url}", "publish it from the build job that owns it, then rerun")
-    except (urllib.error.URLError, TimeoutError, OSError) as error:
+    except (urllib.error.URLError, http.client.InvalidURL, TimeoutError, OSError) as error:
         fail(f"could not read {what} from {url}: {error}", "rerun once the registry is reachable")
 
 

@@ -17,6 +17,7 @@ GITHUB_GRAPHQL_URL, which GitHub Actions sets and the journey points at a double
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import re
@@ -100,7 +101,7 @@ def call(url: str, token: Token, body: dict | None = None) -> object:
             return json.loads(response.read() or b"null")
     except urllib.error.HTTPError as error:
         raise Refused(f"GitHub answered HTTP {error.code} to {url}: {error.msg}: {(error.read() if error.fp else b'')[:300].decode('utf-8', 'replace')}") from error
-    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as error:
+    except (urllib.error.URLError, http.client.InvalidURL, TimeoutError, OSError, json.JSONDecodeError) as error:
         raise Refused(f"could not ask GitHub at {url}: {error}") from error
 
 

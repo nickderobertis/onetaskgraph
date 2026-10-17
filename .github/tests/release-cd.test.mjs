@@ -949,8 +949,24 @@ test("the GitHub upload refuses a missing token, a malformed release and an untr
       "an untrusted upload host",
       {},
       { releases: [tag], upload_host: "http://198.51.100.7:9/uploads" },
-      /neither GitHub's API nor its upload host/,
+      /not a plain URL on GitHub's API or upload host/,
     ],
+    ...[
+      ["an upload path holding a space", "/github/uploads/a b{?name,label}"],
+      ["an upload URL with a query of its own", "/github/uploads/assets?x=1{?name,label}"],
+    ].map(([name, path]) => [
+      name,
+      {},
+      {
+        releases: [tag],
+        release_answer: {
+          tag_name: tag,
+          upload_url: `http://127.0.0.1:${ports.main}${path}`,
+          assets: [],
+        },
+      },
+      /not a plain URL on GitHub's API or upload host/,
+    ]),
   ]) {
     control(state);
     const mark = requests().length;
