@@ -16,7 +16,8 @@ try {
     needs["macos-lanes"].outputs?.diagnostic === "true"
       ? "true"
       : needs["macos-lanes"].outputs?.macosRequired;
-  const result = needs.macos?.result;
+  // The proof is the pull request's `test-macos`, or the manual diagnostic's `macos`.
+  const result = (diagnostic === "true" ? needs.macos : needs["test-macos"])?.result;
   if (required === "true" && result === "success")
     console.log("The combined macOS check and install proofs passed.");
   else if (required === "false" && result === "skipped") {

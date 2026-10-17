@@ -323,8 +323,14 @@ NOT_DEMANDED = declared_value("NOT_DEMANDED")
 workflow = read(WORKFLOW, "the workflow that runs the required check")
 code = without_comments(workflow)
 # Steps, so a credential can be attributed to the lane that carries it. A step begins at
-# the one indentation `- name:` uses inside a job's `steps:` list.
-steps = re.split(r"(?m)^      - (?=name:|uses:)", code)
+# the one indentation `- name:` uses inside a job's `steps:` list, and each is read with the
+# `runs-on` of the job it is in: a job that is not a matrix is one lane by itself.
+lanes = []
+for job in re.split(r"(?m)^  (?=[a-z][a-z0-9-]*:[ \t]*$)", code):
+    runner = re.search(r"(?m)^    runs-on:[ \t]*(\S+)[ \t]*$", job)
+    for step in re.split(r"(?m)^      - (?=name:|uses:)", job):
+        lanes.append((runner.group(1) if runner else "", step))
+steps = [step for _, step in lanes]
 
 
 def demanded(step):
@@ -369,19 +375,20 @@ def demands_a_credential(value):
 
 for relative, session in SESSIONS.items():
     credential = session["credential"]
-    carrying = [step for step in steps if f"secrets.{credential}" in step]
+    carrying = [(runner, step) for runner, step in lanes if f"secrets.{credential}" in step]
     if not carrying:
         problems.append(
             f"{WORKFLOW.as_posix()}: never passes {credential}, so {relative} skips everywhere and "
             "proves nothing. There is one name per credential and nothing translates "
             "between spellings"
         )
-    for step in carrying:
-        if "matrix.os == 'ubuntu-latest'" not in step:
+    for runner, step in carrying:
+        if "matrix.os == 'ubuntu-latest'" not in step and runner != "ubuntu-latest":
             problems.append(
-                f"{WORKFLOW.as_posix()}: hands {credential} to a step that is not scoped to one lane "
-                "of the platform matrix. Every lane carrying it opens a session of its own "
-                "against the same shared fixture"
+                f"{WORKFLOW.as_posix()}: hands {credential} to a step that is not scoped to one Linux "
+                "lane — the Linux leg of the platform matrix, or a job of its own that runs on "
+                "ubuntu-latest. Every lane carrying it opens a session of its own against the "
+                "same shared fixture"
             )
         assigned = demanded(step)
         if assigned is None:

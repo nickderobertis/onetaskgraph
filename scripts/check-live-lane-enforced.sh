@@ -265,6 +265,19 @@ expect_refused "the demand set to 0 on a credentialed step" \
   "$WORKFLOW" "GH_PROJECTS_TOKEN" "which is not the demand"
 reset_fixture
 
+# 5b. The credentialed job moved off Linux. A job that is not a matrix is one lane by
+#     itself, and the guard reads its `runs-on`; scoped to another platform, it is not the
+#     one Linux lane the session belongs to.
+substitute "$WORKFLOW" "  test-linux:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest" "  test-linux:
+    if: github.event_name == 'pull_request'
+    runs-on: windows-latest"
+run_guard
+expect_refused "the credentialed job running on another platform" \
+  "$WORKFLOW" "GH_PROJECTS_TOKEN" "not scoped to one Linux"
+reset_fixture
+
 # 6. The fork exception with its two branches swapped, so the run that is NOT a fork pull
 #    request — every run the merge waits on — is the one that stops demanding a credential.
 substitute "$WORKFLOW" \

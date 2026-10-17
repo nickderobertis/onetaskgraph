@@ -2,7 +2,7 @@
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
   "name": "onetaskgraph-github-live",
   "projectType": "library",
-  "tags": ["lang:rust", "layer:testing"],
+  "tags": ["lang:rust", "layer:testing", "test-in-coverage:unix"],
   "//": "The GitHub Projects lane's own names, which its tests and the scheduled janitor read. It depends only on onetaskgraph-live; the GitHub Projects plugin names it as a dev-dependency, so editing it selects that plugin and the janitor and nothing of Linear.",
   "targets": {
     "bootstrap": {

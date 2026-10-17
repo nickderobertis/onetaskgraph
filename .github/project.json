@@ -51,9 +51,23 @@
         "command": "bun run tsc -p .github/tsconfig.json"
       }
     },
-    "test": {
+    "ci-jobs": {
       "executor": "nx:run-commands",
       "dependsOn": ["bootstrap"],
+      "options": {
+        "command": "node --test .github/tests/ci-jobs.spec.mjs"
+      },
+      "inputs": [
+        "{projectRoot}/**/*",
+        "!{projectRoot}/node_modules/**/*",
+        "!{projectRoot}/.telemetry/**/*"
+      ],
+      "cache": true,
+      "//": "The pull request's four jobs, today's required contexts and every cache key, read from the workflow files. Its inputs are this directory alone: nothing outside .github can change what it reads."
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["bootstrap", "ci-jobs"],
       "options": {
         "command": "node --test .github/tests/*.test.mjs"
       },

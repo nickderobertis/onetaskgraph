@@ -475,15 +475,43 @@ test("real classification composes with actual workflow routing for forged, mixe
     ["{malformed", heads.version],
   ]) {
     const decision = classify(payload, head);
-    const ci = graph({ event: "pull_request", action: "synchronize" }, decision).find(
-      (run) => run.workflow === "ci.yml",
-    );
+    // An unreadable payload is a pull request on no branch GitHub could name.
+    const pr = typeof payload === "string" ? { head: { ref: "", repo: {} } } : payload.pull_request;
+    const scenario = {
+      event: "pull_request",
+      action: "synchronize",
+      headRef: pr.head.ref,
+      fork: pr.head.repo.fork,
+    };
+    const ci = graph(scenario, decision).find((run) => run.workflow === "ci.yml");
+    // test-macos is skipped on this repository's release-plz branch alone, and never on a
+    // pull request the classifier has not authorized to omit macOS without it saying so:
+    // a forged release branch carrying source runs no Mac job, and its carrier goes red.
+    const releaseBranch = !pr.head.repo.fork && pr.head.ref.startsWith("release-plz-");
+    const tested = ci.rows.some((row) => row.job === "test-macos");
+    assert.equal(tested, !releaseBranch);
     assert.equal(
       ci.rows.some((row) => row.job === "macos"),
-      decision.macosRequired,
+      false,
     );
+    if (tested) assert.ok(decision.macosRequired);
     for (const name of ["check (macos-latest)", "install path (macos-latest)"])
       assert.ok(ci.rows.some((row) => row.name === name));
+    if (!tested && decision.macosRequired) {
+      const needs = {
+        "macos-lanes": { result: "success", outputs: { macosRequired: "true", reason: "x" } },
+        macos: { result: "skipped" },
+        "test-macos": { result: "skipped" },
+      };
+      writeFileSync(resolve(history, "needs.json"), JSON.stringify(needs));
+      assert.notEqual(
+        spawnSync(process.execPath, [resolve(history, ".github/macos-result.mjs"), "needs.json"], {
+          cwd: history,
+          encoding: "utf8",
+        }).status,
+        0,
+      );
+    }
   }
 });
 
@@ -531,6 +559,7 @@ test("actual carrier run bodies preserve success, failure, cancellation, missing
       const needs = {
         "macos-lanes": { result: "success", outputs: { macosRequired: "false", diagnostic } },
         macos: { result: "skipped" },
+        "test-macos": { result: "skipped" },
       };
       assert.notEqual(
         spawnSync("bash", ["-c", run], {
@@ -548,7 +577,9 @@ test("actual carrier run bodies preserve success, failure, cancellation, missing
             result: "success",
             outputs: { macosRequired: "false", diagnostic, reason: "manual" },
           },
-          macos: { result },
+          // The diagnostic reads `macos` alone, a pull request `test-macos` alone.
+          macos: { result: diagnostic === "true" ? result : "failure" },
+          "test-macos": { result: diagnostic === "true" ? "failure" : result },
         };
         const outcome = spawnSync("bash", ["-c", run], {
           cwd: history,
@@ -568,7 +599,8 @@ test("actual carrier run bodies preserve success, failure, cancellation, missing
               result: classification,
               outputs: { macosRequired: required, reason: "semantic release omission" },
             },
-            macos: { result },
+            macos: { result: "failure" },
+            "test-macos": { result },
           };
           const outcome = spawnSync("bash", ["-c", run], {
             cwd: history,
@@ -675,6 +707,7 @@ test("workflow matrices, event fan-out and exact release head model record sched
             ...entry,
             diff,
             fork,
+            headRef: diff === "version" ? "release-plz-123" : "feature",
             vars: publicationVariables(optional),
           };
           const runs = graph(scenario, policyResult);
@@ -703,7 +736,7 @@ test("workflow matrices, event fan-out and exact release head model record sched
               );
             if (entry.event === "pull_request" && run.workflow === "ci.yml")
               assert.equal(
-                macs.some((r) => r.job === "macos"),
+                macs.some((r) => r.job === "test-macos"),
                 policyResult.macosRequired,
               );
             if (run.workflow === "ci.yml" && ["manual-default", "manual-opt-in"].includes(entry.id))

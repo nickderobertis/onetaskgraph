@@ -8,6 +8,8 @@ import { isMacosRunner } from "./telemetry.ts";
 import { data, Evaluator, Lexer, Parser } from "./actions-expressions.mjs";
 
 export const root = new URL("../", import.meta.url);
+// The repository the workflows run in; a fork's pull request comes from another.
+const REPOSITORY = "nickderobertis/onetaskgraph";
 export const read = (path) => readFileSync(new URL(path, root), "utf8");
 function record(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -431,9 +433,18 @@ export function jobs(workflow, scenario, policy, prefix = "", inputs = {}, ances
       const context = {
         github: {
           event_name: scenario.event,
+          repository: REPOSITORY,
+          head_ref: scenario.event === "pull_request" ? scenario.headRef || "feature" : "",
           event: {
             action: scenario.action,
-            pull_request: { head: { repo: { fork: scenario.fork } } },
+            pull_request: {
+              head: {
+                repo: {
+                  fork: scenario.fork,
+                  full_name: scenario.fork ? "outside/repo" : REPOSITORY,
+                },
+              },
+            },
           },
           ref: scenario.tag
             ? `refs/tags/${scenario.tag}`

@@ -2,7 +2,7 @@
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
   "name": "onetaskgraph-status-options-e2e",
   "projectType": "application",
-  "tags": ["lang:rust", "layer:e2e"],
+  "tags": ["lang:rust", "layer:e2e", "test-in-coverage:unix"],
   "//": "A test-only member holding only tests/, which spawn the binary onetaskgraph:build made. Its implicitDependencies are the plugin crate it exercises, so a change to that plugin selects it and a change to a sibling plugin does not; the binary, the engine and the shared harness it also exercises are named in its own `default` named input instead, which Nx treats as touching this project when they change without the graph edge that would make every plugin's change select it through them. scripts/check-nx-graph.sh reconciles both halves against the Cargo graph, and scripts/check-affected-selection.sh proves the selection against real Nx.",
   "implicitDependencies": ["onetaskgraph-status-options"],
   "namedInputs": {

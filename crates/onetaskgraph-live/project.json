@@ -2,7 +2,7 @@
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
   "name": "onetaskgraph-live",
   "projectType": "library",
-  "tags": ["lang:rust", "layer:testing"],
+  "tags": ["lang:rust", "layer:testing", "test-in-coverage:unix"],
   "//": "This crate depends on nothing of this workspace, so it declares no implicitDependencies; scripts/check-nx-graph.sh fails, naming the pair, if that ever stops being true. The two hosted plugin crates name it as a dev-dependency, so editing it selects both of them \u2014 which is right: it is the gate their live sessions open. llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] JSON has no comment to scope this to `coverage`: the line floor is one report over every crate's instrumented run, so workspace:coverage runs this crate's whether or not the change reached it. `test` still selects by the graph.",
   "targets": {
     "bootstrap": {

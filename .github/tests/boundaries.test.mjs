@@ -313,6 +313,7 @@ test("classifier and carriers enforce invocation and actual filesystem IO failur
         JSON.stringify({
           "macos-lanes": { result: "success", outputs: { macosRequired: "false", reason } },
           macos: { result: "skipped" },
+          "test-macos": { result: "skipped" },
         }),
       );
       assert.notEqual(
@@ -328,6 +329,7 @@ test("classifier and carriers enforce invocation and actual filesystem IO failur
           outputs: { macosRequired: "false", reason: "authorized semantic release" },
         },
         macos: { result: "skipped" },
+        "test-macos": { result: "skipped" },
       }),
     );
     assert.notEqual(

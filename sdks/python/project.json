@@ -2,7 +2,7 @@
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
   "name": "sdk-python",
   "projectType": "library",
-  "tags": ["lang:python", "layer:sdk"],
+  "tags": ["lang:python", "layer:sdk", "test-in-coverage:all"],
   "implicitDependencies": ["onetaskgraph"],
   "targets": {
     "bootstrap": {
