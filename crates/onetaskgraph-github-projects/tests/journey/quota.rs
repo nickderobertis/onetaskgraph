@@ -13,9 +13,14 @@ use onetaskgraph_github_projects::accounting::{Accounting, Budget, Mode, Respons
 struct Invocation {
     ledger: Arc<Accounting>,
     writer: InvocationWriter,
+    invocation: EntryPoint,
     phase: Phase,
     written: usize,
     modelled_page_refusals: BTreeSet<usize>,
+    /// When the session and its current phase began, and how many requests came before it.
+    started: std::time::Instant,
+    phase_started: std::time::Instant,
+    phase_first_request: usize,
 }
 
 static CURRENT: Mutex<Option<Invocation>> = Mutex::new(None);
@@ -62,12 +67,17 @@ pub fn start(
         return Err("only one live invocation may record in this process".into());
     }
     let writer = InvocationWriter::start(&directory, record)?;
+    let started = std::time::Instant::now();
     *current = Some(Invocation {
         ledger,
         writer,
+        invocation,
         phase: Phase::Admission,
         written: 0,
         modelled_page_refusals: BTreeSet::new(),
+        started,
+        phase_started: started,
+        phase_first_request: 0,
     });
     Ok(Scope)
 }
@@ -77,6 +87,7 @@ pub fn phase(phase: Phase) -> Result<(), String> {
     let mut current = CURRENT.lock().map_err(|error| error.to_string())?;
     if let Some(current) = current.as_mut() {
         current.flush()?;
+        current.time_phase();
         current.phase = phase;
     }
     Ok(())
@@ -87,6 +98,7 @@ pub fn complete() -> Result<(), String> {
     let mut current = CURRENT.lock().map_err(|error| error.to_string())?;
     if let Some(current) = current.as_mut() {
         current.flush()?;
+        current.time_phase();
         current.writer.complete()?;
     }
     Ok(())
@@ -101,6 +113,25 @@ fn flush() -> Result<(), String> {
 }
 
 impl Invocation {
+    /// How long the phase now ending took, against the session's own clock and request count,
+    /// written past the test harness's capture so a credentialed run's log carries it live —
+    /// the lane's wall-clock cost by phase, which no other record of the session holds.
+    fn time_phase(&mut self) {
+        use std::io::Write as _;
+        let requests = self.ledger.snapshot().requests().len();
+        let _ = writeln!(
+            std::io::stderr(),
+            "live-session timing: {:?} {:?} took {:.1}s and {} requests (session at {:.1}s)",
+            self.invocation,
+            self.phase,
+            self.phase_started.elapsed().as_secs_f64(),
+            requests.saturating_sub(self.phase_first_request),
+            self.started.elapsed().as_secs_f64(),
+        );
+        self.phase_started = std::time::Instant::now();
+        self.phase_first_request = requests;
+    }
+
     fn flush(&mut self) -> Result<(), String> {
         let snapshot = self.ledger.snapshot();
         for (index, request) in snapshot.requests().iter().enumerate().skip(self.written) {

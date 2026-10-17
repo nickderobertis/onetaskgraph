@@ -385,7 +385,7 @@ fn run_pair(scenario: &str) {
         assert!(read_bill(&records, &current).is_err());
         return;
     }
-    for output in outputs {
+    for output in &outputs {
         assert!(
             output.status.success(),
             "stdout: {}\nstderr: {}\nfixture: {}",
@@ -399,6 +399,24 @@ fn run_pair(scenario: &str) {
         "{}",
         std::fs::read_to_string(directory.join("fixture.log")).unwrap()
     );
+    // Each entry point reports what each of its phases took, live, past the harness's capture:
+    // the one place a credentialed run's log says where the session's time went.
+    for (output, phases) in outputs.iter().zip([
+        &["Admission", "Setup", "ChangeToken", "Cleanup"][..],
+        &["AssetSetup", "AssetTask", "AssetDocument"][..],
+    ]) {
+        let said = String::from_utf8_lossy(&output.stderr);
+        for phase in phases {
+            assert!(
+                said.lines()
+                    .any(|line| line.starts_with("live-session timing: ")
+                        && line.contains(&format!(" {phase} took "))
+                        && line.contains("s and ")
+                        && line.contains(" requests (session at ")),
+                "no timing line for {phase}: {said}"
+            );
+        }
+    }
     let workload = reference_workload();
     let current =
         CurrentSession::new("entry-point-pair", &revision, WORKSPACE_VERSION, &workload).unwrap();

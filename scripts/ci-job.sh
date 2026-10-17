@@ -5,8 +5,8 @@
 #
 # Each of ci.yml's four jobs runs exactly one `just ci-<job>` recipe, and each recipe is this
 # script, so a contributor runs what CI runs. A job is a list of phases, each one Nx
-# invocation, all run at once. A phase that fails prints the whole of Nx's output (in Actions every phase's
-# streams, one collapsed group per task), and the job ends with one line naming every task
+# invocation, all run at once. A phase that fails prints the whole of Nx's output (in Actions
+# every phase's streams as it is written), and the job ends with one line naming every task
 # it ran. `--select-only` runs nothing and ends with one line naming
 # every task the job selects, which is how a host that is not Windows or macOS proves those
 # jobs' selection.
@@ -140,14 +140,14 @@ run_phase() {
     return 0
   fi
   [ -n "$plan" ] || return 0
-  # In Actions the output streams, tagged with its phase because the phases run at once, so
-  # a job the timeout cuts short still shows how far each got (Nx's per-task groups are
-  # flattened: groups cannot interleave). Elsewhere it is held until the phase ends.
+  # In Actions the output streams as each task writes it (Nx's `stream` style), tagged with
+  # its phase because the phases run at once, so a job the timeout cuts short still shows how
+  # far each task got and when. Elsewhere it is held until the phase ends.
   if [ "${GITHUB_ACTIONS:-}" = true ]; then
     # Nx's status is written from inside the pipeline: under `pipefail` a failing Nx would
     # otherwise end this phase before it is recorded and the failure named.
     {
-      FORCE_COLOR=0 NO_COLOR=1 node_modules/.bin/nx "${arguments[@]}" --outputStyle=static 2>&1 \
+      FORCE_COLOR=0 NO_COLOR=1 node_modules/.bin/nx "${arguments[@]}" --outputStyle=stream 2>&1 \
         && echo 0 >"$scratch/status.$phase" || echo "$?" >"$scratch/status.$phase"
     } | tee "$scratch/run.$phase.log" \
       | awk -v tag="[$targets] " '/^::endgroup::/ { next } { sub(/^::group::/, ""); print tag $0; fflush() }'
