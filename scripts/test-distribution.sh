@@ -6,6 +6,18 @@ set -euo pipefail
 if [ "${ONETASKGRAPH_DISTRIBUTION_UNDER_RELATIVE_INTERPRETER:-}" = 1 ]; then
   exec bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/check-relative-interpreter.sh" scripts/test-distribution.sh
 fi
+# One run of this journey at a time in a tree, held for the whole run: test-macos and
+# test-windows run scripts:test's re-run of it under the relative interpreter beside
+# scripts:distribution-test, and both build, move and package the same files under target/ —
+# test-macos failed when maturin found target/maturin changed under it. `just check` runs them
+# one after the other, as these jobs now do.
+if [ "${ONETASKGRAPH_DISTRIBUTION_JOURNEY_LOCKED:-}" != 1 ]; then
+  journey_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+  [ -r "$journey_root/scripts/file-lock.sh" ] && source "$journey_root/scripts/file-lock.sh" || { echo "distribution test could not load $journey_root/scripts/file-lock.sh; next: restore it with 'git checkout -- scripts/file-lock.sh', then rerun" >&2; exit 1; }
+  export ONETASKGRAPH_DISTRIBUTION_JOURNEY_LOCKED=1
+  with_file_lock "$journey_root/target/.test-distribution.lock" bash "$journey_root/scripts/test-distribution.sh" "$@"
+  exit 0
+fi
 report_failure() {
   echo "distribution setup failed at line $2 (exit $1): $3; next: rerun scripts/test-distribution.sh and fix that command" >&2
 }
@@ -346,11 +358,7 @@ if node -e 'Object.defineProperty(process,"platform",{value:"darwin"}); Object.d
 [[ $intel_launcher_status -eq 64 ]] || { cat "$tmp/error" >&2; echo "Intel macOS launcher exited $intel_launcher_status, expected 64; next: inspect the darwin-x64 refusal in npm/cli/bin/onetaskgraph.js" >&2; exit 1; }
 grep -q 'Intel macOS is no longer supported' "$tmp/error" || { cat "$tmp/error" >&2; echo "Intel macOS launcher refusal did not say Intel macOS is no longer supported; next: inspect launcher diagnostics" >&2; exit 1; }
 mkdir -p "$tmp/python-wheel"
-# One release build at a time: it links target/$target/release/onetaskgraph and then reads it,
-# and another run of this script at once — scripts:test's re-run of it beside
-# scripts:distribution-test, in one CI job — relinks that file in between.
-[ -r "$root/scripts/file-lock.sh" ] && source "$root/scripts/file-lock.sh" || { echo "distribution test could not load $root/scripts/file-lock.sh; next: restore it with 'git checkout -- scripts/file-lock.sh', then rerun" >&2; exit 1; }
-(cd "$root" && with_file_lock "$root/target/.test-distribution-release.lock" uv tool run --from 'maturin>=1.9,<2' maturin build --release --locked --target "$target" --out "$tmp/python-wheel")
+(cd "$root" && uv tool run --from 'maturin>=1.9,<2' maturin build --release --locked --target "$target" --out "$tmp/python-wheel")
 "$python_bin" "$root/scripts/test-release-products.py" --wheel-dir "$tmp/python-wheel" --target "$target"
 cli_wheel=$(find "$tmp/python-wheel" -maxdepth 1 -type f -name 'onetaskgraph_cli-*.whl' -print -quit)
 [[ -n $cli_wheel ]] || { echo "Python CLI build produced no wheel; next: inspect the maturin package configuration" >&2; exit 1; }
