@@ -65,10 +65,10 @@
       "executor": "nx:run-commands",
       "// live": "llmlint: ignore-block[external_service_suite_stays_out_of_the_affected_tier] This node requires the credentialed asset journey as an ordinary test under the existing Session admission and allowance preconditions. Repository policy deliberately makes hosted journeys required under affected selection, because an advisory lane allowed a refused query to merge.",
       "options": {
-        "command": "bash scripts/live-crate-test.sh onetaskgraph-github-projects-e2e"
+        "command": "bash scripts/live-crate-test.sh onetaskgraph-github-projects-e2e live disposable_task_and_document_asset_copies --also-build onetaskgraph-github-projects"
       },
       "// end": "llmlint: ignore-end[external_service_suite_stays_out_of_the_affected_tier]",
-      "// live order": "The main and asset credentialed journeys contribute to one session, main before assets. That order is the asset journey's own: it makes no request until the main entry point's record is complete (tests/live.rs, wait_for_current_main), so this suite's loopback binaries run beside the plugin's main session rather than after its whole test target. `budgets` still depends on both tests, so whenever this suite is selected the main session runs in the same invocation. scripts/live-crate-test.sh builds the plugin's own test binaries first, which live_pair runs.",
+      "// live order": "The main and asset credentialed journeys contribute to one session, main before assets. That order is the asset journey's own: it makes no request until the main entry point's record is complete (tests/live.rs, wait_for_current_main), so this suite's loopback binaries run beside the plugin's main session rather than after its whole test target. `budgets` still depends on both tests, so whenever this suite is selected the main session runs in the same invocation. Its `--also-build` builds the plugin's own test binaries first, which live_pair runs.",
       "dependsOn": ["onetaskgraph:build"],
       "//": "Spawns target/debug/onetaskgraph, which onetaskgraph:build alone produces and this target depends on; it never builds the onetaskgraph package itself, so it cannot relink the file another spawner is running. scripts/check-workspace-config.sh holds the arrangement.",
       "outputs": [

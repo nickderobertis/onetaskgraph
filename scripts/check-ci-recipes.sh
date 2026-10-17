@@ -199,18 +199,32 @@ tag_refused "the coverage run dropping --all-features" "not the whole crate with
 
 # The live crates' credentialed journeys, which their `test` runs alone where coverage runs
 # the rest, held to being credentialed journeys and to leaving nothing to neither target.
+# live_entry <crate> <command>: what that crate's test target runs in place of its
+# live-crate-test.sh command (`true` for an empty one).
 live_entry() {
-  sed -i.bak "s#^  $1) live=(.*) ;;\$#  $1) live=($2) ;;#" "$REPO/scripts/live-crate-test.sh"
-  rm -f "$REPO/scripts/live-crate-test.sh.bak"
+  "$PYTHON" - "$REPO/crates/$1/project.json" "$1" "$2" <<'PY'
+import json, sys
+path, crate, replacement = sys.argv[1:]
+project = json.load(open(path, encoding="utf-8"))
+options = project["targets"]["test"]["options"]
+script = f"bash scripts/live-crate-test.sh {crate} "
+rewrite = lambda command: (replacement or "true") if command.startswith(script) else command
+if "commands" in options:
+    options["commands"] = [rewrite(command) for command in options["commands"]]
+else:
+    options["command"] = rewrite(options["command"])
+json.dump(project, open(path, "w", encoding="utf-8"))
+PY
 }
-live_entry onetaskgraph-linear "live real_linear_reads_nothing_that_is_not_there"
+live_entry onetaskgraph-linear "bash scripts/live-crate-test.sh onetaskgraph-linear live real_linear_reads_nothing_that_is_not_there"
 tag_refused "a live crate's journey named as a test that is not there" "is not in crates/onetaskgraph-linear/tests/live.rs"
 live_entry onetaskgraph-github-projects \
-  "live loopback_configuration_cannot_forward_a_credential_to_a_remote_or_signed_url"
+  "bash scripts/live-crate-test.sh onetaskgraph-github-projects live loopback_configuration_cannot_forward_a_credential_to_a_remote_or_signed_url"
 tag_refused "a live crate's journey named as a loopback test" "opens no live session"
-sed -i.bak '/^  onetaskgraph-linear-e2e) live=/d' "$REPO/scripts/live-crate-test.sh"
-rm -f "$REPO/scripts/live-crate-test.sh.bak"
-tag_refused "a credentialed crate left out of the live table" "names no credentialed journey for it"
+live_entry onetaskgraph-linear-e2e ""
+tag_refused "a credentialed crate naming no live journey" "names no credentialed journey to scripts/live-crate-test.sh"
+live_entry onetaskgraph-linear "bash scripts/live-crate-test.sh onetaskgraph-linear-e2e live real_linear_applies_every_declared_capability_and_leaves_no_residue"
+tag_refused "a live crate naming another crate's journey" "every cargo run of it goes through"
 "$PYTHON" - "$REPO/crates/onetaskgraph-linear/project.json" <<'PY'
 import json, sys
 project = json.load(open(sys.argv[1]))
@@ -230,19 +244,26 @@ live_crate_test() {
     bash scripts/live-crate-test.sh "$@" 2>&1)" && LIVE_STATUS=0 || LIVE_STATUS=$?
   RECORDED="$(cat "$scratch/cargo-record")"
 }
-ONETASKGRAPH_TESTS_UNDER_COVERAGE=1 live_crate_test onetaskgraph-linear-e2e
+ONETASKGRAPH_TESTS_UNDER_COVERAGE=1 live_crate_test onetaskgraph-linear-e2e e2e \
+  linear_assets::live_disposable_issue_and_document_assets_copy_and_recopy
 [ "$LIVE_STATUS" -eq 0 ] && [ "$RECORDED" = "test --quiet -p onetaskgraph-linear-e2e --all-features --locked --test e2e -- --exact linear_assets::live_disposable_issue_and_document_assets_copy_and_recopy" ] \
   || fail "where coverage stands in, live-crate-test.sh ran '$RECORDED' (exit $LIVE_STATUS), not the credentialed journey alone"
-ONETASKGRAPH_TESTS_UNDER_COVERAGE= live_crate_test onetaskgraph-github-projects-e2e
+ONETASKGRAPH_TESTS_UNDER_COVERAGE= live_crate_test onetaskgraph-github-projects-e2e live \
+  disposable_task_and_document_asset_copies --also-build onetaskgraph-github-projects
 [ "$LIVE_STATUS" -eq 0 ] && [ "$RECORDED" = "test --quiet -p onetaskgraph-github-projects --all-features --locked --no-run
 test --quiet -p onetaskgraph-github-projects-e2e --all-features --locked" ] \
   || fail "elsewhere, live-crate-test.sh ran '$RECORDED' (exit $LIVE_STATUS), not the plugin's build and the whole suite"
-ONETASKGRAPH_TESTS_UNDER_COVERAGE=yes live_crate_test onetaskgraph-linear
+ONETASKGRAPH_TESTS_UNDER_COVERAGE=yes live_crate_test onetaskgraph-linear live \
+  real_linear_applies_every_declared_capability_and_leaves_no_residue
 [ "$LIVE_STATUS" -eq 2 ] && [ -z "$RECORDED" ] && grep -qF "it is 1 or unset" <<<"$LIVE_OUTPUT" \
   || fail "live-crate-test.sh accepted ONETASKGRAPH_TESTS_UNDER_COVERAGE=yes: exit $LIVE_STATUS, ran '$RECORDED'"
-live_crate_test onetaskgraph-core
-[ "$LIVE_STATUS" -eq 2 ] && [ -z "$RECORDED" ] && grep -qF "not a crate with a live journey" <<<"$LIVE_OUTPUT" \
-  || fail "live-crate-test.sh ran a crate with no live journey: exit $LIVE_STATUS, ran '$RECORDED'"
+for arguments in "onetaskgraph-linear" "onetaskgraph-linear live" \
+  "onetaskgraph-linear live --exact" "onetaskgraph-linear live journey --build onetaskgraph-core"; do
+  read -r -a words <<<"$arguments"
+  live_crate_test "${words[@]}"
+  [ "$LIVE_STATUS" -eq 2 ] && [ -z "$RECORDED" ] && grep -qF "usage: scripts/live-crate-test.sh" <<<"$LIVE_OUTPUT" \
+    || fail "live-crate-test.sh ran '$arguments', which names no journey: exit $LIVE_STATUS, ran '$RECORDED'"
+done
 git -C "$REPO" checkout --quiet -- .
 
 record_targets

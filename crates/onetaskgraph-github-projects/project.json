@@ -50,7 +50,7 @@
       "executor": "nx:run-commands",
       "options": {
         "commands": [
-          "bash scripts/live-crate-test.sh onetaskgraph-github-projects",
+          "bash scripts/live-crate-test.sh onetaskgraph-github-projects live real_projects_v2_contract_writes_and_leaves_no_residue",
           "bash scripts/check-live-decline.sh onetaskgraph-github-projects",
           "bash scripts/check-budget-decline.sh"
         ],

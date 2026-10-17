@@ -57,7 +57,7 @@
       "// live": "llmlint: ignore-block[external_service_suite_stays_out_of_the_affected_tier] AGENTS.md requires real Linear journeys in the ordinary affected test target: an advisory lane let an API-invalid query merge, so third-party outages now deliberately block merges.",
       "executor": "nx:run-commands",
       "options": {
-        "command": "bash scripts/live-crate-test.sh onetaskgraph-linear-e2e"
+        "command": "bash scripts/live-crate-test.sh onetaskgraph-linear-e2e e2e linear_assets::live_disposable_issue_and_document_assets_copy_and_recopy"
       },
       "// end": "llmlint: ignore-end[external_service_suite_stays_out_of_the_affected_tier]",
       "dependsOn": ["onetaskgraph:build"],

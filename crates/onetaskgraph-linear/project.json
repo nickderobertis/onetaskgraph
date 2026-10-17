@@ -47,7 +47,7 @@
       "executor": "nx:run-commands",
       "options": {
         "commands": [
-          "bash scripts/live-crate-test.sh onetaskgraph-linear",
+          "bash scripts/live-crate-test.sh onetaskgraph-linear live real_linear_applies_every_declared_capability_and_leaves_no_residue",
           "bash scripts/check-live-decline.sh onetaskgraph-linear"
         ],
         "parallel": false
