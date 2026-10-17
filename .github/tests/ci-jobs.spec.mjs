@@ -39,6 +39,7 @@ const SCREENCOMP = [
   /^nickderobertis\/screencomp\/visual-docs-pages@v\d+\.\d+\.\d+$/,
   /^nickderobertis\/screencomp\/visual-docs-aggregate@v\d+\.\d+\.\d+$/,
 ];
+// llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Branch protection's required set is not this repository's to hold: its source is the create-repo skill's setup_github_governance.py, and the orchestration repository reconciles its inventory of this merge path against GitHub on every gate run (AGENTS.md, "Commits, releases, and merging"). A pull request's token cannot read branch protection, so this is the set the workflow must keep producing, held to the workflow below.
 const REQUIRED_CONTEXTS = [
   "check (ubuntu-latest)",
   "check (windows-latest)",
@@ -49,6 +50,7 @@ const REQUIRED_CONTEXTS = [
   "install path (windows-latest)",
   "visual-docs / report (x86_64, shots/current, shots/verify, Visual docs)",
 ];
+// llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 const LOCKFILES = [
   "Cargo.lock",
   "bun.lock",
