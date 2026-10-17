@@ -9,8 +9,8 @@
 #
 #   unix  a Rust crate measured by scripts/rust-coverage.sh, whose every `test` command is
 #         the all-features run that measurement repeats under nextest or a command
-#         `test-uncovered` runs, and whose doctests, which nextest never runs, `test-uncovered`
-#         runs;
+#         `test-uncovered` runs, and whose library's doctests, which nextest never runs,
+#         `test-uncovered` runs;
 #   all   an SDK whose `coverage` command is its `test` command with coverage switched on;
 #
 # and never a project with a live lane, whose credentials coverage clears.
@@ -27,28 +27,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-FENCE = re.compile(r"^\s*//[/!]\s*```\s*([\w,-]*)\s*$")
-RUN = {"", "rust", "no_run", "should_panic", "compile_fail"}
 problems = []
-
-
-INCLUDED_DOC = re.compile(r"#!?\[doc\s*=\s*include_str!")
-
-
-def has_doctest(text):
-    """Whether a doc comment opens a code block rustdoc runs — one tagged rust, or untagged —
-    or documentation is included from a file, whose blocks this cannot see and so counts."""
-    if INCLUDED_DOC.search(text):
-        return True
-    opened = False
-    for line in text.splitlines():
-        fence = FENCE.match(line)
-        if not fence:
-            continue
-        if not opened and all(tag in RUN or tag.startswith("edition") for tag in fence.group(1).split(",")):
-            return True
-        opened = not opened
-    return False
 
 
 def commands(project, target):
@@ -106,12 +85,15 @@ for path in sorted(paths.split()):
                     "test-uncovered runs, so it would stop running where coverage stands in for "
                     "test; add it to test-uncovered"
                 )
-        sources = Path(path).parent / "src"
-        documented = any(has_doctest(file.read_text(encoding="utf-8")) for file in sources.rglob("*.rs"))
-        if documented and not any("--doc" in shlex.split(command) for command in uncovered):
+        # Every library's doctests, whether or not it has any today: nextest never runs them,
+        # and which documentation rustdoc will execute is rustdoc's to say, not this check's.
+        doctests = repeated + ["--doc"]
+        if (Path(path).parent / "src" / "lib.rs").is_file() and not any(
+            shlex.split(command) == doctests for command in uncovered
+        ):
             problems.append(
-                f"{where}: has doctests, which nextest never runs, and test-uncovered does not "
-                "run them; add the crate's all-features test run with `--doc` to it"
+                f"{where}: has a library, whose doctests nextest never runs, and test-uncovered "
+                f"does not run `{' '.join(doctests)}` exactly"
             )
     else:
         if len(tested) != 1 or len(covered) != 1:

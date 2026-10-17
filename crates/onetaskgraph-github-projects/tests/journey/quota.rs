@@ -17,7 +17,6 @@ struct Invocation {
     phase: Phase,
     written: usize,
     modelled_page_refusals: BTreeSet<usize>,
-    /// When the session and its current phase began, and how many requests came before it.
     started: std::time::Instant,
     phase_started: std::time::Instant,
     phase_first_request: usize,

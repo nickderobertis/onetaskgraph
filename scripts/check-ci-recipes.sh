@@ -155,14 +155,17 @@ project["targets"]["test"]["options"]["command"] += " && bash scripts/never-run-
 json.dump(project, open(sys.argv[1], "w"))
 PY
 tag_refused "a tagged crate's test gaining a command nothing else runs" "never-run-elsewhere.sh"
-"$PYTHON" - "$REPO/crates/$DEPENDENT/project.json" <<'PY'
+for replacement in "" "cargo test --quiet -p $UNAFFECTED --all-features --locked --doc" \
+  "cargo test --quiet -p $DEPENDENT --all-features --locked --doc engine"; do
+  "$PYTHON" - "$REPO/crates/$DEPENDENT/project.json" "$replacement" <<'PY'
 import json, sys
 project = json.load(open(sys.argv[1]))
-commands = project["targets"]["test-uncovered"]["options"]["commands"]
-project["targets"]["test-uncovered"]["options"]["commands"] = [c for c in commands if "--doc" not in c]
+commands = [c for c in project["targets"]["test-uncovered"]["options"]["commands"] if "--doc" not in c]
+project["targets"]["test-uncovered"]["options"]["commands"] = commands + ([sys.argv[2]] if sys.argv[2] else [])
 json.dump(project, open(sys.argv[1], "w"))
 PY
-tag_refused "a crate with doctests losing its doctest run" "has doctests"
+  tag_refused "a library's doctest run replaced by '${replacement:-nothing}'" "has a library"
+done
 "$PYTHON" - "$REPO/crates/onetaskgraph-github-projects/project.json" <<'PY'
 import json, sys
 project = json.load(open(sys.argv[1]))
