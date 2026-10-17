@@ -264,18 +264,24 @@ fail_one() {
   record_targets "$1"
   git -C "$REPO" commit --quiet --no-verify -am "test: fail $1"
 }
-fail_one "$CHANGED:lint"
-recipe ci-lint
-expect_status "lint with $CHANGED:lint failing" 1
-expect "lint with $CHANGED:lint failing" ran "workspace:deny"
-grep -qF "ci-job: lint: nx affected -t format-check lint typecheck failed" <<<"$OUTPUT" \
-  || fail "lint with $CHANGED:lint failing: the recipe did not name the phase that failed"
-fail_one "$CHANGED:coverage"
-recipe ci-test-linux
-expect_status "test-linux with $CHANGED:coverage failing" 1
-expect "test-linux with $CHANGED:coverage failing" ran "scripts:distribution-test"
-grep -qF "ci-job: test-linux: nx affected -t test-uncovered coverage failed" <<<"$OUTPUT" \
-  || fail "test-linux with $CHANGED:coverage failing: the recipe did not name the phase that failed"
+# Both ways a job reports — streaming, as in Actions, and held until a phase ends, as anywhere
+# else — because the two take different paths through a failing phase.
+for actions in true ""; do
+  mode="${actions:+streaming as in Actions}"
+  mode="${mode:-held}"
+  fail_one "$CHANGED:lint"
+  GITHUB_ACTIONS="$actions" recipe ci-lint
+  expect_status "lint with $CHANGED:lint failing, $mode" 1
+  expect "lint with $CHANGED:lint failing, $mode" ran "workspace:deny"
+  grep -qF "ci-job: lint: nx affected -t format-check lint typecheck failed" <<<"$OUTPUT" \
+    || fail "lint with $CHANGED:lint failing, $mode: the recipe did not name the phase that failed"
+  fail_one "$CHANGED:coverage"
+  GITHUB_ACTIONS="$actions" recipe ci-test-linux
+  expect_status "test-linux with $CHANGED:coverage failing, $mode" 1
+  expect "test-linux with $CHANGED:coverage failing, $mode" ran "scripts:distribution-test"
+  grep -qF "ci-job: test-linux: nx affected -t test-uncovered coverage failed" <<<"$OUTPUT" \
+    || fail "test-linux with $CHANGED:coverage failing, $mode: the recipe did not name the phase that failed"
+done
 
 # 4. Nx answering with something other than a task graph fails the recipe rather than reading
 #    as a phase with nothing to run. The stand-in is Nx's own executable, so everything the

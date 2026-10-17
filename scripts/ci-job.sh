@@ -144,10 +144,14 @@ run_phase() {
   # a job the timeout cuts short still shows how far each got (Nx's per-task groups are
   # flattened: groups cannot interleave). Elsewhere it is held until the phase ends.
   if [ "${GITHUB_ACTIONS:-}" = true ]; then
-    FORCE_COLOR=0 NO_COLOR=1 node_modules/.bin/nx "${arguments[@]}" --outputStyle=static 2>&1 \
-      | tee "$scratch/run.$phase.log" \
+    # Nx's status is written from inside the pipeline: under `pipefail` a failing Nx would
+    # otherwise end this phase before it is recorded and the failure named.
+    {
+      FORCE_COLOR=0 NO_COLOR=1 node_modules/.bin/nx "${arguments[@]}" --outputStyle=static 2>&1 \
+        && echo 0 >"$scratch/status.$phase" || echo "$?" >"$scratch/status.$phase"
+    } | tee "$scratch/run.$phase.log" \
       | awk -v tag="[$targets] " '/^::endgroup::/ { next } { sub(/^::group::/, ""); print tag $0; fflush() }'
-    phase_status="${PIPESTATUS[0]}"
+    phase_status="$(cat "$scratch/status.$phase")"
   else
     FORCE_COLOR=0 NO_COLOR=1 node_modules/.bin/nx "${arguments[@]}" --outputStyle=static \
       >"$scratch/run.$phase.log" 2>&1 && phase_status=0 || phase_status=$?
