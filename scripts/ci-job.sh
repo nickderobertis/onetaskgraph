@@ -191,7 +191,6 @@ phase=0
 group=
 while IFS=' ' read -r in_group kind targets excluded flags; do
   [ -n "$kind" ] || continue
-  # A new group starts once every phase of the one before has ended.
   [ "$in_group" = "$group" ] || wait
   group="$in_group"
   phase=$((phase + 1))

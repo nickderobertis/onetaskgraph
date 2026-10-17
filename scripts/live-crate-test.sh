@@ -33,6 +33,7 @@ case "${ONETASKGRAPH_TESTS_UNDER_COVERAGE:-}" in
   "") ;;
   *)
     echo "live-crate-test: ONETASKGRAPH_TESTS_UNDER_COVERAGE is '$ONETASKGRAPH_TESTS_UNDER_COVERAGE'; it is 1 or unset." >&2
+    echo "live-crate-test: next: unset it to run the whole crate, or set it to 1 where coverage runs the rest." >&2
     exit 2
     ;;
 esac

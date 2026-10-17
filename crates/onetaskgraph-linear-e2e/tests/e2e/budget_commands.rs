@@ -162,14 +162,44 @@ fn the_telemetry_the_journeys_write_is_what_test_declares_and_budgets_hashes() {
         "`budgets` is keyed on the telemetry it reads: {:#}",
         targets["budgets"]
     );
-    // Only the build's own directory is what `test` declares; a test's override is not.
+    // Only the build's own directory is what `test` declares; a test's override is not. A plain
+    // run writes into it, and so does an instrumented run standing in for `test` — which is when
+    // this suite's journeys record the budgets — so the reports, built plainly, find what they
+    // recorded. cargo-llvm-cov's own variable says a run is instrumented, whatever directory it
+    // builds into, so a run that moved would fail here rather than leave `budgets` nothing.
     if std::env::var_os(telemetry::DIRECTORY).is_none() {
+        let instrumented = std::env::var_os("LLVM_PROFILE_FILE").is_some();
+        let standing_in =
+            std::env::var_os(onetaskgraph_e2e_support::telemetry::TESTS_UNDER_COVERAGE)
+                .is_some_and(|value| value == "1");
         let directory = telemetry::directory();
-        assert!(
-            directory.ends_with(telemetry::BELOW_BUILD),
-            "{}",
-            directory.display()
-        );
+        if !instrumented || standing_in {
+            let build = directory
+                .ancestors()
+                .nth(
+                    std::path::Path::new(telemetry::BELOW_BUILD)
+                        .components()
+                        .count(),
+                )
+                .expect("the telemetry sits below a build directory");
+            let declared =
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug");
+            assert!(
+                directory.ends_with(telemetry::BELOW_BUILD)
+                    && std::fs::canonicalize(build).expect("the build directory exists")
+                        == std::fs::canonicalize(&declared).expect("target/debug exists"),
+                "the journeys record into {}, not the directory `test` declares and the \
+                 reports read, below {}",
+                directory.display(),
+                declared.display()
+            );
+        } else {
+            assert!(
+                directory.ends_with(telemetry::BELOW_BUILD),
+                "{}",
+                directory.display()
+            );
+        }
     }
 }
 

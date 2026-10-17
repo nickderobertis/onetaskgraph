@@ -110,6 +110,11 @@ fn a_shared_board_smaller_than_the_measured_one_runs_and_bills_within_the_budget
 }
 
 #[test]
+fn an_asset_entry_point_started_before_main_waits_for_its_record_then_completes_the_session() {
+    run_pair("assets-first");
+}
+
+#[test]
 fn missing_or_unadmitted_board_observations_never_start_the_fixture_or_make_a_bill() {
     for scenario in ["missing-items", "missing-fields", "board-91", "board-50"] {
         run_pair(scenario);
@@ -147,18 +152,9 @@ fn run_pair(scenario: &str) {
     let endpoint = std::fs::read_to_string(&ready).unwrap();
     let host = endpoint.strip_suffix("/graphql").unwrap();
     let revision = "a".repeat(40);
-    let mut outputs = Vec::new();
-    for (package, test) in [
-        (
-            "onetaskgraph-github-projects",
-            "real_projects_v2_contract_writes_and_leaves_no_residue",
-        ),
-        (
-            "onetaskgraph-github-projects-e2e",
-            "disposable_task_and_document_asset_copies",
-        ),
-    ] {
-        let output = Command::new(executable(package, "live"))
+    let entry_point = |package: &str, test: &str| {
+        let mut command = Command::new(executable(package, "live"));
+        command
             .args([test, "--exact", "--nocapture"])
             .env("GITHUB_LIVE_SELECTION", "run")
             .env("GITHUB_LIVE_TEST_GRAPHQL", &endpoint)
@@ -173,9 +169,52 @@ fn run_pair(scenario: &str) {
             .env("GITHUB_LIVE_SOURCE_REVISION", &revision)
             .env("GITHUB_ACTIONS", "true")
             .env("GITHUB_RUN_ID", "37616803489")
-            .env("GITHUB_RUN_ATTEMPT", "2")
-            .output()
-            .unwrap();
+            .env("GITHUB_RUN_ATTEMPT", "2");
+        command
+    };
+    // With `assets-first` the asset entry point starts before main, as Nx may start it, and is
+    // waiting on main's record once it has reserved its own; main then runs beside it.
+    let mut waiting = None;
+    if scenario == "assets-first" {
+        waiting = Some(
+            entry_point(
+                "onetaskgraph-github-projects-e2e",
+                "disposable_task_and_document_asset_copies",
+            )
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+        );
+        let reserved = Instant::now();
+        while !records.join("assets.json").exists() {
+            assert!(reserved.elapsed() < Duration::from_secs(60));
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+    let mut outputs = Vec::new();
+    let mut main_ran = Duration::ZERO;
+    for (package, test) in [
+        (
+            "onetaskgraph-github-projects",
+            "real_projects_v2_contract_writes_and_leaves_no_residue",
+        ),
+        (
+            "onetaskgraph-github-projects-e2e",
+            "disposable_task_and_document_asset_copies",
+        ),
+    ] {
+        let ran = Instant::now();
+        let output = if package == "onetaskgraph-github-projects-e2e"
+            && let Some(asset) = waiting.take()
+        {
+            asset.wait_with_output().unwrap()
+        } else {
+            entry_point(package, test).output().unwrap()
+        };
+        if package == "onetaskgraph-github-projects" {
+            main_ran = ran.elapsed();
+        }
         let success = output.status.success();
         outputs.push(output);
         if !success {
@@ -446,6 +485,20 @@ fn run_pair(scenario: &str) {
             recorded.calls.len(),
             "the phases' requests are every call {record} holds: {said}"
         );
+        // An asset entry point started first spends its admission waiting: it ends no sooner
+        // than main, which it started before.
+        if scenario == "assets-first" && record == "assets.json" {
+            let admission = timings
+                .iter()
+                .find(|(phase, ..)| phase == "Admission")
+                .map(|(_, took, ..)| *took)
+                .expect("the asset entry point times its admission");
+            assert!(
+                admission + 0.1 >= main_ran.as_secs_f64(),
+                "the asset entry point's admission took {admission}s while main ran {main_ran:?}: \
+                 it did not wait for main's record: {said}"
+            );
+        }
         let mut clock = 0.0;
         for (phase, took, _, at) in &timings {
             assert!(

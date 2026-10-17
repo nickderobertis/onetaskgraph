@@ -240,7 +240,13 @@ async fn wait_for_current_main(
     };
     let ended =
         journey::quota::ended_marker(directory, onetaskgraph_github_live::quota::EntryPoint::Main);
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
+    let deadline = std::time::Instant::now()
+        .checked_add(std::time::Duration::from_secs(seconds))
+        .ok_or_else(|| {
+            format!(
+                "GITHUB_LIVE_MAIN_WAIT_SECONDS is {seconds}, past any deadline this clock holds"
+            )
+        })?;
     loop {
         match onetaskgraph_github_live::quota::require_current_main(directory, current) {
             Ok(()) => return Ok(()),
@@ -1011,7 +1017,8 @@ fn the_actual_asset_entry_point_refuses_missing_main_before_any_request() {
     // Waiting for the main entry point is bounded: with no bound, a refusal at once; with a few
     // seconds, a refusal only once they have passed; with a main entry point that has already
     // ended without its record, a refusal saying so rather than one at the end of the bound;
-    // and a bound that is not whole seconds, refused by name. None of them spends a request.
+    // a bound that is not whole seconds, and one past any deadline the clock holds, each refused
+    // by name. None of them spends a request, and each leaves the entry point marked ended.
     for (wait, main_ended, refused_after, says) in [
         ("0", false, 0, "current main contribution unavailable"),
         (
@@ -1031,6 +1038,12 @@ fn the_actual_asset_entry_point_refuses_missing_main_before_any_request() {
             false,
             0,
             "GITHUB_LIVE_MAIN_WAIT_SECONDS must be whole seconds",
+        ),
+        (
+            "18446744073709551615",
+            false,
+            0,
+            "past any deadline this clock holds",
         ),
     ] {
         let sandbox = Sandbox::new();
@@ -1088,6 +1101,15 @@ fn the_actual_asset_entry_point_refuses_missing_main_before_any_request() {
         assert!(
             record.calls.is_empty(),
             "missing main evidence must not spend another API request"
+        );
+        // The refused journey's own record is final, so it says it has ended.
+        assert!(
+            journey::quota::ended_marker(
+                &directory,
+                onetaskgraph_github_live::quota::EntryPoint::Assets
+            )
+            .exists(),
+            "{wait}: the refused asset entry point left no ended marker beside its record"
         );
     }
 }
