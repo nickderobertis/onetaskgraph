@@ -1,10 +1,9 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { readdirSync } from "node:fs";
+import { readdirSync, rmSync, writeFileSync } from "node:fs";
 import { test } from "node:test";
-import { graph, read, root, workflows } from "../workflow-graph.mjs";
+import { digest, graph, read, root, workflows } from "../workflow-graph.mjs";
 
-// The four CD jobs, the recipe each one's steps call, and the plan that recipe publishes.
 const RELEASE_JOBS = {
   "build-linux": { runner: "ubuntu-latest", recipe: "linux", platform: "linux" },
   "build-macos": { runner: "macos-latest", recipe: "macos", platform: "macos" },
@@ -51,7 +50,6 @@ function tomlDocument(path) {
     ),
   );
 }
-// The steps that send artifacts somewhere, each with exactly the artifacts it sends.
 function uploads() {
   const release = workflows()["release.yml"];
   const found = [];
@@ -494,4 +492,20 @@ with tempfile.TemporaryDirectory() as temporary:
     ],
     { cwd: root, stdio: "pipe" },
   );
+});
+
+test("the telemetry digest moves with a nested fixture's content", () => {
+  const nested = new URL(`.github/tests/fixtures/digest-probe-${process.pid}.json`, root);
+  const without = digest();
+  try {
+    writeFileSync(nested, "{}\n");
+    const added = digest();
+    writeFileSync(nested, "[]\n");
+    const changed = digest();
+    assert.notEqual(added, without);
+    assert.notEqual(changed, added);
+  } finally {
+    rmSync(nested, { force: true });
+  }
+  assert.equal(digest(), without);
 });

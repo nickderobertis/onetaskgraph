@@ -41,7 +41,6 @@ function runStep(definition, env, cwd = checkout) {
 test("the guard enables the job exactly when both release secrets are present, as the guard job did", () => {
   const guard = job().steps[0];
   assert.equal(guard.id, "guard");
-  // The four cases the old guard job decided, by the same two secrets.
   const cases = [
     ["both secrets present", "release-token", "cargo-token", "true"],
     ["RELEASE_PLZ_TOKEN absent, as in a fork", "", "cargo-token", "false"],
