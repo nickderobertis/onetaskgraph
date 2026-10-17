@@ -8,10 +8,9 @@
     "bootstrap": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "uv sync --frozen",
-        "cwd": "sdks/python"
+        "command": "bash scripts/sync-python-sdk.sh"
       },
-      "//": "Uncached: it reaches PyPI and writes a .venv outside the cacheable output set."
+      "//": "Uncached: it reaches PyPI and writes a .venv outside the cacheable output set. `uv sync --frozen`, leaving the CLI member out where CI asks (scripts/sync-python-sdk.sh)."
     },
     "check": {
       "executor": "nx:noop",

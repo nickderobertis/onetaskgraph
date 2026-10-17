@@ -345,7 +345,6 @@ grep -q 'unsupported platform' "$tmp/error" || { cat "$tmp/error" >&2; echo "uns
 if node -e 'Object.defineProperty(process,"platform",{value:"darwin"}); Object.defineProperty(process,"arch",{value:"x64"}); require(process.argv[1])' "$root/npm/cli/bin/onetaskgraph.js" 2>"$tmp/error"; then intel_launcher_status=0; else intel_launcher_status=$?; fi
 [[ $intel_launcher_status -eq 64 ]] || { cat "$tmp/error" >&2; echo "Intel macOS launcher exited $intel_launcher_status, expected 64; next: inspect the darwin-x64 refusal in npm/cli/bin/onetaskgraph.js" >&2; exit 1; }
 grep -q 'Intel macOS is no longer supported' "$tmp/error" || { cat "$tmp/error" >&2; echo "Intel macOS launcher refusal did not say Intel macOS is no longer supported; next: inspect launcher diagnostics" >&2; exit 1; }
-uv run --quiet --locked --package onetaskgraph-sdk onetaskgraph --help | grep -q 'Usage:' || { echo "Python SDK dependency did not supply the real command; next: inspect the SDK carrier dependency" >&2; exit 1; }
 mkdir -p "$tmp/python-wheel"
 # One release build at a time: it links target/$target/release/onetaskgraph and then reads it,
 # and another run of this script at once — scripts:test's re-run of it beside
@@ -356,6 +355,28 @@ mkdir -p "$tmp/python-wheel"
 cli_wheel=$(find "$tmp/python-wheel" -maxdepth 1 -type f -name 'onetaskgraph_cli-*.whl' -print -quit)
 [[ -n $cli_wheel ]] || { echo "Python CLI build produced no wheel; next: inspect the maturin package configuration" >&2; exit 1; }
 uv run --quiet --isolated --no-project --with "$cli_wheel" onetaskgraph --help | grep -q 'Usage:' || { echo "installed Python CLI wheel did not render help; next: inspect the wheel's binary entry point" >&2; exit 1; }
+# The SDK's own dependency supplies that command: the SDK alone is installed, from this tree
+# and without the workspace's sources, so the onetaskgraph-cli it requires resolves to the
+# wheel just built. The command it installs is held to that wheel's bytes, so a resolution
+# that reached the registry instead cannot pass for it.
+uv run --quiet --isolated --no-project --no-sources --find-links "$tmp/python-wheel" --with "$root/sdks/python" python - "$cli_wheel" <<'PY' || { echo "Python SDK dependency did not supply the real command from the CLI wheel just built; next: inspect the onetaskgraph-cli dependency in sdks/python/pyproject.toml" >&2; exit 1; }
+import hashlib, shutil, subprocess, sys, zipfile
+
+installed = shutil.which("onetaskgraph")
+if installed is None:
+    raise SystemExit("installing the SDK installed no onetaskgraph command")
+with zipfile.ZipFile(sys.argv[1]) as wheel:
+    scripts = [n for n in wheel.namelist() if ".data/scripts/" in n and n.split("/")[-1] in ("onetaskgraph", "onetaskgraph.exe")]
+    if len(scripts) != 1:
+        raise SystemExit(f"the CLI wheel carries {scripts}, not one onetaskgraph command")
+    built = hashlib.sha256(wheel.read(scripts[0])).hexdigest()
+with open(installed, "rb") as command:
+    if hashlib.sha256(command.read()).hexdigest() != built:
+        raise SystemExit(f"{installed} is not the command the CLI wheel just built carries")
+shown = subprocess.run([installed, "--help"], capture_output=True, text=True, encoding="utf-8")
+if "Usage:" not in shown.stdout:
+    raise SystemExit(f"{installed} --help printed no usage: {shown.stdout}{shown.stderr}")
+PY
 assert_version_error() {
   expected_message=$1
   shift

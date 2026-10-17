@@ -424,6 +424,12 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # In all four jobs: the Python SDK's environment without the CLI copy `uv sync` would build
+    # into it, which nothing here runs, and no `uv run` that installs it after all
+    # (scripts/sync-python-sdk.sh).
+    env:
+      ONETASKGRAPH_SDK_WITHOUT_CLI: "1"
+      UV_NO_SYNC: "1"
     # llmlint: ignore-block[least_privilege_grants] The visual docs steps push the pull
     # request's gallery preview to gh-pages, upsert its before/after comment and gate on the
     # Pages build; notignored upserts its sticky comment. No other step is handed the token:
@@ -536,10 +542,6 @@ jobs:
           # cargo-binstall reads GitHub's releases; anonymously a shared runner's address is
           # rate-limited and it falls back to building release-plz from source.
           GITHUB_TOKEN: ${{ github.token }}
-          # uv sync builds the CLI into the SDK's environment; nothing here runs that copy (every
-          # spawner runs target/debug's), so it is built as a debug build, which shares the
-          # dependency units the jobs' own builds compile, rather than an optimised one.
-          MATURIN_PEP517_ARGS: --profile dev
         run: just bootstrap --outputStyle=static
       # Saved as soon as Bootstrap has installed them, rather than after the job: a cache saves
       # only from a job that passed, and a tool built from source is the cost worth keeping
@@ -646,6 +648,9 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      ONETASKGRAPH_SDK_WITHOUT_CLI: "1"
+      UV_NO_SYNC: "1"
     steps:
       - uses: actions/checkout@v7
         with:
@@ -717,7 +722,6 @@ jobs:
         if: steps.release.outputs.tests == 'run'
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          MATURIN_PEP517_ARGS: --profile dev
         run: just bootstrap --outputStyle=static
       # Saved straight after Bootstrap, as lint's are.
       - uses: actions/cache/save@v6
@@ -769,6 +773,9 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: windows-latest
     timeout-minutes: 30
+    env:
+      ONETASKGRAPH_SDK_WITHOUT_CLI: "1"
+      UV_NO_SYNC: "1"
     steps:
       - uses: actions/checkout@v7
         with:
@@ -844,7 +851,6 @@ jobs:
         if: steps.release.outputs.tests == 'run'
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          MATURIN_PEP517_ARGS: --profile dev
         run: just bootstrap --outputStyle=static
       # Saved straight after Bootstrap, as lint's are.
       - uses: actions/cache/save@v6
@@ -936,6 +942,9 @@ jobs:
     if: github.event_name == 'pull_request' && !(github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'release-plz-'))
     runs-on: macos-latest
     timeout-minutes: 30
+    env:
+      ONETASKGRAPH_SDK_WITHOUT_CLI: "1"
+      UV_NO_SYNC: "1"
     steps:
       - uses: actions/checkout@v7
         with:
@@ -1004,7 +1013,6 @@ jobs:
         if: steps.release.outputs.tests == 'run'
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          MATURIN_PEP517_ARGS: --profile dev
         run: just bootstrap --outputStyle=static
       # Saved straight after Bootstrap, as lint's are.
       - uses: actions/cache/save@v6
