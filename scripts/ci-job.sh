@@ -9,7 +9,7 @@
 # line naming every task the job selects.
 #
 # `--exclude=` is what scripts/live-lane-selection.sh answers through lane_runner.py: a live
-# plugin a version-only diff cannot reach. It narrows the phase that runs `test` and
+# plugin a version-only diff cannot reach. It narrows the phases that run `test` and
 # `budgets`, exactly as it narrows `just test`; coverage is never narrowed by it.
 #
 # The tests run once. A project tagged `test-in-coverage:<platforms>` has a `coverage` target
@@ -42,9 +42,10 @@ for argument in "$@"; do
 done
 
 # One phase per line: the group it runs in, `affected|run`, the comma-separated targets or
-# task, and the projects that phase excludes (or `-`). Groups run in order, and the phases of
-# one group at once: they select disjoint work, and the instrumented build is cargo-llvm-cov's
-# own target directory, so it and the plain build do not wait on one lock.
+# task, the projects that phase excludes (or `-`), and optionally Nx flags of its own,
+# comma-separated. Groups run in order, and the phases of one group at once: they select
+# disjoint work, and the instrumented build is cargo-llvm-cov's own target directory, so it
+# and the plain build do not wait on one lock.
 case "$JOB" in
   lint)
     phases="1 affected format-check,lint,typecheck -
@@ -58,12 +59,18 @@ case "$JOB" in
     # Work that would queue behind a long phase gets one of its own: the two Linear crates,
     # whose credentialed journeys take one seat and so run one at a time, and the SDKs'
     # coverage, which would otherwise wait for every crate's.
-    phases="1 affected test,budgets tag:test-in-coverage:*,onetaskgraph-linear,onetaskgraph-linear-e2e
-1 affected test,budgets *,!onetaskgraph-linear,!onetaskgraph-linear-e2e
+    #
+    # The budgets are judged last, once coverage has run: the loopback journeys that record
+    # their telemetry are coverage's here, and scripts/rust-coverage.sh writes it where
+    # `budgets` reads it. Their `test` has already run in this job, so it is not run again,
+    # and the cache cannot answer for telemetry its key never saw.
+    phases="1 affected test tag:test-in-coverage:*,onetaskgraph-linear,onetaskgraph-linear-e2e
+1 affected test *,!onetaskgraph-linear,!onetaskgraph-linear-e2e
 1 affected test-uncovered,coverage tag:layer:sdk
 1 affected coverage *,!tag:layer:sdk
 1 run scripts:distribution-check -
-1 run scripts:distribution-test -"
+1 run scripts:distribution-test -
+2 affected budgets - --excludeTaskDependencies,--skipNxCache"
     ;;
   test-windows)
     # The tests alone first: on the Windows runner the test builds and journeys beside other
@@ -130,9 +137,10 @@ for name in sorted(tasks):
 # One phase, in the background beside the job's others: its selection, then its run, each
 # recorded under its index for the summary below. run_phase <index> <kind> <targets> <excluded>.
 run_phase() {
-  local phase="$1" kind="$2" targets="$3" excluded="$4" exclusions="" plan phase_status
+  local phase="$1" kind="$2" targets="$3" excluded="$4" flags="${5:-}" exclusions="" plan phase_status
   [ "$excluded" = "-" ] || exclusions="$excluded"
-  if [ "$kind" = "affected" ] && [ -n "$live_exclusions" ] && [[ ",$targets," == *",test,"* ]]; then
+  if [ "$kind" = "affected" ] && [ -n "$live_exclusions" ] \
+    && { [[ ",$targets," == *",test,"* ]] || [[ ",$targets," == *",budgets,"* ]]; }; then
     exclusions="${exclusions:+$exclusions,}$live_exclusions"
   fi
   if [ "$kind" = "affected" ]; then
@@ -141,6 +149,10 @@ run_phase() {
     [ -z "$exclusions" ] || arguments+=("--exclude=$exclusions")
   else
     arguments=(run "$targets")
+  fi
+  if [ -n "$flags" ]; then
+    read -r -a flag_words <<<"${flags//,/ }"
+    arguments+=("${flag_words[@]}")
   fi
   echo "nx ${arguments[*]}" >"$scratch/command.$phase"
   if ! plan="$(selected_tasks "$phase" "${arguments[@]}" | tr -d '\r')"; then
@@ -177,13 +189,13 @@ record_phase() {
 
 phase=0
 group=
-while IFS=' ' read -r in_group kind targets excluded; do
+while IFS=' ' read -r in_group kind targets excluded flags; do
   [ -n "$kind" ] || continue
   # A new group starts once every phase of the one before has ended.
   [ "$in_group" = "$group" ] || wait
   group="$in_group"
   phase=$((phase + 1))
-  record_phase "$phase" "$kind" "$targets" "$excluded" &
+  record_phase "$phase" "$kind" "$targets" "$excluded" "$flags" &
 done <<EOF
 $phases
 EOF

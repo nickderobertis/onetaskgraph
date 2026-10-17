@@ -348,6 +348,32 @@ for actions in true ""; do
     || fail "test-linux with $CHANGED:coverage failing, $mode: the recipe did not name the phase that failed"
 done
 
+# 3b. Where coverage records the budgets' telemetry, `budgets` is judged after it, and without
+#     running `test` a second time: the Linear e2e suite's coverage leaves a mark its budgets
+#     refuse to run without, and its test counts its runs.
+git -C "$REPO" checkout --quiet -- .
+git -C "$REPO" reset --quiet --hard "$BASE"
+record_targets
+ORDER="$scratch/order"
+rm -rf "$ORDER"
+mkdir -p "$ORDER"
+"$PYTHON" - "$REPO/crates/onetaskgraph-linear-e2e/project.json" "$ORDER" <<'PY2'
+import json, sys
+path, order = sys.argv[1], sys.argv[2]
+project = json.load(open(path, encoding="utf-8"))
+targets = project["targets"]
+targets["coverage"]["options"] = {"command": f"sleep 2 && touch {order}/covered"}
+targets["test"]["options"] = {"command": f"echo ran >>{order}/tests"}
+targets["budgets"]["options"] = {"command": f"test -f {order}/covered"}
+json.dump(project, open(path, "w", encoding="utf-8"), indent=2)
+PY2
+git -C "$REPO" commit --quiet --no-verify -am "test: order the Linear e2e suite's budgets"
+recipe ci-test-linux
+expect_status "test-linux judging budgets after coverage" 0
+expect "test-linux judging budgets after coverage" ran "onetaskgraph-linear-e2e:budgets"
+[ "$(cat "$ORDER/tests" 2>/dev/null)" = ran ] \
+  || fail "test-linux judging budgets after coverage: onetaskgraph-linear-e2e:test ran $(wc -l <"$ORDER/tests" 2>/dev/null || echo 0) times, not once"
+
 # 4. Nx answering with something other than a task graph fails the recipe rather than reading
 #    as a phase with nothing to run. The stand-in is Nx's own executable, so everything the
 #    recipe does around it is still real.

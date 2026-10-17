@@ -92,6 +92,16 @@ fi
 
 readonly CRATE="$REQUEST"
 
+# Where the instrumented run stands in for a live crate's `test` (scripts/live-crate-test.sh),
+# the loopback journeys that record its budgets' telemetry run here, not there. They write it
+# where `budgets` reads it — the plain build's directory, which the reports' own runs find from
+# their executables — rather than beside the instrumented executables, where nothing reads it.
+if [ "${ONETASKGRAPH_TESTS_UNDER_COVERAGE:-}" = 1 ]; then
+  telemetry="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/target/debug/telemetry"
+  export GITHUB_ASSET_TELEMETRY_DIR="$telemetry/onetaskgraph-github-projects-e2e"
+  export LINEAR_BUDGET_TELEMETRY_DIR="$telemetry/onetaskgraph-linear-e2e"
+fi
+
 # Validate the crate name against the real workspace before it is used as a Cargo
 # selector. Unchecked, a typo becomes a silent "measured nothing".
 if ! metadata="$(cargo metadata --format-version 1 --no-deps 2>&1)"; then
