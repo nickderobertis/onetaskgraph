@@ -186,6 +186,19 @@ fn endpoints() -> &'static Endpoints {
     ENDPOINTS.get_or_init(Endpoints::github)
 }
 
+/// Wait on GitHub's clock, and only on GitHub's.
+///
+/// GitHub stamps every write to the whole second and lists what was just written a moment
+/// later, so the journey waits a second between two writes that must read as different
+/// seconds, and before listing what it has just deleted. A stand-in stamps each write with a
+/// later tick of its own and lists exactly what it holds, so against one there is nothing to
+/// wait for: the same journey, at the same checks, without the wall-clock time.
+async fn github_pause(duration: std::time::Duration) {
+    if endpoints().source.is_none() {
+        tokio::time::sleep(duration).await;
+    }
+}
+
 /// The configuration the source under test is built from, for one board.
 ///
 /// Everything the credentialed lane builds is here plus whatever [`Endpoints::source`]
@@ -895,7 +908,7 @@ async fn remove_live_origin_field(token: &str, project_id: &str) -> Result<(), S
             )
             .await?;
         }
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        github_pause(std::time::Duration::from_secs(1)).await;
     }
     Err("live origin field cleanup left the temporary field behind".to_owned())
 }
@@ -1028,7 +1041,7 @@ async fn remove_live_artifacts(
                 delete_issue(token, &issue_id).await?;
             }
         }
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        github_pause(std::time::Duration::from_secs(1)).await;
     }
     Err(format!(
         "live artifact cleanup left project items: {}{}",
@@ -3392,7 +3405,7 @@ async fn every_change_kind_moves_a_tasks_token(
     let body = |text: &str| {
         CommentBody::new(text).map_err(|error| format!("a live comment body: {error}"))
     };
-    let pause = || tokio::time::sleep(std::time::Duration::from_millis(1_100));
+    let pause = || github_pause(std::time::Duration::from_millis(1_100));
     tokio::time::sleep(endpoints().settle).await;
     let reader = TokenReader {
         rebuilt,
@@ -3849,7 +3862,7 @@ async fn an_edited_comment_moves_its_issue_and_is_selected_since(
         .flatten()
         .fold(before_edit, std::cmp::max)
         + chrono::Duration::seconds(1);
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    github_pause(std::time::Duration::from_secs(2)).await;
     let commented_since = || TaskQuery {
         commented_since: Some(since),
         ..by_prefix()
