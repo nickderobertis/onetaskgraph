@@ -510,11 +510,13 @@ jobs:
       # caches on the pinned version, the OS and the architecture (and the pruner, which cargo
       # builds, on the toolchain); the Nx cache on every lockfile and the toolchain, whose
       # entries Nx itself serves only for an unchanged input hash.
-      - uses: actions/cache@v6
+      - uses: actions/cache/restore@v6
+        id: release-plz-cache
         with:
           path: ~/.cache/onetaskgraph/tools/release-plz
           key: release-plz-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.release-plz }}
-      - uses: actions/cache@v6
+      - uses: actions/cache/restore@v6
+        id: prune-superseded-cache
         with:
           path: |
             ~/.cargo/bin/cargo-prune-superseded
@@ -526,7 +528,26 @@ jobs:
           key: nx-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'bun.lock', 'uv.lock', 'sdks/python/uv.lock', '.github/bun.lock', 'rust-toolchain.toml') }}-${{ github.sha }}
           restore-keys: nx-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'bun.lock', 'uv.lock', 'sdks/python/uv.lock', '.github/bun.lock', 'rust-toolchain.toml') }}-
       - name: Bootstrap
+        env:
+          # cargo-binstall reads GitHub's releases; anonymously a shared runner's address is
+          # rate-limited and it falls back to building release-plz from source.
+          GITHUB_TOKEN: ${{ github.token }}
         run: just bootstrap --outputStyle=static
+      # Saved as soon as Bootstrap has installed them, rather than after the job: a cache saves
+      # only from a job that passed, and a tool built from source is the cost worth keeping
+      # even when a later step fails or the timeout ends the job.
+      - uses: actions/cache/save@v6
+        if: steps.release-plz-cache.outputs.cache-hit != 'true'
+        with:
+          path: ~/.cache/onetaskgraph/tools/release-plz
+          key: release-plz-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.release-plz }}
+      - uses: actions/cache/save@v6
+        if: steps.prune-superseded-cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            ~/.cargo/bin/cargo-prune-superseded
+            ~/.cargo/bin/cargo-prune-superseded.exe
+          key: prune-superseded-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.prune-superseded }}-${{ hashFiles('rust-toolchain.toml') }}
       - name: Derive the comparison base
         id: pr-base
         shell: bash
@@ -658,12 +679,14 @@ jobs:
         shell: bash
         run: bash scripts/ci-tool-pins.sh
       # The caches, keyed as lint's are and for the same reasons.
-      - uses: actions/cache@v6
+      - uses: actions/cache/restore@v6
+        id: release-plz-cache
         if: steps.release.outputs.tests == 'run'
         with:
           path: ~/.cache/onetaskgraph/tools/release-plz
           key: release-plz-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.release-plz }}
-      - uses: actions/cache@v6
+      - uses: actions/cache/restore@v6
+        id: prune-superseded-cache
         if: steps.release.outputs.tests == 'run'
         with:
           path: |
@@ -678,7 +701,26 @@ jobs:
           restore-keys: nx-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'bun.lock', 'uv.lock', 'sdks/python/uv.lock', '.github/bun.lock', 'rust-toolchain.toml') }}-
       - name: Bootstrap
         if: steps.release.outputs.tests == 'run'
+        env:
+          # cargo-binstall reads GitHub's releases; anonymously a shared runner's address is
+          # rate-limited and it falls back to building release-plz from source.
+          GITHUB_TOKEN: ${{ github.token }}
         run: just bootstrap --outputStyle=static
+      # Saved as soon as Bootstrap has installed them, rather than after the job: a cache saves
+      # only from a job that passed, and a tool built from source is the cost worth keeping
+      # even when a later step fails or the timeout ends the job.
+      - uses: actions/cache/save@v6
+        if: steps.release.outputs.tests == 'run' && steps.release-plz-cache.outputs.cache-hit != 'true'
+        with:
+          path: ~/.cache/onetaskgraph/tools/release-plz
+          key: release-plz-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.release-plz }}
+      - uses: actions/cache/save@v6
+        if: steps.release.outputs.tests == 'run' && steps.prune-superseded-cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            ~/.cargo/bin/cargo-prune-superseded
+            ~/.cargo/bin/cargo-prune-superseded.exe
+          key: prune-superseded-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.prune-superseded }}-${{ hashFiles('rust-toolchain.toml') }}
       - name: Derive the comparison base
         id: pr-base
         if: steps.release.outputs.tests == 'run'
@@ -761,12 +803,14 @@ jobs:
         shell: bash
         run: bash scripts/ci-tool-pins.sh
       # The caches, keyed as lint's are and for the same reasons.
-      - uses: actions/cache@v6
+      - uses: actions/cache/restore@v6
+        id: release-plz-cache
         if: steps.release.outputs.tests == 'run'
         with:
           path: ~/.cache/onetaskgraph/tools/release-plz
           key: release-plz-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.release-plz }}
-      - uses: actions/cache@v6
+      - uses: actions/cache/restore@v6
+        id: prune-superseded-cache
         if: steps.release.outputs.tests == 'run'
         with:
           path: |
@@ -781,7 +825,26 @@ jobs:
           restore-keys: nx-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'bun.lock', 'uv.lock', 'sdks/python/uv.lock', '.github/bun.lock', 'rust-toolchain.toml') }}-
       - name: Bootstrap
         if: steps.release.outputs.tests == 'run'
+        env:
+          # cargo-binstall reads GitHub's releases; anonymously a shared runner's address is
+          # rate-limited and it falls back to building release-plz from source.
+          GITHUB_TOKEN: ${{ github.token }}
         run: just bootstrap --outputStyle=static
+      # Saved as soon as Bootstrap has installed them, rather than after the job: a cache saves
+      # only from a job that passed, and a tool built from source is the cost worth keeping
+      # even when a later step fails or the timeout ends the job.
+      - uses: actions/cache/save@v6
+        if: steps.release.outputs.tests == 'run' && steps.release-plz-cache.outputs.cache-hit != 'true'
+        with:
+          path: ~/.cache/onetaskgraph/tools/release-plz
+          key: release-plz-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.release-plz }}
+      - uses: actions/cache/save@v6
+        if: steps.release.outputs.tests == 'run' && steps.prune-superseded-cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            ~/.cargo/bin/cargo-prune-superseded
+            ~/.cargo/bin/cargo-prune-superseded.exe
+          key: prune-superseded-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.prune-superseded }}-${{ hashFiles('rust-toolchain.toml') }}
       - name: Derive the comparison base
         id: pr-base
         if: steps.release.outputs.tests == 'run'
@@ -853,12 +916,14 @@ jobs:
         shell: bash
         run: bash scripts/ci-tool-pins.sh
       # The caches, keyed as lint's are and for the same reasons.
-      - uses: actions/cache@v6
+      - uses: actions/cache/restore@v6
+        id: release-plz-cache
         if: steps.release.outputs.tests == 'run'
         with:
           path: ~/.cache/onetaskgraph/tools/release-plz
           key: release-plz-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.release-plz }}
-      - uses: actions/cache@v6
+      - uses: actions/cache/restore@v6
+        id: prune-superseded-cache
         if: steps.release.outputs.tests == 'run'
         with:
           path: |
@@ -873,7 +938,26 @@ jobs:
           restore-keys: nx-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'bun.lock', 'uv.lock', 'sdks/python/uv.lock', '.github/bun.lock', 'rust-toolchain.toml') }}-
       - name: Bootstrap
         if: steps.release.outputs.tests == 'run'
+        env:
+          # cargo-binstall reads GitHub's releases; anonymously a shared runner's address is
+          # rate-limited and it falls back to building release-plz from source.
+          GITHUB_TOKEN: ${{ github.token }}
         run: just bootstrap --outputStyle=static
+      # Saved as soon as Bootstrap has installed them, rather than after the job: a cache saves
+      # only from a job that passed, and a tool built from source is the cost worth keeping
+      # even when a later step fails or the timeout ends the job.
+      - uses: actions/cache/save@v6
+        if: steps.release.outputs.tests == 'run' && steps.release-plz-cache.outputs.cache-hit != 'true'
+        with:
+          path: ~/.cache/onetaskgraph/tools/release-plz
+          key: release-plz-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.release-plz }}
+      - uses: actions/cache/save@v6
+        if: steps.release.outputs.tests == 'run' && steps.prune-superseded-cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            ~/.cargo/bin/cargo-prune-superseded
+            ~/.cargo/bin/cargo-prune-superseded.exe
+          key: prune-superseded-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.prune-superseded }}-${{ hashFiles('rust-toolchain.toml') }}
       - name: Derive the comparison base
         id: pr-base
         if: steps.release.outputs.tests == 'run'
