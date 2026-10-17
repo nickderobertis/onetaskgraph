@@ -145,6 +145,34 @@ test("the auto-merge step asks GitHub to merge release-plz's pull request once i
   );
 });
 
+test("the GitHub double refuses a missing or unwritable state directory with a next action", () => {
+  const start = (args) =>
+    spawnSync("python3", ["scripts/loopback-release-registries.py", ...args], {
+      cwd: checkout,
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+  for (const args of [[], [join(scratch, "no-such-directory")]]) {
+    const result = start(args);
+    assert.equal(result.status, 2, result.stderr);
+    assert.match(result.stderr, /expected one existing state directory/);
+    assert.match(result.stderr, /next: create the directory/);
+  }
+  // Windows has no read-only directory mode for chmod to set.
+  if (process.platform === "win32") return;
+  const unwritable = join(scratch, "unwritable");
+  mkdirSync(unwritable);
+  chmodSync(unwritable, 0o500);
+  try {
+    const result = start([unwritable]);
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, /could not start: .*Permission denied/);
+    assert.match(result.stderr, /next: check that 127\.0\.0\.1 accepts a listening socket/);
+  } finally {
+    chmodSync(unwritable, 0o700);
+  }
+});
+
 test("the auto-merge step follows a redirect within GitHub's own origin, credentials and all", () => {
   const result = automerge([pull(43, "release-plz-0.8.0")], [], { redirect_api_same_origin: true });
   assert.equal(result.status, 0, result.output);

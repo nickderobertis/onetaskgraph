@@ -55,6 +55,10 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+if len(sys.argv) != 2 or not Path(sys.argv[1]).is_dir():
+    print(f"loopback-release-registries: expected one existing state directory, got {sys.argv[1:]!r}", file=sys.stderr)
+    print("loopback-release-registries: next: create the directory and pass it as the only argument, as .github/tests/release-cd.test.mjs does", file=sys.stderr)
+    sys.exit(2)
 state = Path(sys.argv[1])
 lock = threading.Lock()
 github_assets = {}  # (tag, name) -> {"id", "bytes"}
@@ -537,9 +541,14 @@ class Loopback(ThreadingHTTPServer):
         self.server_port = self.server_address[1]
 
 
-servers = {name: Loopback(("127.0.0.1", 0), Handler) for name in ("main", "checksums")}
-ports.update({name: server.server_address[1] for name, server in servers.items()})
-threading.Thread(target=servers["checksums"].serve_forever, daemon=True).start()
-(state / "ports.json.tmp").write_text(json.dumps(ports), encoding="utf-8")
-(state / "ports.json.tmp").replace(state / "ports.json")
+try:
+    servers = {name: Loopback(("127.0.0.1", 0), Handler) for name in ("main", "checksums")}
+    ports.update({name: server.server_address[1] for name, server in servers.items()})
+    threading.Thread(target=servers["checksums"].serve_forever, daemon=True).start()
+    (state / "ports.json.tmp").write_text(json.dumps(ports), encoding="utf-8")
+    (state / "ports.json.tmp").replace(state / "ports.json")
+except OSError as error:
+    print(f"loopback-release-registries: could not start: {error}", file=sys.stderr)
+    print(f"loopback-release-registries: next: check that 127.0.0.1 accepts a listening socket and that {state} is writable", file=sys.stderr)
+    sys.exit(1)
 servers["main"].serve_forever()
