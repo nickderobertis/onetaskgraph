@@ -156,3 +156,27 @@ test("a comparator that fails, prints malformed JSON or answers other than a boo
   }
   assert.equal(tests(mainTip, release).tests, "skip");
 });
+
+test("a tree only a merged branch held, never main's own, runs the tests", () => {
+  // A merge brings a branch's commits into main's history as second parents, but only the
+  // merge itself is a tree main's checks passed; a release cut from one of those commits
+  // has not been proven by main.
+  git("checkout", "-q", "-b", "merged", mainTip);
+  const sideTip = commit("feat: merged later", source("46"));
+  // Main moves on before the merge, so the merge's tree is not the side branch's.
+  git("checkout", "-q", "main");
+  commit("docs: main's own change", { "docs/notes.md": "main moved on\n" });
+  git("merge", "-q", "--no-ff", "-m", "Merge the side branch", "merged");
+  git("checkout", "-q", "-b", "release-on-side", sideTip);
+  const releaseOnSide = commit("chore: release v1.2.4", released("1.2.4"));
+  git("checkout", "-q", "main");
+  const decision = tests(sideTip, releaseOnSide);
+  assert.equal(decision.tests, "run");
+  assert.match(decision.reason, /base tree is not one main passed/);
+  // The merge itself is main's own, so a release on it still skips.
+  const merge = git("rev-parse", "main");
+  git("checkout", "-q", "-b", "release-on-merge", merge);
+  const releaseOnMerge = commit("chore: release v1.2.4", released("1.2.4"));
+  git("checkout", "-q", "main");
+  assert.equal(tests(merge, releaseOnMerge).tests, "skip");
+});

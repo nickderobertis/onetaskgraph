@@ -1,15 +1,11 @@
 #!/usr/bin/env bash
 # Drive the four pull-request job recipes, `just ci-<job>`, the way their ci.yml steps do.
 #
-# Each recipe is real, scripts/ci-job.sh is real, Nx and its affected selection are real and
-# so is the live-lane decision the test recipes consult. What is not real is what a target
-# DOES: in a scratch clone every Nx target's command is replaced with one that only succeeds
-# (or, for one case, fails), so what the recipe ran is readable from its own output in
-# seconds, without building or testing the workspace. Three commits are put to it — a change
-# to one project, a change to nothing any project tests, and the one-project change with one
-# of its targets failing — and it is held to which Nx targets ran, which did not, and its exit
-# status. The Linux recipes run; the Windows and macOS ones are driven through their
-# selection step (`--select-only`), which is all this host can run of them.
+# The recipes, scripts/ci-job.sh, Nx's affected selection and the live-lane decision are all
+# real; only what a target DOES is not — in a scratch clone each target's command is replaced
+# with one that succeeds or fails on cue, so what a recipe ran is readable from its own output
+# in seconds. The Windows and macOS recipes are driven through `--select-only`, which is all
+# this host can run of them.
 set -euo pipefail
 
 readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

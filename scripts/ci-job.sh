@@ -4,12 +4,9 @@
 #   scripts/ci-job.sh <lint|test-linux|test-windows|test-macos> [--select-only] [--exclude=<projects>]
 #
 # Each of ci.yml's four jobs runs exactly one `just ci-<job>` recipe, and each recipe is this
-# script, so a contributor runs what CI runs. A job is a list of phases, each one Nx
-# invocation, all run at once. A phase that fails prints the whole of Nx's output (in Actions
-# every phase's streams as it is written), and the job ends with one line naming every task
-# it ran. `--select-only` runs nothing and ends with one line naming
-# every task the job selects, which is how a host that is not Windows or macOS proves those
-# jobs' selection.
+# script, so a contributor runs what CI runs. A job ends with one line naming every task it
+# ran, or with every failing phase's Nx output; `--select-only` runs nothing and ends with one
+# line naming every task the job selects.
 #
 # `--exclude=` is what scripts/live-lane-selection.sh answers through lane_runner.py: a live
 # plugin a version-only diff cannot reach. It narrows the phase that runs `test` and
