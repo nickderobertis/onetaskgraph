@@ -341,7 +341,12 @@ if node -e 'Object.defineProperty(process,"platform",{value:"darwin"}); Object.d
 grep -q 'Intel macOS is no longer supported' "$tmp/error" || { cat "$tmp/error" >&2; echo "Intel macOS launcher refusal did not say Intel macOS is no longer supported; next: inspect launcher diagnostics" >&2; exit 1; }
 uv run --quiet --locked --package onetaskgraph-sdk onetaskgraph --help | grep -q 'Usage:' || { echo "Python SDK dependency did not supply the real command; next: inspect the SDK carrier dependency" >&2; exit 1; }
 mkdir -p "$tmp/python-wheel"
-(cd "$root" && uv tool run --from 'maturin>=1.9,<2' maturin build --release --locked --target "$target" --out "$tmp/python-wheel")
+# One release build at a time: it links target/$target/release/onetaskgraph and then reads it,
+# and another run of this script at once — scripts:test's re-run of it beside
+# scripts:distribution-test, in one CI job — relinks that file in between.
+[ -r "$root/scripts/directory-lock.sh" ] && source "$root/scripts/directory-lock.sh" || { echo "distribution test could not load $root/scripts/directory-lock.sh; next: restore it with 'git checkout -- scripts/directory-lock.sh', then rerun" >&2; exit 1; }
+release_wheel() { (cd "$root" && uv tool run --from 'maturin>=1.9,<2' maturin build --release --locked --target "$target" --out "$tmp/python-wheel"); }
+with_directory_lock "$root/target/.test-distribution-release.lock" release_wheel
 "$python_bin" "$root/scripts/test-release-products.py" --wheel-dir "$tmp/python-wheel" --target "$target"
 cli_wheel=$(find "$tmp/python-wheel" -maxdepth 1 -type f -name 'onetaskgraph_cli-*.whl' -print -quit)
 [[ -n $cli_wheel ]] || { echo "Python CLI build produced no wheel; next: inspect the maturin package configuration" >&2; exit 1; }
