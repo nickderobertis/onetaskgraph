@@ -345,6 +345,26 @@ test("the Linux job publishes exactly what it built, re-runs only what is missin
       0,
       `verify ${registry}`,
     );
+  // A release read GitHub moves within its own origin is followed with the token, and finds
+  // every asset already there.
+  control({ releases: [tag], redirect_api_same_origin: true });
+  mark = requests().length;
+  expectStatus(
+    recipe("linux", ["publish", "--to", "github", "--tag", tag, "--dist", dist], env),
+    0,
+    "a same-origin redirect",
+  );
+  const redirected = requests().slice(mark);
+  const moved = redirected.findIndex((r) => r.action === "redirected-same-origin");
+  assert.ok(moved >= 0, JSON.stringify(redirected));
+  assert.match(redirected[moved + 1].path, /redirected=1/);
+  assert.equal(redirected[moved + 1].port, ports.main);
+  assert.ok(redirected[moved + 1].authorized, "the token was dropped on a same-origin redirect");
+  assert.deepEqual(
+    redirected.filter((r) => ["upload", "delete-asset"].includes(r.action)),
+    [],
+  );
+  control({ releases: [tag] });
 });
 
 test("the Linux job's registry verification fails on another version, an unusable package or none", {
@@ -872,6 +892,19 @@ test("the GitHub upload refuses a missing token, a malformed release and an untr
       },
       /not a release asset/,
     ],
+    ...[
+      ["an asset id that is a boolean", { id: true, name: "x", size: 1 }],
+      ["an asset id of zero", { id: 0, name: "x", size: 1 }],
+      ["a negative asset size", { id: 1, name: "x", size: -1 }],
+    ].map(([name, asset]) => [
+      name,
+      {},
+      {
+        releases: [tag],
+        release_answer: { tag_name: tag, upload_url: "http://127.0.0.1:9/u", assets: [asset] },
+      },
+      /not a release asset/,
+    ]),
     [
       "another tag's release",
       {},

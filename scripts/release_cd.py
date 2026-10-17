@@ -504,6 +504,11 @@ class SameOriginRedirects(urllib.request.HTTPRedirectHandler):
 AUTHENTICATED = urllib.request.build_opener(SameOriginRedirects)
 
 
+def is_count(value: object, minimum: int) -> bool:
+    """An integer GitHub sends as an id or a size, at least `minimum`; JSON's booleans are not one."""
+    return isinstance(value, int) and not isinstance(value, bool) and value >= minimum
+
+
 @dataclass(frozen=True)
 class ReleaseAsset:
     id: AssetId
@@ -513,7 +518,7 @@ class ReleaseAsset:
 
     @classmethod
     def parse(cls, value: object) -> "ReleaseAsset":
-        if not isinstance(value, dict) or not isinstance(value.get("id"), int) or not isinstance(value.get("name"), str) or not isinstance(value.get("size"), int):
+        if not isinstance(value, dict) or not is_count(value.get("id"), minimum=1) or not isinstance(value.get("name"), str) or not is_count(value.get("size"), minimum=0):
             raise ValueError(f"not a release asset: {value!r:.200}")
         return cls(AssetId(value["id"]), value["name"], value["size"], value.get("state") == "uploaded")
 

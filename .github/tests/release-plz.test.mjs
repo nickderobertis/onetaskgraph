@@ -145,6 +145,20 @@ test("the auto-merge step asks GitHub to merge release-plz's pull request once i
   );
 });
 
+test("the auto-merge step follows a redirect within GitHub's own origin, credentials and all", () => {
+  const result = automerge([pull(43, "release-plz-0.8.0")], [], { redirect_api_same_origin: true });
+  assert.equal(result.status, 0, result.output);
+  const listed = result.sent.findIndex((r) => r.action === "redirected-same-origin");
+  assert.ok(listed >= 0, JSON.stringify(result.sent));
+  const followed = result.sent[listed + 1];
+  assert.equal(followed.action, "list-pulls");
+  assert.match(followed.path, /redirected=1/);
+  assert.equal(followed.port, ports.main);
+  assert.ok(followed.authorized, "the token was dropped on a same-origin redirect");
+  assert.equal(result.sent.filter((r) => r.action === "graphql").length, 1);
+  assert.match(result.output, /#43 \(release-plz-0\.8\.0\) will squash-merge/);
+});
+
 test("the auto-merge step fails visibly when GitHub refuses it or cannot be asked", () => {
   const refused = automerge(
     [pull(43, "release-plz-0.8.0")],
@@ -165,6 +179,13 @@ test("the auto-merge step fails visibly when GitHub refuses it or cannot be aske
   assert.equal(malformed.status, 1);
   assert.match(malformed.output, /GitHub listed something that is not a pull request: 7/);
   assert.equal(malformed.sent.filter((r) => r.action === "graphql").length, 0);
+  // A number GitHub could not have assigned — a boolean, zero, a negative — is no pull request.
+  for (const number of [true, 0, -43]) {
+    const bad = automerge([{ ...pull(43, "release-plz-0.8.0"), number }]);
+    assert.equal(bad.status, 1, `${number}: ${bad.output}`);
+    assert.match(bad.output, /GitHub listed something that is not a pull request/);
+    assert.equal(bad.sent.filter((r) => r.action === "graphql").length, 0);
+  }
   const unset = automerge([pull(43, "release-plz-0.8.0")], [], {
     automerge_answer: { data: { enablePullRequestAutoMerge: { pullRequest: { number: 43 } } } },
   });

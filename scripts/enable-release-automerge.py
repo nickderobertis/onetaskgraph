@@ -62,6 +62,11 @@ class SameOriginRedirects(urllib.request.HTTPRedirectHandler):
 AUTHENTICATED = urllib.request.build_opener(SameOriginRedirects)
 
 
+def is_positive_int(value: object) -> bool:
+    """A JSON number GitHub could have assigned as an identifier: an integer above zero, never a boolean."""
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
 @dataclass(frozen=True)
 class PullRequest:
     number: PullNumber
@@ -73,7 +78,7 @@ class PullRequest:
     def parse(cls, value: object) -> "PullRequest":
         head = value.get("head") if isinstance(value, dict) else None
         repository = head.get("repo") if isinstance(head, dict) else None
-        if not isinstance(value, dict) or not isinstance(value.get("number"), int) or not isinstance(value.get("node_id"), str) or not isinstance(head, dict) or not isinstance(head.get("ref"), str) or not (repository is None or isinstance(repository, dict)):
+        if not isinstance(value, dict) or not is_positive_int(value.get("number")) or not isinstance(value.get("node_id"), str) or not isinstance(head, dict) or not isinstance(head.get("ref"), str) or not (repository is None or isinstance(repository, dict)):
             raise Refused(f"GitHub listed something that is not a pull request: {value!r:.200}")
         full_name = repository.get("full_name") if repository else None
         return cls(PullNumber(value["number"]), NodeId(value["node_id"]), BranchRef(head["ref"]), RepositoryName(full_name) if isinstance(full_name, str) else None)

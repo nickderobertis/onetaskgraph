@@ -28,7 +28,8 @@ short asset behind, as an interrupted one does), `hide` (names read as absent), 
 (files served as garbage), and `relabel` (`{"from": v1, "to": v2}`: every read lists v1 as
 v2), `replace` (a file name served as the bytes of another file, its index hashes with it),
 `pulls_raw` (the pull-request list answered as this text), `redirect_api` (every GitHub API
-call redirected to the other port, another origin), and `release_answer`, `upload_host` and `automerge_answer`, which replace what GitHub
+call redirected to the other port, another origin), `redirect_api_same_origin` (every
+GitHub API read redirected once to itself on the same origin), and `release_answer`, `upload_host` and `automerge_answer`, which replace what GitHub
 answers. Every request is one JSON line in `<state>/requests.jsonl`, with the file or package a
 publication carried, so a journey can assert exactly what was sent.
 """
@@ -156,6 +157,13 @@ class Handler(BaseHTTPRequestHandler):
             self.record(registry="github", action="redirected")
             self.body()
             self.send(307, b"", headers={"Location": f"http://127.0.0.1:{ports['checksums']}{self.path}"})
+            return
+        query = urllib.parse.urlsplit(self.path).query
+        if control().get("redirect_api_same_origin") and path.startswith("/github/api") and self.command in ("GET", "HEAD") and "redirected=1" not in query:
+            # A GitHub API read moved within its own origin, once: the request it is followed
+            # by carries `redirected=1`.
+            self.record(registry="github", action="redirected-same-origin")
+            self.send(307, b"", headers={"Location": f"{self.base()}{self.path}{'&' if query else '?'}redirected=1"})
             return
         for prefix, handler in (
             ("/github/api", self.github_api),
