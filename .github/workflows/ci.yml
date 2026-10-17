@@ -877,11 +877,6 @@ jobs:
         run: just ci-test-windows
       # llmlint: ignore-end[live_tier_compiles_and_requires_credential,no_second_broader_sweep_over_an_already_gated_commit,external_service_suite_stays_out_of_the_affected_tier]
 
-  # Skipped at the job level on release-plz's own release branch, so the release pull request
-  # spends no Mac runner (`onetaskgraph-macos-runs-per-change`); a skipped job satisfies a
-  # required context. The carrier `check (macos-latest)` still goes red when that branch
-  # carries more than the version and changelog edits, because macos-lanes classifies the
-  # diff itself.
   # A manual diagnostic, default off: scripts:distribution-test with nothing beside it, on the
   # two platforms whose test jobs run it beside the coverage union, so its own duration there
   # is read off the step rather than inferred from a contended run.
@@ -933,6 +928,11 @@ jobs:
       - name: The distribution journey, alone
         run: just distribution-test
 
+  # Skipped at the job level on release-plz's own release branch, so the release pull request
+  # spends no Mac runner (`onetaskgraph-macos-runs-per-change`); a skipped job satisfies a
+  # required context. The carrier `check (macos-latest)` still goes red when that branch
+  # carries more than the version and changelog edits, because macos-lanes classifies the
+  # diff itself.
   test-macos:
     if: github.event_name == 'pull_request' && !(github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'release-plz-'))
     runs-on: macos-latest

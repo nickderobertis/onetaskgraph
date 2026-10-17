@@ -46,6 +46,7 @@ done
 # comma-separated. Groups run in order, and the phases of one group at once: they select
 # disjoint work, and the instrumented build is cargo-llvm-cov's own target directory, so it
 # and the plain build do not wait on one lock.
+# llmlint: ignore-block[work_goes_through_command_surface] Each phase is Nx's own invocation because this script reads its task graph to select, stream and summarise the phase, and runs phases side by side; the just recipes for these tasks are single `nx run` wrappers (generate-check adds only output buffering), and this script is itself the body of the ci-* recipes.
 case "$JOB" in
   lint)
     phases="1 affected format-check,lint,typecheck -
@@ -84,6 +85,7 @@ case "$JOB" in
     ;;
   *) usage ;;
 esac
+# llmlint: ignore-end[work_goes_through_command_surface]
 
 if [ ! -x node_modules/.bin/nx ]; then
   # scripts/nx.sh heals a fresh checkout; ask it for nothing but the install.
