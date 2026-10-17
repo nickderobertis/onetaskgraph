@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import email.parser
 import hashlib
+import io
 import json
 import os
 import platform as host_platform
@@ -790,6 +791,7 @@ def resolve_every_platform(tag: ReleaseTag, registry: Registry) -> None:
                     recorded = fetch(f"{checksums}/{tag}/{artifacts['checksum'].file}", f"the {row.target} checksum").decode("utf-8", "replace").split()
                     if not recorded or recorded[0] != hashlib.sha256(archive).hexdigest():
                         fail(f"the {row.target} archive on the release does not match its checksum", "re-run that platform's build job, which re-uploads both")
+                    _archive_holds_binary(archive, row)
                 case "pypi":
                     wheel = artifacts["wheel"]
                     target = directory / row.target
@@ -800,22 +802,44 @@ def resolve_every_platform(tag: ReleaseTag, registry: Registry) -> None:
                     got = sorted(path.name for path in target.glob("*.whl")) if target.is_dir() else []
                     if completed.returncode != 0 or got != [wheel.file]:
                         fail(f"PyPI does not resolve {CLI_DISTRIBUTION}=={version} to {wheel.file} for {row.target}: {completed.stderr.strip()[-400:] or got}", f"re-run build-{row.platform}, which publishes that wheel")
-                    _wheel_identity(target / wheel.file, version)
+                    _wheel_identity(target / wheel.file, version, row)
                 case "npm":
                     resolve_npm_package(artifacts["npm-platform"].package or "", version, directory, row)
                 case _:
                     fail(f"platforms publish nothing to {registry}", "choose github, pypi or npm")
 
 
-def _wheel_identity(path: Path, version: str) -> None:
+def binary_name(row: PlatformTarget) -> str:
+    return "onetaskgraph.exe" if row.extension == "zip" else "onetaskgraph"
+
+
+def _archive_holds_binary(archive: bytes, row: PlatformTarget) -> None:
+    """The archive as served is what scripts/install.sh extracts: one regular file, the binary, at its root."""
+    try:
+        if row.extension == "zip":
+            with zipfile.ZipFile(io.BytesIO(archive)) as packed:
+                members = [(entry.filename, not entry.is_dir() and ((entry.external_attr >> 16) & 0o170000) in (0, 0o100000)) for entry in packed.infolist()]
+        else:
+            with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as packed:
+                members = [(entry.name, entry.isfile()) for entry in packed.getmembers()]
+    except (zipfile.BadZipFile, tarfile.TarError, OSError) as error:
+        fail(f"the {row.target} archive on the release is not a readable archive: {error}", f"re-run build-{row.platform}, which re-uploads it")
+    if members != [(binary_name(row), True)]:
+        fail(f"the {row.target} archive on the release holds {members}, not the one regular file {binary_name(row)}", f"re-run build-{row.platform}, which re-uploads it")
+
+
+def _wheel_identity(path: Path, version: str, row: PlatformTarget) -> None:
     try:
         with zipfile.ZipFile(path) as packed:
-            metadata = next(name for name in packed.namelist() if name.endswith(".dist-info/METADATA"))
+            names = packed.namelist()
+            metadata = next(name for name in names if name.endswith(".dist-info/METADATA"))
             fields = email.parser.Parser().parsestr(packed.read(metadata).decode("utf-8", "replace"), headersonly=True)
     except (zipfile.BadZipFile, StopIteration, OSError) as error:
         fail(f"{path.name} as served is not a readable wheel: {error}", "re-run the build job that owns it")
     if fields.get("Name") != CLI_DISTRIBUTION or fields.get("Version") != version:
         fail(f"{path.name} as served is {fields.get('Name')} {fields.get('Version')}, not {CLI_DISTRIBUTION} {version}", "re-run the build job that owns it")
+    if not any(name.endswith(f".data/scripts/{binary_name(row)}") for name in names):
+        fail(f"{path.name} as served carries no {binary_name(row)}", f"re-run build-{row.platform}, which publishes it")
 
 
 def resolve_npm_package(package: str, version: str, directory: Path, row: PlatformTarget | None = None) -> None:
@@ -829,12 +853,12 @@ def resolve_npm_package(package: str, version: str, directory: Path, row: Platfo
         with tarfile.open(tarballs[0]) as packed:
             member = packed.extractfile("package/package.json")
             manifest = json.loads(member.read()) if member else {}
-            names = packed.getnames()
+            binaries = [entry for entry in packed.getmembers() if row is not None and entry.name == f"package/bin/{binary_name(row)}"]
     except (tarfile.TarError, KeyError, json.JSONDecodeError) as error:
         fail(f"{package}@{version} as served is not a readable package: {error}", "re-run the job that publishes it")
     if not isinstance(manifest, dict) or manifest.get("name") != package or manifest.get("version") != version:
         fail(f"npm serves {manifest!r:.200} for {package}@{version}", "re-run the job that publishes it")
-    if row is not None and f"package/bin/{'onetaskgraph.exe' if row.extension == 'zip' else 'onetaskgraph'}" not in names:
+    if row is not None and (len(binaries) != 1 or not binaries[0].isfile()):
         fail(f"{package}@{version} as served carries no binary", f"re-run build-{row.platform}, which publishes it")
 
 

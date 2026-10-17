@@ -511,7 +511,20 @@ for name, manifest, binary in [('version.tgz', {'name': '@onetaskgraph/cli-darwi
     with tarfile.open(out / name, 'w:gz') as packed:
         for path, data in [('package/package.json', json.dumps(manifest).encode())] + ([('package/bin/onetaskgraph', b'stand-in')] if binary else []):
             info = tarfile.TarInfo(path); info.size = len(data)
-            packed.addfile(info, io.BytesIO(data))`,
+            packed.addfile(info, io.BytesIO(data))
+with tarfile.open(out / 'directory.tgz', 'w:gz') as packed:
+    data = json.dumps({'name': '@onetaskgraph/cli-darwin-arm64', 'version': version}).encode()
+    info = tarfile.TarInfo('package/package.json'); info.size = len(data)
+    packed.addfile(info, io.BytesIO(data))
+    folder = tarfile.TarInfo('package/bin/onetaskgraph'); folder.type = tarfile.DIRTYPE
+    packed.addfile(folder)
+with zipfile.ZipFile(out / 'empty.whl', 'w') as packed:
+    packed.writestr(f'onetaskgraph_cli-{version}.dist-info/METADATA', f'Metadata-Version: 2.1\\nName: onetaskgraph-cli\\nVersion: {version}\\n')
+    packed.writestr(f'onetaskgraph_cli-{version}.dist-info/WHEEL', 'Wheel-Version: 1.0\\nRoot-Is-Purelib: false\\nTag: py3-none-macosx_11_0_arm64\\n')
+    packed.writestr(f'onetaskgraph_cli-{version}.dist-info/RECORD', '')
+import hashlib
+(out / 'not-an-archive').write_bytes(b'not a gzip archive')
+(out / 'not-an-archive.sha256').write_text(hashlib.sha256(b'not a gzip archive').hexdigest() + '  archive\\n')`,
     wrong,
     version,
   ]);
@@ -524,6 +537,16 @@ for name, manifest, binary in [('version.tgz', {'name': '@onetaskgraph/cli-darwi
     ],
     ["npm", { [carrierFile]: join(wrong, "version.tgz") }, /npm serves .*0\.0\.1/],
     ["npm", { [carrierFile]: join(wrong, "binary.tgz") }, /as served carries no binary/],
+    ["npm", { [carrierFile]: join(wrong, "directory.tgz") }, /as served carries no binary/],
+    ["pypi", { [macos.wheel]: join(wrong, "empty.whl") }, /as served carries no onetaskgraph/],
+    [
+      "github",
+      {
+        [macos.archive]: join(wrong, "not-an-archive"),
+        [macos.checksum]: join(wrong, "not-an-archive.sha256"),
+      },
+      /archive on the release is not a readable archive/,
+    ],
   ]) {
     control({ releases: [tag], replace });
     const result = recipe(
@@ -913,4 +936,62 @@ test("the npm publication refuses a package set or platform it does not publish"
     assert.match(result.stderr, reason);
     assert.match(result.stderr, /next: /);
   }
+});
+
+test("the driver refuses a registry address it would send a token to, and a publication with no token", {
+  skip,
+}, () => {
+  control({ releases: [tag] });
+  const independent = join(scratch, "dist-independent");
+  const before = requests().length;
+  for (const [name, args, env, reason] of [
+    [
+      "an npm registry carrying credentials",
+      ["linux", "verify", "--from", "npm", "--wait", "0"],
+      { NPM_REGISTRY: "http://someone:secret@127.0.0.1:9/" },
+      /NPM_REGISTRY is .*, not an http\(s\) URL naming a host/,
+    ],
+    [
+      "a PyPI index with a query",
+      ["linux", "verify", "--from", "pypi", "--wait", "0"],
+      { ONETASKGRAPH_PYPI_SIMPLE_URL: "http://127.0.0.1:9/simple/?mirror=1" },
+      /ONETASKGRAPH_PYPI_SIMPLE_URL is .*, not an http\(s\) URL naming a host/,
+    ],
+    [
+      "a GitHub API on no valid port",
+      ["linux", "publish", "--to", "github", "--dist", dist],
+      { GITHUB_API_URL: "http://127.0.0.1:99999" },
+      /GITHUB_API_URL is .*, not an http\(s\) URL naming a host/,
+    ],
+    [
+      "a release download base that is not http(s)",
+      ["publish", "available", "--from", "github", "--wait", "0"],
+      { ONETASKGRAPH_RELEASE_BASE_URL: "ftp://example.invalid/releases" },
+      /ONETASKGRAPH_RELEASE_BASE_URL is .*, not an http\(s\) URL naming a host/,
+    ],
+    [
+      "PyPI with no token",
+      ["linux", "publish", "--to", "pypi", "--dist", dist],
+      { UV_PUBLISH_TOKEN: "" },
+      /PYPI_TOKEN is required/,
+    ],
+    [
+      "crates.io with no token",
+      ["publish", "publish", "--to", "crates", "--dist", independent],
+      { ONETASKGRAPH_CARGO_REGISTRY: "", CARGO_REGISTRY_TOKEN: "" },
+      /CARGO_REGISTRY_TOKEN is required/,
+    ],
+  ]) {
+    const [job, ...phase] = args;
+    const result = recipe(job, [...phase, "--tag", tag], { ...registries(), ...env });
+    assert.equal(result.status, 1, `${name}:\n${result.output}`);
+    assert.match(result.output, reason, name);
+    assert.match(result.output, /release-cd: next: /, name);
+  }
+  assert.deepEqual(
+    requests()
+      .slice(before)
+      .filter((r) => ["upload", "publish"].includes(r.action)),
+    [],
+  );
 });
