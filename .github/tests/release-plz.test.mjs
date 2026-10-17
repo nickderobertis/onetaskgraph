@@ -271,6 +271,20 @@ test("the auto-merge step fails visibly when GitHub refuses it or cannot be aske
       /GITHUB_API_URL is 'http:\/\/\[broken', not an http\(s\) URL/,
     ],
     [
+      "an API whose host holds a space",
+      [],
+      {},
+      { GITHUB_API_URL: "http://bad host.invalid" },
+      /GITHUB_API_URL is 'http:\/\/bad host\.invalid', not an http\(s\) URL/,
+    ],
+    [
+      "a GraphQL endpoint whose path holds a space",
+      [],
+      {},
+      { GITHUB_GRAPHQL_URL: "http://127.0.0.1:9/graph ql" },
+      /GITHUB_GRAPHQL_URL is 'http:\/\/127\.0\.0\.1:9\/graph ql', not an http\(s\) URL/,
+    ],
+    [
       "a pull list that is not a list",
       [],
       { pulls_raw: { message: "moved" } },

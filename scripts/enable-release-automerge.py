@@ -112,7 +112,16 @@ def main() -> int:
     for name, url in (("GITHUB_API_URL", api), ("GITHUB_GRAPHQL_URL", graphql)):
         try:
             parts = urllib.parse.urlsplit(url)
-            usable = parts.scheme in ("http", "https") and bool(parts.hostname) and "@" not in parts.netloc and not parts.query and not parts.fragment
+            # urlsplit parses rather than validates: the host is held to name characters and a
+            # port, and the URL to what http.client sends, so a space or control character is
+            # refused here rather than escaping as an uncaught InvalidURL at the first request.
+            usable = (
+                parts.scheme in ("http", "https")
+                and bool(re.fullmatch(r"[A-Za-z0-9.-]+(?::[0-9]+)?", parts.netloc))
+                and not re.search(r"[\x00-\x20\x7f]", url)
+                and not parts.query
+                and not parts.fragment
+            )
             parts.port  # noqa: B018 - raises ValueError on a port that is not 0-65535
         except ValueError:
             usable = False

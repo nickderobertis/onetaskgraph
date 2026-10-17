@@ -1143,6 +1143,18 @@ test("the driver refuses a registry address it would send a token to, and a publ
       /GITHUB_API_URL is .*, not an http\(s\) URL naming a host/,
     ],
     [
+      "a GitHub API whose host holds a space",
+      ["linux", "publish", "--to", "github", "--dist", dist],
+      { GITHUB_API_URL: "http://bad host.invalid/" },
+      /GITHUB_API_URL is .*, not an http\(s\) URL naming a host/,
+    ],
+    [
+      "an npm registry whose path holds a control character",
+      ["linux", "verify", "--from", "npm", "--wait", "0"],
+      { NPM_REGISTRY: "http://127.0.0.1:9/a\tb/" },
+      /NPM_REGISTRY is .*, not an http\(s\) URL naming a host/,
+    ],
+    [
       "a release download base that is not http(s)",
       ["publish", "available", "--from", "github", "--wait", "0"],
       { ONETASKGRAPH_RELEASE_BASE_URL: "ftp://example.invalid/releases" },

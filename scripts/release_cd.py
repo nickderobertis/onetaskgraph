@@ -126,6 +126,13 @@ def fail(problem: str, next_action: str) -> NoReturn:
     raise ReleaseStepFailed(problem, next_action)
 
 
+# urlsplit parses rather than validates, so a host is held to name characters and a port, and
+# the whole value to what http.client sends: a space or control character there would escape
+# this refusal as an uncaught InvalidURL at the first request.
+HOST_AND_PORT = re.compile(r"[A-Za-z0-9.-]+(?::[0-9]+)?")
+URL_DISALLOWED = re.compile(r"[\x00-\x20\x7f]")
+
+
 def endpoint(variable: str, default: str) -> str:
     """A registry address from the environment, held to an http(s) URL naming a host and nothing else.
 
@@ -135,7 +142,7 @@ def endpoint(variable: str, default: str) -> str:
     value = os.environ.get(variable) or default
     try:
         parts = urllib.parse.urlsplit(value)
-        usable = parts.scheme in ("http", "https") and bool(parts.hostname) and "@" not in parts.netloc and not parts.query and not parts.fragment
+        usable = parts.scheme in ("http", "https") and bool(HOST_AND_PORT.fullmatch(parts.netloc)) and not URL_DISALLOWED.search(value) and not parts.query and not parts.fragment
         parts.port  # noqa: B018 - raises ValueError on a port that is not 0-65535
     except ValueError:
         usable = False
