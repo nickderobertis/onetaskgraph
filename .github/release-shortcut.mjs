@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 // Whether a pull request's platform test jobs may succeed without running their tests.
@@ -66,7 +66,12 @@ export function decide({ base, head, main, cwd = process.cwd() }) {
   }
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+// Both spellings resolved: `import.meta.url` names the file through no symlink, and argv need
+// not (macOS's temporary directory is one), and a mismatch would decide nothing and exit 0.
+if (
+  process.argv[1] &&
+  realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))
+) {
   try {
     const args = process.argv.slice(2);
     if (

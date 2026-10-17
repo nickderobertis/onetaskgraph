@@ -71,12 +71,12 @@ const unmerged = commit("feat: never merged", source("44"));
 const releaseOnUnmerged = commit("chore: release v1.2.4", released("1.2.4"));
 git("checkout", "-q", "main");
 
-function decide(base, head, extra = []) {
+function decide(base, head, extra = [], via = program) {
   const output = resolve(repository, "github-output");
   rmSync(output, { force: true });
   const result = spawnSync(
     process.execPath,
-    [program, "decide", "--base", base, "--head", head, "--main", "main", ...extra],
+    [via, "decide", "--base", base, "--head", head, "--main", "main", ...extra],
     { cwd: repository, encoding: "utf8", env: { ...process.env, GITHUB_OUTPUT: output } },
   );
   return { ...result, output: result.status === 0 ? readFileSync(output, "utf8") : "" };
@@ -93,6 +93,21 @@ test("a tree main passed plus only release-plz's version and changelog edits ski
   const decision = tests(mainTip, release);
   assert.equal(decision.tests, "skip");
   assert.match(decision.reason, /main passed plus only release-plz's version and changelog edits/);
+});
+
+test("the program decides when it is reached through a symlinked directory", () => {
+  // As macOS's temporary directory is: a run that decided nothing would read as a pass.
+  const link = `${repository}-link`;
+  rmSync(link, { force: true, recursive: true });
+  symlinkSync(repository, link, process.platform === "win32" ? "junction" : "dir");
+  try {
+    const result = decide(mainTip, release, [], resolve(link, ".github/release-shortcut.mjs"));
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).tests, "skip");
+    assert.match(result.output, /^tests=skip\n/);
+  } finally {
+    rmSync(link, { force: true, recursive: true });
+  }
 });
 
 test("a release head carrying any other change runs the tests", () => {
