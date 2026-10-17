@@ -62,13 +62,9 @@
     "test-uncovered": {
       "executor": "nx:run-commands",
       "options": {
-        "commands": [
-          "cargo test --quiet -p onetaskgraph-core --all-features --locked --doc",
-          "cargo test --quiet -p onetaskgraph-core --locked --test plugin_features"
-        ],
-        "parallel": false
+        "command": "cargo test --quiet -p onetaskgraph-core --locked --test plugin_features"
       },
-      "//": "What `coverage` cannot run of `test`, on the platforms where the instrumented run stands in for the rest (scripts/ci-job.sh, tag test-in-coverage): nextest runs no doctest, and coverage builds every feature, so the default build's tests/plugin_features.rs is run here."
+      "//": "What `coverage` cannot run of `test`, on the platforms where the instrumented run stands in for the rest (scripts/ci-job.sh, tag test-in-coverage): coverage builds every feature, so the default build's tests/plugin_features.rs is run here. The doctests, which nextest never runs, are workspace:test-uncovered's."
     },
     "coverage": {
       "executor": "nx:run-commands",

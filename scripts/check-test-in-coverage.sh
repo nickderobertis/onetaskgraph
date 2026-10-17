@@ -10,7 +10,7 @@
 #   unix  a Rust crate measured by scripts/rust-coverage.sh, whose every `test` command is
 #         the all-features run that measurement repeats under nextest or a command
 #         `test-uncovered` runs, and whose library's doctests, which nextest never runs,
-#         `test-uncovered` runs;
+#         workspace:test-uncovered's one doctest run names;
 #   all   an SDK whose `coverage` command is its `test` command with coverage switched on;
 #
 # and never a project with a live lane, whose credentials coverage clears.
@@ -52,6 +52,29 @@ if measured != MEASURED:
         "runs; restore the invocation, or take the tags off"
     )
 
+# The tagged libraries' doctests run in one invocation, workspace:test-uncovered's: every flag
+# beside its -p list is the all-features doctest run itself, with nothing filtering it.
+DOCTESTS = "cargo test --quiet --all-features --locked --doc"
+workspace = json.loads(Path("workspace/project.json").read_text(encoding="utf-8"))
+doc_words = shlex.split(
+    workspace.get("targets", {}).get("test-uncovered", {}).get("options", {}).get("command", "")
+)
+documented = set()
+if doc_words[: len(DOCTESTS.split())] == DOCTESTS.split():
+    rest = doc_words[len(DOCTESTS.split()) :]
+    if len(rest) % 2 == 0 and all(flag == "-p" for flag in rest[::2]):
+        documented = set(rest[1::2])
+    else:
+        problems.append(
+            f"workspace/project.json: test-uncovered runs `{' '.join(doc_words)}`; beside "
+            f"`{DOCTESTS}` it may name packages with -p and nothing else"
+        )
+else:
+    problems.append(
+        f"workspace/project.json: test-uncovered must run the tagged libraries' doctests as "
+        f"`{DOCTESTS} -p <crate>...`; it runs `{' '.join(doc_words) or 'nothing'}`"
+    )
+
 paths = subprocess.check_output(["git", "ls-files", "*project.json"], text=True, encoding="utf-8")
 for path in sorted(paths.split()):
     project = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -87,13 +110,10 @@ for path in sorted(paths.split()):
                 )
         # Every library's doctests, whether or not it has any today: nextest never runs them,
         # and which documentation rustdoc will execute is rustdoc's to say, not this check's.
-        doctests = repeated + ["--doc"]
-        if (Path(path).parent / "src" / "lib.rs").is_file() and not any(
-            shlex.split(command) == doctests for command in uncovered
-        ):
+        if (Path(path).parent / "src" / "lib.rs").is_file() and name not in documented:
             problems.append(
-                f"{where}: has a library, whose doctests nextest never runs, and test-uncovered "
-                f"does not run `{' '.join(doctests)}` exactly"
+                f"{where}: has a library, whose doctests nextest never runs, and "
+                f"workspace:test-uncovered's `{DOCTESTS}` run does not name it with -p"
             )
     else:
         if len(tested) != 1 or len(covered) != 1:

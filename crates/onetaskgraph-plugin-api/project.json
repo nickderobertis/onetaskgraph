@@ -48,13 +48,6 @@
         "command": "cargo test --quiet -p onetaskgraph-plugin-api --all-features --locked"
       }
     },
-    "test-uncovered": {
-      "executor": "nx:run-commands",
-      "options": {
-        "command": "cargo test --quiet -p onetaskgraph-plugin-api --all-features --locked --doc"
-      },
-      "//": "The doctests, which `coverage`'s nextest run never runs, on the platforms where that run stands in for `test` (scripts/ci-job.sh, tag test-in-coverage)."
-    },
     "coverage": {
       "executor": "nx:run-commands",
       "dependsOn": ["workspace:coverage-clear"],

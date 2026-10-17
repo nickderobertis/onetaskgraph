@@ -155,19 +155,26 @@ project["targets"]["test"]["options"]["command"] += " && bash scripts/never-run-
 json.dump(project, open(sys.argv[1], "w"))
 PY
 tag_refused "a tagged crate's test gaining a command nothing else runs" "never-run-elsewhere.sh"
-# The doctest run replaced by nothing, by another crate's, and by one filtered to a name.
-for replacement in none another filtered; do
-  "$PYTHON" - "$REPO/crates/$DEPENDENT/project.json" "$replacement" "$DEPENDENT" "$UNAFFECTED" <<'PY'
+# The libraries' one doctest run leaving a library out, filtered to a name, and narrowed to a
+# feature set.
+for change in unnamed:"has a library" filtered:"nothing else" narrowed:"must run the tagged"; do
+  "$PYTHON" - "$REPO/workspace/project.json" "${change%%:*}" "$DEPENDENT" <<'PY'
 import json, sys
-path, replacement, dependent, unaffected = sys.argv[1:]
-run = lambda crate, *rest: " ".join(["cargo", "test", "--quiet", "-p", crate, "--all-features", "--locked", "--doc", *rest])
+path, change, dependent = sys.argv[1:]
 project = json.load(open(path))
-commands = [c for c in project["targets"]["test-uncovered"]["options"]["commands"] if "--doc" not in c]
-commands += {"none": [], "another": [run(unaffected)], "filtered": [run(dependent, "engine")]}[replacement]
-project["targets"]["test-uncovered"]["options"]["commands"] = commands
+options = project["targets"]["test-uncovered"]["options"]
+words = options["command"].split()
+if change == "unnamed":
+    at = words.index(dependent)
+    del words[at - 1 : at + 1]
+elif change == "filtered":
+    words.append("engine")
+else:
+    words[words.index("--all-features")] = "--no-default-features"
+options["command"] = " ".join(words)
 json.dump(project, open(path, "w"))
 PY
-  tag_refused "a library's doctest run replaced by $replacement" "has a library"
+  tag_refused "the libraries' doctest run ${change%%:*}" "${change#*:}"
 done
 "$PYTHON" - "$REPO/crates/onetaskgraph-github-projects/project.json" <<'PY'
 import json, sys
