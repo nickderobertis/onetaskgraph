@@ -53,6 +53,9 @@ export NX_WORKSPACE_DATA_DIRECTORY="$scratch/nx-workspace-data"
 unset NX_INVOCATION_ROOT_PID
 # No credential reaches the recipes: the live decision still runs, and no session opens.
 unset GH_PROJECTS_TOKEN LINEAR_API_KEY ONETASKGRAPH_LIVE_REQUIRED
+# Nor what the job this check may itself be running in set for its own phases
+# (scripts/ci-job.sh): each case below sets what it is about, and the recipes set the rest.
+unset ONETASKGRAPH_TESTS_UNDER_COVERAGE ONETASKGRAPH_DISTRIBUTION_UNDER_RELATIVE_INTERPRETER
 
 # Every run-commands target becomes a recorder that succeeds, uncached; `FAILING` names the
 # one task (`project:target`) that fails instead.
