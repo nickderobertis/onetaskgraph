@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 import { parse } from "yaml";
+import { graph } from "../workflow-graph.mjs";
 
 // The pull request's four jobs, read from the workflow files exactly as GitHub reads them.
 // Its inputs are .github alone (the github-workflows project's `ci-jobs` target), so a change
 // anywhere in this directory re-runs it and nothing outside does.
 const directory = new URL("../workflows/", import.meta.url);
-const reusableLock = new URL("../reusable-lock.json", import.meta.url);
 
 function definitions() {
   return Object.fromEntries(
@@ -82,25 +82,23 @@ const CACHES = [
 const steps = (job) => (Array.isArray(job?.steps) ? job.steps : []);
 const uses = (step) => (typeof step?.uses === "string" ? step.uses : "");
 
-// Every name a job of these workflows reports as a check context.
-function contexts(all) {
-  const names = [];
-  for (const workflow of Object.values(all))
-    for (const [id, job] of Object.entries(workflow?.jobs ?? {})) {
-      if (typeof job?.uses === "string" && job.uses.includes("visual-docs-reusable.yml")) {
-        const lock = JSON.parse(readFileSync(reusableLock, "utf8"));
-        const pinned = Object.keys(lock).some((ref) => ref.endsWith(job.uses));
-        if (pinned && !job.name)
-          names.push(`${id} / report (x86_64, shots/current, shots/verify, Visual docs)`);
-        continue;
-      }
-      const name = typeof job?.name === "string" ? job.name : id;
-      const legs = job?.strategy?.matrix?.os;
-      if (Array.isArray(legs) && name.includes(`\${{ matrix.os }}`))
-        for (const os of legs) names.push(name.replace(`\${{ matrix.os }}`, os));
-      else names.push(name);
-    }
-  return names;
+// Every check context a source pull request's runs report, resolved as workflow-graph.mjs
+// resolves a run: reusable workflows through their locked definitions, every matrix
+// dimension, each job's display name. A tree it cannot resolve reports none.
+function reportedOnPullRequest(all) {
+  const scenario = {
+    event: "pull_request",
+    action: "synchronize",
+    headRef: "feature",
+    fork: false,
+  };
+  try {
+    return graph(scenario, { macosRequired: true, reason: "a source change" }, all).flatMap((run) =>
+      run.rows.map((row) => row.name),
+    );
+  } catch {
+    return [];
+  }
 }
 
 export function problems(all) {
@@ -165,7 +163,7 @@ export function problems(all) {
   if (JSON.stringify(lint ?? {}).includes("release-shortcut"))
     found.push("lint consults the release shortcut");
   // Today's required contexts keep a job behind each of them until protection moves.
-  const reported = contexts(all);
+  const reported = reportedOnPullRequest(all);
   for (const context of REQUIRED_CONTEXTS)
     if (!reported.includes(context)) found.push(`no job reports the required context ${context}`);
   for (const [file, workflow] of Object.entries(all))

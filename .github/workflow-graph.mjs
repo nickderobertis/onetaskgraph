@@ -528,11 +528,14 @@ export function jobs(workflow, scenario, policy, prefix = "", inputs = {}, ances
           if (ancestry.includes(job.uses)) throw Error("Recursive reusable workflow");
           const child = reusable(job.uses);
           const supplied = reusableInputs(child, resolve(job.with || {}, rowContext));
+          // GitHub names a called job's check after the caller's display name, its id when it
+          // has none; the job ids stay the caller's id either way.
+          const caller = `${prefix}${id} / `;
+          const shown = `${prefix}${resolve(job.name || id, rowContext)} / `;
           rows.push(
-            ...jobs(child, scenario, policy, `${prefix}${id} / `, supplied, [
-              ...ancestry,
-              job.uses,
-            ]),
+            ...jobs(child, scenario, policy, caller, supplied, [...ancestry, job.uses]).map(
+              (row) => ({ ...row, name: shown + row.name.slice(caller.length) }),
+            ),
           );
           continue;
         }
