@@ -24,9 +24,10 @@ prune_superseded_version := "0.1.1"
 
 # Set up from a clean clone: every toolchain, the judged-lint tier and the pool pruner.
 # The pruner is installed everywhere bootstrap runs, CI included; only its pinned-version
-# check decides whether an install is needed.
-bootstrap:
-    @{{nx}} run-many -t bootstrap --all
+# check decides whether an install is needed. Arguments go to Nx: ci.yml's four jobs pass
+# `--outputStyle=static`, so their logs show what each project's bootstrap took.
+bootstrap *args:
+    @{{nx}} run-many -t bootstrap --all {{args}}
     @just pool-maintenance-tool
 
 # Install the pinned cargo-prune-superseded, unless that version is the one on PATH.

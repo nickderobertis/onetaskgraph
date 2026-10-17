@@ -528,7 +528,7 @@ jobs:
           key: nx-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'bun.lock', 'uv.lock', 'sdks/python/uv.lock', '.github/bun.lock', 'rust-toolchain.toml') }}-${{ github.sha }}
           restore-keys: nx-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'bun.lock', 'uv.lock', 'sdks/python/uv.lock', '.github/bun.lock', 'rust-toolchain.toml') }}-
       - name: Bootstrap
-        run: just bootstrap
+        run: just bootstrap --outputStyle=static
       - name: Derive the comparison base
         id: pr-base
         shell: bash
@@ -685,7 +685,7 @@ jobs:
           restore-keys: nx-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'bun.lock', 'uv.lock', 'sdks/python/uv.lock', '.github/bun.lock', 'rust-toolchain.toml') }}-
       - name: Bootstrap
         if: steps.release.outputs.tests == 'run'
-        run: just bootstrap
+        run: just bootstrap --outputStyle=static
       - name: Derive the comparison base
         id: pr-base
         if: steps.release.outputs.tests == 'run'
@@ -795,7 +795,7 @@ jobs:
           restore-keys: nx-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'bun.lock', 'uv.lock', 'sdks/python/uv.lock', '.github/bun.lock', 'rust-toolchain.toml') }}-
       - name: Bootstrap
         if: steps.release.outputs.tests == 'run'
-        run: just bootstrap
+        run: just bootstrap --outputStyle=static
       - name: Derive the comparison base
         id: pr-base
         if: steps.release.outputs.tests == 'run'
@@ -894,7 +894,7 @@ jobs:
           restore-keys: nx-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'bun.lock', 'uv.lock', 'sdks/python/uv.lock', '.github/bun.lock', 'rust-toolchain.toml') }}-
       - name: Bootstrap
         if: steps.release.outputs.tests == 'run'
-        run: just bootstrap
+        run: just bootstrap --outputStyle=static
       - name: Derive the comparison base
         id: pr-base
         if: steps.release.outputs.tests == 'run'
