@@ -48,9 +48,13 @@ readonly REPO="$scratch/repo"
 cp -a "$ROOT/node_modules" "$REPO/node_modules"
 git -C "$REPO" config user.email "check-ci-recipes@invalid"
 git -C "$REPO" config user.name "check-ci-recipes"
-# This runs inside an Nx target, so the Nx it drives shares no state with the outer one.
+# This runs inside an Nx target, so the Nx it drives shares no state with the outer one —
+# including the outer run's root process, under which Nx registers every task it runs to
+# catch a recursive invocation: the recipes below run the same tasks again and again, and
+# each phase of a job runs at once, so under that root each would read as a loop.
 export NX_DAEMON=false
 export NX_WORKSPACE_DATA_DIRECTORY="$scratch/nx-workspace-data"
+unset NX_INVOCATION_ROOT_PID
 # No credential reaches the recipes: the live decision still runs, and no session opens.
 unset GH_PROJECTS_TOKEN LINEAR_API_KEY ONETASKGRAPH_LIVE_REQUIRED
 

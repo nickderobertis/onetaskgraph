@@ -46,6 +46,7 @@ done
 
 # One phase per line: `affected|run`, the comma-separated targets or task, and the projects
 # that phase excludes (or `-`).
+concurrent=true
 case "$JOB" in
   lint)
     phases="affected format-check,lint,typecheck -
@@ -59,6 +60,10 @@ run scripts:distribution-check -
 run scripts:distribution-test -"
     ;;
   test-windows)
+    # In order rather than at once: on the Windows runner the phases' builds and journeys
+    # beside one another took several times longer each, and timing-sensitive loopback
+    # journeys failed under the load.
+    concurrent=false
     phases="affected test,budgets tag:test-in-coverage:all
 affected coverage -
 run scripts:distribution-check -
@@ -160,22 +165,30 @@ run_phase() {
   return "$phase_status"
 }
 
-# Every phase of a job at once: they select disjoint work, and the instrumented build is
-# cargo-llvm-cov's own target directory, so it and the plain build do not wait on one lock.
-pids=()
+record_phase() {
+  if run_phase "$@"; then echo 0 >"$scratch/exit.$1"; else echo 1 >"$scratch/exit.$1"; fi
+}
+
+# Every phase of a job at once, unless the job says otherwise: they select disjoint work, and
+# the instrumented build is cargo-llvm-cov's own target directory, so it and the plain build
+# do not wait on one lock. Each phase's exit status is kept under its index.
 phase=0
 while IFS=' ' read -r kind targets excluded; do
   [ -n "$kind" ] || continue
   phase=$((phase + 1))
-  run_phase "$phase" "$kind" "$targets" "$excluded" &
-  pids+=("$!")
+  if "$concurrent"; then
+    record_phase "$phase" "$kind" "$targets" "$excluded" &
+  else
+    record_phase "$phase" "$kind" "$targets" "$excluded"
+  fi
 done <<EOF
 $phases
 EOF
+wait
 status=0
-for index in "${!pids[@]}"; do
-  phase=$((index + 1))
-  wait "${pids[$index]}" && continue
+for index in $(seq 1 "$phase"); do
+  phase="$index"
+  [ "$(cat "$scratch/exit.$phase")" != 0 ] || continue
   status=1
   [ "${GITHUB_ACTIONS:-}" = true ] || cat "$scratch/run.$phase.log" >&2 2>/dev/null || true
   echo "ci-job: $JOB: $(cat "$scratch/command.$phase" 2>/dev/null || echo "phase $phase") failed — the failing tasks are named above." >&2
