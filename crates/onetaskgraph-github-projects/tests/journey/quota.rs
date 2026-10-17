@@ -24,16 +24,36 @@ struct Invocation {
 
 static CURRENT: Mutex<Option<Invocation>> = Mutex::new(None);
 
-/// Keeps failure-path requests in the partial record, including an unwinding journey.
-pub struct Scope;
+/// Keeps failure-path requests in the partial record, including an unwinding journey, and then
+/// marks the entry point ended beside it — `main.ended` or `assets.ended` — however it ended, so
+/// an entry point waiting on this one's record can tell one still running from one that will
+/// never complete it.
+pub struct Scope(Option<std::path::PathBuf>);
+
+/// The marker an entry point leaves beside its record once its record is final.
+pub fn ended_marker(directory: &std::path::Path, invocation: EntryPoint) -> std::path::PathBuf {
+    directory.join(match invocation {
+        EntryPoint::Main => "main.ended",
+        EntryPoint::Assets => "assets.ended",
+    })
+}
 
 impl Drop for Scope {
     fn drop(&mut self) {
+        use std::io::Write as _;
         if let Err(error) = flush() {
-            use std::io::Write as _;
             let _ = writeln!(
                 std::io::stderr(),
                 "live-session telemetry unavailable: {error}"
+            );
+        }
+        if let Some(marker) = &self.0
+            && let Err(error) = std::fs::write(marker, b"")
+        {
+            let _ = writeln!(
+                std::io::stderr(),
+                "live-session end marker {} unwritten: {error}",
+                marker.display()
             );
         }
     }
@@ -48,7 +68,7 @@ pub fn start(
 ) -> Result<Scope, String> {
     let directory = match std::env::var_os("GITHUB_LIVE_SESSION_DIR") {
         Some(directory) => std::path::PathBuf::from(directory),
-        None => return Ok(Scope),
+        None => return Ok(Scope(None)),
     };
     let record = SessionRecord {
         schema_version: onetaskgraph_github_live::quota::SCHEMA_VERSION,
@@ -78,7 +98,7 @@ pub fn start(
         phase_started: started,
         phase_first_request: 0,
     });
-    Ok(Scope)
+    Ok(Scope(Some(ended_marker(&directory, invocation))))
 }
 
 /// Flush the previous phase's already-executed requests before changing its attribution.

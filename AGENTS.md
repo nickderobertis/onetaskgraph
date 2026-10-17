@@ -479,6 +479,11 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   would take the other's. It cannot happen while the lane runs in exactly one process per
   attempt — the other steps clear the credential — so a change that runs a second
   credentialed process per attempt must revisit it; `tests/sweep_gate.rs` pins it.
+  The asset entry point is the main one's second process and still writes after it, never
+  beside it: the e2e suite's test target no longer waits on the plugin's, so its loopback
+  binaries run during the main session, but the asset journey makes no request until the
+  main record is complete, which follows the main journey's own cleanup, or the main entry
+  point has ended without it (`wait_for_current_main` in that suite's `tests/live.rs`).
   **The scheduled janitor is cleanup, not a test lane.**
   `.github/workflows/live-janitor.yml` runs hourly or by human dispatch, never from a
   project's `test` or `coverage` target. It enumerates issues, their board #1 items and

@@ -155,16 +155,19 @@ project["targets"]["test"]["options"]["command"] += " && bash scripts/never-run-
 json.dump(project, open(sys.argv[1], "w"))
 PY
 tag_refused "a tagged crate's test gaining a command nothing else runs" "never-run-elsewhere.sh"
-for replacement in "" "cargo test --quiet -p $UNAFFECTED --all-features --locked --doc" \
-  "cargo test --quiet -p $DEPENDENT --all-features --locked --doc engine"; do
-  "$PYTHON" - "$REPO/crates/$DEPENDENT/project.json" "$replacement" <<'PY'
+# The doctest run replaced by nothing, by another crate's, and by one filtered to a name.
+for replacement in none another filtered; do
+  "$PYTHON" - "$REPO/crates/$DEPENDENT/project.json" "$replacement" "$DEPENDENT" "$UNAFFECTED" <<'PY'
 import json, sys
-project = json.load(open(sys.argv[1]))
+path, replacement, dependent, unaffected = sys.argv[1:]
+run = lambda crate, *rest: " ".join(["cargo", "test", "--quiet", "-p", crate, "--all-features", "--locked", "--doc", *rest])
+project = json.load(open(path))
 commands = [c for c in project["targets"]["test-uncovered"]["options"]["commands"] if "--doc" not in c]
-project["targets"]["test-uncovered"]["options"]["commands"] = commands + ([sys.argv[2]] if sys.argv[2] else [])
-json.dump(project, open(sys.argv[1], "w"))
+commands += {"none": [], "another": [run(unaffected)], "filtered": [run(dependent, "engine")]}[replacement]
+project["targets"]["test-uncovered"]["options"]["commands"] = commands
+json.dump(project, open(path, "w"))
 PY
-  tag_refused "a library's doctest run replaced by '${replacement:-nothing}'" "has a library"
+  tag_refused "a library's doctest run replaced by $replacement" "has a library"
 done
 "$PYTHON" - "$REPO/crates/onetaskgraph-github-projects/project.json" <<'PY'
 import json, sys
