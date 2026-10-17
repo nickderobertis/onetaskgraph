@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# Hold every `test-in-coverage:<platforms>` tag to what it claims.
+# Hold every `test-in-coverage:<crate|sdk>` tag to what it claims.
 #
-# scripts/ci-job.sh does not run a tagged project's `test` on those platforms, because its
-# `coverage` target runs the same suite instrumented and `test-uncovered` runs the rest. That
-# is only true while the three targets say so: a command added to `test` and nowhere else
-# would stop running on Linux and macOS with every selection still green. So the tag is
-# reconciled against the commands, rather than trusted:
+# scripts/ci-job.sh does not run a tagged project's `test` on Linux, where coverage is
+# measured, because its `coverage` target runs the same suite instrumented and
+# `test-uncovered` runs the rest. That is only true while the three targets say so: a command
+# added to `test` and nowhere else would stop running on Linux with every selection still
+# green. So the tag is reconciled against the commands, rather than trusted:
 #
-#   unix  a Rust crate measured by scripts/rust-coverage.sh, whose every `test` command is
-#         the all-features run that measurement repeats under nextest or a command
-#         `test-uncovered` runs, and whose library's doctests, which nextest never runs,
-#         workspace:test-uncovered's one doctest run names;
-#   all   an SDK whose `coverage` command is its `test` command with coverage switched on;
+#   crate  a Rust crate measured by scripts/rust-coverage.sh, whose every `test` command is
+#          the all-features run that measurement repeats under nextest or a command
+#          `test-uncovered` runs, and whose library's doctests, which nextest never runs,
+#          workspace:test-uncovered's one doctest run names;
+#   sdk    an SDK whose `coverage` command is its `test` command with coverage switched on;
 #
 # and never a project with a live lane, whose credentials coverage clears.
 set -euo pipefail
@@ -48,7 +48,7 @@ if measured != MEASURED:
     problems.append(
         "scripts/rust-coverage.sh: a crate's instrumented run is "
         f"{' '.join(measured) if measured else 'not found'}, not the whole crate with every "
-        f"feature ({' '.join(MEASURED)}), so test-in-coverage:unix claims tests it no longer "
+        f"feature ({' '.join(MEASURED)}), so test-in-coverage:crate claims tests it no longer "
         "runs; restore the invocation, or take the tags off"
     )
 
@@ -84,8 +84,8 @@ for path in sorted(paths.split()):
     if not claimed:
         continue
     where = f"{path} ({name})"
-    if len(claimed) > 1 or claimed[0] not in {"unix", "all"}:
-        problems.append(f"{where}: carries {claimed}; the tag is one of test-in-coverage:unix or :all")
+    if len(claimed) > 1 or claimed[0] not in {"crate", "sdk"}:
+        problems.append(f"{where}: carries {claimed}; the tag is one of test-in-coverage:crate or :sdk")
         continue
     if any(tag.startswith("live:") for tag in tags):
         problems.append(
@@ -93,10 +93,10 @@ for path in sorted(paths.split()):
             "live journeys never run under coverage; take test-in-coverage off it"
         )
     tested, covered, uncovered = (commands(project, t) for t in ("test", "coverage", "test-uncovered"))
-    if claimed[0] == "unix":
+    if claimed[0] == "crate":
         if covered != [f"bash scripts/rust-coverage.sh {name}"]:
             problems.append(
-                f"{where}: test-in-coverage:unix names a Rust crate scripts/rust-coverage.sh "
+                f"{where}: test-in-coverage:crate names a Rust crate scripts/rust-coverage.sh "
                 f"measures, and its coverage runs {covered}"
             )
         # The all-features run of the whole crate, which its nextest measurement repeats.
@@ -117,7 +117,7 @@ for path in sorted(paths.split()):
             )
     else:
         if len(tested) != 1 or len(covered) != 1:
-            problems.append(f"{where}: test-in-coverage:all needs one test and one coverage command")
+            problems.append(f"{where}: test-in-coverage:sdk needs one test and one coverage command")
             continue
         plain = [word for word in shlex.split(tested[0]) if word != "--no-cov"]
         measured = shlex.split(covered[0])
@@ -129,11 +129,11 @@ for path in sorted(paths.split()):
             or options("test") != options("coverage")
         ):
             problems.append(
-                f"{where}: test-in-coverage:all needs coverage to be test with coverage switched "
+                f"{where}: test-in-coverage:sdk needs coverage to be test with coverage switched "
                 f"on; test runs `{tested[0]}` and coverage `{covered[0]}`"
             )
 
-# The live crates: on the same platforms their `test` runs only the credentialed journey each
+# The live crates: on Linux their `test` runs only the credentialed journey each
 # names to scripts/live-crate-test.sh, and `coverage` runs the rest. So exactly the crates whose
 # `test` is keyed on a live credential name one, each a test that opens a live session, every
 # cargo run of their `test` goes through that script, and their coverage is the whole-crate run

@@ -182,7 +182,7 @@
       "options": {
         "command": "cargo test --quiet --all-features --locked --doc -p onetaskgraph-core -p onetaskgraph-e2e-support -p onetaskgraph-github-live -p onetaskgraph-in-memory -p onetaskgraph-live -p onetaskgraph-local-md -p onetaskgraph-plugin-api -p onetaskgraph-status-options"
       },
-      "//": "Every test-in-coverage library's doctests, which `coverage`'s nextest runs never run, in one invocation on the platforms where those runs stand in for `test` (scripts/ci-job.sh). This project depends on every other, so any change runs them, as any change runs every crate's coverage. scripts/check-test-in-coverage.sh holds the list to the tags."
+      "//": "Every test-in-coverage library's doctests, which `coverage`'s nextest runs never run, in one invocation on Linux, where those runs stand in for `test` (scripts/ci-job.sh). This project depends on every other, so any change runs them, as any change runs every crate's coverage. scripts/check-test-in-coverage.sh holds the list to the tags."
     },
     "coverage": {
       "executor": "nx:run-commands",

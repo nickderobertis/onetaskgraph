@@ -2,7 +2,7 @@
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
   "name": "onetaskgraph-e2e-support",
   "projectType": "library",
-  "tags": ["lang:rust", "layer:testing", "test-in-coverage:unix"],
+  "tags": ["lang:rust", "layer:testing", "test-in-coverage:crate"],
   "//": "The harness every e2e suite shares; implicitDependencies mirror its Cargo dependencies, as every crate's do. It is never a graph dependency of a plugin suite, which names it in its `default` input instead, because its edges reach both hosted plugins.",
   "implicitDependencies": [
     "onetaskgraph-github-projects",

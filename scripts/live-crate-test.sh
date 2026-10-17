@@ -4,7 +4,7 @@
 #   scripts/live-crate-test.sh <crate> <test-binary> <test> [--also-build <package>]
 #
 # Every test of the crate, ordinarily. With ONETASKGRAPH_TESTS_UNDER_COVERAGE=1 — which
-# scripts/ci-job.sh sets on the platforms where the instrumented run stands in for `test` —
+# scripts/ci-job.sh sets on Linux, where the instrumented run stands in for `test` —
 # only the crate's credentialed journey, the one `<test>` of `<test-binary>` that opens a live
 # session: its `coverage` target runs the whole crate under nextest anyway (with the
 # credentials cleared, so the journey skips there), and the journey is the one test that has to

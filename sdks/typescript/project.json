@@ -2,7 +2,7 @@
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
   "name": "sdk-typescript",
   "projectType": "library",
-  "tags": ["lang:typescript", "layer:sdk", "test-in-coverage:all"],
+  "tags": ["lang:typescript", "layer:sdk", "test-in-coverage:sdk"],
   "//": "The generator executes the binary and consumes its emitted schema and command surface.",
   "implicitDependencies": ["onetaskgraph"],
   "targets": {

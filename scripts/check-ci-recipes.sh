@@ -182,7 +182,7 @@ done
 "$PYTHON" - "$REPO/crates/onetaskgraph-github-projects/project.json" <<'PY'
 import json, sys
 project = json.load(open(sys.argv[1]))
-project["tags"].append("test-in-coverage:unix")
+project["tags"].append("test-in-coverage:crate")
 json.dump(project, open(sys.argv[1], "w"))
 PY
 tag_refused "a crate with a live lane tagged" "has a live lane"
@@ -322,7 +322,7 @@ git -C "$REPO" commit --quiet --no-verify -am "test: record every target"
 BASE="$(git -C "$REPO" rev-parse HEAD)"
 
 # 1. A change to one project: its targets and its dependents' run, those of a project it never
-#    reaches do not, and on Linux and macOS its suite runs once, under coverage.
+#    reaches do not, and its suite runs once: under coverage on Linux, uninstrumented elsewhere.
 commit_change "$CHANGED_FILE"
 recipe ci-lint
 expect_status "lint after a change to $CHANGED" 0
@@ -351,23 +351,20 @@ expect "test-linux after a change to $CHANGED" ran "$UNAFFECTED:test" absent
 expect "test-linux after a change to $CHANGED" ran "github-workflows:test" absent
 expect "test-linux after a change to $CHANGED" ran "$CHANGED:lint" absent
 
-recipe ci-test-windows --select-only
-expect_status "test-windows after a change to $CHANGED" 0
-# Windows measures no Rust coverage, so the crate's own tests run there.
-expect "test-windows after a change to $CHANGED" selects "$CHANGED:test"
-expect "test-windows after a change to $CHANGED" selects "$DEPENDENT:test-uncovered" absent
-expect "test-windows after a change to $CHANGED" selects "sdk-python:coverage"
-expect "test-windows after a change to $CHANGED" selects "sdk-python:test" absent
-expect "test-windows after a change to $CHANGED" selects "$UNAFFECTED:test" absent
-expect "test-windows after a change to $CHANGED" ran "$CHANGED:test" absent
-
-recipe ci-test-macos --select-only
-expect_status "test-macos after a change to $CHANGED" 0
-expect "test-macos after a change to $CHANGED" selects "$CHANGED:coverage"
-expect "test-macos after a change to $CHANGED" selects "$CHANGED:test" absent
-expect "test-macos after a change to $CHANGED" selects "$DEPENDENT:test-uncovered"
-expect "test-macos after a change to $CHANGED" selects "$UNAFFECTED:test" absent
-expect "test-macos after a change to $CHANGED" ran "$CHANGED:coverage" absent
+# Coverage is measured on Linux alone, so elsewhere every suite runs as `test`, uninstrumented.
+for job in test-windows test-macos; do
+  recipe "ci-$job" --select-only
+  expect_status "$job after a change to $CHANGED" 0
+  expect "$job after a change to $CHANGED" selects "$CHANGED:test"
+  expect "$job after a change to $CHANGED" selects "$DEPENDENT:test"
+  expect "$job after a change to $CHANGED" selects "sdk-python:test"
+  expect "$job after a change to $CHANGED" selects "onetaskgraph-linear-e2e:budgets"
+  for target in "$CHANGED:coverage" "$DEPENDENT:test-uncovered" sdk-python:coverage workspace:coverage; do
+    expect "$job after a change to $CHANGED" selects "$target" absent
+  done
+  expect "$job after a change to $CHANGED" selects "$UNAFFECTED:test" absent
+  expect "$job after a change to $CHANGED" ran "$CHANGED:test" absent
+done
 
 # 2. A change to nothing any project tests: the affected phases select nothing, and the
 #    phases every job runs by name still run.
@@ -388,7 +385,8 @@ for job in test-windows test-macos; do
   recipe "ci-$job" --select-only
   expect_status "$job after a change to $NOTHING_FILE" 0
   expect "$job after a change to $NOTHING_FILE" selects "workspace:test" absent
-  expect "$job after a change to $NOTHING_FILE" selects "$CHANGED:coverage" absent
+  expect "$job after a change to $NOTHING_FILE" selects "$CHANGED:test" absent
+  expect "$job after a change to $NOTHING_FILE" selects "scripts:distribution-check"
   expect "$job after a change to $NOTHING_FILE" selects "scripts:distribution-test"
 done
 

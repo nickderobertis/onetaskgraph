@@ -12,11 +12,11 @@
 # plugin a version-only diff cannot reach. It narrows the phases that run `test` and
 # `budgets`, exactly as it narrows `just test`; coverage is never narrowed by it.
 #
-# The tests run once. A project tagged `test-in-coverage:<platforms>` has a `coverage` target
-# that runs its whole test suite instrumented, so on those platforms its `test` is not run a
-# second time uninstrumented; its `test-uncovered` target runs whatever the instrumented run
-# cannot (doctests, a default-feature build). `unix` means every platform but Windows, where
-# scripts/rust-coverage.sh measures nothing; `all` means every platform.
+# The tests run once. Coverage is measured on Linux alone: there a project tagged
+# `test-in-coverage:<crate|sdk>` has a `coverage` target that runs its whole test suite
+# instrumented, so its `test` is not run a second time uninstrumented, and its `test-uncovered`
+# target runs whatever the instrumented run cannot (doctests, a default-feature build).
+# test-macos and test-windows run every project's `test`, uninstrumented, and no coverage.
 set -euo pipefail
 
 readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -53,16 +53,14 @@ case "$JOB" in
 1 run sdk-python:generate-check -
 1 run workspace:deny -"
     ;;
-  test-linux | test-macos)
+  test-linux)
     # And the live crates' `test` runs only their credentialed journeys, coverage running the
     # rest of them, as it does every tagged crate's (scripts/live-crate-test.sh).
     export ONETASKGRAPH_TESTS_UNDER_COVERAGE=1
-    # And on Linux the distribution journey runs once, under the relative interpreter
-    # scripts:test's check-relative-interpreter.sh would otherwise run it under a second time;
-    # test-macos and test-windows run it plainly, so every pull request still does both.
-    if [ "$JOB" = test-linux ]; then
-      export ONETASKGRAPH_DISTRIBUTION_UNDER_RELATIVE_INTERPRETER=1
-    fi
+    # And the distribution journey runs once, under the relative interpreter scripts:test's
+    # check-relative-interpreter.sh would otherwise run it under a second time; test-macos and
+    # test-windows run it plainly, so every pull request still does both.
+    export ONETASKGRAPH_DISTRIBUTION_UNDER_RELATIVE_INTERPRETER=1
     # Work that would queue behind a long phase gets one of its own: the two Linear crates,
     # whose credentialed journeys take one seat and so run one at a time, and the SDKs'
     # coverage, which would otherwise wait for every crate's.
@@ -79,15 +77,20 @@ case "$JOB" in
 1 run scripts:distribution-test -
 2 affected budgets - --excludeTaskDependencies,--skipNxCache"
     ;;
+  test-macos)
+    # Every suite once, uninstrumented: coverage is Linux's. `budgets` reads what `test`
+    # recorded, and depends on it.
+    phases="1 affected test,budgets -
+1 run scripts:distribution-check -
+1 run scripts:distribution-test -"
+    ;;
   test-windows)
-    # The tests alone first: on the Windows runner the test builds and journeys beside other
-    # phases took several times longer each, and timing-sensitive loopback journeys failed
-    # under the load. The SDKs' coverage and the distribution journeys share no build, and
-    # run together after.
-    phases="1 affected test,budgets tag:test-in-coverage:all
-2 affected coverage -
+    # As test-macos, one phase at a time: on the Windows runner the test builds and journeys
+    # beside other phases took several times longer each, and timing-sensitive loopback
+    # journeys failed under the load.
+    phases="1 affected test,budgets -
 2 run scripts:distribution-check -
-2 run scripts:distribution-test -"
+3 run scripts:distribution-test -"
     ;;
   *) usage ;;
 esac
