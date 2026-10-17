@@ -475,6 +475,28 @@ test("the publish job waits for every platform, then publishes the crates, SDKs 
       0,
       `${registry} with every platform`,
     );
+  // A platform there but unusable is refused like a missing one: an archive that is not its
+  // checksum's, a wheel or an npm package that is not what was published.
+  const macos = Object.fromEntries(plan("macos").map((artifact) => [artifact.kind, artifact.file]));
+  for (const [registry, corrupt] of [
+    ["github", macos.archive],
+    ["pypi", macos.wheel],
+    ["npm", `cli-darwin-arm64-${version}.tgz`],
+  ]) {
+    control({ releases: [tag], corrupt: [corrupt] });
+    const result = recipe(
+      "publish",
+      ["available", "--from", registry, "--tag", tag, "--wait", "0"],
+      env,
+    );
+    assert.equal(
+      result.status,
+      1,
+      `${registry} serving a corrupt macOS artifact:\n${result.output.slice(-2000)}`,
+    );
+    assert.match(result.output, /release-cd: next: re-run/);
+  }
+  control({ releases: [tag] });
   // Nothing platform-independent reached a registry before this point.
   const independentNames = plan("independent").map((artifact) => artifact.package);
   assert.ok(
@@ -541,6 +563,32 @@ test("the publish job waits for every platform, then publishes the crates, SDKs 
   );
   for (const artifact of plan("independent").filter((a) => a.registry === "pypi"))
     assert.ok(existsSync(join(independent, "python-sdk", artifact.file)), artifact.file);
+  // What npm packs at publication is held to what the build made: an SDK rebuilt or edited
+  // since is refused before anything is sent, and the build's own output is then published.
+  const built = join(checkout, "sdks/typescript/dist/index.js");
+  const original = readFileSync(built);
+  writeFileSync(built, Buffer.concat([original, Buffer.from("\n// changed after the build\n")]));
+  try {
+    mark = requests().length;
+    const moved = recipe(
+      "publish",
+      ["publish", "--to", "npm", "--tag", tag, "--dist", independent],
+      env,
+    );
+    assert.equal(moved.status, 1, moved.output);
+    assert.match(
+      moved.output,
+      /the source onetaskgraph-sdk-[\d.]+\.tgz is packed from is not what the build produced/,
+    );
+    assert.deepEqual(
+      requests()
+        .slice(mark)
+        .filter((r) => r.action === "publish"),
+      [],
+    );
+  } finally {
+    writeFileSync(built, original);
+  }
   mark = requests().length;
   expectStatus(
     recipe("publish", ["publish", "--to", "npm", "--tag", tag, "--dist", independent], env),
@@ -563,6 +611,75 @@ test("the publish job waits for every platform, then publishes the crates, SDKs 
       0,
       `the publish job's ${registry} check`,
     );
+  // And it fails when a registry does not serve one of them, until it does again.
+  const sdk = plan("independent")
+    .filter((a) => a.registry === "pypi")
+    .map((a) => a.file);
+  for (const [registry, hide] of [
+    ["crates", [`onetaskgraph@${version}`]],
+    ["pypi", sdk],
+    ["npm", [`@onetaskgraph/sdk@${version}`]],
+  ]) {
+    control({ releases: [tag], hide });
+    const missing = recipe(
+      "publish",
+      ["verify", "--from", registry, "--tag", tag, "--wait", "0"],
+      env,
+    );
+    assert.equal(
+      missing.status,
+      1,
+      `${registry} missing a package:\n${missing.output.slice(-2000)}`,
+    );
+    assert.match(missing.output, /release-cd: next: /);
+    control({ releases: [tag] });
+    expectStatus(
+      recipe("publish", ["verify", "--from", registry, "--tag", tag, "--wait", "0"], env),
+      0,
+      `the publish job's ${registry} check once it is served again`,
+    );
+  }
+});
+
+test("the GitHub upload refuses a missing token, a malformed release and an untrusted upload host", {
+  skip,
+}, () => {
+  for (const [name, env, state, reason] of [
+    ["no token", { GH_TOKEN: "", GITHUB_TOKEN: "" }, { releases: [tag] }, /no GitHub token/],
+    [
+      "a malformed release",
+      {},
+      { releases: [tag], release_answer: { assets: "none" } },
+      /is not a release/,
+    ],
+    [
+      "an untrusted upload host",
+      {},
+      { releases: [tag], upload_host: "http://198.51.100.7:9/uploads" },
+      /neither GitHub's API nor its upload host/,
+    ],
+  ]) {
+    control(state);
+    const mark = requests().length;
+    const result = recipe(
+      "macos",
+      ["publish", "--to", "github", "--tag", tag, "--dist", join(scratch, "dist-macos")],
+      {
+        ...registries(),
+        ...env,
+      },
+    );
+    assert.equal(result.status, 1, `${name}:\n${result.output}`);
+    assert.match(result.output, reason, name);
+    assert.deepEqual(
+      requests()
+        .slice(mark)
+        .filter((r) => r.action === "upload"),
+      [],
+      name,
+    );
+  }
+  control({ releases: [tag] });
 });
 
 test("a publication refuses a build it cannot vouch for before it sends anything", { skip }, () => {
@@ -586,7 +703,7 @@ test("a publication refuses a build it cannot vouch for before it sends anything
     [
       "a file the build did not produce",
       (d) => writeFileSync(join(d, "wheels/x86_64-unknown-linux-gnu", wheel.file), "tampered"),
-      /is not the file the build produced/,
+      /is not what the build produced/,
     ],
     [
       "a file with no recorded digest",
@@ -595,7 +712,7 @@ test("a publication refuses a build it cannot vouch for before it sends anything
           ...manifest,
           artifacts: manifest.artifacts.map(({ sha256: _, ...entry }) => entry),
         }),
-      /is not the file the build produced/,
+      /is not what the build produced/,
     ],
     [
       "a list that is not the plan",

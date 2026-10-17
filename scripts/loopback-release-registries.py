@@ -26,7 +26,8 @@ open pull requests), `refuse` (uploads and calls answered with an error: entries
 `registry` and a `file`, `package` or `action`, and a GitHub upload marked `partial` leaves a
 short asset behind, as an interrupted one does), `hide` (names read as absent), `corrupt`
 (files served as garbage), and `relabel` (`{"from": v1, "to": v2}`: every read lists v1 as
-v2). Every request is one JSON line in `<state>/requests.jsonl`, with the file or package a
+v2), and `release_answer`, `upload_host` and `automerge_answer`, which replace what GitHub
+answers. Every request is one JSON line in `<state>/requests.jsonl`, with the file or package a
 publication carried, so a journey can assert exactly what was sent.
 """
 
@@ -172,7 +173,11 @@ class Handler(BaseHTTPRequestHandler):
             if status:
                 self.send(200, {"errors": [{"type": "UNPROCESSABLE", "message": "Pull request is not in the correct state to enable auto-merge"}]})
                 return
-            self.send(200, {"data": {"enablePullRequestAutoMerge": {"pullRequest": {"number": next((p["number"] for p in control().get("pulls", []) if p.get("node_id") == pull), None), "autoMergeRequest": {"mergeMethod": "SQUASH"}}}}})
+            answer = control().get("automerge_answer")
+            if answer is None:
+                number = next((p["number"] for p in control().get("pulls", []) if isinstance(p, dict) and p.get("node_id") == pull), None)
+                answer = {"data": {"enablePullRequestAutoMerge": {"pullRequest": {"number": number, "autoMergeRequest": {"mergeMethod": "SQUASH"}}}}}
+            self.send(200, answer)
             return
         match = re.fullmatch(r"/repos/[^/]+/[^/]+/pulls", path)
         if match and self.command == "GET":
@@ -196,7 +201,9 @@ class Handler(BaseHTTPRequestHandler):
                     for (asset_tag, name), asset in sorted(github_assets.items())
                     if asset_tag == tag and not hidden(name)
                 ]
-            self.send(200, {"id": release_id, "tag_name": tag, "upload_url": f"{self.base()}/github/uploads/repos/{repository}/releases/{release_id}/assets{{?name,label}}", "assets": assets})
+            upload = control().get("upload_host", f"{self.base()}/github/uploads")
+            release = {"id": release_id, "tag_name": tag, "upload_url": f"{upload}/repos/{repository}/releases/{release_id}/assets{{?name,label}}", "assets": assets}
+            self.send(200, control().get("release_answer", release))
             return
         match = re.fullmatch(r"/repos/[^/]+/[^/]+/releases/assets/(\d+)", path)
         if match and self.command == "DELETE":
@@ -339,50 +346,55 @@ class Handler(BaseHTTPRequestHandler):
             self.send(200, served_bytes(file, found["bytes"]), "application/octet-stream")
             return
         name = decoded
-        if self.command == "PUT":
-            document = json.loads(self.body() or b"{}")
-            versions = document.get("versions") or {}
-            attachments = document.get("_attachments") or {}
-            status = refused("npm", package=name)
-            self.record(registry="npm", action="publish", package=name, versions=sorted(versions), files=sorted(attachments), refused=bool(status))
-            if status:
-                self.send(status, {"error": "publication refused"})
-                return
-            with lock:
-                held = npm_packages.setdefault(name, {})
-                for version, manifest in versions.items():
-                    if version in held:
-                        self.send(403, {"error": f"You cannot publish over the previously published versions: {version}."})
-                        return
-                    attachment = next(iter(attachments.values()))
-                    payload = base64.b64decode(attachment["data"])
-                    file = f"{name.split('/')[-1]}-{version}.tgz"
-                    held[version] = {"manifest": manifest, "file": file, "bytes": payload}
-            self.send(201, {"ok": True})
-            return
-        if self.command == "GET":
-            self.record(registry="npm", action="read", package=name)
-            with lock:
-                held = {version: record for version, record in npm_packages.get(name, {}).items() if not hidden(f"{name}@{version}")}
-            if not held:
-                self.send(404, {"error": "Not found"})
-                return
-            versions = {}
-            for version, record in held.items():
-                payload = record["bytes"]
-                served = relabel(version)
-                manifest = {**record["manifest"], "version": served}
-                manifest["dist"] = {
-                    "tarball": f"{self.base()}/npm/{name}/-/{record['file']}",
-                    "shasum": hashlib.sha1(payload).hexdigest(),
-                    "integrity": "sha512-" + base64.b64encode(hashlib.sha512(payload).digest()).decode(),
-                }
-                versions[served] = manifest
-            latest = sorted(versions)[-1]
-            self.send(200, {"name": name, "dist-tags": {"latest": latest}, "versions": versions})
-            return
-        self.send(405, {"error": "method not allowed"})
+        match self.command:
+            case "PUT":
+                self.npm_publish(name)
+            case "GET":
+                self.npm_packument(name)
+            case _:
+                self.send(405, {"error": "method not allowed"})
 
+    def npm_publish(self, name):
+        document = json.loads(self.body() or b"{}")
+        versions = document.get("versions") or {}
+        attachments = document.get("_attachments") or {}
+        status = refused("npm", package=name)
+        self.record(registry="npm", action="publish", package=name, versions=sorted(versions), files=sorted(attachments), refused=bool(status))
+        if status:
+            self.send(status, {"error": "publication refused"})
+            return
+        with lock:
+            held = npm_packages.setdefault(name, {})
+            for version, manifest in versions.items():
+                if version in held:
+                    self.send(403, {"error": f"You cannot publish over the previously published versions: {version}."})
+                    return
+                attachment = next(iter(attachments.values()))
+                payload = base64.b64decode(attachment["data"])
+                file = f"{name.split('/')[-1]}-{version}.tgz"
+                held[version] = {"manifest": manifest, "file": file, "bytes": payload}
+        self.send(201, {"ok": True})
+
+    def npm_packument(self, name):
+        self.record(registry="npm", action="read", package=name)
+        with lock:
+            held = {version: record for version, record in npm_packages.get(name, {}).items() if not hidden(f"{name}@{version}")}
+        if not held:
+            self.send(404, {"error": "Not found"})
+            return
+        versions = {}
+        for version, record in held.items():
+            payload = record["bytes"]
+            served = relabel(version)
+            manifest = {**record["manifest"], "version": served}
+            manifest["dist"] = {
+                "tarball": f"{self.base()}/npm/{name}/-/{record['file']}",
+                "shasum": hashlib.sha1(payload).hexdigest(),
+                "integrity": "sha512-" + base64.b64encode(hashlib.sha512(payload).digest()).decode(),
+            }
+            versions[served] = manifest
+        latest = sorted(versions)[-1]
+        self.send(200, {"name": name, "dist-tags": {"latest": latest}, "versions": versions})
 
     def crates(self, path):
         if path == "/index/config.json":

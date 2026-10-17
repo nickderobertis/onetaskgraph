@@ -23,6 +23,13 @@ import sys
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from typing import NewType
+
+PullNumber = NewType("PullNumber", int)
+NodeId = NewType("NodeId", str)
+BranchRef = NewType("BranchRef", str)
+RepositoryName = NewType("RepositoryName", str)
+Token = NewType("Token", str)
 
 ENABLE = """mutation($pullRequestId: ID!) {
   enablePullRequestAutoMerge(input: {pullRequestId: $pullRequestId, mergeMethod: SQUASH}) {
@@ -37,10 +44,10 @@ class Refused(Exception):
 
 @dataclass(frozen=True)
 class PullRequest:
-    number: int
-    node_id: str
-    head_ref: str
-    head_repository: str | None
+    number: PullNumber
+    node_id: NodeId
+    head_ref: BranchRef
+    head_repository: RepositoryName | None
 
     @classmethod
     def parse(cls, value: object) -> "PullRequest":
@@ -49,14 +56,14 @@ class PullRequest:
         if not isinstance(value, dict) or not isinstance(value.get("number"), int) or not isinstance(value.get("node_id"), str) or not isinstance(head, dict) or not isinstance(head.get("ref"), str) or not (repository is None or isinstance(repository, dict)):
             raise Refused(f"GitHub listed something that is not a pull request: {value!r:.200}")
         full_name = repository.get("full_name") if repository else None
-        return cls(value["number"], value["node_id"], head["ref"], full_name if isinstance(full_name, str) else None)
+        return cls(PullNumber(value["number"]), NodeId(value["node_id"]), BranchRef(head["ref"]), RepositoryName(full_name) if isinstance(full_name, str) else None)
 
-    def is_release_of(self, repository: str) -> bool:
+    def is_release_of(self, repository: RepositoryName) -> bool:
         """release-plz's own pull request: a `release-plz-` branch of this repository, not a fork's."""
         return self.head_ref.startswith("release-plz-") and self.head_repository == repository
 
 
-def call(url: str, token: str, body: dict | None = None) -> object:
+def call(url: str, token: Token, body: dict | None = None) -> object:
     request = urllib.request.Request(
         url,
         data=None if body is None else json.dumps(body).encode(),
@@ -73,8 +80,8 @@ def call(url: str, token: str, body: dict | None = None) -> object:
 
 
 def main() -> int:
-    token = os.environ.get("GH_TOKEN", "")
-    repository = os.environ.get("GITHUB_REPOSITORY", "")
+    token = Token(os.environ.get("GH_TOKEN", ""))
+    repository = RepositoryName(os.environ.get("GITHUB_REPOSITORY", ""))
     api = os.environ.get("GITHUB_API_URL", "https://api.github.com").rstrip("/")
     graphql = os.environ.get("GITHUB_GRAPHQL_URL", f"{api}/graphql")
     if not token or repository.count("/") != 1:
@@ -95,8 +102,9 @@ def main() -> int:
         if errors:
             raise Refused(f"GitHub refused auto-merge for #{pull.number}: {json.dumps(errors)[:500]}")
         enabled = ((answer.get("data") or {}).get("enablePullRequestAutoMerge") or {}).get("pullRequest") or {}
-        if not isinstance(enabled, dict) or not enabled.get("autoMergeRequest"):
-            raise Refused(f"GitHub answered auto-merge for #{pull.number} without an auto-merge request: {json.dumps(answer)[:300]}")
+        request = enabled.get("autoMergeRequest") if isinstance(enabled, dict) else None
+        if not isinstance(request, dict) or request.get("mergeMethod") != "SQUASH" or enabled.get("number") != pull.number:
+            raise Refused(f"GitHub answered auto-merge for #{pull.number} without a squash auto-merge request on it: {json.dumps(answer)[:300]}")
     # A malformed GitHub answer is a refusal like any other: it says no auto-merge was set.
     except (Refused, AttributeError, TypeError) as error:
         print(f"enable-release-automerge: {error}", file=sys.stderr)

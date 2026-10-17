@@ -91,9 +91,9 @@ const pull = (number, ref, owner = repository) => ({
   node_id: `PR_${number}`,
   head: { ref, repo: { full_name: owner } },
 });
-function automerge(pulls, refuse = []) {
+function automerge(pulls, refuse = [], answers = {}) {
   const state = join(scratch, "github");
-  writeFileSync(join(state, "control.json"), JSON.stringify({ pulls, refuse }));
+  writeFileSync(join(state, "control.json"), JSON.stringify({ pulls, refuse, ...answers }));
   const before = existsSync(join(state, "requests.jsonl"))
     ? readFileSync(join(state, "requests.jsonl"), "utf8")
     : "";
@@ -161,6 +161,16 @@ test("the auto-merge step fails visibly when GitHub refuses it or cannot be aske
   assert.equal(unreachable.status, 1);
   assert.match(unreachable.output, /HTTP 502/);
   assert.equal(unreachable.sent.filter((r) => r.action === "graphql").length, 0);
+  const malformed = automerge([pull(43, "release-plz-0.8.0"), 7]);
+  assert.equal(malformed.status, 1);
+  assert.match(malformed.output, /GitHub listed something that is not a pull request: 7/);
+  assert.equal(malformed.sent.filter((r) => r.action === "graphql").length, 0);
+  const unset = automerge([pull(43, "release-plz-0.8.0")], [], {
+    automerge_answer: { data: { enablePullRequestAutoMerge: { pullRequest: { number: 43 } } } },
+  });
+  assert.equal(unset.status, 1);
+  assert.match(unset.output, /without a squash auto-merge request on it/);
+  assert.match(unset.output, /next: the release pull request will not merge itself/);
 });
 
 // The pinned release-plz, which `just bootstrap` provisions where every script resolves it.

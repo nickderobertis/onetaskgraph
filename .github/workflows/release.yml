@@ -4,18 +4,10 @@ on:
     types: [published]
 permissions:
   contents: read
-# Four jobs, and every step of them is one phase of one justfile recipe — `release-linux`,
-# `release-macos`, `release-windows` and `release-publish`, all scripts/release_cd.py — so
-# nothing a release does is YAML that only a release could run. Each build job builds its
-# platform's targets once, packages the archive, wheel and npm platform package from that one
-# binary, installs and runs those exact files, publishes them, and then installs them back
-# out of every registry on its own OS. `publish` waits for all three, confirms every registry
-# serves every platform, and only then publishes what is platform-independent.
-#
-# A failed build job leaves the other platforms' artifacts published and the
-# platform-independent ones unpublished until it is re-run; re-running it publishes only what
-# is missing. .github/tests/release.test.mjs holds this shape: the jobs, which step uploads
-# each artifact, and that a test-install precedes every publication.
+# Every run step is one phase of the job's justfile recipe (scripts/release_cd.py). The build
+# jobs do not wait on one another, and `publish` publishes nothing until all three have: a
+# failed build leaves the other platforms published and the platform-independent packages
+# unpublished until it is re-run, and a re-run sends only what is missing.
 #
 # llmlint: ignore-block[changed_behavior_has_e2e] Every run step below calls a recipe that .github/tests/release-cd.test.mjs drives on Linux against loopback registries; what is left is GitHub's own scheduling of these jobs on a published release, which a pre-publication dispatch cannot trigger.
 jobs:

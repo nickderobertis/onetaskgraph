@@ -66,6 +66,7 @@ PackageName = NewType("PackageName", str)
 # A release-targets.toml identifier, `<registry>:<name>`.
 ReleaseTargetId = NewType("ReleaseTargetId", str)
 RepositoryName = NewType("RepositoryName", str)
+AssetId = NewType("AssetId", int)
 Token = NewType("Token", str)
 PlanPlatform = Literal["linux", "macos", "windows", "independent"]
 BUILD_PLATFORMS = ("linux", "macos", "windows")
@@ -199,6 +200,36 @@ def staged_path(dist: Path, artifact: Artifact) -> Path:
             return dist / "python-sdk" / artifact.file
         case _:
             return dist / "independent" / artifact.file
+
+
+def source_digest(artifact: Artifact) -> str:
+    """The digest of what cargo or npm packs an unstaged artifact from at publication.
+
+    A crate is packed from its crate directory and the workspace's manifest and lock; a root
+    npm package from its package directory, the TypeScript SDK's from what the build made.
+    Recording it at build time is what lets a publication refuse a tree that moved since.
+    """
+    match artifact.registry, artifact.package:
+        case "crates", crate:
+            roots = [ROOT / "crates" / str(crate), ROOT / "Cargo.toml", ROOT / "Cargo.lock"]
+        case "npm", "@onetaskgraph/cli":
+            roots = [ROOT / "npm" / "cli"]
+        case "npm", _:
+            roots = [ROOT / "sdks" / "typescript" / "package.json", ROOT / "sdks" / "typescript" / "dist"]
+        case _:
+            raise ValueError(f"{artifact.file} is staged by the build, not packed at publication")
+    digest = hashlib.sha256()
+    for root in roots:
+        for path in sorted([root] if root.is_file() else (p for p in root.rglob("*") if p.is_file() and "target" not in p.relative_to(root).parts)):
+            digest.update(path.relative_to(ROOT).as_posix().encode() + b"\0" + path.read_bytes() + b"\0")
+    return digest.hexdigest()
+
+
+def artifact_digest(dist: Path, artifact: Artifact) -> str | None:
+    if artifact.staged:
+        path = staged_path(dist, artifact)
+        return sha256(path) if path.is_file() else None
+    return source_digest(artifact)
 
 
 def sha256(path: Path) -> str:
@@ -348,13 +379,10 @@ class BuildManifest:
 def write_manifest(dist: Path, platform: PlanPlatform, tag: ReleaseTag) -> None:
     entries = []
     for artifact in plan(platform, tag):
-        if not artifact.staged:
-            entries.append(artifact.record())
-            continue
-        path = staged_path(dist, artifact)
-        if not path.is_file():
-            fail(f"the build left no {path.relative_to(dist)}", "rerun the build; the release publishes exactly the files it stages")
-        entries.append({**artifact.record(), "sha256": sha256(path)})
+        digest = artifact_digest(dist, artifact)
+        if digest is None:
+            fail(f"the build left no {staged_path(dist, artifact).relative_to(dist)}", "rerun the build; the release publishes exactly the files it stages")
+        entries.append({**artifact.record(), "sha256": digest})
     manifest_path(dist, platform).write_text(json.dumps({"tag": tag, "platform": platform, "artifacts": entries}, indent=2) + "\n", encoding="utf-8")
 
 
@@ -392,13 +420,15 @@ def load_manifest(dist: Path, platform: PlanPlatform, tag: ReleaseTag) -> list[A
     if recorded.tag != tag or recorded.platform != platform:
         fail(f"{path} records a {recorded.platform} build of {recorded.tag}, not a {platform} build of {tag}", rebuild)
     artifacts = plan(platform, tag)
+    listed = [entry.file for entry in recorded.files]
+    if sorted(listed) != sorted(artifact.file for artifact in artifacts):
+        fail(f"{path} does not list exactly the files {platform} releases, each once", rebuild)
     by_file = {entry.file: entry for entry in recorded.files}
-    if sorted(by_file) != sorted(artifact.file for artifact in artifacts):
-        fail(f"{path} does not list exactly the files {platform} releases", rebuild)
     for artifact in artifacts:
         digest = by_file[artifact.file].sha256
-        if artifact.staged and (digest is None or not staged_path(dist, artifact).is_file() or sha256(staged_path(dist, artifact)) != digest):
-            fail(f"{staged_path(dist, artifact)} is not the file the build produced and installed", rebuild)
+        if digest is None or artifact_digest(dist, artifact) != digest:
+            what = staged_path(dist, artifact) if artifact.staged else f"the source {artifact.file} is packed from"
+            fail(f"{what} is not what the build produced", rebuild)
     return artifacts
 
 
@@ -423,7 +453,7 @@ def publish(platform: PlanPlatform, tag: ReleaseTag, dist: Path, registry: Regis
 
 @dataclass(frozen=True)
 class ReleaseAsset:
-    id: int
+    id: AssetId
     name: str
     size: int
     uploaded: bool
@@ -432,7 +462,7 @@ class ReleaseAsset:
     def parse(cls, value: object) -> "ReleaseAsset":
         if not isinstance(value, dict) or not isinstance(value.get("id"), int) or not isinstance(value.get("name"), str) or not isinstance(value.get("size"), int):
             raise ValueError(f"not a release asset: {value!r:.200}")
-        return cls(value["id"], value["name"], value["size"], value.get("state") == "uploaded")
+        return cls(AssetId(value["id"]), value["name"], value["size"], value.get("state") == "uploaded")
 
 
 @dataclass(frozen=True)
@@ -733,8 +763,8 @@ def _wheel_identity(path: Path, version: str) -> None:
             fields = email.parser.Parser().parsestr(packed.read(metadata).decode("utf-8", "replace"), headersonly=True)
     except (zipfile.BadZipFile, StopIteration, OSError) as error:
         fail(f"{path.name} as served is not a readable wheel: {error}", "re-run the build job that owns it")
-    if fields.get("Version") != version:
-        fail(f"{path.name} as served is version {fields.get('Version')}, not {version}", "re-run the build job that owns it")
+    if fields.get("Name") != CLI_DISTRIBUTION or fields.get("Version") != version:
+        fail(f"{path.name} as served is {fields.get('Name')} {fields.get('Version')}, not {CLI_DISTRIBUTION} {version}", "re-run the build job that owns it")
 
 
 def resolve_npm_package(package: str, version: str, directory: Path, row: PlatformTarget | None = None) -> None:

@@ -73,7 +73,6 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
                 raise ValueError('malformed wheel scripts were accepted by extraction')
         wheel_path.write_bytes(original_wheel)
         subprocess.run([PYTHON_EXECUTABLE, 'scripts/release-wheel-binary.py', '--wheels', str(wheels), '--binary', str(canonical)], cwd=tree, check=True, stdout=subprocess.DEVNULL)
-        # The packaging every build job runs, from this wheel: scripts/release_cd.py's own.
         package = [PYTHON_EXECUTABLE, 'scripts/release_cd.py', '--platform', selected.platform, 'package', '--tag', f'v{version}', '--dist', str(tree / 'dist')]
         subprocess.run(package, cwd=tree, check=True, stdout=subprocess.DEVNULL)
         command = [PYTHON_EXECUTABLE, 'scripts/verify-release-products.py', '--target', target, '--npm', selected.npm_platform, '--tag', f'v{version}', '--ext', selected.extension, '--dist', str(tree / 'dist')]
