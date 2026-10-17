@@ -60,10 +60,14 @@ import re
 from pathlib import Path
 
 driver = Path("scripts/release_cd.py").read_text(encoding="utf-8")
-body = re.search(r"(?ms)^def build_target\(.*?(?=^def )", driver)
-steps = ['"maturin", "build"', "scripts/release-wheel-binary.py", '"pack"', "scripts/verify-release-products.py"]
-found = [body.group(0).find(step) if body else -1 for step in steps]
-raise SystemExit(0 if body and all(index >= 0 for index in found) and found == sorted(found) and '"--install"' in body.group(0) else 1)
+build = re.search(r"(?ms)^def build_target\(.*?(?=^def )", driver)
+package = re.search(r"(?ms)^def package_target\(.*?(?=^def )", driver)
+if not build or not package:
+    raise SystemExit(1)
+in_order = lambda body, steps: all(body.find(step) >= 0 for step in steps) and [body.find(step) for step in steps] == sorted(body.find(step) for step in steps)
+built = in_order(build.group(0), ['"maturin", "build"', "package_target(row, tag, dist)", "scripts/verify-release-products.py", '"--install"'])
+packed = in_order(package.group(0), ["scripts/release-wheel-binary.py", "tarfile.open(archive", '"pack"'])
+raise SystemExit(0 if built and packed else 1)
 PY
 crate_body=$(sed -n '/^def publish_crates(/,/^def /p' scripts/release_cd.py)
 grep -Fq '"scripts/crate-publication-status.sh", crate, version_of(tag)' <<< "$crate_body" || fail "crate publication must decide from scripts/crate-publication-status.sh, which identifies the caller to crates.io"

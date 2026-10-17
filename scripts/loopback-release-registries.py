@@ -207,8 +207,8 @@ class Handler(BaseHTTPRequestHandler):
     def github_enterprise(self, path):
         """The forge reads release-plz makes of a repository URL on this host.
 
-        release-plz derives a GitHub Enterprise API root, `<host>/api/v3`, from any repository
-        URL that is not github.com's, so a journey points it here. It reads which pull
+        The pinned release tool derives a GitHub Enterprise API root, `<host>/api/v3`, from
+        any repository URL that is not github.com's, so a journey points it here. It reads which pull
         requests a commit belongs to; every answer is empty, and any write is refused.
         """
         self.record(registry="github", action="forge-read" if self.command == "GET" else "forge-write")
