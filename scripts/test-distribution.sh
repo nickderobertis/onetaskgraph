@@ -344,9 +344,8 @@ mkdir -p "$tmp/python-wheel"
 # One release build at a time: it links target/$target/release/onetaskgraph and then reads it,
 # and another run of this script at once — scripts:test's re-run of it beside
 # scripts:distribution-test, in one CI job — relinks that file in between.
-[ -r "$root/scripts/directory-lock.sh" ] && source "$root/scripts/directory-lock.sh" || { echo "distribution test could not load $root/scripts/directory-lock.sh; next: restore it with 'git checkout -- scripts/directory-lock.sh', then rerun" >&2; exit 1; }
-release_wheel() { (cd "$root" && uv tool run --from 'maturin>=1.9,<2' maturin build --release --locked --target "$target" --out "$tmp/python-wheel"); }
-with_directory_lock "$root/target/.test-distribution-release.lock" release_wheel
+[ -r "$root/scripts/file-lock.sh" ] && source "$root/scripts/file-lock.sh" || { echo "distribution test could not load $root/scripts/file-lock.sh; next: restore it with 'git checkout -- scripts/file-lock.sh', then rerun" >&2; exit 1; }
+(cd "$root" && with_file_lock "$root/target/.test-distribution-release.lock" uv tool run --from 'maturin>=1.9,<2' maturin build --release --locked --target "$target" --out "$tmp/python-wheel")
 "$python_bin" "$root/scripts/test-release-products.py" --wheel-dir "$tmp/python-wheel" --target "$target"
 cli_wheel=$(find "$tmp/python-wheel" -maxdepth 1 -type f -name 'onetaskgraph_cli-*.whl' -print -quit)
 [[ -n $cli_wheel ]] || { echo "Python CLI build produced no wheel; next: inspect the maturin package configuration" >&2; exit 1; }
