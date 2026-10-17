@@ -264,6 +264,41 @@ for arguments in "onetaskgraph-linear" "onetaskgraph-linear live" \
   [ "$LIVE_STATUS" -eq 2 ] && [ -z "$RECORDED" ] && grep -qF "usage: scripts/live-crate-test.sh" <<<"$LIVE_OUTPUT" \
     || fail "live-crate-test.sh ran '$arguments', which names no journey: exit $LIVE_STATUS, ran '$RECORDED'"
 done
+
+# Where test-linux runs the distribution journey under the relative interpreter, the real
+# check-relative-interpreter.sh runs the scripts it is given, or every one but that journey,
+# and clears the variable before any runs; and the journey hands itself to that check. The
+# scripts it runs are stand-ins that record their name and what they were given.
+under="ONETASKGRAPH_DISTRIBUTION_UNDER_RELATIVE_INTERPRETER"
+for script in test-distribution check-guard-path-spelling check-live-lane-selection; do
+  printf '#!/usr/bin/env bash\necho "%s ${%s:-cleared}" >>"$INTERPRETER_RECORD"\n' "$script" "$under" \
+    >"$REPO/scripts/$script.sh"
+done
+relative_check() {
+  : >"$scratch/interpreter-record"
+  (cd "$REPO" && INTERPRETER_RECORD="$scratch/interpreter-record" bash scripts/check-relative-interpreter.sh "$@") \
+    >/dev/null 2>&1 && INTERPRETER_STATUS=0 || INTERPRETER_STATUS=$?
+  INTERPRETED="$(tr '\n' ' ' <"$scratch/interpreter-record")"
+}
+ONETASKGRAPH_DISTRIBUTION_UNDER_RELATIVE_INTERPRETER=1 relative_check
+[ "$INTERPRETER_STATUS" -eq 0 ] && [ "$INTERPRETED" = "check-guard-path-spelling cleared check-live-lane-selection cleared " ] \
+  || fail "under the relative interpreter, check-relative-interpreter.sh ran '$INTERPRETED' (exit $INTERPRETER_STATUS), not every script but the distribution journey"
+ONETASKGRAPH_DISTRIBUTION_UNDER_RELATIVE_INTERPRETER=1 relative_check scripts/test-distribution.sh
+[ "$INTERPRETER_STATUS" -eq 0 ] && [ "$INTERPRETED" = "test-distribution cleared " ] \
+  || fail "check-relative-interpreter.sh given the distribution journey ran '$INTERPRETED' (exit $INTERPRETER_STATUS)"
+relative_check
+[ "$INTERPRETER_STATUS" -eq 0 ] && [ "$INTERPRETED" = "test-distribution cleared check-guard-path-spelling cleared check-live-lane-selection cleared " ] \
+  || fail "elsewhere, check-relative-interpreter.sh ran '$INTERPRETED' (exit $INTERPRETER_STATUS), not all three"
+relative_check scripts/no-such-script.sh
+[ "$INTERPRETER_STATUS" -ne 0 ] && [ -z "$INTERPRETED" ] \
+  || fail "check-relative-interpreter.sh given a script that is not there ran '$INTERPRETED' (exit $INTERPRETER_STATUS)"
+git -C "$REPO" checkout --quiet -- scripts/test-distribution.sh
+printf '#!/usr/bin/env bash\necho "check $*" >>"$INTERPRETER_RECORD"\n' >"$REPO/scripts/check-relative-interpreter.sh"
+: >"$scratch/interpreter-record"
+(cd "$REPO" && INTERPRETER_RECORD="$scratch/interpreter-record" ONETASKGRAPH_DISTRIBUTION_UNDER_RELATIVE_INTERPRETER=1 \
+  bash scripts/test-distribution.sh) >/dev/null 2>&1 || true
+[ "$(cat "$scratch/interpreter-record")" = "check scripts/test-distribution.sh" ] \
+  || fail "the distribution journey under the relative interpreter did not hand itself to check-relative-interpreter.sh: $(cat "$scratch/interpreter-record")"
 git -C "$REPO" checkout --quiet -- .
 
 record_targets
@@ -367,6 +402,30 @@ for actions in true ""; do
   expect "test-linux with $CHANGED:coverage failing, $mode" ran "scripts:distribution-test"
   grep -qE "^ci-job: test-linux: nx affected -t test-uncovered coverage( --exclude=[^ ]+)? failed" <<<"$OUTPUT" \
     || fail "test-linux with $CHANGED:coverage failing, $mode: the recipe did not name the phase that failed"
+done
+
+# 3a. test-linux runs the distribution journey under the relative interpreter, and test-macos
+#     plainly, so every pull request still runs it both ways.
+git -C "$REPO" checkout --quiet -- .
+git -C "$REPO" reset --quiet --hard "$BASE"
+record_targets
+"$PYTHON" - "$REPO/scripts/project.json" "$scratch" <<'PY2'
+import json, sys
+path, scratch = sys.argv[1], sys.argv[2]
+project = json.load(open(path, encoding="utf-8"))
+project["targets"]["distribution-test"]["options"] = {
+    "command": f"echo ${{ONETASKGRAPH_DISTRIBUTION_UNDER_RELATIVE_INTERPRETER:-plain}} >{scratch}/distribution-path"
+}
+json.dump(project, open(path, "w", encoding="utf-8"), indent=2)
+PY2
+git -C "$REPO" commit --quiet --no-verify -am "test: record how the distribution journey runs"
+for job in test-linux test-macos; do
+  rm -f "$scratch/distribution-path"
+  recipe "ci-$job"
+  expect_status "$job recording how the distribution journey runs" 0
+  case "$job" in test-linux) expected=1 ;; *) expected=plain ;; esac
+  [ "$(cat "$scratch/distribution-path" 2>/dev/null)" = "$expected" ] \
+    || fail "$job ran the distribution journey as '$(cat "$scratch/distribution-path" 2>/dev/null)', not '$expected'"
 done
 
 # 3b. Where coverage records the budgets' telemetry, `budgets` is judged after it, and without

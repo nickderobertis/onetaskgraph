@@ -57,6 +57,12 @@ case "$JOB" in
     # And the live crates' `test` runs only their credentialed journeys, coverage running the
     # rest of them, as it does every tagged crate's (scripts/live-crate-test.sh).
     export ONETASKGRAPH_TESTS_UNDER_COVERAGE=1
+    # And on Linux the distribution journey runs once, under the relative interpreter
+    # scripts:test's check-relative-interpreter.sh would otherwise run it under a second time;
+    # test-macos and test-windows run it plainly, so every pull request still does both.
+    if [ "$JOB" = test-linux ]; then
+      export ONETASKGRAPH_DISTRIBUTION_UNDER_RELATIVE_INTERPRETER=1
+    fi
     # Work that would queue behind a long phase gets one of its own: the two Linear crates,
     # whose credentialed journeys take one seat and so run one at a time, and the SDKs'
     # coverage, which would otherwise wait for every crate's.

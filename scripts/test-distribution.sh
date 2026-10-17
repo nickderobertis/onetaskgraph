@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# In test-linux this journey runs once, under the relative interpreter
+# scripts/check-relative-interpreter.sh simulates, rather than once plainly and once again
+# under that check; its plain-PATH run is test-macos's and test-windows's (scripts/ci-job.sh).
+if [ "${ONETASKGRAPH_DISTRIBUTION_UNDER_RELATIVE_INTERPRETER:-}" = 1 ]; then
+  exec bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/check-relative-interpreter.sh" scripts/test-distribution.sh
+fi
 report_failure() {
   echo "distribution setup failed at line $2 (exit $1): $3; next: rerun scripts/test-distribution.sh and fix that command" >&2
 }
