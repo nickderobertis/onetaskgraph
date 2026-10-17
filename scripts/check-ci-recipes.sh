@@ -344,7 +344,7 @@ for actions in true ""; do
   GITHUB_ACTIONS="$actions" recipe ci-test-linux
   expect_status "test-linux with $CHANGED:coverage failing, $mode" 1
   expect "test-linux with $CHANGED:coverage failing, $mode" ran "scripts:distribution-test"
-  grep -qF "ci-job: test-linux: nx affected -t test-uncovered coverage failed" <<<"$OUTPUT" \
+  grep -qE "^ci-job: test-linux: nx affected -t test-uncovered coverage( --exclude=[^ ]+)? failed" <<<"$OUTPUT" \
     || fail "test-linux with $CHANGED:coverage failing, $mode: the recipe did not name the phase that failed"
 done
 

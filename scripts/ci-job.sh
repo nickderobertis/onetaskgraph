@@ -54,8 +54,13 @@ run workspace:deny -"
     # And the live crates' `test` runs only their credentialed journeys, coverage running the
     # rest of them, as it does every tagged crate's (scripts/live-crate-test.sh).
     export ONETASKGRAPH_TESTS_UNDER_COVERAGE=1
-    phases="affected test,budgets tag:test-in-coverage:*
-affected test-uncovered,coverage -
+    # Each phase runs beside the others, so work that would queue behind a long one gets a
+    # phase of its own: the two Linear crates, whose credentialed journeys take one seat and so
+    # run one at a time, and the SDKs' coverage, which would otherwise wait for every crate's.
+    phases="affected test,budgets tag:test-in-coverage:*,onetaskgraph-linear,onetaskgraph-linear-e2e
+affected test,budgets *,!onetaskgraph-linear,!onetaskgraph-linear-e2e
+affected test-uncovered,coverage tag:layer:sdk
+affected coverage *,!tag:layer:sdk
 run scripts:distribution-check -
 run scripts:distribution-test -"
     ;;

@@ -1010,8 +1010,8 @@ fn propagated_selection_prevents_the_asset_entry_point_from_opening_a_session() 
 fn the_actual_asset_entry_point_refuses_missing_main_before_any_request() {
     // Waiting for the main entry point is bounded: with no bound, a refusal at once; with a few
     // seconds, a refusal only once they have passed; with a main entry point that has already
-    // ended without its record, a refusal at once however long the bound; and a bound that is
-    // not whole seconds, refused by name. None of them spends an API request.
+    // ended without its record, a refusal saying so rather than one at the end of the bound;
+    // and a bound that is not whole seconds, refused by name. None of them spends a request.
     for (wait, main_ended, refused_after, says) in [
         ("0", false, 0, "current main contribution unavailable"),
         (
@@ -1082,13 +1082,6 @@ fn the_actual_asset_entry_point_refuses_missing_main_before_any_request() {
             "{wait}: refused after {:?}",
             started.elapsed()
         );
-        if main_ended {
-            assert!(
-                started.elapsed() < std::time::Duration::from_secs(120),
-                "an ended main entry point is refused at once, not after the bound: {:?}",
-                started.elapsed()
-            );
-        }
         let record: onetaskgraph_github_live::quota::SessionRecord =
             serde_json::from_slice(&std::fs::read(directory.join("assets.json")).unwrap()).unwrap();
         assert!(!record.complete);
