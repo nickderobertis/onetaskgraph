@@ -7,9 +7,9 @@
 # builds from this tree with maturin so a contributor's `uv run onetaskgraph` runs it. CI's
 # pull-request jobs set ONETASKGRAPH_SDK_WITHOUT_CLI=1 and leave that copy out, with
 # UV_NO_SYNC=1 so no later `uv run` installs it after all: nothing they run spawns it — the
-# SDK's tests and every other spawner run target/debug's, and the distribution journey installs
-# the SDK beside the CLI wheel it builds — and building it was three to four and a half
-# minutes of macOS's and Windows' setup.
+# SDK's tests and every other spawner run onetaskgraph:build's, and the distribution journey
+# installs the SDK beside the CLI wheel it builds — and building it was three to four and a
+# half minutes of macOS's and Windows' setup.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/../sdks/python"
