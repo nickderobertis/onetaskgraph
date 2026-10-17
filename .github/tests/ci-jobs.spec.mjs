@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 import { parse } from "yaml";
-import { graph } from "../workflow-graph.mjs";
+import { graph, readSet } from "../workflow-graph.mjs";
 
 // The pull request's four jobs, read from the workflow files exactly as GitHub reads them.
-// Its inputs are .github alone (the github-workflows project's `ci-jobs` target), so a change
-// anywhere in this directory re-runs it and nothing outside does.
+// Its inputs (the github-workflows project's `ci-jobs` target) are this directory and the files
+// outside it the run graph reads, so a change to any of them re-runs it and nothing else does.
 const directory = new URL("../workflows/", import.meta.url);
 
 function definitions() {
@@ -341,4 +341,21 @@ test("a cache key omitting the lockfile or the pinned tool version it depends on
       with: { path: "target", key: `target-\${{ runner.os }}` },
     });
   }, /caches target, whose inputs no rule here states/);
+});
+
+test("the spec's cached target is keyed on every file outside .github the run graph reads", () => {
+  const project = JSON.parse(readFileSync(new URL("../project.json", import.meta.url), "utf8"));
+  const inputs = project.targets["ci-jobs"].inputs;
+  const outside = readSet().filter((path) => !path.startsWith(".github/"));
+  assert.ok(
+    outside.length > 0,
+    "the run graph reads nothing outside .github, so this proves nothing",
+  );
+  for (const path of outside)
+    assert.ok(inputs.includes(`{workspaceRoot}/${path}`), `ci-jobs is not keyed on ${path}`);
+  for (const input of inputs.filter((entry) => entry.startsWith("{workspaceRoot}/")))
+    assert.ok(
+      outside.includes(input.slice("{workspaceRoot}/".length)),
+      `ci-jobs is keyed on ${input}, which the run graph does not read`,
+    );
 });

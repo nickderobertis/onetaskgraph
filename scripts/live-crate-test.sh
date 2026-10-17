@@ -36,8 +36,20 @@ for value in "$CRATE" "$BINARY" "$JOURNEY" ${also_build:+"$also_build"}; do
   esac
 done
 
+run_journey() {
+  # `--exact` with a name nothing holds runs no test and passes, so the journey is found first.
+  local listed
+  listed="$(cargo test --quiet -p "$CRATE" --all-features --locked --test "$BINARY" -- --exact "$JOURNEY" --list)" || exit
+  if ! grep -qxF "$JOURNEY: test" <<<"$listed"; then
+    echo "live-crate-test: $CRATE's \`$BINARY\` test binary holds no test named $JOURNEY, so nothing credentialed would run." >&2
+    echo "live-crate-test: next: name the credentialed journey its project.json's test target runs as it is spelled in tests/." >&2
+    exit 2
+  fi
+  exec cargo test --quiet -p "$CRATE" --all-features --locked --test "$BINARY" -- --exact "$JOURNEY"
+}
+
 case "${ONETASKGRAPH_TESTS_UNDER_COVERAGE:-}" in
-  1) exec cargo test --quiet -p "$CRATE" --all-features --locked --test "$BINARY" -- --exact "$JOURNEY" ;;
+  1) run_journey ;;
   "") ;;
   *)
     echo "live-crate-test: ONETASKGRAPH_TESTS_UNDER_COVERAGE is '$ONETASKGRAPH_TESTS_UNDER_COVERAGE'; it is 1 or unset." >&2

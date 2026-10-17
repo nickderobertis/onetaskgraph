@@ -253,8 +253,9 @@ export function validateEventInventory(inventory, definitions = workflows()) {
     }
   }
 }
-export function digest() {
-  const files = [
+// Every file the run graph and its telemetry read, from the repository root.
+export function readSet() {
+  return [
     "release-targets.toml",
     "screencomp.toml",
     "scripts/product_versions.py",
@@ -266,9 +267,11 @@ export function digest() {
     ...readdirSync(new URL(".github/reusable/", root)).map((p) => `.github/reusable/${p}`),
     ...readdirSync(new URL(".github/tests/", root)).map((p) => `.github/tests/${p}`),
   ];
+}
+export function digest() {
   return createHash("sha256")
     .update(
-      files
+      readSet()
         .sort()
         .map((p) => `${p}\0${read(p)}`)
         .join("\0"),

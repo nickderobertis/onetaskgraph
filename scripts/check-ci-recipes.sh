@@ -236,7 +236,15 @@ tag_refused "a live crate's test target running cargo beside the script" "every 
 
 # The script itself, driven with a stand-in cargo that records each invocation and runs nothing.
 mkdir -p "$scratch/recorded-cargo"
-printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >>"$CARGO_RECORD"\n' >"$scratch/recorded-cargo/cargo"
+# Asked to list, it answers with the test it was asked for, unless CARGO_LISTS_NOTHING is set.
+cat >"$scratch/recorded-cargo/cargo" <<'CARGO'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$CARGO_RECORD"
+if [ "${*: -1}" = --list ] && [ -z "${CARGO_LISTS_NOTHING:-}" ]; then
+  arguments=("$@")
+  echo "${arguments[$#-2]}: test"
+fi
+CARGO
 chmod +x "$scratch/recorded-cargo/cargo"
 live_crate_test() {
   : >"$scratch/cargo-record"
@@ -246,8 +254,13 @@ live_crate_test() {
 }
 ONETASKGRAPH_TESTS_UNDER_COVERAGE=1 live_crate_test onetaskgraph-linear-e2e e2e \
   linear_assets::live_disposable_issue_and_document_assets_copy_and_recopy
-[ "$LIVE_STATUS" -eq 0 ] && [ "$RECORDED" = "test --quiet -p onetaskgraph-linear-e2e --all-features --locked --test e2e -- --exact linear_assets::live_disposable_issue_and_document_assets_copy_and_recopy" ] \
+[ "$LIVE_STATUS" -eq 0 ] && [ "$RECORDED" = "test --quiet -p onetaskgraph-linear-e2e --all-features --locked --test e2e -- --exact linear_assets::live_disposable_issue_and_document_assets_copy_and_recopy --list
+test --quiet -p onetaskgraph-linear-e2e --all-features --locked --test e2e -- --exact linear_assets::live_disposable_issue_and_document_assets_copy_and_recopy" ] \
   || fail "where coverage stands in, live-crate-test.sh ran '$RECORDED' (exit $LIVE_STATUS), not the credentialed journey alone"
+CARGO_LISTS_NOTHING=1 ONETASKGRAPH_TESTS_UNDER_COVERAGE=1 live_crate_test onetaskgraph-linear-e2e e2e \
+  linear_assets::not_a_journey
+[ "$LIVE_STATUS" -eq 2 ] && [ "$(wc -l <<<"$RECORDED")" -eq 1 ] && grep -qF "holds no test named" <<<"$LIVE_OUTPUT" \
+  || fail "live-crate-test.sh ran a journey its test binary does not hold: exit $LIVE_STATUS, ran '$RECORDED'"
 ONETASKGRAPH_TESTS_UNDER_COVERAGE= live_crate_test onetaskgraph-github-projects-e2e live \
   disposable_task_and_document_asset_copies --also-build onetaskgraph-github-projects
 [ "$LIVE_STATUS" -eq 0 ] && [ "$RECORDED" = "test --quiet -p onetaskgraph-github-projects --all-features --locked --no-run

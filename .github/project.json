@@ -60,10 +60,14 @@
       "inputs": [
         "{projectRoot}/**/*",
         "!{projectRoot}/node_modules/**/*",
-        "!{projectRoot}/.telemetry/**/*"
+        "!{projectRoot}/.telemetry/**/*",
+        "{workspaceRoot}/release-targets.toml",
+        "{workspaceRoot}/screencomp.toml",
+        "{workspaceRoot}/scripts/product_versions.py",
+        "{workspaceRoot}/scripts/release_products.py"
       ],
       "cache": true,
-      "//": "The pull request's four jobs, today's required contexts and every cache key, read from the workflow files. Its inputs are this directory alone: nothing outside .github can change what it reads."
+      "//": "The pull request's four jobs, today's required contexts and every cache key, read from the workflow files and the run graph workflow-graph.mjs resolves from them. Its inputs are this directory and the files outside it that readSet() there names; the spec refuses the two parting."
     },
     "test": {
       "executor": "nx:run-commands",
