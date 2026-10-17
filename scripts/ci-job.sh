@@ -5,8 +5,9 @@
 #
 # Each of ci.yml's four jobs runs exactly one `just ci-<job>` recipe, and each recipe is this
 # script, so a contributor runs what CI runs. A job is a list of phases, each one Nx
-# invocation. A phase that fails prints the whole of Nx's output, and the job ends with one
-# line naming every task it ran. `--select-only` runs nothing and ends with one line naming
+# invocation. A phase that fails prints the whole of Nx's output (in Actions every phase's
+# streams, one collapsed group per task), and the job ends with one line naming every task
+# it ran. `--select-only` runs nothing and ends with one line naming
 # every task the job selects, which is how a host that is not Windows or macOS proves those
 # jobs' selection.
 #
@@ -135,10 +136,21 @@ while IFS=' ' read -r kind targets excluded; do
     continue
   fi
   [ -n "$plan" ] || continue
-  if FORCE_COLOR=0 NO_COLOR=1 node_modules/.bin/nx "${arguments[@]}" --outputStyle=static >"$scratch/run.log" 2>&1; then
+  # In Actions the output streams, each task in the collapsed group Nx opens for it there, so a
+  # job the timeout cuts short still shows how far it got; elsewhere it is held until the
+  # phase ends.
+  if [ "${GITHUB_ACTIONS:-}" = true ]; then
+    FORCE_COLOR=0 NO_COLOR=1 node_modules/.bin/nx "${arguments[@]}" --outputStyle=static 2>&1 \
+      | tee "$scratch/run.log"
+    phase_status="${PIPESTATUS[0]}"
+  else
+    FORCE_COLOR=0 NO_COLOR=1 node_modules/.bin/nx "${arguments[@]}" --outputStyle=static \
+      >"$scratch/run.log" 2>&1 && phase_status=0 || phase_status=$?
+  fi
+  if [ "$phase_status" -eq 0 ]; then
     sed -n 's/^.*> nx run \([^ ]*\).*$/\1/p' "$scratch/run.log" | tr -d '\r' >>"$scratch/ran"
   else
-    cat "$scratch/run.log" >&2
+    [ "${GITHUB_ACTIONS:-}" = true ] || cat "$scratch/run.log" >&2
     echo "ci-job: $JOB: nx ${arguments[*]} failed — the failing tasks are named above." >&2
     echo "ci-job: next: run 'just ci-$JOB' again after fixing them; every phase still runs, so one report names every failure." >&2
     status=1

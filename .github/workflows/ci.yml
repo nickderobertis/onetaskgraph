@@ -493,8 +493,12 @@ jobs:
         with:
           enable-cache: true
       # Reads rust-toolchain.toml; its built-in cache keys `target` and the cargo registry on
-      # Cargo.lock, the toolchain and the OS, and cargo's fingerprints refuse a stale unit.
+      # Cargo.lock, the toolchain and the OS, and cargo's fingerprints refuse a stale unit. An
+      # entry is never re-saved under its key, and this job's first was saved by a run that
+      # failed in Bootstrap, holding no build; `cache-key` starts it afresh.
       - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache-key: lint-afresh
       # cargo-binstall is what makes scripts/scoped-release-plz.sh download release-plz rather
       # than build it from source, which was most of a cold Bootstrap.
       - uses: taiki-e/install-action@v2
@@ -642,7 +646,8 @@ jobs:
         with:
           enable-cache: true
       # Reads rust-toolchain.toml; its built-in cache keys `target` and the cargo registry on
-      # Cargo.lock, the toolchain and the OS, and cargo's fingerprints refuse a stale unit.
+      # Cargo.lock, the toolchain and the OS, and cargo's fingerprints refuse a stale unit. A
+      # run cut short by the timeout still saves what it built, which the next run starts from.
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         if: steps.release.outputs.tests == 'run'
       # cargo-binstall is what makes scripts/scoped-release-plz.sh download release-plz rather
@@ -751,7 +756,8 @@ jobs:
         with:
           enable-cache: true
       # Reads rust-toolchain.toml; its built-in cache keys `target` and the cargo registry on
-      # Cargo.lock, the toolchain and the OS, and cargo's fingerprints refuse a stale unit.
+      # Cargo.lock, the toolchain and the OS, and cargo's fingerprints refuse a stale unit. A
+      # run cut short by the timeout still saves what it built, which the next run starts from.
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         if: steps.release.outputs.tests == 'run'
       # cargo-binstall is what makes scripts/scoped-release-plz.sh download release-plz rather
@@ -849,7 +855,8 @@ jobs:
         with:
           enable-cache: true
       # Reads rust-toolchain.toml; its built-in cache keys `target` and the cargo registry on
-      # Cargo.lock, the toolchain and the OS, and cargo's fingerprints refuse a stale unit.
+      # Cargo.lock, the toolchain and the OS, and cargo's fingerprints refuse a stale unit. A
+      # run cut short by the timeout still saves what it built, which the next run starts from.
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         if: steps.release.outputs.tests == 'run'
       # cargo-binstall is what makes scripts/scoped-release-plz.sh download release-plz rather
