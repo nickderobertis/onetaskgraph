@@ -829,17 +829,26 @@ def _archive_holds_binary(archive: bytes, row: PlatformTarget) -> None:
 
 
 def _wheel_identity(path: Path, version: str, row: PlatformTarget) -> None:
+    """The wheel as served: one identity, this release's, tagged for this platform, carrying its binary."""
+    planned = next(artifact for artifact in plan(row.platform, ReleaseTag(f"v{version}")) if artifact.kind == "wheel" and artifact.target == row.target)
     try:
         with zipfile.ZipFile(path) as packed:
-            names = packed.namelist()
-            metadata = next(name for name in names if name.endswith(".dist-info/METADATA"))
-            fields = email.parser.Parser().parsestr(packed.read(metadata).decode("utf-8", "replace"), headersonly=True)
-    except (zipfile.BadZipFile, StopIteration, OSError) as error:
+            entries = packed.infolist()
+            read = lambda suffix: [packed.read(entry).decode("utf-8", "replace") for entry in entries if entry.filename.endswith(suffix)]
+            metadata, wheel = read(".dist-info/METADATA"), read(".dist-info/WHEEL")
+    except (zipfile.BadZipFile, OSError) as error:
         fail(f"{path.name} as served is not a readable wheel: {error}", "re-run the build job that owns it")
-    if fields.get("Name") != CLI_DISTRIBUTION or fields.get("Version") != version:
-        fail(f"{path.name} as served is {fields.get('Name')} {fields.get('Version')}, not {CLI_DISTRIBUTION} {version}", "re-run the build job that owns it")
-    if not any(name.endswith(f".data/scripts/{binary_name(row)}") for name in names):
-        fail(f"{path.name} as served carries no {binary_name(row)}", f"re-run build-{row.platform}, which publishes it")
+    if len(metadata) != 1 or len(wheel) != 1:
+        fail(f"{path.name} as served has {len(metadata)} METADATA and {len(wheel)} WHEEL files, not one each", f"re-run build-{row.platform}, which publishes it")
+    fields = email.parser.Parser().parsestr(metadata[0], headersonly=True)
+    tags = [line.removeprefix("Tag: ") for line in wheel[0].splitlines() if line.startswith("Tag: ")]
+    if fields.get_all("Name") != [CLI_DISTRIBUTION] or fields.get_all("Version") != [version]:
+        fail(f"{path.name} as served is {fields.get_all('Name')} {fields.get_all('Version')}, not {CLI_DISTRIBUTION} {version}", "re-run the build job that owns it")
+    if tags != list(planned.wheel_tags):
+        fail(f"{path.name} as served is tagged {tags}, not {list(planned.wheel_tags)}", f"re-run build-{row.platform}, which publishes it")
+    binaries = [entry for entry in entries if entry.filename.endswith(f".data/scripts/{binary_name(row)}")]
+    if len(binaries) != 1 or binaries[0].is_dir() or ((binaries[0].external_attr >> 16) & 0o170000) not in (0, 0o100000):
+        fail(f"{path.name} as served carries no {binary_name(row)} it could install", f"re-run build-{row.platform}, which publishes it")
 
 
 def resolve_npm_package(package: str, version: str, directory: Path, row: PlatformTarget | None = None) -> None:

@@ -1064,3 +1064,67 @@ test("the driver refuses a registry address it would send a token to, and a publ
     [],
   );
 });
+
+test("a build refuses another tag's release, and a wheel or npm package named otherwise than the plan", {
+  skip,
+}, () => {
+  const other = recipe("linux", [
+    "build",
+    "--tag",
+    "v9.8.7",
+    "--dist",
+    join(scratch, "dist-other-tag"),
+  ]);
+  assert.equal(other.status, 1, other.output);
+  assert.match(other.output, /the tree is not at the release version 9\.8\.7/);
+  assert.ok(!existsSync(join(scratch, "dist-other-tag", "release-linux.json")));
+  // The packaging half over stand-in wheels, in a copy of the scripts and carrier manifests,
+  // so the checkout's own built binary is never replaced by a stand-in.
+  const tree = join(scratch, "package-tree");
+  mkdirSync(tree);
+  for (const directory of ["scripts", "npm"])
+    execFileSync("cp", ["-R", join(checkout, directory), tree]);
+  const wheelFor = (planTag, name) => {
+    const directory = join(tree, `dist-${planTag}`, "wheels/x86_64-unknown-linux-gnu");
+    mkdirSync(directory, { recursive: true });
+    execFileSync("python3", [
+      "-c",
+      "import sys, zipfile\nwith zipfile.ZipFile(sys.argv[1], 'w') as packed:\n    packed.writestr('cli.data/scripts/onetaskgraph', b'stand-in')",
+      join(directory, name),
+    ]);
+    return join(tree, `dist-${planTag}`);
+  };
+  const planned = plan("linux").find((artifact) => artifact.kind === "wheel").file;
+  for (const [name, planTag, wheel, reason] of [
+    [
+      "a wheel maturin tagged otherwise",
+      tag,
+      planned.replace("manylinux_2_39", "manylinux_2_40"),
+      /maturin built .*manylinux_2_40.*, where the release publishes .*manylinux_2_39/,
+    ],
+    [
+      "an npm package at another version than the release",
+      "v9.8.7",
+      plan("linux", "v9.8.7").find((artifact) => artifact.kind === "wheel").file,
+      /npm packed .*onetaskgraph-cli-linux-x64-[\d.]+\.tgz.*, where the release publishes onetaskgraph-cli-linux-x64-9\.8\.7\.tgz/,
+    ],
+  ]) {
+    const result = spawnSync(
+      "python3",
+      [
+        "scripts/release_cd.py",
+        "--platform",
+        "linux",
+        "package",
+        "--tag",
+        planTag,
+        "--dist",
+        wheelFor(planTag, wheel),
+      ],
+      { cwd: tree, encoding: "utf8" },
+    );
+    assert.equal(result.status, 1, `${name}:\n${result.stdout}${result.stderr}`);
+    assert.match(result.stderr, reason, name);
+    assert.match(result.stderr, /release-cd: next: /, name);
+  }
+});
