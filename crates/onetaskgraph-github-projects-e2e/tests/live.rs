@@ -1015,33 +1015,20 @@ fn propagated_selection_prevents_the_asset_entry_point_from_opening_a_session() 
 #[test]
 fn the_actual_asset_entry_point_refuses_missing_main_before_any_request() {
     // Waiting for the main entry point is bounded: with no bound, a refusal at once; with a few
-    // seconds, a refusal only once they have passed; with a main entry point that has already
-    // ended without its record, a refusal saying so rather than one at the end of the bound;
-    // a bound that is not whole seconds, and one past any deadline the clock holds, each refused
-    // by name. None of them spends a request, and each leaves the entry point marked ended.
-    for (wait, main_ended, refused_after, says) in [
-        ("0", false, 0, "current main contribution unavailable"),
-        (
-            "3",
-            false,
-            3,
-            "3 seconds after this entry point began waiting",
-        ),
-        (
-            "600",
-            true,
-            0,
-            "the main entry point ended without completing it",
-        ),
+    // seconds, a refusal only once they have passed; a bound that is not whole seconds, and one
+    // past any deadline the clock holds, each refused by name. None of them spends a request,
+    // and each leaves the entry point marked ended. A main entry point that ended without its
+    // record is live_pair.rs's, which runs one.
+    for (wait, refused_after, says) in [
+        ("0", 0, "current main contribution unavailable"),
+        ("3", 3, "3 seconds after this entry point began waiting"),
         (
             "soon",
-            false,
             0,
             "GITHUB_LIVE_MAIN_WAIT_SECONDS must be whole seconds",
         ),
         (
             "18446744073709551615",
-            false,
             0,
             "past any deadline this clock holds",
         ),
@@ -1049,16 +1036,6 @@ fn the_actual_asset_entry_point_refuses_missing_main_before_any_request() {
         let sandbox = Sandbox::new();
         let directory = sandbox.subdirectory("session");
         std::fs::create_dir_all(&directory).unwrap();
-        if main_ended {
-            std::fs::write(
-                journey::quota::ended_marker(
-                    &directory,
-                    onetaskgraph_github_live::quota::EntryPoint::Main,
-                ),
-                b"",
-            )
-            .unwrap();
-        }
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let host = format!("http://{}", listener.local_addr().unwrap());
         drop(listener);

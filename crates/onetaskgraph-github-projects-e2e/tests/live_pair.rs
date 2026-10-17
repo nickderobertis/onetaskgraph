@@ -4,10 +4,67 @@ use onetaskgraph_github_live::quota::{
     reference_workload,
 };
 use std::{
+    io::{Read as _, Write as _},
+    net::{Shutdown, TcpListener, TcpStream},
     path::PathBuf,
     process::{Command, Stdio},
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
+
+/// A loopback relay in front of the fixture for one entry point: every byte it carries goes
+/// both ways unchanged, and it notes when it first accepted a connection and when it last
+/// carried a byte, so which entry point spoke to the fixture when is read off the wire.
+struct Relay {
+    origin: String,
+    first: Arc<Mutex<Option<Instant>>>,
+    last: Arc<Mutex<Option<Instant>>>,
+}
+
+impl Relay {
+    fn to(upstream: &str) -> Self {
+        let upstream = upstream
+            .strip_prefix("http://")
+            .expect("the fixture listens on plain HTTP")
+            .to_owned();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let first = Arc::new(Mutex::new(None));
+        let last = Arc::new(Mutex::new(None));
+        let (accepted, carried) = (first.clone(), last.clone());
+        std::thread::spawn(move || {
+            for client in listener.incoming() {
+                let Ok(client) = client else { return };
+                accepted.lock().unwrap().get_or_insert_with(Instant::now);
+                // A fixture already gone refuses the connection, as it would unrelayed.
+                let Ok(server) = TcpStream::connect(&upstream) else {
+                    continue;
+                };
+                for (mut from, mut into) in [
+                    (client.try_clone().unwrap(), server.try_clone().unwrap()),
+                    (server, client),
+                ] {
+                    let carried = carried.clone();
+                    std::thread::spawn(move || {
+                        let mut buffer = [0; 16 * 1024];
+                        while let Ok(read) = from.read(&mut buffer) {
+                            if read == 0 || into.write_all(&buffer[..read]).is_err() {
+                                break;
+                            }
+                            *carried.lock().unwrap() = Some(Instant::now());
+                        }
+                        let _ = into.shutdown(Shutdown::Write);
+                    });
+                }
+            }
+        });
+        Self {
+            origin,
+            first,
+            last,
+        }
+    }
+}
 
 fn executable(package: &str, target: &str) -> PathBuf {
     let directory = std::env::current_exe()
@@ -152,13 +209,25 @@ fn run_pair(scenario: &str) {
     let endpoint = std::fs::read_to_string(&ready).unwrap();
     let host = endpoint.strip_suffix("/graphql").unwrap();
     let revision = "a".repeat(40);
+    // Each entry point reaches the fixture through a relay of its own: main for everything it
+    // sends, and the asset entry point for its REST requests, the first of which is the
+    // allowance read that follows its wait. Its GraphQL goes straight to the fixture, whose
+    // attachment URLs name the origin it is reached at.
+    let relays = [Relay::to(host), Relay::to(host)];
     let entry_point = |package: &str, test: &str| {
+        let assets = package == "onetaskgraph-github-projects-e2e";
+        let relay = &relays[usize::from(assets)];
+        let graphql = if assets {
+            endpoint.clone()
+        } else {
+            format!("{}/graphql", relay.origin)
+        };
         let mut command = Command::new(executable(package, "live"));
         command
             .args([test, "--exact", "--nocapture"])
             .env("GITHUB_LIVE_SELECTION", "run")
-            .env("GITHUB_LIVE_TEST_GRAPHQL", &endpoint)
-            .env("GITHUB_LIVE_TEST_REST", host)
+            .env("GITHUB_LIVE_TEST_GRAPHQL", graphql)
+            .env("GITHUB_LIVE_TEST_REST", &relay.origin)
             .env("GH_PROJECTS_TOKEN", "test-token")
             .env("GH_PROJECTS_OWNER", "octo-org")
             .env("GH_PROJECTS_NUMBER", "7")
@@ -193,7 +262,6 @@ fn run_pair(scenario: &str) {
         }
     }
     let mut outputs = Vec::new();
-    let mut main_ran = Duration::ZERO;
     for (package, test) in [
         (
             "onetaskgraph-github-projects",
@@ -204,7 +272,6 @@ fn run_pair(scenario: &str) {
             "disposable_task_and_document_asset_copies",
         ),
     ] {
-        let ran = Instant::now();
         let output = if package == "onetaskgraph-github-projects-e2e"
             && let Some(asset) = waiting.take()
         {
@@ -212,9 +279,6 @@ fn run_pair(scenario: &str) {
         } else {
             entry_point(package, test).output().unwrap()
         };
-        if package == "onetaskgraph-github-projects" {
-            main_ran = ran.elapsed();
-        }
         let success = output.status.success();
         outputs.push(output);
         if !success {
@@ -417,6 +481,23 @@ fn run_pair(scenario: &str) {
                 .any(|call| call.phase == Phase::Capabilities)
         );
         assert!(!records.join("assets.json").exists());
+        // Main ended without completing its record, and its own marker says so: an asset entry
+        // point waiting on it refuses at once, naming that, rather than at the end of its bound.
+        assert!(records.join("main.ended").exists());
+        let asset = entry_point(
+            "onetaskgraph-github-projects-e2e",
+            "disposable_task_and_document_asset_copies",
+        )
+        .env("GITHUB_LIVE_MAIN_WAIT_SECONDS", "600")
+        .output()
+        .unwrap();
+        let said = String::from_utf8_lossy(&asset.stderr);
+        assert!(!asset.status.success(), "{said}");
+        assert!(
+            said.contains("the main entry point ended without completing it"),
+            "{said}"
+        );
+        assert!(relays[1].first.lock().unwrap().is_none(), "{said}");
         let workload = reference_workload();
         let current =
             CurrentSession::new("entry-point-pair", &revision, WORKSPACE_VERSION, &workload)
@@ -485,20 +566,6 @@ fn run_pair(scenario: &str) {
             recorded.calls.len(),
             "the phases' requests are every call {record} holds: {said}"
         );
-        // An asset entry point started first spends its admission waiting: it ends no sooner
-        // than main, which it started before.
-        if scenario == "assets-first" && record == "assets.json" {
-            let admission = timings
-                .iter()
-                .find(|(phase, ..)| phase == "Admission")
-                .map(|(_, took, ..)| *took)
-                .expect("the asset entry point times its admission");
-            assert!(
-                admission + 0.1 >= main_ran.as_secs_f64(),
-                "the asset entry point's admission took {admission}s while main ran {main_ran:?}: \
-                 it did not wait for main's record: {said}"
-            );
-        }
         let mut clock = 0.0;
         for (phase, took, _, at) in &timings {
             assert!(
@@ -511,6 +578,25 @@ fn run_pair(scenario: &str) {
             );
             clock = *at;
         }
+    }
+    // An asset entry point started first sends nothing until main has sent everything: its
+    // first request is a REST one, through its relay.
+    if scenario == "assets-first" {
+        let main_last = relays[0]
+            .last
+            .lock()
+            .unwrap()
+            .expect("main reached the fixture");
+        let asset_first = relays[1]
+            .first
+            .lock()
+            .unwrap()
+            .expect("assets reached the fixture");
+        assert!(
+            asset_first >= main_last,
+            "the asset entry point connected {:?} before main's last byte",
+            main_last - asset_first
+        );
     }
     let workload = reference_workload();
     let current =
