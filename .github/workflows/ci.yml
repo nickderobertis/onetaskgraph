@@ -532,6 +532,10 @@ jobs:
           # cargo-binstall reads GitHub's releases; anonymously a shared runner's address is
           # rate-limited and it falls back to building release-plz from source.
           GITHUB_TOKEN: ${{ github.token }}
+          # uv sync builds the CLI into the SDK's environment; nothing here runs that copy (every
+          # spawner runs target/debug's), so it is built as a debug build, which shares the
+          # dependency units the jobs' own builds compile, rather than an optimised one.
+          MATURIN_PEP517_ARGS: --profile dev
         run: just bootstrap --outputStyle=static
       # Saved as soon as Bootstrap has installed them, rather than after the job: a cache saves
       # only from a job that passed, and a tool built from source is the cost worth keeping
@@ -705,6 +709,7 @@ jobs:
           # cargo-binstall reads GitHub's releases; anonymously a shared runner's address is
           # rate-limited and it falls back to building release-plz from source.
           GITHUB_TOKEN: ${{ github.token }}
+          MATURIN_PEP517_ARGS: --profile dev
         run: just bootstrap --outputStyle=static
       # Saved as soon as Bootstrap has installed them, rather than after the job: a cache saves
       # only from a job that passed, and a tool built from source is the cost worth keeping
@@ -764,6 +769,13 @@ jobs:
           # The merge base, the release shortcut and main's history all need the full history.
           fetch-depth: 0
           persist-credentials: false
+      # Windows Defender scans every file a build writes and every process a test spawns,
+      # which is most of a Rust build's and a journey's time on this runner; the workspace,
+      # the toolchains and the caches it writes are this job's own and are left out of it.
+      - name: Keep Defender's real-time scan off the build
+        shell: pwsh
+        run: |
+          Add-MpPreference -ExclusionPath $env:GITHUB_WORKSPACE, "$env:USERPROFILE\.cargo", "$env:USERPROFILE\.rustup", "$env:USERPROFILE\.bun", "$env:LOCALAPPDATA\uv", $env:RUNNER_TEMP, $env:TEMP
       - uses: extractions/setup-just@v4
       - uses: oven-sh/setup-bun@v2
         with:
@@ -829,6 +841,7 @@ jobs:
           # cargo-binstall reads GitHub's releases; anonymously a shared runner's address is
           # rate-limited and it falls back to building release-plz from source.
           GITHUB_TOKEN: ${{ github.token }}
+          MATURIN_PEP517_ARGS: --profile dev
         run: just bootstrap --outputStyle=static
       # Saved as soon as Bootstrap has installed them, rather than after the job: a cache saves
       # only from a job that passed, and a tool built from source is the cost worth keeping
@@ -942,6 +955,7 @@ jobs:
           # cargo-binstall reads GitHub's releases; anonymously a shared runner's address is
           # rate-limited and it falls back to building release-plz from source.
           GITHUB_TOKEN: ${{ github.token }}
+          MATURIN_PEP517_ARGS: --profile dev
         run: just bootstrap --outputStyle=static
       # Saved as soon as Bootstrap has installed them, rather than after the job: a cache saves
       # only from a job that passed, and a tool built from source is the cost worth keeping
