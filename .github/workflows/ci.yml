@@ -390,10 +390,8 @@ jobs:
 
       # Deterministic and model-free, so it runs first and fails a config, suppression or
       # version-bump slip in milliseconds rather than after a paid harness call.
-      # llmlint: ignore-block[no_second_broader_sweep_over_an_already_gated_commit] Transitional by the task's order: the jobs behind today's required contexts stay in place and passing until branch protection names the four new jobs, and onetaskgraph-ci-budgets removes them; until then both run on one commit.
       - name: Validate the llmlint config (no model)
         run: just lint-llm-validate --diff-base origin/main
-      # llmlint: ignore-end[no_second_broader_sweep_over_an_already_gated_commit]
 
       - name: Lint the changed files
         env:
@@ -536,7 +534,7 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: bash scripts/ci-pr-base.sh "$BASE_REF" "$BASE_SHA"
-      # llmlint: ignore-block[no_second_broader_sweep_over_an_already_gated_commit] Transitional by the task's order: the jobs behind today's required contexts stay in place and passing until branch protection names the four new jobs, and onetaskgraph-ci-budgets removes them; until then both run on one commit.
+      # llmlint: ignore-block[no_second_broader_sweep_over_an_already_gated_commit] The jobs behind today's required contexts stay until branch protection names these four.
       - name: Format, lint and type-check the affected projects, generated code and the supply chain
         env:
           NX_BASE: ${{ steps.pr-base.outputs.base }}
@@ -550,11 +548,11 @@ jobs:
       # setup-llmlint.sh installs no harness, so without this the lint would skip every file.
       - name: Install the coding harness (claude-code)
         run: npm i -g @anthropic-ai/claude-code
-      # llmlint: ignore-block[no_second_broader_sweep_over_an_already_gated_commit] Transitional by the task's order: the jobs behind today's required contexts stay in place and passing until branch protection names the four new jobs, and onetaskgraph-ci-budgets removes them; until then both run on one commit.
+      # llmlint: ignore-block[no_second_broader_sweep_over_an_already_gated_commit] The jobs behind today's required contexts stay until branch protection names these four.
       - name: Validate the llmlint config (no model)
         run: just lint-llm-validate --diff-base origin/main
       # llmlint: ignore-end[no_second_broader_sweep_over_an_already_gated_commit]
-      # llmlint: ignore-block[no_second_broader_sweep_over_an_already_gated_commit] Transitional by the task's order: the jobs behind today's required contexts stay in place and passing until branch protection names the four new jobs, and onetaskgraph-ci-budgets removes them; until then both run on one commit.
+      # llmlint: ignore-block[no_second_broader_sweep_over_an_already_gated_commit] The jobs behind today's required contexts stay until branch protection names these four.
       - name: Lint the changed files with llmlint
         env:
           # `claude` reads only CLAUDE_CODE_OAUTH_TOKEN; see the llmlint job above.
@@ -579,7 +577,7 @@ jobs:
             echo "::error::the visual docs capture exited $status; its log is above. Reproduce it with 'just screenshots'." >&2
             exit 1
           fi
-      # llmlint: ignore-block[no_second_broader_sweep_over_an_already_gated_commit] Transitional by the task's order: the jobs behind today's required contexts stay in place and passing until branch protection names the four new jobs, and onetaskgraph-ci-budgets removes them; until then both run on one commit, visual-docs.yml's capture and report included.
+      # llmlint: ignore-block[no_second_broader_sweep_over_an_already_gated_commit] visual-docs.yml's capture and report stay until branch protection names these four.
       # screencomp's own composite actions, as steps of this job rather than its reusable
       # workflow, which would add five jobs: the CLI pin, the inputs and the strict drift gate
       # visual-docs.yml passes, for the one lane screencomp.toml declares.
@@ -689,7 +687,7 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: bash scripts/ci-pr-base.sh "$BASE_REF" "$BASE_SHA"
-      # llmlint: ignore-block[no_second_broader_sweep_over_an_already_gated_commit] Transitional by the task's order: the jobs behind today's required contexts stay in place and passing until branch protection names the four new jobs, and onetaskgraph-ci-budgets removes them; until then both run on one commit.
+      # llmlint: ignore-block[no_second_broader_sweep_over_an_already_gated_commit] The jobs behind today's required contexts stay until branch protection names these four.
       - name: Test the affected projects
         if: steps.release.outputs.tests == 'run'
         env:
@@ -792,7 +790,7 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: bash scripts/ci-pr-base.sh "$BASE_REF" "$BASE_SHA"
-      # llmlint: ignore-block[live_tier_compiles_and_requires_credential,no_second_broader_sweep_over_an_already_gated_commit,external_service_suite_stays_out_of_the_affected_tier] One live session per run: test-linux alone carries the credentials, so this job's credentialed journeys skip. The suites that reach a real service without one — the binary's public-registry probe among them — run behind affected selection, as on check's legs; AGENTS.md records why an edge of their own was removed. And transitional by the task's order: the jobs behind today's required contexts stay in place and passing until branch protection names the four new jobs, and onetaskgraph-ci-budgets removes them; until then both run on one commit.
+      # llmlint: ignore-block[live_tier_compiles_and_requires_credential,no_second_broader_sweep_over_an_already_gated_commit,external_service_suite_stays_out_of_the_affected_tier] test-linux alone carries this run's live credentials; the uncredentialed service suites run behind affected selection, as on check's legs; and the jobs behind today's required contexts stay until branch protection names these four.
       - name: Test the affected projects
         if: steps.release.outputs.tests == 'run'
         env:
@@ -884,7 +882,7 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: bash scripts/ci-pr-base.sh "$BASE_REF" "$BASE_SHA"
-      # llmlint: ignore-block[live_tier_compiles_and_requires_credential,no_second_broader_sweep_over_an_already_gated_commit,external_service_suite_stays_out_of_the_affected_tier] One live session per run: test-linux alone carries the credentials, so this job's credentialed journeys skip. The suites that reach a real service without one — the binary's public-registry probe among them — run behind affected selection, as on check's legs; AGENTS.md records why an edge of their own was removed. And transitional by the task's order: the jobs behind today's required contexts stay in place and passing until branch protection names the four new jobs, and onetaskgraph-ci-budgets removes them; until then both run on one commit.
+      # llmlint: ignore-block[live_tier_compiles_and_requires_credential,no_second_broader_sweep_over_an_already_gated_commit,external_service_suite_stays_out_of_the_affected_tier] test-linux alone carries this run's live credentials; the uncredentialed service suites run behind affected selection, as on check's legs; and the jobs behind today's required contexts stay until branch protection names these four.
       - name: Test the affected projects
         if: steps.release.outputs.tests == 'run'
         env:
