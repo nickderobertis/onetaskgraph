@@ -260,6 +260,11 @@ test("workflow matrices, event fan-out and exact release head model record sched
             fork,
             headRef: diff === "version" ? "release-plz-123" : "feature",
             vars: publicationVariables(optional),
+            // A push to main is decided over real revisions: rust-cache-warm.yml runs its own
+            // release-merge step against this history.
+            ...(entry.event === "push"
+              ? { revisions: { cwd: history, before: base, after: heads[diff] } }
+              : {}),
           };
           const runs = graph(scenario, policyResult);
           for (const run of runs) {
@@ -289,9 +294,11 @@ test("workflow matrices, event fan-out and exact release head model record sched
                   (entry.event === "push" &&
                     entry.branch === "main" &&
                     run.workflow === "rust-cache-warm.yml" &&
-                    row.job === "warm"),
+                    row.job === "warm-macos"),
                 JSON.stringify(row),
               );
+            // And it warms on every push but a release merge: one changing release versions
+            // and changelogs alone, which is what the release pull request's merge is.
             if (
               entry.event === "push" &&
               entry.branch === "main" &&
@@ -299,7 +306,8 @@ test("workflow matrices, event fan-out and exact release head model record sched
             )
               assert.deepEqual(
                 macs.map((row) => row.job),
-                ["warm"],
+                diff === "version" ? [] : ["warm-macos"],
+                `${entry.id} (${diff})`,
               );
             if (entry.event === "pull_request" && run.workflow === "ci.yml")
               assert.equal(

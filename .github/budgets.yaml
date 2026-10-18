@@ -23,5 +23,10 @@ budgets:
     command: [node, macos-budget.mjs, --metric, runs-per-change, --telemetry, .telemetry/macos-policy.json]
     unit: runs
     direction: max
-    threshold: 2
+    # 3, not 2: the user approved a macOS Rust cache warmer on pushes to main on 2026-10-17
+    # (rust-cache-warm.yml's warm-macos), and the release merge skips it because it changes only
+    # workspace-crate versions, which rust-cache does not store, so the next pull request's
+    # prefix restore is as warm. The lifecycle's runs are its PR's test-macos, the base push's
+    # warm-macos and the release's macOS assets.
+    threshold: 3
     timeout_seconds: 30

@@ -1306,9 +1306,11 @@ The capture drives `local-md` and `in-memory` only: no credential or socket.
   combines the former Mac check and install assertions sequentially. Linux carriers keep
   `check (macos-latest)` and `install path (macos-latest)` required on every PR, using
   `always()` and `.github/macos-result.mjs` to refuse failed, cancelled or missing proofs.
-  Main pushes never schedule Mac, with one exception the user approved on 2026-10-18: the
-  build-only macOS leg of `.github/workflows/rust-cache-warm.yml`, because a pull request
-  waits on its slowest job and `test-macos` restores no other cache.
+  Main pushes never schedule Mac, with one exception the user approved on 2026-10-17: the
+  build-only `warm-macos` job of `.github/workflows/rust-cache-warm.yml`, because a pull
+  request waits on its slowest job and `test-macos` restores no other cache. It skips a
+  release merge — a push `.github/semantic-release.py` reads as versions and changelogs alone,
+  which rust-cache does not store — so `onetaskgraph-macos-runs-per-change` is 3, not 2.
   `.github/macos-policy.mjs` admits a release-only PR only from a same-repository
   `release-plz-` branch with a semantic version/changelog-only diff; an unreadable PR requires coverage. The author is not authority: release-plz
   uses the owner's PAT. An explicit manual diagnostic is default off.

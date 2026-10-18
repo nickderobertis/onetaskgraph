@@ -194,7 +194,9 @@ export function problems(all) {
 }
 
 // The Rust cache a new pull request can restore is the one rust-cache-warm.yml saves on main,
-// under the shared key each test job restores: a push to main alone, one leg per test job.
+// under the shared key each test job restores: a push to main alone, one leg per test job —
+// `warm`'s matrix for Linux and Windows, and `warm-macos`, which a release merge skips
+// (policy-routing.test.mjs drives that decision over real revisions).
 const WARMED = {
   "test-linux": "ubuntu-latest",
   "test-windows": "windows-latest",
@@ -212,9 +214,17 @@ function warmerProblems(all, jobs) {
     JSON.stringify(warmer.on.push?.branches) !== '["main"]'
   )
     found.push("the Rust cache warmer runs on something other than a push to main");
-  const legs = warm.strategy?.matrix?.include ?? [];
+  const legs = [...(warm.strategy?.matrix?.include ?? [])];
   if (toolchainOf(warm)?.with?.["cache-shared-key"] !== `\${{ matrix.job }}`)
     found.push("the Rust cache warmer does not save under its leg's job key");
+  const mac = warmer.jobs["warm-macos"];
+  if (mac) {
+    legs.push({ os: mac["runs-on"], job: toolchainOf(mac)?.with?.["cache-shared-key"] });
+    if (!steps(mac).some((step) => String(step.run ?? "").includes("scripts/warm-rust-cache.sh")))
+      found.push(
+        "the Rust cache warmer's macOS leg does not build through scripts/warm-rust-cache.sh",
+      );
+  }
   for (const [id, os] of Object.entries(WARMED)) {
     if (toolchainOf(jobs[id])?.with?.["cache-shared-key"] !== id)
       found.push(`${id} does not restore the Rust cache under the shared key ${id}`);
@@ -412,8 +422,11 @@ test("the Rust cache warmer parting from the key a test job restores is refused"
     });
   }, /a runner no warmed job uses/);
   refuses((all) => {
-    all["rust-cache-warm.yml"].jobs.warm.strategy.matrix.include.pop();
+    delete all["rust-cache-warm.yml"].jobs["warm-macos"];
   }, /no macos-latest leg saving test-macos's cache/);
+  refuses((all) => {
+    all["rust-cache-warm.yml"].jobs["warm-macos"].steps.at(-1).run = "cargo build";
+  }, /macOS leg does not build through scripts\/warm-rust-cache.sh/);
   refuses((all) => {
     all["rust-cache-warm.yml"].on = { push: { branches: ["main"] }, pull_request: null };
   }, /other than a push to main/);

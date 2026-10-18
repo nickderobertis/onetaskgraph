@@ -421,6 +421,45 @@ function reusable(call) {
 }
 const archMatrices = new Map();
 let configuredArches;
+// rust-cache-warm.yml's release-merge decision, made by running that job's own step over the
+// revisions a push scenario names ({ cwd, before, after }): a push naming none is undecidable
+// here rather than assumed either way.
+const releaseDecisions = new Map();
+function releaseMerge(job, context, scenario) {
+  const step = job.steps?.find((candidate) => candidate.id === "decide");
+  if (!step?.run) throw Error("Unresolved release-merge decision command");
+  const revisions = scenario.revisions;
+  if (!revisions?.cwd || !revisions.before || !revisions.after)
+    throw Error("Unresolved release-merge revisions: a push scenario names none");
+  const stepEnvironment = resolve(step.env || {}, context);
+  const key = JSON.stringify([step.run, stepEnvironment, revisions.cwd]);
+  if (!releaseDecisions.has(key)) {
+    const scratch = mkdtempSync(
+      join(process.env.ONEPIPELINE_NODE_SCRATCH_DIR || tmpdir(), "workflow-release-merge-"),
+    );
+    try {
+      const output = join(scratch, "output");
+      execFileSync("bash", ["-c", step.run], {
+        cwd: revisions.cwd,
+        env: { ...process.env, ...stepEnvironment, GITHUB_OUTPUT: output },
+        stdio: ["ignore", "ignore", "ignore"],
+      });
+      const answer = readFileSync(output, "utf8")
+        .split(/\r?\n/)
+        .find((line) => line.startsWith("version-only="))
+        ?.slice("version-only=".length);
+      if (!["true", "false"].includes(answer)) throw Error("Unresolved release-merge output");
+      releaseDecisions.set(key, answer);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  }
+  return resolve(job.outputs, {
+    ...context,
+    steps: { decide: { outputs: { "version-only": releaseDecisions.get(key) } } },
+  });
+}
+
 export function jobs(workflow, scenario, policy, prefix = "", inputs = {}, ancestry = []) {
   const rows = [];
   const needs = {};
@@ -440,6 +479,7 @@ export function jobs(workflow, scenario, policy, prefix = "", inputs = {}, ances
           head_ref: scenario.event === "pull_request" ? scenario.headRef || "feature" : "",
           event: {
             action: scenario.action,
+            before: scenario.revisions?.before || "",
             pull_request: {
               head: {
                 repo: {
@@ -452,6 +492,7 @@ export function jobs(workflow, scenario, policy, prefix = "", inputs = {}, ances
           ref: scenario.tag
             ? `refs/tags/${scenario.tag}`
             : `refs/heads/${scenario.branch || "main"}`,
+          sha: scenario.revisions?.after || "",
         },
         needs: Object.fromEntries(dependencies.map((d) => [d, needs[d]])),
         inputs: { ...(scenario.inputs || {}), ...inputs },
@@ -474,6 +515,7 @@ export function jobs(workflow, scenario, policy, prefix = "", inputs = {}, ances
         };
         needs[id].outputs = resolve(job.outputs, context);
       }
+      if (id === "release-merge") needs[id].outputs = releaseMerge(job, context, scenario);
       if (id === "arches") {
         configuredArches ||= JSON.parse(
           execFileSync(
