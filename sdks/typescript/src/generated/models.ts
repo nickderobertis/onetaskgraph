@@ -3810,10 +3810,10 @@ export type StatusCategory = ("draft" | "backlog" | "todo" | "queued" | "in-prog
 /**
  * What one source holds for one issue reference, and what moving it to `done` came to.
  *
- * Its members are the ones the plan this verb landed in states field for field — `issue`,
- * `source`, `task`, `from`, `to`, `action`, `reason`, `error` — because the engine's landing
- * record and the read API build against exactly that shape; [`Engine::complete_issues`] is the
- * one writer, and it fills them together from one [`Completion`].
+ * Its members are flat — `issue`, `source`, `task`, `from`, `to`, `action`, `reason`, `error`
+ * — because a landing's record of its closures and the read API consume exactly that shape;
+ * [`Engine::complete_issues`] is the one writer, and it fills them together from one
+ * [`Completion`].
  */
 export interface IssueCompleted {
 /**
@@ -4174,10 +4174,10 @@ unsupported: SourceName[]
 /**
  * What one source holds for one issue reference, and what moving it to `done` came to.
  *
- * Its members are the ones the plan this verb landed in states field for field — `issue`,
- * `source`, `task`, `from`, `to`, `action`, `reason`, `error` — because the engine's landing
- * record and the read API build against exactly that shape; [`Engine::complete_issues`] is the
- * one writer, and it fills them together from one [`Completion`].
+ * Its members are flat — `issue`, `source`, `task`, `from`, `to`, `action`, `reason`, `error`
+ * — because a landing's record of its closures and the read API consume exactly that shape;
+ * [`Engine::complete_issues`] is the one writer, and it fills them together from one
+ * [`Completion`].
  */
 export interface IssueCompleted {
 /**

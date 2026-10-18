@@ -51,6 +51,12 @@ mod commented_since;
 // they prove is a contract member of every plugin read through the engine — a task's change
 // token, ordered by the engine's own reader — so no one plugin crate's edge is narrower.
 mod change_tokens;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No credential and no network: the
+// journeys drive the binary against a folder of Markdown and the Python store over a real pipe,
+// in about a second. What they prove — that the engine refuses each malformed answer a source
+// can give `status_contradictions`, `issue_holdings`, `set_task_status` and `check_task_write`
+// — is the engine's reading of its own protocol, so no one plugin crate's edge is narrower.
+mod closure_answers;
 mod comments;
 mod copy;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No credential and no network: the
@@ -58,11 +64,11 @@ mod copy;
 // Markdown in seconds. The rule they prove is the engine's copy, which carries comments between
 // every pair of plugins, so no one plugin crate's edge is narrower.
 mod copy_comments;
+mod copy_link;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No credential and no network: the
 // journeys drive the binary from a loopback board and a folder of Markdown into a folder of
 // Markdown and the Python store over a real pipe, in a few seconds. Which tasks a copy leaves
 // out is the engine's copy, across plugins, so no one plugin crate's edge is narrower.
-mod copy_link;
 mod copy_per_item;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No credential and no network: the
 // journeys drive the binary between loopback boards and a folder of Markdown in seconds, and

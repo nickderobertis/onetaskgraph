@@ -1021,8 +1021,9 @@ for (struct, member), specified in MEMBER_SECTIONS.items():
 # section, the method its example line is the request of, the path to the object inside that
 # request or its answer, and the struct that object is: every key of the example object has
 # to be a field of the struct, and every field of the struct has to be named in the section,
-# where an optional member the example leaves out is still specified in prose.
-comment_rs = api("comment.rs")
+# where an optional member the example leaves out is still specified in prose. A path step
+# that is a number indexes a list — the first entry of a list stands for every entry — and a
+# struct declared in the api crate is named with the module that declares it.
 
 
 def struct_fields(struct, text, visibility):
@@ -1045,7 +1046,8 @@ def struct_fields(struct, text, visibility):
 
 
 PAYLOAD_EXAMPLES = (
-    # (section, method, "params" or "result", path inside it, struct, where it is declared)
+    # (section, method, "params" or "result", path inside it, struct, where it is declared:
+    # "wire", or the api crate's module)
     ("### 4.4a `get_task_detail`", "get_task_detail", "params", (), "TaskDetailParams", "wire"),
     ("### 4.4a `get_task_detail`", "get_task_detail", "result", (), "TaskDetailResult", "wire"),
     (
@@ -1062,7 +1064,7 @@ PAYLOAD_EXAMPLES = (
         "params",
         ("copy",),
         "CommentCopy",
-        "api",
+        "comment.rs",
     ),
     (
         "### 4.16a `write_comment_copy`",
@@ -1070,7 +1072,34 @@ PAYLOAD_EXAMPLES = (
         "params",
         ("copy", "origin"),
         "CommentOrigin",
-        "api",
+        "comment.rs",
+    ),
+    ("### 4.9b `check_task_write`", "check_task_write", "params", (), "CheckWriteParams", "wire"),
+    (
+        "### 4.23 `status_contradictions`",
+        "status_contradictions",
+        "result",
+        (),
+        "ContradictionsResult",
+        "wire",
+    ),
+    (
+        "### 4.23 `status_contradictions`",
+        "status_contradictions",
+        "result",
+        ("items", 0),
+        "StatusContradiction",
+        "issue.rs",
+    ),
+    ("### 4.24 `issue_holdings`", "issue_holdings", "params", (), "HoldingsParams", "wire"),
+    ("### 4.24 `issue_holdings`", "issue_holdings", "result", (), "HoldingsResult", "wire"),
+    (
+        "### 4.24 `issue_holdings`",
+        "issue_holdings",
+        "result",
+        ("holdings", 0, "task"),
+        "HeldTask",
+        "issue.rs",
     ),
 )
 
@@ -1101,7 +1130,7 @@ for heading, method, half, path, struct, declared_in in PAYLOAD_EXAMPLES:
     if declared_in == "wire":
         fields = struct_fields(struct, wire, r"pub\(crate\)")
     else:
-        fields = struct_fields(struct, comment_rs, "pub")
+        fields = struct_fields(struct, api(declared_in), "pub")
     messages = example_lines(heading)
     request = next((m for m in messages if m.get("method") == method), None)
     if request is None:
@@ -1117,8 +1146,11 @@ for heading, method, half, path, struct, declared_in in PAYLOAD_EXAMPLES:
             None,
         )
     for step in path:
-        shown = shown.get(step) if isinstance(shown, dict) else None
-    where = ".".join((half,) + path)
+        if isinstance(step, int):
+            shown = shown[step] if isinstance(shown, list) and len(shown) > step else None
+        else:
+            shown = shown.get(step) if isinstance(shown, dict) else None
+    where = ".".join((half,) + tuple(str(step) for step in path))
     if not isinstance(shown, dict):
         failures.append(
             f'"{heading}" shows no `{where}` object in its `{method}` example, which is the '
@@ -1145,12 +1177,12 @@ for heading, method, half, path, struct, declared_in in PAYLOAD_EXAMPLES:
 COMMENTS_SECTION = "### 4.15 `task_comments`"
 compare(
     "comment member",
-    struct_fields("Comment", comment_rs, "pub"),
+    struct_fields("Comment", api("comment.rs"), "pub"),
     first_column("| Member | Type | Meaning |", after=(COMMENTS_SECTION,)),
     {},
     "`Comment`",
 )
-for field in sorted(struct_fields("CommentOrigin", comment_rs, "pub")):
+for field in sorted(struct_fields("CommentOrigin", api("comment.rs"), "pub")):
     if not spelled(field, section(COMMENTS_SECTION)):
         failures.append(
             f'`CommentOrigin` carries the field "{field}" but "{COMMENTS_SECTION}", which '

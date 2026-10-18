@@ -99,11 +99,11 @@ impl IssuesCompleted {
 
 /// What one source holds for one issue reference, and what moving it to `done` came to.
 ///
-/// Its members are the ones the plan this verb landed in states field for field — `issue`,
-/// `source`, `task`, `from`, `to`, `action`, `reason`, `error` — because the engine's landing
-/// record and the read API build against exactly that shape; [`Engine::complete_issues`] is the
-/// one writer, and it fills them together from one [`Completion`].
-// llmlint: ignore[invalid_states_unrepresentable] The stated contract for `IssueCompleted` names these eight members and their types, and the engine node of this plan and the read API are built against them, so folding them into tagged variants is a contract change only the plan's owner may make. `Engine::complete_issues` is the one constructor, and each arm of `completion` there fills the members its action owns and no other.
+/// Its members are flat — `issue`, `source`, `task`, `from`, `to`, `action`, `reason`, `error`
+/// — because a landing's record of its closures and the read API consume exactly that shape;
+/// [`Engine::complete_issues`] is the one writer, and it fills them together from one
+/// [`Completion`].
+// llmlint: ignore[invalid_states_unrepresentable] The contract for `IssueCompleted` names these eight flat members and their types, and a landing's closure record and the read API consume them, so folding them into tagged variants is a contract change only the contract's owner may make. `Engine::complete_issues` is the one constructor, and each arm of `completion` there fills the members its action owns and no other.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct IssueCompleted {
     /// The issue, as `owner/name#N`.
@@ -428,7 +428,9 @@ impl Engine {
     }
 
     /// One task's status written through its source's own status write, after the public
-    /// boundary has admitted it, answering the status as the source reads it back.
+    /// boundary has admitted it, answering the status as the source reads it back — which has
+    /// to be the category written, or the source is refused as malformed rather than reported
+    /// as having written it.
     async fn write_category(
         &self,
         source: &ResolvedSource,
@@ -446,12 +448,25 @@ impl Engine {
             &Exposure::metadata([category_word(category)]),
         )
         .await?;
-        source
+        let written = source
             .source()
             .set_task_status(&id.native, category)
             .await
             .map_err(|error| source_failed(source, error))?
-            .ok_or_else(|| EngineError::NoSuchTask { id: id.to_string() })
+            .ok_or_else(|| EngineError::NoSuchTask { id: id.to_string() })?;
+        if written.category != category {
+            return Err(source_failed(
+                source,
+                SourceError::Malformed {
+                    message: format!(
+                        "a write of {id} to {} read back as {}",
+                        category_word(category),
+                        category_word(written.category)
+                    ),
+                },
+            ));
+        }
+        Ok(written)
     }
 }
 

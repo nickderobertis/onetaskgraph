@@ -3297,8 +3297,8 @@ pub struct GitHubProjectsSource {
     /// its item as a person has since left it.
     resolved_cache: Mutex<BTreeMap<NativeId, Resolved>>,
     /// Items an issue read by reference reached, held for the one status write each was read
-    /// for and taken out by it — never reused for another read or write, because that read
-    /// selects only what such a write needs. Dropped by [`TaskSource::end_command`].
+    /// for and taken out by it alone — see [`Self::take_held`] — because that read selects only
+    /// what such a write needs. Dropped by [`TaskSource::end_command`].
     held_cache: Mutex<BTreeMap<NativeId, Resolved>>,
     /// Each project's sub-issues as GitHub answered them, keyed by the selector they were
     /// asked for under, with the project that selector named — for the length of one command,
@@ -5380,7 +5380,14 @@ impl GitHubProjectsSource {
         if let Some(item) = cached {
             return Ok(Some(item));
         }
-        let held = self
+        self.item_by_id(id).await
+    }
+
+    /// Take out the item an issue read by reference reached for `id`, when one is held: the
+    /// status write it was read for is the one caller, so no other read or write is ever
+    /// answered from a read that selected only what that write needs.
+    fn take_held(&self, id: &NativeId) -> Result<Option<Resolved>, SourceError> {
+        Ok(self
             .held_cache
             .lock()
             .map_err(|_| SourceError::Unavailable {
@@ -5388,11 +5395,7 @@ impl GitHubProjectsSource {
                           command again"
                     .into(),
             })?
-            .remove(id);
-        match held {
-            Some(item) => Ok(Some(item)),
-            None => self.item_by_id(id).await,
-        }
+            .remove(id))
     }
 
     /// One board draft by its own id, with the board item it sits in — or `None` when no
@@ -6294,11 +6297,6 @@ impl GitHubProjectsSource {
     /// source is least able to re-read, so leaving it out would put the stale title back on
     /// the only items the completion in [`Self::board`] exists for.
     fn remember_written(&self, item: Resolved, created: bool) -> Result<(), SourceError> {
-        // Read for one status write and carrying only what it needed: nothing this process
-        // answers later may be answered from it.
-        if item.partial {
-            return Ok(());
-        }
         self.resolved_cache()?.insert(item.id.clone(), item.clone());
         if created {
             self.created()?.push(item);
@@ -6591,7 +6589,6 @@ impl GitHubProjectsSource {
             priority,
             closed,
             reason: closed.then(|| reason.map(str::to_owned)).flatten(),
-            partial: false,
             delivers,
             delivered_by,
             labels: item_labels.clone(),
@@ -6834,10 +6831,15 @@ impl GitHubProjectsSource {
     ) -> Result<Option<Status>, SourceError> {
         // Refused before anything is read, in the words a write of the same status is.
         let target = self.resolved_target(ItemKind::Task, category)?;
-        let Some(mut item) = self
-            .bound_item(id)
-            .await?
-            .filter(|item| item.kind == BoardKind::Work(ItemKind::Task))
+        // An item read by issue reference carries only what this write needs, so what it
+        // becomes is never remembered for a later read to be answered from.
+        let held = self.take_held(id)?;
+        let by_reference = held.is_some();
+        let bound = match held {
+            Some(item) => Some(item),
+            None => self.bound_item(id).await?,
+        };
+        let Some(mut item) = bound.filter(|item| item.kind == BoardKind::Work(ItemKind::Task))
         else {
             return Ok(None);
         };
@@ -6922,7 +6924,9 @@ impl GitHubProjectsSource {
             }
         }
         let status = item.status.clone();
-        self.remember_written(item, false)?;
+        if !by_reference {
+            self.remember_written(item, false)?;
+        }
         Ok(Some(status))
     }
 
@@ -8722,7 +8726,6 @@ impl GitHubProjectsSource {
                 Some(_) => None,
                 None => existing.and_then(|item| item.reason.clone()),
             },
-            partial: false,
             delivers: incoming.delivers.to_vec(),
             delivered_by: incoming.delivered_by.to_vec(),
             labels: incoming.labels.to_vec(),
@@ -9971,13 +9974,6 @@ struct Resolved {
     /// issue, a draft, and an issue closed before GitHub recorded reasons.
     #[serde(default)]
     reason: Option<String>,
-    /// Whether this item was read by an issue reference, which reads its card's `Status` and
-    /// nothing else of the board, nor its labels: what the one status write it was read for
-    /// needs, and not what any other read or write may be answered from. Never part of a
-    /// context handed to the store, which such an item never is.
-    #[serde(skip)]
-    #[schemars(skip)]
-    partial: bool,
     /// The tasks this one delivers, read out of its slot. Empty for anything not a task.
     delivers: Vec<TaskRef>,
     /// Every task that delivers this one, read out of its slot. Empty for anything not a
@@ -10790,8 +10786,7 @@ impl GitHubProjectsSource {
                         Completion::Unchanged { task }
                     }
                     _ => {
-                        let mut kept = item.clone();
-                        kept.partial = true;
+                        let kept = item.clone();
                         self.held_cache
                             .lock()
                             .map_err(|_| SourceError::Unavailable {
@@ -10997,12 +10992,16 @@ impl TaskSource for GitHubProjectsSource {
     ) -> Result<Page<Task>, SourceError> {
         validate_page(page)?;
         refuse_unsearchable(query)?;
-        // Every category but `done` and `cancelled` reads only off an open issue or a draft, so
-        // a status filter naming none of those two asks every issue search it sends for open
+        // A closed issue reads `done`, `cancelled` or — closed for a reason that implies no
+        // category — `unknown`; every other category reads only off an open issue or a draft. So
+        // a status filter naming none of those three asks every issue search it sends for open
         // issues alone; each candidate's category is still confirmed from its own item below.
         let open_only = !query.statuses.is_empty()
             && query.statuses.iter().all(|category| {
-                !matches!(category, StatusCategory::Done | StatusCategory::Cancelled)
+                !matches!(
+                    category,
+                    StatusCategory::Done | StatusCategory::Cancelled | StatusCategory::Unknown
+                )
             });
         if query.origin.is_none() && !matches!(query.project, ProjectFilter::Is(_)) {
             let mut qualifiers: Vec<String> = [

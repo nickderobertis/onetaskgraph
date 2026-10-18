@@ -26,8 +26,9 @@ const SINCE: &str = "2026-09-01T00:00:00Z";
 
 /// A board whose commented tasks sit at `Proposal` (`S-1`, `S-2`), `Todo` (`S-3`), `In Progress`
 /// (`S-4`) and `Done` closed as completed (`S-5`), with `S-6` closed as completed while its card
-/// still reads `Todo` — every one commented on — and a folder of Markdown called `snapshot`
-/// configured with the board's own names.
+/// still reads `Todo`, and `S-7` closed for a reason that implies no category, so it reads
+/// `unknown` — every one commented on — and a folder of Markdown called `snapshot` configured
+/// with the board's own names.
 struct Setup {
     sandbox: Sandbox,
     board: GitHubBoardFields,
@@ -46,6 +47,7 @@ impl Setup {
             issue("S-4", "In Progress"),
             issue("S-5", "Done"),
             issue("S-6", "Todo"),
+            issue("S-7", "Todo"),
         ];
         let (mut config, board) = github_projects_with_items(&sandbox, items);
         board.with_status_option("OPT-in-progress", "In Progress");
@@ -54,7 +56,8 @@ impl Setup {
             json!({"backlog":"Proposal","todo":"Todo","in-progress":"In Progress"});
         board.close("S-5", Some("COMPLETED"));
         board.close("S-6", Some("COMPLETED"));
-        for id in ["S-1", "S-2", "S-3", "S-4", "S-5", "S-6"] {
+        board.close("S-7", Some("REOPENED"));
+        for id in ["S-1", "S-2", "S-3", "S-4", "S-5", "S-6", "S-7"] {
             board.add_comment(id, &format!("a word about {id}"));
         }
         sandbox.project_document(&document(&json!({
@@ -318,4 +321,40 @@ fn ids_beside_status_copy_the_one_at_it_and_skip_the_others_reading_none_of_thei
         "{}",
         stdout(&human)
     );
+}
+
+#[test]
+fn a_listing_of_unknown_finds_the_issue_closed_for_no_category_and_searches_every_issue() {
+    let setup = Setup::new();
+    let output = setup.run(&[
+        "--json",
+        "task",
+        "list",
+        "--source",
+        "board",
+        "--commented-since",
+        SINCE,
+        "--status",
+        "unknown",
+    ]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let listed: Value = serde_json::from_str(&stdout(&output)).expect("JSON");
+    let ids: BTreeSet<String> = listed["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .map(|item| item["id"].as_str().expect("an id").to_owned())
+        .collect();
+    assert!(
+        ids.contains("board:S-7"),
+        "a closed issue reads unknown when its reason implies no category: {listed:#}"
+    );
+    let searches = setup.searches();
+    assert!(!searches.is_empty(), "the board was searched");
+    for search in searches {
+        assert!(
+            !search.split_whitespace().any(|word| word == "is:open"),
+            "a search naming unknown asks for closed issues too: {search}"
+        );
+    }
 }

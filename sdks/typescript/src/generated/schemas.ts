@@ -6510,7 +6510,7 @@ export const runtimeSchemas = {
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "description": "What one source holds for one issue reference, and what moving it to `done` came to.\n\nIts members are the ones the plan this verb landed in states field for field — `issue`,\n`source`, `task`, `from`, `to`, `action`, `reason`, `error` — because the engine's landing\nrecord and the read API build against exactly that shape; [`Engine::complete_issues`] is the\none writer, and it fills them together from one [`Completion`].",
+    "description": "What one source holds for one issue reference, and what moving it to `done` came to.\n\nIts members are flat — `issue`, `source`, `task`, `from`, `to`, `action`, `reason`, `error`\n— because a landing's record of its closures and the read API consume exactly that shape;\n[`Engine::complete_issues`] is the one writer, and it fills them together from one\n[`Completion`].",
     "properties": {
       "action": {
         "$ref": "#/$defs/CompleteAction",
@@ -6981,7 +6981,7 @@ export const runtimeSchemas = {
         "type": "string"
       },
       "IssueCompleted": {
-        "description": "What one source holds for one issue reference, and what moving it to `done` came to.\n\nIts members are the ones the plan this verb landed in states field for field — `issue`,\n`source`, `task`, `from`, `to`, `action`, `reason`, `error` — because the engine's landing\nrecord and the read API build against exactly that shape; [`Engine::complete_issues`] is the\none writer, and it fills them together from one [`Completion`].",
+        "description": "What one source holds for one issue reference, and what moving it to `done` came to.\n\nIts members are flat — `issue`, `source`, `task`, `from`, `to`, `action`, `reason`, `error`\n— because a landing's record of its closures and the read API consume exactly that shape;\n[`Engine::complete_issues`] is the one writer, and it fills them together from one\n[`Completion`].",
         "properties": {
           "action": {
             "$ref": "#/$defs/CompleteAction",

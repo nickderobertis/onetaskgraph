@@ -994,9 +994,7 @@ its content, the tasks it delivers and every other field a `write_task` (§4.9) 
 refuse as one it cannot represent.
 
 ```json
-{ "id": "27", "method": "check_task_write",
-  "params": { "write": { "target": null, "item": { "id": "Q-1", "title": "…", "…": "…" },
-                         "depends_on": [] } } }
+{ "id": "27", "method": "check_task_write", "params": { "write": { "target": null, "item": { "id": "Q-1", "title": "…", "…": "…" }, "depends_on": [] } } }
 { "id": "27", "result": {} }
 ```
 
@@ -2066,10 +2064,7 @@ with the status that brings it in line, and the engine writes each one through
 
 ```json
 { "id": "25", "method": "status_contradictions", "params": {} }
-{ "id": "25", "result": { "items": [
-  { "task": { "id": "I_7", "title": "…", "status": { "category": "done", "name": "Done" }, "…": "…" },
-    "option": "Todo", "closed_as": "done", "to": "Done" }
-] } }
+{ "id": "25", "result": { "items": [ { "task": { "id": "I_7", "title": "…", "status": { "category": "done", "name": "Done" }, "…": "…" }, "option": "Todo", "closed_as": "done", "to": "Done" } ] } }
 ```
 
 The trait method answers `Vec<StatusContradiction>`, carried as `result.items`, one
@@ -2093,14 +2088,8 @@ empty list. It changes nothing: for each issue reference, in the order given and
 answers the task this source holds for that issue and what moving it to `done` comes to.
 
 ```json
-{ "id": "26", "method": "issue_holdings",
-  "params": { "issues": ["acme/work#12", "acme/work#40"] } }
-{ "id": "26", "result": { "holdings": [
-  { "issue": "acme/work#12", "completion": "due", "to": "Done",
-    "task": { "id": "I_12", "option": "Todo", "classification": "public",
-              "delivers": ["tickets:T-1"] } },
-  { "issue": "acme/work#40", "completion": "absent" }
-] } }
+{ "id": "26", "method": "issue_holdings", "params": { "issues": ["acme/work#12", "acme/work#40"] } }
+{ "id": "26", "result": { "holdings": [ { "issue": "acme/work#12", "completion": "due", "to": "Done", "task": { "id": "I_12", "option": "Todo", "classification": "public", "delivers": ["tickets:T-1"] } }, { "issue": "acme/work#40", "completion": "absent" } ] } }
 ```
 
 An issue reference is `owner/name#N` — exactly the spelling `onevcs` reports in a landing
