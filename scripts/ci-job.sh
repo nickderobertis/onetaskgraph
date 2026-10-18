@@ -85,8 +85,7 @@ case "$JOB" in
 1 run scripts:distribution-test -"
     ;;
   test-windows)
-    # As test-macos. Side by side only while two consecutive hosted runs show no flake: the
-    # loopback journeys once failed to reach their own servers beside the release build.
+    # As test-macos.
     phases="1 affected test,budgets -
 1 run scripts:distribution-check -
 1 run scripts:distribution-test -"
