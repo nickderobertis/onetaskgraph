@@ -19,7 +19,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -52,6 +52,21 @@ function plan(platform, planTag = tag) {
 }
 const sha256 = (path) => createHash("sha256").update(readFileSync(path)).digest("hex");
 
+// A packaged crate names its siblings on crates.io, so `cargo publish`'s verification build
+// would compile the binary against whatever crates.io holds at this version — a release
+// that predates the tree once the tree's version is published — rather than against the
+// siblings this run just sent. So a publication resolves crates.io through the double, which
+// answers this repository's crates itself and every other one from crates.io, as its header
+// says. Its cache sits in the scratch directory because the double's port, and with it the
+// cache directory cargo names, is new on every run; the host's own cargo configuration is
+// carried over.
+const cargoHome = join(scratch, "cargo-home");
+const hostCargoConfig = join(process.env.CARGO_HOME || join(homedir(), ".cargo"), "config.toml");
+mkdirSync(cargoHome);
+if (existsSync(hostCargoConfig))
+  writeFileSync(join(cargoHome, "config.toml"), readFileSync(hostCargoConfig));
+const cargoPublication = `if [ "$1" = publish ]; then export CARGO_HOME="${cargoHome}"; set -- "$@" --config 'source.crates-io.replace-with="release-double"'; fi`;
+
 // A stand-in for each tool a publication could go through, recording every invocation and
 // handing it to the real one; `extra` lets a journey make one of them fail.
 function shims(directory, extra = {}) {
@@ -64,7 +79,7 @@ function shims(directory, extra = {}) {
     const path = join(directory, name);
     writeFileSync(
       path,
-      `#!/bin/sh\nprintf '%s %s\\n' ${name} "$*" >> "${log}"\n${extra[name] || ""}\nexec "${real}" "$@"\n`,
+      `#!/bin/sh\nprintf '%s %s\\n' ${name} "$*" >> "${log}"\n${extra[name] || ""}\n${name === "cargo" ? cargoPublication : ""}\nexec "${real}" "$@"\n`,
     );
     chmodSync(path, 0o755);
   }
