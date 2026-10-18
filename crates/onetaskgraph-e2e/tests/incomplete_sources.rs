@@ -149,7 +149,8 @@ fn the_complete_source_answers(sandbox: &Sandbox, environment: &[(&str, &str)]) 
 }
 
 /// A command naming `partner` by `--source`, by a qualified id, or as the source a
-/// configuration verb reads is refused, naming it.
+/// configuration verb reads is refused, naming it — and, under `--json`, every one of them
+/// as the one `incomplete-source` kind.
 fn naming_the_incomplete_source_is_refused(sandbox: &Sandbox, environment: &[(&str, &str)]) {
     for arguments in [
         &["task", "list", "--source", PARTNER][..],
@@ -159,19 +160,16 @@ fn naming_the_incomplete_source_is_refused(sandbox: &Sandbox, environment: &[(&s
         &["cache", "clear", PARTNER],
     ] {
         refused_as_incomplete(sandbox, environment, arguments);
+        let json: Vec<&str> = arguments.iter().copied().chain(["--json"]).collect();
+        let output = run(sandbox, environment, &json);
+        let failure: Value = serde_json::from_str(&stdout(&output))
+            .unwrap_or_else(|_| panic!("{json:?}: a refusal under --json is a document"));
+        assert_eq!(
+            (&failure["failure"]["class"], &failure["failure"]["kind"]),
+            (&json!("refused"), &json!("incomplete-source")),
+            "{json:?}: {failure:#}"
+        );
     }
-    let output = run(
-        sandbox,
-        environment,
-        &["task", "list", "--source", PARTNER, "--json"],
-    );
-    let failure: Value =
-        serde_json::from_str(&stdout(&output)).expect("a refusal under --json is a document");
-    assert_eq!(
-        (&failure["failure"]["class"], &failure["failure"]["kind"]),
-        (&json!("refused"), &json!("incomplete-source")),
-        "{failure:#}"
-    );
 }
 
 #[test]

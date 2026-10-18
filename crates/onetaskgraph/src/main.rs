@@ -189,6 +189,11 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
                     })
                 })
                 .transpose()?;
+            if let Some(name) = source.as_ref()
+                && loaded.config.incomplete().contains(name)
+            {
+                return Err(incomplete(name));
+            }
             let cleared = onetaskgraph_core::cache::clear(&loaded.config, source.as_ref())
                 .map_err(|message| Failure::decided("cache-not-cleared", message))?;
             let rendered = rendering(loaded, &cleared, render::cache_cleared, "the cache")?;

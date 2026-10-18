@@ -1141,7 +1141,8 @@ document declares, say. Where no layer read declares that source's `plugin`, the
 refinement with nothing to refine: the source is not configured there, and everything else
 loads. `config show` reports its settings with the layer each came from and lists it under
 `incomplete_sources`; a command naming it — by `--source`, a qualified id, `default_sources`, or
-a route it would follow — is refused, saying no layer declares its plugin.
+a route it would follow — is refused, saying no layer declares its plugin; under `--json` every
+such refusal, `cache clear` naming it included, is the failure kind `incomplete-source`.
 
 A `linear` source's `project`, the id of one Linear project of the team, scopes the source to
 that project: every read and listing is narrowed to it, a task written with no project is
