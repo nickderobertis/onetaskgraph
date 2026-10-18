@@ -345,14 +345,14 @@ pub enum EngineError {
     /// `config` field — but that no layer read here declares a `plugin` for, so it is not
     /// configured: by `--source`, a qualified id, `default_sources` or a route it follows.
     #[error(
-        "source {name:?} is not configured here: no configuration layer declares its plugin\n\
+        "source \"{name}\" is not configured here: no configuration layer declares its plugin\n\
          next: declare `sources.{name}.plugin` in a layer this directory reads, or name \
-         another source — `onetaskgraph config show` lists the layer each of {name:?}'s \
+         another source — `onetaskgraph config show` lists the layer each of \"{name}\"'s \
          settings came from."
     )]
     IncompleteSource {
         /// The name that was asked for.
-        name: String,
+        name: SourceName,
     },
 
     /// A `--page` token that decodes but does not belong to this query.
@@ -2319,9 +2319,7 @@ impl Engine {
             return Ok(name.clone());
         }
         if self.incomplete.contains(name) {
-            return Err(EngineError::IncompleteSource {
-                name: name.to_string(),
-            });
+            return Err(EngineError::IncompleteSource { name: name.clone() });
         }
         if self.sources.is_empty() {
             return Err(EngineError::NoSources);

@@ -20,7 +20,6 @@ use serde_json::{Value, json};
 const NOTES: &str = "notes";
 /// The source a layer refines without declaring.
 const PARTNER: &str = "partner";
-/// The task `notes` holds.
 const TASK: &str = "notes:ship";
 
 /// A folder of Markdown holding one project and one task, under the project tree.
@@ -106,7 +105,6 @@ fn refused_as_incomplete(
     message
 }
 
-/// The status `notes:ship` reads at.
 fn status_of_ship(sandbox: &Sandbox, environment: &[(&str, &str)]) -> Value {
     answer(sandbox, environment, &["task", "show", TASK])["items"][0]["item"]["status"]["category"]
         .clone()
@@ -162,6 +160,18 @@ fn naming_the_incomplete_source_is_refused(sandbox: &Sandbox, environment: &[(&s
     ] {
         refused_as_incomplete(sandbox, environment, arguments);
     }
+    let output = run(
+        sandbox,
+        environment,
+        &["task", "list", "--source", PARTNER, "--json"],
+    );
+    let failure: Value =
+        serde_json::from_str(&stdout(&output)).expect("a refusal under --json is a document");
+    assert_eq!(
+        (&failure["failure"]["class"], &failure["failure"]["kind"]),
+        (&json!("refused"), &json!("incomplete-source")),
+        "{failure:#}"
+    );
 }
 
 #[test]
@@ -413,4 +423,64 @@ fn files_under(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
     }
     found.sort();
     found
+}
+
+/// A sandbox whose `notes` carries `routes` and whose user layer refines `partner` alone,
+/// and the arguments creating a private task in `notes` from `repository`.
+fn private_create(routes: &str, repository: &str) -> (Sandbox, Vec<String>) {
+    let sandbox = Sandbox::new();
+    let root = notes(&sandbox);
+    sandbox.project_document(&declaring_notes(&root, routes));
+    sandbox.user_document("sources:\n  partner:\n    visibility: private\n");
+    std::fs::write(
+        root.join("projects/vault.md"),
+        "---\ntitle: Vault\nstatus: todo\nclassification: private\n---\nPrivate work.\n",
+    )
+    .expect("a private project");
+    let body = sandbox.subdirectory("bodies").join("body.md");
+    std::fs::write(&body, "What to do.\n").expect("a body");
+    let arguments = [
+        "task",
+        "create",
+        NOTES,
+        "--project",
+        "vault",
+        "--title",
+        "Private work",
+        "--classification",
+        "private",
+        "--repository",
+        repository,
+        "--body-file",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .chain([body.display().to_string()])
+    .collect();
+    (sandbox, arguments)
+}
+
+#[test]
+fn a_private_item_routed_to_an_incomplete_source_is_refused_rather_than_kept_where_it_was_written()
+{
+    for routes in [
+        // A classification entry, which loads although no layer read declares `partner`
+        // private.
+        "    routes:\n      - classification: private\n        to: partner\n",
+        // A repository entry, which a private item takes only toward a private destination.
+        "    routes:\n      - repositories: [\"github.com/example-org/*\"]\n        to: partner\n",
+    ] {
+        let (sandbox, arguments) = private_create(routes, "github.com/example-org/app");
+        let before = files_under(sandbox.project().as_path());
+        refused_as_incomplete(
+            &sandbox,
+            &[],
+            &arguments.iter().map(String::as_str).collect::<Vec<_>>(),
+        );
+        assert_eq!(
+            files_under(sandbox.project().as_path()),
+            before,
+            "nothing was written under\n{routes}"
+        );
+    }
 }

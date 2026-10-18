@@ -1047,9 +1047,7 @@ fn source_route(
 
 /// The refusal of a command naming `name`, which some layer refines and none gives a plugin.
 fn incomplete(name: &SourceName) -> Failure {
-    Failure::from(&onetaskgraph_core::EngineError::IncompleteSource {
-        name: name.to_string(),
-    })
+    Failure::from(&onetaskgraph_core::EngineError::IncompleteSource { name: name.clone() })
 }
 
 /// The configured `github-projects` source a guarded board setup verb names, and its
