@@ -9,6 +9,8 @@ use schemars::JsonSchema;
 use serde::Serialize;
 use serde_json::Value;
 
+use onetaskgraph_plugin_api::SourceName;
+
 use crate::secrets::SecretsReport;
 
 use super::Config;
@@ -25,6 +27,14 @@ pub struct EffectiveConfig {
     /// come from — asked of the one kind of value that may never be printed. So the
     /// name and the layer are reported and the value never is.
     pub secrets: SecretsReport,
+    /// Every source some layer refines but no layer gives a `plugin`, in name order.
+    ///
+    /// Its settings are among [`settings`](Self::settings) with the layer each came from;
+    /// this says the source they belong to is incomplete, and so not configured here. Left
+    /// out when there are none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(!skip_serializing_if)]
+    pub incomplete_sources: Vec<SourceName>,
 }
 
 impl EffectiveConfig {
@@ -61,7 +71,11 @@ impl EffectiveConfig {
         }
 
         settings.sort_by(|left, right| left.key.cmp(&right.key));
-        Self { settings, secrets }
+        Self {
+            settings,
+            secrets,
+            incomplete_sources: config.incomplete().iter().cloned().collect(),
+        }
     }
 
     /// The table a person reads, one setting per line.
@@ -101,6 +115,15 @@ impl EffectiveConfig {
                 value,
                 setting.origin
             ));
+        }
+
+        if !self.incomplete_sources.is_empty() {
+            rendered.push_str(
+                "\nincomplete sources  no layer declares a plugin, so these are not configured here\n",
+            );
+            for name in &self.incomplete_sources {
+                rendered.push_str(&format!("  {name}  incomplete\n"));
+            }
         }
 
         rendered.push_str(&match self.secrets.path.as_ref() {

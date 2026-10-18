@@ -271,7 +271,12 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # read from the raw document and the roots from the validated one.
     bundle = generate.validate_schema_bundle(emitted_bundle)
 
-    assert emitted_bundle["version"] == 39
+    assert emitted_bundle["version"] == 40
+    # Version 40 published the sources a layer refines but no layer gives a plugin, left out
+    # when there are none, so a configuration with none reads as it did.
+    effective = emitted_bundle["roots"]["EffectiveConfig"]
+    assert "incomplete_sources" in effective["properties"]
+    assert "incomplete_sources" not in effective.get("required", [])
     # Version 39 published a dependency answer's and a project graph's `unanswered`, left out
     # when every source answered, so a complete answer reads as it did.
     for root in ("ProjectGraph", "QueryResponseOfQualifiedEdge"):

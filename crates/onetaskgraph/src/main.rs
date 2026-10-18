@@ -191,6 +191,11 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
                     })
                 })
                 .transpose()?;
+            if let Some(name) = source.as_ref()
+                && loaded.config.incomplete().contains(name)
+            {
+                return Err(incomplete(name));
+            }
             let cleared = onetaskgraph_core::cache::clear(&loaded.config, source.as_ref())
                 .map_err(|message| Failure::decided("cache-not-cleared", message))?;
             let rendered = rendering(loaded, &cleared, render::cache_cleared, "the cache")?;
@@ -1062,6 +1067,9 @@ fn source_route(
         })
     };
     let name = SourceName::try_from(source.to_owned()).map_err(|_| unknown())?;
+    if loaded.config.incomplete().contains(&name) {
+        return Err(incomplete(&name));
+    }
     if !loaded.config.sources().contains_key(&name) {
         return Err(unknown());
     }
@@ -1072,6 +1080,11 @@ fn source_route(
             .place_classified(&name, classification, repositories),
         source: name,
     })
+}
+
+/// The refusal of a command naming `name`, which some layer refines and none gives a plugin.
+fn incomplete(name: &SourceName) -> Failure {
+    Failure::from(&onetaskgraph_core::EngineError::IncompleteSource { name: name.clone() })
 }
 
 /// The configured `github-projects` source a guarded board setup verb names, and its
@@ -1089,6 +1102,9 @@ fn github_projects_source(
     // rather than duplicated for each CLI verb.
     let name = SourceName::try_from(source.to_owned())
         .map_err(|message| Failure::decided("invalid-source", message.to_string()))?;
+    if loaded.config.incomplete().contains(&name) {
+        return Err(incomplete(&name));
+    }
     let configured =
         loaded.config.sources().get(&name).ok_or_else(|| {
             Failure::decided(verb, format!("no configured source is named {name}"))
