@@ -194,7 +194,12 @@ to be run again, and the re-run is the mutation burst that trips a hosted destin
 secondary rate limiter, which then refuses even reads for the next fifty minutes. A
 destination that will not take one of its items back is not papered over: the copy refuses
 with `EngineError::CopyNotUndone`, naming why it failed, why it could not be undone, and
-what is still there.
+what is still there. A create the destination answered malformed is the one write the journal
+cannot name — the plugin may have stored the item under an id it never said — so after undoing
+every write it can identify the copy refuses with `EngineError::CopyDestinationUncertain`,
+naming the destination and the plugin method whose answer was malformed and saying to inspect
+that destination before copying again; a malformed answer to any other call keeps its own
+failure. Taking an item back stays the source's duty (§4.9), so the plugin contract is unchanged.
 
 1. `deny.toml` refuses every embedded store, index and cache crate, and `deny` is a
    required check — so reaching for one cannot merge.

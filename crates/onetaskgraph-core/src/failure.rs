@@ -315,7 +315,8 @@ fn cause(error: &EngineError) -> (String, Option<SourceName>, Option<&SourceErro
         | EngineError::SourceFailed { name, error } => {
             (source_kind(error), configured(name), Some(error))
         }
-        EngineError::CopyNotUndone { error, .. } => cause(error),
+        EngineError::CopyNotUndone { error, .. }
+        | EngineError::CopyDestinationUncertain { error, .. } => cause(error),
     }
 }
 

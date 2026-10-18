@@ -70,6 +70,9 @@ mod copy_skip;
 // revision of an item and never a mix — is the engine's read, so no plugin crate's edge is
 // narrower.
 mod copy_snapshot;
+// A copy whose create the destination answers malformed, against the Python asset store over a
+// real pipe.
+mod copy_uncertain;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
 // narrower edge for it: every journey here drives the binary against folders of Markdown and a
 // loopback fixture board, with no credential and no network, and the whole module finishes in
