@@ -124,12 +124,12 @@ jobs:
       - uses: extractions/setup-just@v4
       # Nothing platform-independent is published until every platform is: the launcher
       # resolves a carrier at its own exact version, and the SDKs pin the CLI they drive.
-      - name: Confirm the GitHub Release serves every platform's archive
+      - name: Confirm the GitHub Release serves the archive of every platform
         run: just release-publish available --from github --tag "$TAG"
-      - name: Confirm PyPI serves every platform's wheel
+      - name: Confirm PyPI serves the wheel of every platform
         if: ${{ vars.PYPI_PUBLISH == 'true' }}
         run: just release-publish available --from pypi --tag "$TAG"
-      - name: Confirm npm serves every platform's package
+      - name: Confirm npm serves the package of every platform
         if: ${{ vars.NPM_PUBLISH == 'true' }}
         run: just release-publish available --from npm --tag "$TAG"
       - name: Build the Python and TypeScript SDK distributions
