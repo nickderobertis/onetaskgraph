@@ -74,8 +74,8 @@ const drifts = [
     "upload-asset: removing label from GitHub's answer leaves the parser's result unchanged",
   ],
   [
-    "a pull request GitHub answers without its head ref",
-    drifted('"ref": "nick/3634/onetaskgraph-cd-reshape",', ""),
+    "a pull request GitHub answers without its number",
+    drifted('    "number": 3647,\n', ""),
     "open-pulls: the release's parser refuses GitHub's pinned answer",
   ],
   [
@@ -125,6 +125,17 @@ test("the gate refuses a tag that is not a release's", () => {
   const result = gate(drifted('tag = "v0.7.1"', 'tag = "../v0.7.1"'));
   assert.equal(result.status, 1, result.stderr);
   assert.ok(result.stderr.includes("github-interfaces: release-by-tag: `tag` is '../v0.7.1'"));
+});
+
+test("the gate refuses a pinned release with no asset to take back", () => {
+  const result = gate(drifted('"assets": [\n', '"assets": [],\n  "listed": [\n'));
+  assert.equal(result.status, 1, result.stderr);
+  assert.ok(
+    result.stderr.includes(
+      "github-interfaces: release-by-tag: `answer` must be a release with an upload_url and at least one named asset",
+    ),
+    result.stderr,
+  );
 });
 
 test("the gate refuses a pin it cannot read, before reading anything else", () => {

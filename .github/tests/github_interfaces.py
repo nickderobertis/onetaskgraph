@@ -143,9 +143,24 @@ def read_pin(path: Path) -> Pin:
     tag = required(next(table for table in raw["rest"] if table.get("call") == "release-by-tag"), "tag", str, "release-by-tag")
     if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag):
         raise PinError(f"release-by-tag: `tag` is {tag!r}, not a release tag such as v0.7.1")
-    pulls = calls["open-pulls"].answer
-    if not isinstance(pulls, list) or not pulls or not all(isinstance(pull, dict) and isinstance(pull.get("node_id"), str) for pull in pulls):
-        raise PinError("open-pulls: `answer` must list at least one pull request, each with its node_id")
+    # What drive_scripts and double_answers index into, held here so they can.
+    match calls["release-by-tag"].answer:
+        case {"upload_url": str(), "assets": [{"name": str()}, *_]}:
+            pass
+        case _:
+            raise PinError("release-by-tag: `answer` must be a release with an upload_url and at least one named asset")
+    match calls["upload-asset"].answer:
+        case {"name": str(), "size": int()}:
+            pass
+        case _:
+            raise PinError("upload-asset: `answer` must be a release asset with its name and size")
+    match calls["open-pulls"].answer:
+        case [{"node_id": str(), "head": {"ref": str(), "repo": {"full_name": str()}}}, *rest] if all(isinstance(pull, dict) for pull in rest):
+            pass
+        case _:
+            raise PinError("open-pulls: `answer` must list at least one pull request, the first with its node_id, head ref and head repository's full_name")
+    if not isinstance(calls["graphql"].answer, dict) or calls["delete-asset"].answer is not None:
+        raise PinError("graphql: `answer` must be a response object, and delete-asset's empty")
     for name, entry in calls.items():
         if not re.fullmatch(r"[a-z0-9.-]+\.github\.com", entry.host) or not entry.path.startswith("/"):
             raise PinError(f"{name}: `host` must be a github.com host and `path` start with /")
