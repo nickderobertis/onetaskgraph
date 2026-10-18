@@ -1234,6 +1234,48 @@ pub enum EngineError {
         /// What the destination said when the copy tried to take them back.
         refusal: SourceError,
     },
+
+    /// A copy failed on a create whose answer was malformed, so the destination may hold an
+    /// item the copy never learned the id of.
+    ///
+    /// A create is journalled by the id its answer carries, and a plugin that stored the
+    /// item before answering in a shape the engine refuses has kept it under an id nobody
+    /// was told. Every write the copy could identify is undone before this is returned, and
+    /// one the destination will not take back wraps this in [`EngineError::CopyNotUndone`];
+    /// the one it cannot identify is said rather than passed over, because a user told only
+    /// that the answer was malformed would copy again and land a second item beside the first.
+    #[error(
+        "the copy failed, and {destination} may hold an item it could not take back.\n\
+         it failed because: {}\n\
+         {destination}'s answer to {operation} was malformed, so the copy never learned the \
+         id of what that write may have stored and cannot take it back\n\
+         next: inspect {destination} for an item this copy may have created and remove it \
+         before copying again.",
+        reason(error)
+    )]
+    CopyDestinationUncertain {
+        /// The malformed answer, as the destination's refusal of the write.
+        error: Box<EngineError>,
+        // llmlint: ignore-block[invalid_states_unrepresentable] Both fields are `String` because this variant's shape is a stated contract other work builds against, and it matches its neighbours: `SourceRefused`, `NotWritable` and the rest name a source as a `String`. Both are only ever built in `engine/copy.rs`, from a configured source's own name and from one of three method literals.
+        /// The destination source the create was sent to.
+        destination: String,
+        /// The plugin method whose answer was malformed: `write_task`, `write_document` or
+        /// `write_project`.
+        operation: String,
+        // llmlint: ignore-end[invalid_states_unrepresentable]
+    },
+}
+
+/// Why a wrapped failure happened, without the next action it would give on its own: a
+/// wrapper names the next action for the whole failure, and an inner one telling the user to
+/// copy again is exactly what [`EngineError::CopyDestinationUncertain`] exists to replace.
+fn reason(error: &EngineError) -> String {
+    match error {
+        EngineError::SourceRefused { name, error } => {
+            format!("source {name} could not do it: {error}")
+        }
+        other => other.to_string(),
+    }
 }
 
 /// The items a failed copy left at the destination — one of them at least, always.

@@ -4522,3 +4522,304 @@ async fn a_destination_never_keeps_the_change_token_a_copied_task_arrives_with()
         assert_eq!(landed[0].item.version, None, "{:?}", landed[0].item);
     }
 }
+
+/// A source that answers exactly as the `in-memory` source it wraps, except that a write of an
+/// item titled one of `malformed` is applied and then answered malformed — the plugin that
+/// stored what it was asked to and then could not say under which id.
+struct Careless {
+    inner: Box<dyn TaskSource>,
+    malformed: &'static [&'static str],
+}
+
+impl Careless {
+    /// What a write of an item titled `title` answers, once the wrapped source has written it.
+    fn answer(&self, title: &str, written: NativeId) -> Result<NativeId, SourceError> {
+        if self.malformed.contains(&title) {
+            Err(SourceError::Malformed {
+                message: format!("the answer for {title} carries no id"),
+            })
+        } else {
+            Ok(written)
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl TaskSource for Careless {
+    fn kind(&self) -> &'static str {
+        self.inner.kind()
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        self.inner.capabilities()
+    }
+
+    fn writes(&self) -> WriteSupport {
+        self.inner.writes()
+    }
+
+    async fn health(&self) -> Result<Health, SourceError> {
+        self.inner.health().await
+    }
+
+    async fn get_task(&self, id: &NativeId) -> Result<Option<Task>, SourceError> {
+        self.inner.get_task(id).await
+    }
+
+    async fn get_project(&self, id: &NativeId) -> Result<Option<Project>, SourceError> {
+        self.inner.get_project(id).await
+    }
+
+    async fn get_document(&self, id: &NativeId) -> Result<Option<Document>, SourceError> {
+        self.inner.get_document(id).await
+    }
+
+    async fn query_tasks(
+        &self,
+        query: &TaskQuery,
+        page: &PageRequest,
+    ) -> Result<Page<Task>, SourceError> {
+        self.inner.query_tasks(query, page).await
+    }
+
+    async fn query_projects(
+        &self,
+        query: &ProjectQuery,
+        page: &PageRequest,
+    ) -> Result<Page<Project>, SourceError> {
+        self.inner.query_projects(query, page).await
+    }
+
+    async fn query_documents(
+        &self,
+        query: &DocumentQuery,
+        page: &PageRequest,
+    ) -> Result<Page<Document>, SourceError> {
+        self.inner.query_documents(query, page).await
+    }
+
+    async fn labels(&self, page: &PageRequest) -> Result<Page<Label>, SourceError> {
+        self.inner.labels(page).await
+    }
+
+    async fn task_dependencies(
+        &self,
+        id: &NativeId,
+        direction: Direction,
+        page: &PageRequest,
+    ) -> Result<Page<DependencyEdge>, SourceError> {
+        self.inner.task_dependencies(id, direction, page).await
+    }
+
+    async fn project_dependencies(
+        &self,
+        id: &NativeId,
+        direction: Direction,
+        page: &PageRequest,
+    ) -> Result<Page<DependencyEdge>, SourceError> {
+        self.inner.project_dependencies(id, direction, page).await
+    }
+
+    async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
+        let written = self.inner.write_task(write).await?;
+        self.answer(&write.item.title, written)
+    }
+
+    async fn write_project(&self, write: &ItemWrite<Project>) -> Result<NativeId, SourceError> {
+        let written = self.inner.write_project(write).await?;
+        self.answer(&write.item.title, written)
+    }
+
+    async fn write_document(&self, write: &ItemWrite<Document>) -> Result<NativeId, SourceError> {
+        let written = self.inner.write_document(write).await?;
+        self.answer(&write.item.title, written)
+    }
+
+    async fn delete_task(&self, id: &NativeId) -> Result<(), SourceError> {
+        self.inner.delete_task(id).await
+    }
+
+    async fn delete_project(&self, id: &NativeId) -> Result<(), SourceError> {
+        self.inner.delete_project(id).await
+    }
+
+    async fn delete_document(&self, id: &NativeId) -> Result<(), SourceError> {
+        self.inner.delete_document(id).await
+    }
+}
+
+/// [`interlinked`] as `from`, and `into` an in-memory source holding `config` behind a
+/// [`Careless`] answering a write of an item titled one of `malformed` malformed.
+fn careless_engine(config: &Value, malformed: &'static [&'static str]) -> Engine {
+    let built = |source: &str, config: &Value| {
+        onetaskgraph_in_memory::Plugin
+            .build(&name(source), config, &NoSecrets)
+            .expect("the in-memory plugin builds")
+    };
+    Engine::new(
+        vec![
+            ConfiguredSource::Ready(ResolvedSource::adopt(
+                name("from"),
+                built("from", &interlinked()["config"]),
+            )),
+            ConfiguredSource::Ready(ResolvedSource::adopt(
+                name("into"),
+                Box::new(Careless {
+                    inner: built("into", config),
+                    malformed,
+                }),
+            )),
+        ],
+        vec![name("from"), name("into")],
+    )
+}
+
+#[tokio::test]
+async fn a_create_answered_malformed_reports_the_destination_uncertain_after_undoing_the_rest() {
+    // `Beta` is the second task of `P-1`, so the project and `Alpha engine` have landed, with
+    // ids the copy knows, when the destination stores `Beta` and cannot say under which id.
+    let engine = careless_engine(&json!({}), &["Beta"]);
+    let Err(refused) = engine
+        .copy(&many(&["from:P-1"], CopyScope::Projects { tasks: true }))
+        .await
+    else {
+        panic!("a create answered malformed must fail the copy");
+    };
+    let EngineError::CopyDestinationUncertain {
+        error,
+        destination,
+        operation,
+    } = &refused
+    else {
+        panic!("a malformed create answer leaves the destination uncertain: {refused}");
+    };
+    assert_eq!(destination, "into");
+    assert_eq!(operation, "write_task");
+    assert!(
+        matches!(
+            error.as_ref(),
+            EngineError::SourceRefused { name, error: SourceError::Malformed { .. } }
+                if name == "into"
+        ),
+        "{error:?}"
+    );
+    let rendered = refused.to_string();
+    assert!(
+        rendered.ends_with(
+            "next: inspect into for an item this copy may have created and remove it before \
+             copying again."
+        ),
+        "{rendered}"
+    );
+    // Every write the copy could identify is undone; what is left is the one it could not.
+    assert_eq!(
+        held(&engine, "into").await,
+        vec!["into:T-2 Beta".to_owned()]
+    );
+}
+
+#[tokio::test]
+async fn an_update_answered_malformed_keeps_the_refusal_it_always_was() {
+    // An update is journalled before it is sent, so a malformed answer to one leaves nothing
+    // the copy cannot name, and the destination is put back exactly as it was.
+    let engine = careless_engine(&already_holding(), &["Beta"]);
+    let before = held(&engine, "into").await;
+    let Err(refused) = engine
+        .copy(&many(&["from:P-1"], CopyScope::Projects { tasks: true }))
+        .await
+    else {
+        panic!("an update answered malformed must fail the copy");
+    };
+    assert!(
+        matches!(
+            &refused,
+            EngineError::SourceRefused { name, error: SourceError::Malformed { .. } }
+                if name == "into"
+        ),
+        "{refused:?}"
+    );
+    assert_eq!(held(&engine, "into").await, before);
+}
+
+#[tokio::test]
+async fn a_project_create_answered_malformed_after_another_project_landed_undoes_that_one() {
+    // `P-1` and both its tasks land first; `Docs`, the second project, is the create the
+    // destination stores and answers malformed.
+    let engine = careless_engine(&json!({}), &["Docs"]);
+    let Err(refused) = engine
+        .copy(&many(
+            &["from:P-1", "from:P-2"],
+            CopyScope::Projects { tasks: true },
+        ))
+        .await
+    else {
+        panic!("a create answered malformed must fail the copy");
+    };
+    let EngineError::CopyDestinationUncertain {
+        destination,
+        operation,
+        ..
+    } = &refused
+    else {
+        panic!("a malformed create answer leaves the destination uncertain: {refused}");
+    };
+    assert_eq!(
+        (destination.as_str(), operation.as_str()),
+        ("into", "write_project")
+    );
+    assert_eq!(
+        held(&engine, "into").await,
+        vec!["into:P-2 Docs".to_owned()]
+    );
+}
+
+#[tokio::test]
+async fn a_malformed_create_whose_undo_is_refused_names_both_what_it_left_and_what_it_cannot() {
+    // The destination will not take back `P-1`, written before `Beta`'s malformed answer. The
+    // copy then owes both halves: the item it could identify and could not remove, and the
+    // one it could not identify at all.
+    let engine = careless_engine(
+        &json!({"capabilities": {"undeletable_ids": ["P-1"]}}),
+        &["Beta"],
+    );
+    let Err(refused) = engine
+        .copy(&many(&["from:P-1"], CopyScope::Projects { tasks: true }))
+        .await
+    else {
+        panic!("a create answered malformed must fail the copy");
+    };
+    let EngineError::CopyNotUndone {
+        error, left_behind, ..
+    } = &refused
+    else {
+        panic!("a refused undo reports the copy as not undone: {refused}");
+    };
+    assert!(
+        matches!(
+            error.as_ref(),
+            EngineError::CopyDestinationUncertain { destination, operation, .. }
+                if destination == "into" && operation == "write_task"
+        ),
+        "{error:?}"
+    );
+    assert_eq!(
+        left_behind
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        vec!["into:P-1".to_owned()]
+    );
+    let rendered = refused.to_string();
+    assert!(
+        rendered.contains("into may hold an item it could not take back"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("so these still hold what it wrote: into:P-1"),
+        "{rendered}"
+    );
+    assert_eq!(
+        held(&engine, "into").await,
+        vec!["into:P-1 Engine".to_owned(), "into:T-2 Beta".to_owned()]
+    );
+}

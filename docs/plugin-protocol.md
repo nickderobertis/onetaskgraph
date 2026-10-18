@@ -858,7 +858,10 @@ to the empty list.
 
 `result` is `{"id": …}`, carrying the `NativeId` this source now holds the item under. A
 create is free to choose an id other than the one `item` suggested; an update answers
-with `target`.
+with `target`. A create's answer is the only way the engine learns that id, so a create
+answered in any other shape is reported to a copy's caller as a destination that may hold
+an item the copy could not take back, rather than as a refusal: a plugin that refuses a
+create answers `error` and holds nothing.
 
 `url`, `location` (§4.13), `created_at` and `updated_at` are the destination's own and are
 never written — where the *source* holds an item says nothing about where this one does.

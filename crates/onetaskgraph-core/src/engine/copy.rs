@@ -4878,7 +4878,7 @@ impl Engine {
                 depends_on: Vec::new(),
             })
             .await
-            .map_err(|error| refused(there, error))?;
+            .map_err(|error| create_refused(there, Creating::Project, error))?;
         journal.record(Undo::Created {
             at: to.clone(),
             kind: Level::Project,
@@ -5373,6 +5373,13 @@ impl Engine {
                 prior,
             });
         }
+        // A create whose answer is malformed may have stored what it was sent under an id this
+        // copy never learns, so it cannot be journalled; that is said rather than reported as
+        // a source to fix and copy again. An update was journalled before it was sent.
+        let failed = |operation: Creating, error| match &target {
+            None => create_refused(destination, operation, error),
+            Some(_) => refused(destination, error),
+        };
         let landed = match landing {
             Item::Task(task) if carrying => destination
                 .source()
@@ -5387,7 +5394,7 @@ impl Engine {
                 )
                 .await
                 .map(|written| written.id)
-                .map_err(|error| refused(destination, error))?,
+                .map_err(|error| failed(Creating::Task, error))?,
             Item::Document(document) if carrying => destination
                 .source()
                 .write_document_with_assets(
@@ -5401,7 +5408,7 @@ impl Engine {
                 )
                 .await
                 .map(|written| written.id)
-                .map_err(|error| refused(destination, error))?,
+                .map_err(|error| failed(Creating::Document, error))?,
             Item::Task(task) => destination
                 .source()
                 .write_task(&ItemWrite {
@@ -5410,7 +5417,7 @@ impl Engine {
                     depends_on: edges.to_vec(),
                 })
                 .await
-                .map_err(|error| refused(destination, error))?,
+                .map_err(|error| failed(Creating::Task, error))?,
             Item::Project(project) => destination
                 .source()
                 .write_project(&ItemWrite {
@@ -5419,7 +5426,7 @@ impl Engine {
                     depends_on: edges.to_vec(),
                 })
                 .await
-                .map_err(|error| refused(destination, error))?,
+                .map_err(|error| failed(Creating::Project, error))?,
             // No edges, and that is the contract: a document takes part in no dependency
             // graph, so there is nothing here for `depends_on` to carry.
             Item::Document(document) => destination
@@ -5430,12 +5437,13 @@ impl Engine {
                     depends_on: Vec::new(),
                 })
                 .await
-                .map_err(|error| refused(destination, error))?,
+                .map_err(|error| failed(Creating::Document, error))?,
         };
         // A created item can only be journalled here: its id is what the write answers
         // with. A create that fails leaves nothing behind — §4.9 makes taking the item
         // back the source's own duty, because a write that refused must not leave an item
-        // nobody asked for.
+        // nobody asked for. One that answered malformed is the exception no source can be
+        // held to, which is why `failed` reports it as a destination this copy cannot vouch for.
         if target.is_none() {
             journal.record(Undo::Created {
                 at: destination.name().clone(),
@@ -5935,6 +5943,45 @@ fn refused(source: &ResolvedSource, error: SourceError) -> EngineError {
     EngineError::SourceRefused {
         name: source.name().to_string(),
         error,
+    }
+}
+
+/// The plugin method a create is sent as — the operation an uncertain destination names.
+#[derive(Clone, Copy)]
+enum Creating {
+    Task,
+    Document,
+    Project,
+}
+
+impl Creating {
+    /// The method's name in `docs/plugin-protocol.md`, which an asset write shares with the
+    /// item it is on.
+    fn method(self) -> &'static str {
+        match self {
+            Self::Task => "write_task",
+            Self::Document => "write_document",
+            Self::Project => "write_project",
+        }
+    }
+}
+
+/// A destination's refusal of a create sent as `operation`, where a malformed answer is not a
+/// refusal at all: the plugin may have stored the item before answering in a shape the engine
+/// refuses, so the destination may hold an item this copy has no id to take back.
+fn create_refused(
+    destination: &ResolvedSource,
+    operation: Creating,
+    error: SourceError,
+) -> EngineError {
+    if matches!(error, SourceError::Malformed { .. }) {
+        EngineError::CopyDestinationUncertain {
+            error: Box::new(refused(destination, error)),
+            destination: destination.name().to_string(),
+            operation: operation.method().to_owned(),
+        }
+    } else {
+        refused(destination, error)
     }
 }
 

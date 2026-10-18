@@ -3810,6 +3810,31 @@ fn a_failure_document_names_what_failed_where_and_takes_a_wrapped_failures_class
                "message": limited.to_string(), "retry_after_seconds": 90})
     );
 
+    // A copy whose create was answered malformed takes the class and kind of that answer,
+    // and names the destination; its message is the whole failure's, warning of residue.
+    let uncertain = EngineError::CopyDestinationUncertain {
+        error: Box::new(EngineError::SourceRefused {
+            name: "board".to_owned(),
+            error: SourceError::Malformed {
+                message: "the plugin's answer to write_task is not the shape it promises"
+                    .to_owned(),
+            },
+        }),
+        destination: "board".to_owned(),
+        operation: "write_task".to_owned(),
+    };
+    assert_eq!(
+        document(Failure::from(&uncertain))["failure"],
+        json!({"class": "refused", "kind": "malformed", "source": "board",
+               "message": uncertain.to_string(), "retry_after_seconds": null})
+    );
+    assert!(
+        uncertain
+            .to_string()
+            .contains("board may hold an item it could not take back"),
+        "{uncertain}"
+    );
+
     let unbuilt = EngineError::DestinationUnavailable {
         name: "notes".to_owned(),
         error: SourceError::Unavailable {
