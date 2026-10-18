@@ -341,6 +341,20 @@ pub enum EngineError {
         configured: String,
     },
 
+    /// A command named a source that some configuration layer refines — its `routes`, a
+    /// `config` field — but that no layer read here declares a `plugin` for, so it is not
+    /// configured: by `--source`, a qualified id, `default_sources` or a route it follows.
+    #[error(
+        "source {name:?} is not configured here: no configuration layer declares its plugin\n\
+         next: declare `sources.{name}.plugin` in a layer this directory reads, or name \
+         another source — `onetaskgraph config show` lists the layer each of {name:?}'s \
+         settings came from."
+    )]
+    IncompleteSource {
+        /// The name that was asked for.
+        name: String,
+    },
+
     /// A `--page` token that decodes but does not belong to this query.
     #[error(
         "{message}\n\
@@ -1356,6 +1370,9 @@ pub struct Engine {
     sources: Vec<ConfiguredSource>,
     /// Which sources answer when a request names none.
     selection: Vec<SourceName>,
+    /// Sources a configuration layer refines but none declares a `plugin` for: not
+    /// configured, and refused by name rather than as unknown.
+    incomplete: std::collections::BTreeSet<SourceName>,
     /// Where an item written to a source goes instead. Read from configuration and never
     /// from a source, so it holds nothing of anybody's work.
     routes: Routes,
@@ -1417,6 +1434,7 @@ impl Engine {
             config.selected_sources(),
         )
         .with_routes(config.routes())
+        .with_incomplete(config.incomplete().clone())
         .with_boundary(boundary::Boundary::configured(
             config.write_policy(),
             &config.visibilities(),
@@ -1432,11 +1450,17 @@ impl Engine {
         Self {
             sources,
             selection,
+            incomplete: std::collections::BTreeSet::new(),
             routes: Routes::default(),
             boundary: boundary::Boundary::default(),
             caches: BTreeMap::new(),
             copy_expect: std::sync::Mutex::new(None),
         }
+    }
+
+    fn with_incomplete(mut self, incomplete: std::collections::BTreeSet<SourceName>) -> Self {
+        self.incomplete = incomplete;
+        self
     }
 
     fn with_boundary(mut self, boundary: boundary::Boundary) -> Self {
@@ -2284,7 +2308,7 @@ impl Engine {
             if self.selection.is_empty() {
                 return Err(EngineError::NoSources);
             }
-            return Ok(self.selection.clone());
+            return self.selection.iter().map(|name| self.known(name)).collect();
         }
         asked.iter().map(|name| self.known(name)).collect()
     }
@@ -2293,6 +2317,11 @@ impl Engine {
     fn known(&self, name: &SourceName) -> Result<SourceName, EngineError> {
         if self.has(name) {
             return Ok(name.clone());
+        }
+        if self.incomplete.contains(name) {
+            return Err(EngineError::IncompleteSource {
+                name: name.to_string(),
+            });
         }
         if self.sources.is_empty() {
             return Err(EngineError::NoSources);

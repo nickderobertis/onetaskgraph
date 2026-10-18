@@ -297,7 +297,20 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 38);
+    assert_eq!(bundle["version"], 39);
+    // Version 39: the sources a layer refines but no layer gives a plugin, named by
+    // `config show` and left out of the wire when there are none.
+    assert_eq!(
+        bundle["roots"]["EffectiveConfig"]["properties"]["incomplete_sources"]["type"],
+        "array"
+    );
+    assert!(
+        !bundle["roots"]["EffectiveConfig"]["required"]
+            .as_array()
+            .expect("EffectiveConfig names its required members")
+            .contains(&serde_json::json!("incomplete_sources")),
+        "an absent list reads back as none"
+    );
     // Version 38: a project's and a document's change token, left out of the wire when absent.
     for root in ["Project", "Document"] {
         assert!(

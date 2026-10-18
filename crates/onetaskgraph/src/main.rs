@@ -1030,6 +1030,9 @@ fn source_route(
         })
     };
     let name = SourceName::try_from(source.to_owned()).map_err(|_| unknown())?;
+    if loaded.config.incomplete().contains(&name) {
+        return Err(incomplete(&name));
+    }
     if !loaded.config.sources().contains_key(&name) {
         return Err(unknown());
     }
@@ -1039,6 +1042,13 @@ fn source_route(
             .routes()
             .place_classified(&name, classification, repositories),
         source: name,
+    })
+}
+
+/// The refusal of a command naming `name`, which some layer refines and none gives a plugin.
+fn incomplete(name: &SourceName) -> Failure {
+    Failure::from(&onetaskgraph_core::EngineError::IncompleteSource {
+        name: name.to_string(),
     })
 }
 
@@ -1057,6 +1067,9 @@ fn github_projects_source(
     // rather than duplicated for each CLI verb.
     let name = SourceName::try_from(source.to_owned())
         .map_err(|message| Failure::decided("invalid-source", message.to_string()))?;
+    if loaded.config.incomplete().contains(&name) {
+        return Err(incomplete(&name));
+    }
     let configured =
         loaded.config.sources().get(&name).ok_or_else(|| {
             Failure::decided(verb, format!("no configured source is named {name}"))
