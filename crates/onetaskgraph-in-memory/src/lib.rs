@@ -36,6 +36,8 @@
 //! | `filter_by_comment_activity` | **Supported and proven** by this crate's `tests/commented_since.rs`, and configurable: a task is kept when one of the comments held beside it was created or last edited at or after `commented_since`; a task with no comments never is. |
 //! | `filter_by_metadata` | **Supported and proven** by this crate's `tests/metadata_origin.rs`, and configurable: a task is kept when it holds every metadata value the query names, as a string at that key and nested path. |
 //! | `filter_by_origin` | **Supported and proven** by the same tests, and configurable: a task is kept when its `onetaskgraph.origin` entry is exactly the query's qualified id. |
+//! | `reconcile_status` | **Unsupported — unsupportable,** and fixed rather than configured: a task held in memory has a status and no closure beside it to contradict it. |
+//! | `complete_by_issue` | **Unsupported — unsupportable,** and fixed rather than configured: memory holds no issue a landing's `closes` names. |
 //! | `orphan_tasks` | **Supported and proven,** and configurable. |
 //! | `filter_by_label` | **Supported and proven,** and configurable. |
 //! | `filter_by_status` | **Supported and proven,** and configurable. |

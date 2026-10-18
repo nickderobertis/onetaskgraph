@@ -26,6 +26,8 @@
 //! | `filter_by_comment_activity` | **Supported,** and proven by this crate's `tests/commented_since.rs`, over the comments section each task file already holds: a task is kept when one of its comments' `created_at` or `updated_at` is at or after `commented_since`. A task here has no `updated_at` of its own, so those comment times are the only evidence read, and a task with no comments section never matches. |
 //! | `filter_by_metadata` | **Supported,** and proven by this crate's `tests/metadata_origin.rs`, over the `metadata:` front-matter map each task file already holds: a task is kept when every value the query names is a string equal to it at that key and nested path. Applied in process over the files a task read parses anyway. |
 //! | `filter_by_origin` | **Supported,** and proven by the same tests, over the `onetaskgraph.origin` entry of that map: a task is kept when it is exactly the query's qualified id. |
+//! | `reconcile_status` | **Unsupported — unsupportable.** A file's own `status:` is the whole of a task's status, with no closure beside it to contradict it, so nothing could need reconciling. |
+//! | `complete_by_issue` | **Unsupported — unsupportable.** A folder holds no issue a landing's `closes` names, and its status is its closure. |
 //! | `orphan_tasks` | **Supported and proven.** A task document with no `project:` key belongs to none. |
 //! | `filter_by_label` | **Supported and proven,** over the `labels:` key, requiring every label asked for and excluding every label refused. |
 //! | `filter_by_status` | **Supported and proven,** over `status:` through this instance's own `status_mapping`. |

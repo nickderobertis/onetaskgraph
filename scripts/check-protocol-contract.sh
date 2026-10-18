@@ -198,6 +198,7 @@ METHOD_SECTIONS = {
     "project_dependencies": "### 4.8 `task_dependencies` and `project_dependencies`",
     "write_task": "### 4.9 `write_task` and `write_project`",
     "write_project": "### 4.9 `write_task` and `write_project`",
+    "check_task_write": "### 4.9b `check_task_write`",
     "delete_task": "### 4.10 `delete_task` and `delete_project`",
     "delete_project": "### 4.10 `delete_task` and `delete_project`",
     "get_document": "### 4.11 `get_document` and `query_documents`",
@@ -225,6 +226,8 @@ METHOD_SECTIONS = {
     "set_task_content": "### 4.20 `set_task_content`",
     "update_task": "### 4.21 `update_task`",
     "end_command": "### 4.22 `end_command`",
+    "status_contradictions": "### 4.23 `status_contradictions`",
+    "issue_holdings": "### 4.24 `issue_holdings`",
 }
 
 ENUM_SECTIONS = {

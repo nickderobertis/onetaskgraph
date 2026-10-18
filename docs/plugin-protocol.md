@@ -208,6 +208,7 @@ the source can do natively, and what configuration it is being built with.
 | `ends_commands` | boolean | Whether this plugin answers `end_command`. Optional; see §3.11. |
 | `comment_copies` | boolean | Whether this plugin answers `write_comment_copy`. Optional; see §3.12. |
 | `task_details` | boolean | Whether this plugin answers `get_task_detail`. Optional; see §3.13. |
+| `write_checks` | boolean | Whether this plugin answers `check_task_write`. Optional; see §3.14. |
 
 An `initialize` that fails answers with an `error` envelope, ordinarily
 `{"kind": "config"}` for a `config` block this plugin cannot use, or
@@ -585,8 +586,9 @@ title or value, and reads the destination's tasks instead, as it did before eith
 could be pushed down.
 
 `reconcile_status` and `complete_by_issue` are not predicates either. Each says whether this
-source answers one question — `status_contradictions` (§4.23) and `issue_holdings` (§4.24) — and
-only a plugin that answered `"native"` is ever sent it. Both belong to a source whose status is
+source answers one question — which of its tasks contradict their closure (§4.23), and which of
+its items issue references name (§4.24) — and only a plugin that answered `"native"` is ever
+sent it. Both belong to a source whose status is
 a card on a board beside an issue that closes on its own; a source whose status *is* its
 closure — a Linear workflow state, a file's own `status:` — has nothing for either to find, and
 declares neither. The engine sends a plugin that answered `"unsupported"`, or said nothing,
@@ -998,8 +1000,8 @@ refuse as one it cannot represent.
 { "id": "27", "result": {} }
 ```
 
-`params.write` is the `ItemWrite` a `write_task` of the task would carry. An empty `result`
-means the plugin can represent it; `{"kind": "refused"}`, naming the field and why, means it
+`params.write` is the `ItemWrite` a `write_task` of the task would carry. The trait method
+carries `()`, so `result` is an empty object, and it means the plugin can represent it; `{"kind": "refused"}`, naming the field and why, means it
 cannot — in the words its `write_task` would refuse it with. A task copy asks this of every task
 it plans before its first write, and leaves out each one refused: answered `failed` with that
 refusal as its reason, while the rest land as one copy. Any other error fails the whole copy, as
@@ -2071,8 +2073,10 @@ with the status that brings it in line, and the engine writes each one through
 ] } }
 ```
 
-A task is answered when its issue is closed with a reason that reads `done` (completed, or no
-reason) or `cancelled` (not planned, duplicate) and its card does not sit at the option this
+The trait method answers `Vec<StatusContradiction>`, carried as `result.items`, one
+`StatusContradiction` per task. A task is answered when its
+issue is closed with a reason that reads `done` (completed, or no reason) or `cancelled` (not
+planned, duplicate) and its card does not sit at the option this
 source's mapping gives that category; `option` is the option it sits at, or `null`, and `to`
 that category under that option's name. An open task, a closure that reads `unknown` and a card
 already in line are never answered. `task` is the task as `get_task` reads it.
@@ -2100,7 +2104,9 @@ answers the task this source holds for that issue and what moving it to `done` c
 
 An issue reference is `owner/name#N` — exactly the spelling `onevcs` reports in a landing
 event's `closes` — the `IssueRef` root of `onetaskgraph schema`, its owner and name compared
-ignoring case. Each holding's `completion` is one of:
+ignoring case. The trait method answers `Vec<IssueHolding>`, carried as `result.holdings`, one
+`IssueHolding` per reference. Each holding's
+`completion` is one of:
 
 - `absent` — this source holds no item for the issue, or cannot see the issue at all;
 - `skipped`, with `reason` — `closed as not planned` or `closed as duplicate`: the closure
