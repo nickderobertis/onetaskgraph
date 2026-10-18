@@ -447,6 +447,10 @@ fn an_unknown_source_and_a_malformed_reference_are_refused_before_any_request() 
             vec!["task", "status", "complete", "--issue", "onetaskgraph#3"],
             "\"onetaskgraph#3\" is not an issue reference",
         ),
+        (
+            vec!["task", "status", "complete", "--source", "board-a"],
+            "the following required arguments were not provided",
+        ),
     ] {
         let output = stores.run(&arguments);
         assert_eq!(

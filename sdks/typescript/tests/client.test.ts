@@ -1006,6 +1006,15 @@ test("a reconcile and a completion drive the real binary over a source whose sta
     await expect(malformed).rejects.toBeInstanceOf(OnetaskgraphExecutionError);
     await expect(malformed).rejects.toMatchObject({ exitCode: 2 });
     await expect(malformed).rejects.toThrow('"onetaskgraph#3" is not an issue reference');
+    // Refused before the binary is run at all.
+    expect(() => statusClient.taskStatusReconcile("work", { dryRun: JSON.parse('"yes"') })).toThrow(
+      "taskStatusReconcile: dryRun must be a boolean",
+    );
+    expect(() =>
+      statusClient.taskStatusComplete(["nickderobertis/onetaskgraph#3"], {
+        dryRun: JSON.parse('"yes"'),
+      }),
+    ).toThrow("taskStatusComplete: dryRun must be a boolean");
   } finally {
     rmSync(statusRoot, { recursive: true, force: true });
   }

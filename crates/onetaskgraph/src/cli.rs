@@ -965,7 +965,7 @@ pub struct StatusCompleteArgs {
     /// An issue a landing closed, as `owner/name#N` — the spelling a landing event's `closes`
     /// reports. Repeat it, or give several after one flag; a reference named twice is answered
     /// once per source.
-    #[arg(long = "issue", value_name = "REF", num_args = 1.., value_parser = issue_ref)]
+    #[arg(long = "issue", value_name = "REF", num_args = 1.., required = true, value_parser = issue_ref)]
     pub issue: Vec<IssueRef>,
 
     /// Ask only this configured source. Repeat for several. Without it, every configured

@@ -582,3 +582,82 @@ fn a_reconcile_on_a_cached_board_takes_the_written_tasks_entry_out_of_service() 
     );
     read_afresh_after_the_write(&cached, &held);
 }
+
+#[test]
+fn a_private_task_on_a_board_not_declared_private_is_refused_by_both_verbs_and_never_written() {
+    let sandbox = Sandbox::new();
+    let private = |id: &str| {
+        let mut item = issue(id, "Todo");
+        item["body"] = json!(format!(
+            "Not for everyone.\n\n<!-- onetaskgraph.metadata\n{}\n-->",
+            json!({"onetaskgraph.classification": "private"})
+        ));
+        item
+    };
+    let (config, board) =
+        github_projects_with_items(&sandbox, vec![private("N-1"), private("N-2")]);
+    board.reopen("T-2");
+    board.close("N-2", Some("COMPLETED"));
+    sandbox.project_document(&document(&json!({
+        "plans": {"plugin":"github-projects","config":config},
+    })));
+    let run = |arguments: &[&str]| -> Value {
+        let output = sandbox
+            .command()
+            .args(arguments)
+            .assert()
+            .get_output()
+            .clone();
+        assert_eq!(
+            output.status.code(),
+            Some(4),
+            "`onetaskgraph {}` reports the refusal as a failed item\n{}\n{}",
+            arguments.join(" "),
+            stdout(&output),
+            stderr(&output)
+        );
+        serde_json::from_str(&stdout(&output)).expect("JSON")
+    };
+    let mutations = || {
+        board
+            .served()
+            .into_iter()
+            .filter(|(document, _)| document.trim_start().starts_with("mutation"))
+            .count()
+    };
+
+    let completed = run(&[
+        "--json",
+        "task",
+        "status",
+        "complete",
+        "--issue",
+        &reference("N-1"),
+    ]);
+    let item = only(&completed);
+    assert_eq!(item["action"], "failed", "{completed:#}");
+    assert_eq!(item["task"], "plans:N-1", "{completed:#}");
+    assert!(
+        item["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("private")),
+        "the refusal says why: {completed:#}"
+    );
+
+    let reconciled = run(&["--json", "task", "status", "reconcile", "--source", "plans"]);
+    let items = reconciled["items"].as_array().expect("items");
+    assert_eq!(items.len(), 1, "{reconciled:#}");
+    assert_eq!(items[0]["source"], "plans:N-2");
+    assert_eq!(items[0]["action"], "failed", "{reconciled:#}");
+    assert!(
+        items[0]["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("private")),
+        "{reconciled:#}"
+    );
+
+    assert_eq!(mutations(), 0, "neither verb wrote anything");
+    assert_eq!(board.status("N-1").as_deref(), Some("Todo"));
+    assert_eq!(board.state("N-1").0, "OPEN");
+    assert_eq!(board.status("N-2").as_deref(), Some("Todo"));
+}
