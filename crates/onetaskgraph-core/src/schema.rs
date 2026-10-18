@@ -8,10 +8,10 @@ use std::collections::BTreeMap;
 
 use onetaskgraph_plugin_api::{
     Asset, AssetContentType, AssetName, AssetPayload, AssetUpload, AssetUploads, AssetWrite,
-    AssetsWritten, Capabilities, Classification, Comment, Completion, DependencyEdge,
-    DependencyEndpoint, DependencyKind, Direction, Document, DocumentQuery, Health, IssueHolding,
-    IssueRef, ItemKind, Label, Location, NativeId, NewComment, Page, PageRequest, Priority,
-    Project, ProjectQuery, Repository, SourceError, SourceName, Status, StatusCategory,
+    AssetsWritten, Capabilities, Classification, ClosedAs, Comment, Completion, DependencyEdge,
+    DependencyEndpoint, DependencyKind, Direction, Document, DocumentQuery, Health, HeldTask,
+    IssueHolding, IssueRef, ItemKind, Label, Location, NativeId, NewComment, Page, PageRequest,
+    Priority, Project, ProjectQuery, Repository, SourceError, SourceName, Status, StatusCategory,
     StatusContradiction, StatusMapping, Task, TaskQuery, TaskRef, TaskUpdate, TaskUpdateOutcome,
     TextFields, UpdatedField,
 };
@@ -35,7 +35,7 @@ use crate::{
     CopyVia, DeletedComment, Delivered, DeliveryOutcome, DocumentDetail, Failure, FailureClass,
     FailureDocument, GlobalId, IssueCompleted, IssuesCompleted, MetadataSet, PageToken, Predicate,
     ProjectGraph, Qualified, QualifiedEdge, QualifiedEndpoint, QueryPlan, QueryResponse,
-    ReconcileAction, Regenerated, SearchHit, SearchKind, SourceFailure, SourceListing, SourcePlan,
+    ReconcileOutcome, Regenerated, SearchHit, SearchKind, SourceFailure, SourceListing, SourcePlan,
     StatusReconciled, StatusesReconciled, TaskContentSet, TaskDetail, TaskDetails, TaskPrioritySet,
     TaskStatusSet, TaskUpdated, TemplateAnswers,
 };
@@ -199,12 +199,14 @@ pub fn schema_bundle() -> Value {
     // plugin protocol beneath them.
     roots.insert("StatusesReconciled", schema_for!(StatusesReconciled));
     roots.insert("StatusReconciled", schema_for!(StatusReconciled));
-    roots.insert("ReconcileAction", schema_for!(ReconcileAction));
+    roots.insert("ReconcileOutcome", schema_for!(ReconcileOutcome));
     roots.insert("IssuesCompleted", schema_for!(IssuesCompleted));
     roots.insert("IssueCompleted", schema_for!(IssueCompleted));
     roots.insert("CompleteAction", schema_for!(CompleteAction));
     roots.insert("IssueRef", schema_for!(IssueRef));
     roots.insert("IssueHolding", schema_for!(IssueHolding));
+    roots.insert("HeldTask", schema_for!(HeldTask));
+    roots.insert("ClosedAs", schema_for!(ClosedAs));
     roots.insert("Completion", schema_for!(Completion));
     roots.insert("StatusContradiction", schema_for!(StatusContradiction));
 

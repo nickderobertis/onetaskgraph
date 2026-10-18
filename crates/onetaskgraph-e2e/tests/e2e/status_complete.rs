@@ -15,7 +15,7 @@ use onetaskgraph_core::{Config, Engine, Environment, Secrets};
 use onetaskgraph_plugin_api::{IssueRef, SourceName};
 use serde_json::{Value, json};
 
-use crate::common::{Sandbox, stderr, stdout};
+use crate::common::{Sandbox, SourceBoundary, stderr, stdout};
 use crate::document_store::store_at;
 use crate::fixtures::{
     GITHUB_SECOND_BOARD_TOKEN, GitHubBoardFields, LinearWorkspace, dataset, github_number,
@@ -563,4 +563,253 @@ fn a_reconcile_of_a_source_whose_status_is_its_closure_answers_nothing_and_sends
     );
     assert_eq!(stores.notes(), notes);
     assert!(stores.board.served().is_empty());
+}
+
+/// The operation every read by reference carries.
+const READ_BY_REFERENCE: &str = "r0:repository(owner:$owner0";
+
+/// The items of `answer` one source answered, each as its issue and its action.
+fn answered_by(answer: &Value, source: &str) -> Vec<(String, String)> {
+    answer["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .filter(|item| item["source"] == source)
+        .map(|item| {
+            (
+                item["issue"].as_str().expect("an issue").to_owned(),
+                item["action"].as_str().expect("an action").to_owned(),
+            )
+        })
+        .collect()
+}
+
+/// The distinct references of [`NAMED`], in the order given.
+fn distinct() -> Vec<String> {
+    let mut seen = Vec::new();
+    for reference in named() {
+        if !seen.contains(&reference) {
+            seen.push(reference);
+        }
+    }
+    seen
+}
+
+/// That every item `source` answered in `answer` is `failed`, carrying a failure, one per
+/// distinct reference.
+fn every_reference_failed(answer: &Value, source: &str) {
+    let items: Vec<&Value> = answer["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .filter(|item| item["source"] == source)
+        .collect();
+    let issues: Vec<String> = items
+        .iter()
+        .map(|item| item["issue"].as_str().expect("an issue").to_owned())
+        .collect();
+    assert_eq!(
+        issues,
+        distinct(),
+        "{source}: one per reference: {answer:#}"
+    );
+    for item in items {
+        assert_eq!(item["action"], "failed", "{source}: {item:#}");
+        assert!(
+            item["error"]["message"].is_string(),
+            "{source}: the failure is carried: {item:#}"
+        );
+        assert_eq!(item["task"], Value::Null, "{item:#}");
+    }
+}
+
+#[test]
+fn a_board_that_cannot_start_answers_each_reference_failed_and_the_other_board_is_still_written() {
+    let stores = Stores::new();
+    stores
+        .sandbox
+        .secrets_file("GITHUB_PROJECTS_FIXTURE_TOKEN=test-token\nLINEAR_API_KEY=fixture-key\n");
+    let answer = stores.complete(&named(), &[], 4);
+    every_reference_failed(&answer, "board-b");
+    let owed = owed("updated");
+    let board_a: Vec<Value> = owed["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| item["source"] == "board-a")
+        .cloned()
+        .collect();
+    let answered_a: Vec<Value> = answer["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| item["source"] == "board-a")
+        .cloned()
+        .collect();
+    assert_eq!(answered_a, board_a, "board A is answered as ever");
+    assert!(
+        answer["items"].as_array().unwrap().iter().any(|item| {
+            item["source"] == "board-b"
+                && item["error"]["message"]
+                    .as_str()
+                    .is_some_and(|message| message.contains("GITHUB_PROJECTS_FIXTURE_TOKEN_B"))
+        }),
+        "the failure names the missing credential: {answer:#}"
+    );
+    assert!(
+        stores.board.served_to(GITHUB_SECOND_BOARD_TOKEN).is_empty(),
+        "board B is never reached"
+    );
+    assert_eq!(stores.board.status("N-1").as_deref(), Some("Done"));
+}
+
+#[test]
+fn a_board_whose_read_by_reference_is_refused_answers_each_reference_failed_and_writes_nothing() {
+    let stores = Stores::new();
+    stores.board.refuse_once(READ_BY_REFERENCE);
+    let answer = stores.complete(&named(), &[], 4);
+    // Sources are asked in name order, so the refused read is board A's.
+    every_reference_failed(&answer, "board-a");
+    assert_eq!(stores.board.status("N-1").as_deref(), Some("Todo"));
+    assert_eq!(stores.board.state("N-1").0, "OPEN", "board A wrote nothing");
+    let board_b = answered_by(&answer, "board-b");
+    assert!(
+        board_b.contains(&(reference("N-8"), "updated".to_owned())),
+        "board B is still written: {answer:#}"
+    );
+    assert_eq!(
+        stores.board.second_board_status("N-8").as_deref(),
+        Some("Done")
+    );
+}
+
+#[test]
+fn a_reference_no_repository_holds_is_absent_and_an_error_beside_it_fails_that_board() {
+    let stores = Stores::new();
+    let nothing = format!("{REPOSITORY}#999999");
+    let answer = stores.complete(&[reference("N-1"), nothing.clone()], &[], 0);
+    assert_eq!(
+        answered_by(&answer, "board-a"),
+        vec![
+            (reference("N-1"), "updated".to_owned()),
+            (nothing.clone(), "absent".to_owned())
+        ],
+        "a NOT_FOUND is the issue's absence: {answer:#}"
+    );
+    assert_eq!(
+        answered_by(&answer, "board-b"),
+        vec![
+            (reference("N-1"), "absent".to_owned()),
+            (nothing.clone(), "absent".to_owned())
+        ]
+    );
+
+    let stores = Stores::new();
+    stores.board.error_beside_once(
+        READ_BY_REFERENCE,
+        "Something went wrong reading a repository",
+    );
+    let answer = stores.complete(&[reference("N-1"), nothing.clone()], &[], 4);
+    let failed = answered_by(&answer, "board-a");
+    assert_eq!(
+        failed,
+        vec![
+            (reference("N-1"), "failed".to_owned()),
+            (nothing, "failed".to_owned())
+        ],
+        "an error that is not a NOT_FOUND is not read as absence: {answer:#}"
+    );
+    assert_eq!(stores.board.status("N-1").as_deref(), Some("Todo"));
+}
+
+#[test]
+fn a_board_hosted_over_the_stdio_protocol_reconciles_and_completes_as_one_in_process_does() {
+    let sandbox = Sandbox::new();
+    let items = vec![
+        issue("N-1", "Todo"),
+        issue("N-2", "In Progress"),
+        issue("N-3", "Todo"),
+    ];
+    let (mut config, board) = github_projects_with_items(&sandbox, items);
+    board.with_status_option("OPT-in-progress", "In Progress");
+    board.reopen("T-2");
+    board.close("N-2", Some("NOT_PLANNED"));
+    board.close("N-3", Some("COMPLETED"));
+    config["status_mapping"] = json!({"todo":"Todo","in-progress":"In Progress"});
+    sandbox.secrets_file(SECRETS);
+    sandbox.project_document(
+        &serde_json::to_string_pretty(&json!({"sources": {
+            "hosted": SourceBoundary::Subprocess.source_with_secrets(
+                "github-projects",
+                config,
+                &["GITHUB_PROJECTS_FIXTURE_TOKEN"],
+            ),
+        }}))
+        .expect("a configuration renders"),
+    );
+    let run = |arguments: &[&str]| -> Value {
+        let output = sandbox
+            .command()
+            .args(arguments)
+            .assert()
+            .get_output()
+            .clone();
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "`onetaskgraph {}`\n{}\n{}",
+            arguments.join(" "),
+            stdout(&output),
+            stderr(&output)
+        );
+        serde_json::from_str(&stdout(&output)).expect("JSON")
+    };
+
+    let reconciled = run(&[
+        "--json",
+        "task",
+        "status",
+        "reconcile",
+        "--source",
+        "hosted",
+    ]);
+    assert_eq!(
+        reconciled,
+        json!({"items": [
+            {"source":"hosted:N-2","from":"In Progress",
+             "to":{"category":"cancelled","name":"Cancelled"},"action":"updated"},
+            {"source":"hosted:N-3","from":"Todo",
+             "to":{"category":"done","name":"Done"},"action":"updated"},
+        ]}),
+        "{reconciled:#}"
+    );
+    assert_eq!(board.status("N-2").as_deref(), Some("Cancelled"));
+    assert_eq!(board.status("N-3").as_deref(), Some("Done"));
+
+    let completed = run(&[
+        "--json",
+        "task",
+        "status",
+        "complete",
+        "--issue",
+        &reference("N-1"),
+        "--issue",
+        &reference("N-3"),
+    ]);
+    let done = json!({"category":"done","name":"Done"});
+    assert_eq!(
+        completed,
+        json!({"items": [
+            {"issue":reference("N-1"),"source":"hosted","task":"hosted:N-1","from":"Todo",
+             "to":done,"action":"updated"},
+            {"issue":reference("N-3"),"source":"hosted","task":"hosted:N-3","from":"Done",
+             "to":done,"action":"unchanged"},
+        ], "unsupported": []}),
+        "{completed:#}"
+    );
+    assert_eq!(board.status("N-1").as_deref(), Some("Done"));
+    assert_eq!(
+        board.state("N-1"),
+        ("CLOSED".to_owned(), Some("COMPLETED".to_owned()))
+    );
 }

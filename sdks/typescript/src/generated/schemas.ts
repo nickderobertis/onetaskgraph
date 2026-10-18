@@ -587,6 +587,23 @@ export const runtimeSchemas = {
     ],
     "title": "Classification"
   },
+  "ClosedAs": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "The two closures a card is brought in line with: the categories a closed issue's reason can\nread as that name an option to move its card to.",
+    "oneOf": [
+      {
+        "const": "done",
+        "description": "Closed as completed, or with no reason: `done`.",
+        "type": "string"
+      },
+      {
+        "const": "cancelled",
+        "description": "Closed as not planned or as a duplicate: `cancelled`.",
+        "type": "string"
+      }
+    ],
+    "title": "ClosedAs"
+  },
   "Comment": {
     "$defs": {
       "CommentOrigin": {
@@ -1235,72 +1252,76 @@ export const runtimeSchemas = {
   },
   "Completion": {
     "$defs": {
-      "Status": {
-        "description": "A source's status, kept in both normalised and original form.\n\n`category` is what every filter compares against; `name` is the source's own\nwording, preserved so display never flattens \"In Review\" into \"In Progress\".",
-        "properties": {
-          "category": {
-            "$ref": "#/$defs/StatusCategory",
-            "description": "The normalised value filters compare against."
-          },
-          "name": {
-            "description": "The source's own label for this status.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "category",
-          "name"
-        ],
-        "type": "object"
-      },
-      "StatusCategory": {
-        "description": "The normalised status vocabulary shared across every source.",
+      "Classification": {
+        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository or a\nprivate project — a classification only ever tightens.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
         "oneOf": [
           {
-            "const": "draft",
-            "description": "Written down but not yet committed to as work.",
+            "const": "public",
+            "description": "Anybody who may read the destination may read it.",
             "type": "string"
           },
           {
-            "const": "backlog",
-            "description": "Known about, not yet accepted as ready to work.",
-            "type": "string"
-          },
-          {
-            "const": "todo",
-            "description": "Accepted and ready to be picked up, and nothing has claimed it.",
-            "type": "string"
-          },
-          {
-            "const": "queued",
-            "description": "Claimed by work that will do it, and not yet started.",
-            "type": "string"
-          },
-          {
-            "const": "in-progress",
-            "description": "Being worked on.",
-            "type": "string"
-          },
-          {
-            "const": "done",
-            "description": "Finished.",
-            "type": "string"
-          },
-          {
-            "const": "cancelled",
-            "description": "Abandoned.",
-            "type": "string"
-          },
-          {
-            "const": "unknown",
-            "description": "The source reported a status this vocabulary cannot place.",
+            "const": "private",
+            "description": "It may be written only to a destination verified private, and nothing of it may\nreach a public one.",
             "type": "string"
           }
         ]
+      },
+      "HeldTask": {
+        "description": "The task one source holds for an issue, as far as moving it to `done` needs it.\n\nIt carries of the task exactly what the write and the rules around it need — which task, the\ncard it sits at, the tasks it delivers, and what decides where its id may be written — rather\nthan the whole task, because the read that answers it is priced per issue and a whole task\nis not what a landing's closure needs.",
+        "properties": {
+          "classification": {
+            "$ref": "#/$defs/Classification",
+            "default": "public",
+            "description": "The task's own classification."
+          },
+          "delivers": {
+            "description": "The tasks it delivers, which a write of it to `done` keeps in step.",
+            "items": {
+              "$ref": "#/$defs/TaskRef"
+            },
+            "type": "array"
+          },
+          "id": {
+            "$ref": "#/$defs/NativeId",
+            "description": "The task, by this source's own id for it."
+          },
+          "option": {
+            "default": null,
+            "description": "The name of the option the task's card sits at, as the source spells it, when it sits\nat one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "repositories": {
+            "description": "The repositories the task names.",
+            "items": {
+              "$ref": "#/$defs/Repository"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "NativeId": {
+        "description": "A source's own opaque identifier for one item.\n\nDeliberately unvalidated: a native id is whatever the upstream system says it\nis, colons included. The engine parses a qualified id by splitting on the\n*first* colon precisely so this stays true.",
+        "type": "string"
+      },
+      "Repository": {
+        "description": "A repository identified by its normalized origin, without a URL scheme or `.git` suffix.",
+        "type": "string"
+      },
+      "TaskRef": {
+        "description": "One task named by another task's [`Task::delivers`] or [`Task::delivered_by`].\n\nA string with one of two spellings, decided the way a [`DependencyEndpoint`] decides it:\none holding a colon is `<source>:<native>` and names a task of any source, and one\nwithout is a bare native id naming a task of the source that holds the list. So a\nnative id holding a colon cannot be named bare, exactly as it cannot in\n`onetaskgraph.depends_on`.",
+        "type": "string"
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "description": "What moving one issue's item to `done` comes to at one source.",
+    "description": "What moving one issue's item to `done` comes to at one source — the task it holds riding on\nevery outcome that has one, so none can be told without its task, or with one, that has not.",
     "oneOf": [
       {
         "description": "The source holds no item for the issue, or cannot see the issue at all.",
@@ -1325,10 +1346,15 @@ export const runtimeSchemas = {
           "reason": {
             "description": "Why, as `closed as <reason>`.",
             "type": "string"
+          },
+          "task": {
+            "$ref": "#/$defs/HeldTask",
+            "description": "The task held for the issue."
           }
         },
         "required": [
           "completion",
+          "task",
           "reason"
         ],
         "type": "object"
@@ -1339,27 +1365,37 @@ export const runtimeSchemas = {
           "completion": {
             "const": "unchanged",
             "type": "string"
+          },
+          "task": {
+            "$ref": "#/$defs/HeldTask",
+            "description": "The task held for the issue."
           }
         },
         "required": [
-          "completion"
+          "completion",
+          "task"
         ],
         "type": "object"
       },
       {
-        "description": "The item is to be written `done`: its card moved to this status, and its issue closed\nas completed if it is still open.",
+        "description": "The item is to be written `done`: its card moved to the `done` option, and its issue\nclosed as completed if it is still open.",
         "properties": {
           "completion": {
             "const": "due",
             "type": "string"
           },
+          "task": {
+            "$ref": "#/$defs/HeldTask",
+            "description": "The task held for the issue."
+          },
           "to": {
-            "$ref": "#/$defs/Status",
-            "description": "The status the item will read once written."
+            "description": "The name of the option `done` writes it at.",
+            "type": "string"
           }
         },
         "required": [
           "completion",
+          "task",
           "to"
         ],
         "type": "object"
@@ -6111,6 +6147,77 @@ export const runtimeSchemas = {
     "title": "Health",
     "type": "object"
   },
+  "HeldTask": {
+    "$defs": {
+      "Classification": {
+        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository or a\nprivate project — a classification only ever tightens.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
+        "oneOf": [
+          {
+            "const": "public",
+            "description": "Anybody who may read the destination may read it.",
+            "type": "string"
+          },
+          {
+            "const": "private",
+            "description": "It may be written only to a destination verified private, and nothing of it may\nreach a public one.",
+            "type": "string"
+          }
+        ]
+      },
+      "NativeId": {
+        "description": "A source's own opaque identifier for one item.\n\nDeliberately unvalidated: a native id is whatever the upstream system says it\nis, colons included. The engine parses a qualified id by splitting on the\n*first* colon precisely so this stays true.",
+        "type": "string"
+      },
+      "Repository": {
+        "description": "A repository identified by its normalized origin, without a URL scheme or `.git` suffix.",
+        "type": "string"
+      },
+      "TaskRef": {
+        "description": "One task named by another task's [`Task::delivers`] or [`Task::delivered_by`].\n\nA string with one of two spellings, decided the way a [`DependencyEndpoint`] decides it:\none holding a colon is `<source>:<native>` and names a task of any source, and one\nwithout is a bare native id naming a task of the source that holds the list. So a\nnative id holding a colon cannot be named bare, exactly as it cannot in\n`onetaskgraph.depends_on`.",
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "The task one source holds for an issue, as far as moving it to `done` needs it.\n\nIt carries of the task exactly what the write and the rules around it need — which task, the\ncard it sits at, the tasks it delivers, and what decides where its id may be written — rather\nthan the whole task, because the read that answers it is priced per issue and a whole task\nis not what a landing's closure needs.",
+    "properties": {
+      "classification": {
+        "$ref": "#/$defs/Classification",
+        "default": "public",
+        "description": "The task's own classification."
+      },
+      "delivers": {
+        "description": "The tasks it delivers, which a write of it to `done` keeps in step.",
+        "items": {
+          "$ref": "#/$defs/TaskRef"
+        },
+        "type": "array"
+      },
+      "id": {
+        "$ref": "#/$defs/NativeId",
+        "description": "The task, by this source's own id for it."
+      },
+      "option": {
+        "default": null,
+        "description": "The name of the option the task's card sits at, as the source spells it, when it sits\nat one.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "repositories": {
+        "description": "The repositories the task names.",
+        "items": {
+          "$ref": "#/$defs/Repository"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "id"
+    ],
+    "title": "HeldTask",
+    "type": "object"
+  },
   "IssueCompleted": {
     "$defs": {
       "CompleteAction": {
@@ -6330,7 +6437,7 @@ export const runtimeSchemas = {
       },
       "IssueRef": {
         "description": "One issue of one repository, as `owner/name#N`.",
-        "pattern": "^[A-Za-z0-9-]+/[A-Za-z0-9._-]+#[1-9][0-9]*$",
+        "pattern": "^[A-Za-z0-9-]+/[A-Za-z0-9._-]+#[1-9][0-9]{0,18}$",
         "type": "string"
       },
       "SourceName": {
@@ -6403,7 +6510,7 @@ export const runtimeSchemas = {
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "description": "What one source holds for one issue reference, and what moving it to `done` came to.",
+    "description": "What one source holds for one issue reference, and what moving it to `done` came to.\n\nIts members are the ones the plan this verb landed in states field for field — `issue`,\n`source`, `task`, `from`, `to`, `action`, `reason`, `error` — because the engine's landing\nrecord and the read API build against exactly that shape; [`Engine::complete_issues`] is the\none writer, and it fills them together from one [`Completion`].",
     "properties": {
       "action": {
         "$ref": "#/$defs/CompleteAction",
@@ -6498,9 +6605,49 @@ export const runtimeSchemas = {
           }
         ]
       },
+      "HeldTask": {
+        "description": "The task one source holds for an issue, as far as moving it to `done` needs it.\n\nIt carries of the task exactly what the write and the rules around it need — which task, the\ncard it sits at, the tasks it delivers, and what decides where its id may be written — rather\nthan the whole task, because the read that answers it is priced per issue and a whole task\nis not what a landing's closure needs.",
+        "properties": {
+          "classification": {
+            "$ref": "#/$defs/Classification",
+            "default": "public",
+            "description": "The task's own classification."
+          },
+          "delivers": {
+            "description": "The tasks it delivers, which a write of it to `done` keeps in step.",
+            "items": {
+              "$ref": "#/$defs/TaskRef"
+            },
+            "type": "array"
+          },
+          "id": {
+            "$ref": "#/$defs/NativeId",
+            "description": "The task, by this source's own id for it."
+          },
+          "option": {
+            "default": null,
+            "description": "The name of the option the task's card sits at, as the source spells it, when it sits\nat one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "repositories": {
+            "description": "The repositories the task names.",
+            "items": {
+              "$ref": "#/$defs/Repository"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
       "IssueRef": {
         "description": "One issue of one repository, as `owner/name#N`.",
-        "pattern": "^[A-Za-z0-9-]+/[A-Za-z0-9._-]+#[1-9][0-9]*$",
+        "pattern": "^[A-Za-z0-9-]+/[A-Za-z0-9._-]+#[1-9][0-9]{0,18}$",
         "type": "string"
       },
       "NativeId": {
@@ -6511,76 +6658,13 @@ export const runtimeSchemas = {
         "description": "A repository identified by its normalized origin, without a URL scheme or `.git` suffix.",
         "type": "string"
       },
-      "Status": {
-        "description": "A source's status, kept in both normalised and original form.\n\n`category` is what every filter compares against; `name` is the source's own\nwording, preserved so display never flattens \"In Review\" into \"In Progress\".",
-        "properties": {
-          "category": {
-            "$ref": "#/$defs/StatusCategory",
-            "description": "The normalised value filters compare against."
-          },
-          "name": {
-            "description": "The source's own label for this status.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "category",
-          "name"
-        ],
-        "type": "object"
-      },
-      "StatusCategory": {
-        "description": "The normalised status vocabulary shared across every source.",
-        "oneOf": [
-          {
-            "const": "draft",
-            "description": "Written down but not yet committed to as work.",
-            "type": "string"
-          },
-          {
-            "const": "backlog",
-            "description": "Known about, not yet accepted as ready to work.",
-            "type": "string"
-          },
-          {
-            "const": "todo",
-            "description": "Accepted and ready to be picked up, and nothing has claimed it.",
-            "type": "string"
-          },
-          {
-            "const": "queued",
-            "description": "Claimed by work that will do it, and not yet started.",
-            "type": "string"
-          },
-          {
-            "const": "in-progress",
-            "description": "Being worked on.",
-            "type": "string"
-          },
-          {
-            "const": "done",
-            "description": "Finished.",
-            "type": "string"
-          },
-          {
-            "const": "cancelled",
-            "description": "Abandoned.",
-            "type": "string"
-          },
-          {
-            "const": "unknown",
-            "description": "The source reported a status this vocabulary cannot place.",
-            "type": "string"
-          }
-        ]
-      },
       "TaskRef": {
         "description": "One task named by another task's [`Task::delivers`] or [`Task::delivered_by`].\n\nA string with one of two spellings, decided the way a [`DependencyEndpoint`] decides it:\none holding a colon is `<source>:<native>` and names a task of any source, and one\nwithout is a bare native id naming a task of the source that holds the list. So a\nnative id holding a colon cannot be named bare, exactly as it cannot in\n`onetaskgraph.depends_on`.",
         "type": "string"
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "description": "What one source holds for one issue a landing closed, and what moving it to `done` would\nwrite — the answer to [`TaskSource::issue_holdings`](crate::TaskSource::issue_holdings).\n\nIt carries of the task exactly what the write and the rules around it need — which task, the\ncard it sits at, the tasks it delivers, and what decides where its id may be written — rather\nthan the whole task, because the read that answers it is priced per issue and a whole task\nis not what a landing's closure needs.",
+    "description": "What one source holds for one issue a landing closed, and what moving it to `done` would\nwrite — the answer to [`TaskSource::issue_holdings`](crate::TaskSource::issue_holdings).",
     "oneOf": [
       {
         "description": "The source holds no item for the issue, or cannot see the issue at all.",
@@ -6605,10 +6689,15 @@ export const runtimeSchemas = {
           "reason": {
             "description": "Why, as `closed as <reason>`.",
             "type": "string"
+          },
+          "task": {
+            "$ref": "#/$defs/HeldTask",
+            "description": "The task held for the issue."
           }
         },
         "required": [
           "completion",
+          "task",
           "reason"
         ],
         "type": "object"
@@ -6619,75 +6708,46 @@ export const runtimeSchemas = {
           "completion": {
             "const": "unchanged",
             "type": "string"
+          },
+          "task": {
+            "$ref": "#/$defs/HeldTask",
+            "description": "The task held for the issue."
           }
         },
         "required": [
-          "completion"
+          "completion",
+          "task"
         ],
         "type": "object"
       },
       {
-        "description": "The item is to be written `done`: its card moved to this status, and its issue closed\nas completed if it is still open.",
+        "description": "The item is to be written `done`: its card moved to the `done` option, and its issue\nclosed as completed if it is still open.",
         "properties": {
           "completion": {
             "const": "due",
             "type": "string"
           },
+          "task": {
+            "$ref": "#/$defs/HeldTask",
+            "description": "The task held for the issue."
+          },
           "to": {
-            "$ref": "#/$defs/Status",
-            "description": "The status the item will read once written."
+            "description": "The name of the option `done` writes it at.",
+            "type": "string"
           }
         },
         "required": [
           "completion",
+          "task",
           "to"
         ],
         "type": "object"
       }
     ],
     "properties": {
-      "classification": {
-        "$ref": "#/$defs/Classification",
-        "default": "public",
-        "description": "The task's own classification."
-      },
-      "delivers": {
-        "description": "The tasks it delivers, which a write of it to `done` keeps in step.",
-        "items": {
-          "$ref": "#/$defs/TaskRef"
-        },
-        "type": "array"
-      },
       "issue": {
         "$ref": "#/$defs/IssueRef",
         "description": "The issue asked about."
-      },
-      "option": {
-        "default": null,
-        "description": "The name of the option the task's card sits at, as the source spells it, when it sits\nat one.",
-        "type": [
-          "string",
-          "null"
-        ]
-      },
-      "repositories": {
-        "description": "The repositories the task names.",
-        "items": {
-          "$ref": "#/$defs/Repository"
-        },
-        "type": "array"
-      },
-      "task": {
-        "anyOf": [
-          {
-            "$ref": "#/$defs/NativeId"
-          },
-          {
-            "type": "null"
-          }
-        ],
-        "default": null,
-        "description": "The task this source holds for it — `None` when it holds none."
       }
     },
     "required": [
@@ -6699,7 +6759,7 @@ export const runtimeSchemas = {
   "IssueRef": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "description": "One issue of one repository, as `owner/name#N`.",
-    "pattern": "^[A-Za-z0-9-]+/[A-Za-z0-9._-]+#[1-9][0-9]*$",
+    "pattern": "^[A-Za-z0-9-]+/[A-Za-z0-9._-]+#[1-9][0-9]{0,18}$",
     "title": "IssueRef",
     "type": "string"
   },
@@ -6921,7 +6981,7 @@ export const runtimeSchemas = {
         "type": "string"
       },
       "IssueCompleted": {
-        "description": "What one source holds for one issue reference, and what moving it to `done` came to.",
+        "description": "What one source holds for one issue reference, and what moving it to `done` came to.\n\nIts members are the ones the plan this verb landed in states field for field — `issue`,\n`source`, `task`, `from`, `to`, `action`, `reason`, `error` — because the engine's landing\nrecord and the read API build against exactly that shape; [`Engine::complete_issues`] is the\none writer, and it fills them together from one [`Completion`].",
         "properties": {
           "action": {
             "$ref": "#/$defs/CompleteAction",
@@ -7000,7 +7060,7 @@ export const runtimeSchemas = {
       },
       "IssueRef": {
         "description": "One issue of one repository, as `owner/name#N`.",
-        "pattern": "^[A-Za-z0-9-]+/[A-Za-z0-9._-]+#[1-9][0-9]*$",
+        "pattern": "^[A-Za-z0-9-]+/[A-Za-z0-9._-]+#[1-9][0-9]{0,18}$",
         "type": "string"
       },
       "SourceName": {
@@ -14343,27 +14403,123 @@ export const runtimeSchemas = {
     "title": "QueryResponse",
     "type": "object"
   },
-  "ReconcileAction": {
+  "ReconcileOutcome": {
+    "$defs": {
+      "Failure": {
+        "description": "Why one command failed.\n\nEvery member is always written, `source` and `retry_after_seconds` as `null` when they\nhave nothing to say, so a caller reads a fixed shape.",
+        "properties": {
+          "class": {
+            "$ref": "#/$defs/FailureClass",
+            "description": "Whether repeating the request unchanged could change the answer."
+          },
+          "kind": {
+            "description": "What failed: the causing source error's own `kind` when a source caused it, and\notherwise this product's kebab-case name for the failure, such as `no-such-item`.",
+            "type": "string"
+          },
+          "message": {
+            "description": "What the command reported on standard error, without its `onetaskgraph: ` prefix.",
+            "type": "string"
+          },
+          "retry_after_seconds": {
+            "description": "How many seconds a rate limit asked the caller to wait, or `null` when it named no\nwait.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "source": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SourceName"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The configured source the failure came from, or `null` when none did."
+          }
+        },
+        "required": [
+          "class",
+          "kind",
+          "message",
+          "retry_after_seconds",
+          "source"
+        ],
+        "type": "object"
+      },
+      "FailureClass": {
+        "description": "Whether repeating a failed request unchanged could change the answer.\n\nClosed on purpose: a caller acts on this alone, so a third value would be one every\ncaller written before it silently misreads. What the failure *was* is\n[`Failure`]'s `kind`, which is the open half.",
+        "oneOf": [
+          {
+            "const": "refused",
+            "description": "The store or a source declined the request; repeating it unchanged cannot alter\nthe answer.",
+            "type": "string"
+          },
+          {
+            "const": "transient",
+            "description": "The request got no ruling a caller could act on, so the same request may succeed\nlater.",
+            "type": "string"
+          }
+        ]
+      },
+      "SourceName": {
+        "description": "The name a configuration document gives one configured source.",
+        "pattern": "^[a-z0-9][a-z0-9-]*$",
+        "type": "string"
+      }
+    },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "description": "What reconciling one item came to.",
     "oneOf": [
       {
-        "const": "updated",
         "description": "Its card was moved.",
-        "type": "string"
+        "properties": {
+          "action": {
+            "const": "updated",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "type": "object"
       },
       {
-        "const": "would-update",
         "description": "Its card would be moved; a dry run wrote nothing.",
-        "type": "string"
+        "properties": {
+          "action": {
+            "const": "would-update",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "type": "object"
       },
       {
-        "const": "failed",
-        "description": "Its card could not be moved; `error` says why.",
-        "type": "string"
+        "description": "Its card could not be moved.",
+        "properties": {
+          "action": {
+            "const": "failed",
+            "type": "string"
+          },
+          "error": {
+            "$ref": "#/$defs/Failure",
+            "description": "Why — the failure object a failure document carries."
+          }
+        },
+        "required": [
+          "action",
+          "error"
+        ],
+        "type": "object"
       }
     ],
-    "title": "ReconcileAction"
+    "title": "ReconcileOutcome"
   },
   "Regenerated": {
     "$defs": {
@@ -16479,6 +16635,21 @@ export const runtimeSchemas = {
           }
         ]
       },
+      "ClosedAs": {
+        "description": "The two closures a card is brought in line with: the categories a closed issue's reason can\nread as that name an option to move its card to.",
+        "oneOf": [
+          {
+            "const": "done",
+            "description": "Closed as completed, or with no reason: `done`.",
+            "type": "string"
+          },
+          {
+            "const": "cancelled",
+            "description": "Closed as not planned or as a duplicate: `cancelled`.",
+            "type": "string"
+          }
+        ]
+      },
       "Label": {
         "description": "A tag a source attaches to work.",
         "properties": {
@@ -16781,8 +16952,12 @@ export const runtimeSchemas = {
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "description": "One item whose card contradicts its issue's closure, and the status that brings it in line\n— one entry of [`TaskSource::status_contradictions`](crate::TaskSource::status_contradictions).",
+    "description": "One item whose card contradicts its issue's closure, and the option that brings it in line\n— one entry of [`TaskSource::status_contradictions`](crate::TaskSource::status_contradictions).",
     "properties": {
+      "closed_as": {
+        "$ref": "#/$defs/ClosedAs",
+        "description": "What its closure reads as."
+      },
       "option": {
         "default": null,
         "description": "The option its card sits at, or `None` for a card with no option.",
@@ -16796,12 +16971,13 @@ export const runtimeSchemas = {
         "description": "The task, as it reads now."
       },
       "to": {
-        "$ref": "#/$defs/Status",
-        "description": "The status its closure implies: `done` or `cancelled`, named by the option the source's\nmapping gives that category."
+        "description": "The name of the option the source's mapping gives that category, which its card is\nmoved to.",
+        "type": "string"
       }
     },
     "required": [
       "task",
+      "closed_as",
       "to"
     ],
     "title": "StatusContradiction",
@@ -17324,26 +17500,6 @@ export const runtimeSchemas = {
         "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
         "type": "string"
       },
-      "ReconcileAction": {
-        "description": "What reconciling one item came to.",
-        "oneOf": [
-          {
-            "const": "updated",
-            "description": "Its card was moved.",
-            "type": "string"
-          },
-          {
-            "const": "would-update",
-            "description": "Its card would be moved; a dry run wrote nothing.",
-            "type": "string"
-          },
-          {
-            "const": "failed",
-            "description": "Its card could not be moved; `error` says why.",
-            "type": "string"
-          }
-        ]
-      },
       "SourceName": {
         "description": "The name a configuration document gives one configured source.",
         "pattern": "^[a-z0-9][a-z0-9-]*$",
@@ -17415,22 +17571,53 @@ export const runtimeSchemas = {
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "description": "One item `task status reconcile` brought in line, or would, or could not.",
-    "properties": {
-      "action": {
-        "$ref": "#/$defs/ReconcileAction",
-        "description": "What became of it."
-      },
-      "error": {
-        "anyOf": [
-          {
-            "$ref": "#/$defs/Failure"
-          },
-          {
-            "type": "null"
+    "oneOf": [
+      {
+        "description": "Its card was moved.",
+        "properties": {
+          "action": {
+            "const": "updated",
+            "type": "string"
           }
+        },
+        "required": [
+          "action"
         ],
-        "description": "Why it failed — the failure object a failure document carries — present only when it\ndid."
+        "type": "object"
       },
+      {
+        "description": "Its card would be moved; a dry run wrote nothing.",
+        "properties": {
+          "action": {
+            "const": "would-update",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "Its card could not be moved.",
+        "properties": {
+          "action": {
+            "const": "failed",
+            "type": "string"
+          },
+          "error": {
+            "$ref": "#/$defs/Failure",
+            "description": "Why — the failure object a failure document carries."
+          }
+        },
+        "required": [
+          "action",
+          "error"
+        ],
+        "type": "object"
+      }
+    ],
+    "properties": {
       "from": {
         "description": "The option its card sat at, or `null` for a card with none.",
         "type": [
@@ -17449,8 +17636,7 @@ export const runtimeSchemas = {
     },
     "required": [
       "source",
-      "to",
-      "action"
+      "to"
     ],
     "title": "StatusReconciled",
     "type": "object"
@@ -17520,26 +17706,6 @@ export const runtimeSchemas = {
       "GlobalId": {
         "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
         "type": "string"
-      },
-      "ReconcileAction": {
-        "description": "What reconciling one item came to.",
-        "oneOf": [
-          {
-            "const": "updated",
-            "description": "Its card was moved.",
-            "type": "string"
-          },
-          {
-            "const": "would-update",
-            "description": "Its card would be moved; a dry run wrote nothing.",
-            "type": "string"
-          },
-          {
-            "const": "failed",
-            "description": "Its card could not be moved; `error` says why.",
-            "type": "string"
-          }
-        ]
       },
       "SourceName": {
         "description": "The name a configuration document gives one configured source.",
@@ -17611,22 +17777,53 @@ export const runtimeSchemas = {
       },
       "StatusReconciled": {
         "description": "One item `task status reconcile` brought in line, or would, or could not.",
-        "properties": {
-          "action": {
-            "$ref": "#/$defs/ReconcileAction",
-            "description": "What became of it."
-          },
-          "error": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/Failure"
-              },
-              {
-                "type": "null"
+        "oneOf": [
+          {
+            "description": "Its card was moved.",
+            "properties": {
+              "action": {
+                "const": "updated",
+                "type": "string"
               }
+            },
+            "required": [
+              "action"
             ],
-            "description": "Why it failed — the failure object a failure document carries — present only when it\ndid."
+            "type": "object"
           },
+          {
+            "description": "Its card would be moved; a dry run wrote nothing.",
+            "properties": {
+              "action": {
+                "const": "would-update",
+                "type": "string"
+              }
+            },
+            "required": [
+              "action"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Its card could not be moved.",
+            "properties": {
+              "action": {
+                "const": "failed",
+                "type": "string"
+              },
+              "error": {
+                "$ref": "#/$defs/Failure",
+                "description": "Why — the failure object a failure document carries."
+              }
+            },
+            "required": [
+              "action",
+              "error"
+            ],
+            "type": "object"
+          }
+        ],
+        "properties": {
           "from": {
             "description": "The option its card sat at, or `null` for a card with none.",
             "type": [
@@ -17645,8 +17842,7 @@ export const runtimeSchemas = {
         },
         "required": [
           "source",
-          "to",
-          "action"
+          "to"
         ],
         "type": "object"
       }
@@ -17655,7 +17851,7 @@ export const runtimeSchemas = {
     "description": "What `task status reconcile` answers with.",
     "properties": {
       "items": {
-        "description": "One entry per item whose card contradicted its closure, in the order the source read\nthem. Empty for a source with nothing out of line, and for one whose status is its\nclosure.",
+        "description": "One entry per item whose card contradicted its closure, in the order the source read\nthem. Empty for a source with nothing out of line, and for one that does not declare\n`reconcile_status`.",
         "items": {
           "$ref": "#/$defs/StatusReconciled"
         },

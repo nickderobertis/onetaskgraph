@@ -105,6 +105,10 @@ impl Setup {
                 None,
                 "{what}: the board holds no item for {issue}"
             );
+            assert!(
+                !self.board.holds_issue(issue),
+                "{what}: the repository holds no issue {issue}"
+            );
         }
         assert_eq!(self.tasks(), tasks_before, "{what}: the board's tasks");
     }

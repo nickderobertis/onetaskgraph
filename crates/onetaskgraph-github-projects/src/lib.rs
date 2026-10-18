@@ -630,15 +630,16 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
-    Capabilities, Classification, Comment, CommentBody, CommentOrigin, Completion, Coverage,
-    Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport, Direction,
-    Document, DocumentQuery, DocumentVersionCoverage, Health, IssueHolding, IssueRef, ItemKind,
-    ItemWrite, Label, LabelFilter, Location, MetadataKey, Metering, NativeId, NewComment, Page,
-    PageRequest, Priority, Project, ProjectFilter, ProjectQuery, ProjectVersionCoverage,
-    Repository, SecretResolver, SharedClock, SourceError, SourceName, SourcePlugin, Status,
-    StatusCategory, StatusContradiction, StatusMapping, Support, Task, TaskDetailRead, TaskQuery,
-    TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome, TextFields, TextQuery, UnmappedStatus,
-    UpdatedField, VersionCoverage, WriteJournal, WriteSupport, system_clock,
+    Capabilities, Classification, ClosedAs, Comment, CommentBody, CommentOrigin, Completion,
+    Coverage, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport,
+    Direction, Document, DocumentQuery, DocumentVersionCoverage, Health, HeldTask, IssueHolding,
+    IssueRef, ItemKind, ItemWrite, Label, LabelFilter, Location, MetadataKey, Metering, NativeId,
+    NewComment, Page, PageRequest, Priority, Project, ProjectFilter, ProjectQuery,
+    ProjectVersionCoverage, Repository, SecretResolver, SharedClock, SourceError, SourceName,
+    SourcePlugin, Status, StatusCategory, StatusContradiction, StatusMapping, Support, Task,
+    TaskDetailRead, TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome, TextFields,
+    TextQuery, UnmappedStatus, UpdatedField, VersionCoverage, WriteJournal, WriteSupport,
+    system_clock,
 };
 use reqwest::{Client, StatusCode, Url};
 use schemars::{Schema, schema_for};
@@ -3060,19 +3061,20 @@ impl BoardStatuses {
         option: Option<&str>,
         closed: bool,
         reason: Option<&str>,
-    ) -> Option<(StatusCategory, &str)> {
+    ) -> Option<(ClosedAs, &str)> {
         if !closed {
             return None;
         }
-        let category = closed_category(reason);
-        if !matches!(category, StatusCategory::Done | StatusCategory::Cancelled) {
-            return None;
-        }
-        let wanted = self.target(kind, category).option()?;
+        let closed_as = match closed_category(reason) {
+            StatusCategory::Done => ClosedAs::Done,
+            StatusCategory::Cancelled => ClosedAs::Cancelled,
+            _ => return None,
+        };
+        let wanted = self.target(kind, closed_as.category()).option()?;
         if option.is_some_and(|option| option.eq_ignore_ascii_case(wanted)) {
             return None;
         }
-        Some((category, wanted))
+        Some((closed_as, wanted))
     }
 }
 
@@ -4817,16 +4819,41 @@ impl GitHubProjectsSource {
     /// as there.
     fn answer_unresolved(&self, body: &str) -> Result<Value, SourceError> {
         let parsed: Option<Value> = serde_json::from_str(body).ok();
-        let unresolved_only = parsed.as_ref().is_some_and(|parsed| {
-            parsed.get("data").is_some_and(Value::is_object)
-                && parsed
-                    .get("errors")
+        // Each error is a `NOT_FOUND` whose path names one slot of the batch, `r<n>` or its
+        // `issue`, and the answer holds `null` at exactly that path: anything else — another
+        // kind of error, one naming no slot, or one beside a value it says is not there — is a
+        // refusal of the whole read.
+        let unresolved = |data: &Value, error: &Value| {
+            error.get("type").and_then(Value::as_str) == Some("NOT_FOUND")
+                && error
+                    .get("path")
                     .and_then(Value::as_array)
-                    .is_some_and(|errors| {
-                        errors.iter().all(|error| {
-                            error.get("type").and_then(Value::as_str) == Some("NOT_FOUND")
-                        })
+                    .is_some_and(|path| {
+                        let alias = path.first().and_then(Value::as_str).and_then(|alias| {
+                            alias
+                                .strip_prefix('r')
+                                .and_then(|slot| slot.parse::<usize>().ok())
+                                .filter(|slot| *slot < REFERENCE_BATCH)
+                                .map(|_| alias)
+                        });
+                        match (alias, path.get(1).and_then(Value::as_str), path.len()) {
+                            (Some(alias), None, 1) => data.get(alias).is_some_and(Value::is_null),
+                            (Some(alias), Some("issue"), 2) => data
+                                .get(alias)
+                                .and_then(|repository| repository.get("issue"))
+                                .is_some_and(Value::is_null),
+                            _ => false,
+                        }
                     })
+        };
+        let unresolved_only = parsed.as_ref().is_some_and(|parsed| {
+            parsed.get("data").is_some_and(|data| {
+                data.is_object()
+                    && parsed
+                        .get("errors")
+                        .and_then(Value::as_array)
+                        .is_some_and(|errors| errors.iter().all(|error| unresolved(data, error)))
+            })
         });
         match parsed {
             Some(parsed) if unresolved_only => Ok(parsed["data"].clone()),
@@ -10595,6 +10622,27 @@ fn held_issue(issue: &Value) -> Value {
     issue
 }
 
+/// The issue one slot of a read by reference answered, `None` when GitHub answered that
+/// slot's repository or issue `null` — which [`GitHubProjectsSource::answer_unresolved`]
+/// admitted only beside a `NOT_FOUND` naming that very slot — and a refusal when the answer
+/// leaves the slot, or its `issue` member, out: an answer missing a member is malformed rather
+/// than a reference nothing holds.
+fn referenced_issue(data: &Value, slot: usize) -> Result<Option<&Value>, SourceError> {
+    let alias = format!("r{slot}");
+    let repository = data.get(&alias).ok_or_else(|| SourceError::Malformed {
+        message: format!("GitHub answered a read by reference with no {alias}"),
+    })?;
+    if repository.is_null() {
+        return Ok(None);
+    }
+    let issue = repository
+        .get("issue")
+        .ok_or_else(|| SourceError::Malformed {
+            message: format!("GitHub answered {alias} of a read by reference with no issue"),
+        })?;
+    Ok((!issue.is_null()).then_some(issue))
+}
+
 /// A closure reason as a person reads it: `NOT_PLANNED` as `not planned`.
 fn spoken_reason(reason: &str) -> String {
     reason.to_ascii_lowercase().replace('_', " ")
@@ -10649,7 +10697,7 @@ impl GitHubProjectsSource {
                 if resolved.kind != BoardKind::Work(ItemKind::Task) {
                     continue;
                 }
-                let Some((category, name)) = self.statuses.contradicted(
+                let Some((closed_as, name)) = self.statuses.contradicted(
                     ItemKind::Task,
                     resolved.option.as_deref(),
                     resolved.closed,
@@ -10658,10 +10706,8 @@ impl GitHubProjectsSource {
                     continue;
                 };
                 found.push(StatusContradiction {
-                    to: Status {
-                        category,
-                        name: name.to_owned(),
-                    },
+                    closed_as,
+                    to: name.to_owned(),
                     option: resolved.option.clone(),
                     task: resolved.task()?,
                 });
@@ -10707,9 +10753,7 @@ impl GitHubProjectsSource {
                 .graphql(graphql::ISSUES_BY_REFERENCE, reference_batch(batch))
                 .await?;
             for (slot, issue) in batch.iter().enumerate() {
-                let node = data
-                    .pointer(&format!("/r{slot}/issue"))
-                    .filter(|node| !node.is_null());
+                let node = referenced_issue(&data, slot)?;
                 let resolved = match node {
                     Some(node) => self
                         .resolve_issue_as(&held_issue(node), false)
@@ -10717,21 +10761,24 @@ impl GitHubProjectsSource {
                         .filter(|item| item.kind == BoardKind::Work(ItemKind::Task)),
                     None => None,
                 };
-                let absent = || IssueHolding {
-                    issue: issue.clone(),
-                    task: None,
-                    option: None,
-                    classification: Classification::default(),
-                    repositories: Vec::new(),
-                    delivers: Vec::new(),
-                    completion: Completion::Absent,
-                };
                 let Some(item) = resolved else {
-                    holdings.push(absent());
+                    holdings.push(IssueHolding {
+                        issue: issue.clone(),
+                        completion: Completion::Absent,
+                    });
                     continue;
+                };
+                let held = item.task()?;
+                let task = HeldTask {
+                    id: held.id,
+                    option: item.option.clone(),
+                    classification: held.classification,
+                    repositories: held.repositories,
+                    delivers: held.delivers,
                 };
                 let completion = match (item.closed, item.reason.as_deref()) {
                     (true, Some(reason @ ("NOT_PLANNED" | "DUPLICATE"))) => Completion::Skipped {
+                        task,
                         reason: format!("closed as {}", spoken_reason(reason)),
                     },
                     (true, None | Some("COMPLETED"))
@@ -10740,35 +10787,27 @@ impl GitHubProjectsSource {
                             .as_deref()
                             .is_some_and(|option| option.eq_ignore_ascii_case(&done)) =>
                     {
-                        Completion::Unchanged
+                        Completion::Unchanged { task }
                     }
-                    _ => Completion::Due {
-                        to: Status {
-                            category: StatusCategory::Done,
-                            name: done.clone(),
-                        },
-                    },
+                    _ => {
+                        let mut kept = item.clone();
+                        kept.partial = true;
+                        self.held_cache
+                            .lock()
+                            .map_err(|_| SourceError::Unavailable {
+                                message: "items read by issue reference were left \
+                                          inconsistent; run the command again"
+                                    .into(),
+                            })?
+                            .insert(kept.id.clone(), kept);
+                        Completion::Due {
+                            task,
+                            to: done.clone(),
+                        }
+                    }
                 };
-                let task = item.task()?;
-                if matches!(completion, Completion::Due { .. }) {
-                    let mut held = item.clone();
-                    held.partial = true;
-                    self.held_cache
-                        .lock()
-                        .map_err(|_| SourceError::Unavailable {
-                            message: "items read by issue reference were left inconsistent; \
-                                      run the command again"
-                                .into(),
-                        })?
-                        .insert(held.id.clone(), held);
-                }
                 holdings.push(IssueHolding {
                     issue: issue.clone(),
-                    task: Some(task.id),
-                    option: item.option.clone(),
-                    classification: task.classification,
-                    repositories: task.repositories,
-                    delivers: task.delivers,
                     completion,
                 });
             }

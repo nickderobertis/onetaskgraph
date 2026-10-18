@@ -48,7 +48,9 @@ pub use comment::{
 };
 pub use error::SourceError;
 pub use id::{NativeId, SOURCE_NAME_PATTERN, SourceName};
-pub use issue::{Completion, ISSUE_REF_PATTERN, IssueHolding, IssueRef, StatusContradiction};
+pub use issue::{
+    ClosedAs, Completion, HeldTask, ISSUE_REF_PATTERN, IssueHolding, IssueRef, StatusContradiction,
+};
 pub use metadata::{MetadataKey, MetadataRecord, unwritable_metadata};
 pub use metering::{Metered, Metering};
 pub use query::{

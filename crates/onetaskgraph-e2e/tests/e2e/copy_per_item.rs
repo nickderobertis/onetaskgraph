@@ -238,32 +238,83 @@ fn a_project_copy_holding_a_task_the_destination_cannot_hold_still_writes_nothin
 /// A folder of Markdown `plan` holding `A`, `B` and `Z`, copied into the Python store over a real
 /// pipe with `settings`; answers the copy's output and the lines the store logged.
 fn into_the_store(settings: Value) -> (Sandbox, Output, Vec<Value>, PathBuf) {
-    let sandbox = Sandbox::new();
-    let plan = sandbox.subdirectory("plan");
-    std::fs::create_dir_all(plan.join("tasks")).expect("the task folder");
-    for (id, title) in [("A", "Alpha"), ("B", "Beta"), ("Z", "Zeta")] {
-        std::fs::write(
-            plan.join(format!("tasks/{id}.md")),
-            format!("---\ntitle: {title}\nstatus: todo\n---\n{title}.\n"),
-        )
-        .expect("a task");
+    let into = PlanAndStore::new(&[], settings);
+    let output = into.copy();
+    let logged = logged(&into.log);
+    (into.sandbox, output, logged, into.at)
+}
+
+/// A folder of Markdown `plan` holding `A` (`Alpha`), `B` (`Beta`) and `Z` (`Zeta`) — each with
+/// the front matter `extra` gives it — beside the Python store, configured with `settings`.
+struct PlanAndStore {
+    sandbox: Sandbox,
+    plan: PathBuf,
+    at: PathBuf,
+    log: PathBuf,
+}
+
+impl PlanAndStore {
+    fn new(extra: &[(&str, &str)], settings: Value) -> Self {
+        let sandbox = Sandbox::new();
+        let plan = sandbox.subdirectory("plan");
+        std::fs::create_dir_all(plan.join("tasks")).expect("the task folder");
+        for (id, title) in [("A", "Alpha"), ("B", "Beta"), ("Z", "Zeta")] {
+            let more = extra
+                .iter()
+                .filter(|(of, _)| *of == id)
+                .map(|(_, line)| format!("{line}\n"))
+                .collect::<String>();
+            std::fs::write(
+                plan.join(format!("tasks/{id}.md")),
+                format!("---\ntitle: {title}\nstatus: todo\n{more}---\n{title}.\n"),
+            )
+            .expect("a task");
+        }
+        let at = sandbox.subdirectory("store").join("store.json");
+        let log = sandbox.subdirectory("store").join("log.jsonl");
+        let into = Self {
+            sandbox,
+            plan,
+            at,
+            log,
+        };
+        into.configure(settings);
+        into
     }
-    let at = sandbox.subdirectory("store").join("store.json");
-    let log = sandbox.subdirectory("store").join("log.jsonl");
-    sandbox.project_document(&document(&json!({
-        "plan": {"plugin": "local-md", "config": {"root": plan}},
-        "store": store(&at, &log, settings),
-    })));
-    let output = sandbox
-        .command()
-        .args([
-            "--json", "task", "copy", "--source", "plan", "--to", "store",
-        ])
-        .assert()
-        .get_output()
-        .clone();
-    let logged = logged(&log);
-    (sandbox, output, logged, at)
+
+    /// Configure the store with `settings`, from here on.
+    fn configure(&self, settings: Value) {
+        self.sandbox.project_document(&document(&json!({
+            "plan": {"plugin": "local-md", "config": {"root": self.plan}},
+            "store": store(&self.at, &self.log, settings),
+        })));
+    }
+
+    /// Every task of the folder copied by query into the store.
+    fn copy(&self) -> Output {
+        self.sandbox
+            .command()
+            .args([
+                "--json", "task", "copy", "--source", "plan", "--to", "store",
+            ])
+            .assert()
+            .get_output()
+            .clone()
+    }
+
+    /// The task the store holds under `title`, as it holds it.
+    fn held_task(&self, title: &str) -> Value {
+        let held: Value =
+            serde_json::from_str(&std::fs::read_to_string(&self.at).expect("the store"))
+                .expect("the store");
+        held["tasks"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|task| task["title"] == title)
+            .cloned()
+            .unwrap_or_else(|| panic!("the store holds {title}: {held:#}"))
+    }
 }
 
 /// Every line the store logged, in order.
@@ -370,4 +421,152 @@ fn a_refusal_of_another_kind_at_the_check_writes_nothing() {
         "nothing was written: {logged:?}"
     );
     assert!(held(&at).is_empty());
+}
+
+/// The sources and actions a copy's machine output answers, in order.
+fn actions(output: &Output) -> Vec<(String, String)> {
+    let answer: Value = serde_json::from_str(&stdout(output)).expect("JSON");
+    answer["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .map(|item| {
+            (
+                item["source"].as_str().unwrap_or_default().to_owned(),
+                item["action"].as_str().unwrap_or_default().to_owned(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn two_tasks_the_destination_refuses_are_both_left_out_and_the_rest_are_copied() {
+    let (_sandbox, output, _logged, at) =
+        into_the_store(json!({"write_checks": true, "unrepresentable": ["Alpha", "Zeta"]}));
+    assert_eq!(output.status.code(), Some(4), "{}", stderr(&output));
+    assert_eq!(
+        actions(&output),
+        [
+            ("plan:A".to_owned(), "failed".to_owned()),
+            ("plan:B".to_owned(), "created".to_owned()),
+            ("plan:Z".to_owned(), "failed".to_owned()),
+        ]
+    );
+    assert!(
+        stderr(&output).contains("plan:A was not copied")
+            && stderr(&output).contains("plan:Z was not copied"),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(held(&at), ["Beta"]);
+}
+
+#[test]
+fn a_counterpart_the_destination_refuses_to_update_is_left_as_it_was() {
+    let into = PlanAndStore::new(&[], json!({"write_checks": true}));
+    let first = into.copy();
+    assert_eq!(first.status.code(), Some(0), "{}", stderr(&first));
+    let before = into.held_task("Zeta");
+    // Each task changes at its source; the store then refuses Zeta's new form.
+    for (id, title) in [("A", "Alpha"), ("B", "Beta"), ("Z", "Zeta")] {
+        let path = into.plan.join(format!("tasks/{id}.md"));
+        let text = std::fs::read_to_string(&path).expect("a task");
+        std::fs::write(&path, text.replace(&format!("{title}.\n"), "Edited.\n")).expect("an edit");
+    }
+    into.configure(json!({"write_checks": true, "unrepresentable": ["Zeta"]}));
+    let second = into.copy();
+    assert_eq!(second.status.code(), Some(4), "{}", stderr(&second));
+    assert_eq!(
+        actions(&second),
+        [
+            ("plan:A".to_owned(), "updated".to_owned()),
+            ("plan:B".to_owned(), "updated".to_owned()),
+            ("plan:Z".to_owned(), "failed".to_owned()),
+        ]
+    );
+    assert_eq!(
+        into.held_task("Zeta"),
+        before,
+        "the refused task's counterpart is exactly as the first copy left it"
+    );
+    assert!(
+        into.held_task("Alpha")["content"]
+            .as_str()
+            .is_some_and(|content| content.starts_with("Edited.")),
+        "{:#}",
+        into.held_task("Alpha")
+    );
+}
+
+#[test]
+fn a_task_delivering_one_the_destination_refuses_carries_it_as_a_task_outside_the_copy() {
+    // `A` delivers `Z`, which is in progress — a status the folder copied into has no name for.
+    let sandbox = Sandbox::new();
+    let plan = sandbox.subdirectory("plan");
+    let notes = sandbox.subdirectory("notes");
+    for root in [&plan, &notes] {
+        std::fs::create_dir_all(root.join("tasks")).expect("a task folder");
+    }
+    for (id, front) in [
+        ("A", "title: Alpha\nstatus: todo\ndelivers: [Z]"),
+        ("B", "title: Beta\nstatus: todo"),
+        (
+            "Z",
+            "title: Zeta\nstatus: in progress\ndelivered_by: [plan:A]",
+        ),
+    ] {
+        std::fs::write(
+            plan.join(format!("tasks/{id}.md")),
+            format!("---\n{front}\n---\n{id}.\n"),
+        )
+        .expect("a task");
+    }
+    sandbox.project_document(&document(&json!({
+        "plan": {"plugin": "local-md", "config": {"root": plan}},
+        "notes": {"plugin": "local-md", "config": {"root": notes,
+            "status_mapping": {"Todo": "todo", "Done": "done"}}},
+    })));
+    let output = sandbox
+        .command()
+        .args([
+            "--json", "task", "copy", "--source", "plan", "--to", "notes",
+        ])
+        .assert()
+        .get_output()
+        .clone();
+    assert_eq!(output.status.code(), Some(4), "{}", stderr(&output));
+    assert_eq!(
+        actions(&output),
+        [
+            ("plan:A".to_owned(), "created".to_owned()),
+            ("plan:B".to_owned(), "created".to_owned()),
+            ("plan:Z".to_owned(), "failed".to_owned()),
+        ]
+    );
+    let shown = sandbox
+        .command()
+        .args(["--json", "task", "list", "--source", "notes"])
+        .assert()
+        .get_output()
+        .clone();
+    let listed: Value = serde_json::from_str(&stdout(&shown)).expect("JSON");
+    let alpha = listed["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .find(|item| item["item"]["title"] == "Alpha")
+        .unwrap_or_else(|| panic!("Alpha landed: {listed:#}"));
+    assert_eq!(
+        alpha["item"]["delivers"],
+        json!(["plan:Z"]),
+        "the entry names the task left out where it is, and no copy of it, which there is \
+         not: {alpha:#}"
+    );
+    assert_eq!(
+        std::fs::read_dir(notes.join("tasks"))
+            .expect("the folder")
+            .count(),
+        2,
+        "nothing of Zeta was written"
+    );
 }

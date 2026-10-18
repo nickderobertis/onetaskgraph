@@ -709,7 +709,7 @@ async fn a_reconcile_dry_run_reads_the_live_board_through_its_closed_filter_alon
         let item = listed(contradicting).ok_or("the contradicting task was not listed")?;
         if item.from.as_deref() != Some(first.as_str())
             || item.to.name != *done
-            || item.action != onetaskgraph_core::ReconcileAction::WouldUpdate
+            || item.outcome != onetaskgraph_core::ReconcileOutcome::WouldUpdate
         {
             return Err(format!("the contradicting task was listed as {item:?}"));
         }

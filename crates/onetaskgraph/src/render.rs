@@ -15,7 +15,7 @@ use onetaskgraph_core::config::SourceRoute;
 use onetaskgraph_core::{
     CommentList, CompleteAction, CopyAction, CopyReport, DeletedComment, Delivered,
     DeliveryOutcome, GlobalId, IssuesCompleted, MetadataSet, Predicate, Qualified, QualifiedEdge,
-    QueryPlan, ReconcileAction, Regenerated, SearchHit, SourceListing, SourceState,
+    QueryPlan, ReconcileOutcome, Regenerated, SearchHit, SourceListing, SourceState,
     StatusesReconciled, TaskContentSet, TaskDetails, TaskPrioritySet, TaskStatusSet, TaskUpdated,
     TemplateVariables,
 };
@@ -268,40 +268,41 @@ pub fn status_set(set: &TaskStatusSet) -> String {
 /// before, the status its closure implies, and what became of it — then a closing count; or,
 /// for a source whose status is its closure, that nothing could need reconciling.
 pub fn statuses_reconciled(source: &str, reconciled: &StatusesReconciled) -> String {
-    if reconciled.status_is_closure {
+    if reconciled.unsupported {
         return format!("source {source}'s status is its closure, so nothing needs reconciling\n");
     }
     let mut rendered = String::new();
+    let (mut updated, mut would, mut failed) = (0, 0, 0);
     for item in &reconciled.items {
+        let (action, why) = match &item.outcome {
+            ReconcileOutcome::Updated => {
+                updated += 1;
+                ("updated", None)
+            }
+            ReconcileOutcome::WouldUpdate => {
+                would += 1;
+                ("would-update", None)
+            }
+            ReconcileOutcome::Failed { error } => {
+                failed += 1;
+                ("failed", error.message().lines().next())
+            }
+        };
         let mut line = format!(
-            "{}: {} -> {} ({}): {}",
+            "{}: {} -> {} ({}): {action}",
             item.source,
             item.from.as_deref().unwrap_or("no option"),
             item.to.name,
             wire(&item.to.category),
-            wire(&item.action)
         );
-        if let Some(error) = &item.error {
-            line.push_str(&format!(
-                " — {}",
-                error.message().lines().next().unwrap_or_default()
-            ));
+        if let Some(why) = why {
+            line.push_str(&format!(" — {why}"));
         }
         rendered.push_str(&line);
         rendered.push('\n');
     }
-    let count = |action| {
-        reconciled
-            .items
-            .iter()
-            .filter(|item| item.action == action)
-            .count()
-    };
     rendered.push_str(&format!(
-        "{} updated, {} would update, {} failed\n",
-        count(ReconcileAction::Updated),
-        count(ReconcileAction::WouldUpdate),
-        count(ReconcileAction::Failed)
+        "{updated} updated, {would} would update, {failed} failed\n"
     ));
     rendered
 }

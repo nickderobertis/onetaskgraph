@@ -64,7 +64,7 @@ pub use engine::{
     GraphEdge, GraphNode, GroupKey, IssueCompleted, IssuesCompleted, LabelRequest, LeftBehind,
     MatchBy, MetadataSet, NoCounterpart, PROJECT_GRAPH_SCHEMA_VERSION, Paging, ProjectGraph,
     ProjectGraphRequest, ProjectRequest, ProjectSelector, Qualified, QualifiedEdge,
-    QualifiedEndpoint, ReconcileAction, SearchHit, SearchKind, SearchRequest, SourceListing,
+    QualifiedEndpoint, ReconcileOutcome, SearchHit, SearchKind, SearchRequest, SourceListing,
     SourceState, Spent, StatusReconciled, StatusesReconciled, TaskContentSet, TaskDetail,
     TaskDetails, TaskPrioritySet, TaskRequest, TaskStatusSet, TaskUpdated, graph_label, settled,
 };

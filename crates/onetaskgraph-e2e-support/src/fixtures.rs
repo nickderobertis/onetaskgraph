@@ -1130,6 +1130,12 @@ struct GitHubBoard {
     /// Whether the board's `is:closed` item filter also lets open items through, so a
     /// journey can hold a reader to confirming each item it is handed.
     closed_filter_leaks: bool,
+    /// Whether the board's closed-items read answers its second page with the cursor it was
+    /// asked from, as a connection that does not advance would.
+    closed_cursor_stalls: bool,
+    /// Errors this board answers beside the data of the next request carrying each operation,
+    /// once — an error GitHub reports about one part of a read it otherwise answered.
+    erring_beside: Vec<(&'static str, String)>,
     /// The variables each of those documents was sent with, at the same index.
     variables: Vec<Value>,
     /// The Status field's whole option set, replaced exactly as GitHub replaces it.
@@ -1398,6 +1404,34 @@ impl GitHubBoardFields {
                     .find(|card| card["number"] == json!(GITHUB_SECOND_BOARD))
             })
             .and_then(|card| card["status"].as_str().map(str::to_owned))
+    }
+
+    /// Whether this server holds the issue `id` at all — on a board, or created and filed on
+    /// none — as its repository would.
+    #[must_use]
+    pub fn holds_issue(&self, id: &str) -> bool {
+        let board = self.board.lock().unwrap();
+        board
+            .items
+            .iter()
+            .chain(&board.pending)
+            .any(|item| item["id"] == json!(id))
+    }
+
+    /// Have the board's closed-items read answer its second page with the very cursor it was
+    /// asked from, saying there is more — a connection that does not advance.
+    pub fn stall_the_closed_items_cursor(&self) {
+        self.board.lock().unwrap().closed_cursor_stalls = true;
+    }
+
+    /// Answer the next request carrying `operation` with `message` as an error beside its data,
+    /// once.
+    pub fn error_beside_once(&self, operation: &'static str, message: &str) {
+        self.board
+            .lock()
+            .unwrap()
+            .erring_beside
+            .push((operation, message.to_owned()));
     }
 
     /// Have the board's `is:closed` item filter let every open item through as well, as a
@@ -2676,9 +2710,13 @@ impl GitHubBoard {
             .iter()
             .map(|item| self.rendered(item))
             .collect();
+        let (more, cursor) = if self.closed_cursor_stalls && offset > 0 {
+            (true, offset.to_string())
+        } else {
+            (end < closed.len(), end.to_string())
+        };
         json!({"closedItems":{"projectV2":{"id":"PVT-board","fields":self.fields(),
-            "items":{"nodes":nodes,"pageInfo":{"hasNextPage":end < closed.len(),
-                                               "endCursor":end.to_string()}}}}})
+            "items":{"nodes":nodes,"pageInfo":{"hasNextPage":more,"endCursor":cursor}}}}})
     }
 
     /// Each reference of a batch read by reference, answered as GitHub answers one: the issue
@@ -3046,6 +3084,8 @@ fn github_projects_board_at(
         membership_first: usize::MAX,
         owed_error_objects: Vec::new(),
         closed_filter_leaks: false,
+        closed_cursor_stalls: false,
+        erring_beside: Vec::new(),
         variables: Vec::new(),
         status_options: json!([
             {"id":"OPT-backlog","name":"Backlog","color":"GRAY","description":""},
@@ -3237,6 +3277,17 @@ fn github_projects_board_at(
                     Some(_) => board.lock().unwrap().whole(query, data, &variables),
                     None => data,
                 };
+                {
+                    let mut held = board.lock().unwrap();
+                    if let Some(at) = held
+                        .erring_beside
+                        .iter()
+                        .position(|(operation, _)| query.contains(operation))
+                    {
+                        let (_, message) = held.erring_beside.remove(at);
+                        held.owed_errors.push(message);
+                    }
+                }
                 let owed = std::mem::take(&mut board.lock().unwrap().owed_errors);
                 let objects = std::mem::take(&mut board.lock().unwrap().owed_error_objects);
                 if owed.is_empty() && objects.is_empty() {

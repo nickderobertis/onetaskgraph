@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, RootModel
 
@@ -22,12 +22,6 @@ class GlobalId(RootModel[str]):
             description="One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely."
         ),
     ]
-
-
-class ReconcileAction(StrEnum):
-    ReconcileActionUpdated = "updated"
-    ReconcileActionWouldUpdate = "would-update"
-    ReconcileActionFailed = "failed"
 
 
 class SourceName(RootModel[str]):
@@ -92,14 +86,7 @@ class Status(BaseModel):
     name: Annotated[str, Field(description="The source's own label for this status.")]
 
 
-class StatusReconciled(BaseModel):
-    action: Annotated[ReconcileAction, Field(description="What became of it.")]
-    error: Annotated[
-        Failure | None,
-        Field(
-            description="Why it failed — the failure object a failure document carries — present only when it\ndid."
-        ),
-    ] = None
+class StatusReconciledUpdated(BaseModel):
     from_: Annotated[
         str | None,
         Field(
@@ -112,12 +99,60 @@ class StatusReconciled(BaseModel):
         Status,
         Field(description="The status its closure implies, which its card was moved to."),
     ]
+    action: Literal["updated"]
+
+
+class StatusReconciledWouldUpdate(BaseModel):
+    from_: Annotated[
+        str | None,
+        Field(
+            alias="from",
+            description="The option its card sat at, or `null` for a card with none.",
+        ),
+    ] = None
+    source: Annotated[GlobalId, Field(description="The item, by its qualified id.")]
+    to: Annotated[
+        Status,
+        Field(description="The status its closure implies, which its card was moved to."),
+    ]
+    action: Literal["would-update"]
+
+
+class StatusReconciledFailed(BaseModel):
+    from_: Annotated[
+        str | None,
+        Field(
+            alias="from",
+            description="The option its card sat at, or `null` for a card with none.",
+        ),
+    ] = None
+    source: Annotated[GlobalId, Field(description="The item, by its qualified id.")]
+    to: Annotated[
+        Status,
+        Field(description="The status its closure implies, which its card was moved to."),
+    ]
+    action: Literal["failed"]
+    error: Annotated[
+        Failure,
+        Field(description="Why — the failure object a failure document carries."),
+    ]
+
+
+class StatusReconciled(
+    RootModel[StatusReconciledUpdated | StatusReconciledWouldUpdate | StatusReconciledFailed]
+):
+    root: Annotated[
+        StatusReconciledUpdated | StatusReconciledWouldUpdate | StatusReconciledFailed,
+        Field(
+            description="One item `task status reconcile` brought in line, or would, or could not."
+        ),
+    ]
 
 
 class StatusesReconciled(BaseModel):
     items: Annotated[
         list[StatusReconciled],
         Field(
-            description="One entry per item whose card contradicted its closure, in the order the source read\nthem. Empty for a source with nothing out of line, and for one whose status is its\nclosure."
+            description="One entry per item whose card contradicted its closure, in the order the source read\nthem. Empty for a source with nothing out of line, and for one that does not declare\n`reconcile_status`."
         ),
     ]

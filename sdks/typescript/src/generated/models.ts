@@ -481,6 +481,15 @@ export type Classification = ("public" | "private")
 
 }
 export type Classification = GeneratedClassification.Classification;
+export namespace GeneratedClosedAs {
+/**
+ * The two closures a card is brought in line with: the categories a closed issue's reason can
+ * read as that name an option to move its card to.
+ */
+export type ClosedAs = ("done" | "cancelled")
+
+}
+export type ClosedAs = GeneratedClosedAs.ClosedAs;
 export namespace GeneratedComment {
 /**
  * One comment on a task, as its source holds it.
@@ -889,7 +898,8 @@ export type CompleteAction = ("updated" | "would-update" | "unchanged" | "skippe
 export type CompleteAction = GeneratedCompleteAction.CompleteAction;
 export namespace GeneratedCompletion {
 /**
- * What moving one issue's item to `done` comes to at one source.
+ * What moving one issue's item to `done` comes to at one source — the task it holds riding on
+ * every outcome that has one, so none can be told without its task, or with one, that has not.
  */
 export type Completion = ({
 completion: "absent"
@@ -900,28 +910,115 @@ completion: "skipped"
  * Why, as `closed as <reason>`.
  */
 reason: string
+task: HeldTask
 [k: string]: any
 } | {
 completion: "unchanged"
+task: HeldTask1
 [k: string]: any
 } | {
 completion: "due"
-to: Status
+task: HeldTask2
+/**
+ * The name of the option `done` writes it at.
+ */
+to: string
 [k: string]: any
 })
+/**
+ * One task named by another task's [`Task::delivers`] or [`Task::delivered_by`].
+ *
+ * A string with one of two spellings, decided the way a [`DependencyEndpoint`] decides it:
+ * one holding a colon is `<source>:<native>` and names a task of any source, and one
+ * without is a bare native id naming a task of the source that holds the list. So a
+ * native id holding a colon cannot be named bare, exactly as it cannot in
+ * `onetaskgraph.depends_on`.
+ */
+export type TaskRef = string
+/**
+ * A repository identified by its normalized origin, without a URL scheme or `.git` suffix.
+ */
+export type Repository = string
 
 /**
- * The status the item will read once written.
+ * The task held for the issue.
  */
-export interface Status {
+export interface HeldTask {
 /**
- * The normalised value filters compare against.
+ * The task's own classification.
  */
-category: ("draft" | "backlog" | "todo" | "queued" | "in-progress" | "done" | "cancelled" | "unknown")
+classification?: ("public" | "private")
 /**
- * The source's own label for this status.
+ * The tasks it delivers, which a write of it to `done` keeps in step.
  */
-name: string
+delivers?: TaskRef[]
+/**
+ * The task, by this source's own id for it.
+ */
+id: string
+/**
+ * The name of the option the task's card sits at, as the source spells it, when it sits
+ * at one.
+ */
+option?: (string | null)
+/**
+ * The repositories the task names.
+ */
+repositories?: Repository[]
+[k: string]: any
+}
+/**
+ * The task held for the issue.
+ */
+export interface HeldTask1 {
+/**
+ * The task's own classification.
+ */
+classification?: ("public" | "private")
+/**
+ * The tasks it delivers, which a write of it to `done` keeps in step.
+ */
+delivers?: TaskRef[]
+/**
+ * The task, by this source's own id for it.
+ */
+id: string
+/**
+ * The name of the option the task's card sits at, as the source spells it, when it sits
+ * at one.
+ */
+option?: (string | null)
+/**
+ * The repositories the task names.
+ */
+repositories?: Repository[]
+[k: string]: any
+}
+/**
+ * The task held for the issue.
+ */
+export interface HeldTask2 {
+/**
+ * The task's own classification.
+ */
+classification?: ("public" | "private")
+/**
+ * The tasks it delivers, which a write of it to `done` keeps in step.
+ */
+delivers?: TaskRef[]
+/**
+ * The task, by this source's own id for it.
+ */
+id: string
+/**
+ * The name of the option the task's card sits at, as the source spells it, when it sits
+ * at one.
+ */
+option?: (string | null)
+/**
+ * The repositories the task names.
+ */
+repositories?: Repository[]
 [k: string]: any
 }
 
@@ -3585,6 +3682,57 @@ reachable: boolean
 
 }
 export type Health = GeneratedHealth.Health;
+export namespace GeneratedHeldTask {
+/**
+ * One task named by another task's [`Task::delivers`] or [`Task::delivered_by`].
+ *
+ * A string with one of two spellings, decided the way a [`DependencyEndpoint`] decides it:
+ * one holding a colon is `<source>:<native>` and names a task of any source, and one
+ * without is a bare native id naming a task of the source that holds the list. So a
+ * native id holding a colon cannot be named bare, exactly as it cannot in
+ * `onetaskgraph.depends_on`.
+ */
+export type TaskRef = string
+/**
+ * A repository identified by its normalized origin, without a URL scheme or `.git` suffix.
+ */
+export type Repository = string
+
+/**
+ * The task one source holds for an issue, as far as moving it to `done` needs it.
+ *
+ * It carries of the task exactly what the write and the rules around it need — which task, the
+ * card it sits at, the tasks it delivers, and what decides where its id may be written — rather
+ * than the whole task, because the read that answers it is priced per issue and a whole task
+ * is not what a landing's closure needs.
+ */
+export interface HeldTask {
+/**
+ * The task's own classification.
+ */
+classification?: ("public" | "private")
+/**
+ * The tasks it delivers, which a write of it to `done` keeps in step.
+ */
+delivers?: TaskRef[]
+/**
+ * The task, by this source's own id for it.
+ */
+id: string
+/**
+ * The name of the option the task's card sits at, as the source spells it, when it sits
+ * at one.
+ */
+option?: (string | null)
+/**
+ * The repositories the task names.
+ */
+repositories?: Repository[]
+[k: string]: any
+}
+
+}
+export type HeldTask = GeneratedHeldTask.HeldTask;
 export namespace GeneratedIssueCompleted {
 /**
  * What keeping one delivered task in step with one deliverer came to.
@@ -3661,6 +3809,11 @@ export type StatusCategory = ("draft" | "backlog" | "todo" | "queued" | "in-prog
 
 /**
  * What one source holds for one issue reference, and what moving it to `done` came to.
+ *
+ * Its members are the ones the plan this verb landed in states field for field — `issue`,
+ * `source`, `task`, `from`, `to`, `action`, `reason`, `error` — because the engine's landing
+ * record and the read API build against exactly that shape; [`Engine::complete_issues`] is the
+ * one writer, and it fills them together from one [`Completion`].
  */
 export interface IssueCompleted {
 /**
@@ -3789,38 +3942,12 @@ export namespace GeneratedIssueHolding {
 /**
  * What one source holds for one issue a landing closed, and what moving it to `done` would
  * write — the answer to [`TaskSource::issue_holdings`](crate::TaskSource::issue_holdings).
- *
- * It carries of the task exactly what the write and the rules around it need — which task, the
- * card it sits at, the tasks it delivers, and what decides where its id may be written — rather
- * than the whole task, because the read that answers it is priced per issue and a whole task
- * is not what a landing's closure needs.
  */
 export type IssueHolding = ({
-/**
- * The task's own classification.
- */
-classification?: ("public" | "private")
-/**
- * The tasks it delivers, which a write of it to `done` keeps in step.
- */
-delivers?: TaskRef[]
 /**
  * The issue asked about.
  */
 issue: string
-/**
- * The name of the option the task's card sits at, as the source spells it, when it sits
- * at one.
- */
-option?: (string | null)
-/**
- * The repositories the task names.
- */
-repositories?: Repository[]
-/**
- * The task this source holds for it — `None` when it holds none.
- */
-task?: (NativeId | null)
 [k: string]: any
 } & ({
 completion: "absent"
@@ -3831,13 +3958,19 @@ completion: "skipped"
  * Why, as `closed as <reason>`.
  */
 reason: string
+task: HeldTask
 [k: string]: any
 } | {
 completion: "unchanged"
+task: HeldTask1
 [k: string]: any
 } | {
 completion: "due"
-to: Status
+task: HeldTask2
+/**
+ * The name of the option `done` writes it at.
+ */
+to: string
 [k: string]: any
 }))
 /**
@@ -3854,27 +3987,86 @@ export type TaskRef = string
  * A repository identified by its normalized origin, without a URL scheme or `.git` suffix.
  */
 export type Repository = string
-/**
- * A source's own opaque identifier for one item.
- *
- * Deliberately unvalidated: a native id is whatever the upstream system says it
- * is, colons included. The engine parses a qualified id by splitting on the
- * *first* colon precisely so this stays true.
- */
-export type NativeId = string
 
 /**
- * The status the item will read once written.
+ * The task held for the issue.
  */
-export interface Status {
+export interface HeldTask {
 /**
- * The normalised value filters compare against.
+ * The task's own classification.
  */
-category: ("draft" | "backlog" | "todo" | "queued" | "in-progress" | "done" | "cancelled" | "unknown")
+classification?: ("public" | "private")
 /**
- * The source's own label for this status.
+ * The tasks it delivers, which a write of it to `done` keeps in step.
  */
-name: string
+delivers?: TaskRef[]
+/**
+ * The task, by this source's own id for it.
+ */
+id: string
+/**
+ * The name of the option the task's card sits at, as the source spells it, when it sits
+ * at one.
+ */
+option?: (string | null)
+/**
+ * The repositories the task names.
+ */
+repositories?: Repository[]
+[k: string]: any
+}
+/**
+ * The task held for the issue.
+ */
+export interface HeldTask1 {
+/**
+ * The task's own classification.
+ */
+classification?: ("public" | "private")
+/**
+ * The tasks it delivers, which a write of it to `done` keeps in step.
+ */
+delivers?: TaskRef[]
+/**
+ * The task, by this source's own id for it.
+ */
+id: string
+/**
+ * The name of the option the task's card sits at, as the source spells it, when it sits
+ * at one.
+ */
+option?: (string | null)
+/**
+ * The repositories the task names.
+ */
+repositories?: Repository[]
+[k: string]: any
+}
+/**
+ * The task held for the issue.
+ */
+export interface HeldTask2 {
+/**
+ * The task's own classification.
+ */
+classification?: ("public" | "private")
+/**
+ * The tasks it delivers, which a write of it to `done` keeps in step.
+ */
+delivers?: TaskRef[]
+/**
+ * The task, by this source's own id for it.
+ */
+id: string
+/**
+ * The name of the option the task's card sits at, as the source spells it, when it sits
+ * at one.
+ */
+option?: (string | null)
+/**
+ * The repositories the task names.
+ */
+repositories?: Repository[]
 [k: string]: any
 }
 
@@ -3981,6 +4173,11 @@ unsupported: SourceName[]
 }
 /**
  * What one source holds for one issue reference, and what moving it to `done` came to.
+ *
+ * Its members are the ones the plan this verb landed in states field for field — `issue`,
+ * `source`, `task`, `from`, `to`, `action`, `reason`, `error` — because the engine's landing
+ * record and the read API build against exactly that shape; [`Engine::complete_issues`] is the
+ * one writer, and it fills them together from one [`Completion`].
  */
 export interface IssueCompleted {
 /**
@@ -8000,14 +8197,57 @@ unavailable: Predicate[]
 
 }
 export type QueryResponseOfSearchHit = GeneratedQueryResponseOfSearchHit.QueryResponseOfSearchHit;
-export namespace GeneratedReconcileAction {
+export namespace GeneratedReconcileOutcome {
 /**
  * What reconciling one item came to.
  */
-export type ReconcileAction = ("updated" | "would-update" | "failed")
+export type ReconcileOutcome = ({
+action: "updated"
+[k: string]: any
+} | {
+action: "would-update"
+[k: string]: any
+} | {
+action: "failed"
+error: Failure
+[k: string]: any
+})
+/**
+ * The name a configuration document gives one configured source.
+ */
+export type SourceName = string
+
+/**
+ * Why — the failure object a failure document carries.
+ */
+export interface Failure {
+/**
+ * Whether repeating the request unchanged could change the answer.
+ */
+class: ("refused" | "transient")
+/**
+ * What failed: the causing source error's own `kind` when a source caused it, and
+ * otherwise this product's kebab-case name for the failure, such as `no-such-item`.
+ */
+kind: string
+/**
+ * What the command reported on standard error, without its `onetaskgraph: ` prefix.
+ */
+message: string
+/**
+ * How many seconds a rate limit asked the caller to wait, or `null` when it named no
+ * wait.
+ */
+retry_after_seconds: (number | null)
+/**
+ * The configured source the failure came from, or `null` when none did.
+ */
+source: (SourceName | null)
+[k: string]: any
+}
 
 }
-export type ReconcileAction = GeneratedReconcileAction.ReconcileAction;
+export type ReconcileOutcome = GeneratedReconcileOutcome.ReconcileOutcome;
 export namespace GeneratedRegenerated {
 /**
  * What `task render`, `project render` and `document render` answer with.
@@ -9090,16 +9330,24 @@ export type NativeId = string
 export type Repository = string
 
 /**
- * One item whose card contradicts its issue's closure, and the status that brings it in line
+ * One item whose card contradicts its issue's closure, and the option that brings it in line
  * — one entry of [`TaskSource::status_contradictions`](crate::TaskSource::status_contradictions).
  */
 export interface StatusContradiction {
+/**
+ * What its closure reads as.
+ */
+closed_as: ("done" | "cancelled")
 /**
  * The option its card sits at, or `None` for a card with no option.
  */
 option?: (string | null)
 task: Task
-to: Status1
+/**
+ * The name of the option the source's mapping gives that category, which its card is
+ * moved to.
+ */
+to: string
 [k: string]: any
 }
 /**
@@ -9270,21 +9518,6 @@ name: string
  * The source's status, normalised and preserved.
  */
 export interface Status {
-/**
- * The normalised value filters compare against.
- */
-category: ("draft" | "backlog" | "todo" | "queued" | "in-progress" | "done" | "cancelled" | "unknown")
-/**
- * The source's own label for this status.
- */
-name: string
-[k: string]: any
-}
-/**
- * The status its closure implies: `done` or `cancelled`, named by the option the source's
- * mapping gives that category.
- */
-export interface Status1 {
 /**
  * The normalised value filters compare against.
  */
@@ -9466,23 +9699,9 @@ name: string
 export type StatusOptionsReport = GeneratedStatusOptionsReport.StatusOptionsReport;
 export namespace GeneratedStatusReconciled {
 /**
- * The name a configuration document gives one configured source.
- */
-export type SourceName = string
-
-/**
  * One item `task status reconcile` brought in line, or would, or could not.
  */
-export interface StatusReconciled {
-/**
- * What became of it.
- */
-action: ("updated" | "would-update" | "failed")
-/**
- * Why it failed — the failure object a failure document carries — present only when it
- * did.
- */
-error?: (Failure | null)
+export type StatusReconciled = ({
 /**
  * The option its card sat at, or `null` for a card with none.
  */
@@ -9493,12 +9712,38 @@ from?: (string | null)
 source: string
 to: Status
 [k: string]: any
+} & ({
+action: "updated"
+[k: string]: any
+} | {
+action: "would-update"
+[k: string]: any
+} | {
+action: "failed"
+error: Failure
+[k: string]: any
+}))
+/**
+ * The name a configuration document gives one configured source.
+ */
+export type SourceName = string
+
+/**
+ * The status its closure implies, which its card was moved to.
+ */
+export interface Status {
+/**
+ * The normalised value filters compare against.
+ */
+category: ("draft" | "backlog" | "todo" | "queued" | "in-progress" | "done" | "cancelled" | "unknown")
+/**
+ * The source's own label for this status.
+ */
+name: string
+[k: string]: any
 }
 /**
- * Why one command failed.
- *
- * Every member is always written, `source` and `retry_after_seconds` as `null` when they
- * have nothing to say, so a caller reads a fixed shape.
+ * Why — the failure object a failure document carries.
  */
 export interface Failure {
 /**
@@ -9525,24 +9770,36 @@ retry_after_seconds: (number | null)
 source: (SourceName | null)
 [k: string]: any
 }
-/**
- * The status its closure implies, which its card was moved to.
- */
-export interface Status {
-/**
- * The normalised value filters compare against.
- */
-category: ("draft" | "backlog" | "todo" | "queued" | "in-progress" | "done" | "cancelled" | "unknown")
-/**
- * The source's own label for this status.
- */
-name: string
-[k: string]: any
-}
 
 }
 export type StatusReconciled = GeneratedStatusReconciled.StatusReconciled;
 export namespace GeneratedStatusesReconciled {
+/**
+ * One item `task status reconcile` brought in line, or would, or could not.
+ */
+export type StatusReconciled = ({
+/**
+ * The option its card sat at, or `null` for a card with none.
+ */
+from?: (string | null)
+/**
+ * The item, by its qualified id.
+ */
+source: string
+to: Status
+[k: string]: any
+} & StatusReconciled1)
+export type StatusReconciled1 = ({
+action: "updated"
+[k: string]: any
+} | {
+action: "would-update"
+[k: string]: any
+} | {
+action: "failed"
+error: Failure
+[k: string]: any
+})
 /**
  * The name a configuration document gives one configured source.
  */
@@ -9554,41 +9811,28 @@ export type SourceName = string
 export interface StatusesReconciled {
 /**
  * One entry per item whose card contradicted its closure, in the order the source read
- * them. Empty for a source with nothing out of line, and for one whose status is its
- * closure.
+ * them. Empty for a source with nothing out of line, and for one that does not declare
+ * `reconcile_status`.
  */
 items: StatusReconciled[]
 [k: string]: any
 }
 /**
- * One item `task status reconcile` brought in line, or would, or could not.
+ * The status its closure implies, which its card was moved to.
  */
-export interface StatusReconciled {
+export interface Status {
 /**
- * What became of it.
+ * The normalised value filters compare against.
  */
-action: ("updated" | "would-update" | "failed")
+category: ("draft" | "backlog" | "todo" | "queued" | "in-progress" | "done" | "cancelled" | "unknown")
 /**
- * Why it failed — the failure object a failure document carries — present only when it
- * did.
+ * The source's own label for this status.
  */
-error?: (Failure | null)
-/**
- * The option its card sat at, or `null` for a card with none.
- */
-from?: (string | null)
-/**
- * The item, by its qualified id.
- */
-source: string
-to: Status
+name: string
 [k: string]: any
 }
 /**
- * Why one command failed.
- *
- * Every member is always written, `source` and `retry_after_seconds` as `null` when they
- * have nothing to say, so a caller reads a fixed shape.
+ * Why — the failure object a failure document carries.
  */
 export interface Failure {
 /**
@@ -9613,20 +9857,6 @@ retry_after_seconds: (number | null)
  * The configured source the failure came from, or `null` when none did.
  */
 source: (SourceName | null)
-[k: string]: any
-}
-/**
- * The status its closure implies, which its card was moved to.
- */
-export interface Status {
-/**
- * The normalised value filters compare against.
- */
-category: ("draft" | "backlog" | "todo" | "queued" | "in-progress" | "done" | "cancelled" | "unknown")
-/**
- * The source's own label for this status.
- */
-name: string
 [k: string]: any
 }
 

@@ -59,7 +59,7 @@ pub(crate) use resume::{Owed, Resumption, StreamState};
 use resume::{Resume, StreamKind};
 
 pub use closure::{
-    CompleteAction, IssueCompleted, IssuesCompleted, ReconcileAction, StatusReconciled,
+    CompleteAction, IssueCompleted, IssuesCompleted, ReconcileOutcome, StatusReconciled,
     StatusesReconciled,
 };
 pub use comment::{

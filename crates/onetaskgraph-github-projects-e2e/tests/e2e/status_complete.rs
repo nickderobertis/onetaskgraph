@@ -325,6 +325,11 @@ struct Delivering {
 
 impl Delivering {
     fn new(closed: bool, others: &[&str]) -> Self {
+        Self::with_delivers(closed, others, &["tickets:T-1"])
+    }
+
+    /// As [`Delivering::new`], with `N-1` delivering every task of `delivers`.
+    fn with_delivers(closed: bool, others: &[&str], delivers: &[&str]) -> Self {
         let sandbox = Sandbox::new();
         let tickets = sandbox.subdirectory("tickets");
         std::fs::create_dir_all(tickets.join("tasks")).expect("the ticket folder");
@@ -348,7 +353,7 @@ impl Delivering {
         let mut deliverer = issue("N-1", "In Progress");
         deliverer["body"] = json!(format!(
             "The deliverer.\n\n<!-- onetaskgraph.metadata\n{}\n-->",
-            json!({"onetaskgraph.delivers": ["tickets:T-1"]})
+            json!({"onetaskgraph.delivers": delivers})
         ));
         let (mut config, board) = github_projects_with_items(&sandbox, vec![deliverer]);
         board.with_status_option("OPT-in-progress", "In Progress");
@@ -382,6 +387,11 @@ impl Delivering {
     }
 
     fn complete(&self) -> Value {
+        self.complete_exiting(0)
+    }
+
+    /// The completion of `N-1`, asserting it exits `code`.
+    fn complete_exiting(&self, code: i32) -> Value {
         let output = self
             .sandbox
             .command()
@@ -396,7 +406,13 @@ impl Delivering {
             .assert()
             .get_output()
             .clone();
-        assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+        assert_eq!(
+            output.status.code(),
+            Some(code),
+            "{}\n{}",
+            stdout(&output),
+            stderr(&output)
+        );
         serde_json::from_str(&stdout(&output)).expect("JSON")
     }
 }
@@ -479,4 +495,90 @@ fn a_ticket_another_deliverer_is_still_working_on_reads_what_the_delivers_rule_g
             .expect("the ticket")
             .contains("status: in progress")
     );
+}
+
+#[test]
+fn a_delivered_task_that_cannot_be_kept_in_step_is_answered_failed_and_exits_four() {
+    let setup = Delivering::with_delivers(true, &[], &["tickets:T-1", "nowhere:T-9"]);
+    let answer = setup.complete_exiting(4);
+    let item = only(&answer);
+    assert_eq!(
+        item["action"], "updated",
+        "the deliverer's own write landed: {answer:#}"
+    );
+    let delivered = item["delivered"].as_array().expect("delivered entries");
+    let failed: Vec<&Value> = delivered
+        .iter()
+        .filter(|entry| entry["outcome"] == "failed")
+        .collect();
+    assert_eq!(failed.len(), 1, "{answer:#}");
+    assert_eq!(failed[0]["ticket"], "nowhere:T-9");
+    assert_eq!(failed[0]["deliverer"], "plans:N-1");
+    assert!(
+        failed[0]["failure"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("nowhere")),
+        "the failure names the source nothing configures: {answer:#}"
+    );
+    assert_eq!(setup.board.status("N-1").as_deref(), Some("Done"));
+    assert_eq!(setup.ticket(), "done", "the ticket it can keep in step is");
+}
+
+/// Fill the cache's entry of `board:T-1` at the version its listing carries, hold it to being a
+/// hit, and answer that version.
+fn cached_t1(cached: &crate::cache::Cached) -> String {
+    let held = crate::cache_kinds::listed(cached, "task", "board:T-1");
+    crate::cache_kinds::show(cached, "task", "board:T-1", Some(&held));
+    let (_, sent) = crate::cache_kinds::show(cached, "task", "board:T-1", Some(&held));
+    assert_eq!(sent, Vec::<String>::new(), "the entry is filled");
+    held
+}
+
+/// That a read of `board:T-1` pinned to `held` reaches the board after a card write, and reads
+/// it done.
+fn read_afresh_after_the_write(cached: &crate::cache::Cached, held: &str) {
+    let (shown, sent) = crate::cache_kinds::show(cached, "task", "board:T-1", Some(held));
+    assert!(
+        !sent.is_empty(),
+        "the entry the write could change is out of service, so the pinned read is the board's"
+    );
+    assert_eq!(
+        shown["items"][0]["item"]["status"],
+        json!({"category":"done","name":"Done"}),
+        "{shown:#}"
+    );
+    assert_ne!(crate::cache_kinds::version(&shown), held);
+}
+
+#[test]
+fn a_completion_on_a_cached_board_takes_the_written_tasks_entry_out_of_service() {
+    let cached = crate::cache::Cached::new();
+    let held = cached_t1(&cached);
+    let (answer, _) = cached.ok(&[
+        "--json",
+        "task",
+        "status",
+        "complete",
+        "--issue",
+        &reference("T-1"),
+    ]);
+    assert_eq!(answer["items"][0]["action"], "updated", "{answer:#}");
+    read_afresh_after_the_write(&cached, &held);
+}
+
+#[test]
+fn a_reconcile_on_a_cached_board_takes_the_written_tasks_entry_out_of_service() {
+    let cached = crate::cache::Cached::new();
+    cached.board.close("T-1", Some("COMPLETED"));
+    let held = cached_t1(&cached);
+    let (answer, _) = cached.ok(&["--json", "task", "status", "reconcile", "--source", "board"]);
+    assert!(
+        answer["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .any(|item| item["source"] == "board:T-1" && item["action"] == "updated"),
+        "{answer:#}"
+    );
+    read_afresh_after_the_write(&cached, &held);
 }

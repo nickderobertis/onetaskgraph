@@ -13,10 +13,17 @@ use std::str::FromStr;
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Serialize};
 
-use crate::{Classification, NativeId, Repository, Status, Task, TaskRef};
+use crate::{Classification, NativeId, Repository, StatusCategory, Task, TaskRef};
 
-/// The pattern every [`IssueRef`] is spelled in: `owner/name#N`.
-pub const ISSUE_REF_PATTERN: &str = "^[A-Za-z0-9-]+/[A-Za-z0-9._-]+#[1-9][0-9]*$";
+/// The pattern every [`IssueRef`] is spelled in: `owner/name#N`, the number at most nineteen
+/// digits — every such number fits the `u64` it is read into.
+///
+/// What the JSON Schema publishes; [`IssueRef`]'s `FromStr` is the same rule written out, and
+/// `tests/issue_ref.rs` derives a matcher from this constant and holds the two to one language.
+pub const ISSUE_REF_PATTERN: &str = "^[A-Za-z0-9-]+/[A-Za-z0-9._-]+#[1-9][0-9]{0,18}$";
+
+/// The most digits an issue number is spelled with: nineteen, so every one fits a `u64`.
+const MAX_NUMBER_DIGITS: usize = 19;
 
 /// One issue of one repository, as `owner/name#N` — exactly the spelling `onevcs` reports in a
 /// landing event's `closes`.
@@ -83,6 +90,7 @@ impl FromStr for IssueRef {
         if !Self::valid_owner(owner)
             || !Self::valid_name(name)
             || number.is_empty()
+            || number.len() > MAX_NUMBER_DIGITS
             || number.starts_with('0')
             || !number.chars().all(|digit| digit.is_ascii_digit())
         {
@@ -132,18 +140,25 @@ impl JsonSchema for IssueRef {
 
 /// What one source holds for one issue a landing closed, and what moving it to `done` would
 /// write — the answer to [`TaskSource::issue_holdings`](crate::TaskSource::issue_holdings).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct IssueHolding {
+    /// The issue asked about.
+    pub issue: IssueRef,
+    /// What completing the issue comes to here, its tag and members beside the issue.
+    #[serde(flatten)]
+    pub completion: Completion,
+}
+
+/// The task one source holds for an issue, as far as moving it to `done` needs it.
 ///
 /// It carries of the task exactly what the write and the rules around it need — which task, the
 /// card it sits at, the tasks it delivers, and what decides where its id may be written — rather
 /// than the whole task, because the read that answers it is priced per issue and a whole task
 /// is not what a landing's closure needs.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct IssueHolding {
-    /// The issue asked about.
-    pub issue: IssueRef,
-    /// The task this source holds for it — `None` when it holds none.
-    #[serde(default)]
-    pub task: Option<NativeId>,
+pub struct HeldTask {
+    /// The task, by this source's own id for it.
+    pub id: NativeId,
     /// The name of the option the task's card sits at, as the source spells it, when it sits
     /// at one.
     #[serde(default)]
@@ -157,12 +172,10 @@ pub struct IssueHolding {
     /// The tasks it delivers, which a write of it to `done` keeps in step.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub delivers: Vec<TaskRef>,
-    /// What completing the issue comes to here, its tag and members beside the others.
-    #[serde(flatten)]
-    pub completion: Completion,
 }
 
-/// What moving one issue's item to `done` comes to at one source.
+/// What moving one issue's item to `done` comes to at one source — the task it holds riding on
+/// every outcome that has one, so none can be told without its task, or with one, that has not.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "completion", rename_all = "kebab-case")]
 pub enum Completion {
@@ -170,20 +183,49 @@ pub enum Completion {
     Absent,
     /// The issue's closure already says something else, which a landing does not overrule.
     Skipped {
+        /// The task held for the issue.
+        task: HeldTask,
         /// Why, as `closed as <reason>`.
         reason: String,
     },
     /// The issue is closed as completed and its card already sits at the `done` option.
-    Unchanged,
-    /// The item is to be written `done`: its card moved to this status, and its issue closed
-    /// as completed if it is still open.
+    Unchanged {
+        /// The task held for the issue.
+        task: HeldTask,
+    },
+    /// The item is to be written `done`: its card moved to the `done` option, and its issue
+    /// closed as completed if it is still open.
     Due {
-        /// The status the item will read once written.
-        to: Status,
+        /// The task held for the issue.
+        task: HeldTask,
+        /// The name of the option `done` writes it at.
+        to: String,
     },
 }
 
-/// One item whose card contradicts its issue's closure, and the status that brings it in line
+/// The two closures a card is brought in line with: the categories a closed issue's reason can
+/// read as that name an option to move its card to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ClosedAs {
+    /// Closed as completed, or with no reason: `done`.
+    Done,
+    /// Closed as not planned or as a duplicate: `cancelled`.
+    Cancelled,
+}
+
+impl ClosedAs {
+    /// The status category this closure reads as.
+    #[must_use]
+    pub const fn category(self) -> StatusCategory {
+        match self {
+            Self::Done => StatusCategory::Done,
+            Self::Cancelled => StatusCategory::Cancelled,
+        }
+    }
+}
+
+/// One item whose card contradicts its issue's closure, and the option that brings it in line
 /// — one entry of [`TaskSource::status_contradictions`](crate::TaskSource::status_contradictions).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct StatusContradiction {
@@ -192,7 +234,9 @@ pub struct StatusContradiction {
     /// The option its card sits at, or `None` for a card with no option.
     #[serde(default)]
     pub option: Option<String>,
-    /// The status its closure implies: `done` or `cancelled`, named by the option the source's
-    /// mapping gives that category.
-    pub to: Status,
+    /// What its closure reads as.
+    pub closed_as: ClosedAs,
+    /// The name of the option the source's mapping gives that category, which its card is
+    /// moved to.
+    pub to: String,
 }

@@ -917,7 +917,7 @@ impl TaskSource for SubprocessSource {
         if !self.write_checks {
             return Ok(());
         }
-        let _: Value = self
+        let answered: Value = self
             .ask(
                 "check_task_write",
                 params(&CheckWriteParams {
@@ -925,6 +925,17 @@ impl TaskSource for SubprocessSource {
                 }),
             )
             .await?;
+        // §4.9b: the trait method carries `()`, so `result` is an object and nothing else; one
+        // that is not is no answer this engine may read as "representable".
+        if !answered.is_object() {
+            return Err(SourceError::Malformed {
+                message: format!(
+                    "plugin {} answered check_task_write with {answered}, where §4.9b asks for an \
+                     object",
+                    self.kind
+                ),
+            });
+        }
         Ok(())
     }
 

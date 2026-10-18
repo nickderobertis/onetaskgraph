@@ -2068,8 +2068,7 @@ with the status that brings it in line, and the engine writes each one through
 { "id": "25", "method": "status_contradictions", "params": {} }
 { "id": "25", "result": { "items": [
   { "task": { "id": "I_7", "title": "…", "status": { "category": "done", "name": "Done" }, "…": "…" },
-    "option": "Todo",
-    "to": { "category": "done", "name": "Done" } }
+    "option": "Todo", "closed_as": "done", "to": "Done" }
 ] } }
 ```
 
@@ -2077,9 +2076,11 @@ The trait method answers `Vec<StatusContradiction>`, carried as `result.items`, 
 `StatusContradiction` per task. A task is answered when its
 issue is closed with a reason that reads `done` (completed, or no reason) or `cancelled` (not
 planned, duplicate) and its card does not sit at the option this
-source's mapping gives that category; `option` is the option it sits at, or `null`, and `to`
-that category under that option's name. An open task, a closure that reads `unknown` and a card
-already in line are never answered. `task` is the task as `get_task` reads it.
+source's mapping gives that category; `option` is the option it sits at, or `null`,
+`closed_as` the category its closure reads as — `done` or `cancelled`, the only two a card is
+brought in line with — and `to` the name of the option that category is written at. An open
+task, a closure that reads `unknown` and a card already in line are never answered, and no task
+is answered twice: the engine refuses an answer naming one task twice as malformed. `task` is the task as `get_task` reads it.
 
 The `set_task_status` the engine sends for each moves the card alone: an issue already closed
 in a way that reads as the category is not closed again, so its state and its reason — a
@@ -2095,30 +2096,34 @@ answers the task this source holds for that issue and what moving it to `done` c
 { "id": "26", "method": "issue_holdings",
   "params": { "issues": ["acme/work#12", "acme/work#40"] } }
 { "id": "26", "result": { "holdings": [
-  { "issue": "acme/work#12", "task": "I_12", "option": "Todo", "classification": "public",
-    "delivers": ["tickets:T-1"], "completion": "due", "to": { "category": "done", "name": "Done" } },
-  { "issue": "acme/work#40", "task": null, "option": null, "classification": "public",
-    "completion": "absent" }
+  { "issue": "acme/work#12", "completion": "due", "to": "Done",
+    "task": { "id": "I_12", "option": "Todo", "classification": "public",
+              "delivers": ["tickets:T-1"] } },
+  { "issue": "acme/work#40", "completion": "absent" }
 ] } }
 ```
 
 An issue reference is `owner/name#N` — exactly the spelling `onevcs` reports in a landing
 event's `closes` — the `IssueRef` root of `onetaskgraph schema`, its owner and name compared
 ignoring case. The trait method answers `Vec<IssueHolding>`, carried as `result.holdings`, one
-`IssueHolding` per reference. Each holding's
-`completion` is one of:
+`IssueHolding` per reference; the engine refuses, as malformed, an answer that does not name
+each reference it was asked about exactly once and in the order given. Each holding's `completion` is one
+of:
 
-- `absent` — this source holds no item for the issue, or cannot see the issue at all;
-- `skipped`, with `reason` — `closed as not planned` or `closed as duplicate`: the closure
-  already says the work will not be done here, which a landing does not overrule;
-- `unchanged` — the issue is closed as completed and its card already sits at the `done` option;
-- `due`, with `to` — every other task: the engine writes it `done` through `set_task_status`
-  (§4.17), which selects the `done` option and closes the issue as completed if it is still
-  open, never reopening one.
+- `absent` — this source holds no item for the issue, or cannot see the issue at all; it alone
+  carries no `task`;
+- `skipped`, with `task` and `reason` — `closed as not planned` or `closed as duplicate`: the
+  closure already says the work will not be done here, which a landing does not overrule;
+- `unchanged`, with `task` — the issue is closed as completed and its card already sits at the
+  `done` option;
+- `due`, with `task` and `to`, the name of the `done` option — every other task: the engine
+  writes it `done` through `set_task_status` (§4.17), which selects the `done` option and closes
+  the issue as completed if it is still open, never reopening one.
 
-Beside it a holding carries what that write and the rules around it need of the task —
-`classification`, `repositories` and `delivers` — so the engine keeps every task it delivers in
-step exactly as after any status write (§4.17), without reading the task again. A plugin's read
+`task` is the `HeldTask` root: the task's own `id`, the `option` its card sits at, and what the
+write and the rules around it need of it — `classification`, `repositories` and `delivers` — so
+the engine keeps every task it delivers in step exactly as after any status write (§4.17),
+without reading the task again. A plugin's read
 is proportional to the references it is given and never to the size of what it holds.
 
 ## 5. The error envelope

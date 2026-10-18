@@ -147,7 +147,8 @@ fn listed(answer: &Value) -> Vec<(String, Value, Value, String)> {
 }
 
 /// The board every reconcile journey below reads: open items, closed items in line, closed
-/// items at contradicting options and a closed item with no option.
+/// items at contradicting options, a closed item with no option, and one closed for a reason
+/// that implies no category (`R-11`), which is never listed.
 fn mixed() -> (Vec<Value>, Vec<(&'static str, Option<&'static str>)>) {
     (
         vec![
@@ -161,6 +162,7 @@ fn mixed() -> (Vec<Value>, Vec<(&'static str, Option<&'static str>)>) {
             issue("R-8", Some("Proposal")),
             issue("R-9", Some("Proposal")),
             issue("R-10", None),
+            issue("R-11", Some("Todo")),
         ],
         vec![
             ("R-3", Some("COMPLETED")),
@@ -171,12 +173,13 @@ fn mixed() -> (Vec<Value>, Vec<(&'static str, Option<&'static str>)>) {
             ("R-8", Some("NOT_PLANNED")),
             ("R-9", Some("DUPLICATE")),
             ("R-10", Some("COMPLETED")),
+            ("R-11", Some("REOPENED")),
         ],
     )
 }
 
-const ALL: [&str; 10] = [
-    "R-1", "R-2", "R-3", "R-4", "R-5", "R-6", "R-7", "R-8", "R-9", "R-10",
+const ALL: [&str; 11] = [
+    "R-1", "R-2", "R-3", "R-4", "R-5", "R-6", "R-7", "R-8", "R-9", "R-10", "R-11",
 ];
 
 /// What every reconcile of [`mixed`] owes: these items, from these options, to these statuses.
@@ -383,4 +386,100 @@ fn a_reconcile_paces_every_card_write_by_the_sources_configured_interval() {
             "a card write followed the one before it by {gap:?}, under the configured {interval:?}"
         );
     }
+}
+
+impl Setup {
+    /// The failure document of a run refused whole, asserting it exits 1 and sent no mutation.
+    fn refused(&self, arguments: &[&str]) -> Value {
+        let output = self.run(arguments);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "`onetaskgraph {}` is refused whole\n{}\n{}",
+            arguments.join(" "),
+            stdout(&output),
+            stderr(&output)
+        );
+        assert!(
+            self.mutations().is_empty(),
+            "a refused reconcile writes nothing"
+        );
+        serde_json::from_str(&stdout(&output)).expect("a failure document")
+    }
+}
+
+/// `count` items, each at `Todo` and closed as completed.
+fn closed_at_todo(count: usize) -> Setup {
+    let ids: Vec<String> = (1..=count).map(|n| format!("R-{n}")).collect();
+    let items = ids.iter().map(|id| issue(id, Some("Todo"))).collect();
+    let closures: Vec<(&str, Option<&str>)> = ids
+        .iter()
+        .map(|id| (id.as_str(), Some("COMPLETED")))
+        .collect();
+    Setup::new(items, &closures, 0)
+}
+
+#[test]
+fn a_board_whose_closed_items_cannot_be_read_refuses_the_reconcile_whole_writing_nothing() {
+    let (items, closures) = mixed();
+    let setup = Setup::new(items, &closures, 0);
+    let before = setup.snapshot(&ALL);
+    setup.board.refuse_once("closedItems:repositoryOwner(");
+    let failure = setup.refused(&["--json", "task", "status", "reconcile", "--source", "board"]);
+    assert!(
+        failure["failure"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("board")),
+        "the refusal names the source: {failure:#}"
+    );
+    assert_eq!(setup.snapshot(&ALL), before);
+}
+
+#[test]
+fn a_reconcile_walks_every_page_of_the_closed_items() {
+    let setup = closed_at_todo(150);
+    let answer = setup.json(
+        &[
+            "--json",
+            "task",
+            "status",
+            "reconcile",
+            "--source",
+            "board",
+            "--dry-run",
+        ],
+        0,
+    );
+    let items = answer["items"].as_array().expect("items");
+    assert_eq!(
+        items.len(),
+        150,
+        "every closed item of both pages is listed"
+    );
+    assert!(
+        items.iter().all(|item| item["action"] == "would-update"),
+        "{answer:#}"
+    );
+    let pages = setup
+        .board
+        .served()
+        .into_iter()
+        .filter(|(query, _)| query == onetaskgraph_github_projects::graphql::CLOSED_ITEMS)
+        .count();
+    assert_eq!(pages, 2, "a page of 100 and a page of 50");
+    setup.item_reads_are_closed_filtered();
+}
+
+#[test]
+fn a_closed_items_cursor_that_does_not_advance_refuses_the_reconcile_whole_writing_nothing() {
+    let setup = closed_at_todo(150);
+    setup.board.stall_the_closed_items_cursor();
+    let failure = setup.refused(&["--json", "task", "status", "reconcile", "--source", "board"]);
+    assert!(
+        failure["failure"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("cursor")),
+        "the refusal says the paging did not advance: {failure:#}"
+    );
+    assert_eq!(setup.board.status("R-1").as_deref(), Some("Todo"));
 }

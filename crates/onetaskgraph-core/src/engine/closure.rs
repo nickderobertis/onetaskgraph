@@ -8,7 +8,8 @@
 //! reported as having nothing to do.
 
 use onetaskgraph_plugin_api::{
-    Completion, IssueRef, SourceName, Status, StatusCategory, StatusContradiction,
+    Completion, HeldTask, IssueHolding, IssueRef, SourceError, SourceName, Status, StatusCategory,
+    StatusContradiction,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -23,14 +24,15 @@ use crate::{Failure, GlobalId};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct StatusesReconciled {
     /// One entry per item whose card contradicted its closure, in the order the source read
-    /// them. Empty for a source with nothing out of line, and for one whose status is its
-    /// closure.
+    /// them. Empty for a source with nothing out of line, and for one that does not declare
+    /// `reconcile_status`.
     pub items: Vec<StatusReconciled>,
-    /// Whether the source's status is its closure, so nothing could need reconciling — and it
-    /// was sent no request. Not part of the document: what the human rendering says instead
-    /// of a count.
+    /// Whether the source does not declare
+    /// [`reconcile_status`](onetaskgraph_plugin_api::Capabilities::reconcile_status) — its
+    /// status read as its closure — and so was sent no request. Not part of the document: what
+    /// the human rendering says instead of a count.
     #[serde(skip)]
-    pub status_is_closure: bool,
+    pub unsupported: bool,
 }
 
 /// One item `task status reconcile` brought in line, or would, or could not.
@@ -42,24 +44,24 @@ pub struct StatusReconciled {
     pub from: Option<String>,
     /// The status its closure implies, which its card was moved to.
     pub to: Status,
-    /// What became of it.
-    pub action: ReconcileAction,
-    /// Why it failed — the failure object a failure document carries — present only when it
-    /// did.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error: Option<Failure>,
+    /// What became of it: its `action`, and why when it failed.
+    #[serde(flatten)]
+    pub outcome: ReconcileOutcome,
 }
 
 /// What reconciling one item came to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
-pub enum ReconcileAction {
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "action", rename_all = "kebab-case")]
+pub enum ReconcileOutcome {
     /// Its card was moved.
     Updated,
     /// Its card would be moved; a dry run wrote nothing.
     WouldUpdate,
-    /// Its card could not be moved; `error` says why.
-    Failed,
+    /// Its card could not be moved.
+    Failed {
+        /// Why — the failure object a failure document carries.
+        error: Failure,
+    },
 }
 
 impl StatusesReconciled {
@@ -68,7 +70,7 @@ impl StatusesReconciled {
     pub fn failed(&self) -> bool {
         self.items
             .iter()
-            .any(|item| item.action == ReconcileAction::Failed)
+            .any(|item| matches!(item.outcome, ReconcileOutcome::Failed { .. }))
     }
 }
 
@@ -96,6 +98,12 @@ impl IssuesCompleted {
 }
 
 /// What one source holds for one issue reference, and what moving it to `done` came to.
+///
+/// Its members are the ones the plan this verb landed in states field for field — `issue`,
+/// `source`, `task`, `from`, `to`, `action`, `reason`, `error` — because the engine's landing
+/// record and the read API build against exactly that shape; [`Engine::complete_issues`] is the
+/// one writer, and it fills them together from one [`Completion`].
+// llmlint: ignore[invalid_states_unrepresentable] The stated contract for `IssueCompleted` names these eight members and their types, and the engine node of this plan and the read API are built against them, so folding them into tagged variants is a contract change only the plan's owner may make. `Engine::complete_issues` is the one constructor, and each arm of `completion` there fills the members its action owns and no other.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct IssueCompleted {
     /// The issue, as `owner/name#N`.
@@ -166,7 +174,7 @@ impl Engine {
         if !built.source().capabilities().reconcile_status.is_native() {
             return Ok(StatusesReconciled {
                 items: Vec::new(),
-                status_is_closure: true,
+                unsupported: true,
             });
         }
         let contradictions = built
@@ -174,13 +182,29 @@ impl Engine {
             .status_contradictions()
             .await
             .map_err(|error| source_failed(built, error))?;
+        // A plugin's answer is held to what the method promises before any of it is written:
+        // each task once, so no card is written twice in one run.
+        let mut seen = std::collections::BTreeSet::new();
+        for contradiction in &contradictions {
+            if !seen.insert(contradiction.task.id.clone()) {
+                return Err(source_failed(
+                    built,
+                    SourceError::Malformed {
+                        message: format!(
+                            "status_contradictions answered task {} more than once",
+                            contradiction.task.id
+                        ),
+                    },
+                ));
+            }
+        }
         let mut items = Vec::with_capacity(contradictions.len());
         for contradiction in contradictions {
             items.push(self.reconciled(built, contradiction, dry_run).await);
         }
         Ok(StatusesReconciled {
             items,
-            status_is_closure: false,
+            unsupported: false,
         })
     }
 
@@ -191,17 +215,25 @@ impl Engine {
         contradiction: StatusContradiction,
         dry_run: bool,
     ) -> StatusReconciled {
-        let StatusContradiction { task, option, to } = contradiction;
+        let StatusContradiction {
+            task,
+            option,
+            closed_as,
+            to,
+        } = contradiction;
         let id = GlobalId::new(source.name().clone(), task.id.clone());
-        let entry = |action, to, error| StatusReconciled {
+        let planned = Status {
+            category: closed_as.category(),
+            name: to,
+        };
+        let entry = |outcome, to| StatusReconciled {
             source: id.clone(),
             from: option.clone(),
             to,
-            action,
-            error,
+            outcome,
         };
         if dry_run {
-            return entry(ReconcileAction::WouldUpdate, to, None);
+            return entry(ReconcileOutcome::WouldUpdate, planned);
         }
         let written = self
             .write_category(
@@ -209,12 +241,17 @@ impl Engine {
                 &id,
                 task.classification,
                 &task.repositories,
-                to.category,
+                closed_as.category(),
             )
             .await;
         match written {
-            Ok(status) => entry(ReconcileAction::Updated, status, None),
-            Err(error) => entry(ReconcileAction::Failed, to, Some(Failure::from(&error))),
+            Ok(status) => entry(ReconcileOutcome::Updated, status),
+            Err(error) => entry(
+                ReconcileOutcome::Failed {
+                    error: Failure::from(&error),
+                },
+                planned,
+            ),
         }
     }
 
@@ -283,7 +320,12 @@ impl Engine {
             if distinct.is_empty() {
                 continue;
             }
-            let holdings = match source.source().issue_holdings(&distinct).await {
+            let holdings = match source
+                .source()
+                .issue_holdings(&distinct)
+                .await
+                .and_then(|holdings| answered_each(&distinct, holdings))
+            {
                 Ok(holdings) => holdings,
                 Err(error) => {
                     let error = source_failed(source, error);
@@ -308,78 +350,81 @@ impl Engine {
     async fn completion(
         &self,
         source: &ResolvedSource,
-        holding: onetaskgraph_plugin_api::IssueHolding,
+        holding: IssueHolding,
         dry_run: bool,
     ) -> IssueCompleted {
-        let task = holding
-            .task
-            .as_ref()
-            .map(|native| GlobalId::new(source.name().clone(), native.clone()));
-        let mut entry = IssueCompleted {
+        let named = |task: &HeldTask| GlobalId::new(source.name().clone(), task.id.clone());
+        let entry = |task: Option<&HeldTask>, action| IssueCompleted {
             issue: holding.issue.clone(),
             source: source.name().clone(),
-            task: task.clone(),
-            from: holding.option.clone(),
+            task: task.map(named),
+            from: task.and_then(|task| task.option.clone()),
             to: None,
-            action: CompleteAction::Absent,
+            action,
             reason: None,
             error: None,
             delivered: Vec::new(),
         };
-        let (Some(id), completion) = (task, holding.completion) else {
-            return entry;
-        };
-        match completion {
-            Completion::Absent => {}
-            Completion::Skipped { reason } => {
-                entry.action = CompleteAction::Skipped;
-                entry.reason = Some(reason);
-            }
-            Completion::Unchanged => {
-                entry.action = CompleteAction::Unchanged;
-                entry.to = holding.option.map(|name| Status {
+        match &holding.completion {
+            Completion::Absent => entry(None, CompleteAction::Absent),
+            Completion::Skipped { task, reason } => IssueCompleted {
+                reason: Some(reason.clone()),
+                ..entry(Some(task), CompleteAction::Skipped)
+            },
+            Completion::Unchanged { task } => IssueCompleted {
+                to: task.option.clone().map(|name| Status {
                     category: StatusCategory::Done,
                     name,
-                });
-            }
-            Completion::Due { to } if dry_run => {
-                entry.action = CompleteAction::WouldUpdate;
-                entry.to = Some(to);
-            }
-            Completion::Due { to } => {
+                }),
+                ..entry(Some(task), CompleteAction::Unchanged)
+            },
+            Completion::Due { task, to } => {
+                let planned = Status {
+                    category: StatusCategory::Done,
+                    name: to.clone(),
+                };
+                if dry_run {
+                    return IssueCompleted {
+                        to: Some(planned),
+                        ..entry(Some(task), CompleteAction::WouldUpdate)
+                    };
+                }
+                let id = named(task);
                 match self
                     .write_category(
                         source,
                         &id,
-                        holding.classification,
-                        &holding.repositories,
+                        task.classification,
+                        &task.repositories,
                         StatusCategory::Done,
                     )
                     .await
                 {
                     Ok(status) => {
-                        let delivers = targets(&holding.delivers, &id.source);
-                        entry.delivered = self
+                        let delivers = targets(&task.delivers, &id.source);
+                        let delivered = self
                             .deliver(
                                 &id,
-                                holding.classification,
+                                task.classification,
                                 status.category,
                                 &delivers,
                                 &delivers,
                             )
                             .await;
-                        entry.action = CompleteAction::Updated;
-                        entry.to = Some(status);
+                        IssueCompleted {
+                            to: Some(status),
+                            delivered,
+                            ..entry(Some(task), CompleteAction::Updated)
+                        }
                     }
-                    Err(error) => {
-                        entry.action = CompleteAction::Failed;
-                        entry.to = Some(to);
-                        entry.error = Some(Failure::from(&error));
-                    }
+                    Err(error) => IssueCompleted {
+                        to: Some(planned),
+                        error: Some(Failure::from(&error)),
+                        ..entry(Some(task), CompleteAction::Failed)
+                    },
                 }
             }
         }
-        entry
     }
 
     /// One task's status written through its source's own status write, after the public
@@ -408,6 +453,35 @@ impl Engine {
             .map_err(|error| source_failed(source, error))?
             .ok_or_else(|| EngineError::NoSuchTask { id: id.to_string() })
     }
+}
+
+/// A source's holdings, held to what `issue_holdings` promises: one per reference it was asked
+/// about, in the order asked, each about that very reference. Anything else is a malformed
+/// answer, refused for the whole source rather than read as some references holding nothing.
+fn answered_each(
+    asked: &[IssueRef],
+    holdings: Vec<IssueHolding>,
+) -> Result<Vec<IssueHolding>, SourceError> {
+    if holdings.len() != asked.len() {
+        return Err(SourceError::Malformed {
+            message: format!(
+                "issue_holdings answered {} holding(s) for {} reference(s)",
+                holdings.len(),
+                asked.len()
+            ),
+        });
+    }
+    for (holding, issue) in holdings.iter().zip(asked) {
+        if holding.issue != *issue {
+            return Err(SourceError::Malformed {
+                message: format!(
+                    "issue_holdings answered {} where {issue} was asked about",
+                    holding.issue
+                ),
+            });
+        }
+    }
+    Ok(holdings)
 }
 
 /// A reference a source could not be asked about, reported failed with why.
