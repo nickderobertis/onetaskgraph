@@ -9,6 +9,9 @@
 # Quiet on success.
 set -euo pipefail
 
+# Offline: everything it installs is the lock `just bootstrap` already put in uv's cache, so
+# it reaches no registry.
+export UV_OFFLINE=1
 # uv's plan is read as text, which Nx's FORCE_COLOR would otherwise colour.
 export NO_COLOR=1
 unset FORCE_COLOR CLICOLOR_FORCE
@@ -25,13 +28,14 @@ command -v uv >/dev/null 2>&1 || fail "uv is not on PATH" "run 'just bootstrap',
 venv="$scratch/venv"
 sync() { UV_PROJECT_ENVIRONMENT="$venv" bash "$here/sync.sh" "$@"; }
 installed() {
-  uv pip list --python "$venv" --format=json 2>/dev/null \
-    | python3 -c 'import json, sys; print("\n".join(p["name"].lower().replace("_", "-") for p in json.load(sys.stdin)))' \
+  uv pip list --python "$venv" --format=json >"$scratch/list.json" 2>"$scratch/list.log" \
+    || { cat "$scratch/list.log" >&2; fail "could not list the scratch environment's packages" "fix what uv reports above"; }
+  python3 -c 'import json, sys; print("\n".join(p["name"].lower().replace("_", "-") for p in json.load(open(sys.argv[1], encoding="utf-8"))))' "$scratch/list.json" \
     | tr -d '\r'
 }
 
 ONETASKGRAPH_SDK_WITHOUT_CLI=1 sync >"$scratch/ci.log" 2>&1 \
-  || { cat "$scratch/ci.log" >&2; fail "CI's mode (ONETASKGRAPH_SDK_WITHOUT_CLI=1) failed" "fix what uv reports above"; }
+  || { cat "$scratch/ci.log" >&2; fail "CI's mode (ONETASKGRAPH_SDK_WITHOUT_CLI=1) failed offline" "run 'just bootstrap' so uv's cache holds the lock, then fix what uv reports above"; }
 packages="$(installed)"
 for package in onetaskgraph-sdk pydantic pytest ruff ty; do
   printf '%s\n' "$packages" | grep -qx "$package" \

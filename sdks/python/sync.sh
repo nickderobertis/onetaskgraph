@@ -10,7 +10,7 @@
 # SDK's tests and every other spawner run onetaskgraph:build's, and the distribution journey
 # installs the SDK beside the CLI wheel it builds — and building it is a maturin build of the
 # whole binary on every runner. Options are passed to `uv sync`;
-# tests/test_sync.py drives both modes.
+# check-sync.sh beside it drives both modes.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
