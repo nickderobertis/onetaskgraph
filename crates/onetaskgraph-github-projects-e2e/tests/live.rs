@@ -702,7 +702,8 @@ async fn a_reconcile_dry_run_reads_the_live_board_through_its_closed_filter_alon
         let reconciled = engine
             .reconcile_statuses(&name("board"), true)
             .await
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| error.to_string())?
+            .ok_or("the board does not declare reconcile_status")?;
         let listed = |id: &onetaskgraph_core::GlobalId| {
             reconciled.items.iter().find(|item| item.source == *id)
         };

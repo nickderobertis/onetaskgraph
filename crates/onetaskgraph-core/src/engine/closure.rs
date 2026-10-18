@@ -21,18 +21,12 @@ use crate::resolve::ResolvedSource;
 use crate::{Failure, GlobalId};
 
 /// What `task status reconcile` answers with.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct StatusesReconciled {
     /// One entry per item whose card contradicted its closure, in the order the source read
     /// them. Empty for a source with nothing out of line, and for one that does not declare
     /// `reconcile_status`.
     pub items: Vec<StatusReconciled>,
-    /// Whether the source does not declare
-    /// [`reconcile_status`](onetaskgraph_plugin_api::Capabilities::reconcile_status) — its
-    /// status read as its closure — and so was sent no request. Not part of the document: what
-    /// the human rendering says instead of a count.
-    #[serde(skip)]
-    pub unsupported: bool,
 }
 
 /// One item `task status reconcile` brought in line, or would, or could not.
@@ -156,8 +150,8 @@ impl Engine {
     /// only its card through the source's own status write — or, under `dry_run`, nothing.
     ///
     /// A source that does not declare
-    /// [`reconcile_status`](onetaskgraph_plugin_api::Capabilities::reconcile_status) is sent no
-    /// request and answers no items.
+    /// [`reconcile_status`](onetaskgraph_plugin_api::Capabilities::reconcile_status) — its
+    /// status read as its closure — is sent no request and answers `None`.
     ///
     /// # Errors
     ///
@@ -169,13 +163,10 @@ impl Engine {
         &self,
         source: &SourceName,
         dry_run: bool,
-    ) -> Result<StatusesReconciled, EngineError> {
+    ) -> Result<Option<StatusesReconciled>, EngineError> {
         let built = self.built(source)?;
         if !built.source().capabilities().reconcile_status.is_native() {
-            return Ok(StatusesReconciled {
-                items: Vec::new(),
-                unsupported: true,
-            });
+            return Ok(None);
         }
         let contradictions = built
             .source()
@@ -202,10 +193,7 @@ impl Engine {
         for contradiction in contradictions {
             items.push(self.reconciled(built, contradiction, dry_run).await);
         }
-        Ok(StatusesReconciled {
-            items,
-            unsupported: false,
-        })
+        Ok(Some(StatusesReconciled { items }))
     }
 
     /// One contradiction brought in line, or reported as it would be.

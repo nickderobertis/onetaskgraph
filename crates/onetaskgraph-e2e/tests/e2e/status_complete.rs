@@ -18,8 +18,8 @@ use serde_json::{Value, json};
 use crate::common::{Sandbox, SourceBoundary, stderr, stdout};
 use crate::document_store::store_at;
 use crate::fixtures::{
-    GITHUB_SECOND_BOARD_TOKEN, GitHubBoardFields, LinearWorkspace, dataset, github_number,
-    github_projects_with_items, linear_workspace,
+    GITHUB_SECOND_BOARD_TOKEN, GitHubBoardFields, LinearWorkspace, ReferenceFault, dataset,
+    github_number, github_projects_with_items, linear_workspace,
 };
 
 /// The repository every fixture issue lives in.
@@ -497,14 +497,10 @@ fn a_source_whose_status_is_its_closure_answers_nothing_and_is_sent_nothing() {
     assert!(stores.board.served().is_empty(), "no board was asked");
 }
 
-#[test]
-fn the_library_form_answers_what_the_command_line_answers() {
-    let cli = Stores::new();
-    let answer = cli.complete(&named(), &[], 0);
-
-    let library = Stores::new();
+/// An engine built from `stores`' own configuration, as a Rust caller links one.
+fn library_engine(stores: &Stores) -> Engine {
     let config = Config::from_document(json!({
-        "sources": library.sources,
+        "sources": stores.sources,
         "default_sources": ["board-b", "notes"],
     }))
     .expect("a valid configuration");
@@ -514,17 +510,31 @@ fn the_library_form_answers_what_the_command_line_answers() {
         ("LINEAR_API_KEY", "fixture-key"),
     ]))
     .expect("the loopbacks' credentials");
-    let engine = Engine::build(&config, &secrets);
+    Engine::build(&config, &secrets)
+}
+
+/// `engine.complete_issues(issues)`, naming no source, run to its answer.
+fn completed_by(engine: &Engine, issues: &[IssueRef]) -> onetaskgraph_core::IssuesCompleted {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a runtime")
+        .block_on(engine.complete_issues(issues, &[] as &[SourceName], false))
+        .expect("the completion runs")
+}
+
+#[test]
+fn the_library_form_answers_what_the_command_line_answers() {
+    let cli = Stores::new();
+    let answer = cli.complete(&named(), &[], 0);
+
+    let library = Stores::new();
+    let engine = library_engine(&library);
     let issues: Vec<IssueRef> = NAMED
         .iter()
         .map(|id| reference(id).parse().expect("a reference"))
         .collect();
-    let completed = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("a runtime")
-        .block_on(engine.complete_issues(&issues, &[] as &[SourceName], false))
-        .expect("the completion runs");
+    let completed = completed_by(&engine, &issues);
     assert_eq!(
         serde_json::to_value(&completed).expect("it serialises"),
         answer
@@ -812,4 +822,62 @@ fn a_board_hosted_over_the_stdio_protocol_reconciles_and_completes_as_one_in_pro
         board.state("N-1"),
         ("CLOSED".to_owned(), Some("COMPLETED".to_owned()))
     );
+}
+
+#[test]
+fn a_library_completion_of_no_issues_answers_nothing_and_sends_nothing() {
+    let stores = Stores::new();
+    let engine = library_engine(&stores);
+    let completed = completed_by(&engine, &[]);
+    assert_eq!(
+        serde_json::to_value(&completed).expect("it serialises"),
+        json!({"items": [], "unsupported": ["docs", "linear", "notes"]})
+    );
+    assert!(stores.board.served().is_empty(), "no board was asked");
+    assert_eq!(stores.linear.served(), Vec::new(), "Linear is sent nothing");
+}
+
+#[test]
+fn a_read_by_reference_answered_malformed_fails_that_boards_references_and_writes_nothing() {
+    for (fault, says) in [
+        (
+            ReferenceFault::NoAlias,
+            "answered a read by reference with no r0",
+        ),
+        (
+            ReferenceFault::NoIssue,
+            "answered r0 of a read by reference with no issue",
+        ),
+        (
+            ReferenceFault::NotAnIssue,
+            "answered r0 of a read by reference with an issue whose __typename is not Issue",
+        ),
+    ] {
+        let stores = Stores::new();
+        stores.board.bend_the_next_reference_read(fault);
+        let answer = stores.complete(&named(), &[], 4);
+        // Sources are asked in name order, so the bent read is board A's.
+        every_reference_failed(&answer, "board-a");
+        assert!(
+            answer["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|item| item["source"] == "board-a")
+                .all(|item| item["error"]["message"]
+                    .as_str()
+                    .is_some_and(|message| message.contains(says))),
+            "{fault:?}: {answer:#}"
+        );
+        assert_eq!(
+            stores.board.status("N-1").as_deref(),
+            Some("Todo"),
+            "{fault:?}"
+        );
+        assert_eq!(stores.board.state("N-1").0, "OPEN", "{fault:?}");
+        assert!(
+            answered_by(&answer, "board-b").contains(&(reference("N-8"), "updated".to_owned())),
+            "{fault:?}: board B is still written: {answer:#}"
+        );
+    }
 }

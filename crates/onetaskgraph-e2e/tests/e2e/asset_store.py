@@ -660,6 +660,9 @@ def holdings(settings, params):
             answered.append({"issue": issue, "completion": "due", "task": task, "to": "Done"})
         return {"holdings": answered}
     answered = [{"issue": issue, "completion": "absent"} for issue in issues]
+    # llmlint: ignore-block[structural_pattern_matching] `match`/`case` is a syntax error before
+    # Python 3.10, and this peer is spawned by whichever interpreter the host has; see
+    # `document_store.py`, which records the same reason.
     if mode == "missing":
         answered = answered[:-1]
     elif mode == "extra":
@@ -668,6 +671,7 @@ def holdings(settings, params):
         answered[0], answered[1] = answered[1], answered[0]
     elif mode == "renamed":
         answered[0] = {"issue": "acme/other#1", "completion": "absent"}
+    # llmlint: ignore-end[structural_pattern_matching]
     return {"holdings": answered}
 
 

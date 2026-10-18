@@ -443,14 +443,16 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
                 .reconcile_statuses(&source, args.dry_run)
                 .await
                 .map_err(|error| Failure::from(&error))?;
+            // A source whose status is its closure answers the document with no items.
+            let document = reconciled.clone().unwrap_or_default();
             let rendered = rendering(
                 loaded,
-                &reconciled,
-                |reconciled| render::statuses_reconciled(source.as_str(), reconciled),
+                &document,
+                |_| render::statuses_reconciled(source.as_str(), reconciled.as_ref()),
                 "the reconciled statuses",
             )?;
             emit(out, rendered.trim_end(), "the reconciled statuses")?;
-            Ok(if reconciled.failed() {
+            Ok(if document.failed() {
                 EXIT_PARTIAL
             } else {
                 EXIT_OK

@@ -1136,6 +1136,8 @@ struct GitHubBoard {
     /// Errors this board answers beside the data of the next request carrying each operation,
     /// once — an error GitHub reports about one part of a read it otherwise answered.
     erring_beside: Vec<(&'static str, String)>,
+    /// How the next read by issue reference bends its first slot's answer, once.
+    reference_fault: Option<ReferenceFault>,
     /// The variables each of those documents was sent with, at the same index.
     variables: Vec<Value>,
     /// The Status field's whole option set, replaced exactly as GitHub replaces it.
@@ -1416,6 +1418,11 @@ impl GitHubBoardFields {
             .iter()
             .chain(&board.pending)
             .any(|item| item["id"] == json!(id))
+    }
+
+    /// Bend the first slot of the next read by issue reference as `fault` says, once.
+    pub fn bend_the_next_reference_read(&self, fault: ReferenceFault) {
+        self.board.lock().unwrap().reference_fault = Some(fault);
     }
 
     /// Have the board's closed-items read answer its second page with the very cursor it was
@@ -2721,8 +2728,25 @@ impl GitHubBoard {
 
     /// Each reference of a batch read by reference, answered as GitHub answers one: the issue
     /// that repository holds under that number, or `null` beside a `NOT_FOUND` error naming the
-    /// alias.
+    /// alias — its first slot bent once as [`ReferenceFault`] says, when one is armed.
     fn issues_by_reference(&mut self, variables: &Value) -> Value {
+        let mut answer = self.issues_by_reference_as_github_answers(variables);
+        match self.reference_fault.take() {
+            Some(ReferenceFault::NoAlias) => {
+                answer.as_object_mut().expect("aliases").remove("r0");
+            }
+            Some(ReferenceFault::NoIssue) => {
+                answer["r0"] = json!({});
+            }
+            Some(ReferenceFault::NotAnIssue) => {
+                answer["r0"]["issue"]["__typename"] = json!("PullRequest");
+            }
+            None => {}
+        }
+        answer
+    }
+
+    fn issues_by_reference_as_github_answers(&mut self, variables: &Value) -> Value {
         let mut answer = serde_json::Map::new();
         for slot in 0..onetaskgraph_github_projects::REFERENCE_BATCH {
             let owner = variables[format!("owner{slot}")]
@@ -3024,6 +3048,17 @@ fn github_projects_board_lagging(sandbox: &Sandbox, lagging_reads: usize) -> Val
 const GITHUB_FIXTURE_SECRETS: &str =
     "GITHUB_PROJECTS_FIXTURE_TOKEN=test-token\nGITHUB_PROJECTS_FIXTURE_TOKEN_B=test-token-b\n";
 
+/// How a read by issue reference can come back malformed in its first slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReferenceFault {
+    /// With no alias for the slot at all.
+    NoAlias,
+    /// With the slot's repository answered and no `issue` member in it.
+    NoIssue,
+    /// With the slot's issue answered as a node that is not an issue.
+    NotAnIssue,
+}
+
 /// The token a source configured by [`GitHubBoardFields::second_board`] sends, which tells its
 /// requests from the first board's in this server's one log.
 pub const GITHUB_SECOND_BOARD_TOKEN: &str = "test-token-b";
@@ -3086,6 +3121,7 @@ fn github_projects_board_at(
         closed_filter_leaks: false,
         closed_cursor_stalls: false,
         erring_beside: Vec::new(),
+        reference_fault: None,
         variables: Vec::new(),
         status_options: json!([
             {"id":"OPT-backlog","name":"Backlog","color":"GRAY","description":""},

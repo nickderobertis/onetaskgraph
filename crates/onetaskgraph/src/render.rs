@@ -266,11 +266,12 @@ pub fn status_set(set: &TaskStatusSet) -> String {
 
 /// What `task status reconcile` did: one line per item brought in line — its card's option
 /// before, the status its closure implies, and what became of it — then a closing count; or,
-/// for a source whose status is its closure, that nothing could need reconciling.
-pub fn statuses_reconciled(source: &str, reconciled: &StatusesReconciled) -> String {
-    if reconciled.unsupported {
+/// for a source whose status is its closure, answered `None`, that nothing could need
+/// reconciling.
+pub fn statuses_reconciled(source: &str, reconciled: Option<&StatusesReconciled>) -> String {
+    let Some(reconciled) = reconciled else {
         return format!("source {source}'s status is its closure, so nothing needs reconciling\n");
-    }
+    };
     let mut rendered = String::new();
     let (mut updated, mut would, mut failed) = (0, 0, 0);
     for item in &reconciled.items {

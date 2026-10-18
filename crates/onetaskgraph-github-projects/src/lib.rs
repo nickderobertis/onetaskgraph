@@ -10636,7 +10636,19 @@ fn referenced_issue(data: &Value, slot: usize) -> Result<Option<&Value>, SourceE
         .ok_or_else(|| SourceError::Malformed {
             message: format!("GitHub answered {alias} of a read by reference with no issue"),
         })?;
-    Ok((!issue.is_null()).then_some(issue))
+    if issue.is_null() {
+        return Ok(None);
+    }
+    // `Repository.issue` is typed `Issue`, so anything else is not an answer to this read.
+    if optional_str(issue, "__typename")? != Some("Issue") {
+        return Err(SourceError::Malformed {
+            message: format!(
+                "GitHub answered {alias} of a read by reference with an issue whose __typename \
+                 is not Issue"
+            ),
+        });
+    }
+    Ok(Some(issue))
 }
 
 /// A closure reason as a person reads it: `NOT_PLANNED` as `not planned`.
