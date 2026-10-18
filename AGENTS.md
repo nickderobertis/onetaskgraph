@@ -414,9 +414,9 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   CI derives its base explicitly from the merge base or `github.event.before`, because
   an implicit base can select the wrong changes. Pushes run no repository checks;
   contributors can run `NX_BASE=<ref> just check` or `just gate` manually. A push to main
-  does build, testing nothing, the Rust cache `test-linux` and `test-windows` restore
-  (`.github/workflows/rust-cache-warm.yml`): a pull request restores only a cache saved on
-  its own ref or on main, so nothing else could give a new one a warm build.
+  does build, testing nothing, the Rust cache `test-linux`, `test-windows` and `test-macos`
+  restore (`.github/workflows/rust-cache-warm.yml`): a pull request restores only a cache
+  saved on its own ref or on main, so nothing else could give a new one a warm build.
   `scripts/check-live-lane-selection.sh`, a command in `scripts:test`, holds all of that:
   it puts the five diffs to the real decision over real git states, drives the real recipes
   for both CI paths, puts three diffs to real Nx, and ENUMERATES the paths from
@@ -1306,9 +1306,11 @@ The capture drives `local-md` and `in-memory` only: no credential or socket.
   combines the former Mac check and install assertions sequentially. Linux carriers keep
   `check (macos-latest)` and `install path (macos-latest)` required on every PR, using
   `always()` and `.github/macos-result.mjs` to refuse failed, cancelled or missing proofs.
-  Main pushes never schedule Mac. `.github/macos-policy.mjs` admits a release-only PR
-  only from a same-repository `release-plz-` branch with a semantic version/changelog-only
-  diff; an unreadable PR requires coverage. The author is not authority: release-plz
+  Main pushes never schedule Mac, with one exception the user approved on 2026-10-18: the
+  build-only macOS leg of `.github/workflows/rust-cache-warm.yml`, because a pull request
+  waits on its slowest job and `test-macos` restores no other cache.
+  `.github/macos-policy.mjs` admits a release-only PR only from a same-repository
+  `release-plz-` branch with a semantic version/changelog-only diff; an unreadable PR requires coverage. The author is not authority: release-plz
   uses the owner's PAT. An explicit manual diagnostic is default off.
   Release builds the Apple Silicon wheel on one Apple Silicon runner, then uses its binary
   for the archive and npm carrier; Intel macOS is no longer released, and the installer

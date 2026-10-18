@@ -1,8 +1,10 @@
-# Build what test-linux and test-windows build on every push to main, and save it as the Rust
-# cache those pull-request jobs restore: a pull request restores only caches saved on its own
-# ref or on main, and those jobs run on pull requests alone, so without this every pull request
-# compiled every dependency. Nothing is tested here, and there is no macOS leg: main pushes
-# never schedule Mac (AGENTS.md). scripts/warm-rust-cache.sh says what is built and why.
+# Build what test-linux, test-windows and test-macos build on every push to main, and save it
+# as the Rust cache those pull-request jobs restore: a pull request restores only caches saved on
+# its own ref or on main, and those jobs run on pull requests alone, so without this every pull
+# request compiled every dependency. Nothing is tested here. Its macOS leg is the one Mac job a
+# push to main schedules, by the user's decision (AGENTS.md): a pull request waits on its
+# slowest job, and test-macos, cold, was that job. Each leg restores its own previous save, so
+# a push builds only what changed. scripts/warm-rust-cache.sh says what is built and why.
 
 name: rust cache warm
 
@@ -29,6 +31,9 @@ jobs:
             build: --instrumented
           - os: windows-latest
             job: test-windows
+            build: ""
+          - os: macos-latest
+            job: test-macos
             build: ""
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60

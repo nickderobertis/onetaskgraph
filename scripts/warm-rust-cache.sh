@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Build what test-linux and test-windows build, and run nothing.
+# Build what test-linux, test-windows and test-macos build, and run nothing.
 #
 #   scripts/warm-rust-cache.sh [--instrumented]
 #
 # .github/workflows/rust-cache-warm.yml runs this on every push to main and saves the Rust
-# cache under the key those two pull-request jobs restore, because a pull request may restore
-# only a cache saved on its own ref or on main, and they run on pull requests alone: without
-# it every pull request compiled every dependency, and the distribution journey's release
-# build — eight to ten minutes — on every run. The cache keeps dependency units only, so what
-# matters is that these are the very units the jobs compile:
+# cache under the key each of those pull-request jobs restores, because a pull request may
+# restore only a cache saved on its own ref or on main, and they run on pull requests alone:
+# without it every pull request compiled every dependency, and the distribution journey's
+# release build — eight to fifteen minutes — on every run. The cache keeps dependency units
+# only, so what matters is that these are the very units the jobs compile:
 #
 #   every workspace crate's test units, with every feature and with its defaults, as the
 #   crates' `test` targets build them;

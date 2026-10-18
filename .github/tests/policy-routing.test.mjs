@@ -283,8 +283,23 @@ test("workflow matrices, event fan-out and exact release head model record sched
                   run.workflow === "ci.yml") ||
                   (entry.event === "release" && run.workflow === "release.yml") ||
                   (["manual-opt-in", "manual-distribution"].includes(entry.id) &&
-                    run.workflow === "ci.yml"),
+                    run.workflow === "ci.yml") ||
+                  // The one Mac job a push to main schedules, by the user's decision: the
+                  // build-only Rust cache warmer test-macos restores (AGENTS.md).
+                  (entry.event === "push" &&
+                    entry.branch === "main" &&
+                    run.workflow === "rust-cache-warm.yml" &&
+                    row.job === "warm"),
                 JSON.stringify(row),
+              );
+            if (
+              entry.event === "push" &&
+              entry.branch === "main" &&
+              run.workflow === "rust-cache-warm.yml"
+            )
+              assert.deepEqual(
+                macs.map((row) => row.job),
+                ["warm"],
               );
             if (entry.event === "pull_request" && run.workflow === "ci.yml")
               assert.equal(

@@ -194,9 +194,12 @@ export function problems(all) {
 }
 
 // The Rust cache a new pull request can restore is the one rust-cache-warm.yml saves on main,
-// under the shared key test-linux and test-windows each restore: a push to main alone, and
-// never a Mac.
-const WARMED = { "test-linux": "ubuntu-latest", "test-windows": "windows-latest" };
+// under the shared key each test job restores: a push to main alone, one leg per test job.
+const WARMED = {
+  "test-linux": "ubuntu-latest",
+  "test-windows": "windows-latest",
+  "test-macos": "macos-latest",
+};
 const toolchainOf = (job) =>
   steps(job).find((step) => uses(step).startsWith("actions-rust-lang/setup-rust-toolchain"));
 function warmerProblems(all, jobs) {
@@ -219,7 +222,7 @@ function warmerProblems(all, jobs) {
       found.push(`the Rust cache warmer has no ${os} leg saving ${id}'s cache`);
   }
   if (legs.some((leg) => !Object.values(WARMED).includes(leg.os)))
-    found.push("the Rust cache warmer runs on a runner no warmed job uses, a Mac among them");
+    found.push("the Rust cache warmer runs on a runner no warmed job uses");
   if (!steps(warm).some((step) => String(step.run ?? "").includes("scripts/warm-rust-cache.sh")))
     found.push("the Rust cache warmer does not build through scripts/warm-rust-cache.sh");
   return found;
@@ -404,10 +407,13 @@ test("the Rust cache warmer parting from the key a test job restores is refused"
   }, /no ubuntu-latest leg saving test-linux's cache/);
   refuses((all) => {
     all["rust-cache-warm.yml"].jobs.warm.strategy.matrix.include.push({
-      os: "macos-latest",
-      job: "test-macos",
+      os: "ubuntu-24.04-arm",
+      job: "test-linux",
     });
-  }, /a Mac among them/);
+  }, /a runner no warmed job uses/);
+  refuses((all) => {
+    all["rust-cache-warm.yml"].jobs.warm.strategy.matrix.include.pop();
+  }, /no macos-latest leg saving test-macos's cache/);
   refuses((all) => {
     all["rust-cache-warm.yml"].on = { push: { branches: ["main"] }, pull_request: null };
   }, /other than a push to main/);
