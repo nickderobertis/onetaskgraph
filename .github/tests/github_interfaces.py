@@ -4,26 +4,125 @@
 Called as `github_interfaces.py [<pin>]`, the pin defaulting to config/github-interfaces.toml,
 whose header says what is checked. Quiet and exit 0 when everything agrees; otherwise one line
 per disagreement on stderr, naming the call and the field, and exit 1.
+
+Called as `github_interfaces.py --answer <call>`, it prints that call's pinned answer as JSON,
+which is how the release journeys build what their double serves from the pin.
 """
 
+# llmlint: ignore-file[async_typed_clients_at_boundaries] Every request here goes to a loopback server this check starts itself — the double, or the recording stand-in the release scripts are pointed at — strictly one after another, each answer read before the next is sent; the scripts under check use the same standard-library client for the same reason their own directives give.
+
+import contextlib
 import copy
 import importlib.util
+import io
 import json
+import os
 import re
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import tomllib
 import urllib.request
+from dataclasses import dataclass
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Callable
 
 ROOT = Path(__file__).resolve().parents[2]
-problems: list[str] = []
+CALLS = ("release-by-tag", "delete-asset", "upload-asset", "open-pulls", "graphql")
+# The order a release's GitHub calls come in: an asset upload that was interrupted is taken
+# back before it is sent again, and auto-merge is asked for the pull request the list named.
+SEQUENCE = list(CALLS)
+
+Json = None | bool | int | float | str | list | dict  # a decoded JSON value
 
 
-def problem(message: str) -> None:
-    problems.append(message)
+class PinError(Exception):
+    """The pin itself is not what this check can read."""
+
+
+@dataclass(frozen=True)
+class Call:
+    name: str
+    host: str
+    method: str
+    path: str
+    status: int
+    reads: tuple[str, ...]
+    answer: Json
+
+    def matches(self, method: str, target: str) -> bool:
+        pattern = re.sub(r"\\\{[a-z_]+\\\}", "[^/?&]+", re.escape(self.path))
+        return method == self.method and re.fullmatch(pattern, target) is not None
+
+
+@dataclass(frozen=True)
+class Schema:
+    objects: dict[str, dict[str, str]]
+    arguments: dict[str, dict[str, str]]
+    inputs: dict[str, dict[str, str]]
+    enums: dict[str, tuple[str, ...]]
+
+
+@dataclass(frozen=True)
+class Pin:
+    calls: dict[str, Call]
+    tag: str
+    document: str
+    schema: Schema
+
+
+def required(table: object, key: str, kind: type, where: str):
+    if not isinstance(table, dict) or not isinstance(table.get(key), kind) or isinstance(table.get(key), bool) is not (kind is bool):
+        raise PinError(f"{where}: `{key}` must be of type {kind.__name__}")
+    return table[key]
+
+
+def names(table: object, where: str) -> dict[str, str]:
+    if not isinstance(table, dict) or not all(isinstance(value, str) for value in table.values()):
+        raise PinError(f"{where}: must map names to type names")
+    return dict(table)
+
+
+def call(table: object, name: str) -> Call:
+    reads = required(table, "reads", list, name)
+    if not all(isinstance(read, str) for read in reads):
+        raise PinError(f"{name}: `reads` must list field paths")
+    text = required(table, "answer", str, name)
+    try:
+        answer = json.loads(text) if text.strip() else None
+    except json.JSONDecodeError as error:
+        raise PinError(f"{name}: `answer` is not JSON: {error}") from error
+    for key in ("documentation", "observed", "observed_from"):
+        required(table, key, str, name)
+    return Call(name, required(table, "host", str, name), required(table, "method", str, name), required(table, "path", str, name), required(table, "status", int, name), tuple(reads), answer)
+
+
+def read_pin(path: Path) -> Pin:
+    try:
+        raw = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError) as error:
+        raise PinError(f"{path}: {error}") from error
+    calls = {}
+    for table in required(raw, "rest", list, "the pin"):
+        name = required(table, "call", str, "a [[rest]] entry")
+        calls[name] = call(table, name)
+    graphql = required(raw, "graphql", dict, "the pin")
+    calls["graphql"] = call(graphql, "graphql")
+    if sorted(calls) != sorted(CALLS):
+        raise PinError(f"the pin describes {sorted(calls)}, not the release's calls {sorted(CALLS)}")
+    enums = required(graphql, "enums", dict, "graphql")
+    if not all(isinstance(values, list) and all(isinstance(value, str) for value in values) for values in enums.values()):
+        raise PinError("graphql.enums: must map each enum to its values")
+    schema = Schema(
+        {name: names(fields, f"graphql.objects.{name}") for name, fields in required(graphql, "objects", dict, "graphql").items()},
+        {name: names(fields, f"graphql.arguments.{name}") for name, fields in required(graphql, "arguments", dict, "graphql").items()},
+        {name: names(fields, f"graphql.inputs.{name}") for name, fields in required(graphql, "inputs", dict, "graphql").items()},
+        {name: tuple(values) for name, values in enums.items()},
+    )
+    return Pin(calls, required(raw["rest"][0], "tag", str, "release-by-tag"), required(graphql, "document", str, "graphql"), schema)
 
 
 def load(name: str, path: Path):
@@ -39,119 +138,220 @@ def segments(path: str) -> list[str]:
     return [part for part in re.split(r"\.|(\[\])", path) if part]
 
 
-def without(value: object, path: list[str]) -> object:
+def without(value: Json, path: list[str]) -> Json:
     """A copy of `value` with the field at `path` removed from every element a `[]` reaches."""
     value = copy.deepcopy(value)
 
-    def strip(node: object, rest: list[str]) -> None:
-        head, *tail = rest
-        if head == "[]":
-            for item in node if isinstance(node, list) else []:
-                strip(item, tail)
-        elif isinstance(node, dict) and head in node:
-            if tail:
-                strip(node[head], tail)
-            else:
+    def strip(node: Json, rest: list[str]) -> None:
+        match rest, node:
+            case ["[]", *tail], list():
+                for item in node:
+                    strip(item, tail)
+            case [head], dict() if head in node:
                 del node[head]
+            case [head, *tail], dict() if head in node:
+                strip(node[head], tail)
 
     strip(value, path)
     return value
 
 
-def shape(value: object, prefix: str = "") -> set[str]:
+def shape(value: Json, prefix: str = "") -> set[str]:
     """Every field path a JSON value carries, list members spelled `[]`."""
-    paths: set[str] = set()
-    if isinstance(value, dict):
-        for key, member in value.items():
-            path = f"{prefix}.{key}" if prefix else key
-            paths.add(path)
-            paths |= shape(member, path)
-    elif isinstance(value, list):
-        for member in value:
-            paths |= shape(member, f"{prefix}[]")
-    return paths
+    match value:
+        case dict():
+            return set().union(*({f"{prefix}.{key}".lstrip("."), *shape(member, f"{prefix}.{key}".lstrip("."))} for key, member in value.items()))
+        case list():
+            return set().union(*(shape(member, f"{prefix}[]") for member in value))
+        case _:
+            return set()
 
 
-def holds_reads(call: str, answer: object, reads: list[str], parse) -> None:
-    """The parser accepts the pinned answer, and each field it is said to read changes its result when gone."""
-    try:
-        whole = parse(answer)
-    except Exception as error:  # noqa: BLE001 - any refusal of the pinned answer is the finding
-        problem(f"{call}: the release's parser refuses GitHub's pinned answer: {error}")
-        return
-    pinned = shape(answer)
-    for read in reads:
-        spelled = read.replace(".[]", "[]")
-        if spelled.lstrip("[]").lstrip(".") and spelled not in pinned and read != "errors":
-            problem(f"{call}: `reads` names {read}, which GitHub's pinned answer does not carry")
-            continue
+class Findings:
+    def __init__(self) -> None:
+        self.lines: list[str] = []
+
+    def add(self, message: str) -> None:
+        self.lines.append(message)
+
+    def holds_reads(self, call: Call, parse: Callable[[Json], object]) -> None:
+        """The parser accepts the pinned answer, every field `reads` names changes what it
+        answers when gone, and no other field does."""
         try:
-            changed = parse(without(answer, segments(read))) != whole
-        except Exception:  # noqa: BLE001 - a refusal is the parser reading the field
-            changed = True
-        if not changed and read != "errors":
-            problem(f"{call}: removing {read} from GitHub's answer leaves the parser's result unchanged, so it does not read what the pin says it does")
+            whole = parse(call.answer)
+        except Exception as error:  # noqa: BLE001 - any refusal of the pinned answer is the finding
+            self.add(f"{call.name}: the release's parser refuses GitHub's pinned answer: {error}")
+            return
+        carried = shape(call.answer)
+        named = {read.replace(".[]", "[]") for read in call.reads}
+        for read in sorted(named - carried - {"errors"}):
+            self.add(f"{call.name}: `reads` names {read}, which GitHub's pinned answer does not carry")
+        for field in sorted(carried | (named & {"errors"})):
+            ancestor = any(read.startswith((f"{field}.", f"{field}[]")) for read in named)
+            try:
+                same = parse(without(call.answer, segments(field))) == whole
+            except Exception:  # noqa: BLE001 - a refusal is the parser reading the field
+                same = False
+            if field in named and same and field != "errors":
+                self.add(f"{call.name}: removing {field} from GitHub's answer leaves the parser's result unchanged, so it does not read what the pin says it does")
+            elif field not in named and not ancestor and not same:
+                self.add(f"{call.name}: the parser reads {field}, which `reads` does not name")
+
+    def check_document(self, pin: Pin, document: str) -> None:
+        """Walk the document's selections over the pinned schema slice."""
+        schema = pin.schema
+        if document.strip() != pin.document.strip():
+            self.add("graphql: scripts/enable-release-automerge.py sends a document other than the pinned one")
+        tokens = re.findall(r"[A-Za-z_][A-Za-z0-9_]*|\$[A-Za-z_]+|[{}():,]", document[document.index("{") :])
+        stack, current, last, at = [], "Mutation", None, 0
+        while at < len(tokens):
+            match tokens[at]:
+                case "{":
+                    if last is not None:
+                        stack.append(current)
+                        current = schema.objects.get(current, {}).get(last, "")
+                    last = None
+                case "}":
+                    current = stack.pop() if stack else current
+                case "(":
+                    at = self.check_arguments(schema, current, last, tokens, at)
+                    continue
+                case ":" | ",":
+                    pass
+                case token:
+                    if token not in schema.objects.get(current, {}):
+                        self.add(f"graphql: {current} has no field {token} in the pinned schema slice")
+                    last = token
+            at += 1
+
+    def check_arguments(self, schema: Schema, owner: str, field: str | None, tokens: list[str], at: int) -> int:
+        """field(name: value, …): each name an argument of the field, an input object's keys
+        the input type's fields, and a bare value of an enum-typed field one of its values."""
+        depth, end = 1, at + 1
+        while depth:
+            depth += {"(": 1, ")": -1}.get(tokens[end], 0)
+            end += 1
+        declared, inner, index = schema.arguments.get(f"{owner}.{field}", {}), tokens[at + 1 : end - 1], 0
+        while index + 2 < len(inner):
+            if inner[index + 1] == ":" and inner[index] not in "{}":
+                if inner[index] not in declared:
+                    self.add(f"graphql: {owner}.{field} takes no argument {inner[index]}")
+                elif inner[index + 2] == "{":
+                    fields, close = schema.inputs.get(declared[inner[index]], {}), inner.index("}", index)
+                    pairs = inner[index + 3 : close]
+                    for key, value in zip(pairs[0::4], pairs[2::4], strict=False):
+                        if key not in fields:
+                            self.add(f"graphql: {declared[inner[index]]} has no field {key}")
+                        elif fields[key] in schema.enums and value not in schema.enums[fields[key]]:
+                            self.add(f"graphql: {value} is not a value of {fields[key]}")
+                    index = close
+            index += 1
+        return end
 
 
-def check_document(graphql: dict, document: str) -> None:
-    """Walk the document's selections over the pinned schema slice."""
-    objects, inputs, enums, arguments = graphql["objects"], graphql["inputs"], graphql["enums"], graphql["arguments"]
-    if document.strip() != graphql["document"].strip():
-        problem("graphql: scripts/enable-release-automerge.py sends a document other than the pinned one")
-    body = document[document.index("{") :]
-    tokens = re.findall(r"[A-Za-z_][A-Za-z0-9_]*|\$[A-Za-z_]+|[{}():,]", body)
-    stack, current, last, at = [], "Mutation", None, 0
-    while at < len(tokens):
-        token = tokens[at]
-        if token == "{":
-            if last is not None:
-                stack.append(current)
-                current = objects.get(current, {}).get(last, "")
-            last = None
-        elif token == "}":
-            current = stack.pop() if stack else current
-        elif token == "(":
-            # field(name: value, …): every name an argument of the field, an input object's
-            # keys the input type's fields, and a bare value of an enum-typed field one of its values.
-            depth, end = 1, at + 1
-            while depth:
-                depth += {"(": 1, ")": -1}.get(tokens[end], 0)
-                end += 1
-            declared = arguments.get(f"{current}.{last}", {})
-            inner = tokens[at + 1 : end - 1]
-            index = 0
-            while index < len(inner):
-                if index + 1 < len(inner) and inner[index + 1] == ":" and inner[index] not in "{}":
-                    name = inner[index]
-                    if name not in declared:
-                        problem(f"graphql: {current}.{last} takes no argument {name}")
-                    elif inner[index + 2] == "{":
-                        fields = inputs.get(declared[name], {})
-                        close = inner.index("}", index)
-                        pairs = inner[index + 3 : close]
-                        for key, value in zip(pairs[0::4], pairs[2::4], strict=False):
-                            if key not in fields:
-                                problem(f"graphql: {declared[name]} has no field {key}")
-                            elif fields[key] in enums and value not in enums[fields[key]]:
-                                problem(f"graphql: {value} is not a value of {fields[key]}")
-                        index = close
-                index += 1
-            at = end
-            continue
-        elif token not in (":", ","):
-            if current not in objects or token not in objects[current]:
-                problem(f"graphql: {current} has no field {token} in the pinned schema slice")
-            last = token
-        at += 1
+def served_pulls(pin: Pin) -> list[Json]:
+    return pin.calls["open-pulls"].answer
 
 
-def double_answers(pin: dict, release: dict) -> dict:
+class Recorder(BaseHTTPRequestHandler):
+    """GitHub as the pin describes it: each call answered with its pinned status and an answer
+    `answers` shapes from the pinned one, every request recorded."""
+
+    answers: dict[str, Json] = {}
+    calls: list[Call] = []
+    sent: list[tuple[str, str, bytes]] = []
+
+    def log_message(self, *_: object) -> None:
+        pass
+
+    def answer(self) -> None:
+        body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        self.sent.append((self.command, self.path, body))
+        call = next((call for call in self.calls if call.matches(self.command, self.path)), None)
+        payload = b"" if call is None or self.answers[call.name] is None else json.dumps(self.answers[call.name]).encode()
+        self.send_response(404 if call is None else call.status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    do_GET = do_POST = do_DELETE = answer
+
+
+@contextlib.contextmanager
+def environment(**values: str | None):
+    saved = {name: os.environ.get(name) for name in values}
+    os.environ.update({name: value for name, value in values.items() if value is not None})
+    for name in (name for name, value in values.items() if value is None):
+        os.environ.pop(name, None)
+    try:
+        yield
+    finally:
+        for name, value in saved.items():
+            os.environ.pop(name, None) if value is None else os.environ.__setitem__(name, value)
+
+
+def drive_scripts(pin: Pin, findings: Findings, release_cd, automerge) -> None:
+    """Run both scripts' real GitHub code against a server answering as the pin does, and hold
+    every request they send to a call the pin describes, in the release's order."""
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Recorder)
+    base = f"http://127.0.0.1:{server.server_port}"
+    calls = pin.calls
+    release = copy.deepcopy(calls["release-by-tag"].answer)
+    pull = copy.deepcopy(served_pulls(pin)[0])
+    try:
+        repository = pull["head"]["repo"]["full_name"]
+        upload = re.sub(r"^https?://[^/]+", base, release["upload_url"])
+        release["upload_url"] = upload
+        pull["head"]["ref"] = f"release-plz-{pin.tag}"
+    except (KeyError, TypeError) as error:
+        findings.add(f"the pinned release or pull request lacks what the release reads: {error!r}")
+        return
+    with tempfile.TemporaryDirectory() as scratch:
+        built = Path(scratch) / f"onetaskgraph-{pin.tag}-x86_64-unknown-linux-gnu.tar.gz"
+        built.write_bytes(b"one build of the archive")
+        # The release already holds this file, short and not `uploaded`, as an interrupted upload
+        # leaves it: so the step takes it back and sends it again, making every call it can make.
+        release["assets"][0] |= {"name": built.name, "state": "starter"}
+        Recorder.calls, Recorder.sent = list(calls.values()), []
+        Recorder.answers = {
+            "release-by-tag": release,
+            "delete-asset": None,
+            "upload-asset": calls["upload-asset"].answer | {"name": built.name, "size": built.stat().st_size, "state": "uploaded"},
+            "open-pulls": [pull],
+            "graphql": calls["graphql"].answer,
+        }
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        quiet = io.StringIO()
+        try:
+            with environment(GH_TOKEN="pinned-interface", GITHUB_TOKEN=None, GITHUB_REPOSITORY=repository, GITHUB_API_URL=base, GITHUB_GRAPHQL_URL=None), contextlib.redirect_stderr(quiet), contextlib.redirect_stdout(quiet):
+                try:
+                    release_cd.publish_github(release_cd.ReleaseTag(pin.tag), [built])
+                except release_cd.ReleaseStepFailed as error:
+                    findings.add(f"scripts/release_cd.py refuses GitHub answering as pinned: {error}")
+                if automerge.main() != 0:
+                    findings.add(f"scripts/enable-release-automerge.py refuses GitHub answering as pinned: {quiet.getvalue().strip()[-300:]}")
+        finally:
+            server.shutdown()
+            server.server_close()
+    made = [next((call.name for call in calls.values() if call.matches(method, path)), f"{method} {path}") for method, path, _ in Recorder.sent]
+    for method, path, _ in Recorder.sent:
+        if not any(call.matches(method, path) for call in calls.values()):
+            findings.add(f"a release script sent {method} {path}, which the pin describes as no call of GitHub's")
+    if made != SEQUENCE:
+        findings.add(f"the release scripts made {made}, not the pinned calls in order {SEQUENCE}")
+    graphql = next((json.loads(body) for method, path, body in Recorder.sent if calls["graphql"].matches(method, path)), None)
+    if graphql is not None and graphql != {"query": pin.document.strip(), "variables": {"pullRequestId": pull["node_id"]}}:
+        findings.add(f"graphql: scripts/enable-release-automerge.py sent {json.dumps(graphql)[:200]}, not the pinned document for the listed pull request")
+
+
+def double_answers(pin: Pin) -> dict[str, tuple[int, Json]]:
     """What the loopback double answers each call with, on the paths the release journeys drive."""
-    tag = release["tag"]
     with tempfile.TemporaryDirectory() as state:
-        pulls = json.loads(next(entry for entry in pin["rest"] if entry["call"] == "open-pulls")["answer"])
-        (Path(state) / "control.json").write_text(json.dumps({"releases": [tag], "pulls": [{"number": pull["number"], "node_id": pull["node_id"]} for pull in pulls]}))
-        double = subprocess.Popen([sys.executable, str(ROOT / "scripts/loopback-release-registries.py"), state], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        control = {"releases": [pin.tag], "pulls": served_pulls(pin)}
+        (Path(state) / "control.json").write_text(json.dumps(control))
+        double = subprocess.Popen([sys.executable, str(ROOT / "scripts/loopback-release-registries.py"), state], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
             for _ in range(200):
                 if (Path(state) / "ports.json").exists():
@@ -159,69 +359,89 @@ def double_answers(pin: dict, release: dict) -> dict:
                 time.sleep(0.05)
             base = f"http://127.0.0.1:{json.loads((Path(state) / 'ports.json').read_text())['main']}/github/api"
 
-            def ask(method: str, url: str, body: bytes | None = None) -> object:
+            def ask(method: str, url: str, body: bytes | None = None) -> tuple[int, Json]:
                 with urllib.request.urlopen(urllib.request.Request(url, data=body, method=method), timeout=30) as answer:
-                    return json.loads(answer.read() or b"null")
+                    return answer.status, json.loads(answer.read() or b"null")
 
-            listed = ask("GET", f"{base}/repos/owner/name/releases/tags/{tag}")
-            upload = listed["upload_url"].split("{", 1)[0]
-            uploaded = ask("POST", f"{upload}?name=asset.tar.gz", b"bytes")
-            return {
-                "release-by-tag": ask("GET", f"{base}/repos/owner/name/releases/tags/{tag}"),
+            listed = ask("GET", f"{base}/repos/owner/name/releases/tags/{pin.tag}")[1]
+            uploaded = ask("POST", f"{listed['upload_url'].split('{', 1)[0]}?name=asset.tar.gz", b"bytes")
+            answers = {
+                "release-by-tag": ask("GET", f"{base}/repos/owner/name/releases/tags/{pin.tag}"),
                 "upload-asset": uploaded,
-                "graphql": ask("POST", f"{base}/graphql", json.dumps({"query": pin["graphql"]["document"], "variables": {"pullRequestId": pulls[0]["node_id"]}}).encode()),
+                "open-pulls": ask("GET", f"{base}/repos/owner/name/pulls?state=open&per_page=100"),
+                "graphql": ask("POST", f"{base}/graphql", json.dumps({"query": pin.document, "variables": {"pullRequestId": served_pulls(pin)[0]["node_id"]}}).encode()),
             }
+            answers["delete-asset"] = ask("DELETE", f"{base}/repos/owner/name/releases/assets/{uploaded[1]['id']}")
+            return answers
         finally:
             double.terminate()
             double.wait(timeout=30)
 
 
-def main() -> int:
-    pin = tomllib.loads(Path(sys.argv[1] if len(sys.argv) > 1 else ROOT / "config/github-interfaces.toml").read_text(encoding="utf-8"))
-    rest = {entry["call"]: entry for entry in pin["rest"]}
-    answers = {call: json.loads(entry["answer"]) for call, entry in rest.items()} | {"graphql": json.loads(pin["graphql"]["answer"])}
+def main(arguments: list[str]) -> int:
+    findings = Findings()
+    match arguments:
+        case ["--answer", name]:
+            path, answer = ROOT / "config/github-interfaces.toml", name
+        case [path]:
+            path, answer = Path(path), None
+        case []:
+            path, answer = ROOT / "config/github-interfaces.toml", None
+        case _:
+            print("github-interfaces: usage: github_interfaces.py [<pin> | --answer <call>]", file=sys.stderr)
+            return 2
+    try:
+        pin = read_pin(Path(path))
+    except PinError as error:
+        print(f"github-interfaces: {error}", file=sys.stderr)
+        print("github-interfaces: next: bring config/github-interfaces.toml back to the shape its header describes", file=sys.stderr)
+        return 1
+    if answer is not None:
+        if answer not in pin.calls:
+            print(f"github-interfaces: no pinned call {answer}; the pin describes {sorted(pin.calls)}", file=sys.stderr)
+            return 2
+        print(json.dumps(pin.calls[answer].answer))
+        return 0
+
     sys.path.insert(0, str(ROOT / "scripts"))
     release_cd = load("release_cd", ROOT / "scripts/release_cd.py")
     automerge = load("enable_release_automerge", ROOT / "scripts/enable-release-automerge.py")
+    calls = pin.calls
 
-    tag = rest["release-by-tag"]["tag"]
-    holds_reads("release-by-tag", answers["release-by-tag"], rest["release-by-tag"]["reads"], lambda answer: release_cd.Release.parse(answer, tag))
-    holds_reads("upload-asset", answers["upload-asset"], rest["upload-asset"]["reads"], release_cd.ReleaseAsset.parse)
-    holds_reads("open-pulls", answers["open-pulls"], rest["open-pulls"]["reads"], lambda answer: [automerge.PullRequest.parse(pull) for pull in answer])
-
-    check_document(pin["graphql"], automerge.ENABLE)
+    findings.holds_reads(calls["release-by-tag"], lambda answer: release_cd.Release.parse(answer, pin.tag))
+    findings.holds_reads(calls["upload-asset"], release_cd.ReleaseAsset.parse)
+    findings.holds_reads(calls["open-pulls"], lambda answer: [automerge.PullRequest.parse(pull) for pull in answer])
+    findings.check_document(pin, automerge.ENABLE)
     try:
-        pull = automerge.PullRequest.parse(answers["open-pulls"][0])
-    except automerge.Refused:
+        pull = automerge.PullRequest.parse(served_pulls(pin)[0])
+    except (automerge.Refused, IndexError, TypeError):
         pull = None  # open-pulls has already reported it; the auto-merge answer needs its pull request
     if pull is not None:
 
-        def enabled(answer: object) -> bool:
+        def enabled(answer: Json) -> bool:
             automerge.confirm_enabled(answer, pull)
             return True
 
-        holds_reads("graphql", answers["graphql"], pin["graphql"]["reads"], enabled)
-        try:
-            enabled({"errors": [{"message": "refused"}]})
-            problem("graphql: an answer carrying `errors` is taken as auto-merge enabled")
-        except automerge.Refused:
-            pass
+        findings.holds_reads(calls["graphql"], enabled)
+        drive_scripts(pin, findings, release_cd, automerge)
 
     try:
-        served = double_answers(pin, rest["release-by-tag"])
-    except (OSError, KeyError, ValueError, StopIteration, subprocess.SubprocessError) as error:
-        problem(f"scripts/loopback-release-registries.py could not be asked what it answers: {error!r}")
+        served = double_answers(pin)
+    except (OSError, KeyError, ValueError, TypeError, subprocess.SubprocessError) as error:
+        findings.add(f"scripts/loopback-release-registries.py could not be asked what it answers: {error!r}")
         served = {}
-    for call, answer in served.items():
-        for field in sorted(shape(answer) - shape(answers[call])):
-            problem(f"{call}: scripts/loopback-release-registries.py answers with {field}, which GitHub's pinned answer does not carry")
+    for name, (status, answer) in served.items():
+        if status != calls[name].status:
+            findings.add(f"{name}: scripts/loopback-release-registries.py answers HTTP {status}, where GitHub answers {calls[name].status}")
+        for field in sorted(shape(answer) - shape(calls[name].answer)):
+            findings.add(f"{name}: scripts/loopback-release-registries.py answers with {field}, which GitHub's pinned answer does not carry")
 
-    for line in problems:
+    for line in findings.lines:
         print(f"github-interfaces: {line}", file=sys.stderr)
-    if problems:
+    if findings.lines:
         print("github-interfaces: next: re-observe the call in config/github-interfaces.toml if GitHub moved, otherwise bring the script or the double back to the pin", file=sys.stderr)
-    return 1 if problems else 0
+    return 1 if findings.lines else 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(sys.argv[1:]))

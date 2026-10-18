@@ -83,7 +83,39 @@ const drifts = [
     drifted('  "id": 414082970,\n', ""),
     "release-by-tag: scripts/loopback-release-registries.py answers with id, which GitHub's pinned answer does not carry",
   ],
+  [
+    "a read the parser makes that the pin does not name",
+    drifted('reads = ["id", "name", "size", "state"]', 'reads = ["id", "size", "state"]'),
+    "upload-asset: the parser reads name, which `reads` does not name",
+  ],
+  [
+    "a path other than the one a script sends",
+    drifted(
+      'path = "/repos/{owner}/{repo}/pulls?state=open&per_page=100"',
+      'path = "/repos/{owner}/{repo}/pulls?state=all"',
+    ),
+    "a release script sent GET /repos/nickderobertis/onetaskgraph/pulls?state=open&per_page=100, which the pin describes as no call of GitHub's",
+  ],
+  [
+    "a method other than the one a script sends",
+    drifted('method = "DELETE"', 'method = "POST"'),
+    "a release script sent DELETE /repos/nickderobertis/onetaskgraph/releases/assets/644642357, which the pin describes as no call of GitHub's",
+  ],
+  [
+    "a status other than the one the double answers",
+    drifted("status = 204", "status = 200"),
+    "delete-asset: scripts/loopback-release-registries.py answers HTTP 204, where GitHub answers 200",
+  ],
 ];
+
+test("the gate refuses a pin it cannot read, before reading anything else", () => {
+  const result = gate(drifted("status = 201", 'status = "201"'));
+  assert.equal(result.status, 1, result.stderr);
+  assert.ok(
+    result.stderr.includes("github-interfaces: upload-asset: `status` must be of type int"),
+  );
+  assert.ok(result.stderr.includes("github-interfaces: next: bring config/github-interfaces.toml"));
+});
 
 for (const [name, pin, message] of drifts) {
   test(`the gate refuses ${name}`, () => {

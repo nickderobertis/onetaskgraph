@@ -11,13 +11,17 @@
 #
 #   - the GraphQL document the auto-merge step sends is not the one pinned here, or names a
 #     field, argument, input field or enum value the pinned schema slice does not have;
-#   - a parser the release uses does not accept the pinned answer, reads something other than
-#     what `reads` names, or still accepts the answer unchanged with one of those fields gone;
-#   - the double answers a call with a field the pinned answer does not carry.
+#   - either script, run against a server answering each call as pinned, sends a call this file
+#     does not describe — another method, path or query — or makes them in another order;
+#   - a parser the release uses does not accept the pinned answer, reads a field `reads` does
+#     not name, or still answers the same with a field `reads` names gone;
+#   - the double answers a call with another status, or with a field the pinned answer does
+#     not carry.
 #
 # Every `answer` is a real capture, trimmed only inside nested objects nothing reads, except
-# the GraphQL answer: enabling auto-merge is a write a check must not make, so that answer is
-# the shape the introspected schema slice below gives the pinned document. When GitHub moves,
+# where an entry says otherwise: the writes are not observed, so the delete is the
+# documentation's and the GraphQL answer the shape the introspected schema slice below gives
+# the pinned document. A `path` is matched with each `{name}` standing for one segment. When GitHub moves,
 # re-observe here (the `observed_from` of each entry is the request to repeat) and bring the
 # scripts and the double with it.
 
@@ -26,8 +30,10 @@ call = "release-by-tag"
 documentation = "https://docs.github.com/en/rest/releases/releases#get-a-release-by-tag-name"
 observed = "2026-10-18"
 observed_from = "GET https://api.github.com/repos/nickderobertis/onetaskgraph/releases/tags/v0.7.1"
+host = "api.github.com"
 method = "GET"
 path = "/repos/{owner}/{repo}/releases/tags/{tag}"
+status = 200
 tag = "v0.7.1"
 reads = ["tag_name", "upload_url", "assets[].id", "assets[].name", "assets[].size", "assets[].state"]
 answer = '''
@@ -85,8 +91,10 @@ call = "upload-asset"
 documentation = "https://docs.github.com/en/rest/releases/assets#upload-a-release-asset"
 observed = "2026-10-18"
 observed_from = "GET https://api.github.com/repos/nickderobertis/onetaskgraph/releases/tags/v0.7.1 (assets[0])"
+host = "uploads.github.com"
 method = "POST"
-path = "{upload_url}?name={name}"
+path = "/repos/{owner}/{repo}/releases/{release_id}/assets?name={name}"
+status = 201
 reads = ["id", "name", "size", "state"]
 answer = '''
 {
@@ -110,13 +118,29 @@ answer = '''
 }
 '''
 
+# Taking back an asset an interrupted upload left is a write a check must not make either, so
+# this one is the documentation's: 204 No Content, and no body to read.
+[[rest]]
+call = "delete-asset"
+documentation = "https://docs.github.com/en/rest/releases/assets#delete-a-release-asset"
+observed = "2026-10-18"
+observed_from = "https://docs.github.com/en/rest/releases/assets#delete-a-release-asset (status codes)"
+host = "api.github.com"
+method = "DELETE"
+path = "/repos/{owner}/{repo}/releases/assets/{asset_id}"
+status = 204
+reads = []
+answer = ""
+
 [[rest]]
 call = "open-pulls"
 documentation = "https://docs.github.com/en/rest/pulls/pulls#list-pull-requests"
 observed = "2026-10-18"
 observed_from = "GET https://api.github.com/repos/nickderobertis/onetaskgraph/pulls?state=open&per_page=1"
+host = "api.github.com"
 method = "GET"
 path = "/repos/{owner}/{repo}/pulls?state=open&per_page=100"
+status = 200
 reads = ["[].number", "[].node_id", "[].head.ref", "[].head.repo.full_name"]
 answer = '''
 [
@@ -200,6 +224,10 @@ answer = '''
 documentation = "https://docs.github.com/en/graphql/reference/mutations#enablepullrequestautomerge"
 observed = "2026-10-18"
 observed_from = "introspection of https://api.github.com/graphql: __type(name:) of Mutation, EnablePullRequestAutoMergeInput, EnablePullRequestAutoMergePayload, PullRequest, AutoMergeRequest and PullRequestMergeMethod"
+host = "api.github.com"
+method = "POST"
+path = "/graphql"
+status = 200
 document = '''
 mutation($pullRequestId: ID!) {
   enablePullRequestAutoMerge(input: {pullRequestId: $pullRequestId, mergeMethod: SQUASH}) {

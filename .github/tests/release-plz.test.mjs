@@ -85,11 +85,22 @@ before(async () => {
 after(() => double?.kill());
 
 const repository = "nickderobertis/onetaskgraph";
-const pull = (number, ref, owner = repository) => ({
-  number,
-  node_id: `PR_${number}`,
-  head: { ref, repo: { full_name: owner } },
-});
+// Every pull request the double lists is GitHub's pinned answer with these four fields its
+// own, so the double serves what config/github-interfaces.toml says GitHub does.
+const [pinnedPull] = JSON.parse(
+  execFileSync("python3", [".github/tests/github_interfaces.py", "--answer", "open-pulls"], {
+    cwd: checkout,
+    encoding: "utf8",
+  }),
+);
+const pull = (number, ref, owner = repository) => {
+  const listed = structuredClone(pinnedPull);
+  listed.number = number;
+  listed.node_id = `PR_${number}`;
+  listed.head.ref = ref;
+  listed.head.repo.full_name = owner;
+  return listed;
+};
 function automerge(pulls, refuse = [], answers = {}, env = {}) {
   const state = join(scratch, "github");
   writeFileSync(join(state, "control.json"), JSON.stringify({ pulls, refuse, ...answers }));
@@ -207,6 +218,14 @@ test("the auto-merge step fails visibly when GitHub refuses it or cannot be aske
   assert.equal(malformed.status, 1);
   assert.match(malformed.output, /GitHub listed something that is not a pull request: 7/);
   assert.equal(malformed.sent.filter((r) => r.action === "graphql").length, 0);
+  // A head repository that is there but names nothing is no pull request either; only a
+  // deleted fork's is null.
+  const nameless = pull(43, "release-plz-0.8.0");
+  delete nameless.head.repo.full_name;
+  const unnamed = automerge([nameless]);
+  assert.equal(unnamed.status, 1, unnamed.output);
+  assert.match(unnamed.output, /GitHub listed something that is not a pull request/);
+  assert.equal(unnamed.sent.filter((r) => r.action === "graphql").length, 0);
   // A number GitHub could not have assigned — a boolean, zero, a negative — is no pull request.
   for (const number of [true, 0, -43]) {
     const bad = automerge([{ ...pull(43, "release-plz-0.8.0"), number }]);

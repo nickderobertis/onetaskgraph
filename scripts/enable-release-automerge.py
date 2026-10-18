@@ -80,10 +80,10 @@ class PullRequest:
     def parse(cls, value: object) -> "PullRequest":
         head = value.get("head") if isinstance(value, dict) else None
         repository = head.get("repo") if isinstance(head, dict) else None
-        if not isinstance(value, dict) or not is_positive_int(value.get("number")) or not isinstance(value.get("node_id"), str) or not isinstance(head, dict) or not isinstance(head.get("ref"), str) or not (repository is None or isinstance(repository, dict)):
+        # A head repository is null once a fork is deleted; one that is there names itself.
+        if not isinstance(value, dict) or not is_positive_int(value.get("number")) or not isinstance(value.get("node_id"), str) or not isinstance(head, dict) or not isinstance(head.get("ref"), str) or not (repository is None or (isinstance(repository, dict) and isinstance(repository.get("full_name"), str))):
             raise Refused(f"GitHub listed something that is not a pull request: {value!r:.200}")
-        full_name = repository.get("full_name") if repository else None
-        return cls(PullNumber(value["number"]), NodeId(value["node_id"]), BranchRef(head["ref"]), RepositoryName(full_name) if isinstance(full_name, str) else None)
+        return cls(PullNumber(value["number"]), NodeId(value["node_id"]), BranchRef(head["ref"]), RepositoryName(repository["full_name"]) if repository else None)
 
     def is_release_of(self, repository: RepositoryName) -> bool:
         """release-plz's own pull request: a `release-plz-` branch of this repository, not a fork's."""
