@@ -5153,6 +5153,24 @@ impl GitHubProjectsSource {
         Ok(found)
     }
 
+    /// Every issue this board's own search reports with `also` beside its scope, walked to
+    /// exhaustion — held for no later read, which may not be narrowed alike.
+    async fn searched_narrowly(&self, also: &str) -> Result<Vec<Resolved>, SourceError> {
+        let mut after: Option<String> = None;
+        let mut found = Vec::new();
+        let search = self.board_search(Some(also));
+        loop {
+            let (page, next) = self
+                .search_page(&search, MAX_PAGE_SIZE, after.as_deref())
+                .await?;
+            found.extend(page);
+            match next {
+                Some(next) => after = Some(next),
+                None => return Ok(found),
+            }
+        }
+    }
+
     /// This process's own view of the board's issues, or the refusal a poisoned lock is.
     fn search_cache(
         &self,
@@ -6188,6 +6206,12 @@ impl GitHubProjectsSource {
     /// See [`Self::board_cache`]. Both completions happen on every call rather than once,
     /// which is what the cache could otherwise have broken.
     async fn board(&self) -> Result<Board, SourceError> {
+        self.board_completed_by(None).await
+    }
+
+    /// [`Self::board`], its search half narrowed by `also` when it is given — which an issue
+    /// that half could add is then answered only if it holds.
+    async fn board_completed_by(&self, also: Option<&str>) -> Result<Board, SourceError> {
         let cached = self.board_cache()?.clone();
         let mut board = match cached {
             Some(board) => board,
@@ -6197,7 +6221,11 @@ impl GitHubProjectsSource {
                 read
             }
         };
-        for held in self.searched_issues().await? {
+        let searched = match also {
+            None => self.searched_issues().await?,
+            Some(also) => self.searched_narrowly(also).await?,
+        };
+        for held in searched {
             if !board.items.iter().any(|item| item.id == held.id) {
                 board.items.push(held);
             }
@@ -10521,6 +10549,10 @@ const FAR_ENDS_UNCOVERED: &str = "a github item's change token does not attest a
      whether it became a document, or its deletion, so its forward edges are always read from \
      github";
 
+/// The issue-search qualifier that keeps open issues alone, which a status filter naming only
+/// categories an open issue reads as narrows a board-scoped search with.
+const OPEN_QUALIFIER: &str = "is:open";
+
 /// The board filter `task status reconcile` reads the board through: closed items alone.
 const CLOSED_FILTER: &str = "is:closed";
 
@@ -10924,15 +10956,28 @@ impl TaskSource for GitHubProjectsSource {
     ) -> Result<Page<Task>, SourceError> {
         validate_page(page)?;
         refuse_unsearchable(query)?;
+        // Every category but `done` and `cancelled` reads only off an open issue or a draft, so
+        // a status filter naming none of those two asks every issue search it sends for open
+        // issues alone; each candidate's category is still confirmed from its own item below.
+        let open_only = !query.statuses.is_empty()
+            && query.statuses.iter().all(|category| {
+                !matches!(category, StatusCategory::Done | StatusCategory::Cancelled)
+            });
         if query.origin.is_none() && !matches!(query.project, ProjectFilter::Is(_)) {
-            let qualifiers = match (narrowing_qualifiers(query), query.commented_since) {
-                (Some(also), Some(since)) => Some(format!("{} {also}", updated_qualifier(since))),
-                (Some(also), None) => Some(also),
-                (None, Some(since)) => Some(updated_qualifier(since)),
-                (None, None) => None,
-            };
-            if let Some(also) = qualifiers {
-                return self.search_tasks(query, page, &also).await;
+            let mut qualifiers: Vec<String> = [
+                query.commented_since.map(updated_qualifier),
+                narrowing_qualifiers(query),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            // A narrowed search never answers a draft, which is no issue, so narrowing it to
+            // open issues too leaves out nothing such a search could have answered.
+            if !qualifiers.is_empty() {
+                if open_only {
+                    qualifiers.push(OPEN_QUALIFIER.to_owned());
+                }
+                return self.search_tasks(query, page, &qualifiers.join(" ")).await;
             }
         }
 
@@ -10953,6 +10998,13 @@ impl TaskSource for GitHubProjectsSource {
                 match (self.narrowed(query).await?, since) {
                     (Some(narrowed), _) => (narrowed, &query.project),
                     (None, Some(since)) => (self.updated_since(since).await?, &query.project),
+                    // The board's own items list every draft; only the search half, which
+                    // completes them with issues they lag behind on, is narrowed — a closed
+                    // issue that half leaves out is at no category the filter keeps.
+                    (None, None) if open_only => (
+                        self.board_completed_by(Some(OPEN_QUALIFIER)).await?.items,
+                        &query.project,
+                    ),
                     (None, None) => (self.board().await?.items, &query.project),
                 }
             }

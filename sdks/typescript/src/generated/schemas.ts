@@ -1719,6 +1719,24 @@ export const runtimeSchemas = {
           "error"
         ],
         "type": "object"
+      },
+      {
+        "description": "The task named by id is at a status the copy's `--status` does not keep: read only as\nfar as its status, and neither copied nor read for its comments. It does not change the\ncopy's exit code.",
+        "properties": {
+          "action": {
+            "const": "skipped",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Why, as `status <category> is not one of <categories>`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "reason"
+        ],
+        "type": "object"
       }
     ],
     "title": "CopyAction"
@@ -2293,6 +2311,24 @@ export const runtimeSchemas = {
           "error"
         ],
         "type": "object"
+      },
+      {
+        "description": "The task named by id is at a status the copy's `--status` does not keep: read only as\nfar as its status, and neither copied nor read for its comments. It does not change the\ncopy's exit code.",
+        "properties": {
+          "action": {
+            "const": "skipped",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Why, as `status <category> is not one of <categories>`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "reason"
+        ],
+        "type": "object"
       }
     ],
     "properties": {
@@ -2626,6 +2662,24 @@ export const runtimeSchemas = {
             "required": [
               "action",
               "error"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The task named by id is at a status the copy's `--status` does not keep: read only as\nfar as its status, and neither copied nor read for its comments. It does not change the\ncopy's exit code.",
+            "properties": {
+              "action": {
+                "const": "skipped",
+                "type": "string"
+              },
+              "reason": {
+                "description": "Why, as `status <category> is not one of <categories>`.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "action",
+              "reason"
             ],
             "type": "object"
           }

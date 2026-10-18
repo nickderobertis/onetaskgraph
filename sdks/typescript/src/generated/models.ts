@@ -1024,6 +1024,13 @@ destination: string
 action: "failed"
 error: Failure
 [k: string]: any
+} | {
+action: "skipped"
+/**
+ * Why, as `status <category> is not one of <categories>`.
+ */
+reason: string
+[k: string]: any
 })
 /**
  * One item, qualified by the source it came from.
@@ -1247,6 +1254,13 @@ destination: string
 } | {
 action: "failed"
 error: Failure
+[k: string]: any
+} | {
+action: "skipped"
+/**
+ * Why, as `status <category> is not one of <categories>`.
+ */
+reason: string
 [k: string]: any
 }))
 /**
@@ -1706,6 +1720,13 @@ destination: string
 } | {
 action: "failed"
 error: Failure1
+[k: string]: any
+} | {
+action: "skipped"
+/**
+ * Why, as `status <category> is not one of <categories>`.
+ */
+reason: string
 [k: string]: any
 })
 /**

@@ -310,7 +310,9 @@ COMMAND_OPTIONS: dict[tuple[str, ...], dict[str, OptionShape]] = {
     ("task", "copy"): {
         "metadata": OptionShape(
             type="list[str] | tuple[str, ...]", placeholder="KEY[/SEGMENT...]=VALUE"
-        )
+        ),
+        # The status categories a copy keeps, beside ids or a query, named as a category.
+        "status": OptionShape(type="choice_list", placeholder="CATEGORY"),
     },
     # `task show-many` pins each of several tasks, `<ID>=<VERSION>`, where `task show` pins one.
     ("task", "show-many"): {

@@ -139,6 +139,16 @@ pub struct CopyRequest {
     /// than one item, a query, a project or a document, and onto a destination keeping no
     /// cache.
     pub expect: Option<String>,
+    /// The status categories a task copy keeps — `--status`, repeatable. Empty keeps every
+    /// task.
+    ///
+    /// Beside a query it narrows the query exactly as `task list --status` does: a task at
+    /// another category is not read for its comments, not copied and not named in the report.
+    /// Beside ids, an id whose task is at another category is read only as far as its status,
+    /// then reported [`CopyAction::Skipped`], neither copied nor read for its comments. Only a
+    /// task copy takes it: beside a project or a document copy it is refused as
+    /// [`EngineError::StatusesNotTasks`] before anything is read.
+    pub statuses: Vec<StatusCategory>,
 }
 
 /// A way of looking for a counterpart that [`CopyRequest::create`] says not to take, named as
@@ -626,6 +636,13 @@ pub enum CopyAction {
         /// Why, in the failure document every verb reports a failure in.
         error: Failure,
     },
+    /// The task named by id is at a status the copy's `--status` does not keep: read only as
+    /// far as its status, and neither copied nor read for its comments. It does not change the
+    /// copy's exit code.
+    Skipped {
+        /// Why, as `status <category> is not one of <categories>`.
+        reason: String,
+    },
 }
 
 impl CopyAction {
@@ -637,7 +654,7 @@ impl CopyAction {
             Self::Updated { destination, .. }
             | Self::Unchanged { destination, .. }
             | Self::Orphaned { destination } => Some(destination),
-            Self::Failed { .. } => None,
+            Self::Failed { .. } | Self::Skipped { .. } => None,
         }
     }
 
@@ -647,7 +664,10 @@ impl CopyAction {
     pub fn found_by(&self) -> Option<CopyVia> {
         match self {
             Self::Updated { via, .. } | Self::Unchanged { via, .. } => Some(*via),
-            Self::Created { .. } | Self::Orphaned { .. } | Self::Failed { .. } => None,
+            Self::Created { .. }
+            | Self::Orphaned { .. }
+            | Self::Failed { .. }
+            | Self::Skipped { .. } => None,
         }
     }
 
@@ -659,7 +679,7 @@ impl CopyAction {
             Self::Created { link, .. }
             | Self::Updated { link, .. }
             | Self::Unchanged { link, .. } => *link,
-            Self::Orphaned { .. } | Self::Failed { .. } => None,
+            Self::Orphaned { .. } | Self::Failed { .. } | Self::Skipped { .. } => None,
         }
     }
 
@@ -671,7 +691,7 @@ impl CopyAction {
             Self::Created { comments, .. }
             | Self::Updated { comments, .. }
             | Self::Unchanged { comments, .. } => comments.as_ref(),
-            Self::Orphaned { .. } | Self::Failed { .. } => None,
+            Self::Orphaned { .. } | Self::Failed { .. } | Self::Skipped { .. } => None,
         }
     }
 
@@ -685,7 +705,10 @@ impl CopyAction {
     /// Whether this item landed — was created, updated or found unchanged — rather than being
     /// an orphan the copy left alone or an item it failed to read whole.
     fn landed(&self) -> bool {
-        !matches!(self, Self::Orphaned { .. } | Self::Failed { .. })
+        !matches!(
+            self,
+            Self::Orphaned { .. } | Self::Failed { .. } | Self::Skipped { .. }
+        )
     }
 
     /// The link slot of an item this copy landed, `None` for an orphan and a failed item.
@@ -694,7 +717,7 @@ impl CopyAction {
             Self::Created { link, .. }
             | Self::Updated { link, .. }
             | Self::Unchanged { link, .. } => Some(link),
-            Self::Orphaned { .. } | Self::Failed { .. } => None,
+            Self::Orphaned { .. } | Self::Failed { .. } | Self::Skipped { .. } => None,
         }
     }
 
@@ -1564,6 +1587,9 @@ impl Engine {
         if request.comments && request.scope == CopyScope::Documents {
             return Err(EngineError::CommentsNotDocuments);
         }
+        if !request.statuses.is_empty() && request.scope != CopyScope::Tasks {
+            return Err(EngineError::StatusesNotTasks);
+        }
         let destination = self.writable(&request.destination)?;
         // Before anything is read, and from the declaration rather than from a failed
         // write: a destination that says it has no documents has nowhere to put one.
@@ -1662,7 +1688,17 @@ impl Engine {
                     Level::Task
                 };
                 let slots = match request.items.query() {
-                    Some(query) => self.candidates(request, query, &mut running).await?,
+                    Some(query) => {
+                        let mut query = query.clone();
+                        if !request.statuses.is_empty() {
+                            query.filters.statuses.clone_from(&request.statuses);
+                        }
+                        self.candidates(request, &query, &mut running).await?
+                    }
+                    None if !request.statuses.is_empty() => {
+                        self.at_statuses(request.items.as_slice(), &request.statuses)
+                            .await?
+                    }
                     None => request
                         .items
                         .as_slice()

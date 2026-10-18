@@ -91,6 +91,7 @@ fn many(items: &[&str], scope: CopyScope) -> CopyRequest {
         comments: false,
         no_link: false,
         expect: None,
+        statuses: Vec::new(),
     }
 }
 

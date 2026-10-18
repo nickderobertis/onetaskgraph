@@ -361,6 +361,7 @@ async fn disposable_task_and_document_asset_copies() {
                 comments: false,
                 no_link: false,
                 expect: None,
+                statuses: Vec::new(),
             };
             let report = engine
                 .copy(&request)
@@ -544,10 +545,11 @@ async fn a_reconcile_dry_run_reads_the_live_board_through_its_closed_filter_alon
         );
         return;
     }
+    // This binary's asset journey points the shared journey at its API, once per binary, so
+    // this one reads the same configuration and points nothing: the two run in either order.
     let endpoints = journey::Endpoints::configured().unwrap();
     let graphql_endpoint = endpoints.graphql.clone();
     let rest_host = endpoints.rest_host.clone();
-    journey::against(endpoints);
     let admission = lane::admit(&|variable| match std::env::var(variable) {
         Ok(value) => Some(value),
         Err(std::env::VarError::NotPresent) => None,
@@ -580,8 +582,16 @@ async fn a_reconcile_dry_run_reads_the_live_board_through_its_closed_filter_alon
     let [first, done, ..] = options.as_slice() else {
         panic!("the nominated board's Status field holds fewer than two options: {options:?}");
     };
-    let mut config =
-        journey::source_config(lane::live_write_config(&owner, number, &repository, first));
+    let mut config = lane::live_write_config(&owner, number, &repository, first);
+    for (key, value) in endpoints
+        .source
+        .as_ref()
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+    {
+        config[key] = value.clone();
+    }
     config["status_mapping"]["done"] = json!(done);
     config["status_mapping"]["cancelled"] = Value::Null;
     let secrets = lane::LiveSecret(token.to_owned().into());
@@ -631,6 +641,7 @@ async fn a_reconcile_dry_run_reads_the_live_board_through_its_closed_filter_alon
             comments: false,
             no_link: true,
             expect: None,
+            statuses: Vec::new(),
         };
         let report = engine
             .copy(&request)

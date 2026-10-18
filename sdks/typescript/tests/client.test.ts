@@ -837,6 +837,7 @@ test("taskCopy sends exactly the flags the binary's task copy reports, no more a
         sources: ["work"],
         commentedSince: "2026-09-01T00:00:00Z",
         metadata: ["myapp.a=1"],
+        statuses: ["backlog"],
         termScope: ["github.com/example-org/widget"],
         expect: "gh2|v",
       }),

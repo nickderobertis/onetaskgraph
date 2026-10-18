@@ -625,7 +625,7 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
         Command::Task {
             command: TaskCommand::Copy(args),
         } => {
-            let items = if args.query.given() {
+            let items = if args.id.is_empty() && args.query.given() {
                 CopyItems::matching(TaskRequest {
                     sources: selection(&SelectionArgs {
                         source: args.query.source.clone(),
@@ -646,6 +646,7 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
                 named(args.id.iter().map(String::as_str))?
             };
             let mut request = copy_request(items, CopyScope::Tasks, &args.copy)?;
+            request.statuses = args.query.statuses();
             request.create = args.create;
             request.comments = args.comments;
             request.expect.clone_from(&args.expect.expect);
@@ -1540,6 +1541,7 @@ fn copy_request(
         comments: false,
         no_link: args.no_link,
         expect: None,
+        statuses: Vec::new(),
     })
 }
 

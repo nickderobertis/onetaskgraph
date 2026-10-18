@@ -1093,6 +1093,14 @@ pub enum EngineError {
     )]
     QueryNotTasks,
 
+    /// A copy of projects or documents was asked to keep only the tasks at some status
+    /// categories: `--status` narrows the tasks a task copy names, so only a task copy takes it.
+    #[error(
+        "a copy keeps the tasks at a status only when it copies tasks\n\
+         next: copy the projects or documents without --status, or copy the tasks with it."
+    )]
+    StatusesNotTasks,
+
     /// A copy of documents was asked to carry comments: a document holds none, so only a task
     /// or a project copy carries them.
     #[error(

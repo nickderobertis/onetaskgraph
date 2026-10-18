@@ -40,6 +40,7 @@ from onetaskgraph_sdk import (
 from onetaskgraph_sdk._generated.copy_report import (
     CopyOutcome,
     CopyOutcomeFailed,
+    CopyOutcomeSkipped,
     CopyOutcomeUnchanged,
 )
 from onetaskgraph_sdk._generated.copy_report import GlobalId as LandedAt
@@ -319,7 +320,7 @@ def test_status_options_method_decodes_a_real_binary_plan(binary: Path, tmp_path
 def landed(outcome: CopyOutcome) -> str:
     """The id a copy wrote to, absent only for a dry run that would have created one."""
     reported = outcome.root
-    assert not isinstance(reported, CopyOutcomeFailed), "this copy wrote whole"
+    assert not isinstance(reported, CopyOutcomeFailed | CopyOutcomeSkipped), "this copy wrote whole"
     assert reported.destination is not None, "this copy wrote, so it reports where"
     return reported.destination.root
 
@@ -338,7 +339,7 @@ def without_record(metadata: Mapping[str, object]) -> dict[str, object]:
 def destination_of(outcome: CopyOutcome) -> LandedAt | None:
     """Where one outcome landed, or `None` for a dry run's create and an item left unwritten."""
     reported = outcome.root
-    if isinstance(reported, CopyOutcomeFailed):
+    if isinstance(reported, CopyOutcomeFailed | CopyOutcomeSkipped):
         return None
     return reported.destination
 

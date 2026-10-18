@@ -1748,7 +1748,8 @@ pub struct TaskCopyArgs {
     pub id: Vec<String>,
 
     /// Copy what `task list` with the same narrowing returns, in place of ids: these sources,
-    /// and every task matching `--commented-since` and every `--metadata` given.
+    /// and every task matching `--commented-since`, every `--metadata` and any `--status`
+    /// given. `--status` alone is taken beside ids too.
     #[command(flatten)]
     pub query: CopyQueryArgs,
 
@@ -1818,13 +1819,32 @@ pub struct CopyQueryArgs {
         conflicts_with = "id"
     )]
     pub metadata: Vec<MetadataMatch>,
+
+    /// Copy only tasks at this status category, as `task list --status` keeps them; repeat for
+    /// several. A task at another category is not read for its comments, not copied and not
+    /// named in the answer.
+    ///
+    /// Also taken beside ids: an id whose task is at another category is read only as far as
+    /// its status, and answered `skipped` with that status, without changing the exit code.
+    #[arg(long = "status", value_name = "CATEGORY")]
+    pub status: Vec<StatusArg>,
 }
 
 impl CopyQueryArgs {
-    /// Whether any narrowing was given, so the copy names its tasks by a query.
+    /// Whether any narrowing was given, so the copy names its tasks by a query when it names
+    /// no ids.
     #[must_use]
     pub fn given(&self) -> bool {
-        !self.source.is_empty() || self.commented_since.is_some() || !self.metadata.is_empty()
+        !self.source.is_empty()
+            || self.commented_since.is_some()
+            || !self.metadata.is_empty()
+            || !self.status.is_empty()
+    }
+
+    /// The status categories `--status` keeps, empty when it was not given.
+    #[must_use]
+    pub fn statuses(&self) -> Vec<StatusCategory> {
+        self.status.iter().map(|status| status.category()).collect()
     }
 }
 

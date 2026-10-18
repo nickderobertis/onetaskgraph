@@ -20,6 +20,7 @@ mod cache_writes;
 mod closed_status;
 mod copy_cost;
 mod copy_recopy;
+mod copy_status;
 mod copy_unsettled;
 mod fields;
 mod github_status_by_kind;

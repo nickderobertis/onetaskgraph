@@ -628,6 +628,9 @@ pub fn copied(report: &CopyReport) -> String {
                             .to_owned(),
                     );
                 }
+                if let CopyAction::Skipped { reason } = &outcome.action {
+                    row.push(reason.clone());
+                }
                 row
             })
             .collect::<Vec<_>>(),

@@ -99,6 +99,9 @@ export type CopyQueryOptions = {
   commentedSince?: string;
   // `<KEY>[/<SEGMENT>...]=<VALUE>`, as `taskList` takes it.
   metadata?: string[];
+  // The status categories to keep, as `taskList` takes them. Beside ids, a task at another
+  // category is answered `skipped` and neither copied nor read for its comments.
+  statuses?: StatusCategory[];
 };
 // `create` asserts the destination holds no counterpart of any task named, so each is created
 // without the correspondence lookup. Only `task copy` takes it, and the query narrowing.
@@ -845,6 +848,9 @@ function copyFlags(method: string, options: CopyOptions & CopyQueryOptions): str
   }
   for (const match of stringList(method, "metadata", options.metadata)) {
     args.push("--metadata", match);
+  }
+  for (const status of stringList(method, "statuses", options.statuses)) {
+    args.push("--status", status);
   }
   return args;
 }

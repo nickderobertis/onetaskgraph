@@ -82,7 +82,9 @@ onetaskgraph task show <ID> [--no-comments] [--pin VERSION]
 onetaskgraph task show-many <ID>... [--no-comments] [--pin ID=VERSION]...
 onetaskgraph task deps <ID> [--direction depends-on|depended-on-by] [--pin VERSION]
 onetaskgraph task copy <ID>... --to <SOURCE> [--match-by KEY] [--recreate] [--create] [--dry-run]
-                       [--expect VERSION]        # one task, bound to a caching destination
+                       [--status CATEGORY]... [--expect VERSION]  # --expect: one task, caching destination
+onetaskgraph task copy --to <SOURCE> [--source S]... [--commented-since RFC3339]
+                       [--metadata KEY[/SEGMENT...]=VALUE]... [--status CATEGORY]...  # by query
 onetaskgraph task comment add    <ID> [--body-file PATH] [--author NAME] [--expect VERSION]
 onetaskgraph task comment list   <ID> [--pin VERSION]
 onetaskgraph task comment edit   <ID> <COMMENT-ID> [--body-file PATH] [--expect VERSION]
@@ -587,6 +589,7 @@ copied from, which is what makes the next copy of it an update.
 | `--comments` | `task copy` and `project copy`: keep the destination's copies of each task's comments in step with the source's, as [below](#carrying-comments-and-copying-only-what-changed). Without it a copy reads and writes no comment. |
 | `--no-link` | Write nothing at all to the source — no `onetaskgraph.copies` link — and report every link `skipped`. The next copy finds each counterpart by the destination's own `onetaskgraph.origin`. |
 | `--source S`, `--commented-since RFC3339`, `--metadata KEY=VALUE` | `task copy` only, in place of ids: copy what `task list` with the same narrowing answers. Refused beside ids. |
+| `--status CATEGORY` | `task copy` only, repeatable: keep only the tasks at these categories, as `task list --status` keeps them. In a query a task at another category is not read for its comments, not copied and not named in the answer — and on a GitHub board, a status filter naming only open categories (any but `done` and `cancelled`) narrows the board-scoped issue search with `is:open`, each candidate's category still confirmed from its own item. Beside ids, an id whose task is at another category is read only as far as its status and answered `{"source": …, "action": "skipped", "reason": "status <category> is not one of <categories>"}`, neither copied nor read for its comments, without changing the exit code. The comment snapshot a host keeps is this shape: `task copy --source board --commented-since <instant> --status backlog --to snapshot`, into a folder configured with the board's own status names. |
 | `--member TASK-ID` | Copy the project and exactly the tasks named, repeating the flag for each, when you know which of them changed. A task not named is not read at the destination, not written and not reported, so a one-task change costs what one task costs rather than a read of the whole project. A named task the destination does not hold yet is still created. An edge to a task not named is written to the destination id that task records at `onetaskgraph.origin`, and a copy whose edge names a task recording none is refused before anything is written, naming that task. A copy naming members was not told about the rest, so it reports nothing `orphaned`. |
 
 `--dry-run` is how you read that table's first row before trusting it: every source is
@@ -634,9 +637,9 @@ land a second one beside it.
 ```
 
 `action` says which of the things above happened to that item — `created`, `updated`,
-`unchanged`, `orphaned`, or `failed` for a task a copy left unwritten because it kept changing
-while it was read — and `destination` is `null` for a dry run that would have created
-something and absent from a `failed` item. The vocabulary itself is the
+`unchanged`, `orphaned`, `skipped` for an id `--status` left out, or `failed` for a task a copy
+left unwritten because it kept changing while it was read — and `destination` is `null` for a
+dry run that would have created something and absent from a `failed` and a `skipped` item. The vocabulary itself is the
 `CopyAction` root of `onetaskgraph schema`, which is what both SDKs are generated from and
 what the journeys validate this output against.
 
@@ -1149,6 +1152,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         comments: false,
         no_link: false,
         expect: None,
+        statuses: Vec::new(),
     }).await?;
 
     let outcome = &report.items[0];

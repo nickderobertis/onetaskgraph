@@ -1110,3 +1110,94 @@ fn a_cross_source_edge_is_established_both_ways_and_never_taken_from_another_tea
         assert_eq!(far, [upstream], "{scope:?}");
     }
 }
+
+#[test]
+fn a_comment_snapshot_narrowed_to_backlog_copies_only_the_commented_proposed_issues() {
+    let sandbox = Sandbox::new();
+    let mut workspace = held(
+        vec![
+            issue("P-NEW", "Proposed", json!({"title": "Proposed, commented"})),
+            issue(
+                "P-OLD",
+                "Proposed",
+                json!({"title": "Proposed, commented long ago"}),
+            ),
+            issue("T-NEW", "Todo", json!({"title": "Todo, commented"})),
+            issue("I-NEW", "In Progress", json!({"title": "Doing, commented"})),
+        ],
+        Vec::new(),
+        Vec::new(),
+    );
+    let comment = |task: &str, id: &str, at: &str| {
+        json!({"task": task, "comment": {"id": id, "body": "a word",
+                                         "created_at": at, "updated_at": at}})
+    };
+    workspace["comments"] = json!([
+        comment("P-NEW", "C-1", "2026-10-01T12:00:00Z"),
+        comment("P-OLD", "C-2", "2026-09-01T00:00:00Z"),
+        comment("T-NEW", "C-3", "2026-10-01T12:00:00Z"),
+        comment("I-NEW", "C-4", "2026-10-01T12:00:00Z"),
+    ]);
+    let (config, workspace) = linear_workspace(&sandbox, workspace);
+    let plan = folder(&sandbox, "plan", &[]);
+    sandbox.project_document(&document(&json!({
+        "linear": linear(&config, json!({"status_mapping": {
+            "backlog": "Proposed", "todo": "Todo", "in-progress": "In Progress",
+            "done": "Done", "cancelled": "Canceled"}})),
+        // A comment snapshot reads the source's own state names.
+        "plan": {"plugin": "local-md", "config": {"root": plan, "status_mapping": {
+            "Proposed": "backlog", "Todo": "todo", "In Progress": "in-progress"}}},
+    })));
+    let answer = answered(
+        &sandbox,
+        &[
+            "--json",
+            "task",
+            "copy",
+            "--source",
+            "linear",
+            "--commented-since",
+            "2026-10-01T00:00:00Z",
+            "--status",
+            "backlog",
+            "--to",
+            "plan",
+        ],
+    );
+    let named: Vec<&str> = answer["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .map(|item| item["source"].as_str().expect("a source id"))
+        .collect();
+    assert_eq!(named, vec!["linear:P-NEW"], "{answer:#}");
+    let written: Vec<String> = std::fs::read_dir(plan.join("tasks"))
+        .expect("the plan's tasks")
+        .map(|entry| std::fs::read_to_string(entry.expect("an entry").path()).expect("a task file"))
+        .collect();
+    assert_eq!(written.len(), 1, "{written:?}");
+    assert!(written[0].contains("Proposed, commented"), "{written:?}");
+    // Linear was asked for the Proposed issues alone, and only theirs had comments read.
+    let read: std::collections::BTreeSet<String> = workspace
+        .served()
+        .into_iter()
+        .filter(|(query, _)| query.contains("comments(last:"))
+        .filter_map(|(_, variables)| variables["id"].as_str().map(str::to_owned))
+        .collect();
+    assert!(
+        read.iter().all(|id| id.starts_with("P-")),
+        "no issue outside Proposed had its comments read: {read:?}"
+    );
+    assert!(read.contains("P-NEW"), "{read:?}");
+    let listing = workspace
+        .served()
+        .into_iter()
+        .find(|(query, _)| query.contains("issues(first:"))
+        .expect("one listing")
+        .1["filter"]
+        .to_string();
+    assert!(
+        listing.contains("Proposed"),
+        "Linear was asked for the Proposed state: {listing}"
+    );
+}

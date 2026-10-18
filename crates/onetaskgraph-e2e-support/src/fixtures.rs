@@ -4282,6 +4282,7 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
                     item["title"].as_str().unwrap_or_default(),
                     item["body"].as_str().unwrap_or_default(),
                 ) && wanted.recent(&item["updatedAt"])
+                    && wanted.state.is_none_or(|state| item["state"] == state)
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -4498,6 +4499,9 @@ struct IssueSearch {
     /// The instant an `updated:>=` qualifier names: an issue last updated before it is not
     /// in the answer.
     updated_since: Option<chrono::DateTime<chrono::Utc>>,
+    /// The state an `is:open` or `is:closed` qualifier names, as the issue's `state` spells
+    /// it: an issue in another state is not in the answer.
+    state: Option<&'static str>,
 }
 
 impl IssueSearch {
@@ -4508,6 +4512,7 @@ impl IssueSearch {
             in_body: true,
             phrases: Vec::new(),
             updated_since: None,
+            state: None,
         };
         let mut chars = wanted.chars().peekable();
         while let Some(&next) = chars.peek() {
@@ -4535,6 +4540,14 @@ impl IssueSearch {
                 }
                 word.push(next);
                 chars.next();
+            }
+            if let Some(state) = match word.as_str() {
+                "is:open" => Some("OPEN"),
+                "is:closed" => Some("CLOSED"),
+                _ => None,
+            } {
+                parsed.state = Some(state);
+                continue;
             }
             match word.strip_prefix("in:") {
                 Some(fields) => {

@@ -489,6 +489,39 @@ class CopyOutcomeFailed(BaseModel):
     ]
 
 
+class CopyOutcomeSkipped(BaseModel):
+    fallback: Annotated[
+        WriteFallback | None,
+        Field(
+            description="That the write had to read its target first, and why — absent when it sent only its\nmutations."
+        ),
+    ] = None
+    placed: Annotated[
+        Placement | None,
+        Field(
+            description="Which source a routed copy placed it in, and the index of the route entry that\nmatched — `null` there when none did.\n\nPresent for every item a copy into a source declaring `routes` landed, a dry run's\nincluded, so a would-be create still says where it would go; absent for a copy into\na source with none, whose output is what it always was, and for an orphan, which was\nnot placed at all."
+        ),
+    ] = None
+    result: Annotated[
+        WriteResult | None,
+        Field(
+            description="What each mutation the write sent came to, and the version it left the task at — for a\nsource that reports its writes' parts."
+        ),
+    ] = None
+    source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
+    spent: Annotated[
+        Spent | None,
+        Field(
+            description="What the write spent at the sources that meter their own requests — the fallback's\nread included."
+        ),
+    ] = None
+    action: Literal["skipped"]
+    reason: Annotated[
+        str,
+        Field(description="Why, as `status <category> is not one of <categories>`."),
+    ]
+
+
 class CopyOutcome(
     RootModel[
         CopyOutcomeCreatedOrWouldCreate
@@ -496,6 +529,7 @@ class CopyOutcome(
         | CopyOutcomeUnchanged
         | CopyOutcomeOrphaned
         | CopyOutcomeFailed
+        | CopyOutcomeSkipped
     ]
 ):
     root: Annotated[
@@ -503,7 +537,8 @@ class CopyOutcome(
         | CopyOutcomeUpdated
         | CopyOutcomeUnchanged
         | CopyOutcomeOrphaned
-        | CopyOutcomeFailed,
+        | CopyOutcomeFailed
+        | CopyOutcomeSkipped,
         Field(
             description="What happened to one item.\n\n`action` and `destination` are one value rather than two fields side by side: an\nupdated item without a destination id, or an orphan without one, are states this type\nmust not be able to say — the id *is* what those outcomes are about. The one outcome\nthat legitimately has none is a dry run that would create, because nothing was\ncreated and there is no id to report."
         ),

@@ -47,6 +47,7 @@ fn copy_to(destination: &str, items: &[&str]) -> CopyRequest {
         comments: false,
         no_link: false,
         expect: None,
+        statuses: Vec::new(),
     }
 }
 

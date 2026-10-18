@@ -1063,6 +1063,18 @@ class GeneratedClient:
         recreate: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         source: list[str] | tuple[str, ...] | None = None,
+        status: list[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ]
+        ]
+        | tuple[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ],
+            ...,
+        ]
+        | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
         to: str | None = None,
     ) -> CopyReport:
@@ -1084,6 +1096,7 @@ class GeneratedClient:
             recreate=recreate,
             set=set,
             source=source,
+            status=status,
             term_scope=_strings("task_copy", "term_scope", term_scope),
             to=to,
         )
