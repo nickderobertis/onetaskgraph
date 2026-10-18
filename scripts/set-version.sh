@@ -72,5 +72,21 @@ fi
 python3 scripts/product_versions.py set "$expected"
 # Refresh workspace package versions without re-resolving unrelated dependencies.
 cargo_metadata --format-version 1
+# uv re-resolves every dependency when a workspace member's version moves, and with an empty
+# cache and no network (UV_OFFLINE, as the release journeys run it) that fails although no
+# dependency changed. Writing the members' own new version into uv.lock first leaves `uv
+# lock` nothing to resolve, so it only confirms the lock is consistent.
+python3 - "$expected" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+lock = Path("uv.lock")
+text = lock.read_text(encoding="utf-8")
+member = re.compile(
+    r'(\[\[package\]\]\nname = "[^"]+"\nversion = ")[^"]*("\nsource = \{ editable = "[^"]*" \}\n)'
+)
+lock.write_bytes(member.sub(lambda m: m.group(1) + sys.argv[1] + m.group(2), text).encode("utf-8"))
+PY
 uv lock --project . --quiet
 uv lock --project sdks/python --quiet
