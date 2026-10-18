@@ -1720,6 +1720,44 @@ impl GitHubBoardFields {
         board.touch_issue(&json!(id));
     }
 
+    /// Close one issue with `reason` — GitHub's `IssueStateReason`, or `None` for an issue
+    /// closed before GitHub recorded one — and leave its card where it is.
+    ///
+    /// Whichever way an issue closes on GitHub — a person closing it, a change request merged
+    /// with a closing line, a landing's issue-closing line — what any reader of it then sees
+    /// is exactly this: its state and its reason, with the board's `Status` untouched.
+    pub fn close(&self, id: &str, reason: Option<&str>) {
+        let mut board = self.board.lock().unwrap();
+        let item = board.find(&json!(id));
+        item["state"] = json!("CLOSED");
+        item["reason"] = reason.map_or(Value::Null, |reason| json!(reason));
+        board.touch_issue(&json!(id));
+    }
+
+    /// One issue's `state` and the reason it was closed with, as GitHub holds them.
+    #[must_use]
+    pub fn state(&self, id: &str) -> (String, Option<String>) {
+        let board = self.board.lock().unwrap();
+        let item = board
+            .items
+            .iter()
+            .find(|item| item["id"] == json!(id))
+            .unwrap_or_else(|| panic!("the board holds {id}"));
+        (
+            item["state"].as_str().unwrap_or_default().to_owned(),
+            item["reason"].as_str().map(str::to_owned),
+        )
+    }
+
+    /// Add one `Status` option to this board, as a person adding a column would.
+    pub fn with_status_option(&self, id: &str, name: &str) {
+        self.board
+            .lock()
+            .unwrap()
+            .status_options
+            .push(json!({"id":id,"name":name,"color":"GRAY","description":""}));
+    }
+
     /// Rewrite one issue's title, as a person editing it on GitHub would.
     pub fn edit_title(&self, id: &str, title: &str) {
         let mut board = self.board.lock().unwrap();

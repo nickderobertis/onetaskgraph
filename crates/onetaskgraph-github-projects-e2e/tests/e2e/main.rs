@@ -17,6 +17,7 @@ mod cache_assets;
 mod cache_budget;
 mod cache_kinds;
 mod cache_writes;
+mod closed_status;
 mod copy_cost;
 mod copy_recopy;
 mod copy_unsettled;

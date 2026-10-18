@@ -6158,6 +6158,21 @@ async fn a_closed_issue_reports_the_closed_category_and_its_column_name() {
         Item::issue("I_reopened", "odd").closed(Some("REOPENED")),
         Item::issue("I_legacy", "old").closed(None),
         Item::issue("I_open", "doing").status("In Progress"),
+        Item::issue("I_done_at_todo", "landed")
+            .closed(Some("COMPLETED"))
+            .status("Todo"),
+        Item::issue("I_bare_at_todo", "landed")
+            .closed(None)
+            .status("Todo"),
+        Item::issue("I_dropped_doing", "dropped")
+            .closed(Some("NOT_PLANNED"))
+            .status("In Progress"),
+        Item::issue("I_again_doing", "again")
+            .closed(Some("DUPLICATE"))
+            .status("In Progress"),
+        Item::issue("I_dropped_done", "dropped")
+            .closed(Some("NOT_PLANNED"))
+            .status("Done"),
     ]);
     let source = source(&fixture);
     async fn read(source: &dyn TaskSource, id: &str) -> Status {
@@ -6183,8 +6198,9 @@ async fn a_closed_issue_reports_the_closed_category_and_its_column_name() {
     );
     assert_eq!(
         read(source.as_ref(), "I_duplicate").await,
-        status(StatusCategory::Unknown, "Shipped"),
-        "a closed-as-duplicate task is not finished work, whatever column it sits in"
+        status(StatusCategory::Cancelled, "Shipped"),
+        "a closed-as-duplicate task is work nobody will do here, named by the column the \
+         mapping does not read"
     );
     assert_eq!(
         read(source.as_ref(), "I_reopened").await,
@@ -6199,6 +6215,20 @@ async fn a_closed_issue_reports_the_closed_category_and_its_column_name() {
         status(StatusCategory::InProgress, "In Progress"),
         "an open issue reads both from its option"
     );
+    for (id, category, name) in [
+        ("I_done_at_todo", StatusCategory::Done, "Done"),
+        ("I_bare_at_todo", StatusCategory::Done, "Done"),
+        ("I_dropped_doing", StatusCategory::Cancelled, "Cancelled"),
+        ("I_again_doing", StatusCategory::Cancelled, "Cancelled"),
+        ("I_dropped_done", StatusCategory::Cancelled, "Cancelled"),
+    ] {
+        assert_eq!(
+            read(source.as_ref(), id).await,
+            status(category, name),
+            "{id}: an option the mapping reads as another category contradicts the closure, \
+             so the name is the option the mapping gives the closure's category"
+        );
+    }
 }
 
 #[tokio::test]

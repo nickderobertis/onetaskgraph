@@ -2048,8 +2048,9 @@ impl TryFrom<String> for ColumnName {
 
 /// The two closed states this product can mean.
 ///
-/// GitHub's `IssueClosedStateReason` also spells `DUPLICATE`, which is neither finished
-/// work nor abandoned work, so nothing here ever writes it.
+/// GitHub's `IssueClosedStateReason` also spells `DUPLICATE`, which nothing here ever writes:
+/// an issue closed as one *reads* `cancelled`, because its work is another issue's, but this
+/// product never decides on a person's behalf that two issues are the same work.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum ClosedState {
@@ -2847,14 +2848,23 @@ impl BoardStatuses {
     /// The status an item of `kind` reports, from the three things a read of it says: its
     /// board `Status` option, whether its issue is closed, and the reason it was closed with.
     ///
-    /// The closed state decides the category and the `Status` option decides the name, so
-    /// a closed issue sitting in a "Shipped" column reports `done` named `Shipped`, whatever
-    /// its kind. A closed issue whose reason is `DUPLICATE` or `REOPENED` reports `Unknown`:
-    /// a duplicate is not finished work, and calling it done is a lie the next copy would
-    /// write back. `REOPENED`-while-closed is a state this source can never produce, so
-    /// it is read permissively rather than refused — reads are faithful, and refusals
-    /// belong on writes. An open item's option reads through its own kind's mapping, and an
-    /// option that mapping does not name reads as `Unknown` under its own name.
+    /// **A closed issue's category follows its closure**, by [`closed_category`]: completed
+    /// or no reason reads `done`, not planned and duplicate read `cancelled`, and any other
+    /// reason reads `unknown`. `REOPENED`-while-closed is a state this source can never
+    /// produce, so it is read permissively rather than refused — reads are faithful, and
+    /// refusals belong on writes.
+    ///
+    /// **Its name follows the closure too, unless the option agrees with it.** The option's
+    /// own name is kept when this kind's mapping reads that option as the same category, or
+    /// does not name it at all — so a closed issue in a "Shipped" column reports `done`
+    /// named `Shipped`. An option the mapping reads as another category contradicts the
+    /// closure, and so does no option at all: the name is then the option the mapping gives
+    /// the closure's category, so an issue closed as completed at `Todo` reads `done` named
+    /// by the board's `done` option, and a destination reading `Todo` as todo is never handed
+    /// it. An `unknown` closure keeps the option, or `Closed` without one.
+    ///
+    /// An open item's option reads through its own kind's mapping, and an option that mapping
+    /// does not name reads as `Unknown` under its own name.
     ///
     /// One function of those three rather than of a response, so a narrow status write can
     /// answer what a re-read would report by applying it to the state it has just written.
@@ -2866,11 +2876,14 @@ impl BoardStatuses {
         reason: Option<&str>,
     ) -> Status {
         if closed {
-            let category = match reason {
-                None | Some("COMPLETED") => StatusCategory::Done,
-                Some("NOT_PLANNED") => StatusCategory::Cancelled,
-                Some(_) => StatusCategory::Unknown,
-            };
+            let category = closed_category(reason);
+            let agrees = option.filter(|option| {
+                category == StatusCategory::Unknown
+                    || self
+                        .category_of(kind, option)
+                        .is_none_or(|read| read == category)
+            });
+            let name = agrees.or_else(|| self.target(kind, category).option());
             let fallback = match category {
                 StatusCategory::Done => "Done",
                 StatusCategory::Cancelled => "Cancelled",
@@ -2878,7 +2891,7 @@ impl BoardStatuses {
             };
             return Status {
                 category,
-                name: option.unwrap_or(fallback).to_owned(),
+                name: name.or(option).unwrap_or(fallback).to_owned(),
             };
         }
         let name = option.unwrap_or("Open").to_owned();
@@ -2888,6 +2901,19 @@ impl BoardStatuses {
                 .unwrap_or(StatusCategory::Unknown),
             name,
         }
+    }
+}
+
+/// The category a closed issue reads as, from the reason it was closed with.
+///
+/// `COMPLETED`, and no reason at all, is finished work; `NOT_PLANNED` and `DUPLICATE` are both
+/// work nobody will do here — a duplicate's work is the other issue's — and any other reason
+/// is one this source cannot read a category from.
+fn closed_category(reason: Option<&str>) -> StatusCategory {
+    match reason {
+        None | Some("COMPLETED") => StatusCategory::Done,
+        Some("NOT_PLANNED" | "DUPLICATE") => StatusCategory::Cancelled,
+        Some(_) => StatusCategory::Unknown,
     }
 }
 
