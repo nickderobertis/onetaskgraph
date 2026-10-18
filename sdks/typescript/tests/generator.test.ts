@@ -103,8 +103,7 @@ test("generation, clean check, stale check, and invalid arguments use the real b
 test("a caller's own configuration does not reach the binary the contract is emitted with", () => {
   // A source its own plugin refuses — a field that plugin does not accept — is what a host
   // exporting one source's settings into every process can hand the generator, and every verb
-  // refuses it, `schema` included. Half a source, a setting with no plugin, no longer is: the
-  // binary leaves that source unconfigured rather than refusing.
+  // refuses it, `schema` included.
   const stray = {
     ONETASKGRAPH_SOURCES__STRAY__PLUGIN: "in-memory",
     ONETASKGRAPH_SOURCES__STRAY__CONFIG__TEAM: "ENG",

@@ -13,8 +13,7 @@ PACKAGE = Path(__file__).parents[1]
 
 # A source its own plugin refuses — a field that plugin does not accept — is what a host
 # exporting one source's settings into every process can hand the generator, and every verb
-# refuses it, `schema` included. Half a source, a setting with no plugin, no longer is: the
-# binary leaves that source unconfigured rather than refusing.
+# refuses it, `schema` included.
 STRAY = {
     "ONETASKGRAPH_SOURCES__STRAY__PLUGIN": "in-memory",
     "ONETASKGRAPH_SOURCES__STRAY__CONFIG__TEAM": "ENG",
