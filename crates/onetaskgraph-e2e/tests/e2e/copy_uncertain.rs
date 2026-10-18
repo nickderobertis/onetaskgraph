@@ -66,7 +66,6 @@ impl Careless {
         careless
     }
 
-    /// Write one record of `kind` into `notes`.
     fn record(&self, kind: &str, id: &str, front: &str) {
         let path = self.notes.join(kind).join(format!("{id}.md"));
         std::fs::create_dir_all(path.parent().expect("a parent")).expect("the folder");
@@ -82,7 +81,6 @@ impl Careless {
             .clone()
     }
 
-    /// Standard error of a run that failed with exit `1`.
     fn refused(&self, arguments: &[&str]) -> String {
         let output = self.run(arguments);
         assert_eq!(
@@ -96,7 +94,7 @@ impl Careless {
         stderr(&output)
     }
 
-    /// The titles `<verb> list --source <source>` reads back, sorted.
+    /// The titles a source holds, read back through the binary rather than off its store.
     fn titles(&self, verb: &str, source: &str) -> Vec<String> {
         let output = self.run(&[verb, "list", "--source", source, "--json"]);
         assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
@@ -111,7 +109,6 @@ impl Careless {
         titles
     }
 
-    /// Every write and delete `careless` was sent, in order, as its log recorded it.
     fn sent(&self) -> Vec<Value> {
         std::fs::read_to_string(&self.log)
             .unwrap_or_default()
@@ -127,7 +124,6 @@ fn warns(said: &str, destination: &str, method: &str) {
     for wanted in [
         format!("{destination} may hold an item it could not take back"),
         format!("{destination}'s answer to {method} was malformed"),
-        "every write it could identify was undone".to_owned(),
         format!("next: inspect {destination} for an item this copy may have created"),
         "before copying again".to_owned(),
     ] {
@@ -143,7 +139,7 @@ fn warns(said: &str, destination: &str, method: &str) {
     );
 }
 
-/// How many creates `careless` was sent, and how many of them it was asked to take back.
+/// The undo's evidence from the plugin's side: one delete per create it could name.
 fn creates_and_deletes(sent: &[Value], method: &str) -> (usize, usize) {
     let creates = sent
         .iter()
@@ -300,6 +296,26 @@ fn a_project_create_answered_malformed_names_the_destination_and_undoes_the_home
 }
 
 #[test]
+fn a_project_copy_whose_project_create_is_answered_malformed_writes_none_of_its_tasks() {
+    // The ordinary project create, sent before any task of the project: the copy stops on it,
+    // so the residue is that project alone and no task follows it.
+    let careless = Careless::new();
+    careless.record(
+        "tasks",
+        "first",
+        "title: First\nstatus: todo\nproject: launch",
+    );
+    let said = careless.refused(&["project", "copy", "notes:launch", "--to", "careless"]);
+    warns(&said, "careless", "write_project");
+    assert_eq!(
+        careless.titles("project", "careless"),
+        vec![LAUNCH.to_owned()]
+    );
+    assert_eq!(careless.titles("task", "careless"), Vec::<String>::new());
+    assert_eq!(creates_and_deletes(&careless.sent(), "write_task"), (0, 0));
+}
+
+#[test]
 fn a_malformed_answer_to_a_read_keeps_its_own_failure() {
     // A non-mutating call answered malformed is not a write the copy cannot vouch for: the
     // destination's store is not a store at all, so its first read fails as it always has.
@@ -327,7 +343,7 @@ fn spelled(path: &Path) -> &str {
     path.to_str().expect("a UTF-8 path")
 }
 
-/// Every file under `root`, relative to it.
+/// Every file under `root`.
 fn files(root: &Path) -> Vec<String> {
     let mut found = Vec::new();
     let mut pending = vec![root.to_path_buf()];

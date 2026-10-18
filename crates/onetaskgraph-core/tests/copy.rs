@@ -4649,8 +4649,8 @@ impl TaskSource for Careless {
 }
 
 /// [`interlinked`] as `from`, and `into` an in-memory source holding `config` behind a
-/// [`Careless`] answering a write of `Beta` malformed.
-fn careless_engine(config: &Value) -> Engine {
+/// [`Careless`] answering a write of an item titled one of `malformed` malformed.
+fn careless_engine(config: &Value, malformed: &'static [&'static str]) -> Engine {
     let built = |source: &str, config: &Value| {
         onetaskgraph_in_memory::Plugin
             .build(&name(source), config, &NoSecrets)
@@ -4666,7 +4666,7 @@ fn careless_engine(config: &Value) -> Engine {
                 name("into"),
                 Box::new(Careless {
                     inner: built("into", config),
-                    malformed: &["Beta"],
+                    malformed,
                 }),
             )),
         ],
@@ -4678,7 +4678,7 @@ fn careless_engine(config: &Value) -> Engine {
 async fn a_create_answered_malformed_reports_the_destination_uncertain_after_undoing_the_rest() {
     // `Beta` is the second task of `P-1`, so the project and `Alpha engine` have landed, with
     // ids the copy knows, when the destination stores `Beta` and cannot say under which id.
-    let engine = careless_engine(&json!({}));
+    let engine = careless_engine(&json!({}), &["Beta"]);
     let Err(refused) = engine
         .copy(&many(&["from:P-1"], CopyScope::Projects { tasks: true }))
         .await
@@ -4722,7 +4722,7 @@ async fn a_create_answered_malformed_reports_the_destination_uncertain_after_und
 async fn an_update_answered_malformed_keeps_the_refusal_it_always_was() {
     // An update is journalled before it is sent, so a malformed answer to one leaves nothing
     // the copy cannot name, and the destination is put back exactly as it was.
-    let engine = careless_engine(&already_holding());
+    let engine = careless_engine(&already_holding(), &["Beta"]);
     let before = held(&engine, "into").await;
     let Err(refused) = engine
         .copy(&many(&["from:P-1"], CopyScope::Projects { tasks: true }))
@@ -4739,4 +4739,87 @@ async fn an_update_answered_malformed_keeps_the_refusal_it_always_was() {
         "{refused:?}"
     );
     assert_eq!(held(&engine, "into").await, before);
+}
+
+#[tokio::test]
+async fn a_project_create_answered_malformed_after_another_project_landed_undoes_that_one() {
+    // `P-1` and both its tasks land first; `Docs`, the second project, is the create the
+    // destination stores and answers malformed.
+    let engine = careless_engine(&json!({}), &["Docs"]);
+    let Err(refused) = engine
+        .copy(&many(
+            &["from:P-1", "from:P-2"],
+            CopyScope::Projects { tasks: true },
+        ))
+        .await
+    else {
+        panic!("a create answered malformed must fail the copy");
+    };
+    let EngineError::CopyDestinationUncertain {
+        destination,
+        operation,
+        ..
+    } = &refused
+    else {
+        panic!("a malformed create answer leaves the destination uncertain: {refused}");
+    };
+    assert_eq!(
+        (destination.as_str(), operation.as_str()),
+        ("into", "write_project")
+    );
+    assert_eq!(
+        held(&engine, "into").await,
+        vec!["into:P-2 Docs".to_owned()]
+    );
+}
+
+#[tokio::test]
+async fn a_malformed_create_whose_undo_is_refused_names_both_what_it_left_and_what_it_cannot() {
+    // The destination will not take back `P-1`, written before `Beta`'s malformed answer. The
+    // copy then owes both halves: the item it could identify and could not remove, and the
+    // one it could not identify at all.
+    let engine = careless_engine(
+        &json!({"capabilities": {"undeletable_ids": ["P-1"]}}),
+        &["Beta"],
+    );
+    let Err(refused) = engine
+        .copy(&many(&["from:P-1"], CopyScope::Projects { tasks: true }))
+        .await
+    else {
+        panic!("a create answered malformed must fail the copy");
+    };
+    let EngineError::CopyNotUndone {
+        error, left_behind, ..
+    } = &refused
+    else {
+        panic!("a refused undo reports the copy as not undone: {refused}");
+    };
+    assert!(
+        matches!(
+            error.as_ref(),
+            EngineError::CopyDestinationUncertain { destination, operation, .. }
+                if destination == "into" && operation == "write_task"
+        ),
+        "{error:?}"
+    );
+    assert_eq!(
+        left_behind
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        vec!["into:P-1".to_owned()]
+    );
+    let rendered = refused.to_string();
+    assert!(
+        rendered.contains("into may hold an item it could not take back"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("so these still hold what it wrote: into:P-1"),
+        "{rendered}"
+    );
+    assert_eq!(
+        held(&engine, "into").await,
+        vec!["into:P-1 Engine".to_owned(), "into:T-2 Beta".to_owned()]
+    );
 }
