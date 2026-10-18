@@ -23,7 +23,7 @@ use onetaskgraph_core::{
     DeliveryOutcome, DependencyRequest, DocumentFilters, DocumentRequest, Engine, Environment,
     ExpectedWrite, Failure, FailureDocument, Filters, GlobalId, LabelRequest, Loaded, MatchBy,
     OutputFormat, PageToken, Paging, ProjectGraphRequest, ProjectRequest, ProjectSelector,
-    QueryResponse, RenderedRecord, SearchRequest, SourceFailure, TaskRequest,
+    QueryResponse, ReconcileOutcome, RenderedRecord, SearchRequest, SourceFailure, TaskRequest,
 };
 use onetaskgraph_plugin_api::{
     CommentBody, LabelFilter, MetadataKey, MetadataRecord, NativeId, NewComment, SharedClock,
@@ -452,6 +452,15 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
                 "the reconciled statuses",
             )?;
             emit(out, rendered.trim_end(), "the reconciled statuses")?;
+            for item in &document.items {
+                if let ReconcileOutcome::Failed { error } = &item.outcome {
+                    eprintln!(
+                        "onetaskgraph: {} was not reconciled: {}",
+                        item.source,
+                        error.message()
+                    );
+                }
+            }
             Ok(if document.failed() {
                 EXIT_PARTIAL
             } else {
@@ -485,6 +494,14 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
             )?;
             emit(out, rendered.trim_end(), "the completed issues")?;
             for item in &completed.items {
+                if let Some(error) = &item.error {
+                    eprintln!(
+                        "onetaskgraph: {} was not completed in {}: {}",
+                        item.issue,
+                        item.source,
+                        error.message()
+                    );
+                }
                 delivery_exit(&item.delivered);
             }
             Ok(if completed.failed() {

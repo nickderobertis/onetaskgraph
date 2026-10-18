@@ -325,6 +325,29 @@ fn an_item_whose_write_is_refused_is_listed_failed_and_the_others_are_written() 
     for id in ["R-6", "R-7", "R-10"] {
         assert_eq!(setup.board.status(id).as_deref(), Some("Done"), "{id}");
     }
+
+    // The same refusal as a person reads it: the report on stdout, the failure on stderr.
+    let (items, closures) = mixed();
+    let human = Setup::new(items, &closures, 0);
+    human
+        .board
+        .refuse_once("updateProjectV2ItemFieldValue(input:$input)");
+    let output = human.run(&["task", "status", "reconcile", "--source", "board"]);
+    assert_eq!(output.status.code(), Some(4), "{}", stderr(&output));
+    let said = stdout(&output);
+    assert!(
+        said.contains("board:R-5: Todo -> Done (done): failed — ")
+            && said.contains("board:R-6: In Progress -> Done (done): updated")
+            && said.contains("board:R-8: Proposal -> Cancelled (cancelled): updated")
+            && said.contains("5 updated, 0 would update, 1 failed"),
+        "{said}"
+    );
+    assert!(
+        stderr(&output).contains("onetaskgraph: board:R-5 was not reconciled: ")
+            && stderr(&output).contains("updateProjectV2ItemFieldValue"),
+        "{}",
+        stderr(&output)
+    );
 }
 
 #[test]

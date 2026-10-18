@@ -927,3 +927,75 @@ fn a_card_past_the_first_page_of_an_issues_memberships_is_found_and_written() {
         "the read by reference, then the issue's later memberships, and no board read"
     );
 }
+
+#[test]
+fn a_completion_reads_to_a_person_item_by_item_with_each_failure_on_stderr() {
+    let stores = Stores::new();
+    let dry = stores.run(&[
+        "task",
+        "status",
+        "complete",
+        "--issue",
+        &reference("N-2"),
+        "--issue",
+        &reference("N-5"),
+        "--source",
+        "board-a",
+        "--dry-run",
+    ]);
+    assert_eq!(dry.status.code(), Some(0), "{}", stderr(&dry));
+    let said = stdout(&dry);
+    assert!(
+        said.contains(&format!(
+            "{} in board-a: would-update board-a:N-2 (In Progress -> Done)",
+            reference("N-2")
+        )) && said.contains(&format!(
+            "{} in board-a: skipped board-a:N-5 — closed as not planned",
+            reference("N-5")
+        )) && said.contains("unsupported (status is its closure, or no complete_by_issue): none")
+            && said
+                .contains("0 updated, 1 would update, 0 unchanged, 1 skipped, 0 absent, 0 failed"),
+        "{said}"
+    );
+    assert_eq!(
+        stderr(&dry),
+        "",
+        "nothing failed, so nothing is said on stderr"
+    );
+
+    stores
+        .board
+        .refuse_once("updateProjectV2ItemFieldValue(input:$input)");
+    let output = stores.run(&[
+        "task",
+        "status",
+        "complete",
+        "--issue",
+        &reference("N-1"),
+        "--issue",
+        &reference("N-2"),
+        "--source",
+        "board-a",
+    ]);
+    assert_eq!(output.status.code(), Some(4), "{}", stderr(&output));
+    let said = stdout(&output);
+    assert!(
+        said.contains(&format!(
+            "{} in board-a: failed board-a:N-1",
+            reference("N-1")
+        )) && said.contains(&format!(
+            "{} in board-a: updated board-a:N-2 (In Progress -> Done)",
+            reference("N-2")
+        )) && said
+            .contains("1 updated, 0 would update, 0 unchanged, 0 skipped, 0 absent, 1 failed"),
+        "{said}"
+    );
+    assert!(
+        stderr(&output).contains(&format!(
+            "onetaskgraph: {} was not completed in board-a: ",
+            reference("N-1")
+        )),
+        "{}",
+        stderr(&output)
+    );
+}

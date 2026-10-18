@@ -522,6 +522,32 @@ fn a_delivered_task_that_cannot_be_kept_in_step_is_answered_failed_and_exits_fou
     );
     assert_eq!(setup.board.status("N-1").as_deref(), Some("Done"));
     assert_eq!(setup.ticket(), "done", "the ticket it can keep in step is");
+
+    // As a person reads it: each delivered task under its line, the failure on stderr too.
+    let setup = Delivering::with_delivers(true, &[], &["tickets:T-1", "nowhere:T-9"]);
+    let output = setup
+        .sandbox
+        .command()
+        .args(["task", "status", "complete", "--issue", &reference("N-1")])
+        .assert()
+        .get_output()
+        .clone();
+    assert_eq!(output.status.code(), Some(4), "{}", stderr(&output));
+    let said = stdout(&output);
+    assert!(
+        said.contains(&format!(
+            "{} in plans: updated plans:N-1 (In Progress -> Done)",
+            reference("N-1")
+        )) && said.contains("delivered tickets:T-1 by plans:N-1: written from in-progress to done")
+            && said.contains("delivered nowhere:T-9 by plans:N-1: failed: "),
+        "{said}"
+    );
+    assert!(
+        stderr(&output)
+            .contains("onetaskgraph: task nowhere:T-9 could not be kept in step with plans:N-1"),
+        "{}",
+        stderr(&output)
+    );
 }
 
 /// Fill the cache's entry of `board:T-1` at the version its listing carries, hold it to being a
