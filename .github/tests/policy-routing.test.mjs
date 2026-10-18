@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { test } from "node:test";
 import {
@@ -15,7 +15,16 @@ import {
   workflows,
 } from "../workflow-graph.mjs";
 import { Lexer } from "../actions-expressions.mjs";
-import { base, classify, event, files, heads, history, revision } from "./policy-fixture.mjs";
+import {
+  base,
+  classify,
+  event,
+  files,
+  heads,
+  history,
+  revision,
+  scratchRoot,
+} from "./policy-fixture.mjs";
 
 test("every known non-PR automatic event stays Mac-free whatever the diff", () => {
   for (const name of [
@@ -457,4 +466,78 @@ test("malformed lock records and Bun inventory disagreement require coverage thr
     assert.equal(result.macosRequired, true);
     assert.equal(result.reason, "Unreadable release diff requires coverage");
   }
+});
+
+// A push the release-merge step cannot classify still warms macOS: only a decided `true` skips it.
+const warmMacos = (revisions) =>
+  graph(
+    { id: "push-main", event: "push", branch: "main", revisions },
+    {
+      macosRequired: false,
+      reason: "a push",
+    },
+  )
+    .find((run) => run.workflow === "rust-cache-warm.yml")
+    .rows.filter((row) => row.macos)
+    .map((row) => row.job);
+
+test("a push the release-merge step cannot read still schedules warm-macos", () => {
+  // GitHub sends forty zeros as `before` for a branch's first push; neither revision resolves.
+  for (const before of ["0".repeat(40), "deadbeef".repeat(5)])
+    assert.deepEqual(warmMacos({ cwd: history, before, after: heads.version }), ["warm-macos"]);
+  // The same release merge, readable, is the one push that warms no Mac.
+  assert.deepEqual(warmMacos({ cwd: history, before: base, after: heads.version }), []);
+});
+
+test("a classifier that fails or answers anything but true makes the decide step answer false", () => {
+  const decide = workflows()["rust-cache-warm.yml"].jobs["release-merge"].steps.find(
+    (step) => step.id === "decide",
+  ).run;
+  const scratch = mkdtempSync(resolve(scratchRoot, "release-merge-shim-"));
+  try {
+    const shims = resolve(scratch, "bin");
+    mkdirSync(shims);
+    for (const [body, label] of [
+      ["printf '{\"version-only\": tru'", "malformed JSON"],
+      ["printf 'maybe\\n'", "another word"],
+      ["printf ''", "nothing"],
+      ["printf 'true\\n'; exit 3", "true, then a failure"],
+      ["exit 1", "a failure alone"],
+    ]) {
+      writeFileSync(resolve(shims, "python3"), `#!/usr/bin/env bash\n${body}\n`);
+      chmodSync(resolve(shims, "python3"), 0o755);
+      const output = resolve(scratch, "output");
+      rmSync(output, { force: true });
+      // As GitHub runs a `shell: bash` step.
+      const ran = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", decide], {
+        cwd: root,
+        env: {
+          ...process.env,
+          PATH: `${shims}${process.platform === "win32" ? ";" : ":"}${process.env.PATH}`,
+          BEFORE: base,
+          AFTER: heads.version,
+          GITHUB_OUTPUT: output,
+        },
+        encoding: "utf8",
+      });
+      assert.equal(ran.status, 0, `${label}: ${ran.stderr}`);
+      assert.equal(readFileSync(output, "utf8").trim(), "version-only=false", label);
+    }
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+});
+
+test("a release-merge job that fails or reports no answer leaves warm-macos scheduled", () => {
+  const condition = workflows()["rust-cache-warm.yml"].jobs["warm-macos"].if;
+  // GitHub's rule, as jobs() in workflow-graph.mjs applies it: a condition naming no status
+  // function also needs every dependency to have succeeded.
+  const runs = (result, outputs) =>
+    (result === "success" || /\b(always|cancelled|failure|success)\(/.test(condition)) &&
+    Boolean(evaluate(condition, { needs: { "release-merge": { result, outputs } } }));
+  assert.equal(runs("failure", {}), true);
+  assert.equal(runs("success", {}), true);
+  assert.equal(runs("success", { "version-only": "false" }), true);
+  assert.equal(runs("success", { "version-only": "true" }), false);
+  assert.equal(runs("cancelled", {}), false);
 });

@@ -64,8 +64,10 @@ jobs:
 
   # Whether this push is a release merge: release-plz's version and changelog edits and nothing
   # else, as .github/semantic-release.py — the classifier macOS lanes reads a release pull
-  # request with — reads the two trees. Anything it cannot decide answers false, so the macOS
-  # leg warms: a cold build costs every pull request more than one warm leg costs main.
+  # request with — reads the two trees. Anything it cannot decide answers false — an unreadable
+  # revision, a failed classifier, an answer other than `true` — and a job that fails anyway
+  # still lets warm-macos run, so the macOS leg warms: a cold build costs every pull request
+  # more than one warm leg costs main.
   release-merge:
     name: release merge
     runs-on: ubuntu-latest
@@ -89,7 +91,7 @@ jobs:
           BEFORE: ${{ github.event.before }}
           AFTER: ${{ github.sha }}
         run: |
-          answer="$(python3 .github/semantic-release.py "$BEFORE" "$AFTER" | tr -d '\r')"
+          answer="$(python3 .github/semantic-release.py "$BEFORE" "$AFTER" | tr -d '\r')" || answer=false
           [ "$answer" = true ] || answer=false
           echo "version-only=$answer" >>"$GITHUB_OUTPUT"
 

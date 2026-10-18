@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -439,25 +439,36 @@ function releaseMerge(job, context, scenario) {
     );
     try {
       const output = join(scratch, "output");
-      execFileSync("bash", ["-c", step.run], {
+      // As GitHub runs a `shell: bash` step: a step that exits non-zero fails its job, which
+      // then has no outputs — a run outcome rather than an unresolved workflow.
+      const ran = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", step.run], {
         cwd: revisions.cwd,
         env: { ...process.env, ...stepEnvironment, GITHUB_OUTPUT: output },
         stdio: ["ignore", "ignore", "ignore"],
       });
-      const answer = readFileSync(output, "utf8")
-        .split(/\r?\n/)
-        .find((line) => line.startsWith("version-only="))
-        ?.slice("version-only=".length);
-      if (!["true", "false"].includes(answer)) throw Error("Unresolved release-merge output");
-      releaseDecisions.set(key, answer);
+      if (ran.error) throw ran.error;
+      if (ran.status !== 0) releaseDecisions.set(key, null);
+      else {
+        const answer = readFileSync(output, "utf8")
+          .split(/\r?\n/)
+          .find((line) => line.startsWith("version-only="))
+          ?.slice("version-only=".length);
+        if (!["true", "false"].includes(answer)) throw Error("Unresolved release-merge output");
+        releaseDecisions.set(key, answer);
+      }
     } finally {
       rmSync(scratch, { recursive: true, force: true });
     }
   }
-  return resolve(job.outputs, {
-    ...context,
-    steps: { decide: { outputs: { "version-only": releaseDecisions.get(key) } } },
-  });
+  const answer = releaseDecisions.get(key);
+  if (answer === null) return { result: "failure", outputs: {} };
+  return {
+    result: "success",
+    outputs: resolve(job.outputs, {
+      ...context,
+      steps: { decide: { outputs: { "version-only": answer } } },
+    }),
+  };
 }
 
 export function jobs(workflow, scenario, policy, prefix = "", inputs = {}, ancestry = []) {
@@ -515,7 +526,7 @@ export function jobs(workflow, scenario, policy, prefix = "", inputs = {}, ances
         };
         needs[id].outputs = resolve(job.outputs, context);
       }
-      if (id === "release-merge") needs[id].outputs = releaseMerge(job, context, scenario);
+      if (id === "release-merge") needs[id] = releaseMerge(job, context, scenario);
       if (id === "arches") {
         configuredArches ||= JSON.parse(
           execFileSync(
