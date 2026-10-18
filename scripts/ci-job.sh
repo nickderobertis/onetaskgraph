@@ -85,11 +85,11 @@ case "$JOB" in
 1 run scripts:distribution-test -"
     ;;
   test-windows)
-    # As test-macos, one phase at a time: beside the distribution journey's release build, the
-    # hosted runner's loopback journeys fail to reach their own servers.
+    # As test-macos. Side by side only while two consecutive hosted runs show no flake: the
+    # loopback journeys once failed to reach their own servers beside the release build.
     phases="1 affected test,budgets -
-2 run scripts:distribution-check -
-3 run scripts:distribution-test -"
+1 run scripts:distribution-check -
+1 run scripts:distribution-test -"
     ;;
   *) usage ;;
 esac
