@@ -999,3 +999,36 @@ fn a_completion_reads_to_a_person_item_by_item_with_each_failure_on_stderr() {
         stderr(&output)
     );
 }
+
+#[test]
+fn a_reference_past_githubs_issue_number_range_is_absent_and_never_sent() {
+    let stores = Stores::new();
+    let beyond = format!("{REPOSITORY}#9999999999");
+    let answer = stores.complete(
+        &[reference("N-1"), beyond.clone()],
+        &["--source", "board-a"],
+        0,
+    );
+    assert_eq!(
+        answered_by(&answer, "board-a"),
+        vec![
+            (reference("N-1"), "updated".to_owned()),
+            (beyond, "absent".to_owned())
+        ],
+        "{answer:#}"
+    );
+    for (document, variables) in stores.board.served() {
+        if document == onetaskgraph_github_projects::graphql::ISSUES_BY_REFERENCE {
+            assert!(
+                variables
+                    .as_object()
+                    .expect("variables")
+                    .iter()
+                    .filter(|(name, _)| name.starts_with("number"))
+                    .all(|(_, number)| number.as_u64().is_some_and(|n| n <= i32::MAX as u64)),
+                "no number past GitHub's Int was bound: {variables}"
+            );
+        }
+    }
+    assert_eq!(stores.board.status("N-1").as_deref(), Some("Done"));
+}

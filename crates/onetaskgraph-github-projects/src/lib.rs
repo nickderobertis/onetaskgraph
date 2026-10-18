@@ -10774,8 +10774,16 @@ impl GitHubProjectsSource {
             .option()
             .unwrap_or("Done")
             .to_owned();
-        let mut holdings = Vec::with_capacity(distinct.len());
-        for batch in distinct.chunks(REFERENCE_BATCH) {
+        // GitHub numbers an issue with a GraphQL `Int`, a signed 32-bit value, so a reference past
+        // its range names no issue any repository can hold: it is answered absent and never sent,
+        // where binding it would have GitHub refuse the whole batch.
+        let readable: Vec<IssueRef> = distinct
+            .iter()
+            .filter(|issue| i32::try_from(issue.number).is_ok())
+            .cloned()
+            .collect();
+        let mut holdings = Vec::with_capacity(readable.len());
+        for batch in readable.chunks(REFERENCE_BATCH) {
             let data = self
                 .graphql(graphql::ISSUES_BY_REFERENCE, reference_batch(batch))
                 .await?;
@@ -10838,7 +10846,21 @@ impl GitHubProjectsSource {
                 });
             }
         }
-        Ok(holdings)
+        let mut read = holdings.into_iter();
+        let mut answered = Vec::with_capacity(distinct.len());
+        for issue in distinct {
+            if i32::try_from(issue.number).is_ok() {
+                answered.push(read.next().ok_or_else(|| SourceError::Malformed {
+                    message: format!("no holding was read for {issue}"),
+                })?);
+            } else {
+                answered.push(IssueHolding {
+                    issue,
+                    completion: Completion::Absent,
+                });
+            }
+        }
+        Ok(answered)
     }
 }
 

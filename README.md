@@ -735,7 +735,8 @@ does not declare it — is sent no request and listed in `unsupported`. Per refe
 
 - no task for the issue, or an issue the source's credential cannot see: `absent`, no write.
   **It reaches task items only**, so an issue the board holds as a project is `absent` too, and
-  neither its card nor its issue is written;
+  neither its card nor its issue is written. On a GitHub board a number past GitHub's 32-bit
+  issue numbers names no issue at all, so it is `absent` without being sent;
 - closed as not planned or as duplicate: `skipped`, with `reason` `closed as <reason>`, no
   write — the closure already says it, and a landing does not overrule it;
 - closed as completed with its card already at the `done` option: `unchanged`;

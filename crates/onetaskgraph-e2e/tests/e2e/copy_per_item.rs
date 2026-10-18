@@ -570,3 +570,57 @@ fn a_task_delivering_one_the_destination_refuses_carries_it_as_a_task_outside_th
         "nothing of Zeta was written"
     );
 }
+
+#[test]
+fn a_dry_run_reports_the_task_the_destination_refuses_failed_and_writes_nothing() {
+    let into = PlanAndStore::new(
+        &[],
+        json!({"write_checks": true, "unrepresentable": ["Zeta"]}),
+    );
+    let output = into
+        .sandbox
+        .command()
+        .args([
+            "--json",
+            "task",
+            "copy",
+            "--source",
+            "plan",
+            "--to",
+            "store",
+            "--dry-run",
+        ])
+        .assert()
+        .get_output()
+        .clone();
+    assert_eq!(output.status.code(), Some(4), "{}", stderr(&output));
+    assert_eq!(
+        actions(&output),
+        [
+            ("plan:A".to_owned(), "created".to_owned()),
+            ("plan:B".to_owned(), "created".to_owned()),
+            ("plan:Z".to_owned(), "failed".to_owned()),
+        ]
+    );
+    assert!(
+        stderr(&output).contains("plan:Z was not copied"),
+        "{}",
+        stderr(&output)
+    );
+    let answer: Value = serde_json::from_str(&stdout(&output)).expect("JSON");
+    for at in [0, 1] {
+        assert_eq!(
+            answer["items"][at]["destination"],
+            Value::Null,
+            "a dry run lands nowhere: {answer:#}"
+        );
+    }
+    assert!(
+        logged(&into.log)
+            .iter()
+            .all(|line| line["method"] == "check_task_write"),
+        "a dry run asks the checks and writes nothing: {:?}",
+        logged(&into.log)
+    );
+    assert!(held(&into.at).is_empty(), "the store holds nothing");
+}
