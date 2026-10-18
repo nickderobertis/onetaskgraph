@@ -580,12 +580,8 @@ async fn a_reconcile_dry_run_reads_the_live_board_through_its_closed_filter_alon
     let [first, done, ..] = options.as_slice() else {
         panic!("the nominated board's Status field holds fewer than two options: {options:?}");
     };
-    let mut config = journey::source_config(lane::live_write_config(
-        &owner,
-        number,
-        &repository,
-        first,
-    ));
+    let mut config =
+        journey::source_config(lane::live_write_config(&owner, number, &repository, first));
     config["status_mapping"]["done"] = json!(done);
     config["status_mapping"]["cancelled"] = Value::Null;
     let secrets = lane::LiveSecret(token.to_owned().into());

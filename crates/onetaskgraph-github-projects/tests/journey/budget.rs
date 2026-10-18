@@ -580,7 +580,10 @@ pub async fn precondition_reconcile(
         token,
         rest_host,
         into,
-        BTreeMap::from([(Budget::Graphql, RECONCILE_DESIGN_POINTS), (Budget::Rest, 1)]),
+        BTreeMap::from([
+            (Budget::Graphql, RECONCILE_DESIGN_POINTS),
+            (Budget::Rest, 1),
+        ]),
     )
     .await
 }
