@@ -1108,6 +1108,7 @@ test("registry verification waits out a registry that has not caught up, and fai
   assert.equal(deadline.status, 1, deadline.output);
   assert.match(deadline.output, /No matching distribution found for onetaskgraph-cli==/);
   assert.match(deadline.output, /next: check what the index serves/);
+  assert.match(deadline.output, /\(still, after asking for \d+ s\)/);
   const waiting = spawn(
     "just",
     ["release-linux", "verify", "--from", "pypi", "--tag", tag, "--wait", "120"],
@@ -1119,10 +1120,21 @@ test("registry verification waits out a registry that has not caught up, and fai
       output += chunk;
     });
   const exited = new Promise((resolve) => waiting.on("exit", resolve));
-  while (!output.includes("asking again")) await new Promise((resolve) => setTimeout(resolve, 200));
+  const reads = () =>
+    requests().filter((r) => r.registry === "pypi" && r.action === "read-index").length;
+  const before = reads();
+  // The first read is refused; the wheel is served only once it has been, so a pass needs a retry.
+  while (reads() === before) await new Promise((resolve) => setTimeout(resolve, 200));
+  await new Promise((resolve) => setTimeout(resolve, 3000));
   control({ releases: [tag] });
   assert.equal(await exited, 0, output);
-  assert.match(output, /installed v[\d.]+ for x86_64-unknown-linux-gnu from pypi and ran it/);
+  assert.ok(reads() - before >= 2, `verification read the index ${reads() - before} time(s)`);
+  // It waited quietly: one line, the install it made.
+  assert.deepEqual(output.match(/^release-cd: .*$/gm), [
+    output.match(
+      /^release-cd: installed v[\d.]+ for x86_64-unknown-linux-gnu from pypi and ran it$/m,
+    )?.[0],
+  ]);
 });
 
 test("the npm publication refuses a package set or platform it does not publish", {

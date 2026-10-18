@@ -705,17 +705,21 @@ def retrying(what: str, wait: float, attempt) -> None:
 
     A registry serves a version a little after accepting it — PyPI's index and npm's
     packuments sit behind caches — so a read straight after publication is retried rather
-    than read as the package being absent. With `wait` 0 it is asked exactly once.
+    than read as the package being absent. With `wait` 0 it is asked exactly once. The
+    retries are silent: a read that lands says so once, and one still failing at the
+    deadline says what it was refused and for how long it was asked.
     """
-    deadline = time.monotonic() + wait
+    started = time.monotonic()
+    deadline = started + wait
     while True:
         try:
             attempt()
             return
         except ReleaseStepFailed as error:
             if time.monotonic() >= deadline:
+                if wait:
+                    raise ReleaseStepFailed(f"{what}: {error.problem} (still, after asking for {round(time.monotonic() - started)} s)", error.next_action) from error
                 raise
-            say(f"{what}: {error.problem}; asking again in 20 s")
             time.sleep(min(20.0, max(0.0, deadline - time.monotonic())))
 
 
