@@ -455,8 +455,16 @@ for name, binary in [('another-version.tgz', b'#!/bin/sh\\necho onetaskgraph 0.0
     ["a binary that fails", "failing.tgz", /answered 'broken', not 'onetaskgraph /],
     // Neither answers at all: one the host cannot start, and one that never returns, which
     // costs this journey the 60 seconds verification waits before it gives up.
-    ["a binary that cannot start", "unstartable.tgz", /installed from npm did not run: .*Exec format error/],
-    ["a binary that never answers", "hanging.tgz", /installed from npm did not run: .*timed out after 60 seconds/],
+    [
+      "a binary that cannot start",
+      "unstartable.tgz",
+      /installed from npm did not run: .*Exec format error/,
+    ],
+    [
+      "a binary that never answers",
+      "hanging.tgz",
+      /installed from npm did not run: .*timed out after 60 seconds/,
+    ],
   ]) {
     control({
       releases: [tag],
