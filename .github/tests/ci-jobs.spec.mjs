@@ -1,21 +1,12 @@
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { parse } from "yaml";
-import { graph, readSet } from "../workflow-graph.mjs";
+import { definitions, refusals } from "./workflow-definitions.mjs";
 
 // The pull request's four jobs, read from the workflow files exactly as GitHub reads them.
-// Its inputs (the github-workflows project's `ci-jobs` target) are this directory and the files
-// outside it the run graph reads, so a change to any of them re-runs it and nothing else does.
-const directory = new URL("../workflows/", import.meta.url);
-
-function definitions() {
-  return Object.fromEntries(
-    readdirSync(directory)
-      .filter((name) => name.endsWith(".yml"))
-      .map((name) => [name, parse(readFileSync(new URL(name, directory), "utf8"))]),
-  );
-}
+// Its inputs (the github-workflows project's `ci-jobs` target) are this directory alone, so it
+// reads nothing outside it: whether today's required contexts are still reported needs the run
+// graph, which reads files outside it, and is ci-contexts.spec.mjs's.
 
 const FOUR = {
   lint: "ubuntu-latest",
@@ -39,18 +30,6 @@ const SCREENCOMP = [
   /^nickderobertis\/screencomp\/visual-docs-pages@v\d+\.\d+\.\d+$/,
   /^nickderobertis\/screencomp\/visual-docs-aggregate@v\d+\.\d+\.\d+$/,
 ];
-// llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Branch protection's required set is not this repository's to hold: its source is the create-repo skill's setup_github_governance.py, and the orchestration repository reconciles its inventory of this merge path against GitHub on every gate run (AGENTS.md, "Commits, releases, and merging"). A pull request's token cannot read branch protection, so this is the set the workflow must keep producing, held to the workflow below.
-const REQUIRED_CONTEXTS = [
-  "check (ubuntu-latest)",
-  "check (windows-latest)",
-  "deny",
-  "llmlint",
-  "pr-title",
-  "install path (ubuntu-latest)",
-  "install path (windows-latest)",
-  "visual-docs / report (x86_64, shots/current, shots/verify, Visual docs)",
-];
-// llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 const LOCKFILES = [
   "Cargo.lock",
   "bun.lock",
@@ -81,25 +60,6 @@ const CACHES = [
 
 const steps = (job) => (Array.isArray(job?.steps) ? job.steps : []);
 const uses = (step) => (typeof step?.uses === "string" ? step.uses : "");
-
-// Every check context a source pull request's runs report, resolved as workflow-graph.mjs
-// resolves a run: reusable workflows through their locked definitions, every matrix
-// dimension, each job's display name. A tree it cannot resolve reports none.
-function reportedOnPullRequest(all) {
-  const scenario = {
-    event: "pull_request",
-    action: "synchronize",
-    headRef: "feature",
-    fork: false,
-  };
-  try {
-    return graph(scenario, { macosRequired: true, reason: "a source change" }, all).flatMap((run) =>
-      run.rows.map((row) => row.name),
-    );
-  } catch {
-    return [];
-  }
-}
 
 export function problems(all) {
   const found = [];
@@ -171,10 +131,6 @@ export function problems(all) {
     found.push("test-windows does not widen the dynamic port range before its tests");
   if (JSON.stringify(lint ?? {}).includes("release-shortcut"))
     found.push("lint consults the release shortcut");
-  // Today's required contexts keep a job behind each of them until protection moves.
-  const reported = reportedOnPullRequest(all);
-  for (const context of REQUIRED_CONTEXTS)
-    if (!reported.includes(context)) found.push(`no job reports the required context ${context}`);
   for (const [file, workflow] of Object.entries(all))
     for (const [id, job] of Object.entries(workflow?.jobs ?? {}))
       for (const step of steps(job)) {
@@ -247,22 +203,11 @@ function warmerProblems(all, jobs) {
   return found;
 }
 
-test("the finished workflows hold the four jobs, today's required contexts and keyed caches", () => {
+test("the finished workflows hold the four jobs and keyed caches", () => {
   assert.deepEqual(problems(definitions()), []);
 });
 
-function mutated(change) {
-  const all = definitions();
-  change(all);
-  return problems(all);
-}
-function refuses(change, expected) {
-  const found = mutated(change);
-  assert.ok(
-    found.some((problem) => expected.test(problem)),
-    `expected a problem matching ${expected}, got ${JSON.stringify(found)}`,
-  );
-}
+const refuses = refusals(problems);
 
 test("a job missing, renamed, given a needs edge or another timeout is refused", () => {
   for (const id of Object.keys(FOUR)) {
@@ -331,32 +276,6 @@ test("a test job whose tests skip the release shortcut, or lint consulting it, i
   }, /lint consults/);
 });
 
-test("a job behind one of today's required contexts going missing is refused", () => {
-  const removals = {
-    "check (ubuntu-latest)": (all) => {
-      all["ci.yml"].jobs.check.strategy.matrix.os = ["windows-latest"];
-    },
-    "check (windows-latest)": (all) => {
-      all["ci.yml"].jobs.check.strategy.matrix.os = ["ubuntu-latest"];
-    },
-    deny: (all) => delete all["ci.yml"].jobs.deny,
-    llmlint: (all) => delete all["ci.yml"].jobs.llmlint,
-    "pr-title": (all) => delete all["ci.yml"].jobs["pr-title"],
-    "install path (ubuntu-latest)": (all) => delete all["ci.yml"].jobs["install-path"],
-    "install path (windows-latest)": (all) => {
-      all["ci.yml"].jobs["install-path"].strategy.matrix.os = ["ubuntu-latest"];
-    },
-    "visual-docs / report (x86_64, shots/current, shots/verify, Visual docs)": (all) =>
-      delete all["visual-docs.yml"].jobs["visual-docs"],
-  };
-  assert.deepEqual(Object.keys(removals).sort(), [...REQUIRED_CONTEXTS].sort());
-  for (const [context, remove] of Object.entries(removals))
-    refuses(remove, new RegExp(`required context ${context.replace(/[()/]/g, "\\$&")}`));
-  refuses((all) => {
-    all["visual-docs.yml"].jobs["visual-docs"].name = "Visual docs";
-  }, /required context visual-docs/);
-});
-
 test("a cache key omitting the lockfile or the pinned tool version it depends on is refused", () => {
   const cacheOf = (all, job, pattern) =>
     all["ci.yml"].jobs[job].steps.find(
@@ -396,23 +315,6 @@ test("a cache key omitting the lockfile or the pinned tool version it depends on
       with: { path: "target", key: `target-\${{ runner.os }}` },
     });
   }, /caches target, whose inputs no rule here states/);
-});
-
-test("the spec's cached target is keyed on every file outside .github the run graph reads", () => {
-  const project = JSON.parse(readFileSync(new URL("../project.json", import.meta.url), "utf8"));
-  const inputs = project.targets["ci-jobs"].inputs;
-  const outside = readSet().filter((path) => !path.startsWith(".github/"));
-  assert.ok(
-    outside.length > 0,
-    "the run graph reads nothing outside .github, so this proves nothing",
-  );
-  for (const path of outside)
-    assert.ok(inputs.includes(`{workspaceRoot}/${path}`), `ci-jobs is not keyed on ${path}`);
-  for (const input of inputs.filter((entry) => entry.startsWith("{workspaceRoot}/")))
-    assert.ok(
-      outside.includes(input.slice("{workspaceRoot}/".length)),
-      `ci-jobs is keyed on ${input}, which the run graph does not read`,
-    );
 });
 
 test("test-windows' tests running without the widened dynamic port range is refused", () => {
@@ -455,3 +357,57 @@ test("the Rust cache warmer parting from the key a test job restores is refused"
     delete all["rust-cache-warm.yml"];
   }, /has no job `warm`/);
 });
+
+// The contract's own inputs are this directory alone: nothing outside it re-runs it, so it may
+// read nothing outside it — not by an input, and not through a module that reads the tree.
+test("the contract's target is keyed on .github alone and reads nothing outside it", () => {
+  const project = JSON.parse(readFileSync(new URL("../project.json", import.meta.url), "utf8"));
+  assert.deepEqual(contractInputProblems(project), []);
+  const broadened = structuredClone(project);
+  broadened.namedInputs.default.push("{workspaceRoot}/screencomp.toml");
+  assert.match(contractInputProblems(broadened).join("\n"), /screencomp\.toml/);
+  const named = structuredClone(project);
+  named.targets["ci-jobs"].inputs = ["workflowGraph"];
+  assert.match(contractInputProblems(named).join("\n"), /workspaceRoot/);
+  assert.deepEqual(importProblems(import.meta.url), []);
+  assert.match(
+    importProblems(import.meta.url, 'import { graph } from "../workflow-graph.mjs";').join("\n"),
+    /workflow-graph\.mjs/,
+  );
+});
+
+// Every input `ci-jobs` resolves to, named inputs expanded, that is not under its own root.
+function contractInputProblems(project) {
+  const expand = (inputs) =>
+    inputs.flatMap((input) =>
+      typeof input === "string" && project.namedInputs?.[input]
+        ? expand(project.namedInputs[input])
+        : [input],
+    );
+  return expand(project.targets["ci-jobs"].inputs ?? ["default"])
+    .filter((input) => typeof input !== "string" || !/^!?\{projectRoot\}\//.test(input))
+    .map((input) => `ci-jobs is keyed on ${JSON.stringify(input)}, outside .github`);
+}
+
+// The spec's relative imports, followed through every local module: each stays in .github and
+// none is workflow-graph.mjs, which reads files from the repository root.
+function importProblems(url, prepended = "") {
+  const found = [];
+  const seen = new Set();
+  const githubRoot = new URL("../", import.meta.url).href;
+  const visit = (module, text) => {
+    if (seen.has(module)) return;
+    seen.add(module);
+    for (const [, specifier] of text.matchAll(
+      /^\s*(?:import|export)\b[^;]*?\bfrom\s+"([^"]+)"/gm,
+    )) {
+      if (!specifier.startsWith(".")) continue;
+      const target = new URL(specifier, module).href;
+      if (!target.startsWith(githubRoot) || target.endsWith("/workflow-graph.mjs"))
+        found.push(`${module.slice(githubRoot.length)} imports ${specifier}`);
+      else visit(target, readFileSync(new URL(target), "utf8"));
+    }
+  };
+  visit(url, prepended + readFileSync(new URL(url), "utf8"));
+  return found;
+}
