@@ -85,12 +85,11 @@ case "$JOB" in
 1 run scripts:distribution-test -"
     ;;
   test-windows)
-    # As test-macos. A trial, by the manager's ruling: the phases side by side stand only on two
-    # consecutive hosted runs with no flake, because an earlier trial saw timing-sensitive
-    # loopback journeys fail beside the test builds; failing that, one phase at a time.
+    # As test-macos, one phase at a time: beside the distribution journey's release build, the
+    # hosted runner's loopback journeys fail to reach their own servers.
     phases="1 affected test,budgets -
-1 run scripts:distribution-check -
-1 run scripts:distribution-test -"
+2 run scripts:distribution-check -
+3 run scripts:distribution-test -"
     ;;
   *) usage ;;
 esac
