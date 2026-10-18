@@ -169,9 +169,7 @@ fn the_telemetry_the_journeys_write_is_what_test_declares_and_budgets_hashes() {
     // builds into, so a run that moved would fail here rather than leave `budgets` nothing.
     if std::env::var_os(telemetry::DIRECTORY).is_none() {
         let instrumented = std::env::var_os("LLVM_PROFILE_FILE").is_some();
-        let standing_in =
-            std::env::var_os(onetaskgraph_e2e_support::telemetry::TESTS_UNDER_COVERAGE)
-                .is_some_and(|value| value == "1");
+        let standing_in = onetaskgraph_e2e_support::telemetry::tests_under_coverage();
         let directory = telemetry::directory();
         if !instrumented || standing_in {
             let build = directory

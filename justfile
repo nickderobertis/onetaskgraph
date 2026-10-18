@@ -114,11 +114,11 @@ ci-lint *args:
 ci-test-linux *args:
     @python3 crates/onetaskgraph-github-projects-e2e/lane_runner.py select scripts/live-lane-selection.sh bash scripts/ci-job.sh test-linux {{args}}
 
-# The Windows test job: tests, coverage, budgets and the distribution journeys over the affected projects.
+# The Windows test job: every suite once, uninstrumented, its budgets and the distribution journeys over the affected projects.
 ci-test-windows *args:
     @python3 crates/onetaskgraph-github-projects-e2e/lane_runner.py select scripts/live-lane-selection.sh bash scripts/ci-job.sh test-windows {{args}}
 
-# The macOS test job: tests, coverage, budgets and the distribution journeys over the affected projects.
+# The macOS test job: every suite once, uninstrumented, its budgets and the distribution journeys over the affected projects.
 ci-test-macos *args:
     @python3 crates/onetaskgraph-github-projects-e2e/lane_runner.py select scripts/live-lane-selection.sh bash scripts/ci-job.sh test-macos {{args}}
 # llmlint: ignore-end[external_service_suite_stays_out_of_the_affected_tier]

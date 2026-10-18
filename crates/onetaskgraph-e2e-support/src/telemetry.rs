@@ -33,11 +33,40 @@ pub fn build_directory(executable: &Path, under_coverage: bool) -> Option<PathBu
     Some(directory)
 }
 
+/// Whether [`TESTS_UNDER_COVERAGE`] is set: `1`, or unset or empty, exactly as
+/// `scripts/live-crate-test.sh` reads it (a test below holds the two to one reading).
+///
+/// # Errors
+///
+/// Any other value, named, because it is neither of the two modes.
+pub fn under_coverage(value: Option<&std::ffi::OsStr>) -> Result<bool, String> {
+    match value {
+        None => Ok(false),
+        Some(value) if value.is_empty() => Ok(false),
+        Some(value) if value == "1" => Ok(true),
+        Some(value) => Err(format!(
+            "{TESTS_UNDER_COVERAGE} is {value:?}; it is 1 or unset (scripts/live-crate-test.sh)"
+        )),
+    }
+}
+
+/// [`under_coverage`] of the running test's environment.
+///
+/// # Panics
+///
+/// When the variable is set to anything but `1`: a test cannot tell which build its telemetry
+/// belongs beside, so it stops rather than record it in the wrong one.
+#[must_use]
+pub fn tests_under_coverage() -> bool {
+    // llmlint: ignore[no_panics_on_recoverable_errors] Test support: a misconfigured run has nothing to recover to, and the panic names the variable and its two values.
+    under_coverage(std::env::var_os(TESTS_UNDER_COVERAGE).as_deref())
+        .unwrap_or_else(|problem| panic!("{problem}"))
+}
+
 /// [`build_directory`] of the running test executable, under the environment it runs in.
 #[must_use]
 pub fn running_build_directory() -> Option<PathBuf> {
-    let under_coverage = std::env::var_os(TESTS_UNDER_COVERAGE).is_some_and(|value| value == "1");
-    build_directory(&std::env::current_exe().ok()?, under_coverage)
+    build_directory(&std::env::current_exe().ok()?, tests_under_coverage())
 }
 
 /// One file-name spelling for a budget's recorder and reader.
@@ -81,5 +110,31 @@ mod tests {
         assert_eq!(build_directory(&plain, true), Some(target.join("debug")));
         assert_eq!(build_directory(&plain, false), Some(target.join("debug")));
         assert_eq!(build_directory(Path::new("/"), true), None);
+    }
+
+    #[test]
+    fn the_coverage_mode_is_one_or_unset_and_refuses_anything_else() {
+        assert_eq!(under_coverage(None), Ok(false));
+        assert_eq!(under_coverage(Some("".as_ref())), Ok(false));
+        assert_eq!(under_coverage(Some("1".as_ref())), Ok(true));
+        for value in ["0", "true", "yes", " 1"] {
+            let problem = under_coverage(Some(value.as_ref())).expect_err(value);
+            assert!(problem.contains(TESTS_UNDER_COVERAGE), "{problem}");
+            assert!(problem.contains("1 or unset"), "{problem}");
+        }
+    }
+
+    // The shell reader is the variable's other consumer: the same three arms, `1`, empty or
+    // unset (`${…:-}`), and a refusal of anything else.
+    #[test]
+    fn the_shell_reader_reads_the_coverage_mode_the_same_way() {
+        let script = include_str!("../../../scripts/live-crate-test.sh");
+        let arms = format!(
+            "case \"${{{TESTS_UNDER_COVERAGE}:-}}\" in\n  1) run_journey ;;\n  \"\") ;;\n  *)"
+        );
+        assert!(
+            script.contains(&arms),
+            "scripts/live-crate-test.sh no longer reads {TESTS_UNDER_COVERAGE} as `1`, empty or unset, refusing the rest"
+        );
     }
 }

@@ -105,10 +105,10 @@ name="onetaskgraph-${tag}-${target}.${ext}"
 build_release_wheel() {
   (cd "$root" && uv tool run --from 'maturin>=1.9,<2' maturin build --release --locked --target "$target" --out "$1")
 }
-case "${1:-}" in
-  "") ;;
-  --release-build-only) build_release_wheel "$tmp/python-wheel"; exit 0 ;;
-  *) echo "distribution test takes no argument but --release-build-only, not '$1'; next: run scripts/test-distribution.sh with none" >&2; exit 2 ;;
+case "$#:${1:-}" in
+  0:) ;;
+  1:--release-build-only) build_release_wheel "$tmp/python-wheel"; exit 0 ;;
+  *) echo "distribution test takes no argument or --release-build-only alone, not '$*'; next: run scripts/test-distribution.sh with none" >&2; exit 2 ;;
 esac
 # The binary is what onetaskgraph:build produced and this target depends on; nothing here
 # builds it, because a cargo invocation of that package from anywhere else replaces the

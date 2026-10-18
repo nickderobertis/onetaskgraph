@@ -48,6 +48,8 @@ run_journey() {
   exec cargo test --quiet -p "$CRATE" --all-features --locked --test "$BINARY" -- --exact "$JOURNEY"
 }
 
+# The variable's other reader is telemetry::under_coverage in onetaskgraph-e2e-support, whose
+# test holds these three arms to its reading.
 case "${ONETASKGRAPH_TESTS_UNDER_COVERAGE:-}" in
   1) run_journey ;;
   "") ;;

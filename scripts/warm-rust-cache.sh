@@ -24,10 +24,10 @@ fatal() {
 }
 
 instrumented=false
-case "${1:-}" in
-  "") ;;
-  --instrumented) instrumented=true ;;
-  *) fatal "takes no argument but --instrumented, not '$1'" "run it with none, or with --instrumented on Linux" ;;
+case "$#:${1:-}" in
+  0:) ;;
+  1:--instrumented) instrumented=true ;;
+  *) fatal "takes no argument or --instrumented alone, not '$*'" "run it with none, or with --instrumented on Linux" ;;
 esac
 
 # Nothing here opens a live session, and nothing may: it builds the live crates' tests.

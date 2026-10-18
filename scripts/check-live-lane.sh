@@ -75,6 +75,10 @@ CLEARERS = {
         "It builds every crate's tests, the live journeys among them, on every push to main for "
         "the Rust cache warmer, and one edit dropping `--no-run` would run them there"
     ),
+    Path("scripts/check-warm-rust-cache.sh"): (
+        "It drives scripts/warm-rust-cache.sh behind a stand-in cargo, and one edit dropping "
+        "the stand-in from PATH would run that warmer's builds for real, from scripts:test"
+    ),
 }
 DEMAND = "ONETASKGRAPH_LIVE_REQUIRED"
 # The one run where the demand is legitimately not made, spelled as GitHub Actions spells

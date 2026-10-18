@@ -65,7 +65,9 @@
           "bash scripts/check-selection-code-page.sh",
           "bash scripts/check-scoped-release-plz.sh",
           "bash scripts/check-file-lock.sh",
-          "bash scripts/check-ci-recipes.sh"
+          "bash scripts/check-ci-recipes.sh",
+          "bash scripts/check-sync-python-sdk.sh",
+          "bash scripts/check-warm-rust-cache.sh"
         ],
         "parallel": false
       },
