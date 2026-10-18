@@ -797,6 +797,13 @@ jobs:
         shell: pwsh
         run: |
           Add-MpPreference -ExclusionPath $env:GITHUB_WORKSPACE, "$env:USERPROFILE\.cargo", "$env:USERPROFILE\.rustup", "$env:USERPROFILE\.bun", "$env:LOCALAPPDATA\uv", $env:RUNNER_TEMP, $env:TEMP
+      # Every loopback fixture answers `Connection: close`, so the e2e suites open tens of
+      # thousands of connections — the GitHub cache-budget grid alone about 35,000 — and
+      # Windows' default 16,384-port dynamic range runs out while closed ones wait out TIME_WAIT:
+      # a connect then fails with WSAENOBUFS (10055). Every port above 10000 is this job's.
+      - name: Widen the dynamic port range the loopback suites connect from
+        shell: pwsh
+        run: netsh int ipv4 set dynamicport tcp start=10000 num=55535
       - uses: extractions/setup-just@v4
       - uses: oven-sh/setup-bun@v2
         with:

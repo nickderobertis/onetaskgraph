@@ -160,6 +160,15 @@ export function problems(all) {
     if (tested >= 0 && steps(jobs[id])[tested].if !== "steps.release.outputs.tests == 'run'")
       found.push(`${id}'s tests do not wait on the shortcut's answer`);
   }
+  // test-windows' loopback suites exhaust Windows' default dynamic port range (ci.yml says how).
+  const widened = steps(jobs["test-windows"]).findIndex((step) =>
+    /netsh int ipv4 set dynamicport tcp start=\d+ num=\d+/.test(String(step.run ?? "")),
+  );
+  const windowsTests = steps(jobs["test-windows"]).findIndex(
+    (step) => step.run === "just ci-test-windows",
+  );
+  if (widened < 0 || (windowsTests >= 0 && widened > windowsTests))
+    found.push("test-windows does not widen the dynamic port range before its tests");
   if (JSON.stringify(lint ?? {}).includes("release-shortcut"))
     found.push("lint consults the release shortcut");
   // Today's required contexts keep a job behind each of them until protection moves.
@@ -404,6 +413,18 @@ test("the spec's cached target is keyed on every file outside .github the run gr
       outside.includes(input.slice("{workspaceRoot}/".length)),
       `ci-jobs is keyed on ${input}, which the run graph does not read`,
     );
+});
+
+test("test-windows' tests running without the widened dynamic port range is refused", () => {
+  refuses((all) => {
+    const job = all["ci.yml"].jobs["test-windows"];
+    job.steps = job.steps.filter((step) => !String(step.run ?? "").includes("dynamicport"));
+  }, /does not widen the dynamic port range/);
+  refuses((all) => {
+    const job = all["ci.yml"].jobs["test-windows"];
+    const widen = job.steps.findIndex((step) => String(step.run ?? "").includes("dynamicport"));
+    job.steps.push(job.steps.splice(widen, 1)[0]);
+  }, /does not widen the dynamic port range before its tests/);
 });
 
 test("the Rust cache warmer parting from the key a test job restores is refused", () => {
