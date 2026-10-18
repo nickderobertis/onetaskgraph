@@ -24,6 +24,7 @@ import tempfile
 import threading
 import time
 import tomllib
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -56,6 +57,23 @@ class Call:
     def matches(self, method: str, target: str) -> bool:
         pattern = re.sub(r"\\\{[a-z_]+\\\}", "[^/?&]+", re.escape(self.path))
         return method == self.method and re.fullmatch(pattern, target) is not None
+
+
+@dataclass(frozen=True)
+class Sent:
+    """One request a release script made of the recording stand-in."""
+
+    method: str
+    target: str
+    body: bytes
+
+
+@dataclass(frozen=True)
+class Served:
+    """What the loopback double answered one call with."""
+
+    status: int
+    answer: Json
 
 
 @dataclass(frozen=True)
@@ -122,7 +140,16 @@ def read_pin(path: Path) -> Pin:
         {name: names(fields, f"graphql.inputs.{name}") for name, fields in required(graphql, "inputs", dict, "graphql").items()},
         {name: tuple(values) for name, values in enums.items()},
     )
-    return Pin(calls, required(raw["rest"][0], "tag", str, "release-by-tag"), required(graphql, "document", str, "graphql"), schema)
+    tag = required(next(table for table in raw["rest"] if table.get("call") == "release-by-tag"), "tag", str, "release-by-tag")
+    if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag):
+        raise PinError(f"release-by-tag: `tag` is {tag!r}, not a release tag such as v0.7.1")
+    pulls = calls["open-pulls"].answer
+    if not isinstance(pulls, list) or not pulls or not all(isinstance(pull, dict) and isinstance(pull.get("node_id"), str) for pull in pulls):
+        raise PinError("open-pulls: `answer` must list at least one pull request, each with its node_id")
+    for name, entry in calls.items():
+        if not re.fullmatch(r"[a-z0-9.-]+\.github\.com", entry.host) or not entry.path.startswith("/"):
+            raise PinError(f"{name}: `host` must be a github.com host and `path` start with /")
+    return Pin(calls, tag, required(graphql, "document", str, "graphql"), schema)
 
 
 def load(name: str, path: Path):
@@ -249,8 +276,24 @@ class Findings:
         return end
 
 
-def served_pulls(pin: Pin) -> list[Json]:
+def served_pulls(pin: Pin) -> list[dict]:
+    """The pinned pull-request list, which read_pin has held to a non-empty list of objects."""
     return pin.calls["open-pulls"].answer
+
+
+def check_hosts(pin: Pin, findings: Findings, release_cd, automerge) -> None:
+    """Each pinned call goes to the host the scripts send it to by default: the API host they
+    default to, and the upload host the pinned release names, which release_cd trusts."""
+    for name, default in (("release_cd.py", release_cd.DEFAULT_GITHUB_API), ("enable-release-automerge.py", automerge.DEFAULT_API)):
+        for call in pin.calls.values():
+            if call.name != "upload-asset" and urllib.parse.urlsplit(default).netloc != call.host:
+                findings.add(f"{call.name}: scripts/{name} sends it to {urllib.parse.urlsplit(default).netloc}, where the pin says {call.host}")
+    upload_url = pin.calls["release-by-tag"].answer.get("upload_url", "") if isinstance(pin.calls["release-by-tag"].answer, dict) else ""
+    if urllib.parse.urlsplit(upload_url).netloc != pin.calls["upload-asset"].host:
+        findings.add(f"upload-asset: the pinned release names {upload_url!r} to upload to, where the pin says {pin.calls['upload-asset'].host}")
+    github = release_cd.GitHub(release_cd.DEFAULT_GITHUB_API, release_cd.RepositoryName("owner/name"), release_cd.Token("pinned-interface"))
+    if not github.trusts(upload_url.split("{", 1)[0]):
+        findings.add(f"upload-asset: scripts/release_cd.py would not send its token to {upload_url!r}, the upload host the pin says GitHub names")
 
 
 class Recorder(BaseHTTPRequestHandler):
@@ -259,14 +302,14 @@ class Recorder(BaseHTTPRequestHandler):
 
     answers: dict[str, Json] = {}
     calls: list[Call] = []
-    sent: list[tuple[str, str, bytes]] = []
+    sent: list[Sent] = []
 
     def log_message(self, *_: object) -> None:
         pass
 
     def answer(self) -> None:
         body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
-        self.sent.append((self.command, self.path, body))
+        self.sent.append(Sent(self.command, self.path, body))
         call = next((call for call in self.calls if call.matches(self.command, self.path)), None)
         payload = b"" if call is None or self.answers[call.name] is None else json.dumps(self.answers[call.name]).encode()
         self.send_response(404 if call is None else call.status)
@@ -335,18 +378,18 @@ def drive_scripts(pin: Pin, findings: Findings, release_cd, automerge) -> None:
         finally:
             server.shutdown()
             server.server_close()
-    made = [next((call.name for call in calls.values() if call.matches(method, path)), f"{method} {path}") for method, path, _ in Recorder.sent]
-    for method, path, _ in Recorder.sent:
-        if not any(call.matches(method, path) for call in calls.values()):
-            findings.add(f"a release script sent {method} {path}, which the pin describes as no call of GitHub's")
+    made = [next((call.name for call in calls.values() if call.matches(sent.method, sent.target)), f"{sent.method} {sent.target}") for sent in Recorder.sent]
+    for sent in Recorder.sent:
+        if not any(call.matches(sent.method, sent.target) for call in calls.values()):
+            findings.add(f"a release script sent {sent.method} {sent.target}, which the pin describes as no call of GitHub's")
     if made != SEQUENCE:
         findings.add(f"the release scripts made {made}, not the pinned calls in order {SEQUENCE}")
-    graphql = next((json.loads(body) for method, path, body in Recorder.sent if calls["graphql"].matches(method, path)), None)
+    graphql = next((json.loads(sent.body) for sent in Recorder.sent if calls["graphql"].matches(sent.method, sent.target)), None)
     if graphql is not None and graphql != {"query": pin.document.strip(), "variables": {"pullRequestId": pull["node_id"]}}:
         findings.add(f"graphql: scripts/enable-release-automerge.py sent {json.dumps(graphql)[:200]}, not the pinned document for the listed pull request")
 
 
-def double_answers(pin: Pin) -> dict[str, tuple[int, Json]]:
+def double_answers(pin: Pin) -> dict[str, Served]:
     """What the loopback double answers each call with, on the paths the release journeys drive."""
     with tempfile.TemporaryDirectory() as state:
         control = {"releases": [pin.tag], "pulls": served_pulls(pin)}
@@ -359,11 +402,11 @@ def double_answers(pin: Pin) -> dict[str, tuple[int, Json]]:
                 time.sleep(0.05)
             base = f"http://127.0.0.1:{json.loads((Path(state) / 'ports.json').read_text())['main']}/github/api"
 
-            def ask(method: str, url: str, body: bytes | None = None) -> tuple[int, Json]:
+            def ask(method: str, url: str, body: bytes | None = None) -> Served:
                 with urllib.request.urlopen(urllib.request.Request(url, data=body, method=method), timeout=30) as answer:
-                    return answer.status, json.loads(answer.read() or b"null")
+                    return Served(answer.status, json.loads(answer.read() or b"null"))
 
-            listed = ask("GET", f"{base}/repos/owner/name/releases/tags/{pin.tag}")[1]
+            listed = ask("GET", f"{base}/repos/owner/name/releases/tags/{pin.tag}").answer
             uploaded = ask("POST", f"{listed['upload_url'].split('{', 1)[0]}?name=asset.tar.gz", b"bytes")
             answers = {
                 "release-by-tag": ask("GET", f"{base}/repos/owner/name/releases/tags/{pin.tag}"),
@@ -371,7 +414,7 @@ def double_answers(pin: Pin) -> dict[str, tuple[int, Json]]:
                 "open-pulls": ask("GET", f"{base}/repos/owner/name/pulls?state=open&per_page=100"),
                 "graphql": ask("POST", f"{base}/graphql", json.dumps({"query": pin.document, "variables": {"pullRequestId": served_pulls(pin)[0]["node_id"]}}).encode()),
             }
-            answers["delete-asset"] = ask("DELETE", f"{base}/repos/owner/name/releases/assets/{uploaded[1]['id']}")
+            answers["delete-asset"] = ask("DELETE", f"{base}/repos/owner/name/releases/assets/{uploaded.answer['id']}")
             return answers
         finally:
             double.terminate()
@@ -412,6 +455,7 @@ def main(arguments: list[str]) -> int:
     findings.holds_reads(calls["upload-asset"], release_cd.ReleaseAsset.parse)
     findings.holds_reads(calls["open-pulls"], lambda answer: [automerge.PullRequest.parse(pull) for pull in answer])
     findings.check_document(pin, automerge.ENABLE)
+    check_hosts(pin, findings, release_cd, automerge)
     try:
         pull = automerge.PullRequest.parse(served_pulls(pin)[0])
     except (automerge.Refused, IndexError, TypeError):
@@ -430,10 +474,10 @@ def main(arguments: list[str]) -> int:
     except (OSError, KeyError, ValueError, TypeError, subprocess.SubprocessError) as error:
         findings.add(f"scripts/loopback-release-registries.py could not be asked what it answers: {error!r}")
         served = {}
-    for name, (status, answer) in served.items():
-        if status != calls[name].status:
-            findings.add(f"{name}: scripts/loopback-release-registries.py answers HTTP {status}, where GitHub answers {calls[name].status}")
-        for field in sorted(shape(answer) - shape(calls[name].answer)):
+    for name, answer in served.items():
+        if answer.status != calls[name].status:
+            findings.add(f"{name}: scripts/loopback-release-registries.py answers HTTP {answer.status}, where GitHub answers {calls[name].status}")
+        for field in sorted(shape(answer.answer) - shape(calls[name].answer)):
             findings.add(f"{name}: scripts/loopback-release-registries.py answers with {field}, which GitHub's pinned answer does not carry")
 
     for line in findings.lines:

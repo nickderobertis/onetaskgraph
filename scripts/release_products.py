@@ -1,4 +1,6 @@
 """Validated identities for the repository's staged release products."""
+
+# llmlint: ignore-file[code_lands_in_the_domain_that_owns_it] These identities are what the release's own scripts in this project share — release_cd.py, verify-release-products.py and release-wheel-binary.py read them — and this file was the release products' home in the `scripts` project before this change; AGENTS.md names `PLATFORM_TARGETS` here as where the released platforms are declared.
 from dataclasses import dataclass
 import json
 from typing import Literal, NewType

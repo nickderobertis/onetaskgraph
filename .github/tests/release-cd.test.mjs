@@ -159,7 +159,7 @@ test("the Linux recipe builds once, packages every artifact from that binary, in
     assert.match(
       result.output,
       new RegExp(
-        `dry run: would publish ${artifact.file.replaceAll(".", "\\.")} to ${artifact.registry}\\b`,
+        `dry run: would publish (?:[^\\n]*, )?${artifact.file.replaceAll(".", "\\.")}(?:, [^\\n]*)? to ${artifact.registry}\\b`,
       ),
     );
   // What it built is what v0.7.1 published for this target, at this version.

@@ -13,6 +13,7 @@ GITHUB_GRAPHQL_URL, which GitHub Actions sets and the journey points at a double
 0 set, or no release pull request open; 1 GitHub refused or could not be asked.
 """
 
+# llmlint: ignore-file[code_lands_in_the_domain_that_owns_it] This repository's release machinery lives in the `scripts` project: release_products.py, release-probe.sh, publish-npm.sh, prepare-release-pr.sh and their checks were there before this change, AGENTS.md names scripts/release_cd.py as the one implementation every CD job's recipe runs, and github-workflows' default input lists each of these files so a change here selects the release journeys and nothing else.
 # llmlint: ignore-file[async_typed_clients_at_boundaries] Two sequential calls, the second needing the first's answer, in a short CI step with nothing to overlap.
 
 from __future__ import annotations
@@ -33,6 +34,8 @@ NodeId = NewType("NodeId", str)
 BranchRef = NewType("BranchRef", str)
 RepositoryName = NewType("RepositoryName", str)
 Token = NewType("Token", str)
+
+DEFAULT_API = "https://api.github.com"
 
 # Pinned with GitHub's schema slice in config/github-interfaces.toml, which holds this to it.
 ENABLE = """mutation($pullRequestId: ID!) {
@@ -123,7 +126,7 @@ def call(url: str, token: Token, body: dict | None = None) -> object:
 def main() -> int:
     token = Token(os.environ.get("GH_TOKEN", ""))
     repository = RepositoryName(os.environ.get("GITHUB_REPOSITORY", ""))
-    api = os.environ.get("GITHUB_API_URL", "https://api.github.com").rstrip("/")
+    api = os.environ.get("GITHUB_API_URL", DEFAULT_API).rstrip("/")
     graphql = os.environ.get("GITHUB_GRAPHQL_URL", f"{api}/graphql")
     for name, url in (("GITHUB_API_URL", api), ("GITHUB_GRAPHQL_URL", graphql)):
         try:

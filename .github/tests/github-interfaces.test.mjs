@@ -106,7 +106,26 @@ const drifts = [
     drifted("status = 204", "status = 200"),
     "delete-asset: scripts/loopback-release-registries.py answers HTTP 204, where GitHub answers 200",
   ],
+  [
+    "an API host other than the one the scripts default to",
+    drifted(
+      'host = "api.github.com"\nmethod = "GET"\npath = "/repos/{owner}/{repo}/releases/tags/{tag}"',
+      'host = "elsewhere.github.com"\nmethod = "GET"\npath = "/repos/{owner}/{repo}/releases/tags/{tag}"',
+    ),
+    "release-by-tag: scripts/release_cd.py sends it to api.github.com, where the pin says elsewhere.github.com",
+  ],
+  [
+    "an upload host other than the one the pinned release names",
+    drifted('host = "uploads.github.com"', 'host = "api.github.com"'),
+    "upload-asset: the pinned release names 'https://uploads.github.com/repos/nickderobertis/onetaskgraph/releases/414082970/assets{?name,label}' to upload to, where the pin says api.github.com",
+  ],
 ];
+
+test("the gate refuses a tag that is not a release's", () => {
+  const result = gate(drifted('tag = "v0.7.1"', 'tag = "../v0.7.1"'));
+  assert.equal(result.status, 1, result.stderr);
+  assert.ok(result.stderr.includes("github-interfaces: release-by-tag: `tag` is '../v0.7.1'"));
+});
 
 test("the gate refuses a pin it cannot read, before reading anything else", () => {
   const result = gate(drifted("status = 201", 'status = "201"'));

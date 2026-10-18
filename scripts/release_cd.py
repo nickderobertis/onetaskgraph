@@ -1,3 +1,4 @@
+# llmlint: ignore-file[code_lands_in_the_domain_that_owns_it] This repository's release machinery lives in the `scripts` project: release_products.py, release-probe.sh, publish-npm.sh, prepare-release-pr.sh and their checks were there before this change, AGENTS.md names scripts/release_cd.py as the one implementation every CD job's recipe runs, and github-workflows' default input lists each of these files so a change here selects the release journeys and nothing else.
 # llmlint: ignore-file[async_typed_clients_at_boundaries] One release job runs these registry calls strictly in order — a publication must land before the verification that reads it back — so there is no concurrent work for an async client to overlap, and the build tools it drives (maturin, npm, uv, cargo) are subprocesses, not services.
 """Build, package, test-install, publish and verify one release platform's artifacts.
 
@@ -480,8 +481,7 @@ def publish(platform: PlanPlatform, tag: ReleaseTag, dist: Path, registry: Regis
     if not artifacts:
         fail(f"{platform} publishes nothing to {registry}", f"choose one of {', '.join(sorted({a.registry for a in plan(platform, tag)}))}")
     if dry_run:
-        for artifact in artifacts:
-            say(f"dry run: would publish {artifact.file} to {registry}")
+        say(f"dry run: would publish {', '.join(artifact.file for artifact in artifacts)} to {registry}")
         return
     match registry:
         case "github":
