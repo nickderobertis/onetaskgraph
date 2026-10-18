@@ -142,6 +142,13 @@ mod routes;
 // depending on the engine at any depth.
 mod show_many;
 mod source_host;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
+// narrower edge for it: no credential and no network, a few seconds against one loopback GitHub
+// serving two boards, a loopback Linear workspace, a folder of Markdown and a Python peer over a
+// pipe. Which configured sources a completion asks is the engine's decision, across every plugin
+// kind at once, so it cannot sit behind one plugin crate's edge, which AGENTS.md forbids
+// depending on the engine at any depth.
+mod status_complete;
 mod surface;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
 // narrower edge for it: the template journeys configure no source, reach no network and finish

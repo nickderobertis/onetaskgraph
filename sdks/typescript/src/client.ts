@@ -13,6 +13,7 @@ import type {
   DocumentDetail,
   EffectiveConfig,
   FieldsReport,
+  IssuesCompleted,
   MetadataSet,
   NativeId,
   Priority,
@@ -28,6 +29,7 @@ import type {
   SourceListings,
   SourceRoute,
   StatusCategory,
+  StatusesReconciled,
   StatusNamesReport,
   StatusOptionsReport,
   TaskContentSet,
@@ -236,6 +238,11 @@ export const commandResponseRoots: Readonly<Record<string, keyof typeof runtimeS
   "task comment edit": "CommentWritten",
   "task comment delete": "DeletedComment",
   "task status set": "TaskStatusSet",
+  // Every card of one source brought in line with its issue's closure, or none for a source
+  // whose status is its closure.
+  "task status reconcile": "StatusesReconciled",
+  // The items the configured sources hold for the issues a landing closed, moved to `done`.
+  "task status complete": "IssuesCompleted",
   "task priority set": "TaskPrioritySet",
   "task content set": "TaskContentSet",
   "task metadata set": "MetadataSet",
@@ -1025,6 +1032,44 @@ export class OnetaskgraphClient {
       category,
       ...termScopeFlags("taskStatusSet", options),
       ...expectFlags("taskStatusSet", options),
+    ]);
+  }
+  // Bring every card of `source` in line with its issue's closure, writing only the card; a
+  // source whose status is its closure answers no items and is sent no request.
+  taskStatusReconcile(
+    source: string,
+    options: WriteOptions & { dryRun?: boolean } = {},
+  ): Promise<StatusesReconciled> {
+    const args = ["--source", stringOption("taskStatusReconcile", "source", source)];
+    if (options.dryRun !== undefined && typeof options.dryRun !== "boolean") {
+      throw new TypeError("taskStatusReconcile: dryRun must be a boolean");
+    }
+    if (options.dryRun) args.push("--dry-run");
+    return this.run("task status reconcile", [
+      ...args,
+      ...termScopeFlags("taskStatusReconcile", options),
+    ]);
+  }
+  // Move to `done` every item the configured sources hold for `issues`, each `owner/name#N`.
+  // Every configured source is asked unless `sources` narrows them.
+  taskStatusComplete(
+    issues: string[],
+    options: WriteOptions & { sources?: string[]; dryRun?: boolean } = {},
+  ): Promise<IssuesCompleted> {
+    const args: string[] = [];
+    for (const issue of stringList("taskStatusComplete", "issues", issues)) {
+      args.push("--issue", issue);
+    }
+    for (const source of stringList("taskStatusComplete", "sources", options.sources)) {
+      args.push("--source", source);
+    }
+    if (options.dryRun !== undefined && typeof options.dryRun !== "boolean") {
+      throw new TypeError("taskStatusComplete: dryRun must be a boolean");
+    }
+    if (options.dryRun) args.push("--dry-run");
+    return this.run("task status complete", [
+      ...args,
+      ...termScopeFlags("taskStatusComplete", options),
     ]);
   }
   taskPrioritySet(

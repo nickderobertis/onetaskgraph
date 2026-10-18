@@ -18,6 +18,7 @@ from .models import (
     EffectiveConfig,
     FieldsReport,
     GlobalId,
+    IssuesCompleted,
     MetadataSet,
     NativeId,
     Priority,
@@ -34,6 +35,7 @@ from .models import (
     SourceName,
     SourceRoute,
     StatusCategory,
+    StatusesReconciled,
     StatusNamesReport,
     StatusOptionsReport,
     TaskContentSet,
@@ -1374,6 +1376,52 @@ class GeneratedClient:
             page_size=page_size,
             pin=pin,
             set=set,
+        )
+
+    async def task_status_complete(
+        self,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        dry_run: bool | None = None,
+        issue: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        source: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> IssuesCompleted:
+        """Run ``onetaskgraph task status complete``."""
+        return await self._invoke(
+            ["task", "status", "complete"],
+            IssuesCompleted,
+            default_sources=default_sources,
+            dry_run=dry_run,
+            issue=issue,
+            page_size=page_size,
+            set=set,
+            source=source,
+            term_scope=_strings("task_status_complete", "term_scope", term_scope),
+        )
+
+    async def task_status_reconcile(
+        self,
+        source: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        dry_run: bool | None = None,
+        page_size: int | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> StatusesReconciled:
+        """Run ``onetaskgraph task status reconcile``."""
+        return await self._invoke(
+            ["task", "status", "reconcile"],
+            StatusesReconciled,
+            source=source,
+            default_sources=default_sources,
+            dry_run=dry_run,
+            page_size=page_size,
+            set=set,
+            term_scope=_strings("task_status_reconcile", "term_scope", term_scope),
         )
 
     async def task_status_set(

@@ -89,6 +89,8 @@ onetaskgraph task comment edit   <ID> <COMMENT-ID> [--body-file PATH] [--expect 
 onetaskgraph task comment delete <ID> <COMMENT-ID> [--expect VERSION]
 onetaskgraph task status set <ID> draft|backlog|todo|queued|in-progress|done|cancelled|unknown
                              [--expect VERSION]
+onetaskgraph task status reconcile --source <SOURCE> [--dry-run]
+onetaskgraph task status complete --issue <OWNER/NAME#N>... [--source <SOURCE>]... [--dry-run]
 onetaskgraph task priority set <ID> none|urgent|high|medium|low [--expect VERSION]
 onetaskgraph task content set <ID> --file PATH [--expect VERSION]
 onetaskgraph task metadata set <ID> <KEY> <VALUE> [--expect VERSION]
@@ -653,6 +655,95 @@ In the generated SDKs the four rule words are the type `CopyVia` and `created` i
 `NoCounterpart`, and the link words are `CopyLink`.
 <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
+### When an issue closes: reconciling and completing its card
+
+A GitHub board holds a card beside an issue that closes on its own — a person closes it, a
+change request merges with a closing line, a landing closes it — and the card stays where it
+was. Every read already follows the closure (see [Status mapping](#status-mapping)); these two
+verbs move the cards themselves. A source whose status *is* its closure — Linear, whose
+workflow state is the closure, a folder of Markdown, an in-memory source — has no card to move:
+each verb sends it nothing and says so.
+
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by the journeys in
+     `crates/onetaskgraph-github-projects-e2e/tests/e2e/status_reconcile.rs` and
+     `status_complete.rs`, and `crates/onetaskgraph-e2e/tests/e2e/status_complete.rs`, which
+     assert each document below exactly, the requests each verb sends, and its exit codes. -->
+**`task status reconcile --source <SOURCE> [--dry-run]`** is an on-demand tool, run by a person
+— nothing runs it on a schedule — to bring one source's cards in line after closures made
+outside the stack. An item needs it when its issue is closed with a reason that reads `done` or
+`cancelled` and its card does not sit at the option the mapping gives that category, a card
+with no option included; it is written to that option and nothing else — never the issue's
+state, which already says it. Open items, other closures and cards already in line are never
+written and never listed. Candidates come from the board's own `is:closed` filter, never its
+unfiltered items, and each is confirmed from the item it reads, so a filter that let open items
+through would cost reads and write nothing wrong. Writes go one per item through the source's
+own write pacing (`pacing.min_mutation_interval_ms`), which is what keeps a run of a couple of
+hundred under GitHub's secondary limit on content-creating requests. `--json` answers:
+
+```json
+{"items": [{"source": "board:I_7", "from": "Todo",
+            "to": {"category": "done", "name": "Done"}, "action": "updated"}]}
+```
+
+`from` is the card's option before, or `null`; `action` is `updated`, `would-update` under
+`--dry-run` — which writes nothing — or `failed`, with `error` the failure object a failure
+document carries. It exits `0` when every listed item was updated or would be, `4` when any
+failed, and `1` when the whole command was refused, with the failure document. Its human form is
+one line per item and a closing count, or, for a source whose status is its closure, that
+nothing needs reconciling. A source answers it only if its plugin declares the capability
+`reconcile_status`; an out-of-process plugin that does not is sent nothing
+([`docs/plugin-protocol.md`](docs/plugin-protocol.md) §4.23).
+
+**`task status complete --issue <OWNER/NAME#N>... [--source <SOURCE>]... [--dry-run]`** moves to
+`done` every item the configured sources hold for the issues a landing closed, by issue
+reference — `owner/name#N`, exactly the spelling a landing event's `closes` reports, its owner
+and name compared ignoring case; anything else is refused as a usage error naming it. **The
+caller names no source**: every source the configuration declares is asked — not only the
+`default_sources` — one after another in configuration order, or only those `--source` names, a
+narrowing for a person or a test; a name the configuration does not hold is a usage error
+naming it. Each source whose plugin declares the capability `complete_by_issue` — a GitHub
+board does — is read once per 50 references, and nothing else of it: no read of the board's
+items, no search, no project read, so a call costs one read per 50 references per GitHub
+source plus the writes for the items they hold, and never grows with a board's size. Every
+other source — Linear, a folder of Markdown, an in-memory source, an out-of-process plugin that
+does not declare it — is sent no request and listed in `unsupported`. Per reference and source:
+
+- no item for the issue, or an issue the source's credential cannot see: `absent`, no write;
+- closed as not planned or as duplicate: `skipped`, with `reason` `closed as <reason>`, no
+  write — the closure already says it, and a landing does not overrule it;
+- closed as completed with its card already at the `done` option: `unchanged`;
+- otherwise the item is written `done` through the status write — its card moved, and its issue
+  closed as completed if it is still open, never reopened — so every task it delivers is kept in
+  step exactly as after `task status set`: `updated`, or `would-update` under `--dry-run`, which
+  writes nothing.
+
+Because sources are asked one after another, an open issue held on two boards is closed by the
+first board's write and read closed as completed by the second, which moves only its card: one
+call closes an issue at most once. `--json` answers one item per distinct reference for each
+source asked, sources in configuration order and references in the order given:
+
+```json
+{"items": [{"issue": "acme/work#12", "source": "plans", "task": "plans:I_12",
+            "from": "Todo", "to": {"category": "done", "name": "Done"}, "action": "updated"},
+           {"issue": "acme/work#12", "source": "followups", "task": null,
+            "from": null, "to": null, "action": "absent"}],
+ "unsupported": ["notes"]}
+```
+
+`reason` is present on a `skipped` item and `error` — the failure object — on a `failed` one; an
+`updated` item whose task delivers others carries `delivered`, the entries `task status set`
+reports, and has none when it delivers nothing. It exits `0` when no item failed, `4` when one
+did or a delivered task could not be kept in step, and `1` when the whole command was refused.
+Its human form is one line per item, a line naming the unsupported sources, and a closing
+count.
+
+**Its library form** is `onetaskgraph_core::Engine::complete_issues(&self, issues: &[IssueRef],
+only: &[SourceName], dry_run: bool) -> Result<IssuesCompleted, EngineError>`, an empty `only`
+asking every configured source; it answers the very document above, and a delivered task it
+could not keep in step is reported in its result rather than failing the call. `IssueRef` is
+`onetaskgraph_plugin_api::IssueRef`, parsed from and displayed as `owner/name#N`.
+<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
+
 ### Carrying comments, and copying only what changed
 
 Every task a source reads carries a **change token**, `version` in the JSON of `task list`,
@@ -944,7 +1035,7 @@ plugin is sent.
 | `0` | Success — every source asked, every source answered. |
 | `1` | The command failed while running: an id that names nothing, a configuration it will not run on, a source name nothing configures. |
 | `2` | The invocation itself was wrong — an unknown flag, a value out of range, or answers a template refuses. |
-| `4` | The query ran and at least one source did not answer. The others' results still stand and the failure is named on standard error. A write — a copy, `task status set` or `task update` — also exits `4` when it landed and a task it delivers could not be kept in step; its `delivered` list says which. |
+| `4` | The query ran and at least one source did not answer. The others' results still stand and the failure is named on standard error. A write — a copy, `task status set`, `task update` or `task status complete` — also exits `4` when it landed and a task it delivers could not be kept in step; its `delivered` list says which. `task status reconcile` and `task status complete` exit `4` when an item they list failed while the others were written. |
 
 `--allow-partial` says a partial answer is acceptable and turns `4` into `0`. Nothing else
 does: a run that lost a source never exits `0` unless you asked for that.
@@ -1360,7 +1451,29 @@ category the source does not mention keeps its shipped default for both kinds �
 `Backlog`, `todo` → `Todo`, `queued` → `Queued`, `in-progress` → `In Progress`, `done` → `Done`,
 `cancelled` → `Cancelled`; `draft` and `unknown` have none — and a category it does mention uses
 only what it configures. `done` and `cancelled` close the issue as completed or not planned,
-for both kinds, and a closed issue reads by its state whatever its option.
+for both kinds.
+
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by the journeys in
+     `crates/onetaskgraph-github-projects-e2e/tests/e2e/closed_status.rs`, which close each item
+     on the loopback board and read it through `task show`, `task list --status` and a copy into
+     a folder of Markdown, and by `a_closed_issue_reports_the_closed_category_and_its_column_name`
+     in the plugin's own `tests/plugin.rs`, which reads every reason. -->
+**A closed issue reads as its closure says, whatever its card.** However it closed — by hand, by
+a change request merged with a closing line, by a landing's issue-closing line — what any reader
+of it sees is only its state and the reason it was closed with, so those decide:
+
+- **Category:** closed as completed, or with no reason, reads `done`; closed as not planned or as
+  duplicate reads `cancelled`; any other reason reads `unknown`.
+- **Name:** the card's own option, when the mapping reads that option as the same category or
+  does not name it at all — an issue closed as completed in a `Shipped` column reads `done`
+  named `Shipped`. Otherwise — the card's option reads as another category, or there is none —
+  the option the mapping gives the category: an issue closed as completed while its card still
+  says `Todo` reads `done` named `Done`, so no destination that reads `Todo` as todo is ever
+  handed it. An `unknown` closure keeps its option, or `Closed`.
+
+An open issue reads by its option alone, as above. `task status reconcile` brings the cards
+themselves in line; see [below](#when-an-issue-closes-reconciling-and-completing-its-card).
+<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
 **On Linear** a task's names are the configured team's workflow states and a project's are the
 workspace's project statuses — two vocabularies. Linear has no built-in names, so a source

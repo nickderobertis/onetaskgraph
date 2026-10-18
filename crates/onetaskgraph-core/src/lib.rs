@@ -57,15 +57,16 @@ pub use clock::{
 pub use config::{Config, ConfigError, Loaded, OutputFormat, SourceCacheConfig, SourceConfig};
 pub use engine::boundary;
 pub use engine::{
-    Body, BudgetSpent, CommentCounts, CommentList, CommentWritten, ConfiguredSource, CopyAction,
-    CopyItems, CopyLink, CopyLookup, CopyOutcome, CopyReport, CopyRequest, CopyScope, CopyVia,
-    DeletedComment, Delivered, DeliveryOutcome, DependencyRequest, DocumentDetail, DocumentFilters,
-    DocumentRequest, Engine, EngineError, Filters, GraphDirection, GraphEdge, GraphNode, GroupKey,
-    LabelRequest, LeftBehind, MatchBy, MetadataSet, NoCounterpart, PROJECT_GRAPH_SCHEMA_VERSION,
-    Paging, ProjectGraph, ProjectGraphRequest, ProjectRequest, ProjectSelector, Qualified,
-    QualifiedEdge, QualifiedEndpoint, SearchHit, SearchKind, SearchRequest, SourceListing,
-    SourceState, Spent, TaskContentSet, TaskDetail, TaskDetails, TaskPrioritySet, TaskRequest,
-    TaskStatusSet, TaskUpdated, graph_label, settled,
+    Body, BudgetSpent, CommentCounts, CommentList, CommentWritten, CompleteAction,
+    ConfiguredSource, CopyAction, CopyItems, CopyLink, CopyLookup, CopyOutcome, CopyReport,
+    CopyRequest, CopyScope, CopyVia, DeletedComment, Delivered, DeliveryOutcome, DependencyRequest,
+    DocumentDetail, DocumentFilters, DocumentRequest, Engine, EngineError, Filters, GraphDirection,
+    GraphEdge, GraphNode, GroupKey, IssueCompleted, IssuesCompleted, LabelRequest, LeftBehind,
+    MatchBy, MetadataSet, NoCounterpart, PROJECT_GRAPH_SCHEMA_VERSION, Paging, ProjectGraph,
+    ProjectGraphRequest, ProjectRequest, ProjectSelector, Qualified, QualifiedEdge,
+    QualifiedEndpoint, ReconcileAction, SearchHit, SearchKind, SearchRequest, SourceListing,
+    SourceState, Spent, StatusReconciled, StatusesReconciled, TaskContentSet, TaskDetail,
+    TaskDetails, TaskPrioritySet, TaskRequest, TaskStatusSet, TaskUpdated, graph_label, settled,
 };
 pub use engine::{
     DocumentCreate, ProjectCreate, Regenerated, Regeneration, RenderRequest, RenderTemplate,

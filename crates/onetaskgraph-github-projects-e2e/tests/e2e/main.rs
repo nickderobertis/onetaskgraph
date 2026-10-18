@@ -25,6 +25,8 @@ mod fields;
 mod github_status_by_kind;
 mod graph;
 mod metadata_fields;
+mod status_complete;
+mod status_reconcile;
 mod write_order;
 
 mod asset_board;

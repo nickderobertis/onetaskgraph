@@ -36,7 +36,7 @@ use super::{
 ///
 /// `tests/context.rs` pins it beside the shape [`context_shapes`] answers, so a change to what a
 /// context holds that does not move this number fails there.
-pub const CONTEXT_VERSION: u64 = 2;
+pub const CONTEXT_VERSION: u64 = 3;
 
 /// The JSON Schema of the task context and the board context this source hands the store.
 #[must_use]

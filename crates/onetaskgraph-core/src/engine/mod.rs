@@ -18,6 +18,7 @@
 mod assets;
 pub mod boundary;
 mod cached;
+mod closure;
 mod comment;
 mod copy;
 mod delivery;
@@ -57,6 +58,10 @@ use local::{LocalDocuments, LocalProjects, LocalTasks};
 pub(crate) use resume::{Owed, Resumption, StreamState};
 use resume::{Resume, StreamKind};
 
+pub use closure::{
+    CompleteAction, IssueCompleted, IssuesCompleted, ReconcileAction, StatusReconciled,
+    StatusesReconciled,
+};
 pub use comment::{
     CommentList, CommentWritten, DeletedComment, DocumentDetail, TaskDetail, TaskDetails,
 };

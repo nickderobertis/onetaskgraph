@@ -9,7 +9,12 @@
 use onetaskgraph_github_projects::{CONTEXT_VERSION, WHOLE_MEMBERS, context_shapes, graphql};
 
 /// Every context version with the digest of the task and board context shapes it publishes.
-const PUBLISHED_CONTEXTS: &[(u64, u64)] = &[(1, 0x8eab_f0e5_96fd_b4b8), (2, 0x1d08_0c96_c984_edd5)];
+const PUBLISHED_CONTEXTS: &[(u64, u64)] = &[
+    (1, 0x8eab_f0e5_96fd_b4b8),
+    (2, 0x1d08_0c96_c984_edd5),
+    // Version 3: an item carries the reason its issue was closed with.
+    (3, 0x9311_d768_a006_7864),
+];
 
 /// FNV-1a over `value`'s JSON, whose object keys serde_json keeps sorted.
 fn digest(value: &serde_json::Value) -> u64 {

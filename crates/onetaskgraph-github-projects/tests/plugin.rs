@@ -8423,6 +8423,8 @@ async fn health_names_the_board_it_read_and_the_source_declares_what_it_applies(
             filter_by_comment_activity: Support::Native,
             filter_by_metadata: Support::Native,
             filter_by_origin: Support::Native,
+            reconcile_status: Support::Native,
+            complete_by_issue: Support::Native,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,

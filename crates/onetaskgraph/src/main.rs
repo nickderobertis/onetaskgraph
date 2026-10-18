@@ -431,6 +431,69 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
 
         Command::Task {
             command:
+                TaskCommand::Status {
+                    command: StatusCommand::Reconcile(args),
+                },
+        } => {
+            let Some(source) = usable_source(&args.source, loaded) else {
+                return Ok(EXIT_USAGE);
+            };
+            let engine = engine(loaded);
+            let reconciled = engine
+                .reconcile_statuses(&source, args.dry_run)
+                .await
+                .map_err(|error| Failure::from(&error))?;
+            let rendered = rendering(
+                loaded,
+                &reconciled,
+                |reconciled| render::statuses_reconciled(source.as_str(), reconciled),
+                "the reconciled statuses",
+            )?;
+            emit(out, rendered.trim_end(), "the reconciled statuses")?;
+            Ok(if reconciled.failed() {
+                EXIT_PARTIAL
+            } else {
+                EXIT_OK
+            })
+        }
+
+        Command::Task {
+            command:
+                TaskCommand::Status {
+                    command: StatusCommand::Complete(args),
+                },
+        } => {
+            let mut only = Vec::with_capacity(args.source.len());
+            for name in &args.source {
+                let Some(source) = usable_source(name, loaded) else {
+                    return Ok(EXIT_USAGE);
+                };
+                only.push(source);
+            }
+            let engine = engine(loaded);
+            let completed = engine
+                .complete_issues(&args.issue, &only, args.dry_run)
+                .await
+                .map_err(|error| Failure::from(&error))?;
+            let rendered = rendering(
+                loaded,
+                &completed,
+                render::issues_completed,
+                "the completed issues",
+            )?;
+            emit(out, rendered.trim_end(), "the completed issues")?;
+            for item in &completed.items {
+                delivery_exit(&item.delivered);
+            }
+            Ok(if completed.failed() {
+                EXIT_PARTIAL
+            } else {
+                EXIT_OK
+            })
+        }
+
+        Command::Task {
+            command:
                 TaskCommand::Priority {
                     command: PriorityCommand::Set(args),
                 },
@@ -873,6 +936,31 @@ fn engine(loaded: &Loaded) -> Engine {
     .with_term_scope(TERM_SCOPE.get().cloned().flatten())
 }
 
+/// A `--source` this command was given, as a configured source's name — or `None`, having
+/// said why on standard error, when it names none: a usage error, refused before any source
+/// is built or asked.
+fn usable_source(name: &str, loaded: &Loaded) -> Option<SourceName> {
+    let configured: Vec<String> = loaded
+        .config
+        .sources()
+        .keys()
+        .map(ToString::to_string)
+        .collect();
+    match SourceName::new(name.to_owned()) {
+        Ok(source) if configured.iter().any(|held| held == source.as_str()) => Some(source),
+        _ => {
+            let _ = writeln!(
+                io::stderr(),
+                "onetaskgraph: --source {name}: no source named {name:?} is configured\n\
+                 next: name one of the configured sources ({}) — `onetaskgraph sources list` \
+                 reports them.",
+                configured.join(", ")
+            );
+            None
+        }
+    }
+}
+
 /// The term scope `command` names, when it is a writing verb that takes one.
 fn term_scope(command: &Command) -> Option<Vec<String>> {
     let named = match command {
@@ -880,6 +968,12 @@ fn term_scope(command: &Command) -> Option<Vec<String>> {
             TaskCommand::Copy(args) => &args.copy.term_scope,
             TaskCommand::Status {
                 command: StatusCommand::Set(args),
+            } => &args.term_scope,
+            TaskCommand::Status {
+                command: StatusCommand::Reconcile(args),
+            } => &args.term_scope,
+            TaskCommand::Status {
+                command: StatusCommand::Complete(args),
             } => &args.term_scope,
             TaskCommand::Priority {
                 command: PriorityCommand::Set(args),

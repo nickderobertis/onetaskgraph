@@ -57,10 +57,13 @@ const binary = process.env.ONETASKGRAPH_BIN ?? resolve(workspaceRoot, "target/de
 const binaryEnvironment = Object.fromEntries(
   Object.entries(process.env).filter(([name]) => !name.toUpperCase().startsWith("ONETASKGRAPH_")),
 );
+// The bundle passed a mebibyte at version 39, which is the default buffer `spawnSync` would
+// refuse it at; sixty-four leaves the contract room to grow without this read failing first.
 const emitted = spawnSync(binary, ["schema"], {
   cwd: workspaceRoot,
   encoding: "utf8",
   env: binaryEnvironment,
+  maxBuffer: 64 * 1024 * 1024,
 });
 if (emitted.status !== 0) {
   const failure =

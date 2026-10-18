@@ -46,6 +46,10 @@ const PRICES: &[(&str, u64)] = &[
     (graphql::SUB_ISSUES, 6),
     (graphql::BOARD, 2),
     (graphql::ORIGIN_LOOKUP, 1),
+    // llmlint: ignore-block[tests_hold_no_nonfunctional_thresholds] As at `SUB_ISSUES` above: the price is the instrument, not a threshold. `task status reconcile` reads the board's closed items and `task status complete` reads issues by reference, and the sweep below refuses any document in `graphql::DOCUMENTS` without a recorded price; the second's one point per fifty references is what the `github-landing-closure-points` budget's figure rests on, and onebudgetspec judges that budget.
+    (graphql::CLOSED_ITEMS, 2),
+    (graphql::ISSUES_BY_REFERENCE, 1),
+    // llmlint: ignore-end[tests_hold_no_nonfunctional_thresholds]
     (graphql::BOARD_FIELDS, 1),
     (graphql::DRAFT, 1),
     (graphql::REPOSITORY, 1),

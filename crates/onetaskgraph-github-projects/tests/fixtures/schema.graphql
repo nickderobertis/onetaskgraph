@@ -18,6 +18,9 @@
 # `ProjectV2Item.fieldValueByName(name: String!): ProjectV2ItemFieldValue` is pinned from
 # https://docs.github.com/en/graphql/reference/projects#projectv2item (2026-10-01).
 # Priority writes select that value from their mutation payload instead of reading the issue again.
+# `Repository.issue(number: Int!): Issue` is pinned from
+# https://docs.github.com/en/graphql/reference/objects#repository (2026-10-18): `task status
+# complete` reads each issue a landing closed by its reference, and never the board.
 #
 # `ProjectV2Item.updatedAt: DateTime!` ("Identifies the date and time when the object was last
 # updated") and `IssueCommentConnection.totalCount: Int!` ("Identifies the total count of items in
@@ -462,6 +465,8 @@ type PullRequest implements Node {
 type Repository implements Node {
   id: ID!
   nameWithOwner: String!
+  "Returns a single issue from the current repository by number."
+  issue(number: Int!): Issue
 }
 type DraftIssue implements Node {
   id: ID!

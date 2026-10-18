@@ -986,6 +986,30 @@ test("task status set answers when a delivered task could not be kept in step", 
   }
 });
 
+test("a reconcile and a completion drive the real binary over a source whose status is its closure", async () => {
+  // A folder of Markdown has no card beside a closure, so both verbs answer nothing for it and
+  // send it nothing: what is proven here is the client's flags and the documents it validates.
+  const statusRoot = deliveringFolder();
+  try {
+    const statusClient = new OnetaskgraphClient({ binaryPath: binary, cwd: statusRoot });
+    expect(await statusClient.taskStatusReconcile("work", { dryRun: true })).toEqual({
+      items: [],
+    });
+    expect(
+      await statusClient.taskStatusComplete(["nickderobertis/onetaskgraph#3"], {
+        sources: ["work"],
+        dryRun: true,
+      }),
+    ).toEqual({ items: [], unsupported: ["work"] });
+    const malformed = statusClient.taskStatusComplete(["onetaskgraph#3"]);
+    await expect(malformed).rejects.toBeInstanceOf(OnetaskgraphExecutionError);
+    await expect(malformed).rejects.toMatchObject({ exitCode: 2 });
+    await expect(malformed).rejects.toThrow('"onetaskgraph#3" is not an issue reference');
+  } finally {
+    rmSync(statusRoot, { recursive: true, force: true });
+  }
+});
+
 function priorityFolder(): string {
   const priorityRoot = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-priority-"));
   mkdirSync(resolve(priorityRoot, "work/tasks"), { recursive: true });

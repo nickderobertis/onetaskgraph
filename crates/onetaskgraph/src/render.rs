@@ -13,10 +13,11 @@
 
 use onetaskgraph_core::config::SourceRoute;
 use onetaskgraph_core::{
-    CommentList, CopyAction, CopyReport, DeletedComment, Delivered, DeliveryOutcome, GlobalId,
-    MetadataSet, Predicate, Qualified, QualifiedEdge, QueryPlan, Regenerated, SearchHit,
-    SourceListing, SourceState, TaskContentSet, TaskDetails, TaskPrioritySet, TaskStatusSet,
-    TaskUpdated, TemplateVariables,
+    CommentList, CompleteAction, CopyAction, CopyReport, DeletedComment, Delivered,
+    DeliveryOutcome, GlobalId, IssuesCompleted, MetadataSet, Predicate, Qualified, QualifiedEdge,
+    QueryPlan, ReconcileAction, Regenerated, SearchHit, SourceListing, SourceState,
+    StatusesReconciled, TaskContentSet, TaskDetails, TaskPrioritySet, TaskStatusSet, TaskUpdated,
+    TemplateVariables,
 };
 use onetaskgraph_plugin_api::{
     Asset, Capabilities, Comment, Document, Label, Location, MetadataKey, Priority, Project,
@@ -260,6 +261,109 @@ pub fn status_set(set: &TaskStatusSet) -> String {
     } else {
         rendered.push_str(&delivered(&set.delivered));
     }
+    rendered
+}
+
+/// What `task status reconcile` did: one line per item brought in line — its card's option
+/// before, the status its closure implies, and what became of it — then a closing count; or,
+/// for a source whose status is its closure, that nothing could need reconciling.
+pub fn statuses_reconciled(source: &str, reconciled: &StatusesReconciled) -> String {
+    if reconciled.status_is_closure {
+        return format!("source {source}'s status is its closure, so nothing needs reconciling\n");
+    }
+    let mut rendered = String::new();
+    for item in &reconciled.items {
+        let mut line = format!(
+            "{}: {} -> {} ({}): {}",
+            item.source,
+            item.from.as_deref().unwrap_or("no option"),
+            item.to.name,
+            wire(&item.to.category),
+            wire(&item.action)
+        );
+        if let Some(error) = &item.error {
+            line.push_str(&format!(
+                " — {}",
+                error.message().lines().next().unwrap_or_default()
+            ));
+        }
+        rendered.push_str(&line);
+        rendered.push('\n');
+    }
+    let count = |action| {
+        reconciled
+            .items
+            .iter()
+            .filter(|item| item.action == action)
+            .count()
+    };
+    rendered.push_str(&format!(
+        "{} updated, {} would update, {} failed\n",
+        count(ReconcileAction::Updated),
+        count(ReconcileAction::WouldUpdate),
+        count(ReconcileAction::Failed)
+    ));
+    rendered
+}
+
+/// What `task status complete` did: one line per issue and source, a line naming the sources
+/// that hold no items by issue reference, then a closing count.
+pub fn issues_completed(completed: &IssuesCompleted) -> String {
+    let mut rendered = String::new();
+    for item in &completed.items {
+        let mut line = format!("{} in {}: {}", item.issue, item.source, wire(&item.action));
+        if let Some(task) = &item.task {
+            line.push_str(&format!(" {task}"));
+        }
+        if let Some(to) = &item.to {
+            line.push_str(&format!(
+                " ({} -> {})",
+                item.from.as_deref().unwrap_or("no option"),
+                to.name
+            ));
+        }
+        if let Some(reason) = &item.reason {
+            line.push_str(&format!(" — {reason}"));
+        }
+        if let Some(error) = &item.error {
+            line.push_str(&format!(
+                " — {}",
+                error.message().lines().next().unwrap_or_default()
+            ));
+        }
+        rendered.push_str(&line);
+        rendered.push('\n');
+        rendered.push_str(&delivered(&item.delivered));
+    }
+    let unsupported = if completed.unsupported.is_empty() {
+        "none".to_owned()
+    } else {
+        completed
+            .unsupported
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    rendered.push_str(&format!(
+        "unsupported (status is its closure, or no complete_by_issue): {unsupported}\n"
+    ));
+    let count = |action| {
+        completed
+            .items
+            .iter()
+            .filter(|item| item.action == action)
+            .count()
+    };
+    rendered.push_str(&format!(
+        "{} updated, {} would update, {} unchanged, {} skipped, {} absent, {} failed\n",
+        count(CompleteAction::Updated),
+        count(CompleteAction::WouldUpdate),
+        count(CompleteAction::Unchanged),
+        count(CompleteAction::Skipped),
+        count(CompleteAction::Absent),
+        count(CompleteAction::Failed)
+    ));
     rendered
 }
 

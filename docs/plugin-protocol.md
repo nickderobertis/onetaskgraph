@@ -440,6 +440,8 @@ its `result`; the JSON shape of every contract type in them is what
 | `set_document_metadata` | `TaskSource::set_document_metadata` |
 | `update_task` | `TaskSource::update_task` |
 | `end_command` | `TaskSource::end_command` |
+| `status_contradictions` | `TaskSource::status_contradictions` |
+| `issue_holdings` | `TaskSource::issue_holdings` |
 
 `kind`, `capabilities` and `writes` are not methods of their own: all three are settled
 by the handshake, and the engine reads capabilities once per connection.
@@ -503,16 +505,17 @@ returning fewer items than `limit` is not thereby saying there are no more: only
 ### 4.2 `Capabilities`
 
 `projects`, `documents`, `comments`, `assets`, `priority`, `filter_by_priority`,
-`filter_by_comment_activity`, `filter_by_metadata`, `filter_by_origin`, `orphan_tasks`,
-`filter_by_label`, `filter_by_status`, `search_title` and `search_content` are each
-`"native"` or `"unsupported"`.
+`filter_by_comment_activity`, `filter_by_metadata`, `filter_by_origin`, `reconcile_status`,
+`complete_by_issue`, `orphan_tasks`, `filter_by_label`, `filter_by_status`, `search_title` and
+`search_content` are each `"native"` or `"unsupported"`.
 `task_dependencies` and `project_dependencies` are each `"both-directions"` or
 `"forward-only"` — there is deliberately **no** unsupported value for these two.
 `max_page_size` is a positive integer.
 
 `documents`, `comments`, `assets`, `priority`, `filter_by_priority`,
-`filter_by_comment_activity`, `filter_by_metadata` and `filter_by_origin` are the eight members
-of this object that are **optional**, and an absent one means `"unsupported"`. That is §2.1
+`filter_by_comment_activity`, `filter_by_metadata`, `filter_by_origin`, `reconcile_status` and
+`complete_by_issue` are the ten members of this object that are **optional**, and an absent one
+means `"unsupported"`. That is §2.1
 doing its job, exactly as it does for the write-support member §3.3 specifies: a plugin written
 before there were documents, comments, image assets, priorities, a comment-activity filter or a
 metadata or origin filter says nothing here and is read as the source without them it is, with
@@ -573,6 +576,15 @@ matching by title or by a metadata value (`--match-by`) never asks a native sour
 title or value, and reads the destination's tasks instead, as it did before either predicate
 could be pushed down.
 
+`reconcile_status` and `complete_by_issue` are not predicates either. Each says whether this
+source answers one question — `status_contradictions` (§4.23) and `issue_holdings` (§4.24) — and
+only a plugin that answered `"native"` is ever sent it. Both belong to a source whose status is
+a card on a board beside an issue that closes on its own; a source whose status *is* its
+closure — a Linear workflow state, a file's own `status:` — has nothing for either to find, and
+declares neither. The engine sends a plugin that answered `"unsupported"`, or said nothing,
+neither method: `task status reconcile` answers it no items, and `task status complete` lists
+it as unsupported.
+
 Three rules bind every plugin, and the engine's compensation is only correct while
 all three hold:
 
@@ -584,7 +596,8 @@ all three hold:
    searchable — must be declared unsupported and ignored outright, because half
    applying it narrows.
 3. This reaches the ten `"native"`/`"unsupported"` predicates alone — not `documents`,
-   `comments`, `assets` or `priority`, which are not among them. A dependency read is never ignored
+   `comments`, `assets`, `priority`, `reconcile_status` or `complete_by_issue`, which are not
+   among them. A dependency read is never ignored
    and never silently empty.
    A `"forward-only"` plugin still answers `depended-on-by` — see §4.8.
 
@@ -2012,6 +2025,66 @@ plugin could not be sure it dropped what it held, and the engine reports it agai
 as `Engine::end_command`'s failure; the caller should not go on to the next command on that
 source.
 
+### 4.23 `status_contradictions`
+
+Sent only to a plugin that declared `reconcile_status` `"native"` (§4.2). It changes nothing:
+it answers every task this source holds whose **card contradicts its issue's closure**, each
+with the status that brings it in line, and the engine writes each one through
+`set_task_status` (§4.17).
+
+```json
+{ "id": "25", "method": "status_contradictions", "params": {} }
+{ "id": "25", "result": { "items": [
+  { "task": { "id": "I_7", "title": "…", "status": { "category": "done", "name": "Done" }, "…": "…" },
+    "option": "Todo",
+    "to": { "category": "done", "name": "Done" } }
+] } }
+```
+
+A task is answered when its issue is closed with a reason that reads `done` (completed, or no
+reason) or `cancelled` (not planned, duplicate) and its card does not sit at the option this
+source's mapping gives that category; `option` is the option it sits at, or `null`, and `to`
+that category under that option's name. An open task, a closure that reads `unknown` and a card
+already in line are never answered. `task` is the task as `get_task` reads it.
+
+The `set_task_status` the engine sends for each moves the card alone: an issue already closed
+in a way that reads as the category is not closed again, so its state and its reason — a
+duplicate's among them — stay as they are.
+
+### 4.24 `issue_holdings`
+
+Sent only to a plugin that declared `complete_by_issue` `"native"` (§4.2), and never with an
+empty list. It changes nothing: for each issue reference, in the order given and once each, it
+answers the task this source holds for that issue and what moving it to `done` comes to.
+
+```json
+{ "id": "26", "method": "issue_holdings",
+  "params": { "issues": ["acme/work#12", "acme/work#40"] } }
+{ "id": "26", "result": { "holdings": [
+  { "issue": "acme/work#12", "task": "I_12", "option": "Todo", "classification": "public",
+    "delivers": ["tickets:T-1"], "completion": "due", "to": { "category": "done", "name": "Done" } },
+  { "issue": "acme/work#40", "task": null, "option": null, "classification": "public",
+    "completion": "absent" }
+] } }
+```
+
+An issue reference is `owner/name#N` — exactly the spelling `onevcs` reports in a landing
+event's `closes` — the `IssueRef` root of `onetaskgraph schema`, its owner and name compared
+ignoring case. Each holding's `completion` is one of:
+
+- `absent` — this source holds no item for the issue, or cannot see the issue at all;
+- `skipped`, with `reason` — `closed as not planned` or `closed as duplicate`: the closure
+  already says the work will not be done here, which a landing does not overrule;
+- `unchanged` — the issue is closed as completed and its card already sits at the `done` option;
+- `due`, with `to` — every other task: the engine writes it `done` through `set_task_status`
+  (§4.17), which selects the `done` option and closes the issue as completed if it is still
+  open, never reopening one.
+
+Beside it a holding carries what that write and the rules around it need of the task —
+`classification`, `repositories` and `delivers` — so the engine keeps every task it delivers in
+step exactly as after any status write (§4.17), without reading the task again. A plugin's read
+is proportional to the references it is given and never to the size of what it holds.
+
 ## 5. The error envelope
 
 `error` carries a `SourceError` whole. It is internally tagged on `kind`, and every
@@ -2105,6 +2178,12 @@ The `filter_by_metadata` and `filter_by_origin` members of §4.2 and the `metada
 `origin` members of §4.5 were added **without** a bump on the same terms: a plugin written
 before them omits both capabilities, is read as applying neither, and is never sent either
 member — the engine narrows the wider set it returns over each task's own `metadata`.
+
+`status_contradictions` (§4.23), `issue_holdings` (§4.24) and the `reconcile_status` and
+`complete_by_issue` members of §4.2 were added **without** a bump on the same terms: each method
+reaches only a plugin that declared its member `"native"`, which a plugin written before them
+cannot have done, so such a plugin is reported as holding nothing to reconcile and listed as
+unsupported by a completion — and is sent nothing either time.
 
 `set_task_priority` (§4.19), `set_task_content` (§4.20) and the `content_updates` member of
 §3.9 were added **without** a bump, as the methods of §4.18 were: the first reaches only a

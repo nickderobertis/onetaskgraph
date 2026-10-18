@@ -297,7 +297,18 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 38);
+    assert_eq!(bundle["version"], 39);
+    // Version 39: the two capabilities `task status reconcile` and `task status complete` are
+    // asked through, and the documents both verbs answer with.
+    for member in ["reconcile_status", "complete_by_issue"] {
+        assert!(
+            bundle["roots"]["Capabilities"]["properties"][member].is_object(),
+            "Capabilities declares {member}"
+        );
+    }
+    for root in ["StatusesReconciled", "IssuesCompleted", "IssueRef"] {
+        assert!(bundle["roots"][root].is_object(), "{root} is a root");
+    }
     // Version 38: a project's and a document's change token, left out of the wire when absent.
     for root in ["Project", "Document"] {
         assert!(
@@ -334,6 +345,8 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
             "task comment edit",
             "task comment delete",
             "task status set",
+            "task status reconcile",
+            "task status complete",
             "task priority set",
             "task content set",
             "task metadata set",

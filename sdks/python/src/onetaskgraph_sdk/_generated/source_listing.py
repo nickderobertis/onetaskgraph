@@ -117,6 +117,12 @@ class Capabilities(BaseModel):
             description="Whether the source's tasks have comments at all.\n\nRead exactly as [`documents`](Self::documents) is: it says what the source *holds*,\nnot which predicate it applies, so the second capability rule does not reach it. A\nsource declaring `Unsupported` is never sent a comment call — the engine reads this\nonce at the handshake and refuses such a call before anything is read, naming the\nsource and its plugin. Adding, editing and removing a comment is a write, so a source\ndeclaring `Native` is written through only when\n[`TaskSource::writes`](crate::TaskSource::writes) says it can be written at all.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates comments says nothing here and is read as the comment-free source it is."
         ),
     ] = Support.SupportUnsupported
+    complete_by_issue: Annotated[
+        Support,
+        Field(
+            description="Whether the source answers\n[`TaskSource::issue_holdings`](crate::TaskSource::issue_holdings): which of its items\nan issue reference names, which `task status complete` moves to `done`.\n\nRead exactly as [`reconcile_status`](Self::reconcile_status) is: a source declaring\n`Unsupported` is never asked and sends no request, and is listed as unsupported.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, on the same terms."
+        ),
+    ] = Support.SupportUnsupported
     documents: Annotated[
         Support,
         Field(
@@ -175,6 +181,12 @@ class Capabilities(BaseModel):
         Field(description="How far the source can walk project dependencies."),
     ]
     projects: Annotated[Support, Field(description="Whether the source has projects at all.")]
+    reconcile_status: Annotated[
+        Support,
+        Field(
+            description="Whether the source answers\n[`TaskSource::status_contradictions`](crate::TaskSource::status_contradictions): the\nitems whose card contradicts their issue's closure, which `task status reconcile`\nbrings in line.\n\nNot a predicate, so the second capability rule does not reach it: a source declaring\n`Unsupported` is never asked, and is reported as holding nothing to reconcile. That is\nevery source whose status *is* its closure — a Linear workflow state, a file's own\n`status:` — because there a card cannot contradict anything.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates the method is never sent it."
+        ),
+    ] = Support.SupportUnsupported
     search_content: Annotated[
         Support, Field(description="Whether the source searches bodies itself.")
     ]

@@ -143,6 +143,16 @@ fn report_visibility_reads() {
     let (value, detail) = read_visibility(&budget).unwrap_or_else(|error| refuse(&error));
     hand_over(value, &detail);
 }
+// llmlint: ignore-block[budget_commands_measure_directly] Every budget of this crate selects its own report-only entry here, the harness-runner convention it landed with (report_visibility_reads, report_metadata_fields), and the task registering this one names that pattern. It reads only the telemetry the `status_complete` journey recorded, refuses a recording of another workload, and hands the figure to onebudgetspec, which alone judges it.
+#[test]
+fn report_landing_closure() {
+    let Some(budget) = selected() else {
+        return;
+    };
+    let (value, detail) = read_landing_closure(&budget).unwrap_or_else(|error| refuse(&error));
+    hand_over(value, &detail);
+}
+// llmlint: ignore-end[budget_commands_measure_directly]
 // llmlint: ignore-block[budget_commands_measure_directly] Every budget of this crate selects its own report-only entry here, the harness-runner convention it landed with (report_visibility_reads, report_metadata_fields), and the task registering this one names that pattern. It reads only the telemetry the journeys recorded, refuses a recording of another workload, and hands the figure to onebudgetspec, which alone judges it.
 #[test]
 fn report_cache_points() {
@@ -449,6 +459,59 @@ fn read_visibility(budget: &str) -> Result<(f64, String), String> {
         .is_some_and(|seconds| seconds.is_finite() && seconds >= 0.0)
     {
         return Err("missing simulated seconds".into());
+    }
+    let detail = value["detail"].as_str().ok_or("missing detail")?.to_owned();
+    let figure = u32::try_from(figure).map_err(|_| "figure out of range")?;
+    Ok((f64::from(figure), detail))
+}
+
+/// What `status_complete` recorded for `budget`, refused unless it is that journey's recording
+/// at its workload with both scales measured, each source's reads and writes adding up to that
+/// scale's points, and the figure the 10x scale's.
+fn read_landing_closure(budget: &str) -> Result<(f64, String), String> {
+    use super::status_complete::{SCALES, WORKLOAD};
+    let value = recorded(budget)?;
+    if value["workload"].as_str() != Some(WORKLOAD) {
+        return Err("workload does not match one landing's closures over two boards".into());
+    }
+    let figure = value["value"]
+        .as_u64()
+        .ok_or("missing whole-number figure")?;
+    for (scale, issues, board, second) in SCALES {
+        let recorded = &value["scales"][scale];
+        if recorded["issues"].as_u64() != Some(issues as u64)
+            || recorded["board"].as_u64() != Some(board as u64)
+            || recorded["second_board"].as_u64() != Some(second as u64)
+        {
+            return Err(format!(
+                "the {scale} scale is not the workload the budget states"
+            ));
+        }
+        let points = recorded["points"]
+            .as_u64()
+            .ok_or_else(|| format!("the {scale} scale carries no points"))?;
+        let sources = recorded["sources"]
+            .as_object()
+            .filter(|sources| sources.len() == 2)
+            .ok_or_else(|| format!("the {scale} scale does not break down two sources"))?;
+        let mut sum = 0;
+        for spent in sources.values() {
+            for key in ["reads", "read_points", "writes", "write_points"] {
+                spent[key]
+                    .as_u64()
+                    .ok_or_else(|| format!("the {scale} scale's {key} is not a count"))?;
+            }
+            sum += spent["read_points"].as_u64().unwrap_or(0)
+                + spent["write_points"].as_u64().unwrap_or(0);
+        }
+        if sum != points {
+            return Err(format!(
+                "the {scale} breakdown does not add up to its points"
+            ));
+        }
+        if scale == "10x" && points != figure {
+            return Err("the figure is not the 10x scale's".into());
+        }
     }
     let detail = value["detail"].as_str().ok_or("missing detail")?.to_owned();
     let figure = u32::try_from(figure).map_err(|_| "figure out of range")?;

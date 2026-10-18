@@ -271,7 +271,13 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # read from the raw document and the roots from the validated one.
     bundle = generate.validate_schema_bundle(emitted_bundle)
 
-    assert emitted_bundle["version"] == 38
+    assert emitted_bundle["version"] == 39
+    # Version 39 published the two capabilities `task status reconcile` and `task status
+    # complete` are asked through, and the documents both verbs answer with.
+    for member in ("reconcile_status", "complete_by_issue"):
+        assert member in emitted_bundle["roots"]["Capabilities"]["properties"], member
+    for root in ("StatusesReconciled", "IssuesCompleted", "IssueRef"):
+        assert root in emitted_bundle["roots"], root
     # Version 38 published a project's and a document's change token, each left out when
     # absent, so a project or document of a source giving none reads as it did.
     for root in ("Project", "Document"):

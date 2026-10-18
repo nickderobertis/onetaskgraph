@@ -173,6 +173,15 @@ pub struct Declared {
     pub filter_by_metadata: Support,
     /// Whether the source keeps only the tasks copied from the origin a query names, itself.
     pub filter_by_origin: Support,
+    /// Whether the source answers which of its items contradict their issue's closure.
+    ///
+    /// Not a predicate, on the terms [`Self::documents`] is not: a source whose status is its
+    /// closure declares it unsupported and is never asked.
+    pub reconcile_status: Support,
+    /// Whether the source answers which of its items an issue reference names.
+    ///
+    /// Not a predicate, on the same terms.
+    pub complete_by_issue: Support,
     /// Whether the source can select tasks belonging to no project.
     pub orphan_tasks: Support,
     /// Whether the source filters by label itself.
@@ -208,6 +217,8 @@ impl Declared {
             filter_by_comment_activity: self.filter_by_comment_activity,
             filter_by_metadata: self.filter_by_metadata,
             filter_by_origin: self.filter_by_origin,
+            reconcile_status: self.reconcile_status,
+            complete_by_issue: self.complete_by_issue,
             orphan_tasks: self.orphan_tasks,
             filter_by_label: self.filter_by_label,
             filter_by_status: self.filter_by_status,
@@ -262,6 +273,16 @@ impl Declared {
                 "filter_by_origin",
                 claimed.filter_by_origin,
                 reported.filter_by_origin,
+            ),
+            support(
+                "reconcile_status",
+                claimed.reconcile_status,
+                reported.reconcile_status,
+            ),
+            support(
+                "complete_by_issue",
+                claimed.complete_by_issue,
+                reported.complete_by_issue,
             ),
             support("orphan_tasks", claimed.orphan_tasks, reported.orphan_tasks),
             support(
@@ -472,6 +493,8 @@ pub const ROWS: &[Row] = &[
                 filter_by_comment_activity: Support::Unsupported,
                 filter_by_metadata: Support::Unsupported,
                 filter_by_origin: Support::Unsupported,
+                reconcile_status: Support::Unsupported,
+                complete_by_issue: Support::Unsupported,
                 orphan_tasks: Support::Unsupported,
                 filter_by_label: Support::Unsupported,
                 filter_by_status: Support::Unsupported,
@@ -598,6 +621,11 @@ pub const ROWS: &[Row] = &[
                 comments: Support::Native,
                 // The board's `Priority` field, which this row's configuration maps.
                 priority: Support::Native,
+                // A card's `Status` option beside an issue that closes on its own: the one
+                // source whose card can contradict its closure, and whose items an issue
+                // reference names.
+                reconcile_status: Support::Native,
+                complete_by_issue: Support::Native,
                 max_page_size: 100,
                 ..EVERY_PREDICATE_NATIVE
             },
@@ -650,6 +678,10 @@ const EVERY_PREDICATE_NATIVE: Declared = Declared {
     filter_by_comment_activity: Support::Native,
     filter_by_metadata: Support::Native,
     filter_by_origin: Support::Native,
+    // Unsupported here for the reason `documents` is: neither is a predicate. The row whose
+    // source answers both overrides it.
+    reconcile_status: Support::Unsupported,
+    complete_by_issue: Support::Unsupported,
     orphan_tasks: Support::Native,
     filter_by_label: Support::Native,
     filter_by_status: Support::Native,
@@ -682,6 +714,9 @@ pub fn github_number(id: &str) -> u64 {
         // `ISSUE-<n>`, an issue a run of a journey created. Its own band, so a created
         // issue never wears a number the shared dataset already gave something else.
         Some('I') => 60,
+        // `N-<n>`, an issue a journey names by its number: a band past every other, so a
+        // reference `owner/name#<number>` names exactly one issue of the board.
+        Some('N') => 99_000,
         _ => 0,
     };
     1000 + level + tail
@@ -1078,6 +1113,20 @@ struct GitHubBoard {
     lagging_reads: usize,
     /// Every GraphQL document this board has received, in order.
     documents: Vec<String>,
+    /// The bearer token each of those requests carried, at the same index — which of the
+    /// sources configured against this one server sent it.
+    tokens: Vec<String>,
+    /// When each of those requests arrived, at the same index.
+    arrivals: Vec<std::time::Instant>,
+    /// How many of an issue's board memberships the request being answered asks for, from its
+    /// `$boardItems` or `$memberships` — every one when it names neither.
+    membership_first: usize,
+    /// Errors the request being answered owes beside its data, each a whole GraphQL error
+    /// object — a `NOT_FOUND` naming the alias it is about.
+    owed_error_objects: Vec<Value>,
+    /// Whether the board's `is:closed` item filter also lets open items through, so a
+    /// journey can hold a reader to confirming each item it is handed.
+    closed_filter_leaks: bool,
     /// The variables each of those documents was sent with, at the same index.
     variables: Vec<Value>,
     /// The Status field's whole option set, replaced exactly as GitHub replaces it.
@@ -1267,6 +1316,91 @@ impl GitHubBoardFields {
             .cloned()
             .zip(board.variables.iter().cloned())
             .collect()
+    }
+
+    /// Every request this server answered for the source whose credential is `token`, as
+    /// [`Self::served`] reports them — one board's requests out of the one log two boards
+    /// configured against this server share.
+    #[must_use]
+    pub fn served_to(&self, token: &str) -> Vec<(String, Value)> {
+        let board = self.board.lock().unwrap();
+        board
+            .documents
+            .iter()
+            .zip(&board.variables)
+            .zip(&board.tokens)
+            .filter(|(_, sent)| *sent == token)
+            .map(|((document, variables), _)| (document.clone(), variables.clone()))
+            .collect()
+    }
+
+    /// Every request this server answered, as [`Self::served`] reports it, with the moment it
+    /// arrived — what a journey holding a source to its write pacing reads the gaps from.
+    #[must_use]
+    pub fn served_when(&self) -> Vec<(String, Value, std::time::Instant)> {
+        let board = self.board.lock().unwrap();
+        board
+            .documents
+            .iter()
+            .zip(&board.variables)
+            .zip(&board.arrivals)
+            .map(|((document, variables), at)| (document.clone(), variables.clone(), *at))
+            .collect()
+    }
+
+    /// A source configuration for the **second** board this server holds, project
+    /// [`GITHUB_SECOND_BOARD`], over the very issues the first board's items are — so an
+    /// issue's state is one whichever board it is read through, and each board holds cards of
+    /// its own. Its requests carry [`GITHUB_SECOND_BOARD_TOKEN`].
+    #[must_use]
+    pub fn second_board(&self) -> Value {
+        let mut block = github_projects_block_at(&self.endpoint);
+        block["project_number"] = json!(GITHUB_SECOND_BOARD);
+        block["token_env"] = json!("GITHUB_PROJECTS_FIXTURE_TOKEN_B");
+        block
+    }
+
+    /// Put one issue on the second board too, its card at `status` — or at no option.
+    pub fn put_on_second_board(&self, id: &str, status: Option<&str>) {
+        let mut board = self.board.lock().unwrap();
+        let item = board.find(&json!(id));
+        let card = json!({"number":GITHUB_SECOND_BOARD,
+                          "item":format!("ITEM{GITHUB_SECOND_BOARD}-{id}"),
+                          "status":status,"itemUpdatedAt":GITHUB_BOARD_EPOCH});
+        match item["boards"].as_array_mut() {
+            Some(cards) => cards.push(card),
+            None => item["boards"] = json!([card]),
+        }
+    }
+
+    /// Take one issue's card off this server's first board, leaving the issue itself — open or
+    /// closed, in its repository — and any card it has on the second board.
+    pub fn take_off_the_board(&self, id: &str) {
+        let mut board = self.board.lock().unwrap();
+        board.find(&json!(id))["off_board"] = json!(true);
+    }
+
+    /// The `Status` option one issue's card on the second board sits at, or `None`.
+    #[must_use]
+    pub fn second_board_status(&self, id: &str) -> Option<String> {
+        let board = self.board.lock().unwrap();
+        board
+            .items
+            .iter()
+            .find(|item| item["id"] == json!(id))
+            .and_then(|item| item["boards"].as_array())
+            .and_then(|cards| {
+                cards
+                    .iter()
+                    .find(|card| card["number"] == json!(GITHUB_SECOND_BOARD))
+            })
+            .and_then(|card| card["status"].as_str().map(str::to_owned))
+    }
+
+    /// Have the board's `is:closed` item filter let every open item through as well, as a
+    /// filter GitHub did not honour would.
+    pub fn leak_open_items_through_the_closed_filter(&self) {
+        self.board.lock().unwrap().closed_filter_leaks = true;
     }
 
     // llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] Controls of the loopback board's visibility answers, which its request loop reads from its private state: like `refuse_once` below, they can only be methods of this handle, and a suite of one plugin could not add them from outside.
@@ -2175,6 +2309,13 @@ impl GitHubBoard {
             .expect("the fixture holds the item being written")
     }
 
+    /// Whether this issue has a card on this server's first board — every issue does but one
+    /// a journey took off it with [`GitHubBoardFields::take_off_the_board`], which is an issue
+    /// of the repository on no board at all, or on the second board alone.
+    fn on_board(item: &Value) -> bool {
+        item["off_board"] != json!(true)
+    }
+
     /// Whether this item is a board draft rather than an issue.
     fn is_draft(item: &Value) -> bool {
         item["type"] == "DraftIssue"
@@ -2405,12 +2546,12 @@ impl GitHubBoard {
         let visible = self.items.len().saturating_sub(self.lagging_reads);
         let carriers = self.items[..visible]
             .iter()
-            .filter(|item| item["origin"] == json!(wanted))
+            .filter(|item| Self::on_board(item) && item["origin"] == json!(wanted))
             .map(|item| self.rendered(item))
             .collect();
         let found = self.items[..visible]
             .iter()
-            .filter(|item| !Self::is_draft(item))
+            .filter(|item| !Self::is_draft(item) && Self::on_board(item))
             .filter(|item| {
                 phrase.admits(
                     item["title"].as_str().unwrap_or_default(),
@@ -2441,24 +2582,177 @@ impl GitHubBoard {
     /// an item reached through the board and the same item reached through its own id
     /// cannot disagree about its status or its origin.
     fn as_issue(&self, item: &Value) -> Value {
-        let board_item = self.rendered(item);
         let mut issue = self.content(item);
-        issue["projectItems"] = json!({"nodes":[{"id":board_item["id"],
-                                                 "updatedAt":board_item["updatedAt"],
-                                                 "project":{"id":"PVT-board","number":7},
-                                                 "fieldValues":board_item["fieldValues"]}],
-                                       "pageInfo":{"hasNextPage":false}});
+        issue["projectItems"] =
+            Self::membership_page(self.memberships(item), 0, self.membership_first);
         issue
+    }
+
+    /// Every board membership of one issue, this board's own first and then each card a
+    /// journey put it on beside it, as `Issue.projectItems` answers one.
+    ///
+    /// The board half is `rendered`'s, read back out of it rather than spelled twice, so an
+    /// item reached through the board and the same item reached through its own id cannot
+    /// disagree about its status or its origin.
+    fn memberships(&self, item: &Value) -> Vec<Value> {
+        let board_item = self.rendered(item);
+        let mut nodes = Vec::new();
+        if Self::on_board(item) {
+            nodes.push(json!({"id":board_item["id"],
+                              "updatedAt":board_item["updatedAt"],
+                              "project":{"id":"PVT-board","number":7},
+                              "fieldValues":board_item["fieldValues"]}));
+        }
+        for card in item["boards"].as_array().into_iter().flatten() {
+            let number = card["number"].as_u64().expect("a card's board number");
+            let values: Vec<Value> = card["status"]
+                .as_str()
+                .map(|name| {
+                    json!({"name":name,"field":{"id":"FIELD-status","name":"Status",
+                                                "options":self.options()}})
+                })
+                .into_iter()
+                .collect();
+            nodes.push(json!({"id":card["item"],"updatedAt":card["itemUpdatedAt"],
+                              "project":{"id":format!("PVT-board{number}"),"number":number},
+                              "fieldValues":{"nodes":values,"pageInfo":{"hasNextPage":false}}}));
+        }
+        nodes
+    }
+
+    /// One page of an issue's memberships, from `offset`, at most `first` of them.
+    fn membership_page(nodes: Vec<Value>, offset: usize, first: usize) -> Value {
+        let end = offset.saturating_add(first).min(nodes.len());
+        let has_next = end < nodes.len();
+        json!({"nodes":nodes[offset.min(end)..end].to_vec(),
+               "pageInfo":{"hasNextPage":has_next,
+                           "endCursor":(end > offset).then(|| end.to_string())}})
+    }
+
+    /// The card one issue holds on the board `number`, as a journey put it there.
+    fn card_on(&mut self, number: u64, card: &Value) -> Option<&mut Value> {
+        self.items.iter_mut().find_map(|item| {
+            item["boards"].as_array_mut().and_then(|cards| {
+                cards
+                    .iter_mut()
+                    .find(|held| held["number"] == json!(number) && held["item"] == *card)
+            })
+        })
+    }
+
+    /// The closed items of this board, as its own `is:closed` filter answers — every item,
+    /// open ones included, while [`GitHubBoard::closed_filter_leaks`] says the filter leaks.
+    fn closed_items(&self, variables: &Value) -> Value {
+        assert_eq!(variables["owner"], "fixture-owner");
+        assert_eq!(variables["number"], 7);
+        assert_eq!(
+            variables["filter"], "is:closed",
+            "a reconcile reads the board through its closed filter alone"
+        );
+        let offset = match &variables["after"] {
+            Value::Null => 0,
+            Value::String(cursor) => cursor.parse::<usize>().expect("numeric after cursor"),
+            other => panic!("GraphQL after must be null or a numeric string: {other}"),
+        };
+        let first = usize::try_from(variables["first"].as_u64().expect("GraphQL first"))
+            .expect("GraphQL first fits usize");
+        let visible = self.items.len().saturating_sub(self.lagging_reads);
+        let closed: Vec<&Value> = self.items[..visible]
+            .iter()
+            .filter(|item| !Self::is_draft(item) && Self::on_board(item))
+            .filter(|item| self.closed_filter_leaks || item["state"] == "CLOSED")
+            .collect();
+        let end = (offset + first).min(closed.len());
+        let nodes: Vec<Value> = closed[offset.min(end)..end]
+            .iter()
+            .map(|item| self.rendered(item))
+            .collect();
+        json!({"closedItems":{"projectV2":{"id":"PVT-board","fields":self.fields(),
+            "items":{"nodes":nodes,"pageInfo":{"hasNextPage":end < closed.len(),
+                                               "endCursor":end.to_string()}}}}})
+    }
+
+    /// Each reference of a batch read by reference, answered as GitHub answers one: the issue
+    /// that repository holds under that number, or `null` beside a `NOT_FOUND` error naming the
+    /// alias.
+    fn issues_by_reference(&mut self, variables: &Value) -> Value {
+        let mut answer = serde_json::Map::new();
+        for slot in 0..onetaskgraph_github_projects::REFERENCE_BATCH {
+            let owner = variables[format!("owner{slot}")]
+                .as_str()
+                .expect("a reference's owner");
+            let name = variables[format!("name{slot}")]
+                .as_str()
+                .expect("a reference's name");
+            let number = variables[format!("number{slot}")]
+                .as_u64()
+                .expect("a reference's number");
+            let repository = format!("{owner}/{name}");
+            let found = self.items.iter().find(|item| {
+                !Self::is_draft(item)
+                    && item["repo"]
+                        .as_str()
+                        .is_some_and(|repo| repo.eq_ignore_ascii_case(&repository))
+                    && item["id"].as_str().map(github_number) == Some(number)
+            });
+            match found {
+                Some(item) => {
+                    let mut issue = self.as_issue(item);
+                    // Each membership's `Status` value read by name, as `fieldValueByName`
+                    // answers it, in place of its field values.
+                    for node in issue["projectItems"]["nodes"]
+                        .as_array_mut()
+                        .into_iter()
+                        .flatten()
+                    {
+                        let status = node["fieldValues"]["nodes"]
+                            .as_array()
+                            .and_then(|values| {
+                                values
+                                    .iter()
+                                    .find(|value| value["field"]["name"] == "Status")
+                            })
+                            .cloned()
+                            .unwrap_or(Value::Null);
+                        node["status"] = status;
+                        node.as_object_mut()
+                            .expect("a membership")
+                            .remove("fieldValues");
+                    }
+                    answer.insert(format!("r{slot}"), json!({ "issue": issue }));
+                }
+                None => {
+                    answer.insert(format!("r{slot}"), json!({ "issue": null }));
+                    self.owed_error_objects.push(json!({
+                        "type": "NOT_FOUND",
+                        "path": [format!("r{slot}"), "issue"],
+                        "message": format!(
+                            "Could not resolve to an issue or pull request with the number of \
+                             {number}."
+                        )
+                    }));
+                }
+            }
+        }
+        Value::Object(answer)
     }
 
     fn rendered(&self, item: &Value) -> Value {
         // No board field value carries labels: no document this source sends selects the
         // board's built-in `Labels` field, so an item's labels are its content's alone.
-        let mut values = vec![
-            json!({"name":item["status"],"field":{"id":"FIELD-status","name":"Status",
-                   "options":self.options()}}),
+        // A card with no `Status` carries no node for the field, as GitHub leaves an empty
+        // single-select out of `fieldValues`.
+        let mut values: Vec<Value> = item["status"]
+            .is_string()
+            .then(|| {
+                json!({"name":item["status"],"field":{"id":"FIELD-status","name":"Status",
+                       "options":self.options()}})
+            })
+            .into_iter()
+            .collect();
+        values.push(
             json!({"text":item["origin"],"field":{"id":"FIELD-origin","name":"onetaskgraph.origin"}}),
-        ];
+        );
         // An item with no `Priority` value carries no node for the field, as GitHub leaves
         // an empty single-select out of `fieldValues`.
         if let (Some(name), Some(options)) =
@@ -2678,6 +2972,18 @@ fn github_projects_board_lagging(sandbox: &Sandbox, lagging_reads: usize) -> Val
     github_projects_board_at(sandbox, None, &[], lagging_reads, Vec::new()).0
 }
 
+/// The credentials every GitHub fixture board accepts: one per source a journey configures
+/// against it, so which source sent a request is read off the token it carried.
+const GITHUB_FIXTURE_SECRETS: &str =
+    "GITHUB_PROJECTS_FIXTURE_TOKEN=test-token\nGITHUB_PROJECTS_FIXTURE_TOKEN_B=test-token-b\n";
+
+/// The token a source configured by [`GitHubBoardFields::second_board`] sends, which tells its
+/// requests from the first board's in this server's one log.
+pub const GITHUB_SECOND_BOARD_TOKEN: &str = "test-token-b";
+
+/// The project number of the second board one fixture server holds.
+pub const GITHUB_SECOND_BOARD: u64 = 8;
+
 /// `fail_first` names the operations this board refuses, each once — so a retry, and the
 /// tidy-up that follows a refusal, meet the board answering normally again. `extra` is put on
 /// the board after the shared dataset, so every id that dataset holds is where it always was.
@@ -2688,7 +2994,7 @@ fn github_projects_board_at(
     lagging_reads: usize,
     extra: Vec<Value>,
 ) -> (Value, GitHubBoardFields) {
-    sandbox.secrets_file("GITHUB_PROJECTS_FIXTURE_TOKEN=test-token\n");
+    sandbox.secrets_file(GITHUB_FIXTURE_SECRETS);
     let listener = TcpListener::bind("127.0.0.1:0").expect("GitHub fixture listener");
     let endpoint = format!(
         "http://{}/graphql",
@@ -2725,6 +3031,11 @@ fn github_projects_board_at(
         created: 0,
         lagging_reads,
         documents: Vec::new(),
+        tokens: Vec::new(),
+        arrivals: Vec::new(),
+        membership_first: usize::MAX,
+        owed_error_objects: Vec::new(),
+        closed_filter_leaks: false,
         variables: Vec::new(),
         status_options: json!([
             {"id":"OPT-backlog","name":"Backlog","color":"GRAY","description":""},
@@ -2793,7 +3104,7 @@ fn github_projects_board_at(
     thread::spawn(move || {
         for stream in listener.incoming() {
             let mut stream = stream.expect("GitHub fixture connection");
-            let (line, request) = read_http_request(&mut stream);
+            let (line, request, token) = read_http_request(&mut stream);
             // The one REST read a write to a source declared private sends: the visibility of
             // the repository an issue lives in. Recorded beside the GraphQL documents, so a
             // journey counting what a write spent counts it too.
@@ -2805,6 +3116,8 @@ fn github_projects_board_at(
                     let mut served = board.lock().unwrap();
                     served.documents.push(format!("GET /repos/{slug}"));
                     served.variables.push(Value::Null);
+                    served.tokens.push(token.clone());
+                    served.arrivals.push(std::time::Instant::now());
                     served
                         .repository_visibility
                         .get(slug)
@@ -2838,6 +3151,14 @@ fn github_projects_board_at(
                 let mut served = board.lock().unwrap();
                 served.documents.push(query.to_owned());
                 served.variables.push(variables.clone());
+                served.tokens.push(token.clone());
+                served.arrivals.push(std::time::Instant::now());
+                served.membership_first = ["memberships", "boardItems"]
+                    .iter()
+                    .find_map(|name| variables[name].as_u64())
+                    .map_or(usize::MAX, |first| {
+                        usize::try_from(first).expect("a membership page fits usize")
+                    });
                 let named = variables["id"].as_str().unwrap_or_default().to_owned();
                 if let Some(at) = served.replacing.iter().position(|(id, ..)| *id == named) {
                     if served.replacing[at].1 == 0 {
@@ -2907,11 +3228,13 @@ fn github_projects_board_at(
                     None => data,
                 };
                 let owed = std::mem::take(&mut board.lock().unwrap().owed_errors);
-                if owed.is_empty() {
+                let objects = std::mem::take(&mut board.lock().unwrap().owed_error_objects);
+                if owed.is_empty() && objects.is_empty() {
                     json!({ "data": data }).to_string()
                 } else {
                     json!({"data": data,
                            "errors": owed.iter().map(|message| json!({"message": message}))
+                               .chain(objects)
                                .collect::<Vec<_>>()})
                     .to_string()
                 }
@@ -3724,6 +4047,35 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         board.touch_issue(&input["id"]);
         return json!({"updateIssue":{"issue":{"id":input["id"]}}});
     }
+    if query.contains("updateProjectV2ItemFieldValue(input:$input)")
+        && input["projectId"] == json!(format!("PVT-board{GITHUB_SECOND_BOARD}"))
+    {
+        // A card on the second board: only its `Status` is ever written there.
+        assert_eq!(input["fieldId"], "FIELD-status");
+        let id = input["value"]["singleSelectOptionId"]
+            .as_str()
+            .expect("a Status option id");
+        let Some(option) = board
+            .status_options
+            .iter()
+            .find(|option| option["id"] == id)
+            .map(|option| option["name"].clone())
+        else {
+            board.owed_errors.push(format!(
+                "The single select option Id does not belong to the field: {id}"
+            ));
+            return json!({ "updateProjectV2ItemFieldValue": null });
+        };
+        let at = board.tick();
+        let card = input["itemId"].clone();
+        let held = board
+            .card_on(GITHUB_SECOND_BOARD, &card)
+            .expect("a field update names a card on the second board");
+        held["status"] = option;
+        held["itemUpdatedAt"] = json!(at);
+        return json!({"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":card,
+            "fieldValueByName":null}}});
+    }
     if query.contains("updateProjectV2ItemFieldValue(input:$input)") {
         assert_eq!(input["projectId"], "PVT-board");
         assert!(
@@ -3922,8 +4274,9 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         let visible = board.items.len().saturating_sub(board.lagging_reads);
         let matched = board.items[..visible]
             .iter()
-            // An issue search returns issues, and a draft is not one.
-            .filter(|item| !GitHubBoard::is_draft(item))
+            // An issue search returns issues, and a draft is not one; a search scoped to this
+            // board returns only the issues it holds a card for.
+            .filter(|item| !GitHubBoard::is_draft(item) && GitHubBoard::on_board(item))
             .filter(|item| {
                 wanted.admits(
                     item["title"].as_str().unwrap_or_default(),
@@ -4003,8 +4356,31 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
     }
     if query.contains("boardFields:repositoryOwner") {
         assert_eq!(variables["owner"], "fixture-owner");
-        assert_eq!(variables["number"], 7);
-        return json!({"boardFields":{"projectV2":{"id":"PVT-board","fields":board.fields()}}});
+        let id = match variables["number"].as_u64() {
+            Some(7) => "PVT-board".to_owned(),
+            Some(GITHUB_SECOND_BOARD) => format!("PVT-board{GITHUB_SECOND_BOARD}"),
+            other => panic!("this server holds boards 7 and {GITHUB_SECOND_BOARD}, not {other:?}"),
+        };
+        return json!({"boardFields":{"projectV2":{"id":id,"fields":board.fields()}}});
+    }
+    if query == onetaskgraph_github_projects::graphql::CLOSED_ITEMS {
+        return board.closed_items(variables);
+    }
+    if query == onetaskgraph_github_projects::graphql::ISSUES_BY_REFERENCE {
+        return board.issues_by_reference(variables);
+    }
+    if query == onetaskgraph_github_projects::graphql::ISSUE_BOARD_ITEMS {
+        let id = variables["id"].as_str().expect("a node id").to_owned();
+        let Some(item) = board.items.iter().find(|item| item["id"] == json!(id)) else {
+            return json!({ "node": null });
+        };
+        let offset = variables["after"].as_str().map_or(0, |cursor| {
+            cursor.parse::<usize>().expect("numeric after cursor")
+        });
+        let first = usize::try_from(variables["first"].as_u64().expect("GraphQL first"))
+            .expect("GraphQL first fits usize");
+        let page = GitHubBoard::membership_page(board.memberships(item), offset, first);
+        return json!({"node":{"projectItems":page}});
     }
     // One draft by its own id, with the one board item GitHub links it to.
     if query.contains("on DraftIssue{") && query.contains("projectV2Items(") {
@@ -4098,6 +4474,7 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
     let end = (offset + first).min(visible);
     let nodes = board.items[offset.min(visible)..end]
         .iter()
+        .filter(|item| GitHubBoard::on_board(item))
         .map(|item| board.rendered(item))
         .collect::<Vec<_>>();
     let title = board.own["title"].clone();
@@ -4218,12 +4595,12 @@ fn search_words(text: &str) -> Vec<String> {
 }
 
 fn read_http_json(stream: &mut impl Read) -> Value {
-    let (line, body) = read_http_request(stream);
+    let (line, body, _) = read_http_request(stream);
     body.unwrap_or_else(|| panic!("a {line} carries no JSON body"))
 }
 
 /// One request's line and, when it carries one, its JSON body.
-fn read_http_request(stream: &mut impl Read) -> (String, Option<Value>) {
+fn read_http_request(stream: &mut impl Read) -> (String, Option<Value>, String) {
     let mut bytes = Vec::new();
     let mut chunk = [0_u8; 4096];
     loop {
@@ -4241,6 +4618,12 @@ fn read_http_request(stream: &mut impl Read) -> (String, Option<Value>) {
         + 4;
     let headers = String::from_utf8_lossy(&bytes[..header_end]).into_owned();
     assert!(headers.contains("authorization: Bearer test-token"));
+    let token = headers
+        .lines()
+        .find_map(|line| line.strip_prefix("authorization: Bearer "))
+        .unwrap_or_default()
+        .trim()
+        .to_owned();
     let line = headers.lines().next().unwrap_or_default().to_owned();
     let Some(length) = headers.lines().find_map(|line| {
         line.to_ascii_lowercase()
@@ -4251,7 +4634,7 @@ fn read_http_request(stream: &mut impl Read) -> (String, Option<Value>) {
             line.starts_with("GET "),
             "a {line} carries no Content-Length"
         );
-        return (line, None);
+        return (line, None, token);
     };
     while bytes.len() - header_end < length {
         let count = stream.read(&mut chunk).expect("fixture request body");
@@ -4268,7 +4651,7 @@ fn read_http_request(stream: &mut impl Read) -> (String, Option<Value>) {
             String::from_utf8_lossy(body)
         )
     });
-    (line, Some(body))
+    (line, Some(body), token)
 }
 
 /// A socket-level Linear GraphQL fixture used by the shared binary journeys.

@@ -13,8 +13,8 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use onetaskgraph_core::config::{Layer, Origin, Setting, SettingPath, value_from_text};
 use onetaskgraph_core::{GlobalId, OutputFormat, PluginKind, SearchKind};
 use onetaskgraph_plugin_api::{
-    Classification, Direction, MetadataMatch, NativeId, Priority, Repository, StatusCategory,
-    TextFields,
+    Classification, Direction, IssueRef, MetadataMatch, NativeId, Priority, Repository,
+    StatusCategory, TextFields,
 };
 use serde_json::Value;
 
@@ -901,6 +901,91 @@ pub struct MetadataSetArgs {
 pub enum StatusCommand {
     /// Set one task's status to a category, and nothing else about it.
     Set(StatusSetArgs),
+    /// Bring every card of one source in line with its issue's closure — an on-demand tool,
+    /// run by a person after closures made outside the stack.
+    ///
+    /// An item needs it when its issue is closed with a reason that reads `done` (completed,
+    /// or no reason) or `cancelled` (not planned, duplicate) and its card does not sit at the
+    /// option the source's `status_mapping` gives that category. Only the card is written —
+    /// never the issue's state, which already says it — one write per item through the
+    /// source's own write pacing. Open items, other closures and items already in line are
+    /// never written and never listed.
+    ///
+    /// Candidates come from the board's own `is:closed` filter, never its unfiltered items,
+    /// and each is confirmed from what that read carries. A source whose status is its closure
+    /// — Linear, a folder of Markdown, an in-memory source, and a plugin that does not declare
+    /// `reconcile_status` — answers no items and is sent no request.
+    ///
+    /// Exits 0 when every listed item was updated (or would be, under --dry-run), 4 when any
+    /// failed, and 1 when the whole command was refused.
+    Reconcile(StatusReconcileArgs),
+    /// Move to `done` every item the configured sources hold for the issues a landing closed,
+    /// by issue reference.
+    ///
+    /// Every source the configuration declares is asked — not only the default selection — or
+    /// only those --source names, one after another in configuration order; each whose plugin
+    /// declares `complete_by_issue` is read once per 50 references, and no board is read whole.
+    /// Every other source is sent no request and listed under `unsupported`.
+    ///
+    /// Per reference and source: no item for the issue, or an issue the source's credential
+    /// cannot see, is `absent`; an issue closed as not planned or duplicate is `skipped`; one
+    /// closed as completed whose card already reads `done` is `unchanged`; every other item is
+    /// written `done` through the status write — its card moved, and its issue closed as
+    /// completed if it is still open, never reopened — and `updated`, with every task it
+    /// delivers kept in step as `task status set` keeps them.
+    ///
+    /// Exits 0 when no item failed, 4 when any failed or a delivered task could not be kept in
+    /// step, and 1 when the whole command was refused.
+    Complete(StatusCompleteArgs),
+}
+
+/// `onetaskgraph task status reconcile`.
+#[derive(Debug, Args)]
+pub struct StatusReconcileArgs {
+    /// The configured source whose cards to bring in line. A source name, never a qualified
+    /// id.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `CopyArgs::to`: a name that cannot
+    /// be a source name and one that names no configured source are the same typo, and both
+    /// owe the same next action.
+    #[arg(long, value_name = "SOURCE")]
+    pub source: String,
+
+    /// Read and list every item that would be brought in line, and write nothing.
+    #[arg(long = "dry-run")]
+    pub dry_run: bool,
+
+    #[command(flatten)]
+    pub term_scope: TermScopeArgs,
+}
+
+/// `onetaskgraph task status complete`.
+#[derive(Debug, Args)]
+pub struct StatusCompleteArgs {
+    /// An issue a landing closed, as `owner/name#N` — the spelling a landing event's `closes`
+    /// reports. Repeat it, or give several after one flag; a reference named twice is answered
+    /// once per source.
+    #[arg(long = "issue", value_name = "REF", num_args = 1.., value_parser = issue_ref)]
+    pub issue: Vec<IssueRef>,
+
+    /// Ask only this configured source. Repeat for several. Without it, every configured
+    /// source is asked.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `StatusReconcileArgs::source`.
+    #[arg(long = "source", value_name = "SOURCE")]
+    pub source: Vec<String>,
+
+    /// Read and list every item that would be moved, and write nothing.
+    #[arg(long = "dry-run")]
+    pub dry_run: bool,
+
+    #[command(flatten)]
+    pub term_scope: TermScopeArgs,
+}
+
+/// An issue reference, refused as a usage error naming it.
+fn issue_ref(value: &str) -> Result<IssueRef, String> {
+    value.parse()
 }
 
 /// `onetaskgraph task status set`.

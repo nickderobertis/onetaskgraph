@@ -16,11 +16,11 @@ use std::time::Duration;
 use async_trait::async_trait;
 use onetaskgraph_plugin_api::{
     AssetWrite, AssetsWritten, Capabilities, Comment, CommentBody, CommentCopy, DependencyEdge,
-    Direction, Document, DocumentQuery, Health, ItemWrite, Label, MetadataKey, MetadataRecord,
-    Metering, NativeId, NewComment, Page, PageRequest, Priority, Project, ProjectQuery,
-    SourceError, SourceName, Status, StatusCategory, Task, TaskDetailRead, TaskQuery, TaskRef,
-    TaskSource, TaskUpdate, TaskUpdateOutcome, WriteSupport, assetless, unwritable_field,
-    unwritable_metadata,
+    Direction, Document, DocumentQuery, Health, IssueHolding, IssueRef, ItemWrite, Label,
+    MetadataKey, MetadataRecord, Metering, NativeId, NewComment, Page, PageRequest, Priority,
+    Project, ProjectQuery, SourceError, SourceName, Status, StatusCategory, StatusContradiction,
+    Task, TaskDetailRead, TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome,
+    WriteSupport, assetless, unwritable_field, unwritable_metadata,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -28,9 +28,10 @@ use serde_json::{Value, json};
 use super::connection::{Connection, Peer};
 use super::wire::{
     AddCommentParams, CommentCopyParams, CommentResult, CommentsParams, CommentsResult,
-    ContentParams, ContentResult, DeleteCommentParams, DeleteParams, DeletedCommentResult,
-    DeliveredByParams, DeliveredByResult, DependencyParams, DocumentAssetWriteParams, DocumentDir,
-    DocumentQueryParams, DocumentResult, DocumentWriteParams, EditCommentParams, EngineIdentity,
+    ContentParams, ContentResult, ContradictionsResult, DeleteCommentParams, DeleteParams,
+    DeletedCommentResult, DeliveredByParams, DeliveredByResult, DependencyParams,
+    DocumentAssetWriteParams, DocumentDir, DocumentQueryParams, DocumentResult,
+    DocumentWriteParams, EditCommentParams, EngineIdentity, HoldingsParams, HoldingsResult,
     IdParams, InitializeParams, InitializeResult, LabelParams, MetadataParams, MeteringResult,
     PROTOCOL_VERSION, PriorityParams, PriorityResult, ProjectQueryParams, ProjectResult,
     ProjectWriteParams, Request, StatusParams, StatusResult, TaskAssetWriteParams,
@@ -903,6 +904,43 @@ impl TaskSource for SubprocessSource {
             )
             .await?;
         Ok(result.status)
+    }
+
+    async fn status_contradictions(&self) -> Result<Vec<StatusContradiction>, SourceError> {
+        // §4.28: sent only to a plugin whose handshake declares it.
+        if !self.capabilities.reconcile_status.is_native() {
+            return Err(SourceError::Refused {
+                message: format!(
+                    "plugin {} does not declare reconcile_status, so its status is read as its \
+                     closure and nothing needs reconciling",
+                    self.kind
+                ),
+            });
+        }
+        let result: ContradictionsResult = self.ask("status_contradictions", json!({})).await?;
+        Ok(result.items)
+    }
+
+    async fn issue_holdings(&self, issues: &[IssueRef]) -> Result<Vec<IssueHolding>, SourceError> {
+        // §4.29: sent only to a plugin whose handshake declares it.
+        if !self.capabilities.complete_by_issue.is_native() {
+            return Err(SourceError::Refused {
+                message: format!(
+                    "plugin {} does not declare complete_by_issue, so it holds no items by \
+                     issue reference",
+                    self.kind
+                ),
+            });
+        }
+        let result: HoldingsResult = self
+            .ask(
+                "issue_holdings",
+                params(&HoldingsParams {
+                    issues: issues.to_vec(),
+                }),
+            )
+            .await?;
+        Ok(result.holdings)
     }
 
     async fn set_task_priority(

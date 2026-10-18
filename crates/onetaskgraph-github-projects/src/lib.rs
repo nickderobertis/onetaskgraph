@@ -628,15 +628,15 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
-    Capabilities, Classification, Comment, CommentBody, CommentOrigin, Coverage, Cursor,
-    DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport, Direction, Document,
-    DocumentQuery, DocumentVersionCoverage, Health, ItemKind, ItemWrite, Label, LabelFilter,
-    Location, MetadataKey, Metering, NativeId, NewComment, Page, PageRequest, Priority, Project,
-    ProjectFilter, ProjectQuery, ProjectVersionCoverage, Repository, SecretResolver, SharedClock,
-    SourceError, SourceName, SourcePlugin, Status, StatusCategory, StatusMapping, Support, Task,
-    TaskDetailRead, TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome, TextFields,
-    TextQuery, UnmappedStatus, UpdatedField, VersionCoverage, WriteJournal, WriteSupport,
-    system_clock,
+    Capabilities, Classification, Comment, CommentBody, CommentOrigin, Completion, Coverage,
+    Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport, Direction,
+    Document, DocumentQuery, DocumentVersionCoverage, Health, IssueHolding, IssueRef, ItemKind,
+    ItemWrite, Label, LabelFilter, Location, MetadataKey, Metering, NativeId, NewComment, Page,
+    PageRequest, Priority, Project, ProjectFilter, ProjectQuery, ProjectVersionCoverage,
+    Repository, SecretResolver, SharedClock, SourceError, SourceName, SourcePlugin, Status,
+    StatusCategory, StatusContradiction, StatusMapping, Support, Task, TaskDetailRead, TaskQuery,
+    TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome, TextFields, TextQuery, UnmappedStatus,
+    UpdatedField, VersionCoverage, WriteJournal, WriteSupport, system_clock,
 };
 use reqwest::{Client, StatusCode, Url};
 use schemars::{Schema, schema_for};
@@ -671,6 +671,14 @@ pub const SEARCH_PAGE_SIZE: u32 = 20;
 /// twenty-five come to 150, which rounds to two. `tests/point_cost.rs` prices the document at
 /// one point and fails if one item more would still be priced at one.
 pub const DETAIL_BATCH: usize = 24;
+/// How many issue references one [`graphql::ISSUES_BY_REFERENCE`] request reads.
+///
+/// Each reference asks GitHub for one connection — a page of its board memberships, each with
+/// its `Status` value read by name rather than through a connection of field values — so fifty
+/// come to fifty requests' worth of the aggregate GitHub divides by a hundred, which is its
+/// one-point minimum, and the batch a landing's closures are read in costs one point per fifty
+/// issues per source. `tests/point_cost.rs` prices the document at one point.
+pub const REFERENCE_BATCH: usize = 50;
 /// How many items one [`graphql::ISSUE_COPY_DETAILS`] request reads: each with the first page
 /// of its comments and its `blockedBy`, the largest batch the node-count model prices at one
 /// point.
@@ -1089,6 +1097,135 @@ pub mod graphql {
       }
     }"#,
         board_issue!()
+    );
+
+    /// Every closed item of the board, by the board's own field filter — what
+    /// `task status reconcile` reads, and nothing else of the board.
+    ///
+    /// **`ProjectV2.items(query:)` narrowed by `$filter`**, which this source binds to
+    /// `is:closed` alone, so a board whose open items are most of it is not read whole to find
+    /// the closed ones. It is narrowed rather than trusted: every item it answers is confirmed
+    /// closed, with a reason and a card that contradict each other, from the item node it
+    /// already carries, so a filter that also let open items through would cost reads and
+    /// write nothing wrong.
+    ///
+    /// The board's own id and field definitions ride along, as [`BOARD`] carries them, so the
+    /// option writes that follow need no read of the board. The root is aliased `closedItems`
+    /// rather than `owner`, so nothing counting the board's own whole reads counts this one
+    /// among them.
+    pub const CLOSED_ITEMS: &str = concat!(
+        r#"query($owner:String!,$number:Int!,$first:Int!,$after:String,$filter:String!,$nestedFirst:Int!,$duplicates:Boolean!"#,
+        relationship_events_variable!(),
+        r#"){
+      closedItems:repositoryOwner(login:$owner){
+        ... on ProjectV2Owner{projectV2(number:$number){id
+          fields(first:$nestedFirst){nodes{
+            ... on ProjectV2SingleSelectField{__typename id name options{id name}}
+            ... on ProjectV2Field{__typename id name dataType}
+          }pageInfo{hasNextPage}}
+          items(first:$first,after:$after,query:$filter){nodes{id updatedAt "#,
+        board_item_values!(),
+        board_item_content!(),
+        r#"} pageInfo{hasNextPage endCursor}}
+        }}
+      }
+    }"#
+    );
+
+    /// One alias of [`ISSUES_BY_REFERENCE`]: the issue `$owner<n>/$name<n>#$number<n>` names.
+    macro_rules! reference_alias {
+        ($n:literal) => {
+            concat!(
+                "\n      r",
+                stringify!($n),
+                ":repository(owner:$owner",
+                stringify!($n),
+                ",name:$name",
+                stringify!($n),
+                "){issue(number:$number",
+                stringify!($n),
+                "){...HeldIssue}}"
+            )
+        };
+    }
+
+    /// [`REFERENCE_BATCH`](super::REFERENCE_BATCH) issues at once, each by its repository and
+    /// number — the one read `task status complete` makes of a source, and nothing else of
+    /// the board: no `items`, no search and no project read.
+    ///
+    /// **Its own fragment, lighter than `board_issue!`, and that is what makes fifty
+    /// references one point.** It selects no labels, and of each board membership only the
+    /// `Status` value, by name, with `fieldValueByName` — so each alias asks GitHub for one
+    /// connection, its page of memberships, where the whole fragment asks for five. What a
+    /// completion writes is a card and, at most, the issue's state, so the labels and the other
+    /// field values it leaves out are never what it needs; an item read this way is held for
+    /// that write alone and never answers another read. An issue whose entry for this board is
+    /// past its first page of memberships is walked with [`ISSUE_BOARD_ITEMS`], exactly as
+    /// every other read of an issue recovers one.
+    ///
+    /// Fixed-size, as [`ISSUE_DETAILS`] is, so there is one document to price: a batch of
+    /// fewer references binds the slots it has none for to its last one.
+    pub const ISSUES_BY_REFERENCE: &str = concat!(
+        r#"query($owner0:String!,$name0:String!,$number0:Int!,$owner1:String!,$name1:String!,$number1:Int!,$owner2:String!,$name2:String!,$number2:Int!,$owner3:String!,$name3:String!,$number3:Int!,$owner4:String!,$name4:String!,$number4:Int!,$owner5:String!,$name5:String!,$number5:Int!,$owner6:String!,$name6:String!,$number6:Int!,$owner7:String!,$name7:String!,$number7:Int!,$owner8:String!,$name8:String!,$number8:Int!,$owner9:String!,$name9:String!,$number9:Int!,$owner10:String!,$name10:String!,$number10:Int!,$owner11:String!,$name11:String!,$number11:Int!,$owner12:String!,$name12:String!,$number12:Int!,$owner13:String!,$name13:String!,$number13:Int!,$owner14:String!,$name14:String!,$number14:Int!,$owner15:String!,$name15:String!,$number15:Int!,$owner16:String!,$name16:String!,$number16:Int!,$owner17:String!,$name17:String!,$number17:Int!,$owner18:String!,$name18:String!,$number18:Int!,$owner19:String!,$name19:String!,$number19:Int!,$owner20:String!,$name20:String!,$number20:Int!,$owner21:String!,$name21:String!,$number21:Int!,$owner22:String!,$name22:String!,$number22:Int!,$owner23:String!,$name23:String!,$number23:Int!,$owner24:String!,$name24:String!,$number24:Int!,$owner25:String!,$name25:String!,$number25:Int!,$owner26:String!,$name26:String!,$number26:Int!,$owner27:String!,$name27:String!,$number27:Int!,$owner28:String!,$name28:String!,$number28:Int!,$owner29:String!,$name29:String!,$number29:Int!,$owner30:String!,$name30:String!,$number30:Int!,$owner31:String!,$name31:String!,$number31:Int!,$owner32:String!,$name32:String!,$number32:Int!,$owner33:String!,$name33:String!,$number33:Int!,$owner34:String!,$name34:String!,$number34:Int!,$owner35:String!,$name35:String!,$number35:Int!,$owner36:String!,$name36:String!,$number36:Int!,$owner37:String!,$name37:String!,$number37:Int!,$owner38:String!,$name38:String!,$number38:Int!,$owner39:String!,$name39:String!,$number39:Int!,$owner40:String!,$name40:String!,$number40:Int!,$owner41:String!,$name41:String!,$number41:Int!,$owner42:String!,$name42:String!,$number42:Int!,$owner43:String!,$name43:String!,$number43:Int!,$owner44:String!,$name44:String!,$number44:Int!,$owner45:String!,$name45:String!,$number45:Int!,$owner46:String!,$name46:String!,$number46:Int!,$owner47:String!,$name47:String!,$number47:Int!,$owner48:String!,$name48:String!,$number48:Int!,$owner49:String!,$name49:String!,$number49:Int!,$boardItems:Int!,$statusField:String!,$duplicates:Boolean!"#,
+        relationship_events_variable!(),
+        r#"){"#,
+        reference_alias!(0),
+        reference_alias!(1),
+        reference_alias!(2),
+        reference_alias!(3),
+        reference_alias!(4),
+        reference_alias!(5),
+        reference_alias!(6),
+        reference_alias!(7),
+        reference_alias!(8),
+        reference_alias!(9),
+        reference_alias!(10),
+        reference_alias!(11),
+        reference_alias!(12),
+        reference_alias!(13),
+        reference_alias!(14),
+        reference_alias!(15),
+        reference_alias!(16),
+        reference_alias!(17),
+        reference_alias!(18),
+        reference_alias!(19),
+        reference_alias!(20),
+        reference_alias!(21),
+        reference_alias!(22),
+        reference_alias!(23),
+        reference_alias!(24),
+        reference_alias!(25),
+        reference_alias!(26),
+        reference_alias!(27),
+        reference_alias!(28),
+        reference_alias!(29),
+        reference_alias!(30),
+        reference_alias!(31),
+        reference_alias!(32),
+        reference_alias!(33),
+        reference_alias!(34),
+        reference_alias!(35),
+        reference_alias!(36),
+        reference_alias!(37),
+        reference_alias!(38),
+        reference_alias!(39),
+        reference_alias!(40),
+        reference_alias!(41),
+        reference_alias!(42),
+        reference_alias!(43),
+        reference_alias!(44),
+        reference_alias!(45),
+        reference_alias!(46),
+        reference_alias!(47),
+        reference_alias!(48),
+        reference_alias!(49),
+        "\n    }",
+        r#" fragment HeldIssue on Issue{__typename id number title body url createdAt updatedAt state stateReason(enableDuplicate:$duplicates) repository{nameWithOwner} parent{id} subIssuesSummary{total} commentCount:comments{totalCount} relationshipEvents:timelineItems(itemTypes:$relationshipEvents){totalCount}
+      projectItems(first:$boardItems){nodes{id updatedAt project{id number}
+        status:fieldValueByName(name:$statusField){... on ProjectV2ItemFieldSingleSelectValue{name field{
+          ... on ProjectV2SingleSelectField{id name options{id name}}
+        }}}
+      }pageInfo{hasNextPage endCursor}}}"#
     );
 
     /// The board's own id and field definitions, and not one of its items.
@@ -1528,7 +1665,7 @@ pub mod graphql {
     /// `documents_are_all_inventoried` reads this file back and fails naming any `pub
     /// const` here that this list omits, so the two cannot part — which is the same guard
     /// `CATEGORIES` carries, in the one shape available to a set of `&str` constants.
-    pub const DOCUMENTS: [(&str, &str); 40] = [
+    pub const DOCUMENTS: [(&str, &str); 42] = [
         (SEARCH_ISSUES, "searching this board's issues"),
         (ISSUE, "reading one issue"),
         (
@@ -1538,6 +1675,11 @@ pub mod graphql {
         (SUB_ISSUES, "reading a project's tasks"),
         (BOARD, "reading the board"),
         (ORIGIN_LOOKUP, "looking up the items copied from one origin"),
+        (CLOSED_ITEMS, "reading the board's closed items"),
+        (
+            ISSUES_BY_REFERENCE,
+            "reading a batch of issues by their references",
+        ),
         (BOARD_FIELDS, "reading the board's fields"),
         (DRAFT, "reading one draft"),
         (REPOSITORY, "reading the destination repository"),
@@ -2902,6 +3044,34 @@ impl BoardStatuses {
             name,
         }
     }
+
+    /// The option a closed item's `Status` has to hold for its card to agree with its
+    /// closure, and the category that closure reads as — or `None` when the item is open,
+    /// its closure reads `unknown`, or its option already agrees.
+    ///
+    /// What `task status reconcile` writes: only `done` and `cancelled` closures are brought
+    /// in line, each to the one option the mapping gives its category — an item with no
+    /// option, or at one the mapping does not name, included.
+    fn contradicted(
+        &self,
+        kind: ItemKind,
+        option: Option<&str>,
+        closed: bool,
+        reason: Option<&str>,
+    ) -> Option<(StatusCategory, &str)> {
+        if !closed {
+            return None;
+        }
+        let category = closed_category(reason);
+        if !matches!(category, StatusCategory::Done | StatusCategory::Cancelled) {
+            return None;
+        }
+        let wanted = self.target(kind, category).option()?;
+        if option.is_some_and(|option| option.eq_ignore_ascii_case(wanted)) {
+            return None;
+        }
+        Some((category, wanted))
+    }
 }
 
 /// The category a closed issue reads as, from the reason it was closed with.
@@ -3122,6 +3292,10 @@ pub struct GitHubProjectsSource {
     /// [`TaskSource::end_command`] drops every record, so a write in the next command reads
     /// its item as a person has since left it.
     resolved_cache: Mutex<BTreeMap<NativeId, Resolved>>,
+    /// Items an issue read by reference reached, held for the one status write each was read
+    /// for and taken out by it — never reused for another read or write, because that read
+    /// selects only what such a write needs. Dropped by [`TaskSource::end_command`].
+    held_cache: Mutex<BTreeMap<NativeId, Resolved>>,
     /// Each project's sub-issues as GitHub answered them, keyed by the selector they were
     /// asked for under, with the project that selector named — for the length of one command,
     /// dropped by [`TaskSource::end_command`].
@@ -4278,6 +4452,7 @@ impl GitHubProjectsSource {
             search_cache: Mutex::new(None),
             narrowed_cache: Mutex::new(BTreeMap::new()),
             resolved_cache: Mutex::new(BTreeMap::new()),
+            held_cache: Mutex::new(BTreeMap::new()),
             children_cache: Mutex::new(BTreeMap::new()),
             search_next: Mutex::new(BTreeMap::new()),
             fields_cache: Mutex::new(None),
@@ -4620,7 +4795,12 @@ impl GitHubProjectsSource {
                 message: format!("GitHub GraphQL returned HTTP {status}"),
             }));
         }
-        let mut data = self.answer(&body).map_err(Attempt::Failed)?;
+        let answered = if query == graphql::ISSUES_BY_REFERENCE {
+            self.answer_unresolved(&body)
+        } else {
+            self.answer(&body)
+        };
+        let mut data = answered.map_err(Attempt::Failed)?;
         if let Some(served) = served {
             stamp_served(&mut data, &served.to_rfc3339());
         }
@@ -4628,6 +4808,30 @@ impl GitHubProjectsSource {
     }
 
     /// What one successful HTTP response says, once its GraphQL errors are read.
+    /// [`Self::answer`], for a read of issues by reference: a reference GitHub cannot resolve
+    /// for this credential — a repository it cannot see, an issue number it does not hold —
+    /// is answered `null` beside a `NOT_FOUND` error naming it, and that is an answer about
+    /// that reference rather than a failure of the others. Any other error refuses the read,
+    /// as there.
+    fn answer_unresolved(&self, body: &str) -> Result<Value, SourceError> {
+        let parsed: Option<Value> = serde_json::from_str(body).ok();
+        let unresolved_only = parsed.as_ref().is_some_and(|parsed| {
+            parsed.get("data").is_some_and(Value::is_object)
+                && parsed
+                    .get("errors")
+                    .and_then(Value::as_array)
+                    .is_some_and(|errors| {
+                        errors.iter().all(|error| {
+                            error.get("type").and_then(Value::as_str) == Some("NOT_FOUND")
+                        })
+                    })
+        });
+        match parsed {
+            Some(parsed) if unresolved_only => Ok(parsed["data"].clone()),
+            _ => self.answer(body),
+        }
+    }
+
     fn answer(&self, body: &str) -> Result<Value, SourceError> {
         let body: Value = serde_json::from_str(body).map_err(|e| SourceError::Malformed {
             message: format!("GitHub returned invalid JSON: {e}"),
@@ -4730,6 +4934,16 @@ impl GitHubProjectsSource {
     /// page reports more of the connection, in [`Self::board_membership`]'s walk of the
     /// rest of it.
     async fn resolve_issue(&self, issue: &Value) -> Result<Option<Resolved>, SourceError> {
+        self.resolve_issue_as(issue, true).await
+    }
+
+    /// [`Self::resolve_issue`], remembering what it resolves for this command's later reads
+    /// and writes only when `remember` says to.
+    async fn resolve_issue_as(
+        &self,
+        issue: &Value,
+        remember: bool,
+    ) -> Result<Option<Resolved>, SourceError> {
         if optional_str(issue, "__typename")? != Some("Issue") {
             return Ok(None);
         }
@@ -4776,7 +4990,11 @@ impl GitHubProjectsSource {
             "fieldValues": held.get("fieldValues"),
             "content": issue,
         });
-        self.resolve(&item)
+        if remember {
+            self.resolve(&item)
+        } else {
+            self.resolve_unremembered(&item)
+        }
     }
 
     /// This board's own entry among one page of an issue's `Issue.projectItems`.
@@ -5112,7 +5330,19 @@ impl GitHubProjectsSource {
     /// it before writing, so a partial failure cannot leave a pre-write binding behind.
     async fn bound_item(&self, id: &NativeId) -> Result<Option<Resolved>, SourceError> {
         let cached = self.resolved_cache()?.get(id).cloned();
-        match cached {
+        if let Some(item) = cached {
+            return Ok(Some(item));
+        }
+        let held = self
+            .held_cache
+            .lock()
+            .map_err(|_| SourceError::Unavailable {
+                message: "items read by issue reference were left inconsistent; run the \
+                          command again"
+                    .into(),
+            })?
+            .remove(id);
+        match held {
             Some(item) => Ok(Some(item)),
             None => self.item_by_id(id).await,
         }
@@ -6007,6 +6237,11 @@ impl GitHubProjectsSource {
     /// source is least able to re-read, so leaving it out would put the stale title back on
     /// the only items the completion in [`Self::board`] exists for.
     fn remember_written(&self, item: Resolved, created: bool) -> Result<(), SourceError> {
+        // Read for one status write and carrying only what it needed: nothing this process
+        // answers later may be answered from it.
+        if item.partial {
+            return Ok(());
+        }
         self.resolved_cache()?.insert(item.id.clone(), item.clone());
         if created {
             self.created()?.push(item);
@@ -6298,6 +6533,8 @@ impl GitHubProjectsSource {
             option: option.map(str::to_owned),
             priority,
             closed,
+            reason: closed.then(|| reason.map(str::to_owned)).flatten(),
+            partial: false,
             delivers,
             delivered_by,
             labels: item_labels.clone(),
@@ -6565,6 +6802,8 @@ impl GitHubProjectsSource {
                 if item.content_kind == ContentKind::DraftIssue {
                     return Err(self.closes_a_draft(category));
                 }
+                // The option first, so a refused selection leaves an open issue open rather
+                // than closed behind a card that still reads open.
                 self.set_item_field(
                     board.id.as_str(),
                     &item.item_id,
@@ -6572,17 +6811,29 @@ impl GitHubProjectsSource {
                     json!({"singleSelectOptionId": option}),
                 )
                 .await?;
-                self.update_content(
-                    ContentKind::Issue,
-                    &item.id,
-                    json!({"stateInput": state_input(Some(&target))}),
-                )
-                .await?;
+                // An issue already closed in a way that reads as this category keeps its state
+                // and its reason: only its card was out of line, and closing it again would
+                // overwrite a reason — a duplicate's — that says more than this write does.
+                let already = item.closed && item.status.category == category;
+                if !already {
+                    self.update_content(
+                        ContentKind::Issue,
+                        &item.id,
+                        json!({"stateInput": state_input(Some(&target))}),
+                    )
+                    .await?;
+                }
+                let reason = if already {
+                    item.reason.clone()
+                } else {
+                    Some(reason.reason().to_owned())
+                };
                 item.closed = true;
                 item.status =
                     self.statuses
-                        .status(ItemKind::Task, Some(&name), true, Some(reason.reason()));
+                        .status(ItemKind::Task, Some(&name), true, reason.as_deref());
                 item.option = Some(name);
+                item.reason = reason;
             }
             StatusTarget::Column(_) => {
                 // An option is what an open item's status is, so a closed issue is reopened
@@ -8407,6 +8658,14 @@ impl GitHubProjectsSource {
                     Some(_) => false,
                     None => existing.is_some_and(|item| item.closed),
                 },
+            reason: match status_target.as_ref() {
+                Some(StatusTarget::Terminal(_, reason)) if content_kind == ContentKind::Issue => {
+                    Some(reason.reason().to_owned())
+                }
+                Some(_) => None,
+                None => existing.and_then(|item| item.reason.clone()),
+            },
+            partial: false,
             delivers: incoming.delivers.to_vec(),
             delivered_by: incoming.delivered_by.to_vec(),
             labels: incoming.labels.to_vec(),
@@ -9651,6 +9910,17 @@ struct Resolved {
     priority: HeldPriority,
     /// Whether this item's issue is closed. A draft has no such state and is never closed.
     closed: bool,
+    /// GitHub's reason for a closed issue's closure, as it spells it — `None` for an open
+    /// issue, a draft, and an issue closed before GitHub recorded reasons.
+    #[serde(default)]
+    reason: Option<String>,
+    /// Whether this item was read by an issue reference, which reads its card's `Status` and
+    /// nothing else of the board, nor its labels: what the one status write it was read for
+    /// needs, and not what any other read or write may be answered from. Never part of a
+    /// context handed to the store, which such an item never is.
+    #[serde(skip)]
+    #[schemars(skip)]
+    partial: bool,
     /// The tasks this one delivers, read out of its slot. Empty for anything not a task.
     delivers: Vec<TaskRef>,
     /// Every task that delivers this one, read out of its slot. Empty for anything not a
@@ -10251,6 +10521,228 @@ const FAR_ENDS_UNCOVERED: &str = "a github item's change token does not attest a
      whether it became a document, or its deletion, so its forward edges are always read from \
      github";
 
+/// The board filter `task status reconcile` reads the board through: closed items alone.
+const CLOSED_FILTER: &str = "is:closed";
+
+/// The variables of one [`graphql::ISSUES_BY_REFERENCE`] request for `batch`: each slot names
+/// one reference, and a slot the batch has none for names its last one again.
+fn reference_batch(batch: &[IssueRef]) -> Value {
+    let mut variables = serde_json::Map::new();
+    for slot in 0..REFERENCE_BATCH {
+        let issue = batch.get(slot).or(batch.last());
+        variables.insert(format!("owner{slot}"), json!(issue.map(|i| &i.owner)));
+        variables.insert(format!("name{slot}"), json!(issue.map(|i| &i.name)));
+        variables.insert(format!("number{slot}"), json!(issue.map(|i| i.number)));
+    }
+    variables.insert("boardItems".to_owned(), json!(BOARD_ITEMS_PAGE_SIZE));
+    variables.insert("statusField".to_owned(), json!(STATUS_FIELD));
+    variables.insert("duplicates".to_owned(), json!(true));
+    Value::Object(variables)
+}
+
+/// One issue an issue read by reference answered, in the shape every other read of an issue
+/// hands its resolver: each board membership's `Status` value, read by name, as the one field
+/// value that membership carries.
+fn held_issue(issue: &Value) -> Value {
+    let mut issue = issue.clone();
+    if let Some(nodes) = issue
+        .pointer_mut("/projectItems/nodes")
+        .and_then(Value::as_array_mut)
+    {
+        for node in nodes {
+            let status = node
+                .get("status")
+                .filter(|status| status.get("name").is_some_and(Value::is_string))
+                .cloned();
+            node["fieldValues"] = json!({"nodes": status.into_iter().collect::<Vec<_>>(),
+                                         "pageInfo": {"hasNextPage": false}});
+        }
+    }
+    issue
+}
+
+/// A closure reason as a person reads it: `NOT_PLANNED` as `not planned`.
+fn spoken_reason(reason: &str) -> String {
+    reason.to_ascii_lowercase().replace('_', " ")
+}
+
+impl GitHubProjectsSource {
+    /// Every task of this board whose card contradicts its issue's closure, read through the
+    /// board's own `is:closed` filter, page by page — never the board's unfiltered `items`.
+    ///
+    /// Each item the filter answers is confirmed from its own node: an open one, one whose
+    /// closure reads `unknown`, and one whose card is already in line are left out whatever
+    /// the filter let through. The board's fields ride along and are held for the option
+    /// writes that follow, so those need no read of the board.
+    async fn contradictions(&self) -> Result<Vec<StatusContradiction>, SourceError> {
+        let mut after: Option<String> = None;
+        let mut found = Vec::new();
+        loop {
+            let data = self
+                .graphql(
+                    graphql::CLOSED_ITEMS,
+                    json!({"owner":self.owner,"number":self.project_number,
+                           "first":MAX_PAGE_SIZE,"after":after,"filter":CLOSED_FILTER,
+                           "nestedFirst":NESTED_PAGE_SIZE,"duplicates":true}),
+                )
+                .await?;
+            let board = data
+                .pointer("/closedItems/projectV2")
+                .filter(|value| !value.is_null())
+                .ok_or_else(|| SourceError::Refused {
+                    message: format!(
+                        "GitHub project {}/{} was not found or is not visible to the token",
+                        self.owner, self.project_number
+                    ),
+                })?;
+            *self.fields_cache()? = Some(BoardFields {
+                id: BoardId::parse(required_str(board, "id")?)?,
+                fields: board.get("fields").cloned().unwrap_or(Value::Null),
+            });
+            let items = board.get("items").ok_or_else(|| SourceError::Malformed {
+                message: "GitHub project closed items are missing".into(),
+            })?;
+            for item in items
+                .get("nodes")
+                .and_then(Value::as_array)
+                .ok_or_else(|| SourceError::Malformed {
+                    message: "GitHub project items.nodes is not an array".into(),
+                })?
+            {
+                let Some(resolved) = self.resolve(item)? else {
+                    continue;
+                };
+                if resolved.kind != BoardKind::Work(ItemKind::Task) {
+                    continue;
+                }
+                let Some((category, name)) = self.statuses.contradicted(
+                    ItemKind::Task,
+                    resolved.option.as_deref(),
+                    resolved.closed,
+                    resolved.reason.as_deref(),
+                ) else {
+                    continue;
+                };
+                found.push(StatusContradiction {
+                    to: Status {
+                        category,
+                        name: name.to_owned(),
+                    },
+                    option: resolved.option.clone(),
+                    task: resolved.task()?,
+                });
+            }
+            let info = items
+                .get("pageInfo")
+                .ok_or_else(|| SourceError::Malformed {
+                    message: "GitHub project items have no pageInfo".into(),
+                })?;
+            if !required_bool(info, "hasNextPage")? {
+                return Ok(found);
+            }
+            let next = required_str(info, "endCursor")?;
+            validate_cursor_progress(after.as_deref(), next)?;
+            after = Some(next.to_owned());
+        }
+    }
+
+    /// What this board holds for each issue in `issues`, once each in the order given, read
+    /// [`REFERENCE_BATCH`] references at a time — and nothing else of the board.
+    ///
+    /// An issue GitHub cannot find for this source's credential, and one with no item on this
+    /// board, are both absent. A closure that already says the work will not be done here —
+    /// not planned, duplicate — is skipped: a landing does not overrule it. A task closed as
+    /// completed whose card sits at the `done` option is unchanged, and every other task is
+    /// due a `done` write.
+    async fn holdings(&self, issues: &[IssueRef]) -> Result<Vec<IssueHolding>, SourceError> {
+        let mut distinct: Vec<IssueRef> = Vec::with_capacity(issues.len());
+        for issue in issues {
+            if !distinct.contains(issue) {
+                distinct.push(issue.clone());
+            }
+        }
+        let done = self
+            .statuses
+            .target(ItemKind::Task, StatusCategory::Done)
+            .option()
+            .unwrap_or("Done")
+            .to_owned();
+        let mut holdings = Vec::with_capacity(distinct.len());
+        for batch in distinct.chunks(REFERENCE_BATCH) {
+            let data = self
+                .graphql(graphql::ISSUES_BY_REFERENCE, reference_batch(batch))
+                .await?;
+            for (slot, issue) in batch.iter().enumerate() {
+                let node = data
+                    .pointer(&format!("/r{slot}/issue"))
+                    .filter(|node| !node.is_null());
+                let resolved = match node {
+                    Some(node) => self
+                        .resolve_issue_as(&held_issue(node), false)
+                        .await?
+                        .filter(|item| item.kind == BoardKind::Work(ItemKind::Task)),
+                    None => None,
+                };
+                let absent = || IssueHolding {
+                    issue: issue.clone(),
+                    task: None,
+                    option: None,
+                    classification: Classification::default(),
+                    repositories: Vec::new(),
+                    delivers: Vec::new(),
+                    completion: Completion::Absent,
+                };
+                let Some(item) = resolved else {
+                    holdings.push(absent());
+                    continue;
+                };
+                let completion = match (item.closed, item.reason.as_deref()) {
+                    (true, Some(reason @ ("NOT_PLANNED" | "DUPLICATE"))) => Completion::Skipped {
+                        reason: format!("closed as {}", spoken_reason(reason)),
+                    },
+                    (true, None | Some("COMPLETED"))
+                        if item
+                            .option
+                            .as_deref()
+                            .is_some_and(|option| option.eq_ignore_ascii_case(&done)) =>
+                    {
+                        Completion::Unchanged
+                    }
+                    _ => Completion::Due {
+                        to: Status {
+                            category: StatusCategory::Done,
+                            name: done.clone(),
+                        },
+                    },
+                };
+                let task = item.task()?;
+                if matches!(completion, Completion::Due { .. }) {
+                    let mut held = item.clone();
+                    held.partial = true;
+                    self.held_cache
+                        .lock()
+                        .map_err(|_| SourceError::Unavailable {
+                            message: "items read by issue reference were left inconsistent; \
+                                      run the command again"
+                                .into(),
+                        })?
+                        .insert(held.id.clone(), held);
+                }
+                holdings.push(IssueHolding {
+                    issue: issue.clone(),
+                    task: Some(task.id),
+                    option: item.option.clone(),
+                    classification: task.classification,
+                    repositories: task.repositories,
+                    delivers: task.delivers,
+                    completion,
+                });
+            }
+        }
+        Ok(holdings)
+    }
+}
+
 #[async_trait::async_trait]
 impl TaskSource for GitHubProjectsSource {
     fn kind(&self) -> &'static str {
@@ -10326,6 +10818,8 @@ impl TaskSource for GitHubProjectsSource {
             filter_by_comment_activity: Support::Native,
             filter_by_metadata: Support::Native,
             filter_by_origin: Support::Native,
+            reconcile_status: Support::Native,
+            complete_by_issue: Support::Native,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,
@@ -10730,6 +11224,18 @@ impl TaskSource for GitHubProjectsSource {
         self.set_status(id, category).await
     }
 
+    /// Every task whose card contradicts its issue's closure, read through the board's own
+    /// `is:closed` filter; see [`TaskSource::status_contradictions`].
+    async fn status_contradictions(&self) -> Result<Vec<StatusContradiction>, SourceError> {
+        self.contradictions().await
+    }
+
+    /// What this board holds for each issue reference, one request per fifty of them; see
+    /// [`TaskSource::issue_holdings`].
+    async fn issue_holdings(&self, issues: &[IssueRef]) -> Result<Vec<IssueHolding>, SourceError> {
+        self.holdings(issues).await
+    }
+
     /// Set one task's priority alone: one `updateProjectV2ItemFieldValue` selecting the
     /// mapped option of the board's `Priority` field, or one `clearProjectV2ItemFieldValue`
     /// for `none`. Refused by an instance with no `priority_mapping`.
@@ -11132,6 +11638,7 @@ impl TaskSource for GitHubProjectsSource {
         clear(&self.narrowed_cache);
         clear(&self.search_next);
         clear(&self.resolved_cache);
+        clear(&self.held_cache);
         clear(&self.children_cache);
         clear(&self.fields_cache);
         self.expected.end_command();

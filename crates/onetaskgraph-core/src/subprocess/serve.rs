@@ -16,7 +16,7 @@ use std::io::{BufRead, Write};
 
 use onetaskgraph_plugin_api::{
     Document, NativeId, Page, Project, SecretResolver, SourceError, SourceName, Status,
-    StatusCategory, Task, TaskDetailRead, TaskSource, TaskUpdateOutcome,
+    StatusCategory, StatusContradiction, Task, TaskDetailRead, TaskSource, TaskUpdateOutcome,
 };
 use secrecy::SecretString;
 use serde::Deserialize;
@@ -24,12 +24,13 @@ use serde_json::{Value, json};
 
 use super::connection::{Line, MAX_LINE, read_line};
 use super::wire::{
-    AddCommentParams, CommentCopyParams, CommentsParams, ContentParams, DeleteCommentParams,
-    DeleteParams, DeliveredByParams, DependencyParams, DocumentDir, DocumentQueryParams,
-    EditCommentParams, HandshakePluginKind, IdParams, InitializeParams, InitializeResult,
-    LabelParams, MetadataParams, PROTOCOL_VERSION, PriorityParams, ProjectQueryParams,
-    ProjectWriteParams, Request, Response, ServedWriteParams, StatusParams, TaskDetailParams,
-    TaskQueryParams, UpdateParams, after_the_first_vocabulary, knows_every_category, vocabulary,
+    AddCommentParams, CommentCopyParams, CommentsParams, ContentParams, ContradictionsResult,
+    DeleteCommentParams, DeleteParams, DeliveredByParams, DependencyParams, DocumentDir,
+    DocumentQueryParams, EditCommentParams, HandshakePluginKind, HoldingsParams, HoldingsResult,
+    IdParams, InitializeParams, InitializeResult, LabelParams, MetadataParams, PROTOCOL_VERSION,
+    PriorityParams, ProjectQueryParams, ProjectWriteParams, Request, Response, ServedWriteParams,
+    StatusParams, TaskDetailParams, TaskQueryParams, UpdateParams, after_the_first_vocabulary,
+    knows_every_category, vocabulary,
 };
 use crate::config::rebased;
 use crate::registry::PluginKind;
@@ -475,6 +476,23 @@ async fn dispatch(
             let params: StatusParams = decode(method, params)?;
             let status = source.set_task_status(&params.id, params.category).await?;
             encode(json!({ "status": status.map(|status| told(status, known)) }))
+        }
+        "status_contradictions" => {
+            let items = source.status_contradictions().await?;
+            encode(ContradictionsResult {
+                items: items
+                    .into_iter()
+                    .map(|contradiction| StatusContradiction {
+                        task: told_task(contradiction.task, known),
+                        ..contradiction
+                    })
+                    .collect(),
+            })
+        }
+        "issue_holdings" => {
+            let params: HoldingsParams = decode(method, params)?;
+            let holdings = source.issue_holdings(&params.issues).await?;
+            encode(HoldingsResult { holdings })
         }
         "set_task_priority" => {
             let params: PriorityParams = decode(method, params)?;

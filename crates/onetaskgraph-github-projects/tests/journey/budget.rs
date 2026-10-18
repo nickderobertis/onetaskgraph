@@ -558,6 +558,33 @@ pub async fn precondition_session(
     .await
 }
 
+/// The GraphQL points the credentialed `task status reconcile --dry-run` journey is designed to
+/// spend: reading the board's fields, creating and filing two tasks with their fields, one
+/// card write and one close each way, the closed-items reads the reconcile and its own check
+/// make, and taking both tasks back — rounded up generously, because it is what refuses a run
+/// rather than what a run spends.
+pub const RECONCILE_DESIGN_POINTS: u64 = 40;
+
+/// [`precondition_session`] for the reconcile journey, which records into no entry point's
+/// session: the same one allowance read, deciding on [`RECONCILE_DESIGN_POINTS`].
+///
+/// # Errors
+///
+/// As [`precondition_session`].
+pub async fn precondition_reconcile(
+    token: &str,
+    rest_host: &str,
+    into: &Accounting,
+) -> Result<Admitted, Declined> {
+    precondition_estimated(
+        token,
+        rest_host,
+        into,
+        BTreeMap::from([(Budget::Graphql, RECONCILE_DESIGN_POINTS), (Budget::Rest, 1)]),
+    )
+    .await
+}
+
 async fn precondition_estimated(
     token: &str,
     rest_host: &str,

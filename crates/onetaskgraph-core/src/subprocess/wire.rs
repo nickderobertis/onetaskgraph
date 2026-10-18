@@ -16,9 +16,10 @@ use std::path::Path;
 
 use onetaskgraph_plugin_api::{
     AssetWrite, Capabilities, Comment, CommentBody, CommentCopy, Direction, Document,
-    DocumentQuery, ItemWrite, MetadataKey, Metering, NativeId, NewComment, Page, PageRequest,
-    Priority, Project, ProjectQuery, SourceError, Status, StatusCategory, Task, TaskDetailRead,
-    TaskQuery, TaskRef, TaskUpdate, TaskUpdateOutcome, WriteSupport,
+    DocumentQuery, IssueHolding, IssueRef, ItemWrite, MetadataKey, Metering, NativeId, NewComment,
+    Page, PageRequest, Priority, Project, ProjectQuery, SourceError, Status, StatusCategory,
+    StatusContradiction, Task, TaskDetailRead, TaskQuery, TaskRef, TaskUpdate, TaskUpdateOutcome,
+    WriteSupport,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -712,6 +713,28 @@ pub(crate) struct StatusResult {
     /// The status, or `null`.
     #[serde(default)]
     pub(crate) status: Option<Status>,
+}
+
+/// The `status_contradictions` result (§4.28): every task whose card contradicts its issue's
+/// closure, with the status that brings it in line.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct ContradictionsResult {
+    /// The tasks, in the order the plugin read them.
+    pub(crate) items: Vec<StatusContradiction>,
+}
+
+/// `issue_holdings` parameters (§4.29).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct HoldingsParams {
+    /// The issue references, each `owner/name#N`, once each and in the order asked.
+    pub(crate) issues: Vec<IssueRef>,
+}
+
+/// The `issue_holdings` result (§4.29): one holding per reference, in the order asked.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct HoldingsResult {
+    /// The holdings.
+    pub(crate) holdings: Vec<IssueHolding>,
 }
 
 /// `set_task_priority` parameters (§4.19).
