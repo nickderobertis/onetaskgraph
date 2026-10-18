@@ -65,11 +65,46 @@ copy_tracked_files "$ROOT" "$scratch/repo" || fatal \
   "could not copy $ROOT's tracked files into $scratch/repo" \
   "confirm 'git ls-files' answers in $ROOT and 'df -h' for free space, then rerun"
 
-# Its own target directory, inside the scratch tree: sharing this repository's would make
-# every later `just test` rebuild what this check displaced, and the crate's dependencies
-# are already unpacked in the cargo registry, so a cold build here is under a minute.
+# Its own target directory, inside the scratch tree, for what cargo hands back — so nothing
+# it builds is uplifted over this repository's own artifacts — and this repository's build
+# directory for everything cargo builds on the way, so every registry dependency the gate's
+# own test build left is reused rather than compiled again, which on the Windows runner was
+# most of this check's time. Cargo hashes a workspace crate by its path relative to the
+# workspace, and does not rebuild one for a changed CARGO_MANIFEST_DIR, so a crate of the copy
+# built into this repository's slot would bake in a path that is deleted when this exits and
+# be read as fresh by the next build here. So every workspace crate of the copy gets a profile
+# of its own — a codegen-unit count no build of this repository uses, with nothing observable
+# — which hashes it apart, and the copy's files are touched so each of those is built afresh
+# for this tree rather than taken from an earlier run's.
 readonly CRATE=onetaskgraph-github-projects
 readonly SOURCE="crates/$CRATE/src/lib.rs"
+METADATA="$(cd "$ROOT" && cargo metadata --no-deps --format-version 1)" || fatal \
+  "could not read $ROOT's cargo metadata, which names the build directory this check shares" \
+  "run 'cargo metadata --no-deps' in $ROOT and fix what it reports, then rerun"
+BUILD_DIR="$(printf '%s' "$METADATA" \
+  | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])' \
+  | tr -d '\r')"
+readonly BUILD_DIR
+APART=()
+while IFS= read -r member; do
+  [ -n "$member" ] || continue
+  APART+=(--config "profile.dev.package.$member.codegen-units=255"
+    --config "profile.test.package.$member.codegen-units=255")
+done < <(printf '%s' "$METADATA" | python3 -c '
+import json, sys
+metadata = json.load(sys.stdin)
+members = set(metadata["workspace_members"])
+for package in metadata["packages"]:
+    if package["id"] in members:
+        print(package["name"])
+' | tr -d '\r')
+[ -n "$BUILD_DIR" ] && [ "${#APART[@]}" -gt 0 ] || fatal \
+  "could not read $ROOT's target directory and workspace members from cargo metadata" \
+  "run 'cargo metadata --no-deps' in $ROOT and fix what it reports, then rerun"
+readonly APART
+find "$scratch/repo" -type f -exec touch {} + || fatal \
+  "could not touch the scratch copy's files, which keeps its crates from an earlier run's" \
+  "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
 
 SUITE_OUTPUT=""
 SUITE_STATUS=0
@@ -81,7 +116,8 @@ run_suite() {
   # of the repository under test. The same reason cargo is invoked directly in
   # scripts/check-isolation-enforced.sh and scripts/check-real-release-preparation.sh.
   SUITE_OUTPUT="$(cd "$scratch/repo" \
-    && CARGO_TARGET_DIR="$scratch/target" cargo test -q -p "$CRATE" 2>&1)" \
+    && CARGO_TARGET_DIR="$scratch/target" CARGO_BUILD_BUILD_DIR="$BUILD_DIR" \
+      cargo test -q -p "$CRATE" "${APART[@]}" 2>&1)" \
     && SUITE_STATUS=0 || SUITE_STATUS=$?
 }
 
