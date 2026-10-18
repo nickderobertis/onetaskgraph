@@ -470,9 +470,18 @@ fn every_status_set_refusal_names_the_problem_and_the_next_action() {
         "work",
         &[("tasks/T-1.md", "---\ntitle: One\nstatus: todo\n---\n")],
     );
+    // A folder whose mapping already reads the word `done` as todo: remapping that word to
+    // done would misread every task at it, so its refusal recommends no remapping.
+    let misread = folder(
+        &sandbox,
+        "misread",
+        &[("tasks/T-1.md", "---\ntitle: One\nstatus: todo\n---\n")],
+    );
     let (config, _board) = github_projects_with_board(&sandbox);
     sandbox.project_document(&document(&json!({
         "work": {"plugin": "local-md", "config": {"root": work, "status_mapping": {"todo": "todo"}}},
+        "misread": {"plugin": "local-md", "config": {"root": misread,
+            "status_mapping": {"todo": "todo", "done": "todo"}}},
         "frozen": {"plugin": "in-memory", "config": {
             "capabilities": {"writes": "unsupported"},
             "tasks": [{"id": "T-1", "title": "One", "content": null,
@@ -491,6 +500,13 @@ fn every_status_set_refusal_names_the_problem_and_the_next_action() {
             "cannot represent the field `status`: this source reads \"queued\" as unknown, not queued",
         ),
         (
+            vec!["misread:T-1", "done"],
+            "cannot represent the field `status` of task T-1: its status name \"done\" disagrees \
+             with its category done at the source, and this source reads \"done\" as todo; \
+             next: bring the item's status in line at the source — for a board, \
+             `onetaskgraph task status reconcile --source misread`",
+        ),
+        (
             vec!["board:T-3", "draft"],
             "source board has no task status name for draft",
         ),
@@ -507,6 +523,21 @@ fn every_status_set_refusal_names_the_problem_and_the_next_action() {
             said.contains(message) && said.contains("next:"),
             "{arguments:?}: {said}"
         );
+        // Only a name the mapping lacks is a mapping to add; one it reads as another
+        // category is never recommended for remapping, which would misread every other item.
+        if arguments[0].starts_with("misread") {
+            assert!(
+                !said.contains("under this source's status_mapping"),
+                "{arguments:?} recommended a remapping: {said}"
+            );
+        }
+        if arguments[1] == "queued" {
+            assert!(
+                said.contains("next: map \"queued\" to queued under this source's status_mapping")
+                    && !said.contains("reconcile"),
+                "{arguments:?}: {said}"
+            );
+        }
         full.push("--json");
         let failed = parsed(&exits(&arguments.join(" "), &sandbox, &full, 1));
         assert!(
@@ -524,6 +555,10 @@ fn every_status_set_refusal_names_the_problem_and_the_next_action() {
     }
     assert_eq!(
         read(&work, "tasks/T-1.md"),
+        "---\ntitle: One\nstatus: todo\n---\n"
+    );
+    assert_eq!(
+        read(&misread, "tasks/T-1.md"),
         "---\ntitle: One\nstatus: todo\n---\n"
     );
     // A category the vocabulary has no word for is refused as the invocation it is.
