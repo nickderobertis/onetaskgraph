@@ -5,9 +5,14 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, RootModel
+
+
+class FailureClass(StrEnum):
+    FailureClassRefused = "refused"
+    FailureClassTransient = "transient"
 
 
 class GlobalId(RootModel[str]):
@@ -73,6 +78,90 @@ class GroupKey(RootModel[str]):
     ]
 
 
+class SourceErrorConfig(BaseModel):
+    kind: Literal["config"]
+    message: Annotated[str, Field(description="What is wrong, in a form a user can act on.")]
+
+
+class SourceErrorAuth(BaseModel):
+    kind: Literal["auth"]
+    message: Annotated[str, Field(description="What failed. Never contains the credential itself.")]
+
+
+class SourceErrorRefused(BaseModel):
+    kind: Literal["refused"]
+    message: Annotated[str, Field(description="The source's own reason.")]
+
+
+class SourceErrorRateLimited(BaseModel):
+    kind: Literal["rate-limited"]
+    message: Annotated[
+        str | None,
+        Field(
+            description="What the source can add about *which* limit refused it and what it was doing.\n\nAbsent means the source had nothing to add beyond the kind, which is what\nevery source said before this member existed; it is omitted from the wire\nentirely when absent, so a reader written against the shape without it sees\nexactly the shape it was written for. Never contains a credential."
+        ),
+    ] = None
+    retry_after_seconds: Annotated[
+        int | None,
+        Field(description="How long the source asked us to wait, when it said.", ge=0),
+    ] = None
+
+
+class SourceErrorUnavailable(BaseModel):
+    kind: Literal["unavailable"]
+    message: Annotated[str, Field(description="What went wrong reaching it.")]
+
+
+class SourceErrorMalformed(BaseModel):
+    kind: Literal["malformed"]
+    message: Annotated[str, Field(description="What could not be represented.")]
+
+
+class SourceError(
+    RootModel[
+        SourceErrorConfig
+        | SourceErrorAuth
+        | SourceErrorRefused
+        | SourceErrorRateLimited
+        | SourceErrorUnavailable
+        | SourceErrorMalformed
+    ]
+):
+    root: Annotated[
+        SourceErrorConfig
+        | SourceErrorAuth
+        | SourceErrorRefused
+        | SourceErrorRateLimited
+        | SourceErrorUnavailable
+        | SourceErrorMalformed,
+        Field(
+            description="Why a source could not answer.\n\nEvery variant carries owned data only, so an error survives the JSON-over-stdio\nboundary a subprocess-hosted plugin crosses without losing anything."
+        ),
+    ]
+
+
+class SourceName(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="The name a configuration document gives one configured source.",
+            pattern="^[a-z0-9][a-z0-9-]*$",
+        ),
+    ]
+
+
+class SourceFailure(BaseModel):
+    class_: Annotated[
+        FailureClass,
+        Field(
+            alias="class",
+            description="Whether repeating the request unchanged could change this source's answer.",
+        ),
+    ]
+    error: Annotated[SourceError, Field(description="Why.")]
+    source: Annotated[SourceName, Field(description="The source that failed.")]
+
+
 class ProjectGraph(BaseModel):
     direction: Annotated[
         GraphDirection,
@@ -98,3 +187,10 @@ class ProjectGraph(BaseModel):
     schema_version: Annotated[
         int, Field(description="The version of this document's shape; `1`.", ge=0)
     ]
+    unanswered: Annotated[
+        list[SourceFailure],
+        Field(
+            description="Each source declared private that could not be asked what it records of the project's\ntasks, and why — so `edges` lacks whatever it records. Absent when every source\nanswered, which is the one case the graph is complete.",
+            validate_default=True,
+        ),
+    ] = []
