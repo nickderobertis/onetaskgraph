@@ -82,11 +82,14 @@ import sys
 from pathlib import Path
 
 lock = Path("uv.lock")
-text = lock.read_text(encoding="utf-8")
 member = re.compile(
     r'(\[\[package\]\]\nname = "[^"]+"\nversion = ")[^"]*("\nsource = \{ editable = "[^"]*" \}\n)'
 )
-lock.write_bytes(member.sub(lambda m: m.group(1) + sys.argv[1] + m.group(2), text).encode("utf-8"))
+try:
+    text = lock.read_text(encoding="utf-8")
+    lock.write_bytes(member.sub(lambda m: m.group(1) + sys.argv[1] + m.group(2), text).encode("utf-8"))
+except (OSError, UnicodeDecodeError) as error:
+    sys.exit(f"could not write the workspace members' version into {lock}: {error}; next: restore a readable, writable uv.lock (git checkout uv.lock) and rerun scripts/set-version.sh {sys.argv[1]}")
 PY
 uv lock --project . --quiet
 uv lock --project sdks/python --quiet

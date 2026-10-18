@@ -436,9 +436,9 @@ test("the Linux job's registry verification fails on another version, an unusabl
 from pathlib import Path
 out, version = Path(sys.argv[1]), sys.argv[2]
 manifest = json.loads(Path('npm/platforms/linux-x64/package.json').read_text())
-for name, script in [('another-version.tgz', 'echo onetaskgraph 0.0.1'), ('failing.tgz', 'echo broken >&2; exit 3')]:
+for name, binary in [('another-version.tgz', b'#!/bin/sh\\necho onetaskgraph 0.0.1\\n'), ('failing.tgz', b'#!/bin/sh\\necho broken >&2; exit 3\\n'), ('unstartable.tgz', b'not a program this host can execute\\n'), ('hanging.tgz', b'#!/bin/sh\\nexec sleep 300\\n')]:
     with tarfile.open(out / name, 'w:gz') as packed:
-        for path, data in [('package/package.json', json.dumps({**manifest, 'version': version}).encode()), ('package/bin/onetaskgraph', f'#!/bin/sh\\n{script}\\n'.encode())]:
+        for path, data in [('package/package.json', json.dumps({**manifest, 'version': version}).encode()), ('package/bin/onetaskgraph', binary)]:
             info = tarfile.TarInfo(path); info.size = len(data); info.mode = 0o755
             packed.addfile(info, io.BytesIO(data))`,
       binaries,
@@ -453,6 +453,10 @@ for name, script in [('another-version.tgz', 'echo onetaskgraph 0.0.1'), ('faili
       /answered 'onetaskgraph 0\.0\.1', not 'onetaskgraph /,
     ],
     ["a binary that fails", "failing.tgz", /answered 'broken', not 'onetaskgraph /],
+    // Neither answers at all: one the host cannot start, and one that never returns, which
+    // costs this journey the 60 seconds verification waits before it gives up.
+    ["a binary that cannot start", "unstartable.tgz", /installed from npm did not run: .*Exec format error/],
+    ["a binary that never answers", "hanging.tgz", /installed from npm did not run: .*timed out after 60 seconds/],
   ]) {
     control({
       releases: [tag],
