@@ -616,7 +616,12 @@ undoes what it has already written and takes back the items it created in that r
 retry starts from the destination you started from. That is what stops a half-written
 project having to be re-run, and the re-run is the burst of writes that trips a hosted
 destination's rate limiter. When the destination will not take one of them back, the
-refusal says so and names what is still there rather than leaving you to find it.
+refusal says so and names what is still there rather than leaving you to find it. A
+destination that stores an item and then answers its create in a shape the engine refuses
+has kept it under an id the copy was never told, so that one item cannot be taken back: the
+copy undoes everything else, names the destination and the method whose answer was malformed,
+and tells you to inspect that destination before copying again, rather than to copy again and
+land a second one beside it.
 
 <!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] Held by a drift gate: `the_readmes_example_of_a_copy_report_validates_against_the_schema_the_binary_emits` in `crates/onetaskgraph-e2e/tests/e2e/surface.rs` validates the example below against the `CopyReport` root the binary emits. -->
 `--json` gives one entry per item for a script to read:

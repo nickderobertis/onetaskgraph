@@ -10,12 +10,14 @@ can be written from the protocol document alone.
 
 Its settings, handed over in the `initialize` request (§3), are
 `{"store": <path>, "log": <path>, "assets": "native", "half_written": [<title>],
-"answer_content": "omit" | "null"}`. With `assets` absent the handshake says
-nothing about assets, which is a plugin written before there were any. `log` receives one JSON
-line per write this source is sent — what arrived and what it answered — which is how a
-journey proves which bytes reached the plugin, and that a refused copy sent it nothing.
+"malformed_creates": [<title>], "answer_content": "omit" | "null"}`. With `assets` absent the
+handshake says nothing about assets, which is a plugin written before there were any. `log`
+receives one JSON line per write this source is sent — what arrived and what it answered — which
+is how a journey proves which bytes reached the plugin, and that a refused copy sent it nothing.
 `half_written` names titles whose update is applied and then refused, so a journey can make a
 copy fail after another item of it landed and watch it put that item back.
+`malformed_creates` names titles whose create is stored and then answered without its `id`, so
+a journey can make a copy fail on a write that left an item the engine never learned the id of.
 `answer_content` bends the answer to a write carrying assets: `"omit"` leaves its required
 `content` member out, the malformed answer a journey proves the engine refuses, and `"null"`
 answers `null`, which §4.9a allows.
@@ -579,6 +581,10 @@ def write(settings, kind, params):
         answer["content"] = (
             None if settings.get("answer_content") == "null" else item.get("content")
         )
+    # A create of an item whose title the settings name is stored and then answered without
+    # the id it was stored under: the malformed answer that leaves residue nobody can name.
+    if target is None and item.get("title") in settings.get("malformed_creates", []):
+        del answer["id"]
     entry["answered"] = answer
     log(settings, entry)
     return answer
@@ -670,14 +676,16 @@ def initialize(params):
         or settings.get("assets", "native") != "native"
         or not isinstance(settings.get("half_written", []), list)
         or not all(isinstance(title, str) for title in settings.get("half_written", []))
+        or not isinstance(settings.get("malformed_creates", []), list)
+        or not all(isinstance(title, str) for title in settings.get("malformed_creates", []))
         or settings.get("answer_content", "omit") not in ("omit", "null")
     ):
         raise Refusal(
             {
                 "kind": "config",
                 "message": 'this source\'s settings are {"store": <path>, "log": <path>, '
-                '"assets": "native", "half_written": [<title>], "answer_content": '
-                '"omit" | "null"}, all but the first optional',
+                '"assets": "native", "half_written": [<title>], "malformed_creates": '
+                '[<title>], "answer_content": "omit" | "null"}, all but the first optional',
             }
         )
     return settings, {

@@ -58,7 +58,10 @@ mod copy;
 // Markdown in seconds. The rule they prove is the engine's copy, which carries comments between
 // every pair of plugins, so no one plugin crate's edge is narrower.
 mod copy_comments;
+// A copy whose create the destination answers malformed, against the Python asset store over a
+// real pipe.
 mod copy_link;
+mod copy_uncertain;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No credential and no network: the
 // journeys drive the binary between loopback boards and a folder of Markdown in seconds, and
 // read the boards' own request logs. What they prove — a copy's skip and its copy by query — is
