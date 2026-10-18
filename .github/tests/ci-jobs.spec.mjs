@@ -115,11 +115,7 @@ export function problems(all) {
       continue;
     }
     if (job.name !== undefined) found.push(`${id} overrides its name; its check context is its id`);
-    // DIAGNOSTIC, reverted in the next commit by the manager's ruling: test-windows runs to
-    // completion at 60 so the side-by-side trial's two runs are whole.
-    const allowed = id === "test-windows" ? [30, 60] : [30];
-    if (!allowed.includes(job["timeout-minutes"]))
-      found.push(`${id} has timeout-minutes other than 30`);
+    if (job["timeout-minutes"] !== 30) found.push(`${id} has timeout-minutes other than 30`);
     if (job.needs !== undefined) found.push(`${id} has a needs edge`);
     if (job["runs-on"] !== runner) found.push(`${id} runs on ${job["runs-on"]}, not ${runner}`);
     if (job.if !== CONDITIONS[id])
