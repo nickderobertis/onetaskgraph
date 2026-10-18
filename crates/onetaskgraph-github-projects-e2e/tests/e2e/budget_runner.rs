@@ -469,8 +469,12 @@ fn read_visibility(budget: &str) -> Result<(f64, String), String> {
 /// at its workload with both scales measured, each source's reads and writes adding up to that
 /// scale's points, and the figure the 10x scale's.
 fn read_landing_closure(budget: &str) -> Result<(f64, String), String> {
+    landing_closure_of(&recorded(budget)?)
+}
+
+/// [`read_landing_closure`]'s judgement of one recording, `value`.
+fn landing_closure_of(value: &Value) -> Result<(f64, String), String> {
     use super::status_complete::{SCALES, WORKLOAD};
-    let value = recorded(budget)?;
     if value["workload"].as_str() != Some(WORKLOAD) {
         return Err("workload does not match one landing's closures over two boards".into());
     }
@@ -516,6 +520,82 @@ fn read_landing_closure(budget: &str) -> Result<(f64, String), String> {
     let detail = value["detail"].as_str().ok_or("missing detail")?.to_owned();
     let figure = u32::try_from(figure).map_err(|_| "figure out of range")?;
     Ok((f64::from(figure), detail))
+}
+
+/// A recording `landing_closure_of` accepts: both scales at the workload the budget states, each
+/// source spending one read point, the 10x scale's figure the recording's.
+fn landing_closure_recording() -> Value {
+    use super::status_complete::{SCALES, WORKLOAD};
+    let mut scales = serde_json::Map::new();
+    for (scale, issues, board, second) in SCALES {
+        let spent = serde_json::json!({"reads":1,"read_points":1,"writes":0,"write_points":0});
+        scales.insert(
+            scale.to_owned(),
+            serde_json::json!({"issues":issues,"board":board,"second_board":second,"points":2,
+                               "sources":{"plans":spent,"followups":spent}}),
+        );
+    }
+    serde_json::json!({"workload":WORKLOAD,"value":2,"scales":scales,"detail":"2 points"})
+}
+
+#[test]
+fn a_landing_closure_recording_is_refused_unless_it_is_that_journeys_whole_measurement() {
+    assert_eq!(
+        landing_closure_of(&landing_closure_recording()),
+        Ok((2.0, "2 points".to_owned()))
+    );
+    let bent = |bend: &dyn Fn(&mut Value)| {
+        let mut recording = landing_closure_recording();
+        bend(&mut recording);
+        landing_closure_of(&recording).expect_err("a bent recording is refused")
+    };
+    for (bend, says) in [
+        (
+            Box::new(|value: &mut Value| value["workload"] = "another".into())
+                as Box<dyn Fn(&mut Value)>,
+            "workload does not match",
+        ),
+        (
+            Box::new(|value: &mut Value| value["scales"]["1x"]["issues"] = 2.into()),
+            "the 1x scale is not the workload the budget states",
+        ),
+        (
+            Box::new(|value: &mut Value| {
+                value["scales"]["10x"]["sources"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("plans");
+            }),
+            "the 10x scale does not break down two sources",
+        ),
+        (
+            Box::new(|value: &mut Value| {
+                value["scales"]["1x"]["sources"]["plans"]["write_points"] = "1".into();
+            }),
+            "the 1x scale's write_points is not a count",
+        ),
+        (
+            Box::new(|value: &mut Value| value["scales"]["10x"]["points"] = 3.into()),
+            "the 10x breakdown does not add up to its points",
+        ),
+        (
+            Box::new(|value: &mut Value| value["value"] = 1.into()),
+            "the figure is not the 10x scale's",
+        ),
+        (
+            Box::new(|value: &mut Value| value["value"] = "2".into()),
+            "missing whole-number figure",
+        ),
+        (
+            Box::new(|value: &mut Value| {
+                value.as_object_mut().unwrap().remove("detail");
+            }),
+            "missing detail",
+        ),
+    ] {
+        let refused = bent(&*bend);
+        assert!(refused.contains(says), "{refused} does not say {says}");
+    }
 }
 
 /// What `cache_budget` recorded for `budget`, refused unless it is that journey's recording at

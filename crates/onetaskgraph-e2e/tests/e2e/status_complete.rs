@@ -852,6 +852,14 @@ fn a_read_by_reference_answered_malformed_fails_that_boards_references_and_write
             ReferenceFault::NotAnIssue,
             "answered r0 of a read by reference with an issue whose __typename is not Issue",
         ),
+        (
+            ReferenceFault::MembershipNotAnObject,
+            "a board membership that is not an object",
+        ),
+        (
+            ReferenceFault::StatusNamingNoOption,
+            "a membership status that names no option",
+        ),
     ] {
         let stores = Stores::new();
         stores.board.bend_the_next_reference_read(fault);
@@ -880,4 +888,38 @@ fn a_read_by_reference_answered_malformed_fails_that_boards_references_and_write
             "{fault:?}: board B is still written: {answer:#}"
         );
     }
+}
+
+#[test]
+fn a_card_past_the_first_page_of_an_issues_memberships_is_found_and_written() {
+    let stores = Stores::new();
+    // N-8 sits on board A, then two other boards, then board B: board B's card is its fourth
+    // membership, past the first page a read by reference carries.
+    stores.board.put_on_other_boards("N-8", &[20, 21]);
+    let answer = stores.complete(&[reference("N-8")], &["--source", "board-b"], 0);
+    assert_eq!(
+        answered_by(&answer, "board-b"),
+        vec![(reference("N-8"), "updated".to_owned())],
+        "{answer:#}"
+    );
+    assert_eq!(answer["items"][0]["from"], "Todo", "{answer:#}");
+    assert_eq!(
+        stores.board.second_board_status("N-8").as_deref(),
+        Some("Done")
+    );
+    let reads: Vec<String> = stores
+        .board
+        .served_to(GITHUB_SECOND_BOARD_TOKEN)
+        .into_iter()
+        .map(|(document, _)| document)
+        .filter(|document| !document.trim_start().starts_with("mutation"))
+        .collect();
+    assert_eq!(
+        reads,
+        vec![
+            onetaskgraph_github_projects::graphql::ISSUES_BY_REFERENCE.to_owned(),
+            onetaskgraph_github_projects::graphql::ISSUE_BOARD_ITEMS.to_owned(),
+        ],
+        "the read by reference, then the issue's later memberships, and no board read"
+    );
 }

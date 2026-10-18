@@ -1384,6 +1384,23 @@ impl GitHubBoardFields {
         }
     }
 
+    /// Put one issue on each board of `numbers` too, its cards at no option, ahead of every card
+    /// it already holds beside the first board's — so a card a journey put it on before is that
+    /// many memberships further down its list.
+    pub fn put_on_other_boards(&self, id: &str, numbers: &[u64]) {
+        let mut board = self.board.lock().unwrap();
+        let item = board.find(&json!(id));
+        let mut cards: Vec<Value> = numbers
+            .iter()
+            .map(|number| {
+                json!({"number":number,"item":format!("ITEM{number}-{id}"),"status":null,
+                       "itemUpdatedAt":GITHUB_BOARD_EPOCH})
+            })
+            .collect();
+        cards.extend(item["boards"].as_array().cloned().unwrap_or_default());
+        item["boards"] = json!(cards);
+    }
+
     /// Take one issue's card off this server's first board, leaving the issue itself — open or
     /// closed, in its repository — and any card it has on the second board.
     pub fn take_off_the_board(&self, id: &str) {
@@ -2741,6 +2758,12 @@ impl GitHubBoard {
             Some(ReferenceFault::NotAnIssue) => {
                 answer["r0"]["issue"]["__typename"] = json!("PullRequest");
             }
+            Some(ReferenceFault::MembershipNotAnObject) => {
+                answer["r0"]["issue"]["projectItems"]["nodes"] = json!(["ITEM"]);
+            }
+            Some(ReferenceFault::StatusNamingNoOption) => {
+                answer["r0"]["issue"]["projectItems"]["nodes"][0]["status"] = json!({"name": 7});
+            }
             None => {}
         }
         answer
@@ -3057,6 +3080,10 @@ pub enum ReferenceFault {
     NoIssue,
     /// With the slot's issue answered as a node that is not an issue.
     NotAnIssue,
+    /// With the slot's issue holding a board membership that is not an object.
+    MembershipNotAnObject,
+    /// With the slot's issue's first membership answering a status that names no option.
+    StatusNamingNoOption,
 }
 
 /// The token a source configured by [`GitHubBoardFields::second_board`] sends, which tells its

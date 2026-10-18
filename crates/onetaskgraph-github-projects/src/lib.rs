@@ -10600,22 +10600,41 @@ fn reference_batch(batch: &[IssueRef]) -> Value {
 /// One issue an issue read by reference answered, in the shape every other read of an issue
 /// hands its resolver: each board membership's `Status` value, read by name, as the one field
 /// value that membership carries.
-fn held_issue(issue: &Value) -> Value {
+///
+/// A membership's `status` is `null` when its card sits at no option — or on a board with no
+/// field of that name — and otherwise an option value naming its option; anything else is not
+/// an answer to this read, and is refused rather than read as a card at no option.
+fn held_issue(issue: &Value) -> Result<Value, SourceError> {
+    let malformed = |what: &str| SourceError::Malformed {
+        message: format!("GitHub answered an issue read by reference with {what}"),
+    };
     let mut issue = issue.clone();
-    if let Some(nodes) = issue
+    let nodes = issue
         .pointer_mut("/projectItems/nodes")
         .and_then(Value::as_array_mut)
-    {
-        for node in nodes {
-            let status = node
-                .get("status")
-                .filter(|status| status.get("name").is_some_and(Value::is_string))
-                .cloned();
-            node["fieldValues"] = json!({"nodes": status.into_iter().collect::<Vec<_>>(),
-                                         "pageInfo": {"hasNextPage": false}});
-        }
+        .ok_or_else(|| malformed("no list of board memberships"))?;
+    for node in nodes {
+        let node = node
+            .as_object_mut()
+            .ok_or_else(|| malformed("a board membership that is not an object"))?;
+        let status = match node.get("status") {
+            None => return Err(malformed("a board membership with no status member")),
+            Some(Value::Null) => None,
+            Some(status) if status.get("name").is_some_and(Value::is_string) => {
+                Some(status.clone())
+            }
+            // A single-select value of another field type answers `{}`; only an option value
+            // carries a name.
+            Some(status) if status.as_object().is_some_and(serde_json::Map::is_empty) => None,
+            Some(_) => return Err(malformed("a membership status that names no option")),
+        };
+        node.insert(
+            "fieldValues".to_owned(),
+            json!({"nodes": status.into_iter().collect::<Vec<_>>(),
+                   "pageInfo": {"hasNextPage": false}}),
+        );
     }
-    issue
+    Ok(issue)
 }
 
 /// The issue one slot of a read by reference answered, `None` when GitHub answered that
@@ -10764,7 +10783,7 @@ impl GitHubProjectsSource {
                 let node = referenced_issue(&data, slot)?;
                 let resolved = match node {
                     Some(node) => self
-                        .resolve_issue_as(&held_issue(node), false)
+                        .resolve_issue_as(&held_issue(node)?, false)
                         .await?
                         .filter(|item| item.kind == BoardKind::Work(ItemKind::Task)),
                     None => None,
