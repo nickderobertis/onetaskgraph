@@ -126,14 +126,22 @@ fn the_complete_source_answers(sandbox: &Sandbox, environment: &[(&str, &str)]) 
         "only the complete source is configured: {listed:#}"
     );
 
-    let tasks = answer(sandbox, environment, &["task", "list", "--source", NOTES]);
-    let ids: Vec<&str> = tasks["items"]
-        .as_array()
-        .expect("items is a list")
-        .iter()
-        .map(|entry| entry["id"].as_str().expect("a qualified id"))
-        .collect();
-    assert_eq!(ids, [TASK], "{tasks:#}");
+    // Named, and unqualified with `default_sources` unset: every configured source is read,
+    // and the incomplete one is not among them.
+    for arguments in [&["task", "list", "--source", NOTES][..], &["task", "list"]] {
+        let tasks = answer(sandbox, environment, arguments);
+        let ids: Vec<&str> = tasks["items"]
+            .as_array()
+            .expect("items is a list")
+            .iter()
+            .map(|entry| entry["id"].as_str().expect("a qualified id"))
+            .collect();
+        assert_eq!(ids, [TASK], "{arguments:?}: {tasks:#}");
+        assert!(
+            !tasks.to_string().contains(PARTNER),
+            "{arguments:?} reads nothing of the incomplete source: {tasks:#}"
+        );
+    }
 
     assert_eq!(status_of_ship(sandbox, environment), "todo");
     ok(
