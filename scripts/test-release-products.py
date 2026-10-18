@@ -22,6 +22,10 @@ from release_products import bash_executable, RustTarget, NpmPlatform, RunnerLab
 from product_versions import SEMANTIC_VERSION_RE, SemanticVersion
 
 PYTHON_EXECUTABLE = str(Path(sys.executable).resolve())
+# The tampered archives and wheels these cases write are judged by their payloads, never by
+# how they were compressed, and compressing them at zlib's default level was most of this
+# journey's own time.
+FIXTURE_COMPRESSION = 1
 
 
 @dataclass(frozen=True)
@@ -160,7 +164,7 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
         def alter_wheel(suffix: str, replacement: bytes) -> None:
             with zipfile.ZipFile(wheel_path) as wheel:
                 members = [(info, wheel.read(info.filename)) for info in wheel.infolist()]
-            with zipfile.ZipFile(wheel_path, 'w') as wheel:
+            with zipfile.ZipFile(wheel_path, 'w', compresslevel=FIXTURE_COMPRESSION) as wheel:
                 for info, contents in members:
                     wheel.writestr(info, replacement if info.filename.endswith(suffix) else contents)
 
@@ -172,7 +176,7 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
             with zipfile.ZipFile(archive, 'w') as packed:
                 packed.writestr(binary, original_binary + b'corrupt')
         else:
-            with tarfile.open(archive, 'w:gz') as packed:
+            with tarfile.open(archive, 'w:gz', compresslevel=FIXTURE_COMPRESSION) as packed:
                 info = tarfile.TarInfo(binary)
                 info.size = len(original_binary) + len(b'corrupt')
                 packed.addfile(info, io.BytesIO(original_binary + b'corrupt'))
@@ -182,18 +186,18 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
             archive.write_bytes(b'not a tar archive')
             refuses('verification failed')
             for names in [[], [binary, binary], [binary, 'extra']]:
-                with tarfile.open(archive, 'w:gz') as packed:
+                with tarfile.open(archive, 'w:gz', compresslevel=FIXTURE_COMPRESSION) as packed:
                     for name in names:
                         info = tarfile.TarInfo(name)
                         info.size = len(original_binary)
                         packed.addfile(info, io.BytesIO(original_binary))
                 refuses('expected exactly one archive CLI entry')
-            with tarfile.open(archive, 'w:gz') as packed:
+            with tarfile.open(archive, 'w:gz', compresslevel=FIXTURE_COMPRESSION) as packed:
                 info = tarfile.TarInfo('nested/' + binary)
                 info.size = len(original_binary)
                 packed.addfile(info, io.BytesIO(original_binary))
             refuses('archive CLI must be at the root')
-            with tarfile.open(archive, 'w:gz') as packed:
+            with tarfile.open(archive, 'w:gz', compresslevel=FIXTURE_COMPRESSION) as packed:
                 info = tarfile.TarInfo(binary)
                 info.type = tarfile.SYMTYPE
                 info.linkname = 'other'
@@ -209,7 +213,7 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
         original_carrier = carrier.read_bytes()
         with tarfile.open(carrier) as packed:
             members = [(info, packed.extractfile(info).read() if info.isfile() else None) for info in packed.getmembers()]
-        with tarfile.open(carrier, 'w:gz') as packed:
+        with tarfile.open(carrier, 'w:gz', compresslevel=FIXTURE_COMPRESSION) as packed:
             for info, contents in members:
                 if info.name == f'package/bin/{binary}':
                     contents += b'corrupt'
@@ -221,14 +225,14 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
             contract_members = [(info, packed.extractfile(info).read() if info.isfile() else None) for info in packed.getmembers()]
         for path, kind in [(f'package/bin/{binary}', 'carrier CLI entry'), ('package/package.json', 'carrier manifest entry')]:
             for duplicate in [False, True]:
-                with tarfile.open(carrier, 'w:gz') as packed:
+                with tarfile.open(carrier, 'w:gz', compresslevel=FIXTURE_COMPRESSION) as packed:
                     for info, data in contract_members:
                         if info.name != path or duplicate:
                             packed.addfile(info, io.BytesIO(data) if data is not None else None)
                         if info.name == path and duplicate:
                             packed.addfile(info, io.BytesIO(data) if data is not None else None)
                 refuses('expected exactly one ' + kind)
-            with tarfile.open(carrier, 'w:gz') as packed:
+            with tarfile.open(carrier, 'w:gz', compresslevel=FIXTURE_COMPRESSION) as packed:
                 for info, data in contract_members:
                     if info.name == path:
                         bad = tarfile.TarInfo(path)
@@ -239,8 +243,8 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
                         packed.addfile(info, io.BytesIO(data) if data is not None else None)
             refuses(kind + ' must be a regular file')
             carrier.write_bytes(original_carrier)
-        # llmlint: ignore[changed_behavior_has_e2e] This fixture explicitly opens in write mode ('w:gz'); the real native product journey and distribution test execute this malformed-manifest refusal and its recovery.
-        with tarfile.open(carrier, 'w:gz') as packed:
+        # llmlint: ignore[changed_behavior_has_e2e] This fixture explicitly opens in write mode ('w:gz', compresslevel=FIXTURE_COMPRESSION); the real native product journey and distribution test execute this malformed-manifest refusal and its recovery.
+        with tarfile.open(carrier, 'w:gz', compresslevel=FIXTURE_COMPRESSION) as packed:
             for info, data in contract_members:
                 if info.name == 'package/package.json':
                     info = tarfile.TarInfo(info.name)
@@ -285,7 +289,7 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
         original_carrier = carrier.read_bytes()
         with tarfile.open(carrier) as packed:
             members = [(info, packed.extractfile(info).read() if info.isfile() else None) for info in packed.getmembers()]
-        with tarfile.open(carrier, 'w:gz') as packed:
+        with tarfile.open(carrier, 'w:gz', compresslevel=FIXTURE_COMPRESSION) as packed:
             for info, contents in members:
                 if info.name == 'package/package.json':
                     manifest = json.loads(contents)
@@ -298,7 +302,7 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
         for field, invalid, reason in [('version', '999.0.0', 'carrier identity mismatch'), ('os', ['foreign'], 'carrier platform mismatch'), ('cpu', ['foreign'], 'carrier platform mismatch')]:
             with tarfile.open(carrier) as packed:
                 members = [(info, packed.extractfile(info).read() if info.isfile() else None) for info in packed.getmembers()]
-            with tarfile.open(carrier, 'w:gz') as packed:
+            with tarfile.open(carrier, 'w:gz', compresslevel=FIXTURE_COMPRESSION) as packed:
                 for info, contents in members:
                     if info.name == 'package/package.json':
                         manifest = json.loads(contents)
@@ -334,7 +338,7 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
             text = io.StringIO()
             csv.writer(text, lineterminator='\n').writerows(rows)
             contents[record] = (contents[record][0], text.getvalue().encode())
-            with zipfile.ZipFile(wheel_path, 'w') as wheel:
+            with zipfile.ZipFile(wheel_path, 'w', compresslevel=FIXTURE_COMPRESSION) as wheel:
                 for info, data in contents.values():
                     wheel.writestr(info, data)
             subprocess.run([bash_executable(platform.system()), '-c', body], cwd=tree, env=env, check=True, stdout=subprocess.DEVNULL)

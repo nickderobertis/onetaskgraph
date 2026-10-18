@@ -63,7 +63,9 @@
           "bash scripts/check-live-lane-selection.sh",
           "bash scripts/check-selection-line-endings.sh",
           "bash scripts/check-selection-code-page.sh",
-          "bash scripts/check-scoped-release-plz.sh"
+          "bash scripts/check-scoped-release-plz.sh",
+          "bash scripts/check-file-lock.sh",
+          "bash scripts/check-ci-recipes.sh"
         ],
         "parallel": false
       },

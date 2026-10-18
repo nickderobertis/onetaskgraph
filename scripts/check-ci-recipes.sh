@@ -1,0 +1,552 @@
+#!/usr/bin/env bash
+# Drive the four pull-request job recipes, `just ci-<job>`, the way their ci.yml steps do.
+#
+# The recipes, scripts/ci-job.sh, Nx's affected selection and the live-lane decision are all
+# real; only what a target DOES is not — in a scratch clone each target's command is replaced
+# with one that succeeds or fails on cue, so what a recipe ran is readable from its own output
+# in seconds. The Windows recipe, and the macOS recipe outside the cases that read what its
+# phases ran with, are driven through `--select-only`.
+set -euo pipefail
+
+readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Absolute, because every case runs it from inside the scratch clone, where a relative PATH
+# entry such as a virtualenv's resolves to nothing (AGENTS.md).
+PYTHON="$(command -v python3)" || {
+  echo "check-ci-recipes: python3 is not on PATH; next: install Python 3, then re-run." >&2
+  exit 1
+}
+case "$PYTHON" in
+  /*) ;;
+  *) PYTHON="$(cd "$(dirname "$PYTHON")" && pwd)/$(basename "$PYTHON")" ;;
+esac
+readonly PYTHON
+
+# The scratch tree needs a real copy of node_modules, which the Windows runner cannot make
+# (scripts/check-affected-selection.sh says why); the Linux and macOS lanes run this.
+case "${OS:-}${OSTYPE:-}" in
+  *Windows_NT* | *msys* | *cygwin* | *win32*)
+    echo "check-ci-recipes: skipped on Windows (bun's node_modules is a symlink tree the runner cannot copy); the Linux and macOS lanes drive the recipes" >&2
+    exit 0
+    ;;
+esac
+if [ ! -d "$ROOT/node_modules" ]; then
+  echo "check-ci-recipes: there is no node_modules to copy into the scratch tree." >&2
+  echo "check-ci-recipes: next: run 'just bootstrap' (or 'bun install'), then re-run." >&2
+  exit 1
+fi
+
+scratch="$(mktemp -d)"
+trap 'rm -rf "$scratch"' EXIT
+# shellcheck source=scripts/scratch-clone.sh
+source "$ROOT/scripts/scratch-clone.sh"
+scratch_clone "$ROOT" "$scratch/repo"
+readonly REPO="$scratch/repo"
+cp -a "$ROOT/node_modules" "$REPO/node_modules"
+git -C "$REPO" config user.email "check-ci-recipes@invalid"
+git -C "$REPO" config user.name "check-ci-recipes"
+# This runs inside an Nx target, so the Nx it drives shares no state with the outer one —
+# including the outer run's root process, under which Nx registers every task it runs to
+# catch a recursive invocation: the recipes below run the same tasks again and again, and
+# each phase of a job runs at once, so under that root each would read as a loop.
+export NX_DAEMON=false
+export NX_WORKSPACE_DATA_DIRECTORY="$scratch/nx-workspace-data"
+unset NX_INVOCATION_ROOT_PID
+# No credential reaches the recipes: the live decision still runs, and no session opens.
+unset GH_PROJECTS_TOKEN LINEAR_API_KEY ONETASKGRAPH_LIVE_REQUIRED
+# Nor what the job this check may itself be running in set for its own phases
+# (scripts/ci-job.sh): each case below sets what it is about, and the recipes set the rest.
+unset ONETASKGRAPH_TESTS_UNDER_COVERAGE ONETASKGRAPH_DISTRIBUTION_UNDER_RELATIVE_INTERPRETER
+
+# Every run-commands target becomes a recorder that succeeds, uncached; `FAILING` names the
+# one task (`project:target`) that fails instead.
+record_targets() {
+  (cd "$REPO" && FAILING="${1:-}" "$PYTHON" - <<'PY'
+import json, os, subprocess
+failing = os.environ["FAILING"]
+for path in subprocess.check_output(["git", "ls-files", "*project.json"], text=True).split():
+    with open(path, encoding="utf-8") as handle:
+        project = json.load(handle)
+    name = project.get("name")
+    for target, definition in project.get("targets", {}).items():
+        if definition.get("executor") != "nx:run-commands":
+            continue
+        task = f"{name}:{target}"
+        definition["options"] = {"command": "exit 1" if task == failing else "true"}
+        definition["cache"] = False
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(project, handle, indent=2)
+PY
+  )
+}
+
+failures=0
+fail() {
+  echo "check-ci-recipes: $1" >&2
+  failures=$((failures + 1))
+}
+
+# commit <file>: a committed change to that file, against which the recipe compares.
+commit_change() {
+  git -C "$REPO" checkout --quiet -- .
+  git -C "$REPO" reset --quiet --hard "$BASE"
+  printf '\n// touched by scripts/check-ci-recipes.sh\n' >>"$REPO/$1"
+  git -C "$REPO" add "$1"
+  git -C "$REPO" commit --quiet --no-verify -m "test: touch $1"
+}
+
+# recipe <name> <args...>: run `just <name>` against the commit before HEAD, keeping its
+# output in $OUTPUT and its exit status in $STATUS.
+recipe() {
+  OUTPUT="$(cd "$REPO" && NX_CACHE_DIRECTORY="$scratch/nx-cache-$RANDOM" NX_BASE="$BASE" NX_HEAD=HEAD \
+    just "$@" 2>&1)" && STATUS=0 || STATUS=$?
+}
+
+# expect <case> <ran|selects> <task> [absent]: the recipe's own output names (or, given
+# `absent`, never names) that task in that verb — a task the change does not reach, or one the
+# job runs another way.
+expect() {
+  local case_name="$1" verb="$2" task="$3" absent="${4:-}" job line
+  job="${case_name%% *}"
+  # A phase that ran says so on one line, `ci-job: <job>: ran <task> <task>...`; a selection
+  # is one task per line. Either way the task is one whole word after the verb.
+  if grep -E "^ci-job: $job: $verb " <<<"$OUTPUT" | tr ' ' '\n' | grep -qxF "$task"; then
+    line=present
+  else
+    line=absent
+  fi
+  if [ -z "$absent" ] && [ "$line" = absent ]; then
+    fail "$case_name: expected the recipe to say it $verb $task; its output was:"
+    printf '%s\n' "$OUTPUT" >&2
+  elif [ -n "$absent" ] && [ "$line" = present ]; then
+    fail "$case_name: the recipe $verb $task, which this job must not do for this change"
+  fi
+}
+
+expect_status() {
+  local case_name="$1" expected="$2"
+  if [ "$expected" = 0 ] && [ "$STATUS" -ne 0 ]; then
+    fail "$case_name: the recipe exited $STATUS, expected 0. Its output:"
+    printf '%s\n' "$OUTPUT" >&2
+  elif [ "$expected" != 0 ] && [ "$STATUS" -eq 0 ]; then
+    fail "$case_name: the recipe exited 0 although a target it ran failed. Its output:"
+    printf '%s\n' "$OUTPUT" >&2
+  fi
+}
+
+readonly CHANGED=onetaskgraph-local-md
+readonly CHANGED_FILE=crates/onetaskgraph-local-md/src/lib.rs
+readonly DEPENDENT=onetaskgraph-core
+readonly UNAFFECTED=onetaskgraph-plugin-api
+readonly NOTHING_FILE=LICENSE
+
+# 0. The tag that makes a job skip a project's uninstrumented `test` is held to its claim, and
+#    the check that holds it is watched refusing each way the claim can stop being true.
+tag_refused() {
+  local case_name="$1" expected="$2" guard
+  guard="$(cd "$REPO" && bash scripts/check-test-in-coverage.sh 2>&1)" \
+    && fail "$case_name: check-test-in-coverage passed it" \
+    || grep -qF "$expected" <<<"$guard" \
+    || fail "$case_name: check-test-in-coverage refused it without saying '$expected': $guard"
+  git -C "$REPO" checkout --quiet -- .
+}
+(cd "$REPO" && bash scripts/check-test-in-coverage.sh) \
+  || fail "check-test-in-coverage does not pass on the committed tree, so the cases below prove nothing"
+"$PYTHON" - "$REPO/crates/$CHANGED/project.json" <<'PY'
+import json, sys
+project = json.load(open(sys.argv[1]))
+project["targets"]["test"]["options"]["command"] += " && bash scripts/never-run-elsewhere.sh"
+json.dump(project, open(sys.argv[1], "w"))
+PY
+tag_refused "a tagged crate's test gaining a command nothing else runs" "never-run-elsewhere.sh"
+# The libraries' one doctest run leaving a library out, filtered to a name, and narrowed to a
+# feature set.
+for change in unnamed:"has a library" filtered:"nothing else" narrowed:"must run the tagged"; do
+  "$PYTHON" - "$REPO/workspace/project.json" "${change%%:*}" "$DEPENDENT" <<'PY'
+import json, sys
+path, change, dependent = sys.argv[1:]
+project = json.load(open(path))
+options = project["targets"]["test-uncovered"]["options"]
+words = options["command"].split()
+if change == "unnamed":
+    at = words.index(dependent)
+    del words[at - 1 : at + 1]
+elif change == "filtered":
+    words.append("engine")
+else:
+    words[words.index("--all-features")] = "--no-default-features"
+options["command"] = " ".join(words)
+json.dump(project, open(path, "w"))
+PY
+  tag_refused "the libraries' doctest run ${change%%:*}" "${change#*:}"
+done
+"$PYTHON" - "$REPO/crates/onetaskgraph-github-projects/project.json" <<'PY'
+import json, sys
+project = json.load(open(sys.argv[1]))
+project["tags"].append("test-in-coverage:crate")
+json.dump(project, open(sys.argv[1], "w"))
+PY
+tag_refused "a crate with a live lane tagged" "has a live lane"
+"$PYTHON" - "$REPO/sdks/python/project.json" <<'PY'
+import json, sys
+project = json.load(open(sys.argv[1]))
+project["targets"]["coverage"]["options"]["command"] = "uv run --frozen pytest -q tests/smoke"
+json.dump(project, open(sys.argv[1], "w"))
+PY
+tag_refused "an SDK whose coverage runs fewer tests than its test" "coverage switched on"
+sed -i.bak 's/^  --all-features \\$/  --all-features -E "test(only_one)" \\/' "$REPO/scripts/rust-coverage.sh"
+rm -f "$REPO/scripts/rust-coverage.sh.bak"
+tag_refused "the coverage run filtering its tests" "not the whole crate with every feature"
+sed -i.bak '/^  --all-features \\$/d' "$REPO/scripts/rust-coverage.sh"
+rm -f "$REPO/scripts/rust-coverage.sh.bak"
+tag_refused "the coverage run dropping --all-features" "not the whole crate with every feature"
+
+# The live crates' credentialed journeys, which their `test` runs alone where coverage runs
+# the rest, held to being credentialed journeys and to leaving nothing to neither target.
+# live_entry <crate> <command>: what that crate's test target runs in place of its
+# live-crate-test.sh command (`true` for an empty one).
+live_entry() {
+  "$PYTHON" - "$REPO/crates/$1/project.json" "$1" "$2" <<'PY'
+import json, sys
+path, crate, replacement = sys.argv[1:]
+project = json.load(open(path, encoding="utf-8"))
+options = project["targets"]["test"]["options"]
+script = f"bash scripts/live-crate-test.sh {crate} "
+rewrite = lambda command: (replacement or "true") if command.startswith(script) else command
+if "commands" in options:
+    options["commands"] = [rewrite(command) for command in options["commands"]]
+else:
+    options["command"] = rewrite(options["command"])
+json.dump(project, open(path, "w", encoding="utf-8"))
+PY
+}
+live_entry onetaskgraph-linear "bash scripts/live-crate-test.sh onetaskgraph-linear live real_linear_reads_nothing_that_is_not_there"
+tag_refused "a live crate's journey named as a test that is not there" "is not in crates/onetaskgraph-linear/tests/live.rs"
+live_entry onetaskgraph-github-projects \
+  "bash scripts/live-crate-test.sh onetaskgraph-github-projects live loopback_configuration_cannot_forward_a_credential_to_a_remote_or_signed_url"
+tag_refused "a live crate's journey named as a loopback test" "opens no live session"
+live_entry onetaskgraph-linear-e2e ""
+tag_refused "a credentialed crate naming no live journey" "names no credentialed journey to scripts/live-crate-test.sh"
+live_entry onetaskgraph-linear "bash scripts/live-crate-test.sh onetaskgraph-linear-e2e live real_linear_applies_every_declared_capability_and_leaves_no_residue"
+tag_refused "a live crate naming another crate's journey" "every cargo run of it goes through"
+"$PYTHON" - "$REPO/crates/onetaskgraph-linear/project.json" <<'PY'
+import json, sys
+project = json.load(open(sys.argv[1]))
+command = " ".join(["cargo", "test", "--quiet", "-p", "onetaskgraph-linear", "--test", "plugin"])
+project["targets"]["test"]["options"]["commands"].append(command)
+json.dump(project, open(sys.argv[1], "w"))
+PY
+tag_refused "a live crate's test target running cargo beside the script" "every cargo run of it goes through"
+
+# The script itself, driven with a stand-in cargo that records each invocation and runs nothing.
+mkdir -p "$scratch/recorded-cargo"
+# Asked to list, it answers with the test it was asked for, unless CARGO_LISTS_NOTHING is set.
+cat >"$scratch/recorded-cargo/cargo" <<'CARGO'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$CARGO_RECORD"
+if [ "${*: -1}" = --list ] && [ -z "${CARGO_LISTS_NOTHING:-}" ]; then
+  arguments=("$@")
+  echo "${arguments[$#-2]}: test"
+fi
+CARGO
+chmod +x "$scratch/recorded-cargo/cargo"
+live_crate_test() {
+  : >"$scratch/cargo-record"
+  LIVE_OUTPUT="$(cd "$REPO" && PATH="$scratch/recorded-cargo:$PATH" CARGO_RECORD="$scratch/cargo-record" \
+    bash scripts/live-crate-test.sh "$@" 2>&1)" && LIVE_STATUS=0 || LIVE_STATUS=$?
+  RECORDED="$(cat "$scratch/cargo-record")"
+}
+ONETASKGRAPH_TESTS_UNDER_COVERAGE=1 live_crate_test onetaskgraph-linear-e2e e2e \
+  linear_assets::live_disposable_issue_and_document_assets_copy_and_recopy
+[ "$LIVE_STATUS" -eq 0 ] && [ "$RECORDED" = "test --quiet -p onetaskgraph-linear-e2e --all-features --locked --test e2e -- --exact linear_assets::live_disposable_issue_and_document_assets_copy_and_recopy --list
+test --quiet -p onetaskgraph-linear-e2e --all-features --locked --test e2e -- --exact linear_assets::live_disposable_issue_and_document_assets_copy_and_recopy" ] \
+  || fail "where coverage stands in, live-crate-test.sh ran '$RECORDED' (exit $LIVE_STATUS), not the credentialed journey alone"
+CARGO_LISTS_NOTHING=1 ONETASKGRAPH_TESTS_UNDER_COVERAGE=1 live_crate_test onetaskgraph-linear-e2e e2e \
+  linear_assets::not_a_journey
+[ "$LIVE_STATUS" -eq 2 ] && [ "$(wc -l <<<"$RECORDED")" -eq 1 ] && grep -qF "holds no test named" <<<"$LIVE_OUTPUT" \
+  || fail "live-crate-test.sh ran a journey its test binary does not hold: exit $LIVE_STATUS, ran '$RECORDED'"
+ONETASKGRAPH_TESTS_UNDER_COVERAGE= live_crate_test onetaskgraph-github-projects-e2e live \
+  disposable_task_and_document_asset_copies --also-build onetaskgraph-github-projects
+[ "$LIVE_STATUS" -eq 0 ] && [ "$RECORDED" = "test --quiet -p onetaskgraph-github-projects --all-features --locked --no-run
+test --quiet -p onetaskgraph-github-projects-e2e --all-features --locked" ] \
+  || fail "elsewhere, live-crate-test.sh ran '$RECORDED' (exit $LIVE_STATUS), not the plugin's build and the whole suite"
+ONETASKGRAPH_TESTS_UNDER_COVERAGE=yes live_crate_test onetaskgraph-linear live \
+  real_linear_applies_every_declared_capability_and_leaves_no_residue
+[ "$LIVE_STATUS" -eq 2 ] && [ -z "$RECORDED" ] && grep -qF "it is 1 or unset" <<<"$LIVE_OUTPUT" \
+  || fail "live-crate-test.sh accepted ONETASKGRAPH_TESTS_UNDER_COVERAGE=yes: exit $LIVE_STATUS, ran '$RECORDED'"
+for arguments in "onetaskgraph-linear" "onetaskgraph-linear live" \
+  "onetaskgraph-linear live --exact" "onetaskgraph-linear live journey --build onetaskgraph-core"; do
+  read -r -a words <<<"$arguments"
+  live_crate_test "${words[@]}"
+  [ "$LIVE_STATUS" -eq 2 ] && [ -z "$RECORDED" ] && grep -qF "usage: scripts/live-crate-test.sh" <<<"$LIVE_OUTPUT" \
+    || fail "live-crate-test.sh ran '$arguments', which names no journey: exit $LIVE_STATUS, ran '$RECORDED'"
+done
+
+# Where test-linux runs the distribution journey under the relative interpreter, the real
+# check-relative-interpreter.sh runs the scripts it is given, or every one but that journey,
+# and clears the variable before any runs; and the journey hands itself to that check. The
+# scripts it runs are stand-ins that record their name and what they were given.
+under="ONETASKGRAPH_DISTRIBUTION_UNDER_RELATIVE_INTERPRETER"
+for script in test-distribution check-guard-path-spelling check-live-lane-selection; do
+  printf '#!/usr/bin/env bash\necho "%s ${%s:-cleared}" >>"$INTERPRETER_RECORD"\n' "$script" "$under" \
+    >"$REPO/scripts/$script.sh"
+done
+relative_check() {
+  : >"$scratch/interpreter-record"
+  (cd "$REPO" && INTERPRETER_RECORD="$scratch/interpreter-record" bash scripts/check-relative-interpreter.sh "$@") \
+    >/dev/null 2>&1 && INTERPRETER_STATUS=0 || INTERPRETER_STATUS=$?
+  INTERPRETED="$(tr '\n' ' ' <"$scratch/interpreter-record")"
+}
+ONETASKGRAPH_DISTRIBUTION_UNDER_RELATIVE_INTERPRETER=1 relative_check
+[ "$INTERPRETER_STATUS" -eq 0 ] && [ "$INTERPRETED" = "check-guard-path-spelling cleared check-live-lane-selection cleared " ] \
+  || fail "under the relative interpreter, check-relative-interpreter.sh ran '$INTERPRETED' (exit $INTERPRETER_STATUS), not every script but the distribution journey"
+ONETASKGRAPH_DISTRIBUTION_UNDER_RELATIVE_INTERPRETER=1 relative_check scripts/test-distribution.sh
+[ "$INTERPRETER_STATUS" -eq 0 ] && [ "$INTERPRETED" = "test-distribution cleared " ] \
+  || fail "check-relative-interpreter.sh given the distribution journey ran '$INTERPRETED' (exit $INTERPRETER_STATUS)"
+relative_check
+[ "$INTERPRETER_STATUS" -eq 0 ] && [ "$INTERPRETED" = "test-distribution cleared check-guard-path-spelling cleared check-live-lane-selection cleared " ] \
+  || fail "elsewhere, check-relative-interpreter.sh ran '$INTERPRETED' (exit $INTERPRETER_STATUS), not all three"
+relative_check scripts/no-such-script.sh
+[ "$INTERPRETER_STATUS" -ne 0 ] && [ -z "$INTERPRETED" ] \
+  || fail "check-relative-interpreter.sh given a script that is not there ran '$INTERPRETED' (exit $INTERPRETER_STATUS)"
+git -C "$REPO" checkout --quiet -- scripts/test-distribution.sh
+printf '#!/usr/bin/env bash\necho "check $*" >>"$INTERPRETER_RECORD"\n' >"$REPO/scripts/check-relative-interpreter.sh"
+: >"$scratch/interpreter-record"
+(cd "$REPO" && INTERPRETER_RECORD="$scratch/interpreter-record" ONETASKGRAPH_DISTRIBUTION_UNDER_RELATIVE_INTERPRETER=1 \
+  bash scripts/test-distribution.sh) >/dev/null 2>&1 || true
+[ "$(cat "$scratch/interpreter-record")" = "check scripts/test-distribution.sh" ] \
+  || fail "the distribution journey under the relative interpreter did not hand itself to check-relative-interpreter.sh: $(cat "$scratch/interpreter-record")"
+git -C "$REPO" checkout --quiet -- .
+
+record_targets
+git -C "$REPO" commit --quiet --no-verify -am "test: record every target"
+BASE="$(git -C "$REPO" rev-parse HEAD)"
+
+# 1. A change to one project: its targets and its dependents' run, those of a project it never
+#    reaches do not, and its suite runs once: under coverage on Linux, uninstrumented elsewhere.
+commit_change "$CHANGED_FILE"
+recipe ci-lint
+expect_status "lint after a change to $CHANGED" 0
+for target in format-check lint typecheck; do
+  expect "lint after a change to $CHANGED" ran "$CHANGED:$target"
+  expect "lint after a change to $CHANGED" ran "$DEPENDENT:$target"
+  expect "lint after a change to $CHANGED" ran "$UNAFFECTED:$target" absent
+done
+expect "lint after a change to $CHANGED" ran "sdk-python:generate-check"
+expect "lint after a change to $CHANGED" ran "workspace:deny"
+expect "lint after a change to $CHANGED" ran "$CHANGED:test" absent
+
+recipe ci-test-linux
+expect_status "test-linux after a change to $CHANGED" 0
+# The suite runs once: under coverage, plus what coverage cannot run, on Linux.
+expect "test-linux after a change to $CHANGED" ran "$CHANGED:coverage"
+expect "test-linux after a change to $CHANGED" ran "$CHANGED:test" absent
+expect "test-linux after a change to $CHANGED" ran "$DEPENDENT:test-uncovered"
+expect "test-linux after a change to $CHANGED" ran "onetaskgraph-linear-e2e:test"
+expect "test-linux after a change to $CHANGED" ran "onetaskgraph-linear-e2e:budgets"
+expect "test-linux after a change to $CHANGED" ran "workspace:test"
+expect "test-linux after a change to $CHANGED" ran "workspace:coverage"
+expect "test-linux after a change to $CHANGED" ran "scripts:distribution-check"
+expect "test-linux after a change to $CHANGED" ran "scripts:distribution-test"
+expect "test-linux after a change to $CHANGED" ran "$UNAFFECTED:test" absent
+expect "test-linux after a change to $CHANGED" ran "github-workflows:test" absent
+expect "test-linux after a change to $CHANGED" ran "$CHANGED:lint" absent
+
+# Coverage is measured on Linux alone, so elsewhere every suite runs as `test`, uninstrumented.
+for job in test-windows test-macos; do
+  recipe "ci-$job" --select-only
+  expect_status "$job after a change to $CHANGED" 0
+  expect "$job after a change to $CHANGED" selects "$CHANGED:test"
+  expect "$job after a change to $CHANGED" selects "$DEPENDENT:test"
+  expect "$job after a change to $CHANGED" selects "sdk-python:test"
+  expect "$job after a change to $CHANGED" selects "onetaskgraph-linear-e2e:budgets"
+  for target in "$CHANGED:coverage" "$DEPENDENT:test-uncovered" sdk-python:coverage workspace:coverage; do
+    expect "$job after a change to $CHANGED" selects "$target" absent
+  done
+  expect "$job after a change to $CHANGED" selects "$UNAFFECTED:test" absent
+  expect "$job after a change to $CHANGED" ran "$CHANGED:test" absent
+done
+
+# 2. A change to nothing any project tests: the affected phases select nothing, and the
+#    phases every job runs by name still run.
+commit_change "$NOTHING_FILE"
+recipe ci-lint
+expect_status "lint after a change to $NOTHING_FILE" 0
+expect "lint after a change to $NOTHING_FILE" ran "$CHANGED:lint" absent
+expect "lint after a change to $NOTHING_FILE" ran "workspace:lint" absent
+expect "lint after a change to $NOTHING_FILE" ran "workspace:deny"
+for job in test-linux; do
+  recipe "ci-$job"
+  expect_status "$job after a change to $NOTHING_FILE" 0
+  expect "$job after a change to $NOTHING_FILE" ran "$CHANGED:coverage" absent
+  expect "$job after a change to $NOTHING_FILE" ran "workspace:test" absent
+  expect "$job after a change to $NOTHING_FILE" ran "scripts:distribution-test"
+done
+for job in test-windows test-macos; do
+  recipe "ci-$job" --select-only
+  expect_status "$job after a change to $NOTHING_FILE" 0
+  expect "$job after a change to $NOTHING_FILE" selects "workspace:test" absent
+  expect "$job after a change to $NOTHING_FILE" selects "$CHANGED:test" absent
+  expect "$job after a change to $NOTHING_FILE" selects "scripts:distribution-check"
+  expect "$job after a change to $NOTHING_FILE" selects "scripts:distribution-test"
+done
+
+# 3. One of the changed project's targets failing fails the recipe that ran it, and every
+#    later phase still runs. The commit is that project's own project.json, which is what
+#    makes it the one project the change reaches.
+fail_one() {
+  git -C "$REPO" checkout --quiet -- .
+  git -C "$REPO" reset --quiet --hard "$BASE"
+  record_targets "$1"
+  git -C "$REPO" commit --quiet --no-verify -am "test: fail $1"
+}
+# Both ways a job reports — streaming, as in Actions, and held until a phase ends, as anywhere
+# else — because the two take different paths through a failing phase.
+for actions in true ""; do
+  mode="${actions:+streaming as in Actions}"
+  mode="${mode:-held}"
+  fail_one "$CHANGED:lint"
+  GITHUB_ACTIONS="$actions" recipe ci-lint
+  expect_status "lint with $CHANGED:lint failing, $mode" 1
+  expect "lint with $CHANGED:lint failing, $mode" ran "workspace:deny"
+  grep -qF "ci-job: lint: nx affected -t format-check lint typecheck failed" <<<"$OUTPUT" \
+    || fail "lint with $CHANGED:lint failing, $mode: the recipe did not name the phase that failed"
+  fail_one "$CHANGED:coverage"
+  GITHUB_ACTIONS="$actions" recipe ci-test-linux
+  expect_status "test-linux with $CHANGED:coverage failing, $mode" 1
+  expect "test-linux with $CHANGED:coverage failing, $mode" ran "scripts:distribution-test"
+  grep -qE "^ci-job: test-linux: nx affected -t test-uncovered coverage( --exclude=[^ ]+)? failed" <<<"$OUTPUT" \
+    || fail "test-linux with $CHANGED:coverage failing, $mode: the recipe did not name the phase that failed"
+done
+
+# 3a. test-linux runs the distribution journey under the relative interpreter, and test-macos
+#     plainly, so every pull request still runs it both ways.
+git -C "$REPO" checkout --quiet -- .
+git -C "$REPO" reset --quiet --hard "$BASE"
+record_targets
+"$PYTHON" - "$REPO/scripts/project.json" "$scratch" <<'PY2'
+import json, sys
+path, scratch = sys.argv[1], sys.argv[2]
+project = json.load(open(path, encoding="utf-8"))
+project["targets"]["distribution-test"]["options"] = {
+    "command": f"echo ${{ONETASKGRAPH_DISTRIBUTION_UNDER_RELATIVE_INTERPRETER:-plain}} >{scratch}/distribution-path"
+}
+json.dump(project, open(path, "w", encoding="utf-8"), indent=2)
+PY2
+git -C "$REPO" commit --quiet --no-verify -am "test: record how the distribution journey runs"
+for job in test-linux test-macos; do
+  rm -f "$scratch/distribution-path"
+  recipe "ci-$job"
+  expect_status "$job recording how the distribution journey runs" 0
+  case "$job" in test-linux) expected=1 ;; *) expected=plain ;; esac
+  [ "$(cat "$scratch/distribution-path" 2>/dev/null)" = "$expected" ] \
+    || fail "$job ran the distribution journey as '$(cat "$scratch/distribution-path" 2>/dev/null)', not '$expected'"
+done
+
+# 3b. Where coverage records the budgets' telemetry, `budgets` is judged after it, and without
+#     running `test` a second time: the Linear e2e suite's coverage leaves a mark its budgets
+#     refuse to run without, and its test counts its runs.
+git -C "$REPO" checkout --quiet -- .
+git -C "$REPO" reset --quiet --hard "$BASE"
+record_targets
+ORDER="$scratch/order"
+rm -rf "$ORDER"
+mkdir -p "$ORDER"
+"$PYTHON" - "$REPO/crates/onetaskgraph-linear-e2e/project.json" "$ORDER" <<'PY2'
+import json, sys
+path, order = sys.argv[1], sys.argv[2]
+project = json.load(open(path, encoding="utf-8"))
+targets = project["targets"]
+targets["coverage"]["options"] = {"command": f"sleep 2 && touch {order}/covered"}
+targets["test"]["options"] = {"command": f"echo ran >>{order}/tests"}
+targets["budgets"]["options"] = {"command": f"test -f {order}/covered"}
+json.dump(project, open(path, "w", encoding="utf-8"), indent=2)
+PY2
+git -C "$REPO" commit --quiet --no-verify -am "test: order the Linear e2e suite's budgets"
+recipe ci-test-linux
+expect_status "test-linux judging budgets after coverage" 0
+expect "test-linux judging budgets after coverage" ran "onetaskgraph-linear-e2e:budgets"
+[ "$(cat "$ORDER/tests" 2>/dev/null)" = ran ] \
+  || fail "test-linux judging budgets after coverage: onetaskgraph-linear-e2e:test ran $(wc -l <"$ORDER/tests" 2>/dev/null || echo 0) times, not once"
+
+# 4. Nx answering with something other than a task graph fails the recipe rather than reading
+#    as a phase with nothing to run. The stand-in is Nx's own executable, so everything the
+#    recipe does around it is still real.
+git -C "$REPO" checkout --quiet -- .
+git -C "$REPO" reset --quiet --hard "$BASE"
+commit_change "$CHANGED_FILE"
+mv "$REPO/node_modules/.bin/nx" "$REPO/node_modules/.bin/nx.real"
+printf '#!/usr/bin/env bash\necho "{\\"graph\\": {}}"\n' >"$REPO/node_modules/.bin/nx"
+chmod +x "$REPO/node_modules/.bin/nx"
+recipe ci-test-macos --select-only
+expect_status "test-macos with Nx printing no task graph" 1
+grep -qF "ci-job: Nx printed no task graph" <<<"$OUTPUT" \
+  || fail "test-macos with Nx printing no task graph: the recipe did not say Nx printed no task graph: $OUTPUT"
+mv "$REPO/node_modules/.bin/nx.real" "$REPO/node_modules/.bin/nx"
+
+# 5. The tool pins ci.yml keys its caches on are read from where each tool is pinned, so a
+#    pin that moves is a different key; a pin that is gone fails rather than keying on nothing.
+pins() {
+  PINS="$(cd "$REPO" && GITHUB_OUTPUT="$scratch/pins-output" bash scripts/ci-tool-pins.sh 2>&1)" \
+    && PINS_STATUS=0 || PINS_STATUS=$?
+}
+: >"$scratch/pins-output"
+sed -i.bak 's/^readonly RELEASE_PLZ_VERSION=.*/readonly RELEASE_PLZ_VERSION=9.8.7/' "$REPO/scripts/scoped-release-plz.sh"
+sed -i.bak 's/^prune_superseded_version := .*/prune_superseded_version := "6.5.4"/' "$REPO/justfile"
+pins
+[ "$PINS_STATUS" -eq 0 ] && [ "$(cat "$scratch/pins-output")" = "release-plz=9.8.7
+prune-superseded=6.5.4" ] \
+  || fail "the tool pins did not follow the moved pins to \$GITHUB_OUTPUT: exit $PINS_STATUS, $PINS"
+for broken in "" "9.8" "9.8.7 9.8.8" "--all" "9..8.7" "9.8.7."; do
+  : >"$scratch/pins-output"
+  if [ -z "$broken" ]; then
+    sed -i.bak '/^readonly RELEASE_PLZ_VERSION=/d' "$REPO/scripts/scoped-release-plz.sh"
+  else
+    sed -i.bak "s/^readonly RELEASE_PLZ_VERSION=.*/readonly RELEASE_PLZ_VERSION=$broken/" "$REPO/scripts/scoped-release-plz.sh"
+  fi
+  pins
+  [ "$PINS_STATUS" -ne 0 ] && grep -qF "no single pinned version for release-plz" <<<"$PINS" \
+    && [ ! -s "$scratch/pins-output" ] \
+    || fail "a release-plz pin of '$broken' did not fail the tool pins before writing a key: exit $PINS_STATUS, $PINS"
+  git -C "$REPO" checkout --quiet -- scripts/scoped-release-plz.sh
+done
+rm -f "$REPO/scripts/scoped-release-plz.sh.bak" "$REPO/justfile.bak"
+git -C "$REPO" checkout --quiet -- .
+
+# 6. A pull request's comparison base is the merge base of the commit under test with its base
+#    branch's tip, over a real remote whose base branch moved on after the branch was cut.
+remote="$scratch/base-remote.git"
+work="$scratch/base-work"
+git init --quiet --bare "$remote"
+git init --quiet -b main "$work"
+git -C "$work" config user.email "check-ci-recipes@invalid"
+git -C "$work" config user.name "check-ci-recipes"
+git -C "$work" remote add origin "$remote"
+git -C "$work" commit --quiet --allow-empty -m "the fork point"
+fork="$(git -C "$work" rev-parse HEAD)"
+git -C "$work" commit --quiet --allow-empty -m "main moves on"
+tip="$(git -C "$work" rev-parse HEAD)"
+git -C "$work" push --quiet origin main
+git -C "$work" checkout --quiet -b feature "$fork"
+git -C "$work" commit --quiet --allow-empty -m "the pull request"
+: >"$scratch/base-output"
+derived="$(cd "$work" && GITHUB_OUTPUT="$scratch/base-output" bash "$REPO/scripts/ci-pr-base.sh" main "$tip" 2>&1)" \
+  && derived_status=0 || derived_status=$?
+[ "$derived_status" -eq 0 ] && [ "$(cat "$scratch/base-output")" = "base=$fork" ] \
+  || fail "the comparison base was not the fork point $fork: exit $derived_status, $derived, output $(cat "$scratch/base-output")"
+derived="$(cd "$work" && bash "$REPO/scripts/ci-pr-base.sh" main "$(printf '%040d' 0)" 2>&1)" \
+  && derived_status=0 || derived_status=$?
+[ "$derived_status" -ne 0 ] && grep -qF "share no merge base" <<<"$derived" \
+  || fail "a base sha the checkout does not hold did not fail the comparison base: exit $derived_status, $derived"
+for arguments in "--all $tip" "main..feature $tip" "main ${tip:0:12}" "main HEAD" "main"; do
+  # shellcheck disable=SC2086 # each case is two words, or deliberately one
+  derived="$(cd "$work" && bash "$REPO/scripts/ci-pr-base.sh" $arguments 2>&1)" \
+    && derived_status=0 || derived_status=$?
+  [ "$derived_status" -eq 2 ] && grep -qF "usage: scripts/ci-pr-base.sh" <<<"$derived" \
+    || fail "the comparison base accepted '$arguments' rather than refusing it before git: exit $derived_status, $derived"
+done
+
+if [ "$failures" -ne 0 ]; then
+  echo "check-ci-recipes: $failures expectation(s) about the pull-request job recipes failed — see above." >&2
+  echo "check-ci-recipes: next: fix scripts/ci-job.sh, the ci-* recipes in the justfile or the tags and targets they select, then re-run 'bash scripts/check-ci-recipes.sh'." >&2
+  exit 1
+fi

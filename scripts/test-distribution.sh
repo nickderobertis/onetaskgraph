@@ -1,5 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# In test-linux this journey runs once, under the relative interpreter
+# scripts/check-relative-interpreter.sh simulates, rather than once plainly and once again
+# under that check; its plain-PATH run is test-macos's and test-windows's (scripts/ci-job.sh).
+if [ "${ONETASKGRAPH_DISTRIBUTION_UNDER_RELATIVE_INTERPRETER:-}" = 1 ]; then
+  exec bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/check-relative-interpreter.sh" scripts/test-distribution.sh
+fi
+# One run of this journey at a time in a tree, held for the whole run: test-macos and
+# test-windows run scripts:test's re-run of it under the relative interpreter beside
+# scripts:distribution-test, and both build, move and package the same files under target/ —
+# test-macos failed when maturin found target/maturin changed under it. `just check` runs them
+# one after the other, as these jobs now do.
+if [ "${ONETASKGRAPH_DISTRIBUTION_JOURNEY_LOCKED:-}" != 1 ]; then
+  journey_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+  [ -r "$journey_root/scripts/file-lock.sh" ] && source "$journey_root/scripts/file-lock.sh" || { echo "distribution test could not load $journey_root/scripts/file-lock.sh; next: restore it with 'git checkout -- scripts/file-lock.sh', then rerun" >&2; exit 1; }
+  export ONETASKGRAPH_DISTRIBUTION_JOURNEY_LOCKED=1
+  with_file_lock "$journey_root/target/.test-distribution.lock" bash "$journey_root/scripts/test-distribution.sh" "$@"
+  exit 0
+fi
 report_failure() {
   echo "distribution setup failed at line $2 (exit $1): $3; next: rerun scripts/test-distribution.sh and fix that command" >&2
 }
@@ -81,6 +99,17 @@ case "$(uname -s):$(uname -m)" in
   MINGW*:x86_64|MSYS*:x86_64|CYGWIN*:x86_64) target=x86_64-pc-windows-msvc; ext=zip; binary=onetaskgraph.exe;;
 esac
 name="onetaskgraph-${tag}-${target}.${ext}"
+# The release build this journey packages, in one place: the Rust cache warmer
+# (.github/workflows/rust-cache-warm.yml) runs it alone, `--release-build-only`, so the units
+# it leaves for the pull-request jobs to restore are exactly the ones built here.
+build_release_wheel() {
+  (cd "$root" && uv tool run --from 'maturin>=1.9,<2' maturin build --release --locked --target "$target" --out "$1")
+}
+case "${1:-}" in
+  "") ;;
+  --release-build-only) build_release_wheel "$tmp/python-wheel"; exit 0 ;;
+  *) echo "distribution test takes no argument but --release-build-only, not '$1'; next: run scripts/test-distribution.sh with none" >&2; exit 2 ;;
+esac
 # The binary is what onetaskgraph:build produced and this target depends on; nothing here
 # builds it, because a cargo invocation of that package from anywhere else replaces the
 # file while the Rust integration tests are spawning it (scripts/check-workspace-config.sh).
@@ -339,13 +368,34 @@ grep -q 'unsupported platform' "$tmp/error" || { cat "$tmp/error" >&2; echo "uns
 if node -e 'Object.defineProperty(process,"platform",{value:"darwin"}); Object.defineProperty(process,"arch",{value:"x64"}); require(process.argv[1])' "$root/npm/cli/bin/onetaskgraph.js" 2>"$tmp/error"; then intel_launcher_status=0; else intel_launcher_status=$?; fi
 [[ $intel_launcher_status -eq 64 ]] || { cat "$tmp/error" >&2; echo "Intel macOS launcher exited $intel_launcher_status, expected 64; next: inspect the darwin-x64 refusal in npm/cli/bin/onetaskgraph.js" >&2; exit 1; }
 grep -q 'Intel macOS is no longer supported' "$tmp/error" || { cat "$tmp/error" >&2; echo "Intel macOS launcher refusal did not say Intel macOS is no longer supported; next: inspect launcher diagnostics" >&2; exit 1; }
-uv run --quiet --locked --package onetaskgraph-sdk onetaskgraph --help | grep -q 'Usage:' || { echo "Python SDK dependency did not supply the real command; next: inspect the SDK carrier dependency" >&2; exit 1; }
 mkdir -p "$tmp/python-wheel"
-(cd "$root" && uv tool run --from 'maturin>=1.9,<2' maturin build --release --locked --target "$target" --out "$tmp/python-wheel")
+build_release_wheel "$tmp/python-wheel"
 "$python_bin" "$root/scripts/test-release-products.py" --wheel-dir "$tmp/python-wheel" --target "$target"
 cli_wheel=$(find "$tmp/python-wheel" -maxdepth 1 -type f -name 'onetaskgraph_cli-*.whl' -print -quit)
 [[ -n $cli_wheel ]] || { echo "Python CLI build produced no wheel; next: inspect the maturin package configuration" >&2; exit 1; }
 uv run --quiet --isolated --no-project --with "$cli_wheel" onetaskgraph --help | grep -q 'Usage:' || { echo "installed Python CLI wheel did not render help; next: inspect the wheel's binary entry point" >&2; exit 1; }
+# The SDK's own dependency supplies that command: the SDK alone is installed, from this tree
+# and without the workspace's sources, so the onetaskgraph-cli it requires resolves to the
+# wheel just built. The command it installs is held to that wheel's bytes, so a resolution
+# that reached the registry instead cannot pass for it.
+uv run --quiet --isolated --no-project --no-sources --find-links "$tmp/python-wheel" --with "$root/sdks/python" python - "$cli_wheel" <<'PY' || { echo "Python SDK dependency did not supply the real command from the CLI wheel just built; next: inspect the onetaskgraph-cli dependency in sdks/python/pyproject.toml" >&2; exit 1; }
+import hashlib, shutil, subprocess, sys, zipfile
+
+installed = shutil.which("onetaskgraph")
+if installed is None:
+    raise SystemExit("installing the SDK installed no onetaskgraph command")
+with zipfile.ZipFile(sys.argv[1]) as wheel:
+    scripts = [n for n in wheel.namelist() if ".data/scripts/" in n and n.split("/")[-1] in ("onetaskgraph", "onetaskgraph.exe")]
+    if len(scripts) != 1:
+        raise SystemExit(f"the CLI wheel carries {scripts}, not one onetaskgraph command")
+    built = hashlib.sha256(wheel.read(scripts[0])).hexdigest()
+with open(installed, "rb") as command:
+    if hashlib.sha256(command.read()).hexdigest() != built:
+        raise SystemExit(f"{installed} is not the command the CLI wheel just built carries")
+shown = subprocess.run([installed, "--help"], capture_output=True, text=True, encoding="utf-8")
+if "Usage:" not in shown.stdout:
+    raise SystemExit(f"{installed} --help printed no usage: {shown.stdout}{shown.stderr}")
+PY
 assert_version_error() {
   expected_message=$1
   shift

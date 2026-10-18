@@ -47,7 +47,7 @@
       "executor": "nx:run-commands",
       "options": {
         "commands": [
-          "cargo test --quiet -p onetaskgraph-linear --all-features --locked",
+          "bash scripts/live-crate-test.sh onetaskgraph-linear live real_linear_applies_every_declared_capability_and_leaves_no_residue",
           "bash scripts/check-live-decline.sh onetaskgraph-linear"
         ],
         "parallel": false
@@ -66,7 +66,9 @@
         },
         {
           "env": "ONETASKGRAPH_LIVE_REQUIRED"
-        }
+        },
+        "{workspaceRoot}/scripts/live-crate-test.sh",
+        { "env": "ONETASKGRAPH_TESTS_UNDER_COVERAGE" }
       ]
     },
     "coverage": {

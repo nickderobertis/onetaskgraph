@@ -333,7 +333,9 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   list reconciled against the crates in the tree both ways, so a crate cannot fall out of
   the union in silence. The *measurement* is skipped on Windows with a printed notice
   (instrumentation there does not attribute subprocess coverage); the functional lanes
-  still gate that platform.
+  still gate that platform. **The pull-request jobs measure on Linux alone**, by the user's
+  decision of 2026-10-17: `test-macos` and `test-windows` run every suite once,
+  uninstrumented (`scripts/ci-job.sh`).
 - **One target directory per clone, and the binary the journeys spawn is built once.**
   `.cargo/config.toml` points every cargo invocation inside a clone at `<clone>/target` and
   builds dev and test at `debug = 0`, with no debuginfo; nothing in the tree names a target directory of its
@@ -411,7 +413,10 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   and the default branch runs `just gate`, which is `deny` plus that same `check`.
   CI derives its base explicitly from the merge base or `github.event.before`, because
   an implicit base can select the wrong changes. Pushes run no repository checks;
-  contributors can run `NX_BASE=<ref> just check` or `just gate` manually.
+  contributors can run `NX_BASE=<ref> just check` or `just gate` manually. A push to main
+  does build, testing nothing, the Rust cache `test-linux` and `test-windows` restore
+  (`.github/workflows/rust-cache-warm.yml`): a pull request restores only a cache saved on
+  its own ref or on main, so nothing else could give a new one a warm build.
   `scripts/check-live-lane-selection.sh`, a command in `scripts:test`, holds all of that:
   it puts the five diffs to the real decision over real git states, drives the real recipes
   for both CI paths, puts three diffs to real Nx, and ENUMERATES the paths from
@@ -479,6 +484,11 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   would take the other's. It cannot happen while the lane runs in exactly one process per
   attempt — the other steps clear the credential — so a change that runs a second
   credentialed process per attempt must revisit it; `tests/sweep_gate.rs` pins it.
+  The asset entry point is the main one's second process and still writes after it, never
+  beside it: the e2e suite's test target no longer waits on the plugin's, so its loopback
+  binaries run during the main session, but the asset journey makes no request until the
+  main record is complete, which follows the main journey's own cleanup, or the main entry
+  point has ended without it (`wait_for_current_main` in that suite's `tests/live.rs`).
   **The scheduled janitor is cleanup, not a test lane.**
   `.github/workflows/live-janitor.yml` runs hourly or by human dispatch, never from a
   project's `test` or `coverage` target. It enumerates issues, their board #1 items and

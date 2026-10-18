@@ -57,6 +57,11 @@ locale.getpreferredencoding = lambda do_setlocale=True: "cp1252"
 locale.getencoding = lambda: "cp1252"
 PY
 
+# The Windows python also runs with UTF-8 mode off, and a host whose locale is C or POSIX
+# turns it on by itself (PEP 540), which bypasses text mode's locale lookup and the shim with
+# it: the macOS runner's journeys run so. Every simulated python is told the runner's mode.
+readonly SIMULATED_UTF8_MODE=0
+
 failures=0
 fail() {
   echo "check-selection-code-page: $1" >&2
@@ -66,7 +71,7 @@ fail() {
 # 1. The simulation takes. Everything below is evidence only while this holds: a shim that
 # did nothing would leave the cases passing on the very platform they cannot fail on.
 
-simulated="$(PYTHONPATH="$scratch" python3 - <<'PY'
+simulated="$(PYTHONPATH="$scratch" PYTHONUTF8="$SIMULATED_UTF8_MODE" python3 - <<'PY'
 import subprocess
 import sys
 
@@ -123,7 +128,7 @@ echo "check-selection-code-page: $carrier is what makes the run below evidence" 
 # 3. The real check, over the real decision, on the simulated platform. It is the whole of
 # the proof: its version-only fixtures are exactly the diffs the defect answered `run` for.
 
-if ! (cd "$ROOT" && PYTHONPATH="$scratch" bash scripts/check-live-lane-selection.sh) \
+if ! (cd "$ROOT" && PYTHONPATH="$scratch" PYTHONUTF8="$SIMULATED_UTF8_MODE" bash scripts/check-live-lane-selection.sh) \
   >"$scratch/selection-output" 2>&1; then
   fail "scripts/check-live-lane-selection.sh fails when python decodes a subprocess with the Windows runner's code page, which is what the windows-latest lane runs. It said:"
   sed 's/^/    /' <"$scratch/selection-output" >&2

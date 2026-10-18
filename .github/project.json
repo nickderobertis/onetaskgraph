@@ -51,9 +51,27 @@
         "command": "bun run tsc -p .github/tsconfig.json"
       }
     },
-    "test": {
+    "ci-jobs": {
       "executor": "nx:run-commands",
       "dependsOn": ["bootstrap"],
+      "options": {
+        "command": "node --test .github/tests/ci-jobs.spec.mjs"
+      },
+      "inputs": [
+        "{projectRoot}/**/*",
+        "!{projectRoot}/node_modules/**/*",
+        "!{projectRoot}/.telemetry/**/*",
+        "{workspaceRoot}/release-targets.toml",
+        "{workspaceRoot}/screencomp.toml",
+        "{workspaceRoot}/scripts/product_versions.py",
+        "{workspaceRoot}/scripts/release_products.py"
+      ],
+      "cache": true,
+      "//": "The pull request's four jobs, today's required contexts and every cache key, read from the workflow files and the run graph workflow-graph.mjs resolves from them. Its inputs are this directory and the files outside it that readSet() there names; the spec refuses the two parting."
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["bootstrap", "ci-jobs"],
       "options": {
         "command": "node --test .github/tests/*.test.mjs"
       },

@@ -6,7 +6,8 @@
 # release commit and exhausted the account's GraphQL budget. AGENTS.md records that.
 #
 # Two things about the tests that reach a real API are this file's alone. One live session
-# per run: only the `ubuntu-latest` leg carries the credentials, and scripts/rust-coverage.sh
+# per run: only one Linux lane carries the credentials — `test-linux` on a pull request, the
+# `ubuntu-latest` leg of `check` on a push — and scripts/rust-coverage.sh
 # clears them before coverage re-runs the same tests — read the note there before changing
 # either. And `ONETASKGRAPH_LIVE_REQUIRED` travels with them rather than with the matrix: `1`
 # on that leg, `0` there on a fork pull request alone, so the leg that was handed a credential
@@ -24,6 +25,10 @@ on:
     inputs:
       macos:
         description: Run the combined macOS diagnostic proofs
+        type: boolean
+        default: false
+      distribution:
+        description: Time the distribution journey alone on Linux and macOS
         type: boolean
         default: false
 
@@ -170,30 +175,13 @@ jobs:
 
       # Generated-code drift is platform-independent. The Linux aggregate adds its
       # uniform Nx target without paying for the generator in the other required lanes.
+      # One live session per run: on a pull request `test-linux` carries the credentials,
+      # so this leg runs uncredentialed and its live journeys skip. The default-branch step
+      # below keeps them, because `test-linux` never runs on a push.
+      # llmlint: ignore[live_tier_compiles_and_requires_credential] This step is given no credential, because test-linux carries this run's one live session, so it cannot demand one.
       - name: Check the affected projects and generated Python SDK
         if: github.event_name == 'pull_request' && matrix.os == 'ubuntu-latest'
         env:
-          # GH_PROJECTS_TOKEN, not GITHUB_PROJECTS_TOKEN: GitHub Actions refuses to create
-          # a secret whose name begins with GITHUB_, so the short name is the one that can
-          # exist both here and in the local secrets file. Do not "correct" it into a break.
-          GH_PROJECTS_TOKEN: ${{ secrets.GH_PROJECTS_TOKEN }}
-          GITHUB_LIVE_SESSION_ID: ${{ github.run_id }}-${{ github.run_attempt }}
-          GITHUB_LIVE_SESSION_DIR: ${{ github.workspace }}/target/debug/telemetry/github-live-session/${{ github.run_id }}-${{ github.run_attempt }}
-          GITHUB_LIVE_SOURCE_REVISION: ${{ github.sha }}
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
-          # Nominations, not secrets: each lane writes only where it is pointed and refuses
-          # to pick a target itself, because "whichever project was updated most recently"
-          # once walked a credentialed write onto the board plans are authored on. Naming
-          # them in the open is what makes the blast radius reviewable.
-          # llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The lane's own refusal is the drift gate: ONETASKGRAPH_LIVE_REQUIRED below is 1 on this lane, so a name spelled differently on either side fails this required check naming the variable rather than skipping green.
-          GH_PROJECTS_OWNER: nickderobertis
-          GH_PROJECTS_NUMBER: "1"
-          # A board has no repository, and this lane's artifact is a real issue.
-          GH_PROJECTS_REPOSITORY: nickderobertis/onetaskgraph-live-scratch
-          # A repository variable rather than a secret: a nomination has to stay readable.
-          LINEAR_WRITE_TEAM: ${{ vars.LINEAR_WRITE_TEAM }}
-          # llmlint: ignore[live_tier_compiles_and_requires_credential] The `0` here is the fork case alone, which is the one run where no credential was ever expected: GitHub supplies a fork pull request no secrets at all, so demanding one would fail every outside contribution for something the contributor cannot supply. Every other run — including every pull request from this repository, which is the one the merge waits on — gets `1`, and there an absent credential fails rather than skipping green. That is the demand this rule asks for, expressed once at the place test credentials enter this build.
-          ONETASKGRAPH_LIVE_REQUIRED: ${{ github.event.pull_request.head.repo.fork && '0' || '1' }}
           NX_BASE: ${{ steps.base.outputs.base }}
           NX_HEAD: HEAD
         # llmlint: ignore[external_service_suite_stays_out_of_the_affected_tier] These targets run only when their own plugin changed, which is the edge; AGENTS.md records why an edge of their own was removed.
@@ -218,7 +206,6 @@ jobs:
           NX_HEAD: HEAD
         run: just gate
 
-
       - name: Check the affected projects and generated Python SDK on the default branch
         if: github.event_name != 'pull_request' && matrix.os == 'ubuntu-latest'
         env:
@@ -241,10 +228,12 @@ jobs:
           NX_HEAD: HEAD
         run: just gate-generated
 
+  # The explicit manual diagnostic alone. On a pull request the one Mac job is `test-macos`,
+  # which the two carriers below read in this job's place.
   macos:
     name: macOS check and install proofs
     needs: [macos-lanes]
-    if: (github.event_name == 'pull_request' && needs.macos-lanes.outputs.macosRequired == 'true') || (github.event_name == 'workflow_dispatch' && inputs.macos)
+    if: github.event_name == 'workflow_dispatch' && inputs.macos
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
@@ -317,7 +306,7 @@ jobs:
 
   macos-check:
     name: check (macos-latest)
-    needs: [macos-lanes, macos]
+    needs: [macos-lanes, macos, test-macos]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
@@ -331,7 +320,7 @@ jobs:
 
   macos-install:
     name: install path (macos-latest)
-    needs: [macos-lanes, macos]
+    needs: [macos-lanes, macos, test-macos]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
@@ -425,3 +414,642 @@ jobs:
             exit 1
           fi
           just lint-llm-diff origin/main
+
+  # The four pull-request jobs: `lint` once, on Linux, for everything platform-independent,
+  # and one test job per platform. None needs another, so all four start at once, and each
+  # runs its checks through one `just ci-<job>` recipe (scripts/ci-job.sh) over the projects
+  # the diff reaches. The jobs above stay until branch protection names these four.
+
+  lint:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # In all four jobs: the Python SDK's environment without the CLI copy `uv sync` would build
+    # into it, which nothing here runs, and no `uv run` that installs it after all
+    # (scripts/sync-python-sdk.sh).
+    env:
+      ONETASKGRAPH_SDK_WITHOUT_CLI: "1"
+      UV_NO_SYNC: "1"
+    # llmlint: ignore-block[least_privilege_grants] The visual docs steps push the pull
+    # request's gallery preview to gh-pages, upsert its before/after comment and gate on the
+    # Pages build; notignored upserts its sticky comment. No other step is handed the token:
+    # the checkout persists no credential.
+    permissions:
+      contents: write # push the gh-pages gallery preview
+      pull-requests: write # the visual docs and notignored sticky comments; read the PR title
+      pages: read # gate on the Pages build the deploy triggers
+    # llmlint: ignore-end[least_privilege_grants]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The merge base, llmlint's diff and notignored's scan all need the full history.
+          fetch-depth: 0
+          persist-credentials: false
+      # The CLI first, because the lane the capture writes is the one screencomp reads out of
+      # screencomp.toml's [capture].arches, the one place it is declared.
+      - uses: nickderobertis/screencomp@v0.4.8
+        with:
+          version: v0.4.8
+      - name: Read the visual docs lane
+        id: lane
+        shell: bash
+        run: |
+          lanes="$(screencomp arches --format json)"
+          lane="$(jq -er 'if length == 1 then .[0] else error("exactly one lane") end' <<<"$lanes")"
+          echo "lane=$lane" >> "$GITHUB_OUTPUT"
+          jq -cn --arg lane "$lane" '"matrix=" + ([{project: "", arch: $lane, current: "shots/current", verify: "shots/verify", manifest: "", gallery_title: "Visual docs"}] | tojson)' -r >> "$GITHUB_OUTPUT"
+      # The capture builds the release binary inside the Rust image matching
+      # rust-toolchain.toml, exactly as visual-docs.yml's capture-command does, and runs
+      # beside the checks below rather than after them. Its `target` is a directory of its
+      # own, so the host's restored build cache and its builds never meet the container's;
+      # it runs as root there, and hands what it wrote in the tree back before exiting. The
+      # host's `target` exists first, so the mount point Docker needs is not created as root.
+      # llmlint: ignore-block[work_goes_through_command_surface] These are the two lines
+      # visual-docs.yml's capture-command runs, inside the same plain Rust image with no
+      # `just` on it; the recipes `just screenshots-tools` and `just screenshots` wrap them.
+      - name: Start the visual docs capture
+        shell: bash
+        env:
+          LANE: ${{ steps.lane.outputs.lane }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/capture/target" target
+          nohup bash -c '
+            docker run --rm -v "$PWD:/w" -v "$RUNNER_TEMP/capture/target:/w/target" -w /w \
+              -e LANE rust:1.97.1-bookworm bash -c "
+                status=0
+                { bash scripts/screenshots-freeze.sh ensure &&
+                  SHOTS_OUT=shots/current/\$LANE bash scripts/screenshots.sh &&
+                  SHOTS_OUT=shots/verify/\$LANE bash scripts/screenshots.sh; } || status=\$?
+                chown -R $(id -u):$(id -g) shots docs/screenshots
+                exit \$status"
+            echo $? > "$RUNNER_TEMP/capture/exit"' > "$RUNNER_TEMP/capture/log" 2>&1 < /dev/null &
+      # llmlint: ignore-end[work_goes_through_command_surface]
+      - name: Check the pull request title
+        uses: amannn/action-semantic-pull-request@v6
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # A fork's pull request is granted a read-only token, so the comment upsert would fail
+      # on something the contributor has no way to fix (notignored.yml).
+      - name: Comment the suppressions this change adds
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        uses: nickderobertis/notignored@v0
+      - uses: extractions/setup-just@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      # Reads rust-toolchain.toml; its built-in cache keys `target` and the cargo registry on
+      # Cargo.lock, the toolchain and the OS, and cargo's fingerprints refuse a stale unit. An
+      # entry is never re-saved under its key, so a key whose entry holds no build is retired
+      # by naming a new one here.
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache-key: lint-afresh
+      # cargo-binstall is what makes scripts/scoped-release-plz.sh download release-plz rather
+      # than build it from source.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov,cargo-nextest,cargo-machete,cargo-deny,cargo-binstall
+      - name: Read the pinned bootstrap tool versions
+        id: pins
+        shell: bash
+        run: bash scripts/ci-tool-pins.sh
+      # Each cache is keyed on everything that produced it, so a hit is never stale: the tool
+      # caches on the pinned version, the OS and the architecture (and the pruner, which cargo
+      # builds, on the toolchain); the Nx cache on every lockfile and the toolchain, whose
+      # entries Nx itself serves only for an unchanged input hash.
+      - uses: actions/cache/restore@v6
+        id: release-plz-cache
+        with:
+          path: ~/.cache/onetaskgraph/tools/release-plz
+          key: release-plz-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.release-plz }}
+      - uses: actions/cache/restore@v6
+        id: prune-superseded-cache
+        with:
+          path: |
+            ~/.cargo/bin/cargo-prune-superseded
+            ~/.cargo/bin/cargo-prune-superseded.exe
+          key: prune-superseded-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.prune-superseded }}-${{ hashFiles('rust-toolchain.toml') }}
+      - uses: actions/cache@v6
+        with:
+          path: .nx/cache
+          key: nx-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'bun.lock', 'uv.lock', 'sdks/python/uv.lock', '.github/bun.lock', 'rust-toolchain.toml') }}-${{ github.sha }}
+          restore-keys: nx-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'bun.lock', 'uv.lock', 'sdks/python/uv.lock', '.github/bun.lock', 'rust-toolchain.toml') }}-
+      - name: Bootstrap
+        env:
+          # cargo-binstall reads GitHub's releases; anonymously a shared runner's address is
+          # rate-limited and it falls back to building release-plz from source.
+          GITHUB_TOKEN: ${{ github.token }}
+        run: just bootstrap --outputStyle=static
+      # Saved as soon as Bootstrap has installed them, rather than after the job: a cache saves
+      # only from a job that passed, and a tool built from source is the cost worth keeping
+      # even when a later step fails or the timeout ends the job.
+      - uses: actions/cache/save@v6
+        if: steps.release-plz-cache.outputs.cache-hit != 'true'
+        with:
+          path: ~/.cache/onetaskgraph/tools/release-plz
+          key: release-plz-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.release-plz }}
+      - uses: actions/cache/save@v6
+        if: steps.prune-superseded-cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            ~/.cargo/bin/cargo-prune-superseded
+            ~/.cargo/bin/cargo-prune-superseded.exe
+          key: prune-superseded-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.prune-superseded }}-${{ hashFiles('rust-toolchain.toml') }}
+      - name: Derive the comparison base
+        id: pr-base
+        shell: bash
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: bash scripts/ci-pr-base.sh "$BASE_REF" "$BASE_SHA"
+      # llmlint: ignore-block[no_second_broader_sweep_over_an_already_gated_commit] The jobs behind today's required contexts stay until branch protection names these four.
+      - name: Format, lint and type-check the affected projects, generated code and the supply chain
+        env:
+          NX_BASE: ${{ steps.pr-base.outputs.base }}
+          NX_HEAD: HEAD
+        run: just ci-lint
+      # The release pull request alone: the pass-time budget of the pool maintenance
+      # onevcs.toml declares, which `check`'s Linux leg runs after its gate. lint is the one of the
+      # four that runs in full there, on Linux, already bootstrapped with the pinned pruner.
+      - name: Pool-maintenance pass-time budget on the release pull request
+        if: startsWith(github.head_ref, 'release-plz-')
+        run: just pool-maintenance-budget
+      # llmlint: ignore-end[no_second_broader_sweep_over_an_already_gated_commit]
+      - name: Install oneharness and llmlint
+        run: |
+          just setup-llmlint
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      # setup-llmlint.sh installs no harness, so without this the lint would skip every file.
+      - name: Install the coding harness (claude-code)
+        run: npm i -g @anthropic-ai/claude-code
+      # llmlint: ignore-block[no_second_broader_sweep_over_an_already_gated_commit] The jobs behind today's required contexts stay until branch protection names these four.
+      - name: Validate the llmlint config (no model)
+        run: just lint-llm-validate --diff-base origin/main
+      # llmlint: ignore-end[no_second_broader_sweep_over_an_already_gated_commit]
+      # llmlint: ignore-block[no_second_broader_sweep_over_an_already_gated_commit] The jobs behind today's required contexts stay until branch protection names these four.
+      - name: Lint the changed files with llmlint
+        env:
+          # `claude` reads only CLAUDE_CODE_OAUTH_TOKEN; see the llmlint job above.
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+            echo "::error::llmlint needs a harness credential. Add the" \
+                 "CLAUDE_CODE_OAUTH_TOKEN repository secret (it is declared in" \
+                 "gh-secrets.json). Fork pull requests are gated by the" \
+                 "require-approval-for-fork-workflows setting." >&2
+            exit 1
+          fi
+          just lint-llm-diff origin/main
+      # llmlint: ignore-end[no_second_broader_sweep_over_an_already_gated_commit]
+      - name: Wait for the visual docs capture
+        shell: bash
+        run: |
+          until [ -f "$RUNNER_TEMP/capture/exit" ]; do sleep 5; done
+          status="$(cat "$RUNNER_TEMP/capture/exit")"
+          if [ "$status" != 0 ]; then
+            cat "$RUNNER_TEMP/capture/log" >&2
+            echo "::error::the visual docs capture exited $status; its log is above. Reproduce it with 'just screenshots'." >&2
+            exit 1
+          fi
+      # llmlint: ignore-block[no_second_broader_sweep_over_an_already_gated_commit] visual-docs.yml's capture and report stay until branch protection names these four.
+      # screencomp's own composite actions, as steps of this job rather than its reusable
+      # workflow, which would add five jobs: the CLI pin, the inputs and the strict drift gate
+      # visual-docs.yml passes, for the one lane screencomp.toml declares.
+      # A capture-to-gallery integration proof is GitHub's alone: these actions push to
+      # gh-pages, wait on its Pages build and comment through the pull request's token, none of
+      # which a host reaches. The pull request's own run of this job is that proof;
+      # ci-jobs.spec.mjs and check-visual-docs.sh hold the composition to its sources.
+      - uses: nickderobertis/screencomp/visual-docs@v0.4.8
+        with:
+          arch: ${{ steps.lane.outputs.lane }}
+          current: shots/current
+          verify-second: shots/verify
+          gallery-title: Visual docs
+          fail-on-drift: true
+          publish: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+          comment-mode: aggregated
+          pages-artifact: screencomp-gallery-${{ steps.lane.outputs.lane }}
+          github-token: ${{ github.token }}
+      - uses: nickderobertis/screencomp/visual-docs-pages@v0.4.8
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        with:
+          github-token: ${{ github.token }}
+      - uses: nickderobertis/screencomp/visual-docs-aggregate@v0.4.8
+        with:
+          matrix: ${{ steps.lane.outputs.matrix }}
+          publish: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+          github-token: ${{ github.token }}
+      # llmlint: ignore-end[no_second_broader_sweep_over_an_already_gated_commit]
+
+  test-linux:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ONETASKGRAPH_SDK_WITHOUT_CLI: "1"
+      UV_NO_SYNC: "1"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The merge base, the release shortcut and main's history all need the full history.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: extractions/setup-just@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - name: Install the workflow tooling
+        run: just github-workflows-bootstrap
+      # .github/release-shortcut.mjs says when the tests need not run again, and why.
+      - name: Decide whether the release shortcut applies
+        id: release
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          git fetch --quiet --no-tags origin "$DEFAULT_BRANCH"
+          node .github/release-shortcut.mjs decide --base "$BASE_SHA" --head HEAD --main "origin/$DEFAULT_BRANCH"
+      - name: Report the release shortcut
+        if: steps.release.outputs.tests == 'skip'
+        shell: bash
+        env:
+          REASON: ${{ steps.release.outputs.reason }}
+        run: echo "Tests not run ($REASON); the lint job still runs in full."
+      - uses: astral-sh/setup-uv@v7
+        if: steps.release.outputs.tests == 'run'
+        with:
+          enable-cache: true
+      # Reads rust-toolchain.toml; its built-in cache keys `target` and the cargo registry on
+      # Cargo.lock, the toolchain and the OS, and cargo's fingerprints refuse a stale unit. A
+      # run cut short by the timeout still saves what it built, which the next run starts from.
+      # The shared key is the one .github/workflows/rust-cache-warm.yml saves on main, which is
+      # the only cache a new pull request can restore.
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        if: steps.release.outputs.tests == 'run'
+        with:
+          cache-shared-key: test-linux
+      - uses: taiki-e/install-action@v2
+        if: steps.release.outputs.tests == 'run'
+        with:
+          tool: cargo-llvm-cov,cargo-nextest,cargo-machete,cargo-deny,cargo-binstall
+      - name: Read the pinned bootstrap tool versions
+        id: pins
+        if: steps.release.outputs.tests == 'run'
+        shell: bash
+        run: bash scripts/ci-tool-pins.sh
+      # The caches, keyed as lint's are and for the same reasons.
+      - uses: actions/cache/restore@v6
+        id: release-plz-cache
+        if: steps.release.outputs.tests == 'run'
+        with:
+          path: ~/.cache/onetaskgraph/tools/release-plz
+          key: release-plz-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.release-plz }}
+      - uses: actions/cache/restore@v6
+        id: prune-superseded-cache
+        if: steps.release.outputs.tests == 'run'
+        with:
+          path: |
+            ~/.cargo/bin/cargo-prune-superseded
+            ~/.cargo/bin/cargo-prune-superseded.exe
+          key: prune-superseded-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.prune-superseded }}-${{ hashFiles('rust-toolchain.toml') }}
+      - uses: actions/cache@v6
+        if: steps.release.outputs.tests == 'run'
+        with:
+          path: .nx/cache
+          key: nx-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'bun.lock', 'uv.lock', 'sdks/python/uv.lock', '.github/bun.lock', 'rust-toolchain.toml') }}-${{ github.sha }}
+          restore-keys: nx-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'bun.lock', 'uv.lock', 'sdks/python/uv.lock', '.github/bun.lock', 'rust-toolchain.toml') }}-
+      - name: Bootstrap
+        if: steps.release.outputs.tests == 'run'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: just bootstrap --outputStyle=static
+      # Saved straight after Bootstrap, as lint's are.
+      - uses: actions/cache/save@v6
+        if: steps.release.outputs.tests == 'run' && steps.release-plz-cache.outputs.cache-hit != 'true'
+        with:
+          path: ~/.cache/onetaskgraph/tools/release-plz
+          key: release-plz-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.release-plz }}
+      - uses: actions/cache/save@v6
+        if: steps.release.outputs.tests == 'run' && steps.prune-superseded-cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            ~/.cargo/bin/cargo-prune-superseded
+            ~/.cargo/bin/cargo-prune-superseded.exe
+          key: prune-superseded-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.prune-superseded }}-${{ hashFiles('rust-toolchain.toml') }}
+      - name: Derive the comparison base
+        id: pr-base
+        if: steps.release.outputs.tests == 'run'
+        shell: bash
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: bash scripts/ci-pr-base.sh "$BASE_REF" "$BASE_SHA"
+      # llmlint: ignore-block[no_second_broader_sweep_over_an_already_gated_commit] The jobs behind today's required contexts stay until branch protection names these four.
+      - name: Test the affected projects
+        if: steps.release.outputs.tests == 'run'
+        env:
+          # This run's one live session. GH_PROJECTS_TOKEN rather than GITHUB_PROJECTS_TOKEN,
+          # which GitHub refuses as a secret name; nominations in the open, because a lane
+          # writes only where it is pointed and refuses to pick a target itself.
+          GH_PROJECTS_TOKEN: ${{ secrets.GH_PROJECTS_TOKEN }}
+          GITHUB_LIVE_SESSION_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          GITHUB_LIVE_SESSION_DIR: ${{ github.workspace }}/target/debug/telemetry/github-live-session/${{ github.run_id }}-${{ github.run_attempt }}
+          GITHUB_LIVE_SOURCE_REVISION: ${{ github.sha }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          # llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The lane's own refusal is the drift gate: ONETASKGRAPH_LIVE_REQUIRED below is 1 on this lane, so a name spelled differently on either side fails this job naming the variable rather than skipping green.
+          GH_PROJECTS_OWNER: nickderobertis
+          GH_PROJECTS_NUMBER: "1"
+          GH_PROJECTS_REPOSITORY: nickderobertis/onetaskgraph-live-scratch
+          LINEAR_WRITE_TEAM: ${{ vars.LINEAR_WRITE_TEAM }}
+          # llmlint: ignore[live_tier_compiles_and_requires_credential] `0` on a fork pull request alone, which GitHub hands no secrets; every other run demands the credential, as on `check`'s Linux leg.
+          ONETASKGRAPH_LIVE_REQUIRED: ${{ github.event.pull_request.head.repo.fork && '0' || '1' }}
+          NX_BASE: ${{ steps.pr-base.outputs.base }}
+          NX_HEAD: HEAD
+        # llmlint: ignore[external_service_suite_stays_out_of_the_affected_tier] As on check's Linux leg: these suites run only when their own plugin changed, which is the edge; AGENTS.md records why an edge of their own was removed.
+        run: just ci-test-linux
+      # llmlint: ignore-end[no_second_broader_sweep_over_an_already_gated_commit]
+
+  test-windows:
+    if: github.event_name == 'pull_request'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      ONETASKGRAPH_SDK_WITHOUT_CLI: "1"
+      UV_NO_SYNC: "1"
+      # With the distribution phases beside the tests, the journeys that run Nx inside a test
+      # saw its plugin workers miss Nx's ten-second load handshake on this runner and fail; a
+      # worker that never loads still ends at the job's timeout.
+      NX_PLUGIN_NO_TIMEOUTS: "true"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The merge base, the release shortcut and main's history all need the full history.
+          fetch-depth: 0
+          persist-credentials: false
+      # Windows Defender scans every file a build writes and every process a test spawns,
+      # which is most of a Rust build's and a journey's time on this runner; the workspace,
+      # the toolchains and the caches it writes are this job's own and are left out of it.
+      - name: Keep Defender's real-time scan off the build
+        shell: pwsh
+        run: |
+          Add-MpPreference -ExclusionPath $env:GITHUB_WORKSPACE, "$env:USERPROFILE\.cargo", "$env:USERPROFILE\.rustup", "$env:USERPROFILE\.bun", "$env:LOCALAPPDATA\uv", $env:RUNNER_TEMP, $env:TEMP
+      - uses: extractions/setup-just@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - name: Install the workflow tooling
+        run: just github-workflows-bootstrap
+      # .github/release-shortcut.mjs says when the tests need not run again, and why.
+      - name: Decide whether the release shortcut applies
+        id: release
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          git fetch --quiet --no-tags origin "$DEFAULT_BRANCH"
+          node .github/release-shortcut.mjs decide --base "$BASE_SHA" --head HEAD --main "origin/$DEFAULT_BRANCH"
+      - name: Report the release shortcut
+        if: steps.release.outputs.tests == 'skip'
+        shell: bash
+        env:
+          REASON: ${{ steps.release.outputs.reason }}
+        run: echo "Tests not run ($REASON); the lint job still runs in full."
+      - uses: astral-sh/setup-uv@v7
+        if: steps.release.outputs.tests == 'run'
+        with:
+          enable-cache: true
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        if: steps.release.outputs.tests == 'run'
+        with:
+          cache-shared-key: test-windows
+      - uses: taiki-e/install-action@v2
+        if: steps.release.outputs.tests == 'run'
+        with:
+          tool: cargo-llvm-cov,cargo-nextest,cargo-machete,cargo-deny,cargo-binstall
+      - name: Read the pinned bootstrap tool versions
+        id: pins
+        if: steps.release.outputs.tests == 'run'
+        shell: bash
+        run: bash scripts/ci-tool-pins.sh
+      # The caches, keyed as lint's are and for the same reasons.
+      - uses: actions/cache/restore@v6
+        id: release-plz-cache
+        if: steps.release.outputs.tests == 'run'
+        with:
+          path: ~/.cache/onetaskgraph/tools/release-plz
+          key: release-plz-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.release-plz }}
+      - uses: actions/cache/restore@v6
+        id: prune-superseded-cache
+        if: steps.release.outputs.tests == 'run'
+        with:
+          path: |
+            ~/.cargo/bin/cargo-prune-superseded
+            ~/.cargo/bin/cargo-prune-superseded.exe
+          key: prune-superseded-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.prune-superseded }}-${{ hashFiles('rust-toolchain.toml') }}
+      - uses: actions/cache@v6
+        if: steps.release.outputs.tests == 'run'
+        with:
+          path: .nx/cache
+          key: nx-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'bun.lock', 'uv.lock', 'sdks/python/uv.lock', '.github/bun.lock', 'rust-toolchain.toml') }}-${{ github.sha }}
+          restore-keys: nx-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'bun.lock', 'uv.lock', 'sdks/python/uv.lock', '.github/bun.lock', 'rust-toolchain.toml') }}-
+      - name: Bootstrap
+        if: steps.release.outputs.tests == 'run'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: just bootstrap --outputStyle=static
+      # Saved straight after Bootstrap, as lint's are.
+      - uses: actions/cache/save@v6
+        if: steps.release.outputs.tests == 'run' && steps.release-plz-cache.outputs.cache-hit != 'true'
+        with:
+          path: ~/.cache/onetaskgraph/tools/release-plz
+          key: release-plz-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.release-plz }}
+      - uses: actions/cache/save@v6
+        if: steps.release.outputs.tests == 'run' && steps.prune-superseded-cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            ~/.cargo/bin/cargo-prune-superseded
+            ~/.cargo/bin/cargo-prune-superseded.exe
+          key: prune-superseded-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.prune-superseded }}-${{ hashFiles('rust-toolchain.toml') }}
+      - name: Derive the comparison base
+        id: pr-base
+        if: steps.release.outputs.tests == 'run'
+        shell: bash
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: bash scripts/ci-pr-base.sh "$BASE_REF" "$BASE_SHA"
+      # llmlint: ignore-block[live_tier_compiles_and_requires_credential,no_second_broader_sweep_over_an_already_gated_commit,external_service_suite_stays_out_of_the_affected_tier] test-linux alone carries this run's live credentials; the uncredentialed service suites run behind affected selection, as on check's legs; and the jobs behind today's required contexts stay until branch protection names these four.
+      - name: Test the affected projects
+        if: steps.release.outputs.tests == 'run'
+        env:
+          NX_BASE: ${{ steps.pr-base.outputs.base }}
+          NX_HEAD: HEAD
+        run: just ci-test-windows
+      # llmlint: ignore-end[live_tier_compiles_and_requires_credential,no_second_broader_sweep_over_an_already_gated_commit,external_service_suite_stays_out_of_the_affected_tier]
+
+  # A manual diagnostic, default off: scripts:distribution-test with nothing beside it, on the
+  # two platforms whose test jobs run it beside the coverage union, so its own duration there
+  # is read off the step rather than inferred from a contended run.
+  distribution-diagnostic:
+    if: github.event_name == 'workflow_dispatch' && inputs.distribution
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: extractions/setup-just@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov,cargo-nextest,cargo-machete,cargo-deny,cargo-binstall
+      - name: Read the pinned bootstrap tool versions
+        id: pins
+        shell: bash
+        run: bash scripts/ci-tool-pins.sh
+      - uses: actions/cache/restore@v6
+        with:
+          path: ~/.cache/onetaskgraph/tools/release-plz
+          key: release-plz-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.release-plz }}
+      - uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/.cargo/bin/cargo-prune-superseded
+            ~/.cargo/bin/cargo-prune-superseded.exe
+          key: prune-superseded-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.prune-superseded }}-${{ hashFiles('rust-toolchain.toml') }}
+      - name: Bootstrap
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          MATURIN_PEP517_ARGS: --profile dev
+        run: just bootstrap --outputStyle=static
+      - name: Build the binary the distribution journey packages
+        run: bash scripts/nx.sh run onetaskgraph:build --outputStyle=static
+      - name: The distribution journey, alone
+        run: just distribution-test
+
+  # Skipped at the job level on release-plz's own release branch, so the release pull request
+  # spends no Mac runner (`onetaskgraph-macos-runs-per-change`); a skipped job satisfies a
+  # required context. The carrier `check (macos-latest)` still goes red when that branch
+  # carries more than the version and changelog edits, because macos-lanes classifies the
+  # diff itself.
+  test-macos:
+    if: github.event_name == 'pull_request' && !(github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'release-plz-'))
+    runs-on: macos-latest
+    timeout-minutes: 30
+    env:
+      ONETASKGRAPH_SDK_WITHOUT_CLI: "1"
+      UV_NO_SYNC: "1"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The merge base, the release shortcut and main's history all need the full history.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: extractions/setup-just@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - name: Install the workflow tooling
+        run: just github-workflows-bootstrap
+      # .github/release-shortcut.mjs says when the tests need not run again, and why.
+      - name: Decide whether the release shortcut applies
+        id: release
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          git fetch --quiet --no-tags origin "$DEFAULT_BRANCH"
+          node .github/release-shortcut.mjs decide --base "$BASE_SHA" --head HEAD --main "origin/$DEFAULT_BRANCH"
+      - name: Report the release shortcut
+        if: steps.release.outputs.tests == 'skip'
+        shell: bash
+        env:
+          REASON: ${{ steps.release.outputs.reason }}
+        run: echo "Tests not run ($REASON); the lint job still runs in full."
+      - uses: astral-sh/setup-uv@v7
+        if: steps.release.outputs.tests == 'run'
+        with:
+          enable-cache: true
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        if: steps.release.outputs.tests == 'run'
+      - uses: taiki-e/install-action@v2
+        if: steps.release.outputs.tests == 'run'
+        with:
+          tool: cargo-llvm-cov,cargo-nextest,cargo-machete,cargo-deny,cargo-binstall
+      - name: Read the pinned bootstrap tool versions
+        id: pins
+        if: steps.release.outputs.tests == 'run'
+        shell: bash
+        run: bash scripts/ci-tool-pins.sh
+      # The caches, keyed as lint's are and for the same reasons.
+      - uses: actions/cache/restore@v6
+        id: release-plz-cache
+        if: steps.release.outputs.tests == 'run'
+        with:
+          path: ~/.cache/onetaskgraph/tools/release-plz
+          key: release-plz-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.release-plz }}
+      - uses: actions/cache/restore@v6
+        id: prune-superseded-cache
+        if: steps.release.outputs.tests == 'run'
+        with:
+          path: |
+            ~/.cargo/bin/cargo-prune-superseded
+            ~/.cargo/bin/cargo-prune-superseded.exe
+          key: prune-superseded-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.prune-superseded }}-${{ hashFiles('rust-toolchain.toml') }}
+      - uses: actions/cache@v6
+        if: steps.release.outputs.tests == 'run'
+        with:
+          path: .nx/cache
+          key: nx-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'bun.lock', 'uv.lock', 'sdks/python/uv.lock', '.github/bun.lock', 'rust-toolchain.toml') }}-${{ github.sha }}
+          restore-keys: nx-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'bun.lock', 'uv.lock', 'sdks/python/uv.lock', '.github/bun.lock', 'rust-toolchain.toml') }}-
+      - name: Bootstrap
+        if: steps.release.outputs.tests == 'run'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: just bootstrap --outputStyle=static
+      # Saved straight after Bootstrap, as lint's are.
+      - uses: actions/cache/save@v6
+        if: steps.release.outputs.tests == 'run' && steps.release-plz-cache.outputs.cache-hit != 'true'
+        with:
+          path: ~/.cache/onetaskgraph/tools/release-plz
+          key: release-plz-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.release-plz }}
+      - uses: actions/cache/save@v6
+        if: steps.release.outputs.tests == 'run' && steps.prune-superseded-cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            ~/.cargo/bin/cargo-prune-superseded
+            ~/.cargo/bin/cargo-prune-superseded.exe
+          key: prune-superseded-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.prune-superseded }}-${{ hashFiles('rust-toolchain.toml') }}
+      - name: Derive the comparison base
+        id: pr-base
+        if: steps.release.outputs.tests == 'run'
+        shell: bash
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: bash scripts/ci-pr-base.sh "$BASE_REF" "$BASE_SHA"
+      # llmlint: ignore-block[live_tier_compiles_and_requires_credential,no_second_broader_sweep_over_an_already_gated_commit,external_service_suite_stays_out_of_the_affected_tier] test-linux alone carries this run's live credentials; the uncredentialed service suites run behind affected selection, as on check's legs; and the jobs behind today's required contexts stay until branch protection names these four.
+      - name: Test the affected projects
+        if: steps.release.outputs.tests == 'run'
+        env:
+          NX_BASE: ${{ steps.pr-base.outputs.base }}
+          NX_HEAD: HEAD
+        run: just ci-test-macos
+      # llmlint: ignore-end[live_tier_compiles_and_requires_credential,no_second_broader_sweep_over_an_already_gated_commit,external_service_suite_stays_out_of_the_affected_tier]

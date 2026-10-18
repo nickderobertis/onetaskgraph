@@ -8,6 +8,8 @@ import { isMacosRunner } from "./telemetry.ts";
 import { data, Evaluator, Lexer, Parser } from "./actions-expressions.mjs";
 
 export const root = new URL("../", import.meta.url);
+// The repository the workflows run in; a fork's pull request comes from another.
+const REPOSITORY = "nickderobertis/onetaskgraph";
 export const read = (path) => readFileSync(new URL(path, root), "utf8");
 function record(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -251,8 +253,9 @@ export function validateEventInventory(inventory, definitions = workflows()) {
     }
   }
 }
-export function digest() {
-  const files = [
+// Every file the run graph and its telemetry read, from the repository root.
+export function readSet() {
+  return [
     "release-targets.toml",
     "screencomp.toml",
     "scripts/product_versions.py",
@@ -264,9 +267,11 @@ export function digest() {
     ...readdirSync(new URL(".github/reusable/", root)).map((p) => `.github/reusable/${p}`),
     ...readdirSync(new URL(".github/tests/", root)).map((p) => `.github/tests/${p}`),
   ];
+}
+export function digest() {
   return createHash("sha256")
     .update(
-      files
+      readSet()
         .sort()
         .map((p) => `${p}\0${read(p)}`)
         .join("\0"),
@@ -431,9 +436,18 @@ export function jobs(workflow, scenario, policy, prefix = "", inputs = {}, ances
       const context = {
         github: {
           event_name: scenario.event,
+          repository: REPOSITORY,
+          head_ref: scenario.event === "pull_request" ? scenario.headRef || "feature" : "",
           event: {
             action: scenario.action,
-            pull_request: { head: { repo: { fork: scenario.fork } } },
+            pull_request: {
+              head: {
+                repo: {
+                  fork: scenario.fork,
+                  full_name: scenario.fork ? "outside/repo" : REPOSITORY,
+                },
+              },
+            },
           },
           ref: scenario.tag
             ? `refs/tags/${scenario.tag}`
@@ -517,11 +531,14 @@ export function jobs(workflow, scenario, policy, prefix = "", inputs = {}, ances
           if (ancestry.includes(job.uses)) throw Error("Recursive reusable workflow");
           const child = reusable(job.uses);
           const supplied = reusableInputs(child, resolve(job.with || {}, rowContext));
+          // GitHub names a called job's check after the caller's display name, its id when it
+          // has none; the job ids stay the caller's id either way.
+          const caller = `${prefix}${id} / `;
+          const shown = `${prefix}${resolve(job.name || id, rowContext)} / `;
           rows.push(
-            ...jobs(child, scenario, policy, `${prefix}${id} / `, supplied, [
-              ...ancestry,
-              job.uses,
-            ]),
+            ...jobs(child, scenario, policy, caller, supplied, [...ancestry, job.uses]).map(
+              (row) => ({ ...row, name: shown + row.name.slice(caller.length) }),
+            ),
           );
           continue;
         }

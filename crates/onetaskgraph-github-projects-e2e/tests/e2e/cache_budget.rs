@@ -551,27 +551,25 @@ impl Workload {
     }
 }
 
-/// Every kind's four sequences at one scale, with the cache on or off, on one board: each kind's
-/// cold sequence reads none of the entries another kind's sequences kept.
-fn measured(scale: Scale, cache: bool) -> Vec<Vec<Spent>> {
-    let workload = Workload::new(scale, cache);
-    let measured: Vec<Vec<Spent>> = KINDS.iter().map(|kind| workload.sequences(kind)).collect();
-    if !cache {
+/// One scale and cache mode's sequences, by kind: its scale's name, whether the cache was on,
+/// and each kind's four sequences in [`KINDS`] order.
+type Run = (&'static str, bool, Vec<Vec<Spent>>);
+
+/// One kind's four sequences at one scale, with the cache on or off, on a board of its own: its
+/// cold sequence reads nothing another kind kept, and every kind of every scale runs at once.
+fn measured(scale: Scale, cache: bool, kind: &str) -> Vec<Spent> {
+    let sequences = Workload::new(scale, cache).sequences(kind);
+    if !cache && kind != "asset-bytes" {
         // With nothing kept, each of the two concurrent passes makes exactly the cold load's
         // reads, so a span that counted any request twice — or missed one — reads otherwise.
-        for (kind, sequences) in KINDS.iter().zip(&measured) {
-            if *kind == "asset-bytes" {
-                continue;
-            }
-            let (cold, unchanged) = (sequences[0], sequences[1]);
-            assert_eq!(
-                (unchanged.requests, unchanged.points),
-                (2 * cold.requests, 2 * cold.points),
-                "{kind}: two concurrent passes are counted once each"
-            );
-        }
+        let (cold, unchanged) = (sequences[0], sequences[1]);
+        assert_eq!(
+            (unchanged.requests, unchanged.points),
+            (2 * cold.requests, 2 * cold.points),
+            "{kind}: two concurrent passes are counted once each"
+        );
     }
-    measured
+    sequences
 }
 
 /// The stale-option fallback, with the cache on and off: a priority write after the option it
@@ -601,20 +599,32 @@ fn stale_option(cache: bool) -> Value {
 // llmlint: ignore-block[budgets_reuse_gate_telemetry] The budget compares the same workload with the cache on and with it off, which no behavioural journey runs — the cache's journeys hold small boards to exact requests, cache on alone — and its task fixes the design: the e2e journeys record the four sequences in both modes, and the reporter only reads what they recorded.
 #[test]
 fn the_cache_spends_no_more_board_points_than_no_cache_over_every_kind_sequence_and_scale() {
-    let runs: Vec<(&str, bool, Vec<Vec<Spent>>)> = std::thread::scope(|scope| {
+    // Every cell of the grid at once — each scale, cache mode and kind on its own board — so
+    // the test takes as long as its slowest kind rather than every kind of a scale in turn.
+    let (runs, stale): (Vec<Run>, Value) = std::thread::scope(|scope| {
         let handles: Vec<_> = SCALES
             .iter()
             .flat_map(|(name, factor)| {
                 [false, true].map(|cache| {
                     let scale = Scale { factor: *factor };
-                    (*name, cache, scope.spawn(move || measured(scale, cache)))
+                    let kinds: Vec<_> = KINDS
+                        .iter()
+                        .map(|kind| scope.spawn(move || measured(scale, cache, kind)))
+                        .collect();
+                    (*name, cache, kinds)
                 })
             })
             .collect();
-        handles
+        let stale = [true, false].map(|cache| scope.spawn(move || stale_option(cache)));
+        let runs = handles
             .into_iter()
-            .map(|(name, cache, handle)| (name, cache, handle.join().expect("a run")))
-            .collect()
+            .map(|(name, cache, kinds)| {
+                let kinds = kinds.into_iter().map(|kind| kind.join().expect("a run"));
+                (name, cache, kinds.collect())
+            })
+            .collect();
+        let [on, off] = stale.map(|run| run.join().expect("a stale-option run"));
+        (runs, json!({"on": on, "off": off}))
     });
     let mut figure = i64::MIN;
     let mut scales = serde_json::Map::new();
@@ -654,7 +664,6 @@ fn the_cache_spends_no_more_board_points_than_no_cache_over_every_kind_sequence_
                                              "difference": total}}),
         );
     }
-    let stale = json!({"on": stale_option(true), "off": stale_option(false)});
     let detail = format!(
         "largest difference, cache on minus cache off, in GitHub GraphQL points over every \
          kind, sequence and scale and each scale's total: {figure}; by scale, kind and \

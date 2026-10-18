@@ -24,9 +24,10 @@ prune_superseded_version := "0.1.1"
 
 # Set up from a clean clone: every toolchain, the judged-lint tier and the pool pruner.
 # The pruner is installed everywhere bootstrap runs, CI included; only its pinned-version
-# check decides whether an install is needed.
-bootstrap:
-    @{{nx}} run-many -t bootstrap --all
+# check decides whether an install is needed. Arguments go to Nx: ci.yml's four jobs pass
+# `--outputStyle=static`, so their logs show what each project's bootstrap took.
+bootstrap *args:
+    @{{nx}} run-many -t bootstrap --all {{args}}
     @just pool-maintenance-tool
 
 # Install the pinned cargo-prune-superseded, unless that version is the one on PATH.
@@ -95,6 +96,31 @@ distribution-test:
 # Tests only, for the affected projects.
 test:
     @python3 crates/onetaskgraph-github-projects-e2e/lane_runner.py select scripts/live-lane-selection.sh bash {{nx}} affected -t test budgets
+# llmlint: ignore-end[external_service_suite_stays_out_of_the_affected_tier]
+
+# The four pull-request jobs ci.yml runs, one recipe each, so a contributor runs exactly what
+# CI runs: `lint` once on Linux, and one test job per platform. scripts/ci-job.sh is the one
+# implementation; it prints every Nx task a phase selects and every task it ran, and
+# `--select-only` stops after the selection. The test jobs reach the live-lane decision the
+# way `test` above does, so a version-only diff opens no live session from them either, and
+# run each suite once: under coverage where coverage measures it, uninstrumented elsewhere.
+
+# Format, lint and type checks over the affected projects, generated-code drift and the supply chain.
+ci-lint *args:
+    @bash scripts/ci-job.sh lint {{args}}
+
+# llmlint: ignore-block[external_service_suite_stays_out_of_the_affected_tier] As on `test`: affected selection is the edge the live suites sit behind, and the decision consulted here is its second half.
+# The Linux test job: tests, coverage, budgets and the distribution journeys over the affected projects.
+ci-test-linux *args:
+    @python3 crates/onetaskgraph-github-projects-e2e/lane_runner.py select scripts/live-lane-selection.sh bash scripts/ci-job.sh test-linux {{args}}
+
+# The Windows test job: tests, coverage, budgets and the distribution journeys over the affected projects.
+ci-test-windows *args:
+    @python3 crates/onetaskgraph-github-projects-e2e/lane_runner.py select scripts/live-lane-selection.sh bash scripts/ci-job.sh test-windows {{args}}
+
+# The macOS test job: tests, coverage, budgets and the distribution journeys over the affected projects.
+ci-test-macos *args:
+    @python3 crates/onetaskgraph-github-projects-e2e/lane_runner.py select scripts/live-lane-selection.sh bash scripts/ci-job.sh test-macos {{args}}
 # llmlint: ignore-end[external_service_suite_stays_out_of_the_affected_tier]
 
 # Every crate's coverage target runs its tests instrumented into the one shared profile
