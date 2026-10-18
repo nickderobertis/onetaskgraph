@@ -11,7 +11,8 @@
 #          the all-features run that measurement repeats under nextest or a command
 #          `test-uncovered` runs, and whose library's doctests, which nextest never runs,
 #          workspace:test-uncovered's one doctest run names;
-#   sdk    an SDK whose `coverage` command is its `test` command with coverage switched on;
+#   sdk    an SDK whose `coverage` command is its `test` command with coverage switched on,
+#          beside which `test` may run only commands `test-uncovered` runs;
 #
 # and never a project with a live lane, whose credentials coverage clears.
 set -euo pipefail
@@ -116,13 +117,19 @@ for path in sorted(paths.split()):
                 f"workspace:test-uncovered's `{DOCTESTS}` run does not name it with -p"
             )
     else:
-        if len(tested) != 1 or len(covered) != 1:
-            problems.append(f"{where}: test-in-coverage:sdk needs one test and one coverage command")
+        options = lambda target: project["targets"].get(target, {}).get("options", {}).get("cwd")
+        if uncovered and options("test-uncovered") != options("test"):
+            problems.append(f"{where}: test-uncovered runs in another directory than test")
+        suite = [command for command in tested if command not in uncovered]
+        if len(suite) != 1 or len(covered) != 1:
+            problems.append(
+                f"{where}: test-in-coverage:sdk needs one test command, beside those "
+                "test-uncovered runs, and one coverage command"
+            )
             continue
-        plain = [word for word in shlex.split(tested[0]) if word != "--no-cov"]
+        plain = [word for word in shlex.split(suite[0]) if word != "--no-cov"]
         measured = shlex.split(covered[0])
         extra = measured[len(plain):]
-        options = lambda target: project["targets"][target].get("options", {}).get("cwd")
         if (
             measured[: len(plain)] != plain
             or not all(word.startswith(("--cov", "--coverage")) for word in extra)
@@ -130,7 +137,7 @@ for path in sorted(paths.split()):
         ):
             problems.append(
                 f"{where}: test-in-coverage:sdk needs coverage to be test with coverage switched "
-                f"on; test runs `{tested[0]}` and coverage `{covered[0]}`"
+                f"on; test runs `{suite[0]}` and coverage `{covered[0]}`"
             )
 
 # The live crates: on Linux their `test` runs only the credentialed journey each

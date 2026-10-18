@@ -77,15 +77,9 @@ case "$JOB" in
 1 run scripts:distribution-test -
 2 affected budgets - --excludeTaskDependencies,--skipNxCache"
     ;;
-  test-macos)
+  test-macos | test-windows)
     # Every suite once, uninstrumented: coverage is Linux's. `budgets` reads what `test`
     # recorded, and depends on it.
-    phases="1 affected test,budgets -
-1 run scripts:distribution-check -
-1 run scripts:distribution-test -"
-    ;;
-  test-windows)
-    # As test-macos.
     phases="1 affected test,budgets -
 1 run scripts:distribution-check -
 1 run scripts:distribution-test -"

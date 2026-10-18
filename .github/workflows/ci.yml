@@ -426,7 +426,7 @@ jobs:
     timeout-minutes: 30
     # In all four jobs: the Python SDK's environment without the CLI copy `uv sync` would build
     # into it, which nothing here runs, and no `uv run` that installs it after all
-    # (scripts/sync-python-sdk.sh).
+    # (sdks/python/sync.sh).
     env:
       ONETASKGRAPH_SDK_WITHOUT_CLI: "1"
       UV_NO_SYNC: "1"
