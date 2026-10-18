@@ -155,6 +155,7 @@ RETURN_TYPES = {"sources_list": "list[SourceListing]"}
 OPTION_TYPES = {
     "apply": "bool",
     "allow_partial": "bool",
+    "complete": "bool",
     "no_comments": "bool",
     "comments": "bool",
     "no_link": "bool",
@@ -221,6 +222,7 @@ OPTION_TYPES = {
 OPTION_PLACEHOLDERS = {
     "apply": None,
     "allow_partial": None,
+    "complete": None,
     "no_comments": None,
     "comments": None,
     "no_link": None,
@@ -385,8 +387,9 @@ def run_workspace_binary(*args: str) -> str:
     command = [str(BINARY), *args]
     # Every verb validates the configuration it is handed, `schema` and `help` included, so a
     # caller's own `ONETASKGRAPH_` settings would decide whether the contract can be emitted
-    # at all: a host exporting half a source makes the binary refuse. What is generated is the
-    # build's contract and nothing of any configuration, so none of it reaches the binary.
+    # at all: a host exporting a source its plugin refuses makes the binary refuse. What is
+    # generated is the build's contract and nothing of any configuration, so none of it
+    # reaches the binary.
     environment = {
         name: value
         for name, value in os.environ.items()

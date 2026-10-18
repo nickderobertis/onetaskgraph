@@ -14,9 +14,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use onetaskgraph_core::{
-    BudgetSpent, Config, ConfiguredSource, CopyAction, CopyItems, CopyOutcome, CopyReport,
-    CopyRequest, CopyScope, DependencyRequest, Engine, EngineError, GlobalId, MatchBy, Paging,
-    ProjectGraphRequest, ResolvedSource, Spent, TaskRequest,
+    BudgetSpent, Completeness, Config, ConfiguredSource, CopyAction, CopyItems, CopyOutcome,
+    CopyReport, CopyRequest, CopyScope, DependencyRequest, Engine, EngineError, GlobalId, MatchBy,
+    Paging, ProjectGraphRequest, ResolvedSource, Spent, TaskRequest,
 };
 use onetaskgraph_plugin_api::{
     Capabilities, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport,
@@ -970,6 +970,7 @@ async fn the_edges_a_copy_read_are_written_and_a_far_end_that_leaves_the_set_is_
         .task_dependencies(&onetaskgraph_core::DependencyRequest {
             id: id("into:T-1"),
             direction: onetaskgraph_plugin_api::Direction::DependsOn,
+            completeness: onetaskgraph_core::Completeness::NamingUnasked,
             paging: Paging {
                 limit: NonZeroU32::new(50).expect("a non-zero limit"),
                 token: None,
@@ -1014,6 +1015,7 @@ async fn the_edges_a_copy_read_are_written_and_a_far_end_that_leaves_the_set_is_
         .task_dependencies(&onetaskgraph_core::DependencyRequest {
             id: id("from:T-1"),
             direction: onetaskgraph_plugin_api::Direction::DependsOn,
+            completeness: onetaskgraph_core::Completeness::NamingUnasked,
             paging: Paging {
                 limit: NonZeroU32::new(50).expect("a non-zero limit"),
                 token: None,
@@ -1212,6 +1214,7 @@ async fn depends_on(engine: &Engine, near: &str) -> Vec<String> {
         .task_dependencies(&DependencyRequest {
             id: id(near),
             direction: Direction::DependsOn,
+            completeness: onetaskgraph_core::Completeness::NamingUnasked,
             paging: Paging {
                 limit: NonZeroU32::new(50).expect("a non-zero limit"),
                 token: None,
@@ -1269,6 +1272,7 @@ async fn a_copy_resolves_a_dependency_on_an_item_it_created_in_the_same_run() {
         .project_dependencies(&DependencyRequest {
             id: id("into:P-1"),
             direction: Direction::DependsOn,
+            completeness: onetaskgraph_core::Completeness::NamingUnasked,
             paging: Paging {
                 limit: NonZeroU32::new(50).expect("a non-zero limit"),
                 token: None,
@@ -3146,6 +3150,7 @@ async fn a_source_whose_cursors_cycle_stops_the_walk_of_a_projects_graph() {
             project: id("from:P-1"),
             direction: None,
             group_by: None,
+            completeness: Completeness::NamingUnasked,
         })
         .await
         .expect_err("a source whose cursors cycle is refused")

@@ -4913,6 +4913,14 @@ export const runtimeSchemas = {
       "plan": {
         "$ref": "#/$defs/QueryPlan",
         "description": "What each source was asked to do, and what the engine did instead."
+      },
+      "unanswered": {
+        "default": [],
+        "description": "Each source declared private that a task's dependency read could not ask what it\nrecords of that task — its credential absent or refused, or it unreachable or\nrate-limited — and why. Not a failure of the read: the task lives elsewhere and every\nsource holding it answered, so `items` is every edge this reader can be shown. Only\nthat read fills it, and only while it does not ask for\n[`Completeness::Required`](crate::Completeness::Required), which reports such a source\nin `errors` instead. Left out when empty.",
+        "items": {
+          "$ref": "#/$defs/SourceFailure"
+        },
+        "type": "array"
       }
     },
     "required": [
@@ -5217,11 +5225,24 @@ export const runtimeSchemas = {
       "SettingPath": {
         "description": "A dotted path to one setting, such as `sources.work.config.root`.",
         "type": "string"
+      },
+      "SourceName": {
+        "description": "The name a configuration document gives one configured source.",
+        "pattern": "^[a-z0-9][a-z0-9-]*$",
+        "type": "string"
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "description": "Every setting this build reads, with its value and where the value came from.",
     "properties": {
+      "incomplete_sources": {
+        "default": [],
+        "description": "Every source some layer refines but no layer gives a `plugin`, in name order.\n\nIts settings are among [`settings`](Self::settings) with the layer each came from;\nthis says the source they belong to is incomplete, and so not configured here. Left\nout when there are none.",
+        "items": {
+          "$ref": "#/$defs/SourceName"
+        },
+        "type": "array"
+      },
       "secrets": {
         "$ref": "#/$defs/SecretsReport",
         "description": "What the credentials file supplied, by name, and which layer answers for each.\n\nBeside the settings because it is the same question — where does this value\ncome from — asked of the one kind of value that may never be printed. So the\nname and the layer are reported and the value never is."
@@ -9407,6 +9428,21 @@ export const runtimeSchemas = {
   },
   "ProjectGraph": {
     "$defs": {
+      "FailureClass": {
+        "description": "Whether repeating a failed request unchanged could change the answer.\n\nClosed on purpose: a caller acts on this alone, so a third value would be one every\ncaller written before it silently misreads. What the failure *was* is\n[`Failure`]'s `kind`, which is the open half.",
+        "oneOf": [
+          {
+            "const": "refused",
+            "description": "The store or a source declined the request; repeating it unchanged cannot alter\nthe answer.",
+            "type": "string"
+          },
+          {
+            "const": "transient",
+            "description": "The request got no ruling a caller could act on, so the same request may succeed\nlater.",
+            "type": "string"
+          }
+        ]
+      },
       "GlobalId": {
         "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
         "type": "string"
@@ -9483,6 +9519,158 @@ export const runtimeSchemas = {
         "description": "The task metadata key `project graph --group-by` groups by: any key a record may hold,\nand never the empty string, which names none.\n\nNot a [`MetadataKey`](onetaskgraph_plugin_api::MetadataKey): that is what a *write* may\nname, which keeps out this product's own namespace and a key with no dot. A read groups\nby whatever a task holds, so a folder of Markdown's `unit:` is as good a key as\n`orchestrator.unit`.",
         "minLength": 1,
         "type": "string"
+      },
+      "SourceError": {
+        "description": "Why a source could not answer.\n\nEvery variant carries owned data only, so an error survives the JSON-over-stdio\nboundary a subprocess-hosted plugin crosses without losing anything.",
+        "oneOf": [
+          {
+            "description": "The source's configuration block is wrong, or names something absent.",
+            "properties": {
+              "kind": {
+                "const": "config",
+                "type": "string"
+              },
+              "message": {
+                "description": "What is wrong, in a form a user can act on.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "message"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The credential was missing, malformed, or rejected.",
+            "properties": {
+              "kind": {
+                "const": "auth",
+                "type": "string"
+              },
+              "message": {
+                "description": "What failed. Never contains the credential itself.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "message"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The source understood the request and declined it.",
+            "properties": {
+              "kind": {
+                "const": "refused",
+                "type": "string"
+              },
+              "message": {
+                "description": "The source's own reason.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "message"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The source asked the caller to slow down.\n\nA rate limit is the one refusal whose *reason* an operator cannot guess from the\nkind alone. A hosted service typically has more than one limiter, only some of\nthem are reported by the endpoint an operator would go and check, and the right\nnext step differs between them — so a source that knows which one refused it, and\nwhat it was doing when it did, says so in [`message`](Self::RateLimited::message)\nrather than leaving the operator to infer it and infer it wrong.",
+            "properties": {
+              "kind": {
+                "const": "rate-limited",
+                "type": "string"
+              },
+              "message": {
+                "description": "What the source can add about *which* limit refused it and what it was doing.\n\nAbsent means the source had nothing to add beyond the kind, which is what\nevery source said before this member existed; it is omitted from the wire\nentirely when absent, so a reader written against the shape without it sees\nexactly the shape it was written for. Never contains a credential.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "retry_after_seconds": {
+                "description": "How long the source asked us to wait, when it said.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The source could not be reached at all.",
+            "properties": {
+              "kind": {
+                "const": "unavailable",
+                "type": "string"
+              },
+              "message": {
+                "description": "What went wrong reaching it.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "message"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The source answered with something this interface cannot represent.",
+            "properties": {
+              "kind": {
+                "const": "malformed",
+                "type": "string"
+              },
+              "message": {
+                "description": "What could not be represented.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "SourceFailure": {
+        "description": "One source's failure, kept beside the results the other sources returned.",
+        "properties": {
+          "class": {
+            "$ref": "#/$defs/FailureClass",
+            "description": "Whether repeating the request unchanged could change this source's answer."
+          },
+          "error": {
+            "$ref": "#/$defs/SourceError",
+            "description": "Why."
+          },
+          "source": {
+            "$ref": "#/$defs/SourceName",
+            "description": "The source that failed."
+          }
+        },
+        "required": [
+          "source",
+          "error",
+          "class"
+        ],
+        "type": "object"
+      },
+      "SourceName": {
+        "description": "The name a configuration document gives one configured source.",
+        "pattern": "^[a-z0-9][a-z0-9-]*$",
+        "type": "string"
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -9526,6 +9714,14 @@ export const runtimeSchemas = {
         "format": "uint32",
         "minimum": 0,
         "type": "integer"
+      },
+      "unanswered": {
+        "default": [],
+        "description": "Each source declared private that could not be asked what it records of the project's\ntasks, and why — so `edges` lacks whatever it records. Absent when every source\nanswered, which is the one case the graph is complete.",
+        "items": {
+          "$ref": "#/$defs/SourceFailure"
+        },
+        "type": "array"
       }
     },
     "required": [
@@ -11440,6 +11636,14 @@ export const runtimeSchemas = {
       "plan": {
         "$ref": "#/$defs/QueryPlan",
         "description": "What each source was asked to do, and what the engine did instead."
+      },
+      "unanswered": {
+        "default": [],
+        "description": "Each source declared private that a task's dependency read could not ask what it\nrecords of that task — its credential absent or refused, or it unreachable or\nrate-limited — and why. Not a failure of the read: the task lives elsewhere and every\nsource holding it answered, so `items` is every edge this reader can be shown. Only\nthat read fills it, and only while it does not ask for\n[`Completeness::Required`](crate::Completeness::Required), which reports such a source\nin `errors` instead. Left out when empty.",
+        "items": {
+          "$ref": "#/$defs/SourceFailure"
+        },
+        "type": "array"
       }
     },
     "required": [
@@ -11863,6 +12067,14 @@ export const runtimeSchemas = {
       "plan": {
         "$ref": "#/$defs/QueryPlan",
         "description": "What each source was asked to do, and what the engine did instead."
+      },
+      "unanswered": {
+        "default": [],
+        "description": "Each source declared private that a task's dependency read could not ask what it\nrecords of that task — its credential absent or refused, or it unreachable or\nrate-limited — and why. Not a failure of the read: the task lives elsewhere and every\nsource holding it answered, so `items` is every edge this reader can be shown. Only\nthat read fills it, and only while it does not ask for\n[`Completeness::Required`](crate::Completeness::Required), which reports such a source\nin `errors` instead. Left out when empty.",
+        "items": {
+          "$ref": "#/$defs/SourceFailure"
+        },
+        "type": "array"
       }
     },
     "required": [
@@ -12262,6 +12474,14 @@ export const runtimeSchemas = {
       "plan": {
         "$ref": "#/$defs/QueryPlan",
         "description": "What each source was asked to do, and what the engine did instead."
+      },
+      "unanswered": {
+        "default": [],
+        "description": "Each source declared private that a task's dependency read could not ask what it\nrecords of that task — its credential absent or refused, or it unreachable or\nrate-limited — and why. Not a failure of the read: the task lives elsewhere and every\nsource holding it answered, so `items` is every edge this reader can be shown. Only\nthat read fills it, and only while it does not ask for\n[`Completeness::Required`](crate::Completeness::Required), which reports such a source\nin `errors` instead. Left out when empty.",
+        "items": {
+          "$ref": "#/$defs/SourceFailure"
+        },
+        "type": "array"
       }
     },
     "required": [
@@ -12873,6 +13093,14 @@ export const runtimeSchemas = {
       "plan": {
         "$ref": "#/$defs/QueryPlan",
         "description": "What each source was asked to do, and what the engine did instead."
+      },
+      "unanswered": {
+        "default": [],
+        "description": "Each source declared private that a task's dependency read could not ask what it\nrecords of that task — its credential absent or refused, or it unreachable or\nrate-limited — and why. Not a failure of the read: the task lives elsewhere and every\nsource holding it answered, so `items` is every edge this reader can be shown. Only\nthat read fills it, and only while it does not ask for\n[`Completeness::Required`](crate::Completeness::Required), which reports such a source\nin `errors` instead. Left out when empty.",
+        "items": {
+          "$ref": "#/$defs/SourceFailure"
+        },
+        "type": "array"
       }
     },
     "required": [
@@ -13558,6 +13786,14 @@ export const runtimeSchemas = {
       "plan": {
         "$ref": "#/$defs/QueryPlan",
         "description": "What each source was asked to do, and what the engine did instead."
+      },
+      "unanswered": {
+        "default": [],
+        "description": "Each source declared private that a task's dependency read could not ask what it\nrecords of that task — its credential absent or refused, or it unreachable or\nrate-limited — and why. Not a failure of the read: the task lives elsewhere and every\nsource holding it answered, so `items` is every edge this reader can be shown. Only\nthat read fills it, and only while it does not ask for\n[`Completeness::Required`](crate::Completeness::Required), which reports such a source\nin `errors` instead. Left out when empty.",
+        "items": {
+          "$ref": "#/$defs/SourceFailure"
+        },
+        "type": "array"
       }
     },
     "required": [
@@ -14393,6 +14629,14 @@ export const runtimeSchemas = {
       "plan": {
         "$ref": "#/$defs/QueryPlan",
         "description": "What each source was asked to do, and what the engine did instead."
+      },
+      "unanswered": {
+        "default": [],
+        "description": "Each source declared private that a task's dependency read could not ask what it\nrecords of that task — its credential absent or refused, or it unreachable or\nrate-limited — and why. Not a failure of the read: the task lives elsewhere and every\nsource holding it answered, so `items` is every edge this reader can be shown. Only\nthat read fills it, and only while it does not ask for\n[`Completeness::Required`](crate::Completeness::Required), which reports such a source\nin `errors` instead. Left out when empty.",
+        "items": {
+          "$ref": "#/$defs/SourceFailure"
+        },
+        "type": "array"
       }
     },
     "required": [
@@ -19313,6 +19557,14 @@ export const runtimeSchemas = {
       "plan": {
         "$ref": "#/$defs/QueryPlan",
         "description": "What each source was asked to do, and what the engine did instead."
+      },
+      "unanswered": {
+        "default": [],
+        "description": "Each source declared private that a task's dependency read could not ask what it\nrecords of that task — its credential absent or refused, or it unreachable or\nrate-limited — and why. Not a failure of the read: the task lives elsewhere and every\nsource holding it answered, so `items` is every edge this reader can be shown. Only\nthat read fills it, and only while it does not ask for\n[`Completeness::Required`](crate::Completeness::Required), which reports such a source\nin `errors` instead. Left out when empty.",
+        "items": {
+          "$ref": "#/$defs/SourceFailure"
+        },
+        "type": "array"
       }
     },
     "required": [
@@ -20225,6 +20477,14 @@ export const runtimeSchemas = {
           "plan": {
             "$ref": "#/$defs/QueryPlan",
             "description": "What each source was asked to do, and what the engine did instead."
+          },
+          "unanswered": {
+            "default": [],
+            "description": "Each source declared private that a task's dependency read could not ask what it\nrecords of that task — its credential absent or refused, or it unreachable or\nrate-limited — and why. Not a failure of the read: the task lives elsewhere and every\nsource holding it answered, so `items` is every edge this reader can be shown. Only\nthat read fills it, and only while it does not ask for\n[`Completeness::Required`](crate::Completeness::Required), which reports such a source\nin `errors` instead. Left out when empty.",
+            "items": {
+              "$ref": "#/$defs/SourceFailure"
+            },
+            "type": "array"
           }
         },
         "required": [

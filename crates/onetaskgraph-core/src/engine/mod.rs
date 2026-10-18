@@ -23,6 +23,7 @@ mod comment;
 mod copy;
 mod delivery;
 mod dependents;
+pub use dependents::Completeness;
 mod fetch;
 mod graph;
 mod join;
@@ -320,6 +321,10 @@ pub struct DependencyRequest {
     pub id: GlobalId,
     /// Which way to walk.
     pub direction: Direction,
+    /// What a task's read owes when a source declared private could not be asked what it
+    /// records of the task: every other edge, with that source in
+    /// [`QueryResponse::unanswered`], or that source in [`QueryResponse::errors`].
+    pub completeness: Completeness,
     /// Which page.
     pub paging: Paging,
 }
@@ -344,6 +349,20 @@ pub enum EngineError {
         name: String,
         /// The names that exist, for the message.
         configured: String,
+    },
+
+    /// A command named a source that some configuration layer refines — its `routes`, a
+    /// `config` field — but that no layer read here declares a `plugin` for, so it is not
+    /// configured: by `--source`, a qualified id, `default_sources` or a route it follows.
+    #[error(
+        "source \"{name}\" is not configured here: no configuration layer declares its plugin\n\
+         next: declare `sources.{name}.plugin` in a layer this directory reads, or name \
+         another source — `onetaskgraph config show` lists the layer each of \"{name}\"'s \
+         settings came from."
+    )]
+    IncompleteSource {
+        /// The name that was asked for.
+        name: SourceName,
     },
 
     /// A `--page` token that decodes but does not belong to this query.
@@ -1369,6 +1388,9 @@ pub struct Engine {
     sources: Vec<ConfiguredSource>,
     /// Which sources answer when a request names none.
     selection: Vec<SourceName>,
+    /// Sources a configuration layer refines but none declares a `plugin` for: not
+    /// configured, and refused by name rather than as unknown.
+    incomplete: std::collections::BTreeSet<SourceName>,
     /// Where an item written to a source goes instead. Read from configuration and never
     /// from a source, so it holds nothing of anybody's work.
     routes: Routes,
@@ -1430,6 +1452,7 @@ impl Engine {
             config.selected_sources(),
         )
         .with_routes(config.routes())
+        .with_incomplete(config.incomplete().clone())
         .with_boundary(boundary::Boundary::configured(
             config.write_policy(),
             &config.visibilities(),
@@ -1445,11 +1468,17 @@ impl Engine {
         Self {
             sources,
             selection,
+            incomplete: std::collections::BTreeSet::new(),
             routes: Routes::default(),
             boundary: boundary::Boundary::default(),
             caches: BTreeMap::new(),
             copy_expect: std::sync::Mutex::new(None),
         }
+    }
+
+    fn with_incomplete(mut self, incomplete: std::collections::BTreeSet<SourceName>) -> Self {
+        self.incomplete = incomplete;
+        self
     }
 
     fn with_boundary(mut self, boundary: boundary::Boundary) -> Self {
@@ -2168,7 +2197,9 @@ impl Engine {
     /// [`dependents`]): a forward read of a task in a source not declared private reads, as
     /// one more stream each, the tasks of every source declared private that record it as
     /// depending on them, and a reverse read of a task in a source declared private reads the
-    /// dependents it records on itself beside its source's own answer.
+    /// dependents it records on itself beside its source's own answer. A recording source
+    /// that could not be asked is reported in [`QueryResponse::unanswered`] rather than as a
+    /// failure, unless the request asks for [`Completeness::Required`].
     async fn dependencies(
         &self,
         request: &DependencyRequest,
@@ -2278,7 +2309,7 @@ impl Engine {
         let kinds: Vec<StreamKind> = streams.iter().map(|(_, kind, _)| *kind).collect();
 
         let streams = answer.collect_streams(&ready, &kinds, walked, &counters, outcomes);
-        answer.finish(
+        let mut response = answer.finish(
             streams,
             budget,
             owed(&states),
@@ -2288,7 +2319,17 @@ impl Engine {
                 to: qualify_endpoint(name, edge.to),
                 kind: edge.kind,
             },
-        )
+        )?;
+        // A source declared private that could not be asked what it records of a task held
+        // elsewhere did not fail this read, unless the caller asked for every source's part.
+        if entity == Entity::Task && request.completeness == Completeness::NamingUnasked {
+            let (unasked, failed) = std::mem::take(&mut response.errors)
+                .into_iter()
+                .partition(|failure| self.records_unasked(&name, failure));
+            response.errors = failed;
+            response.unanswered = unasked;
+        }
+        Ok(response)
     }
 
     /// The names a request addresses: the ones it gave, or the configuration's own.
@@ -2297,7 +2338,7 @@ impl Engine {
             if self.selection.is_empty() {
                 return Err(EngineError::NoSources);
             }
-            return Ok(self.selection.clone());
+            return self.selection.iter().map(|name| self.known(name)).collect();
         }
         asked.iter().map(|name| self.known(name)).collect()
     }
@@ -2306,6 +2347,9 @@ impl Engine {
     fn known(&self, name: &SourceName) -> Result<SourceName, EngineError> {
         if self.has(name) {
             return Ok(name.clone());
+        }
+        if self.incomplete.contains(name) {
+            return Err(EngineError::IncompleteSource { name: name.clone() });
         }
         if self.sources.is_empty() {
             return Err(EngineError::NoSources);
@@ -2584,6 +2628,7 @@ impl Answer {
                 per_source: merge_plans(self.plans),
             },
             errors: self.errors,
+            unanswered: Vec::new(),
         }
     }
 
@@ -2596,6 +2641,7 @@ impl Answer {
                 per_source: merge_plans(self.plans),
             },
             errors: self.errors,
+            unanswered: Vec::new(),
         })
     }
 
@@ -2623,6 +2669,7 @@ impl Answer {
                 per_source: merge_plans(self.plans),
             },
             errors: self.errors,
+            unanswered: Vec::new(),
         })
     }
 }

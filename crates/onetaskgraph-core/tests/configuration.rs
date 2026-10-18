@@ -534,6 +534,27 @@ fn a_default_source_naming_something_unconfigured_is_refused() {
     assert!(error.to_string().contains("none are"), "{error}");
 }
 
+/// A Rust caller clearing the cache of a source a layer refines and none declares is told
+/// which, on one line, rather than that no such source is configured.
+#[test]
+fn clearing_the_cache_of_an_incomplete_source_names_it_as_incomplete() {
+    let config = Config::from_document(json!({"sources": {
+        "notes": {"plugin": "in-memory"},
+        "partner": {"routes": [{"repositories": ["github.com/example-org/*"], "to": "notes"}]},
+    }}))
+    .expect("a refinement with nothing to refine still loads");
+    let partner = SourceName::new("partner".to_owned()).expect("a usable name");
+
+    let message = onetaskgraph_core::cache::clear(&config, Some(&partner))
+        .expect_err("an incomplete source keeps no cache");
+    assert!(
+        message.starts_with("source \"partner\" is not configured here")
+            && message.contains("no configuration layer declares its plugin; next:")
+            && !message.contains('\n'),
+        "{message}"
+    );
+}
+
 #[test]
 fn a_default_source_that_is_not_a_usable_name_is_refused() {
     let error = Config::from_document(json!({"default_sources": ["Work_1"]}))

@@ -588,6 +588,64 @@ def test_project_graph_drives_the_binary(binary: Path, tmp_path: Path) -> None:
     assert "unit" in str(refused.value)
 
 
+def test_a_dependency_read_answers_without_a_private_source_it_cannot_authenticate_to(
+    binary: Path, tmp_path: Path
+) -> None:
+    """Read a graph and a task's edges past a private source that could not be asked."""
+    for folder in ("work/tasks", "work/projects", "vault/tasks"):
+        (tmp_path / folder).mkdir(parents=True)
+    (tmp_path / "work" / "projects" / "P-1.md").write_text(
+        "---\ntitle: Engine\n---\n", encoding="utf-8"
+    )
+    (tmp_path / "work" / "tasks" / "T-1.md").write_text(
+        "---\ntitle: Ship\nproject: P-1\n---\n", encoding="utf-8"
+    )
+    (tmp_path / "vault" / "tasks" / "V-1.md").write_text(
+        "---\ntitle: Approve\nmetadata:\n  onetaskgraph.depended_on_by:\n"
+        "    'work:T-1':\n      id: work:T-1\n      kind: task\n---\n",
+        encoding="utf-8",
+    )
+    sources = {
+        "work": {"plugin": "local-md", "config": {"root": str(tmp_path / "work")}},
+        "vault": {
+            "plugin": "local-md",
+            "config": {"root": str(tmp_path / "vault")},
+            "visibility": "private",
+        },
+        # Declared private, and nothing sets its credential.
+        "ledger": {
+            "plugin": "linear",
+            "config": {"api_key_env": "ONETASKGRAPH_SDK_ABSENT_KEY", "team": "LED"},
+            "visibility": "private",
+        },
+    }
+    (tmp_path / "onetaskgraph.yaml").write_text(json.dumps({"sources": sources}), encoding="utf-8")
+    client = Client(binary, cwd=tmp_path)
+
+    graph = run(client.project_graph(id="work:P-1"))
+    assert [(edge.from_.root, edge.to.root) for edge in graph.edges] == [("vault:V-1", "work:T-1")]
+    assert graph.unanswered is not None
+    assert [(failure.source.root, failure.error.root.kind) for failure in graph.unanswered] == [
+        ("ledger", "auth")
+    ]
+    deps = run(client.task_deps(id="work:T-1"))
+    assert [(edge.from_.id.root, edge.to.id.root) for edge in deps.items] == [
+        ("work:T-1", "vault:V-1")
+    ]
+    assert deps.errors == []
+    assert [failure.source.root for failure in deps.unanswered] == ["ledger"]
+
+    with pytest.raises(OnetaskgraphError) as refused:
+        run(client.project_graph(id="work:P-1", complete=True))
+    assert refused.value.exit_code == 1
+    assert "ledger" in str(refused.value)
+    # `complete` makes the answer partial, which the client returns as every partial answer.
+    assert [
+        failure.source.root
+        for failure in run(client.task_deps(id="work:T-1", complete=True)).errors
+    ] == ["ledger"]
+
+
 def test_document_copy_drives_the_binary_and_refuses_a_destination_with_no_documents(
     binary: Path, tmp_path: Path
 ) -> None:

@@ -210,6 +210,7 @@ fn cause(error: &EngineError) -> (String, Option<SourceName>, Option<&SourceErro
     let configured = |name: &str| SourceName::new(name.to_owned()).ok();
     match error {
         EngineError::UnknownSource { .. } => ("unknown-source".to_owned(), None, None),
+        EngineError::IncompleteSource { .. } => ("incomplete-source".to_owned(), None, None),
         EngineError::Token { .. } => ("page-token".to_owned(), None, None),
         EngineError::NoSources => ("no-sources".to_owned(), None, None),
         EngineError::NotWritable { name, .. } => {

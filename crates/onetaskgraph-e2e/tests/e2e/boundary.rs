@@ -4247,6 +4247,337 @@ fn a_dependency_read_a_private_source_cannot_answer_fails_rather_than_dropping_t
     }
 }
 
+/// `store`'s configuration with the source `name` added, declared private.
+fn add_private_source(store: &Store, name: &str, source: Value) {
+    let path = store.sandbox.project().join("onetaskgraph.yaml");
+    let mut document: Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("the project document"))
+            .expect("JSON");
+    document["sources"][name] = merged(source, json!({"visibility": "private"}));
+    std::fs::write(&path, document.to_string()).expect("the project document");
+}
+
+/// `store`'s configuration with `ledger` added: a Linear source declared private whose
+/// credential nothing sets, so every read of it fails as a host without that key fails.
+fn add_unauthenticated_private_source(store: &Store) {
+    add_private_source(
+        store,
+        "ledger",
+        json!({
+            "plugin": "linear",
+            "config": {"api_key_env": "ONETASKGRAPH_E2E_ABSENT_KEY", "team": "LED"},
+        }),
+    );
+}
+
+#[test]
+fn a_dependency_read_answers_without_a_private_source_it_cannot_authenticate_to() {
+    let store = routed_plan();
+    let landed =
+        landed_ids(&store.ok(&["project", "copy", "draft:goal", "--to", "site", "--json"]));
+    let (home, consumer, rollout) = (
+        landed["draft:goal"].as_str(),
+        landed["draft:consumer"].as_str(),
+        landed["draft:rollout"].as_str(),
+    );
+    let complete_mermaid = store.ok(&["project", "graph", home]);
+    let complete_json = store.ok(&["project", "graph", home, "--format", "json"]);
+    assert!(
+        !complete_json.contains("unanswered"),
+        "a complete graph's document is as it was: {complete_json}"
+    );
+    let forward = vec![(rollout.to_owned(), consumer.to_owned())];
+    assert_eq!(edges_of(&store, rollout, "depends-on"), forward);
+
+    add_unauthenticated_private_source(&store);
+
+    // `task deps` of the public task still answers what `vault` records and succeeds: `ledger`
+    // is named in the answer's `unanswered` and as a notice on standard error, never in its
+    // `errors`.
+    let output = store.run(&["task", "deps", rollout, "--json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let answer: Value = serde_json::from_str(&stdout(&output)).expect("a dependency answer");
+    assert_eq!(answer["items"][0]["to"]["id"], consumer, "{answer:#}");
+    assert_eq!(answer["items"].as_array().map(Vec::len), Some(1));
+    assert_eq!(answer["errors"], json!([]), "{answer:#}");
+    let unanswered = answer["unanswered"]
+        .as_array()
+        .expect("the sources not asked");
+    assert_eq!(unanswered.len(), 1, "{answer:#}");
+    assert_eq!(unanswered[0]["source"], "ledger");
+    assert_eq!(unanswered[0]["error"]["kind"], "auth");
+    assert!(
+        stderr(&output).contains("note: private source ledger was not asked"),
+        "{}",
+        stderr(&output)
+    );
+    let output = store.run(&["task", "deps", rollout]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(stdout(&output).contains(consumer), "{}", stdout(&output));
+    assert!(stderr(&output).contains("ledger"), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("--complete"),
+        "{}",
+        stderr(&output)
+    );
+    // The other end asks no private source but its own, and answers as it did.
+    assert_eq!(edges_of(&store, consumer, "depended-on-by"), forward);
+    assert_eq!(edges_of(&store, rollout, "depended-on-by"), Vec::new());
+
+    // `--complete` counts `ledger` as a source the read lost: it is in `errors`, and the
+    // answer is partial.
+    let output = store.run(&["task", "deps", rollout, "--complete", "--json"]);
+    assert_eq!(output.status.code(), Some(4), "{}", stdout(&output));
+    let answer: Value = serde_json::from_str(&stdout(&output)).expect("a dependency answer");
+    assert_eq!(answer["errors"][0]["source"], "ledger", "{answer:#}");
+    assert!(answer.get("unanswered").is_none(), "{answer:#}");
+    assert!(stderr(&output).contains("source ledger could not answer"));
+    let output = store.run(&["task", "deps", rollout, "--complete", "--allow-partial"]);
+    assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+
+    // `project graph` draws every edge it drew before, names `ledger` on standard error and in
+    // the document's `unanswered`, and exits 0.
+    let output = store.run(&["project", "graph", home]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(stdout(&output), complete_mermaid);
+    assert!(stderr(&output).contains("note: private source ledger was not asked"));
+    let output = store.run(&["project", "graph", home, "--format", "json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let mut graph: Value = serde_json::from_str(&stdout(&output)).expect("a graph");
+    let unanswered = graph
+        .as_object_mut()
+        .expect("a document")
+        .remove("unanswered")
+        .expect("the sources that could not answer");
+    assert_eq!(unanswered[0]["source"], "ledger", "{unanswered:#}");
+    assert_eq!(unanswered[0]["error"]["kind"], "auth", "{unanswered:#}");
+    assert_eq!(unanswered.as_array().map(Vec::len), Some(1));
+    let complete: Value = serde_json::from_str(&complete_json).expect("a graph");
+    assert_eq!(
+        graph, complete,
+        "every other part of the document is as it was"
+    );
+
+    // `--complete` refuses the graph, printing none of it.
+    let output = store.run(&["project", "graph", home, "--complete"]);
+    assert_eq!(output.status.code(), Some(1), "{}", stdout(&output));
+    assert!(stdout(&output).is_empty(), "{}", stdout(&output));
+    assert!(stderr(&output).contains("ledger"), "{}", stderr(&output));
+
+    // A private board nothing answers at, and one whose rate limiter refuses every request,
+    // could not be asked either: each is named beside `ledger`, by its own kind, and every
+    // other edge still stands.
+    add_private_source(
+        &store,
+        "dark",
+        json!({"plugin": "github-projects",
+               "config": crate::fixtures::github_projects_unreachable(&store.sandbox)}),
+    );
+    add_private_source(
+        &store,
+        "busy",
+        json!({"plugin": "github-projects",
+               "config": crate::fixtures::github_projects_rate_limited(&store.sandbox, None)}),
+    );
+    let output = store.run(&["task", "deps", rollout, "--json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let answer: Value = serde_json::from_str(&stdout(&output)).expect("a dependency answer");
+    assert_eq!(answer["items"][0]["to"]["id"], consumer, "{answer:#}");
+    assert_eq!(answer["errors"], json!([]), "{answer:#}");
+    let mut kinds: Vec<(String, String)> = answer["unanswered"]
+        .as_array()
+        .expect("the sources not asked")
+        .iter()
+        .map(|failure| {
+            (
+                failure["source"].as_str().expect("a source").to_owned(),
+                failure["error"]["kind"]
+                    .as_str()
+                    .expect("a kind")
+                    .to_owned(),
+            )
+        })
+        .collect();
+    kinds.sort();
+    let unasked = [
+        ("busy", "rate-limited"),
+        ("dark", "unavailable"),
+        ("ledger", "auth"),
+    ]
+    .map(|(source, kind)| (source.to_owned(), kind.to_owned()));
+    assert_eq!(kinds, unasked, "{answer:#}");
+    let output = store.run(&["project", "graph", home, "--format", "json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let mut graph: Value = serde_json::from_str(&stdout(&output)).expect("a graph");
+    let mut kinds: Vec<(String, String)> = graph
+        .as_object_mut()
+        .expect("a document")
+        .remove("unanswered")
+        .expect("the sources that could not answer")
+        .as_array()
+        .expect("a list")
+        .iter()
+        .map(|failure| {
+            (
+                failure["source"].as_str().expect("a source").to_owned(),
+                failure["error"]["kind"]
+                    .as_str()
+                    .expect("a kind")
+                    .to_owned(),
+            )
+        })
+        .collect();
+    kinds.sort();
+    assert_eq!(kinds, unasked);
+    assert_eq!(
+        graph, complete,
+        "every other part of the document is as it was"
+    );
+
+    // A read of an item that lives in `ledger` still fails, naming it.
+    for arguments in [
+        vec!["task", "deps", "ledger:LED-1"],
+        vec![
+            "task",
+            "deps",
+            "ledger:LED-1",
+            "--direction",
+            "depended-on-by",
+        ],
+        vec!["project", "graph", "ledger:plan"],
+    ] {
+        let output = store.run(&arguments);
+        assert_ne!(
+            output.status.code(),
+            Some(0),
+            "{arguments:?}\n{}",
+            stdout(&output)
+        );
+        assert!(
+            stderr(&output).contains("ledger"),
+            "{arguments:?}\n{}",
+            stderr(&output)
+        );
+    }
+
+    // And a record a private source answers with that does not say what it names still fails
+    // the read beside the source that could not be asked.
+    store.record("vault", "tasks", "unreadable", "title: [", PLAIN);
+    for arguments in [
+        vec!["task", "deps", rollout],
+        vec!["project", "graph", home],
+    ] {
+        let output = store.run(&arguments);
+        assert_ne!(
+            output.status.code(),
+            Some(0),
+            "{arguments:?}\n{}",
+            stdout(&output)
+        );
+        assert!(
+            stderr(&output).contains("vault"),
+            "{arguments:?}\n{}",
+            stderr(&output)
+        );
+    }
+}
+
+/// The same, through the engine a program links: the graph a plan is loaded from says it is
+/// incomplete and which source it lacks, and a request for a complete one is refused.
+#[tokio::test]
+async fn a_linked_engine_loads_a_plan_without_a_private_source_it_cannot_authenticate_to() {
+    let store = routed_plan();
+    let landed =
+        landed_ids(&store.ok(&["project", "copy", "draft:goal", "--to", "site", "--json"]));
+    let home: onetaskgraph_core::GlobalId = landed["draft:goal"].parse().expect("a home id");
+    let rollout: onetaskgraph_core::GlobalId = landed["draft:rollout"].parse().expect("a task id");
+    let consumer = landed["draft:consumer"].as_str();
+    let request = |completeness| onetaskgraph_core::ProjectGraphRequest {
+        project: home.clone(),
+        direction: None,
+        group_by: None,
+        completeness,
+    };
+    let whole = linked_engine(&store)
+        .project_graph(&request(onetaskgraph_core::Completeness::Required))
+        .await
+        .expect("every source answers");
+    assert!(whole.is_complete());
+
+    add_unauthenticated_private_source(&store);
+    let engine = linked_engine(&store);
+    let graph = engine
+        .project_graph(&request(onetaskgraph_core::Completeness::NamingUnasked))
+        .await
+        .expect("a graph without ledger");
+    assert!(!graph.is_complete());
+    let unanswered: Vec<&str> = graph
+        .unanswered()
+        .iter()
+        .map(|failure| failure.source.as_str())
+        .collect();
+    assert_eq!(unanswered, ["ledger"]);
+    assert_eq!(
+        graph.mermaid(),
+        whole.mermaid(),
+        "every other edge is drawn"
+    );
+    assert!(graph.mermaid().contains("-->"), "{}", graph.mermaid());
+
+    let refused = engine
+        .project_graph(&request(onetaskgraph_core::Completeness::Required))
+        .await
+        .expect_err("a complete graph is refused");
+    assert!(
+        matches!(&refused, onetaskgraph_core::EngineError::SourceFailed { name, .. } if name == "ledger"),
+        "{refused:?}"
+    );
+
+    let answer = engine
+        .task_dependencies(&onetaskgraph_core::DependencyRequest {
+            id: rollout.clone(),
+            direction: onetaskgraph_plugin_api::Direction::DependsOn,
+            completeness: onetaskgraph_core::Completeness::NamingUnasked,
+            paging: onetaskgraph_core::Paging {
+                limit: std::num::NonZeroU32::new(50).expect("non-zero"),
+                token: None,
+            },
+        })
+        .await
+        .expect("an answer");
+    assert_eq!(answer.items.len(), 1);
+    assert_eq!(answer.items[0].to.id.to_string(), consumer);
+    assert!(answer.errors.is_empty(), "{:?}", answer.errors);
+    let unasked: Vec<&str> = answer
+        .unanswered
+        .iter()
+        .map(|failure| failure.source.as_str())
+        .collect();
+    assert_eq!(unasked, ["ledger"]);
+
+    // Asked for every source's part, the same read reports `ledger` as a failure instead.
+    let whole = engine
+        .task_dependencies(&onetaskgraph_core::DependencyRequest {
+            id: rollout.clone(),
+            direction: onetaskgraph_plugin_api::Direction::DependsOn,
+            completeness: onetaskgraph_core::Completeness::Required,
+            paging: onetaskgraph_core::Paging {
+                limit: std::num::NonZeroU32::new(50).expect("non-zero"),
+                token: None,
+            },
+        })
+        .await
+        .expect("an answer");
+    assert_eq!(whole.items, answer.items);
+    assert!(whole.unanswered.is_empty());
+    let failed: Vec<&str> = whole
+        .errors
+        .iter()
+        .map(|failure| failure.source.as_str())
+        .collect();
+    assert_eq!(failed, ["ledger"]);
+}
+
 /// Every `(from, to)` pair `task deps` answers for `id` in `direction`, one edge to a page,
 /// walked to exhaustion.
 fn paged_edges(store: &Store, id: &str, direction: &str) -> Vec<(String, String)> {

@@ -19,10 +19,10 @@ use std::sync::OnceLock;
 use clap::{CommandFactory as _, Parser};
 use onetaskgraph_core::config::{self, Layer};
 use onetaskgraph_core::{
-    CommentWritten, CopyAction, CopyItems, CopyReport, CopyRequest, CopyScope, Delivered,
-    DeliveryOutcome, DependencyRequest, DocumentFilters, DocumentRequest, Engine, Environment,
-    ExpectedWrite, Failure, FailureDocument, Filters, GlobalId, LabelRequest, Loaded, MatchBy,
-    OutputFormat, PageToken, Paging, ProjectGraphRequest, ProjectRequest, ProjectSelector,
+    CommentWritten, Completeness, CopyAction, CopyItems, CopyReport, CopyRequest, CopyScope,
+    Delivered, DeliveryOutcome, DependencyRequest, DocumentFilters, DocumentRequest, Engine,
+    Environment, ExpectedWrite, Failure, FailureDocument, Filters, GlobalId, LabelRequest, Loaded,
+    MatchBy, OutputFormat, PageToken, Paging, ProjectGraphRequest, ProjectRequest, ProjectSelector,
     QueryResponse, ReconcileOutcome, RenderedRecord, SearchRequest, SourceFailure, TaskRequest,
 };
 use onetaskgraph_plugin_api::{
@@ -41,7 +41,9 @@ use crate::cli::{
     SelectionArgs, ShowArgs, SourcesCommand, StatusCommand, TaskCommand,
 };
 
-/// Everything asked for was answered, by every source asked. Nothing else exits `0`.
+/// Everything asked for was answered, by every source asked. Nothing else exits `0`. A
+/// source in a dependency read's `unanswered` was not asked for anything the read answers —
+/// the item lives elsewhere — and `--complete` moves it into the read's failures.
 const EXIT_OK: u8 = 0;
 
 /// Something went wrong while doing what was asked. Distinct from [`EXIT_USAGE`], so a
@@ -189,6 +191,11 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
                     })
                 })
                 .transpose()?;
+            if let Some(name) = source.as_ref()
+                && loaded.config.incomplete().contains(name)
+            {
+                return Err(incomplete(name));
+            }
             let cleared = onetaskgraph_core::cache::clear(&loaded.config, source.as_ref())
                 .map_err(|message| Failure::decided("cache-not-cleared", message))?;
             let rendered = rendering(loaded, &cleared, render::cache_cleared, "the cache")?;
@@ -622,9 +629,12 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
         Command::Task {
             command: TaskCommand::Deps(args),
         } => {
-            let request = dependency_request(loaded, args)?;
+            let mut request = dependency_request(loaded, &args.dependencies)?;
+            if args.complete {
+                request.completeness = Completeness::Required;
+            }
             let engine = engine(loaded);
-            if let Some(pin) = &args.pin {
+            if let Some(pin) = &args.dependencies.pin {
                 engine.pin(&request.id, pin);
             }
             let response = engine
@@ -636,7 +646,7 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
                 loaded,
                 response,
                 render::edges,
-                &args.paging,
+                &args.dependencies.paging,
                 "dependencies",
             )
         }
@@ -765,6 +775,11 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
                 project: qualified(&args.id)?,
                 direction: args.direction.direction(),
                 group_by: args.group_by.clone(),
+                completeness: if args.complete {
+                    Completeness::Required
+                } else {
+                    Completeness::NamingUnasked
+                },
             };
             let graph = engine(loaded)
                 .project_graph(&request)
@@ -783,6 +798,7 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
                 GraphFormat::Json => json(&graph, "the project graph")?,
             };
             emit(out, &rendered, "the project graph")?;
+            unanswered(graph.unanswered());
             Ok(EXIT_OK)
         }
 
@@ -1071,7 +1087,28 @@ fn respond<T: Serialize>(
         OutputFormat::Json => json(&response, what)?,
     };
     emit(out, rendered.trim_end(), what)?;
+    unanswered(&response.unanswered);
     Ok(report(&response.errors, paging.allow_partial))
+}
+
+/// Name each source declared private that could not be asked what it records, on standard
+/// error, as a notice: the answer above is whole for the item it was asked about.
+fn unanswered(unasked: &[SourceFailure]) {
+    if unasked.is_empty() {
+        return;
+    }
+    for failure in unasked {
+        eprintln!(
+            "onetaskgraph: note: private source {} was not asked what it records: {}",
+            failure.source, failure.error
+        );
+    }
+    eprintln!(
+        "onetaskgraph: note: the answer above leaves out only what the source(s) named above \
+         record of it. To include it, give those sources their credential — `onetaskgraph \
+         sources list` reports each one's state; to treat their absence as a failure, re-run \
+         with --complete."
+    );
 }
 
 /// Write one item, or say plainly that there is no such item.
@@ -1144,6 +1181,9 @@ fn source_route(
         })
     };
     let name = SourceName::try_from(source.to_owned()).map_err(|_| unknown())?;
+    if loaded.config.incomplete().contains(&name) {
+        return Err(incomplete(&name));
+    }
     if !loaded.config.sources().contains_key(&name) {
         return Err(unknown());
     }
@@ -1154,6 +1194,11 @@ fn source_route(
             .place_classified(&name, classification, repositories),
         source: name,
     })
+}
+
+/// The refusal of a command naming `name`, which some layer refines and none gives a plugin.
+fn incomplete(name: &SourceName) -> Failure {
+    Failure::from(&onetaskgraph_core::EngineError::IncompleteSource { name: name.clone() })
 }
 
 /// The configured `github-projects` source a guarded board setup verb names, and its
@@ -1171,6 +1216,9 @@ fn github_projects_source(
     // rather than duplicated for each CLI verb.
     let name = SourceName::try_from(source.to_owned())
         .map_err(|message| Failure::decided("invalid-source", message.to_string()))?;
+    if loaded.config.incomplete().contains(&name) {
+        return Err(incomplete(&name));
+    }
     let configured =
         loaded.config.sources().get(&name).ok_or_else(|| {
             Failure::decided(verb, format!("no configured source is named {name}"))
@@ -1735,6 +1783,7 @@ fn dependency_request(
     Ok(DependencyRequest {
         id: qualified(&args.id)?,
         direction: args.direction.direction(),
+        completeness: Completeness::NamingUnasked,
         paging: paging(loaded, &args.paging)?,
     })
 }

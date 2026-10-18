@@ -250,6 +250,7 @@ async fn an_emulated_reverse_walk_answers_exactly_what_a_native_one_does() {
             .task_dependencies(&DependencyRequest {
                 id: format!("{source}:T-2").parse().expect("a qualified id"),
                 direction: Direction::DependedOnBy,
+                completeness: onetaskgraph_core::Completeness::NamingUnasked,
                 paging: page(50),
             })
             .await
@@ -997,6 +998,7 @@ async fn a_source_that_never_advances_its_edge_cursor_stops_the_scan_that_answer
         engine.task_dependencies(&DependencyRequest {
             id: "scanned:T-1".parse().expect("a qualified id"),
             direction: Direction::DependedOnBy,
+            completeness: onetaskgraph_core::Completeness::NamingUnasked,
             paging: page(10),
         }),
     )
@@ -1162,6 +1164,7 @@ async fn project_dependencies_walk_both_ways_and_the_reverse_is_emulated_when_it
             .project_dependencies(&DependencyRequest {
                 id: format!("{source}:P-1").parse().expect("a qualified id"),
                 direction: Direction::DependsOn,
+                completeness: onetaskgraph_core::Completeness::NamingUnasked,
                 paging: page(50),
             })
             .await
@@ -1173,6 +1176,7 @@ async fn project_dependencies_walk_both_ways_and_the_reverse_is_emulated_when_it
             .project_dependencies(&DependencyRequest {
                 id: format!("{source}:P-2").parse().expect("a qualified id"),
                 direction: Direction::DependedOnBy,
+                completeness: onetaskgraph_core::Completeness::NamingUnasked,
                 paging: page(50),
             })
             .await
@@ -1247,6 +1251,7 @@ async fn a_verb_addressed_at_a_source_that_never_built_reports_it_and_returns_no
         .task_dependencies(&DependencyRequest {
             id: id.clone(),
             direction: Direction::DependsOn,
+            completeness: onetaskgraph_core::Completeness::NamingUnasked,
             paging: page(10),
         })
         .await
@@ -1258,6 +1263,7 @@ async fn a_verb_addressed_at_a_source_that_never_built_reports_it_and_returns_no
         .project_dependencies(&DependencyRequest {
             id,
             direction: Direction::DependedOnBy,
+            completeness: onetaskgraph_core::Completeness::NamingUnasked,
             paging: page(10),
         })
         .await
@@ -1276,6 +1282,7 @@ async fn a_dependency_walk_pages_like_every_other_walk() {
             .task_dependencies(&DependencyRequest {
                 id: "work:T-2".parse().expect("a qualified id"),
                 direction: Direction::DependedOnBy,
+                completeness: onetaskgraph_core::Completeness::NamingUnasked,
                 paging: match token {
                     None => page(1),
                     Some(token) => resumed(1, token),

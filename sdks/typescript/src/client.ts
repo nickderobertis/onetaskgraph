@@ -60,6 +60,9 @@ export const projectGraphDirections = ["auto", "td", "lr"] as const;
 export type ProjectGraphOptions = {
   direction?: (typeof projectGraphDirections)[number];
   groupBy?: string;
+  // Refuse the graph when a source declared private could not be asked what it records of the
+  // project's tasks, rather than answering every other edge and naming it in `unanswered`.
+  complete?: boolean;
 };
 export type FilterOptions = QueryOptions & {
   labels?: string[];
@@ -297,8 +300,9 @@ export const commandAlternateRoots: Readonly<
 // client accepts from it. A `metadata set` is the same: one write to one source, and metadata is
 // not status, so it keeps no delivered task in step — and so are `priority set` and `content
 // set`, for the same reason. `sources fields` sets up one board and answers for it whole, or
-// fails, and `sources route` reads configuration alone. `project graph` prints a graph whole or
-// not at all, so it never answers in part. A template verb reads no source at all. Of the verbs that create and regenerate from
+// fails, and `sources route` reads configuration alone. `project graph` prints a graph or
+// nothing, and a graph lacking a private source it could not ask names it in `unanswered` and
+// exits 0, so it never exits 4. A template verb reads no source at all. Of the verbs that create and regenerate from
 // one, `task create` alone keeps what it delivers in step, so it alone can exit 4.
 const partialResponseCommands = new Set(
   Object.keys(commandResponseRoots).filter(
@@ -1165,6 +1169,7 @@ export class OnetaskgraphClient {
       }
       args.push("--group-by", options.groupBy);
     }
+    if (options.complete) args.push("--complete");
     return this.run("project graph", args);
   }
   projectCopy(

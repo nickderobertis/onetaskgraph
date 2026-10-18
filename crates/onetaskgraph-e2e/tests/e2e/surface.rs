@@ -297,8 +297,8 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 39);
-    // Version 39: the two capabilities `task status reconcile` and `task status complete` are
+    assert_eq!(bundle["version"], 41);
+    // Version 41: the two capabilities `task status reconcile` and `task status complete` are
     // asked through, and the documents both verbs answer with.
     for member in ["reconcile_status", "complete_by_issue"] {
         assert!(
@@ -308,6 +308,31 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     }
     for root in ["StatusesReconciled", "IssuesCompleted", "IssueRef"] {
         assert!(bundle["roots"][root].is_object(), "{root} is a root");
+    }
+    // Version 40: the sources a layer refines but no layer gives a plugin, named by
+    // `config show` and left out of the wire when there are none.
+    assert_eq!(
+        bundle["roots"]["EffectiveConfig"]["properties"]["incomplete_sources"]["type"],
+        "array"
+    );
+    assert!(
+        !bundle["roots"]["EffectiveConfig"]["required"]
+            .as_array()
+            .expect("EffectiveConfig names its required members")
+            .contains(&serde_json::json!("incomplete_sources")),
+        "an absent list reads back as none"
+    );
+    // Version 39: a dependency answer's and a project graph's `unanswered`, left out of the
+    // wire when every source answered.
+    for root in ["ProjectGraph", "QueryResponseOfQualifiedEdge"] {
+        let schema = &bundle["roots"][root];
+        assert!(schema["properties"]["unanswered"].is_object(), "{root}");
+        assert!(
+            !schema["required"]
+                .as_array()
+                .is_some_and(|required| required.iter().any(|name| name == "unanswered")),
+            "{root}: a complete answer leaves it out"
+        );
     }
     // Version 38: a project's and a document's change token, left out of the wire when absent.
     for root in ["Project", "Document"] {
