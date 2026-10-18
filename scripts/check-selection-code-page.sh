@@ -57,6 +57,12 @@ locale.getpreferredencoding = lambda do_setlocale=True: "cp1252"
 locale.getencoding = lambda: "cp1252"
 PY
 
+# From Python 3.15 UTF-8 mode is on by default (PEP 686), and in it text mode decodes UTF-8
+# without consulting the locale at all, so the shim above would change nothing. Every run
+# under the shim turns it off: the platform simulated is a python whose code page decides,
+# which is what the Windows runner's is whenever its python predates that default.
+shimmed=(env PYTHONPATH="$scratch" PYTHONUTF8=0)
+
 failures=0
 fail() {
   echo "check-selection-code-page: $1" >&2
@@ -66,7 +72,7 @@ fail() {
 # 1. The simulation takes. Everything below is evidence only while this holds: a shim that
 # did nothing would leave the cases passing on the very platform they cannot fail on.
 
-simulated="$(PYTHONPATH="$scratch" python3 - <<'PY'
+simulated="$("${shimmed[@]}" python3 - <<'PY'
 import subprocess
 import sys
 
@@ -123,7 +129,7 @@ echo "check-selection-code-page: $carrier is what makes the run below evidence" 
 # 3. The real check, over the real decision, on the simulated platform. It is the whole of
 # the proof: its version-only fixtures are exactly the diffs the defect answered `run` for.
 
-if ! (cd "$ROOT" && PYTHONPATH="$scratch" bash scripts/check-live-lane-selection.sh) \
+if ! (cd "$ROOT" && "${shimmed[@]}" bash scripts/check-live-lane-selection.sh) \
   >"$scratch/selection-output" 2>&1; then
   fail "scripts/check-live-lane-selection.sh fails when python decodes a subprocess with the Windows runner's code page, which is what the windows-latest lane runs. It said:"
   sed 's/^/    /' <"$scratch/selection-output" >&2
