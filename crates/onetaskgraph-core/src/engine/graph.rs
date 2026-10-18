@@ -20,8 +20,10 @@ use serde::Serialize;
 use serde_json::Value;
 
 use super::copy::{Level, forward_edges};
+use super::dependents::Completeness;
 use super::{Engine, EngineError, Qualified, qualify_endpoint};
 use crate::GlobalId;
+use crate::plan::SourceFailure;
 
 /// The version of the document [`ProjectGraph`] serialises to, which its consumers read
 /// before anything else in it.
@@ -121,6 +123,10 @@ pub struct ProjectGraphRequest {
     pub direction: Option<GraphDirection>,
     /// The key whose non-empty string value groups the project's tasks, or `None` for none.
     pub group_by: Option<GroupKey>,
+    /// What the graph owes when a source declared private could not be asked what it records
+    /// of the project's tasks: every other edge, with that source named in
+    /// [`ProjectGraph::unanswered`], or a refusal.
+    pub completeness: Completeness,
 }
 
 /// One project's dependency graph, laid out: the document `project graph --format json`
@@ -129,7 +135,7 @@ pub struct ProjectGraphRequest {
 /// Built by [`Engine::project_graph`] alone, so every edge names a node it holds, an `n`
 /// node is never external and an `x` node never has a group: nothing outside this module can
 /// put one together any other way.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub struct ProjectGraph {
     /// The version of this document's shape; `1`.
     schema_version: u32,
@@ -144,6 +150,12 @@ pub struct ProjectGraph {
     nodes: Vec<GraphNode>,
     /// Every dependency, ordered by its prerequisite's position and then its dependent's.
     edges: Vec<GraphEdge>,
+    /// Each source declared private that could not be asked what it records of the project's
+    /// tasks, and why — so `edges` lacks whatever it records. Absent when every source
+    /// answered, which is the one case the graph is complete.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(!skip_serializing_if)]
+    unanswered: Vec<SourceFailure>,
     /// Each edge as the positions in `nodes` of its prerequisite and its dependent, in the
     /// order of `edges` — what the Mermaid form names each end by.
     #[serde(skip)]
@@ -256,6 +268,19 @@ pub struct GraphEdge {
 }
 
 impl ProjectGraph {
+    /// Each source declared private that could not be asked what it records of the project's
+    /// tasks, and why; empty exactly when the graph is complete.
+    #[must_use]
+    pub fn unanswered(&self) -> &[SourceFailure] {
+        &self.unanswered
+    }
+
+    /// Whether every source that may hold an edge of the project's tasks answered.
+    #[must_use]
+    pub fn is_complete(&self) -> bool {
+        self.unanswered.is_empty()
+    }
+
     /// The graph as Mermaid flowchart text, every line ending in `\n`.
     ///
     /// Without a `group_by` key: the header, the project's node lines, the external node
@@ -378,7 +403,10 @@ impl Engine {
     ///
     /// Every page of the project's tasks is read, then each task's forward edges, then the
     /// title of each task outside the project one of them depends on. Any read failing fails
-    /// the whole graph rather than answering part of it.
+    /// the whole graph rather than answering part of it — but for a source declared private
+    /// that could not be asked what it records of a task, which the graph names in
+    /// [`ProjectGraph::unanswered`] and draws every other edge without, unless the request
+    /// asks for [`Completeness::Required`].
     ///
     /// # Errors
     ///
@@ -423,6 +451,7 @@ impl Engine {
         // one relationship twice — as two kinds of edge between the same two tasks, say —
         // still has one edge to draw.
         let mut edges: HashSet<(GlobalId, GlobalId)> = HashSet::new();
+        let mut unanswered = Vec::new();
         for task in &tasks {
             let read = forward_edges(source, &task.id.native, Level::Task)
                 .await
@@ -436,7 +465,10 @@ impl Engine {
             }
             // And what a task of a source declared private records of this one, which this
             // task's own source cannot hold without naming it.
-            for prerequisite in self.recorded_prerequisites(&task.id).await? {
+            for prerequisite in self
+                .recorded_prerequisites_answered(&task.id, request.completeness, &mut unanswered)
+                .await?
+            {
                 edges.insert((prerequisite, task.id.clone()));
             }
         }
@@ -534,6 +566,7 @@ impl Engine {
             group_by: request.group_by.clone(),
             nodes,
             edges,
+            unanswered,
             links,
         })
     }

@@ -80,7 +80,7 @@ onetaskgraph task list [--source S]... [--label L]... [--not-label L]...
                        [--limit N] [--page TOKEN] [--explain] [--allow-partial] [--json]
 onetaskgraph task show <ID> [--no-comments] [--pin VERSION]
 onetaskgraph task show-many <ID>... [--no-comments] [--pin ID=VERSION]...
-onetaskgraph task deps <ID> [--direction depends-on|depended-on-by] [--pin VERSION]
+onetaskgraph task deps <ID> [--direction depends-on|depended-on-by] [--pin VERSION] [--complete]
 onetaskgraph task copy <ID>... --to <SOURCE> [--match-by KEY] [--recreate] [--create] [--dry-run]
                        [--expect VERSION]        # one task, bound to a caching destination
 onetaskgraph task comment add    <ID> [--body-file PATH] [--author NAME] [--expect VERSION]
@@ -115,7 +115,8 @@ onetaskgraph task answers <ID>
 
 onetaskgraph project list / show / deps          # the same flags, minus the project filter
 onetaskgraph project graph <ID> [--format mermaid|json] [--direction auto|td|lr]
-                           [--group-by KEY]      # see "Drawing a project's dependency graph"
+                           [--group-by KEY] [--complete]
+                                                 # see "Drawing a project's dependency graph"
 onetaskgraph project copy <ID> --to <SOURCE> [--no-tasks | --member TASK-ID...]
                                                  [--match-by KEY] [--recreate] [--dry-run]
 onetaskgraph project metadata set <ID> <KEY> <VALUE>
@@ -466,12 +467,15 @@ Mermaid form draws, and the form to read when a program has to know which task a
     ],
     "edges": [
       {"from": "<qualified id of the prerequisite>", "to": "<qualified id of the dependent>"}
-    ]
+    ],
+    "unanswered": [{"source": "<source name>", "error": {...}}]
   }
   direction is the resolved direction, never auto. nodes holds every n node and then every
   x node, in the Mermaid form's order; key is the Mermaid node id, external is true exactly
   for the x nodes, and group is null for a task with no group, for every external task, and
   for every task without --group-by. edges follows the Mermaid form's edge order.
+  unanswered is present only when the graph is incomplete, as below; each entry has the
+  shape of an `errors` entry of any other --json answer.
 
 Determinism:
   The output is a function of the project's task titles, their dependency edges, the
@@ -482,7 +486,14 @@ Failure:
   An id naming no project, a source that cannot answer a read, a dependency naming a task
   its source does not hold, and tasks that depend on each other in a cycle each exit
   non-zero with nothing on standard output and the problem on standard error; a graph is
-  never printed in part.
+  never printed in part. A source declared private that could not be asked what it records
+  of the project's tasks - its credential absent or refused, or it unreachable or
+  rate-limited - is not a failed read, because none of the project's tasks lives there: the
+  graph is drawn from every source that holds them, that source and why are named in
+  unanswered and as a notice on standard error, and the exit is 0. --complete counts it as a
+  failed read instead. Anything else such a source answers with - a record that does not
+  say what it names, a refusal, a configuration it reports wrong - is a failed read either
+  way.
 ```
 
 ### Writing tasks: Markdown in, ticket out
@@ -941,13 +952,18 @@ plugin is sent.
 
 | Code | Meaning |
 | --- | --- |
-| `0` | Success — every source asked, every source answered. |
+| `0` | Success — every source asked, every source answered. A dependency read (`task deps`, `project graph`) of an item outside a source declared private also asks that private source what it records of it; one that could not be asked is not a failure of the read, because the item lives elsewhere, and is reported in the answer's `unanswered` and on standard error as a notice. `--complete` makes it a failure. |
 | `1` | The command failed while running: an id that names nothing, a configuration it will not run on, a source name nothing configures. |
 | `2` | The invocation itself was wrong — an unknown flag, a value out of range, or answers a template refuses. |
 | `4` | The query ran and at least one source did not answer. The others' results still stand and the failure is named on standard error. A write — a copy, `task status set` or `task update` — also exits `4` when it landed and a task it delivers could not be kept in step; its `delivered` list says which. |
 
 `--allow-partial` says a partial answer is acceptable and turns `4` into `0`. Nothing else
-does: a run that lost a source never exits `0` unless you asked for that.
+does: a run that lost a source never exits `0` unless you asked for that. A source in a
+dependency read's `unanswered` — declared private, and unable to be asked what it records
+because its credential is absent or refused, or it is unreachable or rate-limited — is not a
+lost source: it holds nothing the read was asked about, and it is never in `errors`. Asked
+with `--complete`, the read counts it as one: it moves to `errors`, and `task deps` exits `4`
+while `project graph` exits `1`.
 
 With machine output selected — `--json`, `--output json`, or `output: json` set in a
 document, by `--set` or by `ONETASKGRAPH_OUTPUT` — a command that exits `1` also writes
@@ -1727,7 +1743,15 @@ its order both ways. `task deps` of the public task also asks every source decla
 which of its tasks record it, a copy of a task filed under a home naming a member in such a
 source asks that source and carries the edge to the private task's counterpart, `task deps
 --direction depended-on-by` of the private task reads what it records, and `project graph`
-draws the edge; a source that cannot answer fails the read rather than leaving the edge out. An
+draws the edge. A source declared private that could not be asked — its credential absent or
+refused, or it unreachable or rate-limited — leaves those reads of a task of another source
+answering every edge the other sources hold, exiting 0 and naming that source on standard
+error and in the `--json` answer's `unanswered`, never in `errors`,
+so a reader without that source's credential still reads the public graph; `--complete` refuses such an
+answer, and a program linking the engine reads `ProjectGraph::is_complete` or asks for
+`Completeness::Required`. A read of a task that lives in that source still fails, and anything
+else a source answers with — a record that does not say what it names, a refusal, a
+configuration it reports wrong — fails the read either way rather than leaving the edge out. An
 edge naming a private task the copy does not carry is withheld as before, recorded nowhere,
 because the copy was not asked to write to that task's source. A later copy keeps exactly one
 entry per dependent, takes off a dependent it landed whose edges no longer name that task —

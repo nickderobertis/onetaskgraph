@@ -25,7 +25,10 @@ use serde_json::Value;
 /// for some sources and failed for others without `--allow-partial`, or when a write landed
 /// and a task it delivers could not be kept in step with it. `0` means success
 /// and nothing else: a run that reached no source, or lost one, never exits `0` unless
-/// you asked for a partial answer.
+/// you asked for a partial answer. A dependency read (`task deps`, `project graph`) of an
+/// item outside a source declared private names, in its `unanswered` and as a notice on
+/// standard error, a private source it could not ask what it records: the item lives
+/// elsewhere, so that is not a lost source, and `--complete` makes it one.
 #[derive(Debug, Parser)]
 // `bin_name` is pinned rather than left to clap, which takes it from argv[0] — and on
 // Windows argv[0] is `onetaskgraph.exe`, so the usage line would name a different command
@@ -352,7 +355,13 @@ pub enum TaskCommand {
     /// together, so a source that reads many items in one request answers in few.
     ShowMany(TaskShowManyArgs),
     /// Walk one task's dependency edges.
-    Deps(DependencyArgs),
+    ///
+    /// A task's edges include what each source declared private records of it. One of those
+    /// that could not be asked — its credential absent or refused, or it unreachable or
+    /// rate-limited — is not a source this read lost, because the task lives elsewhere: it is
+    /// named in the answer's `unanswered` and as a notice on standard error, and the read
+    /// succeeds. `--complete` counts it as lost instead.
+    Deps(TaskDependencyArgs),
     /// Copy tasks into another configured source, by qualified id or by the narrowing
     /// `task list` takes.
     Copy(TaskCopyArgs),
@@ -1461,6 +1470,19 @@ pub struct DependencyArgs {
     pub paging: PageArgs,
 }
 
+/// `onetaskgraph task deps`: [`DependencyArgs`], and whether the answer has to be complete.
+#[derive(Debug, Args)]
+pub struct TaskDependencyArgs {
+    #[command(flatten)]
+    pub dependencies: DependencyArgs,
+
+    /// Count a source declared private that could not be asked what it records of the task as
+    /// a source this read lost: it is reported in `errors`, and the run exits 4 as any other
+    /// partial answer does.
+    #[arg(long, conflicts_with = "allow_partial")]
+    pub complete: bool,
+}
+
 /// `onetaskgraph project graph`.
 #[derive(Debug, Args)]
 pub struct GraphArgs {
@@ -1480,6 +1502,12 @@ pub struct GraphArgs {
     /// Group the project's tasks by the non-empty string each holds under this metadata key.
     #[arg(long = "group-by", value_name = "KEY", value_parser = group_key)]
     pub group_by: Option<onetaskgraph_core::GroupKey>,
+
+    /// Refuse the graph when a source declared private could not be asked what it records of
+    /// the project's tasks. Without it, every other edge is drawn, that source is named on
+    /// standard error and in the JSON document's `unanswered`, and the command exits 0.
+    #[arg(long)]
+    pub complete: bool,
 }
 
 /// A `--group-by` key, refused when it is empty: an empty key names no metadata at all.
@@ -1587,12 +1615,15 @@ Mermaid form draws, and the form to read when a program has to know which task a
     ],
     \"edges\": [
       {\"from\": \"<qualified id of the prerequisite>\", \"to\": \"<qualified id of the dependent>\"}
-    ]
+    ],
+    \"unanswered\": [{\"source\": \"<source name>\", \"error\": {...}}]
   }
   direction is the resolved direction, never auto. nodes holds every n node and then every
   x node, in the Mermaid form's order; key is the Mermaid node id, external is true exactly
   for the x nodes, and group is null for a task with no group, for every external task, and
   for every task without --group-by. edges follows the Mermaid form's edge order.
+  unanswered is present only when the graph is incomplete, as below; each entry has the
+  shape of an `errors` entry of any other --json answer.
 
 Determinism:
   The output is a function of the project's task titles, their dependency edges, the
@@ -1603,7 +1634,14 @@ Failure:
   An id naming no project, a source that cannot answer a read, a dependency naming a task
   its source does not hold, and tasks that depend on each other in a cycle each exit
   non-zero with nothing on standard output and the problem on standard error; a graph is
-  never printed in part.
+  never printed in part. A source declared private that could not be asked what it records
+  of the project's tasks - its credential absent or refused, or it unreachable or
+  rate-limited - is not a failed read, because none of the project's tasks lives there: the
+  graph is drawn from every source that holds them, that source and why are named in
+  unanswered and as a notice on standard error, and the exit is 0. --complete counts it as a
+  failed read instead. Anything else such a source answers with - a record that does not
+  say what it names, a refusal, a configuration it reports wrong - is a failed read either
+  way.
 ";
 
 /// The arguments both copy verbs share.

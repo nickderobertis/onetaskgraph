@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.2](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.7.1...onetaskgraph-core-v0.7.2) - 2026-10-18
+
+### Fixed
+
+- *(copy)* [**breaking**] report an uncertain destination when a plugin's create answer is malformed ([#3644](https://github.com/nickderobertis/onetaskgraph/pull/3644))
+
 ## [0.7.1](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.7.0...onetaskgraph-core-v0.7.1) - 2026-10-15
 
 ### Added

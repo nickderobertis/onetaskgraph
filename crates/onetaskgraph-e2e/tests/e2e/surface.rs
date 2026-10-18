@@ -297,7 +297,19 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 38);
+    assert_eq!(bundle["version"], 39);
+    // Version 39: a dependency answer's and a project graph's `unanswered`, left out of the
+    // wire when every source answered.
+    for root in ["ProjectGraph", "QueryResponseOfQualifiedEdge"] {
+        let schema = &bundle["roots"][root];
+        assert!(schema["properties"]["unanswered"].is_object(), "{root}");
+        assert!(
+            !schema["required"]
+                .as_array()
+                .is_some_and(|required| required.iter().any(|name| name == "unanswered")),
+            "{root}: a complete answer leaves it out"
+        );
+    }
     // Version 38: a project's and a document's change token, left out of the wire when absent.
     for root in ["Project", "Document"] {
         assert!(

@@ -12,6 +12,15 @@
 //! The record lives in the private source's own store, at the user's explicit request — a
 //! copy — and is read back only by asking that source again, so it is a write into a plugin
 //! rather than state the engine keeps.
+//!
+//! A source declared private that could not be asked — its credential absent or refused, it
+//! unreachable or rate-limited — leaves such a read answering what every other source holds and
+//! naming that source, rather than failing a read of tasks none of which live there: a reader
+//! who may not see a private source still reads the public graph. A source that answered — with
+//! a record that does not say what it names, a refusal of the request, or word that its own
+//! configuration is wrong — still fails the read, because that is an edge lost or a store to
+//! fix, not a source unasked. A caller that needs every edge asks for
+//! [`Completeness::Required`] and is refused.
 
 use std::collections::BTreeMap;
 
@@ -25,6 +34,7 @@ use super::local::ProjectSelector;
 use super::{Engine, EngineError, Filters, Paging, TaskRequest};
 use crate::GlobalId;
 use crate::config::SourceVisibility;
+use crate::plan::SourceFailure;
 
 /// The reserved key a task of a source declared private records, under it, the tasks of
 /// sources not declared private that depend on it.
@@ -191,7 +201,46 @@ pub(crate) fn recorded_edges(task: &Task) -> Result<Vec<DependencyEdge>, SourceE
         .collect())
 }
 
+/// Whether `error` says a source could not be asked at all — its credential absent or refused,
+/// it unreachable, or it asking to be asked later — rather than that it answered: with a record
+/// that cannot be read, a refusal of the request, or word that its configuration is wrong.
+fn could_not_answer(error: &SourceError) -> bool {
+    matches!(
+        error,
+        SourceError::Auth { .. }
+            | SourceError::Unavailable { .. }
+            | SourceError::RateLimited { .. }
+    )
+}
+
+/// What a dependency read owes when a source declared private could not be asked what it
+/// records of the items read.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Completeness {
+    /// Answer every edge the sources that could answer hold, and name each source declared
+    /// private that could not be asked: a reader without that source's credential still reads
+    /// the rest of the graph.
+    #[default]
+    NamingUnasked,
+    /// Refuse an answer that lacks what any source records, as any other failed read is
+    /// refused.
+    Required,
+}
+
 impl Engine {
+    /// Whether `failure`, reported by a dependency read of an item of `subject`, is a source
+    /// declared private that could not be asked what it records of that item — so the read
+    /// answered every edge the other sources hold, and lacks only what that source records.
+    ///
+    /// `false` for a failure of `subject` itself, of any source not asked for its records, and
+    /// for anything a source answered with: each of those leaves the answer wrong rather than
+    /// short of one private source.
+    pub(crate) fn records_unasked(&self, subject: &SourceName, failure: &SourceFailure) -> bool {
+        &failure.source != subject
+            && could_not_answer(&failure.error)
+            && self.recording_sources(subject).contains(&failure.source)
+    }
+
     /// Every configured source that may record a dependent from `near`: each one declared
     /// private but `near` itself, and none at all when `near` is declared private, because a
     /// private task holds its own edges wherever they lead.
@@ -266,6 +315,44 @@ impl Engine {
                     Some(token) => request.paging.token = Some(token),
                     None => break,
                 }
+            }
+        }
+        Ok(prerequisites)
+    }
+
+    /// [`recorded_prerequisites`](Self::recorded_prerequisites), with each source that could
+    /// not be asked added to `unasked` instead of failing the read, and not asked again once it
+    /// is there — unless `completeness` is [`Completeness::Required`], when it fails the read as
+    /// it always did. What such a source answered for an earlier dependent stays answered.
+    ///
+    /// # Errors
+    ///
+    /// As [`recorded_prerequisites`](Self::recorded_prerequisites), less a source that could
+    /// not be asked when the answer need not be complete.
+    pub(crate) async fn recorded_prerequisites_answered(
+        &self,
+        dependent: &GlobalId,
+        completeness: Completeness,
+        unasked: &mut Vec<SourceFailure>,
+    ) -> Result<Vec<GlobalId>, EngineError> {
+        let mut prerequisites = Vec::new();
+        for source in self.recording_sources(&dependent.source) {
+            if unasked.iter().any(|failure| failure.source == source) {
+                continue;
+            }
+            match self
+                .recorded_prerequisites_in(dependent, std::slice::from_ref(&source))
+                .await
+            {
+                Ok(found) => prerequisites.extend(found),
+                Err(EngineError::SourceFailed { name, error })
+                    if completeness == Completeness::NamingUnasked
+                        && name == source.as_str()
+                        && could_not_answer(&error) =>
+                {
+                    unasked.push(SourceFailure { source, error });
+                }
+                Err(error) => return Err(error),
             }
         }
         Ok(prerequisites)

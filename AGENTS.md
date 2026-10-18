@@ -1114,12 +1114,17 @@ them do; this is the inventory of what is owed, not a status board.
     the public home task's dependency on the private member task: `task deps` reads it from
     either end and `project graph` draws it, while nothing on the public folder names the
     private task; a second copy writes nothing and keeps one edge, dropping the edge at the
-    draft takes it off, and a private source that cannot answer, or a recorded entry that does
-    not say what it names, fails the read rather than dropping the edge.
+    draft takes it off, and a record a private source answers with, or a recorded entry, that
+    does not say what it names fails the read rather than dropping the edge.
 105. That public home copied on to another public folder routing to a private one carries its
     member's task and the recorded edge between their copies, read from either end and drawn
     by `project graph`, with nothing on that folder naming either private task; a second copy
     writes nothing anywhere and keeps one edge.
+106. A private source that could not be asked — its credential absent — leaves `task deps` of
+    a public task and `project graph` of a public project exiting 0 with every other edge,
+    naming that source on standard error and in `unanswered`, never `errors`, through the binary
+    and the linked engine alike; `--complete` refuses that answer, and a read of an item that
+    lives in that source still fails naming it.
 
 ## The public boundary
 
