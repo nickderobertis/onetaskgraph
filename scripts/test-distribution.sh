@@ -393,8 +393,11 @@ with open(installed, "rb") as command:
     if hashlib.sha256(command.read()).hexdigest() != built:
         raise SystemExit(f"{installed} is not the command the CLI wheel just built carries")
 shown = subprocess.run([installed, "--help"], capture_output=True, text=True, encoding="utf-8")
-if "Usage:" not in shown.stdout:
-    raise SystemExit(f"{installed} --help printed no usage: {shown.stdout}{shown.stderr}")
+if shown.returncode != 0 or "Usage:" not in shown.stdout:
+    raise SystemExit(
+        f"{installed} --help exited {shown.returncode}; it must exit 0 and print its usage: "
+        f"{shown.stdout}{shown.stderr}"
+    )
 PY
 assert_version_error() {
   expected_message=$1
