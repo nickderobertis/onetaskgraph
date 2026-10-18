@@ -247,6 +247,7 @@ async fn the_same_query_asked_twice_reaches_the_source_twice() {
     let dependencies = DependencyRequest {
         id: id.clone(),
         direction: Direction::DependedOnBy,
+        completeness: onetaskgraph_core::Completeness::NamingUnasked,
         paging: one_page(),
     };
 

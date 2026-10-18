@@ -248,6 +248,7 @@ impl Engine {
                         next: None,
                         plan: QueryPlan::default(),
                         errors: answer.errors.clone(),
+                        unanswered: Vec::new(),
                     },
                     comments: None,
                     assets: None,
@@ -822,6 +823,7 @@ fn failed_response(source: &SourceName, error: SourceError) -> QueryResponse<Qua
             source: source.clone(),
             error,
         }],
+        unanswered: Vec::new(),
     }
 }
 
