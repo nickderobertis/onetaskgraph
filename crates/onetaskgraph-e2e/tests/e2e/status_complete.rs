@@ -11,7 +11,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-use onetaskgraph_core::{Config, Engine, Environment, Secrets};
+use onetaskgraph_core::{Config, Engine, EngineError, Environment, Secrets};
 use onetaskgraph_plugin_api::{IssueRef, SourceName};
 use serde_json::{Value, json};
 
@@ -547,6 +547,107 @@ fn the_library_form_answers_what_the_command_line_answers() {
     assert_eq!(
         library.board.second_board_status("N-8").as_deref(),
         Some("Done")
+    );
+}
+
+/// `future` on a runtime of its own, as a Rust caller drives one engine call to its answer.
+fn run_to_answer<T>(future: impl std::future::Future<Output = T>) -> T {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a runtime")
+        .block_on(future)
+}
+
+#[test]
+fn a_library_completion_narrowed_to_a_source_nothing_configures_is_refused_before_any_request() {
+    let stores = Stores::new();
+    let notes = stores.notes();
+    let engine = library_engine(&stores);
+    let issues: Vec<IssueRef> = NAMED
+        .iter()
+        .map(|id| reference(id).parse().expect("a reference"))
+        .collect();
+    let only = [
+        SourceName::new("board-a").expect("a name"),
+        SourceName::new("nowhere").expect("a name"),
+    ];
+    let refused = run_to_answer(engine.complete_issues(&issues, &only, false))
+        .expect_err("a source nothing configures is refused");
+    let EngineError::UnknownSource { name, .. } = &refused else {
+        panic!("refused as an unknown source, not {refused:?}");
+    };
+    assert_eq!(name, "nowhere");
+    assert!(
+        refused.to_string().contains("board-a"),
+        "the refusal names what is configured: {refused}"
+    );
+    assert!(stores.board.served().is_empty(), "no board was asked");
+    assert_eq!(stores.linear.served(), Vec::new(), "Linear is sent nothing");
+    assert!(
+        stores
+            .plugin_requests()
+            .iter()
+            .all(|method| method == "initialize"),
+        "{:?}",
+        stores.plugin_requests()
+    );
+    assert_eq!(stores.notes(), notes);
+    assert_eq!(stores.board.status("N-1").as_deref(), Some("Todo"));
+}
+
+#[test]
+fn a_reconcile_of_a_board_that_cannot_start_is_refused_whole_naming_why() {
+    let stores = Stores::new();
+    stores
+        .sandbox
+        .secrets_file("GITHUB_PROJECTS_FIXTURE_TOKEN=test-token\nLINEAR_API_KEY=fixture-key\n");
+    let output = stores.run(&[
+        "--json",
+        "task",
+        "status",
+        "reconcile",
+        "--source",
+        "board-b",
+    ]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let failure: Value = serde_json::from_str(&stdout(&output)).expect("a failure document");
+    assert_eq!(failure["failure"]["source"], "board-b", "{failure:#}");
+    assert!(
+        failure["failure"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("GITHUB_PROJECTS_FIXTURE_TOKEN_B")),
+        "the failure names the missing credential: {failure:#}"
+    );
+    assert!(
+        failure.get("items").is_none(),
+        "no item is listed: {failure:#}"
+    );
+    assert!(
+        stderr(&output).contains("GITHUB_PROJECTS_FIXTURE_TOKEN_B"),
+        "{}",
+        stderr(&output)
+    );
+
+    let config =
+        Config::from_document(json!({"sources": stores.sources})).expect("a valid configuration");
+    let secrets = Secrets::load(Environment::from_pairs([
+        ("GITHUB_PROJECTS_FIXTURE_TOKEN", "test-token"),
+        ("LINEAR_API_KEY", "fixture-key"),
+    ]))
+    .expect("every credential but board B's");
+    let engine = Engine::build(&config, &secrets);
+    let board_b = SourceName::new("board-b").expect("a name");
+    let refused = run_to_answer(engine.reconcile_statuses(&board_b, false))
+        .expect_err("a source that did not build is refused whole");
+    assert!(
+        matches!(&refused, EngineError::SourceUnavailable { name, .. } if name == "board-b"),
+        "{refused:?}"
+    );
+    assert!(stores.board.served().is_empty(), "no board was asked");
+    assert_eq!(
+        stores.board.second_board_status("N-8").as_deref(),
+        Some("Todo")
     );
 }
 

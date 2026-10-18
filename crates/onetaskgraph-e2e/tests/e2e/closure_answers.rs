@@ -165,6 +165,57 @@ fn a_status_write_reading_back_another_category_is_answered_failed_not_updated()
 }
 
 #[test]
+fn a_task_removed_before_its_status_write_is_answered_failed_and_the_others_are_written() {
+    let stored = Stored::new();
+    let (alpha, beta) = (stored.id_of("Alpha"), stored.id_of("Beta"));
+    let gone = format!("store:{alpha}");
+    let removed = |answer: &Value| {
+        let item = &answer["items"][0];
+        assert_eq!(item["action"], "failed", "{answer:#}");
+        assert_eq!(item["error"]["kind"], "no-such-item", "{answer:#}");
+        assert!(
+            item["error"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains(&format!("no task with the id {gone}"))),
+            "{answer:#}"
+        );
+        assert_eq!(answer["items"][1]["action"], "updated", "{answer:#}");
+    };
+
+    stored.configure(json!({"closure": {"contradictions": [alpha, beta], "removed": [alpha]}}));
+    let (answer, _) = stored.json(&["task", "status", "reconcile", "--source", "store"], 4);
+    removed(&answer);
+    assert_eq!(answer["items"][0]["source"], gone, "{answer:#}");
+    assert_eq!(
+        answer["items"][1]["source"],
+        format!("store:{beta}"),
+        "{answer:#}"
+    );
+
+    stored.configure(json!({"closure": {"holdings": "due", "removed": [alpha]}}));
+    let (answer, _) = stored.json(
+        &["task", "status", "complete", "--source", "store"]
+            .iter()
+            .copied()
+            .chain(ISSUES)
+            .collect::<Vec<_>>(),
+        4,
+    );
+    removed(&answer);
+    assert_eq!(answer["items"][0]["task"], gone, "{answer:#}");
+    let targets: Vec<String> = stored
+        .status_writes()
+        .iter()
+        .map(|write| write["target"].as_str().unwrap_or_default().to_owned())
+        .collect();
+    assert_eq!(
+        targets,
+        [alpha.as_str(), beta.as_str(), alpha.as_str(), beta.as_str()],
+        "each task was asked once per verb"
+    );
+}
+
+#[test]
 fn a_holdings_answer_that_does_not_name_each_reference_once_in_order_fails_every_reference() {
     for (mode, says) in [
         ("missing", "answered 1 holding(s) for 2 reference(s)"),

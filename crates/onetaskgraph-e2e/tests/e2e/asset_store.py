@@ -38,7 +38,9 @@ closure that reads `done` — an id listed twice is a task answered twice. `hold
 §4.24 is answered: `"due"` answers the `N`th stored task due for the reference numbered `N`;
 `"missing"`, `"extra"`, `"reordered"` and `"renamed"` answer every reference absent and then
 drop the last, add one, swap the first two, or rename the first. `reads_back` is the category
-`set_task_status` answers whatever it was asked to write.
+`set_task_status` answers whatever it was asked to write, and `removed` lists stored task ids it
+answers as no longer held — a task deleted after the closure method named it and before its
+write arrived.
 """
 
 # llmlint: ignore-file[modern_domain_modeling] This peer is a transcription of
@@ -682,7 +684,7 @@ def set_status(settings, params):
     log(settings, {"method": "set_task_status", "target": wanted, "category": category})
     held = read_store(settings["store"])
     found = [task for task in held["tasks"] if task["id"] == wanted]
-    if not found:
+    if not found or wanted in settings["closure"].get("removed", []):
         return {"status": None}
     found[0]["status"] = {"category": category, "name": category}
     write_store(settings["store"], held)
