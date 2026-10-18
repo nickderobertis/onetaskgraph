@@ -536,6 +536,15 @@ class Release:
     upload_url: str
     assets: tuple[ReleaseAsset, ...]
 
+    @classmethod
+    def parse(cls, value: object, tag: ReleaseTag) -> "Release":
+        """GitHub's release-by-tag answer, as config/github-interfaces.toml pins it."""
+        if not isinstance(value, dict) or not isinstance(value.get("upload_url"), str) or not isinstance(value.get("assets"), list):
+            raise ValueError("it has no upload_url and assets list")
+        if value.get("tag_name") != tag:
+            raise ValueError(f"it is the release of {value.get('tag_name')!r}")
+        return cls(value["upload_url"].split("{", 1)[0], tuple(ReleaseAsset.parse(asset) for asset in value["assets"]))
+
 
 @dataclass(frozen=True)
 class GitHub:
@@ -584,11 +593,7 @@ class GitHub:
     def release(self, tag: ReleaseTag) -> Release:
         found = self.request("GET", f"{self.api}/repos/{self.repository}/releases/tags/{urllib.parse.quote(tag)}")
         try:
-            if not isinstance(found, dict) or not isinstance(found.get("upload_url"), str) or not isinstance(found.get("assets"), list):
-                raise ValueError("it has no upload_url and assets list")
-            if found.get("tag_name") != tag:
-                raise ValueError(f"it is the release of {found.get('tag_name')!r}")
-            release = Release(found["upload_url"].split("{", 1)[0], tuple(ReleaseAsset.parse(asset) for asset in found["assets"]))
+            release = Release.parse(found, tag)
         except ValueError as error:
             fail(f"GitHub's answer for the {tag} release is not a release: {error}", "check that the release-plz job cut the GitHub Release for this tag")
         if not self.trusts(release.upload_url):

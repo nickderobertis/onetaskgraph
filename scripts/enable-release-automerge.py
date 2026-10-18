@@ -34,6 +34,7 @@ BranchRef = NewType("BranchRef", str)
 RepositoryName = NewType("RepositoryName", str)
 Token = NewType("Token", str)
 
+# Pinned with GitHub's schema slice in config/github-interfaces.toml, which holds this to it.
 ENABLE = """mutation($pullRequestId: ID!) {
   enablePullRequestAutoMerge(input: {pullRequestId: $pullRequestId, mergeMethod: SQUASH}) {
     pullRequest { number autoMergeRequest { mergeMethod } }
@@ -87,6 +88,20 @@ class PullRequest:
     def is_release_of(self, repository: RepositoryName) -> bool:
         """release-plz's own pull request: a `release-plz-` branch of this repository, not a fork's."""
         return self.head_ref.startswith("release-plz-") and self.head_repository == repository
+
+
+def confirm_enabled(answer: object, pull: PullRequest) -> None:
+    """Refuse unless GitHub's answer to ENABLE says this pull request now squash-merges itself.
+
+    A malformed answer refuses too, as an AttributeError or TypeError the caller reports.
+    """
+    errors = answer.get("errors") if isinstance(answer, dict) else ["no answer"]
+    if errors:
+        raise Refused(f"GitHub refused auto-merge for #{pull.number}: {json.dumps(errors)[:500]}")
+    enabled = ((answer.get("data") or {}).get("enablePullRequestAutoMerge") or {}).get("pullRequest") or {}
+    request = enabled.get("autoMergeRequest") if isinstance(enabled, dict) else None
+    if not isinstance(request, dict) or request.get("mergeMethod") != "SQUASH" or not is_positive_int(enabled.get("number")) or enabled.get("number") != pull.number:
+        raise Refused(f"GitHub answered auto-merge for #{pull.number} without a squash auto-merge request on it: {json.dumps(answer)[:300]}")
 
 
 def call(url: str, token: Token, body: dict | None = None) -> object:
@@ -144,13 +159,7 @@ def main() -> int:
             return 0
         pull = max(candidates, key=lambda candidate: candidate.number)
         answer = call(graphql, token, {"query": ENABLE, "variables": {"pullRequestId": pull.node_id}})
-        errors = answer.get("errors") if isinstance(answer, dict) else ["no answer"]
-        if errors:
-            raise Refused(f"GitHub refused auto-merge for #{pull.number}: {json.dumps(errors)[:500]}")
-        enabled = ((answer.get("data") or {}).get("enablePullRequestAutoMerge") or {}).get("pullRequest") or {}
-        request = enabled.get("autoMergeRequest") if isinstance(enabled, dict) else None
-        if not isinstance(request, dict) or request.get("mergeMethod") != "SQUASH" or not is_positive_int(enabled.get("number")) or enabled.get("number") != pull.number:
-            raise Refused(f"GitHub answered auto-merge for #{pull.number} without a squash auto-merge request on it: {json.dumps(answer)[:300]}")
+        confirm_enabled(answer, pull)
     # A malformed GitHub answer is a refusal like any other: it says no auto-merge was set.
     except (Refused, AttributeError, TypeError) as error:
         print(f"enable-release-automerge: {error}", file=sys.stderr)

@@ -9,6 +9,7 @@
       "!{projectRoot}/node_modules/**/*",
       "!{projectRoot}/.telemetry/**/*",
       "{workspaceRoot}/release-targets.toml",
+      "{workspaceRoot}/config/github-interfaces.toml",
       "{workspaceRoot}/screencomp.toml",
       "{workspaceRoot}/scripts/product_versions.py",
       "{workspaceRoot}/scripts/release_products.py",

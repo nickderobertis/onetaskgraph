@@ -30,7 +30,8 @@ v2), `replace` (a file name served as the bytes of another file, its index hashe
 `pulls_raw` (the pull-request list answered as this text), `redirect_api` (every GitHub API
 call redirected to the other port, another origin), `redirect_api_same_origin` (every
 GitHub API read redirected once to itself on the same origin), and `release_answer`, `upload_host`, `upload_answer` (an upload stored nowhere and answered so) and `automerge_answer`, which replace what GitHub
-answers. Every request is one JSON line in `<state>/requests.jsonl`, with the file or package a
+answers. What it answers GitHub's calls with is held to config/github-interfaces.toml by
+.github/tests/github_interfaces.py. Every request is one JSON line in `<state>/requests.jsonl`, with the file or package a
 publication carried, so a journey can assert exactly what was sent.
 """
 

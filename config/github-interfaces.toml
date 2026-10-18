@@ -1,0 +1,257 @@
+# GitHub's interface as a release calls it, pinned.
+#
+# Two scripts call GitHub during a release: scripts/release_cd.py reads a release by tag and
+# uploads and deletes its assets, and scripts/enable-release-automerge.py lists the open pull
+# requests and asks GraphQL's enablePullRequestAutoMerge for release-plz's one. The release
+# journeys stand GitHub in with scripts/loopback-release-registries.py. All three restate a
+# third party's interface, so it is pinned here the way config/registry-interfaces.toml pins
+# the registries': a recorded observation with its provenance, which a deterministic check
+# holds the code to. .github/tests/github_interfaces.py, run by
+# .github/tests/github-interfaces.test.mjs in github-workflows:test, fails when
+#
+#   - the GraphQL document the auto-merge step sends is not the one pinned here, or names a
+#     field, argument, input field or enum value the pinned schema slice does not have;
+#   - a parser the release uses does not accept the pinned answer, reads something other than
+#     what `reads` names, or still accepts the answer unchanged with one of those fields gone;
+#   - the double answers a call with a field the pinned answer does not carry.
+#
+# Every `answer` is a real capture, trimmed only inside nested objects nothing reads, except
+# the GraphQL answer: enabling auto-merge is a write a check must not make, so that answer is
+# the shape the introspected schema slice below gives the pinned document. When GitHub moves,
+# re-observe here (the `observed_from` of each entry is the request to repeat) and bring the
+# scripts and the double with it.
+
+[[rest]]
+call = "release-by-tag"
+documentation = "https://docs.github.com/en/rest/releases/releases#get-a-release-by-tag-name"
+observed = "2026-10-18"
+observed_from = "GET https://api.github.com/repos/nickderobertis/onetaskgraph/releases/tags/v0.7.1"
+method = "GET"
+path = "/repos/{owner}/{repo}/releases/tags/{tag}"
+tag = "v0.7.1"
+reads = ["tag_name", "upload_url", "assets[].id", "assets[].name", "assets[].size", "assets[].state"]
+answer = '''
+{
+  "url": "https://api.github.com/repos/nickderobertis/onetaskgraph/releases/414082970",
+  "assets_url": "https://api.github.com/repos/nickderobertis/onetaskgraph/releases/414082970/assets",
+  "upload_url": "https://uploads.github.com/repos/nickderobertis/onetaskgraph/releases/414082970/assets{?name,label}",
+  "html_url": "https://github.com/nickderobertis/onetaskgraph/releases/tag/v0.7.1",
+  "id": 414082970,
+  "author": {
+    "login": "nickderobertis",
+    "type": "User"
+  },
+  "node_id": "RE_kwDOUBBgxs4Yrmea",
+  "tag_name": "v0.7.1",
+  "target_commitish": "main",
+  "name": "v0.7.1",
+  "draft": false,
+  "immutable": false,
+  "prerelease": false,
+  "created_at": "2026-10-15T17:27:24Z",
+  "updated_at": "2026-10-15T17:36:35Z",
+  "published_at": "2026-10-15T17:27:26Z",
+  "assets": [
+    {
+      "url": "https://api.github.com/repos/nickderobertis/onetaskgraph/releases/assets/644642357",
+      "id": 644642357,
+      "node_id": "RA_kwDOUBBgxs4mbHY1",
+      "name": "onetaskgraph-v0.7.1-aarch64-apple-darwin.tar.gz",
+      "label": "",
+      "uploader": {
+        "login": "github-actions[bot]",
+        "type": "Bot"
+      },
+      "content_type": "application/x-gtar",
+      "state": "uploaded",
+      "size": 8661681,
+      "digest": "sha256:b11cf0d112b1b03e044980031612e35a771bf65885ad0452562d089ff2884f5a",
+      "download_count": 0,
+      "created_at": "2026-10-15T17:36:34Z",
+      "updated_at": "2026-10-15T17:36:35Z",
+      "browser_download_url": "https://github.com/nickderobertis/onetaskgraph/releases/download/v0.7.1/onetaskgraph-v0.7.1-aarch64-apple-darwin.tar.gz"
+    }
+  ],
+  "tarball_url": "https://api.github.com/repos/nickderobertis/onetaskgraph/tarball/v0.7.1",
+  "zipball_url": "https://api.github.com/repos/nickderobertis/onetaskgraph/zipball/v0.7.1",
+  "body": "### Added\n\n- *(cache)* serve Linear comments and dependency "
+}
+'''
+
+# The upload answers the release-asset object a release lists under `assets`, which is where
+# this one was observed: an upload is a write a check must not make.
+[[rest]]
+call = "upload-asset"
+documentation = "https://docs.github.com/en/rest/releases/assets#upload-a-release-asset"
+observed = "2026-10-18"
+observed_from = "GET https://api.github.com/repos/nickderobertis/onetaskgraph/releases/tags/v0.7.1 (assets[0])"
+method = "POST"
+path = "{upload_url}?name={name}"
+reads = ["id", "name", "size", "state"]
+answer = '''
+{
+  "url": "https://api.github.com/repos/nickderobertis/onetaskgraph/releases/assets/644642357",
+  "id": 644642357,
+  "node_id": "RA_kwDOUBBgxs4mbHY1",
+  "name": "onetaskgraph-v0.7.1-aarch64-apple-darwin.tar.gz",
+  "label": "",
+  "uploader": {
+    "login": "github-actions[bot]",
+    "type": "Bot"
+  },
+  "content_type": "application/x-gtar",
+  "state": "uploaded",
+  "size": 8661681,
+  "digest": "sha256:b11cf0d112b1b03e044980031612e35a771bf65885ad0452562d089ff2884f5a",
+  "download_count": 0,
+  "created_at": "2026-10-15T17:36:34Z",
+  "updated_at": "2026-10-15T17:36:35Z",
+  "browser_download_url": "https://github.com/nickderobertis/onetaskgraph/releases/download/v0.7.1/onetaskgraph-v0.7.1-aarch64-apple-darwin.tar.gz"
+}
+'''
+
+[[rest]]
+call = "open-pulls"
+documentation = "https://docs.github.com/en/rest/pulls/pulls#list-pull-requests"
+observed = "2026-10-18"
+observed_from = "GET https://api.github.com/repos/nickderobertis/onetaskgraph/pulls?state=open&per_page=1"
+method = "GET"
+path = "/repos/{owner}/{repo}/pulls?state=open&per_page=100"
+reads = ["[].number", "[].node_id", "[].head.ref", "[].head.repo.full_name"]
+answer = '''
+[
+  {
+    "url": "https://api.github.com/repos/nickderobertis/onetaskgraph/pulls/3647",
+    "id": 4906459104,
+    "node_id": "PR_kwDOUBBgxs8AAAABJHKf4A",
+    "html_url": "https://github.com/nickderobertis/onetaskgraph/pull/3647",
+    "diff_url": "https://github.com/nickderobertis/onetaskgraph/pull/3647.diff",
+    "patch_url": "https://github.com/nickderobertis/onetaskgraph/pull/3647.patch",
+    "issue_url": "https://api.github.com/repos/nickderobertis/onetaskgraph/issues/3647",
+    "number": 3647,
+    "state": "open",
+    "locked": false,
+    "title": "ci!: drop linux-arm64 and release onetaskgraph per platform",
+    "user": {
+      "login": "nickderobertis",
+      "type": "User"
+    },
+    "body": "## What\n\nConsolidate releases into five CD jobs: `release-pl",
+    "created_at": "2026-10-18T04:50:10Z",
+    "updated_at": "2026-10-18T08:37:49Z",
+    "closed_at": null,
+    "merged_at": null,
+    "merge_commit_sha": "a27b581f86fdb4e47bccea662f04784d7b9aac74",
+    "assignees": [],
+    "requested_reviewers": [],
+    "requested_teams": [],
+    "labels": [],
+    "milestone": null,
+    "draft": true,
+    "commits_url": "https://api.github.com/repos/nickderobertis/onetaskgraph/pulls/3647/commits",
+    "review_comments_url": "https://api.github.com/repos/nickderobertis/onetaskgraph/pulls/3647/comments",
+    "review_comment_url": "https://api.github.com/repos/nickderobertis/onetaskgraph/pulls/comments{/number}",
+    "comments_url": "https://api.github.com/repos/nickderobertis/onetaskgraph/issues/3647/comments",
+    "statuses_url": "https://api.github.com/repos/nickderobertis/onetaskgraph/statuses/c7c2398ef0c1c93705e0601b9ffc7f2c62d08a28",
+    "head": {
+      "label": "nickderobertis:nick/3634/onetaskgraph-cd-reshape",
+      "ref": "nick/3634/onetaskgraph-cd-reshape",
+      "sha": "c7c2398ef0c1c93705e0601b9ffc7f2c62d08a28",
+      "repo": {
+        "id": 1343250630,
+        "name": "onetaskgraph",
+        "full_name": "nickderobertis/onetaskgraph",
+        "private": false
+      },
+      "user": {
+        "login": "nickderobertis",
+        "type": "User"
+      }
+    },
+    "base": {
+      "label": "nickderobertis:main",
+      "ref": "main",
+      "sha": "9632b5b0f71a617135713cd6a6786944bc874344",
+      "repo": {
+        "id": 1343250630,
+        "name": "onetaskgraph",
+        "full_name": "nickderobertis/onetaskgraph",
+        "private": false
+      },
+      "user": {
+        "login": "nickderobertis",
+        "type": "User"
+      }
+    },
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/nickderobertis/onetaskgraph/pulls/3647"
+      }
+    },
+    "author_association": "OWNER",
+    "auto_merge": null,
+    "assignee": null,
+    "active_lock_reason": null
+  }
+]
+'''
+
+[graphql]
+documentation = "https://docs.github.com/en/graphql/reference/mutations#enablepullrequestautomerge"
+observed = "2026-10-18"
+observed_from = "introspection of https://api.github.com/graphql: __type(name:) of Mutation, EnablePullRequestAutoMergeInput, EnablePullRequestAutoMergePayload, PullRequest, AutoMergeRequest and PullRequestMergeMethod"
+document = '''
+mutation($pullRequestId: ID!) {
+  enablePullRequestAutoMerge(input: {pullRequestId: $pullRequestId, mergeMethod: SQUASH}) {
+    pullRequest { number autoMergeRequest { mergeMethod } }
+  }
+}
+'''
+reads = ["errors", "data.enablePullRequestAutoMerge.pullRequest.number", "data.enablePullRequestAutoMerge.pullRequest.autoMergeRequest.mergeMethod"]
+answer = '''
+{
+  "data": {
+    "enablePullRequestAutoMerge": {
+      "pullRequest": {
+        "number": 3647,
+        "autoMergeRequest": {
+          "mergeMethod": "SQUASH"
+        }
+      }
+    }
+  }
+}
+'''
+
+# The slice of GitHub's schema the document reaches: each object type's fields it can select,
+# as the type they return, the arguments of each field the document passes any, each input type's fields,
+# and each enum's values — what introspection answered, for those types only.
+[graphql.objects.Mutation]
+enablePullRequestAutoMerge = "EnablePullRequestAutoMergePayload"
+
+[graphql.objects.EnablePullRequestAutoMergePayload]
+actor = "Actor"
+clientMutationId = "String"
+pullRequest = "PullRequest"
+
+[graphql.objects.PullRequest]
+number = "Int"
+autoMergeRequest = "AutoMergeRequest"
+
+[graphql.objects.AutoMergeRequest]
+mergeMethod = "PullRequestMergeMethod"
+
+[graphql.arguments]
+"Mutation.enablePullRequestAutoMerge" = { input = "EnablePullRequestAutoMergeInput" }
+
+[graphql.inputs.EnablePullRequestAutoMergeInput]
+clientMutationId = "String"
+pullRequestId = "ID"
+commitHeadline = "String"
+commitBody = "String"
+mergeMethod = "PullRequestMergeMethod"
+authorEmail = "String"
+expectedHeadOid = "GitObjectID"
+
+[graphql.enums]
+PullRequestMergeMethod = ["MERGE", "SQUASH", "REBASE"]

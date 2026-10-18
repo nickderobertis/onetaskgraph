@@ -1276,7 +1276,9 @@ The capture drives `local-md` and `in-memory` only: no credential or socket.
   it lands once its required checks pass, and a refusal fails the step visibly.
   `.github/tests/release-plz.test.mjs` drives the guard's four cases, that step against a
   GitHub double, and the release and preparation steps over a scratch repository with the
-  real pinned release-plz.
+  real pinned release-plz. What GitHub answers those calls and the release's asset uploads
+  with is pinned, with its provenance, in `config/github-interfaces.toml`, and
+  `.github/tests/github-interfaces.test.mjs` holds both scripts and the double to it.
 - **A release is five CD jobs, and each platform publishes its own artifacts.**
   `release-plz` cuts the tag and the GitHub Release; `.github/workflows/release.yml` then
   runs `build-linux` (x86_64 Linux), `build-macos` (Apple Silicon) and `build-windows`

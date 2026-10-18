@@ -1,0 +1,95 @@
+// The release's GitHub calls and the double that stands GitHub in, held to
+// config/github-interfaces.toml by .github/tests/github_interfaces.py. Each drift
+// below is written into a copy of the pin, so the gate is watched refusing it
+// rather than trusted.
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { test } from "node:test";
+import { fileURLToPath } from "node:url";
+
+const root = fileURLToPath(new URL("../..", import.meta.url));
+const pinned = readFileSync(join(root, "config/github-interfaces.toml"), "utf8");
+
+function gate(pin) {
+  const args = [".github/tests/github_interfaces.py"];
+  let scratch;
+  if (pin !== undefined) {
+    scratch = mkdtempSync(join(tmpdir(), "github-interfaces-"));
+    args.push(join(scratch, "pin.toml"));
+    writeFileSync(args[1], pin);
+  }
+  try {
+    return spawnSync("python3", args, { cwd: root, encoding: "utf8" });
+  } finally {
+    if (scratch) rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
+function drifted(from, to) {
+  assert.ok(pinned.includes(from), `the pin no longer holds ${from}`);
+  return pinned.replace(from, to);
+}
+
+test("the release's calls and the double agree with the pinned interface", () => {
+  const result = gate();
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, "");
+});
+
+const drifts = [
+  [
+    "a field the schema slice lacks",
+    drifted('number = "Int"\n', ""),
+    "graphql: PullRequest has no field number in the pinned schema slice",
+  ],
+  [
+    "an input field the schema slice lacks",
+    drifted('mergeMethod = "PullRequestMergeMethod"\nauthorEmail', "authorEmail"),
+    "graphql: EnablePullRequestAutoMergeInput has no field mergeMethod",
+  ],
+  [
+    "an enum value the schema slice lacks",
+    drifted('["MERGE", "SQUASH", "REBASE"]', '["MERGE", "REBASE"]'),
+    "graphql: SQUASH is not a value of PullRequestMergeMethod",
+  ],
+  [
+    "a document other than the one the step sends",
+    drifted("number autoMergeRequest {", "autoMergeRequest {"),
+    "graphql: scripts/enable-release-automerge.py sends a document other than the pinned one",
+  ],
+  [
+    "a read the answer does not carry",
+    drifted('"state": "uploaded",', ""),
+    "release-by-tag: `reads` names assets[].state, which GitHub's pinned answer does not carry",
+  ],
+  [
+    "a read the parser does not make",
+    drifted(
+      'reads = ["id", "name", "size", "state"]',
+      'reads = ["id", "name", "size", "state", "label"]',
+    ),
+    "upload-asset: removing label from GitHub's answer leaves the parser's result unchanged",
+  ],
+  [
+    "a pull request GitHub answers without its head ref",
+    drifted('"ref": "nick/3634/onetaskgraph-cd-reshape",', ""),
+    "open-pulls: the release's parser refuses GitHub's pinned answer",
+  ],
+  [
+    "a field the double answers that GitHub does not",
+    drifted('  "id": 414082970,\n', ""),
+    "release-by-tag: scripts/loopback-release-registries.py answers with id, which GitHub's pinned answer does not carry",
+  ],
+];
+
+for (const [name, pin, message] of drifts) {
+  test(`the gate refuses ${name}`, () => {
+    const result = gate(pin);
+    assert.equal(result.status, 1, result.stderr);
+    assert.ok(result.stderr.includes(`github-interfaces: ${message}`), result.stderr);
+    assert.ok(result.stderr.includes("github-interfaces: next: "), result.stderr);
+  });
+}
