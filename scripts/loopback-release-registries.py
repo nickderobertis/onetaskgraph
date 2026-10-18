@@ -244,6 +244,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         self.send(404, {"message": "Not Found"})
 
+    # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Only the real pinned release-plz calls this, and it is the authority on what it reads of a forge: an answer it could not use fails the release-plz journeys in .github/tests/release-plz.test.mjs, which is the drift gate for this restatement.
     def github_enterprise(self, path):
         """The forge reads release-plz makes of a repository URL on this host.
 
@@ -256,6 +257,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send(200, [])
             return
         self.send(403 if self.command != "GET" else 404, {"message": "the double serves no other forge call"})
+    # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
     def github_upload(self, path):
         match = re.fullmatch(r"/repos/[^/]+/[^/]+/releases/(\d+)/assets", path)
@@ -305,6 +307,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send(200, served_bytes(stored, asset["bytes"]), "application/octet-stream")
 
 
+    # llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Only the real clients speak to these handlers — uv publish and pip for PyPI, npm publish and npm install for npm, cargo publish and cargo's sparse-index resolution for crates.io — and each is the authority on its registry's protocol: an answer it could not use fails the journeys in .github/tests/release-cd.test.mjs, which is the drift gate for this restatement. GitHub's calls above are pinned in config/github-interfaces.toml instead, because no real client of theirs runs here.
     def pypi(self, path):
         if path in ("/legacy/", "/legacy") and self.command == "POST":
             message = email.message_from_bytes(b"Content-Type: " + self.headers["Content-Type"].encode() + b"\r\n\r\n" + self.body(), policy=email.policy.HTTP)
@@ -526,6 +529,7 @@ class Handler(BaseHTTPRequestHandler):
         with lock:
             proxied_index[relative] = answer
         return answer
+    # llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
 
 class Loopback(ThreadingHTTPServer):
