@@ -647,7 +647,7 @@ jobs:
   test-linux:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 30
     env:
       ONETASKGRAPH_SDK_WITHOUT_CLI: "1"
       UV_NO_SYNC: "1"
@@ -749,12 +749,6 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: bash scripts/ci-pr-base.sh "$BASE_REF" "$BASE_SHA"
       # llmlint: ignore-block[no_second_broader_sweep_over_an_already_gated_commit] The jobs behind today's required contexts stay until branch protection names these four.
-      # DIAGNOSTIC, reverted with the 120-minute limit: attempt 1 builds what the Rust cache
-      # warmer builds, so its cache save is the warmer's; the re-run measures the job warm.
-      - name: DIAGNOSTIC build what the Rust cache warmer builds
-        if: steps.release.outputs.tests == 'run' && github.run_attempt == '1'
-        shell: bash
-        run: bash scripts/warm-rust-cache.sh --instrumented
       - name: Test the affected projects
         if: steps.release.outputs.tests == 'run'
         env:
@@ -777,14 +771,12 @@ jobs:
           NX_HEAD: HEAD
         # llmlint: ignore[external_service_suite_stays_out_of_the_affected_tier] As on check's Linux leg: these suites run only when their own plugin changed, which is the edge; AGENTS.md records why an edge of their own was removed.
         run: just ci-test-linux
-        # DIAGNOSTIC: a step limit keeps the log.
-        timeout-minutes: 100
       # llmlint: ignore-end[no_second_broader_sweep_over_an_already_gated_commit]
 
   test-windows:
     if: github.event_name == 'pull_request'
     runs-on: windows-latest
-    timeout-minutes: 120
+    timeout-minutes: 30
     env:
       ONETASKGRAPH_SDK_WITHOUT_CLI: "1"
       UV_NO_SYNC: "1"
@@ -899,20 +891,12 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: bash scripts/ci-pr-base.sh "$BASE_REF" "$BASE_SHA"
       # llmlint: ignore-block[live_tier_compiles_and_requires_credential,no_second_broader_sweep_over_an_already_gated_commit,external_service_suite_stays_out_of_the_affected_tier] test-linux alone carries this run's live credentials; the uncredentialed service suites run behind affected selection, as on check's legs; and the jobs behind today's required contexts stay until branch protection names these four.
-      # DIAGNOSTIC, reverted with the 120-minute limit: attempt 1 builds what the Rust cache
-      # warmer builds, so its cache save is the warmer's; the re-run measures the job warm.
-      - name: DIAGNOSTIC build what the Rust cache warmer builds
-        if: steps.release.outputs.tests == 'run' && github.run_attempt == '1'
-        shell: bash
-        run: bash scripts/warm-rust-cache.sh
       - name: Test the affected projects
         if: steps.release.outputs.tests == 'run'
         env:
           NX_BASE: ${{ steps.pr-base.outputs.base }}
           NX_HEAD: HEAD
         run: just ci-test-windows
-        # DIAGNOSTIC: a step limit keeps the log.
-        timeout-minutes: 100
       # llmlint: ignore-end[live_tier_compiles_and_requires_credential,no_second_broader_sweep_over_an_already_gated_commit,external_service_suite_stays_out_of_the_affected_tier]
 
   # A manual diagnostic, default off: scripts:distribution-test with nothing beside it, on the
@@ -974,7 +958,7 @@ jobs:
   test-macos:
     if: github.event_name == 'pull_request' && !(github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'release-plz-'))
     runs-on: macos-latest
-    timeout-minutes: 120
+    timeout-minutes: 30
     env:
       ONETASKGRAPH_SDK_WITHOUT_CLI: "1"
       UV_NO_SYNC: "1"
@@ -1071,18 +1055,10 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: bash scripts/ci-pr-base.sh "$BASE_REF" "$BASE_SHA"
       # llmlint: ignore-block[live_tier_compiles_and_requires_credential,no_second_broader_sweep_over_an_already_gated_commit,external_service_suite_stays_out_of_the_affected_tier] test-linux alone carries this run's live credentials; the uncredentialed service suites run behind affected selection, as on check's legs; and the jobs behind today's required contexts stay until branch protection names these four.
-      # DIAGNOSTIC, reverted with the 120-minute limit: attempt 1 builds what the Rust cache
-      # warmer builds, so its cache save is the warmer's; the re-run measures the job warm.
-      - name: DIAGNOSTIC build what the Rust cache warmer builds
-        if: steps.release.outputs.tests == 'run' && github.run_attempt == '1'
-        shell: bash
-        run: bash scripts/warm-rust-cache.sh
       - name: Test the affected projects
         if: steps.release.outputs.tests == 'run'
         env:
           NX_BASE: ${{ steps.pr-base.outputs.base }}
           NX_HEAD: HEAD
         run: just ci-test-macos
-        # DIAGNOSTIC: a step limit keeps the log.
-        timeout-minutes: 100
       # llmlint: ignore-end[live_tier_compiles_and_requires_credential,no_second_broader_sweep_over_an_already_gated_commit,external_service_suite_stays_out_of_the_affected_tier]
