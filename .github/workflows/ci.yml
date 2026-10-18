@@ -893,7 +893,7 @@ jobs:
       # llmlint: ignore-end[live_tier_compiles_and_requires_credential,no_second_broader_sweep_over_an_already_gated_commit,external_service_suite_stays_out_of_the_affected_tier]
 
   # A manual diagnostic, default off: scripts:distribution-test with nothing beside it, on the
-  # two platforms whose test jobs run it beside the coverage union, so its own duration there
+  # two platforms whose test jobs run it beside their other suites, so its own duration there
   # is read off the step rather than inferred from a contended run.
   distribution-diagnostic:
     if: github.event_name == 'workflow_dispatch' && inputs.distribution
