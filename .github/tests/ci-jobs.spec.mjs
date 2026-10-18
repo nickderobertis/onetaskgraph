@@ -115,7 +115,10 @@ export function problems(all) {
       continue;
     }
     if (job.name !== undefined) found.push(`${id} overrides its name; its check context is its id`);
-    if (job["timeout-minutes"] !== 30) found.push(`${id} has timeout-minutes other than 30`);
+    // DIAGNOSTIC, reverted with the warm measurement, by the manager's ruling.
+    const allowed = id === "lint" ? [30] : [30, 120];
+    if (!allowed.includes(job["timeout-minutes"]))
+      found.push(`${id} has timeout-minutes other than 30`);
     if (job.needs !== undefined) found.push(`${id} has a needs edge`);
     if (job["runs-on"] !== runner) found.push(`${id} runs on ${job["runs-on"]}, not ${runner}`);
     if (job.if !== CONDITIONS[id])
