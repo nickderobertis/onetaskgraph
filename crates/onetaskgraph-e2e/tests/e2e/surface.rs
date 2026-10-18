@@ -297,8 +297,8 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 39);
-    // Version 39: the sources a layer refines but no layer gives a plugin, named by
+    assert_eq!(bundle["version"], 40);
+    // Version 40: the sources a layer refines but no layer gives a plugin, named by
     // `config show` and left out of the wire when there are none.
     assert_eq!(
         bundle["roots"]["EffectiveConfig"]["properties"]["incomplete_sources"]["type"],
@@ -311,6 +311,18 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
             .contains(&serde_json::json!("incomplete_sources")),
         "an absent list reads back as none"
     );
+    // Version 39: a dependency answer's and a project graph's `unanswered`, left out of the
+    // wire when every source answered.
+    for root in ["ProjectGraph", "QueryResponseOfQualifiedEdge"] {
+        let schema = &bundle["roots"][root];
+        assert!(schema["properties"]["unanswered"].is_object(), "{root}");
+        assert!(
+            !schema["required"]
+                .as_array()
+                .is_some_and(|required| required.iter().any(|name| name == "unanswered")),
+            "{root}: a complete answer leaves it out"
+        );
+    }
     // Version 38: a project's and a document's change token, left out of the wire when absent.
     for root in ["Project", "Document"] {
         assert!(

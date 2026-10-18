@@ -419,6 +419,7 @@ fn a_pin_reaches_the_cache_through_both_sdks_and_a_rust_caller() {
             engine.project_dependencies(&onetaskgraph_core::DependencyRequest {
                 id: id.clone(),
                 direction: onetaskgraph_plugin_api::Direction::DependsOn,
+                completeness: onetaskgraph_core::Completeness::NamingUnasked,
                 paging: onetaskgraph_core::Paging {
                     limit: std::num::NonZeroU32::new(50).unwrap(),
                     token: None,

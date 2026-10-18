@@ -1185,6 +1185,60 @@ test("a project's graph is read through the real binary as its JSON form, groupe
   }
 });
 
+test("a project graph answers without a private source it cannot authenticate to, unless complete", async () => {
+  const root = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-unasked-"));
+  try {
+    for (const folder of ["work/tasks", "work/projects", "vault/tasks"]) {
+      mkdirSync(resolve(root, folder), { recursive: true });
+    }
+    writeFileSync(resolve(root, "work/projects/P-1.md"), "---\ntitle: Engine\n---\n");
+    writeFileSync(resolve(root, "work/tasks/T-1.md"), "---\ntitle: Ship\nproject: P-1\n---\n");
+    writeFileSync(
+      resolve(root, "vault/tasks/V-1.md"),
+      "---\ntitle: Approve\nmetadata:\n  onetaskgraph.depended_on_by:\n" +
+        "    'work:T-1':\n      id: work:T-1\n      kind: task\n---\n",
+    );
+    writeFileSync(
+      resolve(root, "onetaskgraph.yaml"),
+      JSON.stringify({
+        sources: {
+          work: { plugin: "local-md", config: { root: resolve(root, "work") } },
+          vault: {
+            plugin: "local-md",
+            config: { root: resolve(root, "vault") },
+            visibility: "private",
+          },
+          // Declared private, and nothing sets its credential.
+          ledger: {
+            plugin: "linear",
+            config: { api_key_env: "ONETASKGRAPH_SDK_ABSENT_KEY", team: "LED" },
+            visibility: "private",
+          },
+        },
+      }),
+    );
+    const client = new OnetaskgraphClient({ binaryPath: binary, cwd: root });
+
+    const graph = await client.projectGraph("work:P-1");
+    expect(graph.edges).toEqual([{ from: "vault:V-1", to: "work:T-1" }]);
+    expect(graph.unanswered?.map((failure) => [failure.source, failure.error.kind])).toEqual([
+      ["ledger", "auth"],
+    ]);
+    const deps = await client.taskDeps("work:T-1");
+    expect(deps.items.map((edge) => [edge.from.id, edge.to.id])).toEqual([
+      ["work:T-1", "vault:V-1"],
+    ]);
+    expect(deps.errors).toEqual([]);
+    expect(deps.unanswered?.map((failure) => failure.source)).toEqual(["ledger"]);
+
+    const refusedGraph = client.projectGraph("work:P-1", { complete: true });
+    await expect(refusedGraph).rejects.toMatchObject({ exitCode: 1 });
+    await expect(refusedGraph).rejects.toThrow("ledger");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("a task's content is replaced from a file through the real binary, and nothing else", async () => {
   const contentRoot = priorityFolder();
   try {

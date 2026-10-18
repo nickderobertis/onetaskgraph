@@ -150,6 +150,7 @@ RETURN_TYPES = {"sources_list": "list[SourceListing]"}
 OPTION_TYPES = {
     "apply": "bool",
     "allow_partial": "bool",
+    "complete": "bool",
     "no_comments": "bool",
     "comments": "bool",
     "no_link": "bool",
@@ -214,6 +215,7 @@ OPTION_TYPES = {
 OPTION_PLACEHOLDERS = {
     "apply": None,
     "allow_partial": None,
+    "complete": None,
     "no_comments": None,
     "comments": None,
     "no_link": None,
