@@ -895,6 +895,17 @@ def resolve_npm_package(package: str, version: str, directory: Path, row: Platfo
         fail(f"{package}@{version} as served carries no binary", f"re-run build-{row.platform}, which publishes it")
 
 
+def sdk_minimum_python() -> str:
+    manifest = Path("sdks/python/pyproject.toml")
+    try:
+        declared = re.search(r'^requires-python = ">=([0-9]+\.[0-9]+)"$', manifest.read_text(encoding="utf-8"), re.MULTILINE)
+    except OSError as error:
+        fail(f"could not read {manifest.as_posix()}: {error}", "run the release from a checkout of this repository")
+    if declared is None:
+        fail(f"{manifest.as_posix()} declares no requires-python of the form '>=X.Y'", "restore that floor, which the SDK's PyPI check resolves for")
+    return declared.group(1)
+
+
 def resolve_independent(tag: ReleaseTag, registry: Registry) -> None:
     version = version_of(tag)
     bash = bash_executable(host_platform.system())
@@ -906,7 +917,9 @@ def resolve_independent(tag: ReleaseTag, registry: Registry) -> None:
                     fail(f"{crate} {version} is not on the registry ({status})", "rerun the publish job's crate step")
         case "pypi":
             with tempfile.TemporaryDirectory(prefix="release-sdk-") as scratch:
-                completed = subprocess.run([PYTHON_EXECUTABLE, "-m", "pip", "download", "--no-deps", "--no-cache-dir", "--disable-pip-version-check", "--index-url", pypi_simple_base(), "--dest", scratch, f"{SDK_DISTRIBUTION}=={version}"], capture_output=True, text=True, check=False)
+                # Resolved for the oldest python the SDK declares rather than for this runner's
+                # own, which the SDK may not support: ubuntu-latest's python3 is older than it.
+                completed = subprocess.run([PYTHON_EXECUTABLE, "-m", "pip", "download", "--no-deps", "--no-cache-dir", "--disable-pip-version-check", "--only-binary=:all:", "--python-version", sdk_minimum_python(), "--index-url", pypi_simple_base(), "--dest", scratch, f"{SDK_DISTRIBUTION}=={version}"], capture_output=True, text=True, check=False)
                 if completed.returncode != 0:
                     fail(f"PyPI does not resolve {SDK_DISTRIBUTION}=={version}: {completed.stderr.strip()[-400:]}", "rerun the publish job's PyPI step")
         case "npm":
