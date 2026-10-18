@@ -598,6 +598,72 @@ fn a_landing_closure_recording_is_refused_unless_it_is_that_journeys_whole_measu
     }
 }
 
+#[test]
+fn the_landing_closure_report_hands_over_the_recorded_figure_and_refuses_what_it_cannot_vouch_for()
+{
+    use onetaskgraph_e2e_support::common::Sandbox;
+    use serde_json::json;
+    let sandbox = Sandbox::new();
+    let directory = sandbox.subdirectory("landing-closure");
+    let budget = super::status_complete::BUDGET;
+    let mut valid = landing_closure_recording();
+    valid["budget"] = json!(budget);
+    let run = |recorded: Option<Value>| {
+        let path = onetaskgraph_e2e_support::telemetry::file_in(&directory, budget);
+        let _ = std::fs::remove_file(&path);
+        if let Some(recorded) = recorded {
+            std::fs::write(&path, recorded.to_string()).unwrap();
+        }
+        let result = directory.join("result.json");
+        let _ = std::fs::remove_file(&result);
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "budget_runner::report_landing_closure",
+                "--exact",
+                "--nocapture",
+            ])
+            .env("GITHUB_ASSET_TELEMETRY_DIR", &directory)
+            .env("ONEBUDGETSPEC_BUDGET_ID", budget)
+            .env("ONEBUDGETSPEC_RESULT", &result)
+            .output()
+            .unwrap();
+        let reported = std::fs::read_to_string(&result)
+            .ok()
+            .map(|text| serde_json::from_str::<Value>(&text).unwrap());
+        (output, reported)
+    };
+    let mut foreign = valid.clone();
+    foreign["budget"] = json!("visibility-write-requests");
+    let mut unbalanced = valid.clone();
+    unbalanced["scales"]["10x"]["points"] = json!(3);
+    for (recorded, message) in [
+        (None, "no telemetry"),
+        (Some(foreign), "telemetry belongs to a different budget"),
+        (
+            Some(unbalanced),
+            "the 10x breakdown does not add up to its points",
+        ),
+    ] {
+        let (output, reported) = run(recorded);
+        assert!(!output.status.success(), "accepted: {message}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(message),
+            "{message}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(reported.is_none(), "reported a figure over {message}");
+    }
+    let (output, reported) = run(Some(valid));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let reported = reported.expect("a valid recording is reported");
+    assert_eq!(reported["value"].as_f64(), Some(2.0), "{reported}");
+    assert_eq!(reported["detail"], "2 points", "{reported}");
+}
+
 /// What `cache_budget` recorded for `budget`, refused unless it is that journey's recording at
 /// its workload with every sequence measured in both modes, and its figure the largest
 /// difference among them.

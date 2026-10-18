@@ -2071,8 +2071,8 @@ The trait method answers `Vec<StatusContradiction>`, carried as `result.items`, 
 `StatusContradiction` per task. A task is answered when its issue is closed with a reason that
 reads `done` (completed, or no reason) or `cancelled` (not planned, duplicate) and its card does
 not sit at the option this source's mapping gives that category; `option` is the option it sits
-at, or `null`, `closed_as` the category its closure reads as — `done` or `cancelled`, the only
-two a card is brought in line with — and `to` the name of the option that category is written
+at, or `null`, `closed_as` the category its closure reads as — `"done"` or `"cancelled"`, the
+only two a card is brought in line with — and `to` the name of the option that category is written
 at. An open task, a closure that reads `unknown` and a card already in line are never answered —
 nor is any item this source reads as a project rather than a task, whatever its closure, because
 this method reaches task items only — and no task is answered twice: the engine refuses an
