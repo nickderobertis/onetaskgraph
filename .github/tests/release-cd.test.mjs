@@ -891,6 +891,15 @@ for name, members in [
       `the publish job's ${registry} check once it is served again`,
     );
   }
+  // Packaging verification builds under other RUSTFLAGS than onetaskgraph:build, so in the
+  // shared target it relinked target/debug/onetaskgraph while the e2e suites spawned it.
+  const crateBuilds = invocations().filter((line) => line.startsWith("cargo publish "));
+  assert.ok(crateBuilds.length > 0, "the journey published no crate");
+  for (const line of crateBuilds)
+    assert.ok(
+      line.includes(`--target-dir ${join(checkout, "target", "crate-publication")}`),
+      `a crate publication verifies in the target the e2e suites spawn from: ${line}`,
+    );
 });
 
 test("the GitHub upload refuses a missing token, a malformed release and an untrusted upload host", {

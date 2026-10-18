@@ -671,7 +671,11 @@ def publish_crates(tag: ReleaseTag) -> None:
         if status != "absent":
             fail(f"unusable registry answer for {crate} {version_of(tag)}: {status}", "rerun once the registry answers 200 or 404")
         run([bash, "scripts/crate-sibling-resolution.sh", crate], f"{crate}'s siblings do not resolve on the registry", "publish the siblings it names first, then rerun")
-        command = [tool("cargo"), "publish", "-p", crate, "--locked"]
+        # Packaging verification builds every crate again under these RUSTFLAGS, a different
+        # unit from the one onetaskgraph:build links, so in the clone's shared target it would
+        # relink the debug binary while the e2e suites are spawning it. A directory of
+        # its own, still inside that target, keeps the verification and leaves that file alone.
+        command = [tool("cargo"), "publish", "-p", crate, "--locked", "--target-dir", str(ROOT / "target" / "crate-publication")]
         if alternate:
             command += ["--registry", alternate]
         run(command, f"cargo could not publish {crate}", "fix what cargo reported above and rerun; published crates are skipped", env={**os.environ, "RUSTFLAGS": "-D warnings"})
