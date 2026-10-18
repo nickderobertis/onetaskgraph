@@ -1082,6 +1082,9 @@ struct GitHubBoard {
     /// alias before it — the way GitHub runs a document's mutation fields in order and answers
     /// one that failed with `null` and an error, without undoing the ones before it.
     failing_alias: Option<&'static str>,
+    /// The id of a board field whose write, in whichever alias of a batched field write carries
+    /// it, this board fails once in the same way.
+    failing_field: Option<String>,
     /// The errors the request being answered owes beside its data.
     owed_errors: Vec<String>,
     /// Operations this board refuses, each once, named after it was built — so a journey
@@ -1533,6 +1536,12 @@ impl GitHubBoardFields {
     /// every alias before it in that document has landed.
     pub fn fail_field_alias(&self, alias: &'static str) {
         self.board.lock().unwrap().failing_alias = Some(alias);
+    }
+
+    /// Fail the next batched field write's alias that writes the board field `field` — its id,
+    /// such as `FIELD-status` — once, after every alias before it landed and before any after.
+    pub fn fail_field_write(&self, field: &str) {
+        self.board.lock().unwrap().failing_field = Some(field.to_owned());
     }
 
     /// Take one `Status` option off this board, as a person deleting a column would.
@@ -3021,6 +3030,7 @@ fn github_projects_board_at(
         read_lag: Some(3600),
         pending: Vec::new(),
         failing_alias: None,
+        failing_field: None,
         owed_errors: Vec::new(),
         refusing: Vec::new(),
         refusing_after: Vec::new(),
@@ -3608,9 +3618,16 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
             if enabled {
                 let failing = {
                     let mut held = board.lock().unwrap();
-                    let failing = held.failing_alias == Some(alias);
-                    if failing {
+                    let field = variables[variable]["fieldId"].as_str();
+                    let by_field = field.is_some() && held.failing_field.as_deref() == field;
+                    let failing = held.failing_alias == Some(alias) || by_field;
+                    if by_field {
+                        held.failing_field = None;
+                    }
+                    if failing && !by_field {
                         held.failing_alias = None;
+                    }
+                    if failing {
                         held.owed_errors.push(format!(
                             "Something went wrong while executing your query: {alias} failed"
                         ));

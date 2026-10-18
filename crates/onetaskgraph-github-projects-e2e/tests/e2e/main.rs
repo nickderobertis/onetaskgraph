@@ -29,6 +29,7 @@ mod metadata_fields;
 mod status_complete;
 mod status_reconcile;
 mod write_order;
+mod write_rollback;
 
 mod asset_board;
 mod assets;
