@@ -424,7 +424,7 @@ def write_manifest(dist: Path, platform: PlanPlatform, tag: ReleaseTag) -> None:
     manifest_path(dist, platform).write_text(json.dumps({"tag": tag, "platform": platform, "artifacts": entries}, indent=2) + "\n", encoding="utf-8")
 
 
-def build(platform: PlanPlatform, tag: ReleaseTag, dist: Path) -> None:
+def build(platform: PlanPlatform, tag: ReleaseTag, dist: Path, announce: bool = True) -> None:
     require_tree_version(tag)
     dist.mkdir(parents=True, exist_ok=True)
     manifest_path(dist, platform).unlink(missing_ok=True)
@@ -434,7 +434,8 @@ def build(platform: PlanPlatform, tag: ReleaseTag, dist: Path) -> None:
         for row in platform_targets(platform):
             build_target(row, tag, dist)
     write_manifest(dist, platform, tag)
-    say(f"built {platform} for {tag}: {', '.join(artifact.file for artifact in plan(platform, tag))}")
+    if announce:
+        say(f"built {platform} for {tag}: {', '.join(artifact.file for artifact in plan(platform, tag))}")
 
 
 def build_independent(tag: ReleaseTag, dist: Path) -> None:
@@ -476,12 +477,22 @@ def load_manifest(dist: Path, platform: PlanPlatform, tag: ReleaseTag) -> list[A
     return artifacts
 
 
-def publish(platform: PlanPlatform, tag: ReleaseTag, dist: Path, registry: Registry, dry_run: bool) -> None:
+def publishable(platform: PlanPlatform, tag: ReleaseTag, dist: Path, registry: Registry) -> list[Artifact]:
+    """What this build hands `registry`, each file held to the manifest the build wrote."""
     artifacts = [artifact for artifact in load_manifest(dist, platform, tag) if artifact.registry == registry]
     if not artifacts:
         fail(f"{platform} publishes nothing to {registry}", f"choose one of {', '.join(sorted({a.registry for a in plan(platform, tag)}))}")
+    return artifacts
+
+
+def would_publish(artifacts: list[Artifact], registry: Registry) -> str:
+    return f"would publish {', '.join(artifact.file for artifact in artifacts)} to {registry}"
+
+
+def publish(platform: PlanPlatform, tag: ReleaseTag, dist: Path, registry: Registry, dry_run: bool) -> None:
+    artifacts = publishable(platform, tag, dist, registry)
     if dry_run:
-        say(f"dry run: would publish {', '.join(artifact.file for artifact in artifacts)} to {registry}")
+        say(f"dry run: {would_publish(artifacts, registry)}")
         return
     match registry:
         case "github":
@@ -1001,9 +1012,10 @@ def main(argv: Iterable[str] | None = None) -> int:
                     parser.error("`available` is the publish job's check: --platform independent --from github|pypi|npm")
                 available(tag, args.registry, args.wait)
             case "run":
-                build(args.platform, tag, dist)
-                for registry in INDEPENDENT_REGISTRIES if args.platform == "independent" else PLATFORM_REGISTRIES:
-                    publish(args.platform, tag, dist, registry, dry_run=True)
+                build(args.platform, tag, dist, announce=False)
+                registries = INDEPENDENT_REGISTRIES if args.platform == "independent" else PLATFORM_REGISTRIES
+                planned = "; ".join(would_publish(publishable(args.platform, tag, dist, registry), registry) for registry in registries)
+                say(f"built {args.platform} for {tag}; dry run: {planned}")
     except ReleaseStepFailed as error:
         say(error.problem)
         say(f"next: {error.next_action}")

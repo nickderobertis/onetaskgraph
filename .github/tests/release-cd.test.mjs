@@ -159,9 +159,13 @@ test("the Linux recipe builds once, packages every artifact from that binary, in
     assert.match(
       result.output,
       new RegExp(
-        `dry run: would publish (?:[^\\n]*, )?${artifact.file.replaceAll(".", "\\.")}(?:, [^\\n]*)? to ${artifact.registry}\\b`,
+        `would publish (?:[^\\n;]*, )?${artifact.file.replaceAll(".", "\\.")}(?:, [^\\n;]*)? to ${artifact.registry}\\b`,
       ),
     );
+  // The whole run reports itself on one line, naming each registry's files.
+  assert.deepEqual(result.output.match(/^release-cd: .*$/gm), [
+    result.output.match(/^release-cd: built linux for v[^;\n]*; dry run: .*$/m)?.[0],
+  ]);
   // What it built is what v0.7.1 published for this target, at this version.
   const published = JSON.parse(
     readFileSync(join(checkout, ".github/tests/fixtures/v0.7.1-published.json"), "utf8"),

@@ -83,8 +83,19 @@ class PullRequest:
     def parse(cls, value: object) -> "PullRequest":
         head = value.get("head") if isinstance(value, dict) else None
         repository = head.get("repo") if isinstance(head, dict) else None
-        # A head repository is null once a fork is deleted; one that is there names itself.
-        if not isinstance(value, dict) or not is_positive_int(value.get("number")) or not isinstance(value.get("node_id"), str) or not isinstance(head, dict) or not isinstance(head.get("ref"), str) or not (repository is None or (isinstance(repository, dict) and isinstance(repository.get("full_name"), str))):
+        # GitHub always sends a head repository: null once a fork is deleted, otherwise one that
+        # names itself owner/name. Absent, or naming nothing, is not GitHub's answer.
+        if (
+            not isinstance(value, dict)
+            or not is_positive_int(value.get("number"))
+            or not isinstance(value.get("node_id"), str)
+            or not value["node_id"]
+            or not isinstance(head, dict)
+            or not isinstance(head.get("ref"), str)
+            or not head["ref"]
+            or "repo" not in head
+            or not (repository is None or (isinstance(repository, dict) and isinstance(repository.get("full_name"), str) and re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository["full_name"])))
+        ):
             raise Refused(f"GitHub listed something that is not a pull request: {value!r:.200}")
         return cls(PullNumber(value["number"]), NodeId(value["node_id"]), BranchRef(head["ref"]), RepositoryName(repository["full_name"]) if repository else None)
 

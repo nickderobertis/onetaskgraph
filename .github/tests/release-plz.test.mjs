@@ -222,10 +222,26 @@ test("the auto-merge step fails visibly when GitHub refuses it or cannot be aske
   // deleted fork's is null.
   const nameless = pull(43, "release-plz-0.8.0");
   delete nameless.head.repo.full_name;
-  const unnamed = automerge([nameless]);
-  assert.equal(unnamed.status, 1, unnamed.output);
-  assert.match(unnamed.output, /GitHub listed something that is not a pull request/);
-  assert.equal(unnamed.sent.filter((r) => r.action === "graphql").length, 0);
+  const repoless = pull(43, "release-plz-0.8.0");
+  delete repoless.head.repo;
+  for (const [what, listed] of [
+    ["a head repository naming nothing", nameless],
+    ["no head repository at all", repoless],
+    ["an empty node id", { ...pull(43, "release-plz-0.8.0"), node_id: "" }],
+    ["an empty head ref", pull(43, "")],
+    ["a head repository that is not owner/name", pull(43, "release-plz-0.8.0", "onetaskgraph")],
+  ]) {
+    const unnamed = automerge([listed]);
+    assert.equal(unnamed.status, 1, `${what}: ${unnamed.output}`);
+    assert.match(unnamed.output, /GitHub listed something that is not a pull request/, what);
+    assert.equal(unnamed.sent.filter((r) => r.action === "graphql").length, 0, what);
+  }
+  // A deleted fork's head repository is null: that pull request is listed, and not release-plz's.
+  const deleted = pull(44, "release-plz-0.8.0");
+  deleted.head.repo = null;
+  const fork = automerge([deleted]);
+  assert.equal(fork.status, 0, fork.output);
+  assert.match(fork.output, /no release pull request is open/);
   // A number GitHub could not have assigned — a boolean, zero, a negative — is no pull request.
   for (const number of [true, 0, -43]) {
     const bad = automerge([{ ...pull(43, "release-plz-0.8.0"), number }]);
