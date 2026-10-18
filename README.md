@@ -694,11 +694,12 @@ each verb sends it nothing and says so.
      assert each document below exactly, the requests each verb sends, and its exit codes. -->
 **`task status reconcile --source <SOURCE> [--dry-run]`** is an on-demand tool, run by a person
 — nothing runs it on a schedule — to bring one source's cards in line after closures made
-outside the stack. An item needs it when its issue is closed with a reason that reads `done` or
+outside the stack. A task needs it when its issue is closed with a reason that reads `done` or
 `cancelled` and its card does not sit at the option the mapping gives that category, a card
 with no option included; it is written to that option and nothing else — never the issue's
 state, which already says it. Open items, other closures and cards already in line are never
-written and never listed. Candidates come from the board's own `is:closed` filter, never its
+written and never listed. **It reaches task items only**: an item the board reads as a project
+is never listed or written, whatever its closure, and keeps its card as it was. Candidates come from the board's own `is:closed` filter, never its
 unfiltered items, and each is confirmed from the item it reads, so a filter that let open items
 through would cost reads and write nothing wrong. Writes go one per item through the source's
 own write pacing (`pacing.min_mutation_interval_ms`), which is what keeps a run of a couple of
@@ -719,7 +720,7 @@ nothing needs reconciling. A source answers it only if its plugin declares the c
 ([`docs/plugin-protocol.md`](docs/plugin-protocol.md) §4.23).
 
 **`task status complete --issue <OWNER/NAME#N>... [--source <SOURCE>]... [--dry-run]`** moves to
-`done` every item the configured sources hold for the issues a landing closed, by issue
+`done` every task the configured sources hold for the issues a landing closed, by issue
 reference — `owner/name#N`, exactly the spelling a landing event's `closes` reports, its owner
 and name compared ignoring case; anything else is refused as a usage error naming it. **The
 caller names no source**: every source the configuration declares is asked — not only the
@@ -732,7 +733,9 @@ source plus the writes for the items they hold, and never grows with a board's s
 other source — Linear, a folder of Markdown, an in-memory source, an out-of-process plugin that
 does not declare it — is sent no request and listed in `unsupported`. Per reference and source:
 
-- no item for the issue, or an issue the source's credential cannot see: `absent`, no write;
+- no task for the issue, or an issue the source's credential cannot see: `absent`, no write.
+  **It reaches task items only**, so an issue the board holds as a project is `absent` too, and
+  neither its card nor its issue is written;
 - closed as not planned or as duplicate: `skipped`, with `reason` `closed as <reason>`, no
   write — the closure already says it, and a landing does not overrule it;
 - closed as completed with its card already at the `done` option: `unchanged`;

@@ -1130,7 +1130,9 @@ them do; this is the inventory of what is owed, not a status board.
 107. `task status reconcile` moves exactly each closed task's contradicting card to its
     closure's option, reading the board through its `is:closed` filter alone, confirming every
     candidate, pacing every write, answering `would-update` under `--dry-run` and `failed` per
-    refused write; a source whose status is its closure answers nothing and is sent nothing.
+    refused write; a source whose status is its closure answers nothing and is sent nothing; and
+    a project's issue, closed against its card, is never listed or written — both verbs reach
+    task items only, and `task status complete` answers it `absent`.
 108. `task status complete` asks every configured source declaring `complete_by_issue`, one read
     per 50 references and no board read, answering `updated`, `unchanged`, `skipped`, `absent`
     and `failed` per reference and source, closing an issue at most once, keeping delivered

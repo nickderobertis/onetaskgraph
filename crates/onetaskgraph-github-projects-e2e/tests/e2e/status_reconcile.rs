@@ -11,7 +11,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use crate::common::{Sandbox, stderr, stdout};
-use crate::fixtures::{GitHubBoardFields, document, github_projects_with_items};
+use crate::fixtures::{GitHubBoardFields, document, github_number, github_projects_with_items};
 
 /// One item as the board holds it: its id, its card's option, and its issue's state and reason.
 type Held = (String, Option<String>, (String, Option<String>));
@@ -505,4 +505,52 @@ fn a_closed_items_cursor_that_does_not_advance_refuses_the_reconcile_whole_writi
         "the refusal says the paging did not advance: {failure:#}"
     );
     assert_eq!(setup.board.status("R-1").as_deref(), Some("Todo"));
+}
+
+#[test]
+fn a_projects_issue_closed_against_its_card_is_left_alone_by_reconcile_and_by_complete() {
+    // Both verbs reach task items only: the shared dataset's project `P-1`, its issue closed as
+    // completed while its card reads otherwise, is neither listed nor written by either.
+    let (items, closures) = mixed();
+    let setup = Setup::new(items, &closures, 0);
+    setup.board.close("P-1", Some("COMPLETED"));
+    let card = setup.board.status("P-1");
+    assert_ne!(
+        card.as_deref(),
+        Some("Done"),
+        "the project's card contradicts its closure"
+    );
+
+    let answer = setup.json(
+        &["--json", "task", "status", "reconcile", "--source", "board"],
+        0,
+    );
+    assert_eq!(listed(&answer), expected("updated"), "{answer:#}");
+    assert_eq!(
+        setup.board.status("P-1"),
+        card,
+        "the project's card is as it was"
+    );
+
+    let before = setup.mutations().len();
+    let reference = format!("nickderobertis/onetaskgraph#{}", github_number("P-1"));
+    let completed = setup.json(
+        &[
+            "--json", "task", "status", "complete", "--issue", &reference,
+        ],
+        0,
+    );
+    assert_eq!(
+        completed,
+        json!({"items": [{"issue": reference, "source": "board", "task": null, "from": null,
+                          "to": null, "action": "absent"}],
+               "unsupported": []}),
+        "a project's issue is answered absent: {completed:#}"
+    );
+    assert_eq!(setup.mutations().len(), before, "complete wrote nothing");
+    assert_eq!(setup.board.status("P-1"), card);
+    assert_eq!(
+        setup.board.state("P-1"),
+        ("CLOSED".to_owned(), Some("COMPLETED".to_owned()))
+    );
 }
