@@ -279,7 +279,6 @@ fn a_project_create_answered_malformed_names_the_destination_and_undoes_the_home
     );
     let said = careless.refused(&["project", "copy", "notes:launch", "--to", "routing"]);
     warns(&said, "careless", "write_project");
-    // Everything `routing` was written is gone: it holds no project and no task.
     assert_eq!(careless.titles("project", "routing"), Vec::<String>::new());
     assert_eq!(careless.titles("task", "routing"), Vec::<String>::new());
     assert!(
@@ -343,7 +342,6 @@ fn spelled(path: &Path) -> &str {
     path.to_str().expect("a UTF-8 path")
 }
 
-/// Every file under `root`.
 fn files(root: &Path) -> Vec<String> {
     let mut found = Vec::new();
     let mut pending = vec![root.to_path_buf()];
