@@ -1094,6 +1094,37 @@ test("a publication refuses a build it cannot vouch for before it sends anything
   }
 });
 
+test("a publication's dry run names exactly what it would send to each registry and sends nothing", {
+  skip,
+}, () => {
+  const planned = plan("linux");
+  const env = registries();
+  control({ releases: [tag] });
+  for (const registry of ["github", "pypi", "npm"]) {
+    writeFileSync(log, "");
+    const mark = requests().length;
+    const result = recipe(
+      "linux",
+      ["publish", "--to", registry, "--tag", tag, "--dist", dist, "--dry-run"],
+      env,
+    );
+    expectStatus(result, 0, `a dry run to ${registry}`);
+    const files = planned.filter((artifact) => artifact.registry === registry).map((a) => a.file);
+    assert.match(
+      result.output,
+      new RegExp(
+        `dry run: would publish ${files.join(", ").replaceAll(".", "\\.")} to ${registry}`,
+      ),
+      registry,
+    );
+    assert.deepEqual(requests().slice(mark), [], `a dry run to ${registry} reached the double`);
+    assert.ok(
+      !invocations().some((line) => /^(uv publish|npm publish|cargo publish|gh |curl )/.test(line)),
+      `a dry run to ${registry} ran a publication tool:\n${invocations().join("\n")}`,
+    );
+  }
+});
+
 test("registry verification waits out a registry that has not caught up, and fails at its deadline", {
   skip,
 }, async () => {
