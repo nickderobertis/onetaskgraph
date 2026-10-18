@@ -615,10 +615,30 @@ key both hold takes the source's value, and a re-copy that changes nothing else 
 describe the item, are in [`docs/metadata.md`](docs/metadata.md).
 <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
-**A copy either completes or leaves the destination as it found it.** A copy that cannot
-finish — a field the destination refuses, a credential that expires, a rate limiter —
-undoes what it has already written and takes back the items it created in that run, so the
-retry starts from the destination you started from. That is what stops a half-written
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by the journeys in
+     `crates/onetaskgraph-e2e/tests/e2e/copy_per_item.rs`, which drive each kind of task a folder
+     cannot represent, the order the checks arrive in at a stdio plugin, a refusal at the write and
+     one of another kind, and a project copy. -->
+**A task copy carries every task past one its destination cannot represent.** Before anything
+is written, the copy asks the destination about each task it plans — its status, its content,
+the tasks it delivers and every other field a write of it would refuse as "cannot represent
+the field …". A task the destination refuses is answered
+`{"source": …, "action": "failed", "error": {"class": "refused", …, "message": <the
+destination's reason>}}` and left out; an edge or a `delivers` entry of another task naming it is
+written the way one naming an item outside the copy is — by its qualified id where it is, and
+never as a copy that is not there; and every other task lands as one copy, all or nothing among
+themselves. The command exits `4`, as for any failed item. A source answers that question
+through `check_task_write` ([`docs/plugin-protocol.md`](docs/plugin-protocol.md) §4.9b); a folder
+of Markdown does, and a source that does not is read as able to represent everything, refusing
+in its write instead. **`project copy` is unchanged**: a project and its tasks still copy whole
+or not at all, representability included.
+<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
+
+**Otherwise a copy either completes or leaves the destination as it found it.** A copy that
+cannot finish — a write the destination refuses after accepting the task at the check, a
+credential that expires, a rate limiter — undoes what it has already written and takes back
+the items it created in that run, exiting `1`, so the retry starts from the destination you
+started from. That is what stops a half-written
 project having to be re-run, and the re-run is the burst of writes that trips a hosted
 destination's rate limiter. When the destination will not take one of them back, the
 refusal says so and names what is still there rather than leaving you to find it. A
@@ -637,9 +657,10 @@ land a second one beside it.
 ```
 
 `action` says which of the things above happened to that item — `created`, `updated`,
-`unchanged`, `orphaned`, `skipped` for an id `--status` left out, or `failed` for a task a copy
-left unwritten because it kept changing while it was read — and `destination` is `null` for a
-dry run that would have created something and absent from a `failed` and a `skipped` item. The vocabulary itself is the
+`unchanged`, `orphaned`, `skipped` for an id `--status` left out, or `failed` for a task its
+destination cannot represent or a copy left unwritten because it kept changing while it was
+read — and `destination` is `null` for a dry run that would have created something and absent
+from a `failed` and a `skipped` item. The vocabulary itself is the
 `CopyAction` root of `onetaskgraph schema`, which is what both SDKs are generated from and
 what the journeys validate this output against.
 

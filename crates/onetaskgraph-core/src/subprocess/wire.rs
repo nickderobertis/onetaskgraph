@@ -324,6 +324,13 @@ pub(crate) struct InitializeResult {
     /// one call each. Omitted when `false`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) task_details: bool,
+    /// Whether this plugin answers `check_task_write` (§3.14).
+    ///
+    /// Optional, and absent means it does not: such a plugin is never sent the method, a copy
+    /// reads every task it plans as one it can represent, and a write it refuses as one it
+    /// cannot takes the whole copy back, as before. Omitted when `false`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) write_checks: bool,
 }
 
 /// The `metering` result (§4.14).
@@ -715,7 +722,15 @@ pub(crate) struct StatusResult {
     pub(crate) status: Option<Status>,
 }
 
-/// The `status_contradictions` result (§4.28): every task whose card contradicts its issue's
+/// `check_task_write` parameters (§4.9b): the write a copy plans, asked about before it is
+/// sent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct CheckWriteParams {
+    /// The write.
+    pub(crate) write: ItemWrite<Task>,
+}
+
+/// The `status_contradictions` result (§4.23): every task whose card contradicts its issue's
 /// closure, with the status that brings it in line.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ContradictionsResult {
@@ -723,14 +738,14 @@ pub(crate) struct ContradictionsResult {
     pub(crate) items: Vec<StatusContradiction>,
 }
 
-/// `issue_holdings` parameters (§4.29).
+/// `issue_holdings` parameters (§4.24).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct HoldingsParams {
     /// The issue references, each `owner/name#N`, once each and in the order asked.
     pub(crate) issues: Vec<IssueRef>,
 }
 
-/// The `issue_holdings` result (§4.29): one holding per reference, in the order asked.
+/// The `issue_holdings` result (§4.24): one holding per reference, in the order asked.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct HoldingsResult {
     /// The holdings.

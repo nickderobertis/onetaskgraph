@@ -3177,6 +3177,25 @@ impl Engine {
             self.rewrite_references(&mut planned, &mut running.references)
                 .await?;
         }
+        // A task copy carries every task past one its destination cannot represent: each is
+        // asked about before anything is written, and one refused is left out — reported
+        // `failed` with the destination's own reason — and read by every other task as an item
+        // outside the copy. A project copy is still one write, whole or not at all.
+        let mut left_out: Vec<(usize, CopyOutcome)> = Vec::new();
+        if request.scope == CopyScope::Tasks && project.is_none() {
+            let mut kept = Vec::with_capacity(planned.len());
+            for (index, item) in planned.into_iter().enumerate() {
+                match self.unrepresentable(&item, running).await? {
+                    None => kept.push(item),
+                    Some(error) => {
+                        running.resolvable.retain(|copied| copied != &item.source);
+                        running.counterparts.remove(&item.source.to_string());
+                        left_out.push((index, failed(item.source.clone(), &error)));
+                    }
+                }
+            }
+            planned = kept;
+        }
         for item in &planned {
             if let Target::Update { id, .. } = &item.target {
                 running.counterparts.insert(
@@ -3456,7 +3475,76 @@ impl Engine {
                 });
             }
         }
+        // Each task left out answers where it was planned, among the rest.
+        for (index, outcome) in left_out {
+            outcomes.insert(index.min(outcomes.len()), outcome);
+        }
         Ok(outcomes)
+    }
+
+    /// Why the destination cannot represent `item` — a task whose write it refuses at
+    /// [`TaskSource::check_task_write`](onetaskgraph_plugin_api::TaskSource::check_task_write) —
+    /// or `None` when it can, or when `item` is no task.
+    ///
+    /// The write asked about is the one this copy would send first: the task as it lands, with
+    /// the edges and the tasks it delivers that can already be named at the destination. Only a
+    /// refusal leaves the task out; anything else that keeps the destination from answering
+    /// fails the copy, as a failed write would.
+    async fn unrepresentable(
+        &self,
+        item: &Planned,
+        running: &Running,
+    ) -> Result<Option<EngineError>, EngineError> {
+        if item.skipped || !matches!(item.item, Item::Task(_)) {
+            return Ok(None);
+        }
+        let destination = self.writable(&item.to)?;
+        let target = match &item.target {
+            Target::Update { id, .. } => Some(id.clone()),
+            Target::Create => None,
+        };
+        let suggested = target
+            .clone()
+            .unwrap_or_else(|| created_id(&item.item, None));
+        let delivers = resolved_entries(&self.shown_delivers(
+            &item.to,
+            delivers_of(item, &item.to, &running.resolvable, &running.counterparts),
+            &running.private,
+        ));
+        let edges = resolved(&self.shown_edges(
+            &item.to,
+            mapped_edges(
+                &item.edges,
+                &item.source.source,
+                &item.to,
+                &running.resolvable,
+                &running.counterparts,
+            ),
+            &running.private,
+        ));
+        let Item::Task(task) = outgoing(
+            item,
+            suggested,
+            None,
+            &recorded(item, None),
+            &delivers,
+            None,
+        ) else {
+            return Ok(None);
+        };
+        match destination
+            .source()
+            .check_task_write(&ItemWrite {
+                target,
+                item: *task,
+                depends_on: edges,
+            })
+            .await
+        {
+            Ok(()) => Ok(None),
+            Err(error @ SourceError::Refused { .. }) => Ok(Some(refused(destination, error))),
+            Err(error) => Err(refused(destination, error)),
+        }
     }
 
     /// Read one item, place it, read its forward edges, and decide where it is going.

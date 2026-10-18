@@ -1217,6 +1217,10 @@ impl TaskSource for CachedSource {
         self.inner.status_contradictions().await
     }
 
+    async fn check_task_write(&self, write: &ItemWrite<Task>) -> Result<(), SourceError> {
+        self.inner.check_task_write(write).await
+    }
+
     async fn issue_holdings(&self, issues: &[IssueRef]) -> Result<Vec<IssueHolding>, SourceError> {
         self.inner.issue_holdings(issues).await
     }

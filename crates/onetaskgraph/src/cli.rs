@@ -1691,10 +1691,17 @@ Failure:
   never printed in part.
 ";
 
-/// The arguments both copy verbs share.
+/// The arguments every copy verb shares.
 ///
-/// A copy is one write into one destination, so there is no paging, no `--explain` and no
-/// `--allow-partial` here: a partial write is not an answer a caller could act on.
+/// A copy writes into one destination, so there is no paging and no `--explain` here. A task
+/// copy asks the destination about every task it plans before its first write, and carries
+/// every task past one the destination says it cannot represent — a status, content, a
+/// `delivers` list or any other field it cannot hold: that task is answered `failed`, with the
+/// destination's own reason, an edge to it is written as one to an item outside the copy, and
+/// the command exits 4. Every other refusal takes the whole copy back and exits 1, and a project
+/// copy is still one write, its tasks included, whole or not at all. There is no
+/// `--allow-partial`: what lands is decided before anything is written, never by a write that
+/// stopped part way.
 #[derive(Debug, Args)]
 pub struct CopyArgs {
     /// The configured source to copy into. A source name, never a qualified id.

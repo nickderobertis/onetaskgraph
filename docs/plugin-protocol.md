@@ -399,6 +399,13 @@ and then `task_comments`, which is the trait's own default. A plugin that can re
 one — and so promise they are one revision of the task — answers `true`. Added without a
 protocol version bump.
 
+### 3.14 `write_checks`
+
+Optional, and absent means `false`: a plugin that answers `check_task_write` (§4.9b) says so
+here. One that does not is never sent the method; every task a copy plans for it is read as one
+it can represent, and a write it refuses as one it cannot takes the whole copy back, as it did
+before the method existed. Omitted when `false`.
+
 ## 4. The methods
 
 One method per trait method, named after it. Each is given below as its `params` and
@@ -419,6 +426,7 @@ its `result`; the JSON shape of every contract type in them is what
 | `project_dependencies` | `TaskSource::project_dependencies` |
 | `write_task` | `TaskSource::write_task` |
 | `write_project` | `TaskSource::write_project` |
+| `check_task_write` | `TaskSource::check_task_write` |
 | `delete_task` | `TaskSource::delete_task` |
 | `delete_project` | `TaskSource::delete_project` |
 | `get_document` | `TaskSource::get_document` |
@@ -975,6 +983,28 @@ with nothing recorded to reuse, and one whose `bytes` do not hash to its `sha256
 
 A create from a template, and a regenerate, carrying assets are template operations, and are
 not carried (§4).
+
+### 4.9b `check_task_write`
+
+Sent only to a plugin that answered `write_checks: true` at the handshake (§3.14). It changes
+nothing: it says whether this plugin can represent every field of one task write — its status,
+its content, the tasks it delivers and every other field a `write_task` (§4.9) of it would
+refuse as one it cannot represent.
+
+```json
+{ "id": "27", "method": "check_task_write",
+  "params": { "write": { "target": null, "item": { "id": "Q-1", "title": "…", "…": "…" },
+                         "depends_on": [] } } }
+{ "id": "27", "result": {} }
+```
+
+`params.write` is the `ItemWrite` a `write_task` of the task would carry. An empty `result`
+means the plugin can represent it; `{"kind": "refused"}`, naming the field and why, means it
+cannot — in the words its `write_task` would refuse it with. A task copy asks this of every task
+it plans before its first write, and leaves out each one refused: answered `failed` with that
+refusal as its reason, while the rest land as one copy. Any other error fails the whole copy, as
+a failed write would. It is a promise about representability alone: a write the check accepted
+may still fail, and a copy then takes back everything it wrote.
 
 ### 4.10 `delete_task` and `delete_project`
 
@@ -2178,6 +2208,10 @@ The `filter_by_metadata` and `filter_by_origin` members of §4.2 and the `metada
 `origin` members of §4.5 were added **without** a bump on the same terms: a plugin written
 before them omits both capabilities, is read as applying neither, and is never sent either
 member — the engine narrows the wider set it returns over each task's own `metadata`.
+
+`check_task_write` (§4.9b) and the `write_checks` member of §3.14 were added **without** a
+bump: the method reaches only a plugin that declared the member, which a plugin written before
+them cannot have done.
 
 `status_contradictions` (§4.23), `issue_holdings` (§4.24) and the `reconcile_status` and
 `complete_by_issue` members of §4.2 were added **without** a bump on the same terms: each method

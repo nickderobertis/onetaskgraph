@@ -1275,6 +1275,41 @@ impl TaskSource for LocalMdSource {
     async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
         self.write_task_with(write, None)
     }
+    /// Every refusal [`write_task`](TaskSource::write_task) makes of what a task carries — its
+    /// two task lists, its status against this folder's mapping, its content against the
+    /// sections this folder reads out of a file — made without touching a file.
+    async fn check_task_write(&self, write: &ItemWrite<Task>) -> Result<(), SourceError> {
+        let task = &write.item;
+        let near = write.target.as_ref().unwrap_or(&task.id);
+        for (field, list) in [
+            ("delivers", &task.delivers),
+            ("delivered_by", &task.delivered_by),
+        ] {
+            self.representable_list(field, near, list)?;
+        }
+        self.render(
+            &Outgoing::Work {
+                kind: WorkKind::Task,
+                status: &task.status,
+                priority: task.priority,
+                depends_on: &write.depends_on,
+                delivers: &task.delivers,
+                delivered_by: &task.delivered_by,
+                fields: Fields {
+                    id: &task.id,
+                    title: &task.title,
+                    content: task.content.as_deref(),
+                    labels: &task.labels,
+                    project: task.project.as_ref(),
+                    metadata: &task.metadata,
+                    repositories: &task.repositories,
+                    classification: task.classification,
+                },
+            },
+            None,
+        )
+        .map(|_| ())
+    }
     /// A task written with the answers it was rendered from stored after its content, in the
     /// one write that lands the file; see [`ANSWERS_OPEN`].
     async fn write_task_rendered(

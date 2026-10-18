@@ -2032,6 +2032,8 @@ mod tests {
                 "task comment edit",
                 "task comment delete",
                 "task status set",
+                "task status reconcile",
+                "task status complete",
                 "task priority set",
                 "task content set",
                 "task metadata set",

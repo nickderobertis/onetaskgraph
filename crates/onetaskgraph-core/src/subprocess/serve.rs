@@ -24,13 +24,13 @@ use serde_json::{Value, json};
 
 use super::connection::{Line, MAX_LINE, read_line};
 use super::wire::{
-    AddCommentParams, CommentCopyParams, CommentsParams, ContentParams, ContradictionsResult,
-    DeleteCommentParams, DeleteParams, DeliveredByParams, DependencyParams, DocumentDir,
-    DocumentQueryParams, EditCommentParams, HandshakePluginKind, HoldingsParams, HoldingsResult,
-    IdParams, InitializeParams, InitializeResult, LabelParams, MetadataParams, PROTOCOL_VERSION,
-    PriorityParams, ProjectQueryParams, ProjectWriteParams, Request, Response, ServedWriteParams,
-    StatusParams, TaskDetailParams, TaskQueryParams, UpdateParams, after_the_first_vocabulary,
-    knows_every_category, vocabulary,
+    AddCommentParams, CheckWriteParams, CommentCopyParams, CommentsParams, ContentParams,
+    ContradictionsResult, DeleteCommentParams, DeleteParams, DeliveredByParams, DependencyParams,
+    DocumentDir, DocumentQueryParams, EditCommentParams, HandshakePluginKind, HoldingsParams,
+    HoldingsResult, IdParams, InitializeParams, InitializeResult, LabelParams, MetadataParams,
+    PROTOCOL_VERSION, PriorityParams, ProjectQueryParams, ProjectWriteParams, Request, Response,
+    ServedWriteParams, StatusParams, TaskDetailParams, TaskQueryParams, UpdateParams,
+    after_the_first_vocabulary, knows_every_category, vocabulary,
 };
 use crate::config::rebased;
 use crate::registry::PluginKind;
@@ -276,6 +276,9 @@ async fn initialize(
                 // And a task read beside a page of its comments, which this host answers with
                 // the plugin's own detail read — one read of the two, where the plugin makes one.
                 task_details: true,
+                // And a write checked before it is sent, which every plugin of this build answers
+                // through its own check or the contract's default.
+                write_checks: true,
             };
             *source = Some(Hosted {
                 source: built,
@@ -476,6 +479,11 @@ async fn dispatch(
             let params: StatusParams = decode(method, params)?;
             let status = source.set_task_status(&params.id, params.category).await?;
             encode(json!({ "status": status.map(|status| told(status, known)) }))
+        }
+        "check_task_write" => {
+            let params: CheckWriteParams = decode(method, params)?;
+            source.check_task_write(&params.write).await?;
+            encode(json!({}))
         }
         "status_contradictions" => {
             let items = source.status_contradictions().await?;

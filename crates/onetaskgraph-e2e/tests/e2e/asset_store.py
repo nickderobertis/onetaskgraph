@@ -21,6 +21,13 @@ a journey can make a copy fail on a write that left an item the engine never lea
 `answer_content` bends the answer to a write carrying assets: `"omit"` leaves its required
 `content` member out, the malformed answer a journey proves the engine refuses, and `"null"`
 answers `null`, which §4.9a allows.
+
+`write_checks: true` declares `check_task_write` (§4.9b) at the handshake, and every check it
+is sent is logged beside the writes, so a journey reads the order the two arrived in.
+`unrepresentable` names titles that check refuses as a field this source cannot represent;
+`check_unavailable` names titles it answers as unavailable instead — a refusal of another
+kind; and `refused_at_write` names titles whose check passes and whose create is then refused
+as unrepresentable all the same.
 """
 
 # llmlint: ignore-file[modern_domain_modeling] This peer is a transcription of
@@ -558,6 +565,12 @@ def write(settings, kind, params):
             log(settings, entry)
             raise refused("the %s plugin cannot store image assets" % KIND)
         entry["received"] = store_assets(item, params["assets"], params.get("recorded_assets"))
+    if kind == "task" and item.get("title") in settings.get("refused_at_write", []):
+        log(settings, dict(entry, refused=True))
+        raise refused(
+            "cannot represent the field `status` of %s: refused at its write"
+            % item.get("title")
+        )
     store = settings["store"]
     held = read_store(store)
     items = held[KINDS[kind]]
@@ -588,6 +601,22 @@ def write(settings, kind, params):
     entry["answered"] = answer
     log(settings, entry)
     return answer
+
+
+def check(settings, params):
+    """`check_task_write` (§4.9b): whether this source could hold the task a write carries."""
+    written = params.get("write")
+    if not isinstance(written, dict) or not isinstance(written.get("item"), dict):
+        raise malformed("check_task_write needs a `write` carrying an `item`")
+    title = written["item"].get("title")
+    log(settings, {"method": "check_task_write", "title": title})
+    if title in settings.get("unrepresentable", []):
+        raise refused("cannot represent the field `status` of %s" % title)
+    if title in settings.get("check_unavailable", []):
+        raise Refusal(
+            {"kind": "unavailable", "message": "the store is not answering for %s" % title}
+        )
+    return {}
 
 
 def capabilities(settings):
@@ -645,6 +674,8 @@ def dispatch(settings, method, params):
         return page_of(read_store(store)["documents"], params.get("page"))
     if method in ("labels", "task_dependencies", "project_dependencies"):
         return {"items": [], "next": None}
+    if method == "check_task_write" and settings.get("write_checks"):
+        return check(settings, params)
     for kind in KINDS:
         if method == "write_" + kind:
             return write(settings, kind, params)
@@ -679,21 +710,32 @@ def initialize(params):
         or not isinstance(settings.get("malformed_creates", []), list)
         or not all(isinstance(title, str) for title in settings.get("malformed_creates", []))
         or settings.get("answer_content", "omit") not in ("omit", "null")
+        or not isinstance(settings.get("write_checks", False), bool)
+        or not all(
+            isinstance(settings.get(name, []), list)
+            and all(isinstance(title, str) for title in settings.get(name, []))
+            for name in ("unrepresentable", "check_unavailable", "refused_at_write")
+        )
     ):
         raise Refusal(
             {
                 "kind": "config",
                 "message": 'this source\'s settings are {"store": <path>, "log": <path>, '
                 '"assets": "native", "half_written": [<title>], "malformed_creates": '
-                '[<title>], "answer_content": "omit" | "null"}, all but the first optional',
+                '[<title>], "answer_content": "omit" | "null", "write_checks": <bool>, '
+                '"unrepresentable": [<title>], "check_unavailable": [<title>], '
+                '"refused_at_write": [<title>]}, all but the first optional',
             }
         )
-    return settings, {
+    answer = {
         "protocol_version": PROTOCOL_VERSION,
         "kind": KIND,
         "capabilities": capabilities(settings),
         "writes": "supported",
     }
+    if settings.get("write_checks"):
+        answer["write_checks"] = True
+    return settings, answer
 
 
 def main():

@@ -27,9 +27,9 @@ use serde_json::{Value, json};
 
 use super::connection::{Connection, Peer};
 use super::wire::{
-    AddCommentParams, CommentCopyParams, CommentResult, CommentsParams, CommentsResult,
-    ContentParams, ContentResult, ContradictionsResult, DeleteCommentParams, DeleteParams,
-    DeletedCommentResult, DeliveredByParams, DeliveredByResult, DependencyParams,
+    AddCommentParams, CheckWriteParams, CommentCopyParams, CommentResult, CommentsParams,
+    CommentsResult, ContentParams, ContentResult, ContradictionsResult, DeleteCommentParams,
+    DeleteParams, DeletedCommentResult, DeliveredByParams, DeliveredByResult, DependencyParams,
     DocumentAssetWriteParams, DocumentDir, DocumentQueryParams, DocumentResult,
     DocumentWriteParams, EditCommentParams, EngineIdentity, HoldingsParams, HoldingsResult,
     IdParams, InitializeParams, InitializeResult, LabelParams, MetadataParams, MeteringResult,
@@ -138,6 +138,9 @@ pub struct SubprocessSource {
     /// A plugin that said nothing is read a task and a page of its comments through
     /// `get_task` and `task_comments`, and is never sent the method.
     task_details: bool,
+    /// Whether the plugin answers `check_task_write` (§3.14). A plugin that said nothing is
+    /// never sent it, and every write it is planned is read as one it can represent.
+    write_checks: bool,
     /// The live process.
     connection: Connection,
 }
@@ -378,6 +381,7 @@ impl SubprocessSource {
             ends_commands,
             comment_copies,
             task_details,
+            write_checks,
         } = match result {
             Ok(result) => result,
             Err(error) => return Err(with_diagnostics(error, &mut peer)),
@@ -412,6 +416,7 @@ impl SubprocessSource {
             ends_commands,
             comment_copies,
             task_details,
+            write_checks,
             connection: Connection::adopt(peer),
         })
     }
@@ -906,8 +911,25 @@ impl TaskSource for SubprocessSource {
         Ok(result.status)
     }
 
+    async fn check_task_write(&self, write: &ItemWrite<Task>) -> Result<(), SourceError> {
+        // §3.14: sent only to a plugin whose handshake declares it, and every other plugin's
+        // writes are read as representable here and refused, if at all, by the write itself.
+        if !self.write_checks {
+            return Ok(());
+        }
+        let _: Value = self
+            .ask(
+                "check_task_write",
+                params(&CheckWriteParams {
+                    write: write.clone(),
+                }),
+            )
+            .await?;
+        Ok(())
+    }
+
     async fn status_contradictions(&self) -> Result<Vec<StatusContradiction>, SourceError> {
-        // §4.28: sent only to a plugin whose handshake declares it.
+        // §4.23: sent only to a plugin whose handshake declares it.
         if !self.capabilities.reconcile_status.is_native() {
             return Err(SourceError::Refused {
                 message: format!(
@@ -922,7 +944,7 @@ impl TaskSource for SubprocessSource {
     }
 
     async fn issue_holdings(&self, issues: &[IssueRef]) -> Result<Vec<IssueHolding>, SourceError> {
-        // §4.29: sent only to a plugin whose handshake declares it.
+        // §4.24: sent only to a plugin whose handshake declares it.
         if !self.capabilities.complete_by_issue.is_native() {
             return Err(SourceError::Refused {
                 message: format!(

@@ -632,14 +632,17 @@ fn a_list_naming_its_own_task_repeating_one_or_holding_no_task_id_is_refused_by_
     .expect("JSON");
     sources["sources"]["plan"] = markdown(&plan);
     sandbox.project_document(&serde_json::to_string(&sources).expect("renders"));
+    // The destination says up front it cannot hold the list, so the task is left out and
+    // answered failed — exit 4 — rather than failing a copy of everything else.
     let output = exits(
         "a self-naming copy",
         &sandbox,
         &["task", "copy", "plan:A", "--to", "into"],
-        1,
+        4,
     );
     assert!(
-        stderr(&output).contains("cannot represent the field `delivers`: delivers on task A names into:A, which is that task itself"),
+        stderr(&output).contains("plan:A was not copied")
+            && stderr(&output).contains("cannot represent the field `delivers`: delivers on task A names into:A, which is that task itself"),
         "{}",
         stderr(&output)
     );

@@ -418,6 +418,28 @@ pub trait TaskSource: Send + Sync {
         Err(unwritable(self.kind()))
     }
 
+    /// Whether this source can represent every field of `write` — its status, its content, the
+    /// tasks it delivers and every other field a [`write_task`](Self::write_task) of it would
+    /// refuse as "cannot represent the field …" — asked before anything is written and changing
+    /// nothing.
+    ///
+    /// A task copy asks it of every task it plans before its first write, and leaves out each
+    /// task this refuses — answered `failed`, with this refusal as its reason — writing the rest
+    /// as one copy. It answers what the write itself would refuse in the same words; and it is a
+    /// promise only about representability, so a write may still fail for any other reason.
+    ///
+    /// Defaulted to `Ok(())`: a source that does not answer it in advance still refuses such a
+    /// write in its write, which a copy then takes back whole, exactly as before.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SourceError::Refused`] naming the field this source cannot represent; and
+    /// whatever else kept it from finding out.
+    async fn check_task_write(&self, write: &ItemWrite<Task>) -> Result<(), SourceError> {
+        let _ = write;
+        Ok(())
+    }
+
     /// Whether a write of an item of `kind` at `category` — over the item `target` names, or
     /// creating one when it is `None` — would have a status to write, asked before the write
     /// and changing nothing.

@@ -185,6 +185,10 @@ the user's explicit request, is not the state `DependencyEdge`'s own documentati
 forbids, because the engine holds nothing between calls and reads nothing back to answer a
 later query.
 
+**A task copy leaves out, up front, every task its destination says it cannot represent**
+(`TaskSource::check_task_write`, asked of every planned task before the first write), answering
+each `failed`; what follows holds of the tasks it then writes, and of every project copy whole.
+
 **A copy is either complete or it never happened, and undoing one is not a delete verb.**
 A copy that cannot finish removes the items *it created in that run* and writes back the
 items it overwrote, through `TaskSource::delete_task` and `TaskSource::delete_project`.
@@ -1119,6 +1123,27 @@ them do; this is the inventory of what is owed, not a status board.
     member's task and the recorded edge between their copies, read from either end and drawn
     by `project graph`, with nothing on that folder naming either private task; a second copy
     writes nothing anywhere and keeps one edge.
+106. A closed issue reads as its closure says on a GitHub board — completed or no reason `done`,
+    not planned or duplicate `cancelled` — named by its card's option when the mapping reads that
+    option the same way or not at all and otherwise by the option the mapping gives the
+    category, through `task show`, `task list --status` and a copy into a folder of Markdown.
+107. `task status reconcile` moves exactly each closed task's contradicting card to its
+    closure's option, reading the board through its `is:closed` filter alone, confirming every
+    candidate, pacing every write, answering `would-update` under `--dry-run` and `failed` per
+    refused write; a source whose status is its closure answers nothing and is sent nothing.
+108. `task status complete` asks every configured source declaring `complete_by_issue`, one read
+    per 50 references and no board read, answering `updated`, `unchanged`, `skipped`, `absent`
+    and `failed` per reference and source, closing an issue at most once, keeping delivered
+    tasks in step, listing every other source `unsupported`; `Engine::complete_issues` answers
+    the same.
+109. `task copy --status` keeps only the tasks at the named categories, by query — a GitHub
+    board's search narrowed to open issues when every category is open — and beside ids, where a
+    task at another category is answered `skipped` without its comments being read.
+110. A task copy leaves out each task its destination says it cannot represent — a status,
+    content or `delivers` — answered `failed` and exit `4`, the rest landing and an edge to it
+    written as one outside the copy; every check precedes the first write; any other refusal,
+    and a project copy holding such a task, writes nothing; and a ticket write onto a board
+    refused part way leaves no item behind and no issue closed behind an unwritten card.
 
 ## The public boundary
 
