@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.8.0...onetaskgraph-core-v0.9.0) - 2026-10-19
+
+### Added
+
+- *(status)* [**breaking**] move a project item with its issue's closure and set a project's status ([#3681](https://github.com/nickderobertis/onetaskgraph/pull/3681))
+
 ## [0.8.0](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.7.3...onetaskgraph-core-v0.8.0) - 2026-10-19
 
 ### Added
