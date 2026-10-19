@@ -687,3 +687,91 @@ fn a_private_task_on_a_board_not_declared_private_is_refused_by_both_verbs_and_n
     assert_eq!(board.state("N-1").0, "OPEN");
     assert_eq!(board.status("N-2").as_deref(), Some("Todo"));
 }
+
+/// Every mutation `board` was sent, as the GraphQL document's text.
+fn mutations(board: &GitHubBoardFields) -> Vec<String> {
+    board
+        .served()
+        .into_iter()
+        .map(|(document, _)| document)
+        .filter(|document| document.trim_start().starts_with("mutation"))
+        .collect()
+}
+
+#[test]
+fn an_issue_closed_with_no_reason_reads_as_completed_and_a_reopened_one_is_closed_as_completed() {
+    let sandbox = Sandbox::new();
+    let mut reopened = issue("N-3", "Todo");
+    reopened["reason"] = json!("REOPENED");
+    let (plans, board) = github_projects_with_items(
+        &sandbox,
+        vec![issue("N-1", "Todo"), issue("N-2", "Done"), reopened],
+    );
+    // A closure GitHub records without a reason reads as completed. `REOPENED` is the reason
+    // GitHub gives an open issue someone reopened, which says nothing a landing defers to.
+    board.close("N-1", None);
+    board.close("N-2", None);
+    sandbox.project_document(&document(&json!({
+        "plans": {"plugin":"github-projects","config":plans},
+    })));
+    let ids = ["N-1", "N-2", "N-3"];
+    let mut arguments = vec!["--json", "task", "status", "complete"];
+    let references: Vec<String> = ids.iter().map(|id| reference(id)).collect();
+    for reference in &references {
+        arguments.extend(["--issue", reference.as_str()]);
+    }
+    let output = sandbox
+        .command()
+        .args(&arguments)
+        .assert()
+        .get_output()
+        .clone();
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let answer: Value = serde_json::from_str(&stdout(&output)).expect("JSON");
+    let actions: Vec<(&str, &str, &Value)> = answer["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .map(|item| {
+            (
+                item["task"].as_str().unwrap_or_default(),
+                item["action"].as_str().unwrap_or_default(),
+                &item["to"],
+            )
+        })
+        .collect();
+    let done = json!({"category":"done","name":"Done"});
+    assert_eq!(
+        actions,
+        [
+            ("plans:N-1", "updated", &done),
+            ("plans:N-2", "unchanged", &done),
+            ("plans:N-3", "updated", &done),
+        ],
+        "{answer:#}"
+    );
+    for id in ids {
+        assert_eq!(board.status(id).as_deref(), Some("Done"), "{id}'s card");
+    }
+    assert_eq!(
+        board.state("N-1"),
+        ("CLOSED".to_owned(), None),
+        "never reopened or re-closed"
+    );
+    assert_eq!(board.state("N-2"), ("CLOSED".to_owned(), None));
+    assert_eq!(
+        board.state("N-3"),
+        ("CLOSED".to_owned(), Some("COMPLETED".to_owned())),
+        "the reopened issue is closed as completed"
+    );
+    let sent = mutations(&board);
+    let closes: Vec<&String> = sent
+        .iter()
+        .filter(|mutation| mutation.contains("closeIssue") || mutation.contains("updateIssue"))
+        .collect();
+    assert_eq!(
+        closes.len(),
+        1,
+        "the reopened issue is closed once, and no issue already closed again: {sent:#?}"
+    );
+}
