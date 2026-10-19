@@ -2422,7 +2422,8 @@ impl Engine {
     /// destination too.
     ///
     /// A home that already exists, in any source the copy can reach, stays where it is —
-    /// found by the project's own link or origin.
+    /// found by the project's own link or origin — and is looked for before a split among the
+    /// private voters is refused, since that refusal is about choosing a new home.
     async fn home_placement(
         &self,
         request: &CopyRequest,
@@ -2469,21 +2470,27 @@ impl Engine {
                     .place_classified(&request.destination, own, &held.repositories);
             voters.push((project.source.clone(), own, placement));
         }
+        // Where a new home would go. A refusal to choose one waits until no home is found to
+        // exist, because an existing home stays where it is whatever its voters now say.
         let rule = match voters.first() {
             Some((_, _, first))
                 if voters
                     .iter()
                     .all(|(_, _, placement)| placement.destination == first.destination) =>
             {
-                first.clone()
+                Ok(first.clone())
             }
             Some(_) if class == Classification::Private && self.boundary_active() => {
-                self.private_home(request, &project.source, &voters)?
+                self.private_home(request, &project.source, &voters)
             }
-            _ => self.placed_at(request, &request.destination),
+            _ => Ok(self.placed_at(request, &request.destination)),
         };
         for elsewhere in self.routes.reachable(&request.destination) {
-            if elsewhere == rule.destination {
+            // A home in the source the rule chooses is found there by the copy's own target.
+            if rule
+                .as_ref()
+                .is_ok_and(|rule| rule.destination == elsewhere)
+            {
                 continue;
             }
             let there = self.writable(&elsewhere)?;
@@ -2504,7 +2511,7 @@ impl Engine {
             }
         }
         Ok(Homing {
-            home: rule,
+            home: rule?,
             following: Following::ByRepositories,
         })
     }

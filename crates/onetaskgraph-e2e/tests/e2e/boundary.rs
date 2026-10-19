@@ -1197,6 +1197,93 @@ fn a_plan_whose_private_work_routes_to_two_private_sources_is_refused_naming_bot
     assert_eq!(store.tree(), before, "nothing was written anywhere");
 }
 
+/// [`routing_store`] with `site` routing `hiddenco` work to `vault` and `lanternco` work to the
+/// private `archive`, and `draft` declared `draft_visibility`.
+fn two_private_routes(draft_visibility: &'static str) -> Store {
+    routing_store(move |sandbox| {
+        json!({
+            "draft": {"visibility": draft_visibility},
+            "archive": folder(sandbox, "archive", "private"),
+            "site": {"routes": [
+                {"repositories": ["github.com/hiddenco/*"], "to": "vault"},
+                {"repositories": ["github.com/lanternco/*"], "to": "archive"},
+            ]},
+        })
+    })
+}
+
+/// Add to [`private_plan`] the task `bright`, of the private `lanternco` repository, whose
+/// route sends it to `archive` — a second private source beside the `vault` `quiet` routes to.
+fn add_bright(store: &Store) {
+    store.record(
+        "draft",
+        "tasks",
+        "bright",
+        &format!("title: Bright work\nstatus: todo\nproject: goal\nrepositories: [{B}]"),
+        B_TEXT,
+    );
+}
+
+#[test]
+fn an_existing_private_home_stays_the_home_when_its_private_work_later_routes_two_ways() {
+    // Authored in a private folder, so the link to its private home is recorded on it.
+    let store = two_private_routes("private");
+    std::fs::create_dir_all(store.folder("archive")).expect("the archive folder");
+    private_plan(&store, "One goal");
+    let first = landed_ids(&store.ok(&["project", "copy", "draft:goal", "--to", "site", "--json"]));
+    let home = first["draft:goal"].clone();
+    assert!(home.starts_with("vault:"), "{first:?}");
+    let site = tree(&store.folder("site"));
+
+    // A second private repository's work now routes to `archive`: a new home would have no one
+    // private source, but this plan has a home, and it stays where it is.
+    add_bright(&store);
+    let again = landed_ids(&store.ok(&["project", "copy", "draft:goal", "--to", "site", "--json"]));
+    assert_eq!(again["draft:goal"], home, "{again:?}");
+    assert!(again["draft:bright"].starts_with("archive:"), "{again:?}");
+    let projects: Value =
+        serde_json::from_str(&store.ok(&["project", "list", "--source", "vault", "--json"]))
+            .expect("a listing");
+    assert_eq!(
+        projects["items"].as_array().expect("projects").len(),
+        1,
+        "no second home: {projects:#}"
+    );
+    assert_eq!(tree(&store.folder("site")), site, "site is as it was");
+}
+
+#[test]
+fn an_existing_public_home_of_a_plan_whose_private_work_routes_two_ways_is_refused_unmoved() {
+    let store = two_private_routes("public");
+    private_plan(&store, "One goal");
+    // Copied while it was public: its home is on `site`.
+    let set_aside: Vec<(PathBuf, Vec<u8>)> = ["quiet", "review"]
+        .iter()
+        .map(|task| {
+            let path = store.folder("draft").join(format!("tasks/{task}.md"));
+            let held = std::fs::read(&path).expect("the task");
+            std::fs::remove_file(&path).expect("the task set aside");
+            (path, held)
+        })
+        .collect();
+    let landed =
+        landed_ids(&store.ok(&["project", "copy", "draft:goal", "--to", "site", "--json"]));
+    assert!(landed["draft:goal"].starts_with("site:"), "{landed:?}");
+    for (path, held) in set_aside {
+        std::fs::write(path, held).expect("the task restored");
+    }
+    add_bright(&store);
+    let before = store.tree();
+    let (kind, said) = store.refused(&["project", "copy", "draft:goal", "--to", "site"]);
+    assert_eq!(kind, "not-private-destination", "{said}");
+    assert!(said.contains("draft:goal"), "{said}");
+    assert_eq!(
+        store.tree(),
+        before,
+        "the existing home and everything else are unchanged"
+    );
+}
+
 #[test]
 fn a_project_s_own_private_repository_votes_its_home_into_the_private_source() {
     let store = routing_store(|_| json!({}));

@@ -1725,9 +1725,9 @@ engine's write-back uses.
     each routed task — unless the [public boundary](#the-public-boundary) is active and any
     item of the plan classifies private. Then the home goes to the source declared private
     that the plan's private voters place at, by their own repositories and the placement a
-    private item takes. When those voters place at two different private sources the copy is
-    refused before anything is written, naming each source and the qualified ids of the
-    items placing there. The public voters stay where their own repositories place them —
+    private item takes. When those voters place at two different private sources and the
+    plan has no home yet, the copy is refused before anything is written, naming each source
+    and the qualified ids of the items placing there. The public voters stay where their own repositories place them —
     under the home's member project in each other source, whose write is screened like any
     other.
   - With no voter at all, the home is the named destination. With `--no-tasks` only the
