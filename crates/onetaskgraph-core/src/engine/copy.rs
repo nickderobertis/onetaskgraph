@@ -1167,9 +1167,8 @@ struct MemberFiling {
 
 /// Where a routed project copy lands its home, and how the tasks it carries follow it.
 struct Homing {
-    /// The home's placement.
+    /// The source it lands in, and the route entry sending it there for the report.
     home: Placement,
-    /// How its tasks follow it.
     following: Following,
 }
 
@@ -1198,7 +1197,7 @@ struct Home {
     members: Vec<GlobalId>,
     /// Whether this copy added, replaced or released one, so the home's own list is written
     /// once the copy has landed.
-    grew: bool,
+    changed: bool,
 }
 
 impl Home {
@@ -1221,7 +1220,7 @@ impl Home {
             status: held.status.clone(),
             classification: held.classification,
             members,
-            grew: false,
+            changed: false,
         })
     }
 }
@@ -2786,13 +2785,13 @@ impl Engine {
             .expect("the home was recorded above");
         if entry.members.contains(member) {
             entry.members.retain(|named| named != member);
-            entry.grew = true;
+            entry.changed = true;
         }
         Ok(())
     }
 
-    /// The member projects `home` names: the list this copy already holds for it, grown
-    /// members included, or else the one the home itself records.
+    /// The member projects `home` names: the list this copy already holds for it, with every
+    /// member it added or released, or else the one the home itself records.
     async fn members_named(
         &self,
         home: &GlobalId,
@@ -5300,7 +5299,7 @@ impl Engine {
                 .expect("the home was recorded above");
             entry.members.retain(|member| &member.source != to);
             entry.members.push(GlobalId::new(to.clone(), found.clone()));
-            entry.grew = true;
+            entry.changed = true;
             return Ok(Some(found));
         }
         if dry_run {
@@ -5384,7 +5383,7 @@ impl Engine {
         entry
             .members
             .push(GlobalId::new(to.clone(), created.clone()));
-        entry.grew = true;
+        entry.changed = true;
         Ok(Some(created))
     }
 
@@ -5560,7 +5559,7 @@ impl Engine {
         Ok(())
     }
 
-    /// Write each home's grown `onetaskgraph.members` through its own project write, once the
+    /// Write each home's changed `onetaskgraph.members` through its own project write, once the
     /// whole copy has landed.
     ///
     /// The home is read as it now stands and written back with that one entry changed, and
@@ -5571,7 +5570,7 @@ impl Engine {
         homes: BTreeMap<String, Home>,
         journal: &mut Journal,
     ) -> Result<(), EngineError> {
-        for home in homes.into_values().filter(|home| home.grew) {
+        for home in homes.into_values().filter(|home| home.changed) {
             let at = self.writable(&home.id.source)?;
             let Some(prior) = self.prior(at, Level::Project, &home.id.native).await? else {
                 continue;

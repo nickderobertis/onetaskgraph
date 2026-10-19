@@ -1152,14 +1152,81 @@ fn a_plan_whose_private_work_routes_to_two_private_sources_is_refused_naming_bot
         &format!("title: Bright work\nstatus: todo\nproject: goal\nrepositories: [{B}]"),
         B_TEXT,
     );
+    // A second `hiddenco` task, and the project's own `hiddenco` repository, vote beside the
+    // first.
+    store.record(
+        "draft",
+        "tasks",
+        "hush",
+        &format!("title: Hushed work\nstatus: todo\nproject: goal\nrepositories: [{A}]"),
+        A_TEXT,
+    );
+    store.record(
+        "draft",
+        "projects",
+        "goal",
+        &format!("title: One goal\nstatus: todo\nrepositories: [{A}]"),
+        PLAIN,
+    );
     let before = store.tree();
     let (kind, said) = store.refused(&["project", "copy", "draft:goal", "--to", "site"]);
     assert_eq!(kind, "split-private-home", "{said}");
-    assert!(
-        said.contains("vault for draft:quiet") && said.contains("plan for draft:bright"),
-        "both destinations, each with the task placing there: {said}"
+    // One `<source> for <ids>` entry per destination, each naming every voter placing there.
+    let entries: BTreeMap<&str, Vec<&str>> = said
+        .lines()
+        .next()
+        .and_then(|first| first.split_once("no one home: "))
+        .map(|(_, split)| split)
+        .unwrap_or_default()
+        .split("; ")
+        .filter_map(|entry| entry.split_once(" for "))
+        .map(|(source, ids)| {
+            let mut ids: Vec<&str> = ids.split(", ").collect();
+            ids.sort_unstable();
+            (source, ids)
+        })
+        .collect();
+    assert_eq!(
+        entries,
+        BTreeMap::from([
+            ("plan", vec!["draft:bright"]),
+            ("vault", vec!["draft:goal", "draft:hush", "draft:quiet"]),
+        ]),
+        "{said}"
     );
     assert_eq!(store.tree(), before, "nothing was written anywhere");
+}
+
+#[test]
+fn a_project_s_own_private_repository_votes_its_home_into_the_private_source() {
+    let store = routing_store(|_| json!({}));
+    private_plan(&store, "One goal");
+    // The project names the private repository, and no task does any more.
+    std::fs::remove_file(store.folder("draft").join("tasks/quiet.md")).expect("the task removed");
+    store.record(
+        "draft",
+        "tasks",
+        "review",
+        "title: Review it\nstatus: todo\nproject: goal\ndepends_on: [open]",
+        PLAIN,
+    );
+    store.record(
+        "draft",
+        "projects",
+        "goal",
+        &format!("title: One goal\nstatus: todo\nrepositories: [{A}]"),
+        PLAIN,
+    );
+    let landed =
+        landed_ids(&store.ok(&["project", "copy", "draft:goal", "--to", "site", "--json"]));
+    assert!(landed["draft:goal"].starts_with("vault:"), "{landed:?}");
+    assert!(landed["draft:review"].starts_with("vault:"), "{landed:?}");
+    assert!(landed["draft:open"].starts_with("site:"), "{landed:?}");
+    assert_eq!(
+        members_of_home(&store, &landed["draft:goal"]).len(),
+        1,
+        "the public task is filed under a member on site"
+    );
 }
 
 #[test]

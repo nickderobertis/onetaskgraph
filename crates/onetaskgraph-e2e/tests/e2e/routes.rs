@@ -2044,6 +2044,66 @@ fn a_take_over_whose_task_cannot_be_written_leaves_every_folder_as_it_was() {
 }
 
 #[test]
+fn a_take_over_whose_former_home_refuses_its_list_leaves_both_sources_as_they_were() {
+    let sandbox = Sandbox::new();
+    let plan = mixed_plan(&sandbox);
+    let linear = linear_empty_workspace(&sandbox);
+    let (board, fields) = github_projects_with_board(&sandbox);
+    sandbox.secrets_file("GITHUB_PROJECTS_FIXTURE_TOKEN=test-token\nLINEAR_API_KEY=fixture-key\n");
+    sandbox.project_document(&document(&json!({
+        PLAN: {"plugin": "local-md", "config": {"root": sandbox.project().join(PLAN)}},
+        BOARD: {
+            "plugin": "github-projects",
+            "config": board,
+            "routes": [{"repositories": ["github.com/widgetco/*"], "to": LINEAR}],
+        },
+        LINEAR: {"plugin": "linear", "config": linear},
+    })));
+    let first = answer(&sandbox, &["project", "copy", "plan:goal", "--to", BOARD]);
+    let home = landed(&first, "plan:goal");
+    let member = members_of(&sandbox, &home)[0].clone();
+    assert_eq!(source_of(&member), LINEAR);
+    let (app, lib, docs) = (
+        landed(&first, "plan:app"),
+        landed(&first, "plan:lib"),
+        landed(&first, "plan:docs"),
+    );
+    let tasks = [app.as_str(), lib.as_str(), docs.as_str()];
+    let before = state(&sandbox, &[&home, &member], &tasks);
+    // What Linear holds, by id: a restored item reads back at a later time and version.
+    let listed = |verb: &str| -> Vec<String> {
+        answer(&sandbox, &[verb, "list", "--source", LINEAR])["items"]
+            .as_array()
+            .expect("a listing")
+            .iter()
+            .map(|item| item["id"].as_str().expect("a qualified id").to_owned())
+            .collect()
+    };
+    let linear_before = (listed("project"), listed("task"));
+    let plan_before = tree(&plan);
+
+    // The copy takes the member over and lands the board's tasks beside it in Linear; then the
+    // board refuses the home's list without it, which is the copy's last write.
+    fields.refuse_once("updateIssue(input:$input)");
+    let refusal = refused(
+        &sandbox,
+        &["project", "copy", "plan:goal", "--to", LINEAR],
+        1,
+    );
+    assert!(
+        refusal.contains("updateIssue") && !refusal.contains("could not be undone"),
+        "the former home's write failed and the copy was undone:\n{refusal}"
+    );
+    assert_eq!(
+        state(&sandbox, &[&home, &member], &tasks),
+        before,
+        "the member is a member again and the home still names it"
+    );
+    assert_eq!((listed("project"), listed("task")), linear_before);
+    assert_eq!(tree(&plan), plan_before, "no link was recorded");
+}
+
+#[test]
 fn a_member_found_by_one_link_alone_becomes_the_home_rather_than_a_second_project() {
     // The home no longer lists its member, which still names it; and the member names no
     // home, while the home still lists it.
