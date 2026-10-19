@@ -765,51 +765,78 @@ fn a_recopy_with_no_token_reads_every_counterpart_in_batches_and_none_on_its_own
     holds_the_plan(&plan, &at, None);
 }
 
+/// Every plan item the board holds, as it holds it, apart from the time GitHub stamps on any
+/// write: a write that changes nothing of an item still moves its `updatedAt`, and leaving an
+/// unchanged item unwritten is the write path's to do, not a read's.
+fn held_content(plan: &Plan, at: &Counterparts) -> BTreeMap<String, Option<Value>> {
+    plan_ids(at)
+        .into_iter()
+        .map(|id| {
+            let mut item = plan.github.item(&id);
+            if let Some(Value::Object(fields)) = &mut item {
+                fields.remove("updatedAt");
+            }
+            (id, item)
+        })
+        .collect()
+}
+
 #[test]
 fn a_recopy_reads_nothing_its_cache_holds_at_the_token_the_listing_carries() {
-    // (a): the cache holds every item at the token the copy's own listings carry, so the
-    // project copy reads none of its tasks — the project alone is read, once and in a batch,
-    // for the forward edges a GitHub token does not cover — and the document copy does not
-    // read the document. What the project copy then rewrites, unchanged, the document copy
-    // reads again; leaving unchanged items unwritten is the write path's to do.
+    // (a): every one of the ten destination items is answered without a read naming it — the
+    // project and its tasks by the members listing the copy makes anyway, at the state and
+    // token GitHub answered in this command, the project's own edges with them, and the
+    // document by its cache entry at the token its listing carries — so neither the project
+    // copy nor the document copy after it sends one, and the board holds the plan as it did.
+    //
+    // The plan is copied twice before the cache is filled: the first copy records each source
+    // file's token from before it wrote that file's link, so the second is a real source change
+    // and rewrites the record. From the third on, nothing at the source has changed.
     let plan = Plan::configured(SMALL, Vec::new(), Some(json!({"enabled": true})));
     let (project, document, _) = plan.copy();
     let at = counterparts(&project, &document);
+    plan.copy();
     plan.read_back(&at);
+    let before = held_content(&plan, &at);
 
-    let (_, calls) = plan.measured(&["project", "copy", "notes:P", "--to", "board", "--json"]);
-    never_walks("a cached project copy", &calls);
-    let named = named_by_item_reads(&calls);
-    for n in 1..=TASKS {
+    for (what, arguments) in [
+        (
+            "the project copy",
+            ["project", "copy", "notes:P", "--to", "board", "--json"],
+        ),
+        (
+            "the document copy",
+            ["document", "copy", "notes:D", "--to", "board", "--json"],
+        ),
+    ] {
+        let (_, calls) = plan.measured(&arguments);
+        never_walks(what, &calls);
+        let named: std::collections::BTreeSet<String> = named_by_item_reads(&calls)
+            .intersection(&plan_ids(&at))
+            .cloned()
+            .collect();
         assert!(
-            !named.contains(&at[&format!("T-{n}")]),
-            "T-{n} was read though its cache entry is at its token: {:?}",
+            named.is_empty(),
+            "{what} read {named:?}, though each is answered without a read: {:?}",
             item_reads(&calls)
         );
     }
-    assert_eq!(
-        item_reads(&calls),
-        [(
-            graphql::ISSUE_COPY_DETAILS.to_owned(),
-            std::collections::BTreeSet::from([at["P"].clone()])
-        )],
-        "the project, alone, in one batch"
-    );
-    let (_, calls) = plan.measured(&["document", "copy", "notes:D", "--to", "board", "--json"]);
-    assert!(
-        !named_by_item_reads(&calls).contains(&at["D"]),
-        "the document was read though its cache entry is at its token: {:?}",
-        item_reads(&calls)
-    );
     holds_the_plan(&plan, &at, None);
+    assert_eq!(
+        held_content(&plan, &at),
+        before,
+        "the destination items are unchanged"
+    );
 }
 
 #[test]
 fn a_recopy_reads_only_what_neither_token_nor_cache_answers_and_keeps_a_persons_edit() {
     // (c): the cache holds the plan at its tokens; then a person fills in a board field of
     // their own on T-3's card, which moves its token past its entry, and the plan gains a ninth
-    // task never copied. The copy reads T-3 — before it writes it — and of the plan's items
-    // only it and the project, whose edges no token covers; creates the ninth; and leaves T-3
+    // task never copied. The members listing the copy sends first carries every member at the
+    // state GitHub holds now — T-3 with the person's edit and the token it moved to — so no
+    // plan item is left unanswered and none is read on its own: T-3 is read, by that listing,
+    // before it is written. The ninth has no counterpart to read and is created, and T-3 keeps
     // the field the copy never writes.
     let plan = Plan::configured(SMALL, Vec::new(), Some(json!({"enabled": true})));
     let (project, document, _) = plan.copy();
@@ -834,14 +861,16 @@ fn a_recopy_reads_only_what_neither_token_nor_cache_answers_and_keeps_a_persons_
         "{reads:?}"
     );
     let named = named_by_item_reads(&calls);
-    let unanswered = std::collections::BTreeSet::from([at["P"].clone(), edited.clone()]);
-    assert_eq!(
-        named, unanswered,
-        "only the project and the task edited since were read"
+    assert!(
+        named.intersection(&plan_ids(&at)).next().is_none(),
+        "no plan item is read on its own: the listing answers every one — T-3 at the token \
+         its edit moved it to, and the rest at theirs: {reads:?}"
     );
+    // The members listing is what read T-3 as the person left it: the request naming the
+    // project's members, carrying each at the state GitHub answered.
     let read_at = calls
         .iter()
-        .position(|call| named_by_item_reads(std::slice::from_ref(call)).contains(edited))
+        .position(|call| operation(call) == "reading a project's tasks")
         .unwrap();
     let written_at = calls.iter().position(|call| {
         call.kind == Kind::Mutation
@@ -861,15 +890,18 @@ fn a_recopy_reads_only_what_neither_token_nor_cache_answers_and_keeps_a_persons_
 }
 
 #[test]
-fn a_recopy_whose_pinning_listing_is_refused_reads_what_it_would_have_pinned_and_still_lands() {
-    // The listing that would pin every member's token is refused once: nothing is pinned, so
-    // every counterpart is read as if there were no cache — in one batch — and the copy lands
-    // the plan exactly as it would have. The orphan check's own read of the members is made
-    // after it, and answered.
+fn a_recopy_whose_pinning_listings_are_refused_reads_what_they_would_have_carried_and_still_lands()
+{
+    // Both listings that would pin every member's token and carry the plan — the project's
+    // tasks, then its documents, which are sub-issues of it too — are refused once each:
+    // nothing is pinned or carried, so every counterpart is read as if there were no cache —
+    // in one batch — and the copy lands the plan exactly as it would have. The orphan check's
+    // own read of the members is made after it, and answered.
     let plan = Plan::configured(SMALL, Vec::new(), Some(json!({"enabled": true})));
     let (project, document, _) = plan.copy();
     let at = counterparts(&project, &document);
     plan.read_back(&at);
+    plan.github.refuse_once("subIssues(first:$first");
     plan.github.refuse_once("subIssues(first:$first");
     let (report, calls) = plan.measured(&["project", "copy", "notes:P", "--to", "board", "--json"]);
     assert!(
@@ -890,8 +922,8 @@ fn a_recopy_whose_pinning_listing_is_refused_reads_what_it_would_have_pinned_and
     );
     assert_eq!(
         tally(&calls)["reading a project's tasks"],
-        2,
-        "the refused pinning listing, then the orphan check's own: {:?}",
+        3,
+        "the two refused pinning listings, then the orphan check's own: {:?}",
         tally(&calls)
     );
     holds_the_plan(&plan, &at, None);

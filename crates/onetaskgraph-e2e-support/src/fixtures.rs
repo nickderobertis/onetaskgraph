@@ -4506,9 +4506,28 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
                 issue
             })
             .collect::<Vec<_>>();
-        return json!({"node":{"__typename":"Issue",
-            "subIssues":{"nodes":nodes,
-                "pageInfo":{"hasNextPage":end < children.len(),"endCursor":end.to_string()}}}});
+        // The project issue itself, with what blocks it, when the read selects it beside its
+        // sub-issues.
+        let mut node = json!({"__typename":"Issue"});
+        if query.contains("node(id:$id){__typename ...BoardIssue") {
+            let parent = board
+                .items
+                .iter()
+                .find(|item| item["id"] == json!(id))
+                .cloned()
+                .expect("the project read");
+            node = board.as_issue(&parent);
+            let page = blocked_first.expect("nestedFirst beside the project's own blockedBy");
+            let all = board.related(&id, false);
+            let all = all.as_array().expect("related issues");
+            node["blockedBy"] = json!({
+                "nodes": all.iter().take(page).collect::<Vec<_>>(),
+                "pageInfo": {"hasNextPage": all.len() > page,
+                             "endCursor": page.min(all.len()).to_string()}});
+        }
+        node["subIssues"] = json!({"nodes":nodes,
+            "pageInfo":{"hasNextPage":end < children.len(),"endCursor":end.to_string()}});
+        return json!({ "node": node });
     }
     // The board's own id and fields with none of its items: what a write reads when the
     // item it writes does not carry them.

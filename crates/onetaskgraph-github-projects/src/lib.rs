@@ -1005,12 +1005,22 @@ pub mod graphql {
     /// It adds a connection under each issue of the page — one rate-limit point per page,
     /// and `$nestedFirst` nodes per issue — and is kept off [`SEARCH_ISSUES`], whose pages
     /// answer questions that never read an edge.
+    ///
+    /// **The project issue itself rides here too**, with the page of what blocks it, because
+    /// the reader of a project's tasks reads the project next: a copy writing the project reads
+    /// it and its edges before it writes them. Carried on the request that already names the
+    /// project, the first page answers that read and the dependency read after it, at the
+    /// state GitHub answered in this command, rather than spending one more read on an item
+    /// the cache's token cannot vouch for whole. Each sub-issue is kept the same way, so a
+    /// copy's read of a task this listing carried is answered by it rather than sent again.
+    /// Only a copy's read-before-write takes them; every other read by id reads GitHub.
     pub const SUB_ISSUES: &str = concat!(
         r#"query($id:ID!,$first:Int!,$after:String,$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!"#,
         relationship_events_variable!(),
         r#"){
-      node(id:$id){__typename
-        ... on Issue{subIssues(first:$first,after:$after){
+      node(id:$id){__typename ...BoardIssue
+        ... on Issue{blockedBy(first:$nestedFirst){nodes{...Related}pageInfo{hasNextPage endCursor}}
+          subIssues(first:$first,after:$after){
           pageInfo{hasNextPage endCursor}
           nodes{__typename ...BoardIssue ... on Issue{
             blockedBy(first:$nestedFirst){nodes{...Related}pageInfo{hasNextPage endCursor}}
@@ -3302,6 +3312,13 @@ pub struct GitHubProjectsSource {
     /// [`TaskSource::end_command`]. So a read answered from it is the copy's own
     /// read-before-write, made in the same request as the others' rather than on its own.
     read_ahead: Mutex<BTreeMap<NativeId, Option<Resolved>>>,
+    /// Every item a listing of one project's members carried whole in this command — the
+    /// project issue and each of its sub-issues — kept for [`TaskSource::read_ahead_for_copy`]
+    /// alone, which takes each one it is asked for into [`Self::read_ahead`] instead of reading
+    /// it again. No other read is answered from it, so a read by id outside a copy's
+    /// read-before-write reads GitHub as it always did. Dropped by any mutation naming an
+    /// item, and cleared by [`TaskSource::end_command`].
+    carried: Mutex<BTreeMap<NativeId, Resolved>>,
     /// Items an issue read by reference reached, held for the one status write each was read
     /// for and taken out by it alone — see [`Self::take_held`] — because that read selects only
     /// what such a write needs. Dropped by [`TaskSource::end_command`].
@@ -4463,6 +4480,7 @@ impl GitHubProjectsSource {
             narrowed_cache: Mutex::new(BTreeMap::new()),
             resolved_cache: Mutex::new(BTreeMap::new()),
             read_ahead: Mutex::new(BTreeMap::new()),
+            carried: Mutex::new(BTreeMap::new()),
             held_cache: Mutex::new(BTreeMap::new()),
             children_cache: Mutex::new(BTreeMap::new()),
             search_next: Mutex::new(BTreeMap::new()),
@@ -4525,6 +4543,7 @@ impl GitHubProjectsSource {
         {
             let mut cache = self.resolved_cache()?;
             let mut ahead = self.read_ahead()?;
+            let mut carried = self.carried()?;
             for argument in ["input", "second", "third", "clear"] {
                 if let Some(input) = variables.get(argument) {
                     let names = |id: &NativeId, item_id: Option<&str>| {
@@ -4539,6 +4558,7 @@ impl GitHubProjectsSource {
                     ahead.retain(|id, item| {
                         !names(id, item.as_ref().map(|item| item.item_id.as_str()))
                     });
+                    carried.retain(|id, item| !names(id, Some(&item.item_id)));
                 }
             }
         }
@@ -5651,6 +5671,8 @@ impl GitHubProjectsSource {
     async fn sub_issues(&self, id: &NativeId) -> Result<Option<Vec<Resolved>>, SourceError> {
         let mut after: Option<String> = None;
         let mut children = Vec::new();
+        // The project issue as the first page carried it, held once the walk has ended.
+        let mut parent: Option<Resolved> = None;
         loop {
             let asked = self
                 .graphql(
@@ -5675,6 +5697,14 @@ impl GitHubProjectsSource {
                 // the one this board can really hold.
                 return Ok(None);
             };
+            if after.is_none()
+                && let Some(node) = data.get("node").filter(|node| node.get("id").is_some())
+            {
+                parent = self
+                    .resolve_issue(node)
+                    .await?
+                    .filter(|resolved| resolved.id == *id);
+            }
             for node in connection
                 .get("nodes")
                 .and_then(Value::as_array)
@@ -5699,9 +5729,27 @@ impl GitHubProjectsSource {
                     validate_cursor_progress(after.as_deref(), next)?;
                     after = Some(next.to_owned());
                 }
-                None => return Ok(Some(children)),
+                None => {
+                    // Held only once the walk has ended, so one failing part way holds
+                    // nothing and every read it would have answered is made.
+                    let mut carried = self.carried()?;
+                    for item in parent.into_iter().chain(children.iter().cloned()) {
+                        carried.insert(item.id.clone(), item);
+                    }
+                    return Ok(Some(children));
+                }
             }
         }
+    }
+
+    fn carried(
+        &self,
+    ) -> Result<std::sync::MutexGuard<'_, BTreeMap<NativeId, Resolved>>, SourceError> {
+        self.carried.lock().map_err(|_| SourceError::Unavailable {
+            message: "items a project's listing carried were left inconsistent; run the \
+                      command again"
+                .into(),
+        })
     }
 
     /// Which issue of this board a project *name* is, or `None` when none is.
@@ -6395,6 +6443,7 @@ impl GitHubProjectsSource {
     fn forget(&self, id: &NativeId) -> Result<(), SourceError> {
         self.resolved_cache()?.remove(id);
         self.read_ahead()?.remove(id);
+        self.carried()?.remove(id);
         self.created()?.retain(|own| own.id != *id);
         self.updated()?.retain(|own| own.id != *id);
         self.commented()?.retain(|own| own != id);
@@ -11729,6 +11778,8 @@ impl TaskSource for GitHubProjectsSource {
     /// and held for the next read of each by id; see `read_ahead`.
     ///
     /// What this run wrote is never read: its own record answers, as it does for a read by id.
+    /// Nor is an item a listing of its project carried whole earlier in this command — see
+    /// `carried` — which is held in place of reading it.
     /// A batch GitHub refuses because one of its ids resolves to no node at all holds nothing,
     /// so each of its ids is read on its own and answered as that read answers; a draft, and an
     /// answer naming another issue than the one asked for, are left to their own reads too.
@@ -11736,14 +11787,26 @@ impl TaskSource for GitHubProjectsSource {
         let mut unread: Vec<NativeId> = Vec::new();
         {
             let created = self.created()?;
-            let held = self.read_ahead()?;
+            let mut held = self.read_ahead()?;
+            let mut carried = self.carried()?;
+            let mut resolved = self.resolved_cache()?;
             for id in ids {
-                if !unread.contains(id)
-                    && !held.contains_key(id)
-                    && !created.iter().any(|own| own.id == *id)
+                if unread.contains(id)
+                    || held.contains_key(id)
+                    || created.iter().any(|own| own.id == *id)
                 {
-                    unread.push(id.clone());
+                    continue;
                 }
+                // Read whole by a listing of its project in this command, which a mutation
+                // naming it would have dropped: held as this batch would have held it.
+                if let Some(item) = carried.remove(id) {
+                    if item.blocked_by.is_some() {
+                        resolved.insert(item.id.clone(), item.clone());
+                    }
+                    held.insert(id.clone(), Some(item));
+                    continue;
+                }
+                unread.push(id.clone());
             }
         }
         // Nothing of an item's comments is wanted here: the smallest page keeps the read to
@@ -11946,6 +12009,7 @@ impl TaskSource for GitHubProjectsSource {
         clear(&self.search_next);
         clear(&self.resolved_cache);
         clear(&self.read_ahead);
+        clear(&self.carried);
         clear(&self.held_cache);
         clear(&self.children_cache);
         clear(&self.fields_cache);

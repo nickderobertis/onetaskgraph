@@ -1187,3 +1187,31 @@ reduced session each read `GET /rate_limit` and `the GraphQL rateLimit object` o
 endpoint's row goes 1 → 9, a row of 9 rateLimit reads is added, and the request total goes
 193 → 210. The rateLimit document has no connection, so the node count does not move; the
 session's estimate, derived from this record, grows by those rows' charge.
+
+## A project's members listing carries the project, and holds what it carried
+
+`SUB_ISSUES` now selects the project issue itself — its `BoardIssue` fields and a page of
+`$nestedFirst` blockers — beside its sub-issues, and once the walk has ended this source keeps
+the project and every sub-issue it carried for `read_ahead_for_copy`, which holds each one it is
+asked for as its own batch would have — for the copy's read of it by id and, where the whole of
+what blocks it came with it, the dependency read after that — instead of reading it again. A
+copy writing a plan reads the project and its tasks before it writes them, and the project's
+own edges are a part no GitHub change token vouches for, so before this the project was read
+again on every cached re-copy, by one `ISSUE_COPY_DETAILS` batch naming it, whatever the cache
+held. Each item is answered at the state GitHub returned in this command, a mutation naming one
+drops what was kept for it, and no read outside a copy's read-before-write is answered from a
+listing: the boundary's re-reads of a project still see it as it is.
+
+**`SUB_ISSUES`** goes from 25,400 worst-case nodes to **25,653**: the project issue's labels,
+board memberships and their field values, and its fifty blockers — one issue rather than a
+page of them. Its price stays **6** points.
+
+**`session-cost.txt`** moves on two lines and its totals: the two `reading a project's tasks`
+requests by those 253 nodes each (50,800 → 51,306), and `reading one issue` from 37 requests and
+16,872 nodes to **36 and 16,416**: one read of one issue (456 nodes) that followed a listing
+of its project is now answered by that listing. Requests go 210 → **209**, nodes 292,849 → **293,152**.
+
+**`copy-cost.txt`** moves only (b), the uncached unchanged repeat, whose one `reading a
+project's tasks` grows by the same 253 nodes (30,734 → **30,987**) and whose two requests do
+not move: with no cache there is no listing before the read-ahead, so the batch still reads the
+project and its tasks.
