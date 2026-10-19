@@ -11785,28 +11785,26 @@ impl TaskSource for GitHubProjectsSource {
     /// answer naming another issue than the one asked for, are left to their own reads too.
     async fn read_ahead_for_copy(&self, ids: &[NativeId]) -> Result<(), SourceError> {
         let mut unread: Vec<NativeId> = Vec::new();
+        // Read whole by a listing of its project in this command, which a mutation naming it
+        // would have dropped: held as a batch would have held it, once every batch is answered.
+        let mut listed: Vec<NativeId> = Vec::new();
         {
             let created = self.created()?;
-            let mut held = self.read_ahead()?;
-            let mut carried = self.carried()?;
-            let mut resolved = self.resolved_cache()?;
+            let held = self.read_ahead()?;
+            let carried = self.carried()?;
             for id in ids {
                 if unread.contains(id)
+                    || listed.contains(id)
                     || held.contains_key(id)
                     || created.iter().any(|own| own.id == *id)
                 {
                     continue;
                 }
-                // Read whole by a listing of its project in this command, which a mutation
-                // naming it would have dropped: held as this batch would have held it.
-                if let Some(item) = carried.remove(id) {
-                    if item.blocked_by.is_some() {
-                        resolved.insert(item.id.clone(), item.clone());
-                    }
-                    held.insert(id.clone(), Some(item));
-                    continue;
+                if carried.contains_key(id) {
+                    listed.push(id.clone());
+                } else {
+                    unread.push(id.clone());
                 }
-                unread.push(id.clone());
             }
         }
         // Nothing of an item's comments is wanted here: the smallest page keeps the read to
@@ -11816,7 +11814,8 @@ impl TaskSource for GitHubProjectsSource {
             limit: 1,
         };
         // Held only once every batch has been answered, so a read-ahead that fails part way
-        // holds nothing and every item is read on its own, as the method promises.
+        // holds nothing — what a listing carried included, which stays carried — and every
+        // item is read on its own, as the method promises.
         let mut read: Vec<(NativeId, Option<Resolved>)> = Vec::new();
         for batch in unread.chunks(COPY_DETAIL_BATCH) {
             let data = match self
@@ -11849,6 +11848,14 @@ impl TaskSource for GitHubProjectsSource {
         }
         let mut resolved = self.resolved_cache()?;
         let mut ahead = self.read_ahead()?;
+        let mut carried = self.carried()?;
+        // Taken only if still carried: a mutation naming it while the batches ran dropped it,
+        // and its next read is then its own.
+        read.extend(
+            listed
+                .iter()
+                .filter_map(|id| carried.remove(id).map(|item| (id.clone(), Some(item)))),
+        );
         for (id, held) in read {
             // The whole of what it is blocked by came with it, so the dependency read a copy
             // makes next is answered from this one, as a copy's detail read is.

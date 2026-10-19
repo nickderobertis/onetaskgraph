@@ -18617,6 +18617,47 @@ async fn a_read_ahead_answers_each_items_next_read_once_and_holds_nothing_it_can
     }
 }
 
+/// A read-ahead naming an item a listing of its project carried and one it did not holds
+/// neither when the batch for the second is refused: the carried item's next read by id is
+/// its own, and observes what a person changed on the board after the listing.
+#[tokio::test]
+async fn a_read_ahead_refused_part_way_holds_nothing_a_project_listing_carried_either() {
+    let fixture = board(vec![
+        Item::issue("I_plan", "Plan").status("Todo").sub_issues(1),
+        Item::issue("I_step", "Step")
+            .status("Todo")
+            .parent("I_plan"),
+        Item::issue("I_loose", "Loose").status("Todo"),
+    ]);
+    let source = configured(&fixture.endpoint, json!({}));
+    assert_eq!(
+        project_titles(source.as_ref(), "I_plan").await,
+        [("I_step".to_owned(), "Step".to_owned())],
+        "the listing carries the plan's one task"
+    );
+    fixture.refuse("issueDetails");
+    let failed = source
+        .read_ahead_for_copy(&[native("I_step"), native("I_loose")])
+        .await;
+    assert!(
+        matches!(&failed, Err(SourceError::Refused { message })
+            if message.contains("issueDetails is refused")),
+        "{failed:?}"
+    );
+    fixture.retitled_by_something_else("I_step", "Retitled by a person");
+    let reads = fixture.requests("issue");
+    assert_eq!(
+        source
+            .get_task(&native("I_step"))
+            .await
+            .unwrap()
+            .map(|task| task.title),
+        Some("Retitled by a person".to_owned()),
+        "nothing the listing carried was held by a read-ahead that failed"
+    );
+    assert_eq!(fixture.requests("issue"), reads + 1, "read on its own");
+}
+
 /// A read-ahead of more ids than one batch holds is sent as consecutive batches of at most
 /// [`COPY_DETAIL_BATCH`](onetaskgraph_github_projects::COPY_DETAIL_BATCH), and once every batch
 /// is answered each id's next read is answered from the batch that carried it — the last,
