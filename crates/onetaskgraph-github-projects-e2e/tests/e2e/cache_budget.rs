@@ -284,12 +284,17 @@ impl Workload {
     /// One command that had to succeed: what it printed and what the ledgers took while it ran
     /// — its own spend, as long as no other command runs beside it.
     fn run(&self, arguments: &[&str]) -> (Value, Spent) {
+        self.run_on(&self.clock, arguments)
+    }
+
+    /// `run`, as the one client of `clock`.
+    fn run_on(&self, clock: &SimulatedClock, arguments: &[&str]) -> (Value, Spent) {
         let mark = self.mark();
         let output = self
             .sandbox
             .command()
             .env("XDG_CACHE_HOME", &self.cache_home)
-            .envs(self.clock.client_env(0))
+            .envs(clock.client_env(0))
             .args(arguments)
             .assert()
             .get_output()
@@ -331,6 +336,16 @@ impl Workload {
         kind: &str,
         pins: Option<&[(String, String)]>,
     ) -> (Spent, Vec<(String, String)>) {
+        self.load_on(&self.clock, kind, pins)
+    }
+
+    /// `load`, its every command the one client of `clock`.
+    fn load_on(
+        &self,
+        clock: &SimulatedClock,
+        kind: &str,
+        pins: Option<&[(String, String)]>,
+    ) -> (Spent, Vec<(String, String)>) {
         let ids = self.loaded(kind);
         let pin_of = |id: &str| {
             pins.and_then(|pins| pins.iter().find(|(pinned, _)| pinned == id))
@@ -352,7 +367,7 @@ impl Workload {
                 }
                 arguments.push("--json".to_owned());
                 let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
-                let (read, cost) = self.run(&arguments);
+                let (read, cost) = self.run_on(clock, &arguments);
                 spent.add(cost);
                 for detail in read["details"].as_array().expect("details") {
                     let task = &detail["items"][0];
@@ -379,7 +394,7 @@ impl Workload {
             }
             arguments.push("--json".to_owned());
             let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
-            let (read, cost) = self.run(&arguments);
+            let (read, cost) = self.run_on(clock, &arguments);
             // Said by the answer itself, so it holds while another pass runs beside this one.
             if read["cache"]["served"] == "cache" {
                 spent.hits += 1;
@@ -521,11 +536,17 @@ impl Workload {
         let (cold, held) = self.load(loads, None);
         // Two passes at once, each pinned to what the cold load returned. Each command's slice
         // of the ledgers would hold the other's requests too, so the two are measured as one
-        // span, every request once; the hits are what each answer said of itself.
+        // span, every request once; the hits are what each answer said of itself. Each pass is
+        // the one client of a clock of its own: two live processes cannot both be client 0 of
+        // one clock, which would refuse whichever lost the race to reattach for its whole grace.
         let mark = self.mark();
         let hits: u64 = std::thread::scope(|scope| {
             let passes: Vec<_> = (0..2)
-                .map(|_| scope.spawn(|| self.load(loads, Some(&held)).0.hits))
+                .map(|_| {
+                    let clock = SimulatedClock::start(1);
+                    let held = &held;
+                    scope.spawn(move || self.load_on(&clock, loads, Some(held)).0.hits)
+                })
                 .collect();
             passes
                 .into_iter()

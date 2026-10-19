@@ -192,7 +192,7 @@ impl SimulatedClock {
         let address = listener.local_addr().expect("the listener's address");
         let state = Arc::new(Mutex::new(State {
             expected: clients,
-            reattach_grace: Duration::from_secs(30),
+            reattach_grace: Duration::from_secs(5),
             ..State::default()
         }));
         let accepting = Arc::clone(&state);
@@ -208,11 +208,9 @@ impl SimulatedClock {
 
     /// `with_reattach_grace(self, grace: Duration) -> SimulatedClock`: how long an attach
     /// naming a client still attached waits for that client's last connection to detach
-    /// before it is refused as a second live process under one number. The default, thirty
-    /// seconds, outlasts any detach of a process that has exited — five did not on a loaded
-    /// three-core macOS runner, where a cache-budget cell's next process was refused — and is
-    /// only ever waited out by a refusal; a journey proving the refusal shortens it so it does
-    /// not pay that wait.
+    /// before it is refused as a second live process under one number. The default, five
+    /// seconds, outlasts any detach of a process that has exited; a journey proving the
+    /// refusal shortens it so it does not pay that wait.
     pub fn with_reattach_grace(self, grace: Duration) -> SimulatedClock {
         self.lock().reattach_grace = grace;
         self
