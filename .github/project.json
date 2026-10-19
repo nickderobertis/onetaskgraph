@@ -7,7 +7,10 @@
     "default": [
       "{projectRoot}/**/*",
       "!{projectRoot}/node_modules/**/*",
-      "!{projectRoot}/.telemetry/**/*",
+      "!{projectRoot}/.telemetry/**/*"
+    ],
+    "workflowGraph": [
+      "default",
       "{workspaceRoot}/release-targets.toml",
       "{workspaceRoot}/screencomp.toml",
       "{workspaceRoot}/scripts/product_versions.py",
@@ -51,14 +54,35 @@
         "command": "bun run tsc -p .github/tsconfig.json"
       }
     },
-    "test": {
+    "ci-jobs": {
       "executor": "nx:run-commands",
       "dependsOn": ["bootstrap"],
+      "options": {
+        "command": "node --test .github/tests/ci-jobs.spec.mjs"
+      },
+      "inputs": ["default"],
+      "cache": true,
+      "//": "The pull request's four jobs, their keyed caches and the Rust cache warmer, read from the workflow files alone: keyed on this directory alone, it imports nothing that reads outside it, which the spec itself refuses. Whether today's required contexts are still reported needs the run graph, which reads files outside it, and is ci-contexts'."
+    },
+    "ci-contexts": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["bootstrap"],
+      "options": {
+        "command": "node --test .github/tests/ci-contexts.spec.mjs"
+      },
+      "inputs": ["workflowGraph"],
+      "cache": true,
+      "//": "Today's required contexts, resolved by the run graph workflow-graph.mjs builds. Its inputs are this directory and the files outside it that readSet() there names; the spec refuses the two parting, for this target and for test."
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["bootstrap", "ci-jobs", "ci-contexts"],
       "options": {
         "command": "node --test .github/tests/*.test.mjs"
       },
       "cache": false,
-      "outputs": ["{projectRoot}/.telemetry/macos-policy.json"]
+      "outputs": ["{projectRoot}/.telemetry/macos-policy.json"],
+      "inputs": ["workflowGraph"]
     },
     "budgets": {
       "executor": "nx:run-commands",
@@ -66,7 +90,8 @@
       "options": {
         "command": "bun run onebudgetspec check .github/budgets.yaml"
       },
-      "cache": false
+      "cache": false,
+      "inputs": ["workflowGraph"]
     },
     "coverage": {
       "executor": "nx:noop",

@@ -131,6 +131,9 @@ struct Workload {
     sandbox: Sandbox,
     github: GitHubBoardFields,
     board: Board,
+    /// The same board's ledger behind a listener of its own, which the second of two concurrent
+    /// passes reaches as clock client 1: two live processes may not share one client.
+    second: Board,
     clock: SimulatedClock,
     cache_home: PathBuf,
     scale: Scale,
@@ -168,7 +171,9 @@ const PICTURE: &str = "---\nonetaskgraph_template: 1\nvariables:\n  note:\n    d
 
 impl Workload {
     fn new(scale: Scale, cache: bool) -> Self {
-        let clock = SimulatedClock::start(1);
+        // Two clients: the second of the two concurrent passes runs as client 1, because a second
+        // live process attaching as client 0 waits out the reattach grace and is then refused.
+        let clock = SimulatedClock::start(2);
         let sandbox = Sandbox::new();
         let mut items = Vec::new();
         for n in 0..scale.projects() {
@@ -195,7 +200,9 @@ impl Workload {
             items.push(item(&task_id(n), &format!("Budget task {n}"), &slot));
         }
         let (mut config, github) = github_projects_with_items(&sandbox, items);
-        let board = Board::new(config["endpoint"].as_str().unwrap(), &clock, 0, None);
+        let upstream = config["endpoint"].as_str().unwrap().to_owned();
+        let board = Board::new(&upstream, &clock, 0, None);
+        let second = Board::new(&upstream, &clock, 1, Some(&board));
         config["endpoint"] = json!(board.endpoint);
         config["pacing"] = json!({});
         sandbox.project_document(&document(&json!({
@@ -213,6 +220,7 @@ impl Workload {
             sandbox,
             github,
             board,
+            second,
             clock,
             cache_home: PathBuf::new(),
             scale,
@@ -220,6 +228,13 @@ impl Workload {
             imaged: Vec::new(),
         };
         workload.cache_home = workload.sandbox.subdirectory("cache-home");
+        // Virtual time stands still until both clients have attached once, so client 1 attaches
+        // before anything could wait on it rather than first in the concurrent passes.
+        let (effective, _) = workload.run_as(1, &["config", "show", "--json"]);
+        assert!(
+            effective.to_string().contains(&workload.second.endpoint),
+            "client 1 reaches the board through its own listener: {effective}"
+        );
         for n in 0..scale.images() {
             let directory = workload.sandbox.subdirectory(&format!("image-{n}"));
             std::fs::create_dir_all(&directory).unwrap();
@@ -258,12 +273,12 @@ impl Workload {
 
     /// Where the board's and the attachment host's ledgers stand now.
     fn mark(&self) -> (usize, usize) {
-        (self.github.served().len(), self.board.calls().len())
+        (self.github.served_count(), self.board.calls_count())
     }
 
     /// Every GraphQL request and attachment read the ledgers took since `mark`, each once.
     fn spent_since(&self, (documents, calls): (usize, usize)) -> Spent {
-        let served = &self.github.served()[documents..];
+        let served = &self.github.served_since(documents);
         Spent {
             requests: served.len() as u64,
             points: served
@@ -274,7 +289,9 @@ impl Workload {
                 })
                 .sum(),
             hits: 0,
-            rest: self.board.calls()[calls..]
+            rest: self
+                .board
+                .calls_since(calls)
                 .iter()
                 .filter(|call| call.path.starts_with("/user-attachments/assets/"))
                 .count() as u64,
@@ -284,12 +301,19 @@ impl Workload {
     /// One command that had to succeed: what it printed and what the ledgers took while it ran
     /// — its own spend, as long as no other command runs beside it.
     fn run(&self, arguments: &[&str]) -> (Value, Spent) {
+        self.run_as(0, arguments)
+    }
+
+    /// [`run`](Self::run) as clock client `client`, through that client's own listener.
+    fn run_as(&self, client: usize, arguments: &[&str]) -> (Value, Spent) {
         let mark = self.mark();
+        let endpoint = [&self.board, &self.second][client].endpoint.as_str();
         let output = self
             .sandbox
             .command()
             .env("XDG_CACHE_HOME", &self.cache_home)
-            .envs(self.clock.client_env(0))
+            .env("ONETASKGRAPH_SOURCES__BOARD__CONFIG__ENDPOINT", endpoint)
+            .envs(self.clock.client_env(client))
             .args(arguments)
             .assert()
             .get_output()
@@ -331,6 +355,16 @@ impl Workload {
         kind: &str,
         pins: Option<&[(String, String)]>,
     ) -> (Spent, Vec<(String, String)>) {
+        self.load_as(0, kind, pins)
+    }
+
+    /// [`load`](Self::load) as clock client `client`.
+    fn load_as(
+        &self,
+        client: usize,
+        kind: &str,
+        pins: Option<&[(String, String)]>,
+    ) -> (Spent, Vec<(String, String)>) {
         let ids = self.loaded(kind);
         let pin_of = |id: &str| {
             pins.and_then(|pins| pins.iter().find(|(pinned, _)| pinned == id))
@@ -352,7 +386,7 @@ impl Workload {
                 }
                 arguments.push("--json".to_owned());
                 let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
-                let (read, cost) = self.run(&arguments);
+                let (read, cost) = self.run_as(client, &arguments);
                 spent.add(cost);
                 for detail in read["details"].as_array().expect("details") {
                     let task = &detail["items"][0];
@@ -379,7 +413,7 @@ impl Workload {
             }
             arguments.push("--json".to_owned());
             let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
-            let (read, cost) = self.run(&arguments);
+            let (read, cost) = self.run_as(client, &arguments);
             // Said by the answer itself, so it holds while another pass runs beside this one.
             if read["cache"]["served"] == "cache" {
                 spent.hits += 1;
@@ -523,9 +557,11 @@ impl Workload {
         // of the ledgers would hold the other's requests too, so the two are measured as one
         // span, every request once; the hits are what each answer said of itself.
         let mark = self.mark();
+        let held = held.as_slice();
         let hits: u64 = std::thread::scope(|scope| {
+            // Each pass is a clock client of its own, so neither's process is refused an attach.
             let passes: Vec<_> = (0..2)
-                .map(|_| scope.spawn(|| self.load(loads, Some(&held)).0.hits))
+                .map(|client| scope.spawn(move || self.load_as(client, loads, Some(held)).0.hits))
                 .collect();
             passes
                 .into_iter()
@@ -551,27 +587,25 @@ impl Workload {
     }
 }
 
-/// Every kind's four sequences at one scale, with the cache on or off, on one board: each kind's
-/// cold sequence reads none of the entries another kind's sequences kept.
-fn measured(scale: Scale, cache: bool) -> Vec<Vec<Spent>> {
-    let workload = Workload::new(scale, cache);
-    let measured: Vec<Vec<Spent>> = KINDS.iter().map(|kind| workload.sequences(kind)).collect();
-    if !cache {
+/// One scale and cache mode's sequences, by kind: its scale's name, whether the cache was on,
+/// and each kind's four sequences in [`KINDS`] order.
+type Run = (&'static str, bool, Vec<Vec<Spent>>);
+
+/// One kind's four sequences at one scale, with the cache on or off, on a board of its own: its
+/// cold sequence reads nothing another kind kept, and every kind of every scale runs at once.
+fn measured(scale: Scale, cache: bool, kind: &str) -> Vec<Spent> {
+    let sequences = Workload::new(scale, cache).sequences(kind);
+    if !cache && kind != "asset-bytes" {
         // With nothing kept, each of the two concurrent passes makes exactly the cold load's
         // reads, so a span that counted any request twice — or missed one — reads otherwise.
-        for (kind, sequences) in KINDS.iter().zip(&measured) {
-            if *kind == "asset-bytes" {
-                continue;
-            }
-            let (cold, unchanged) = (sequences[0], sequences[1]);
-            assert_eq!(
-                (unchanged.requests, unchanged.points),
-                (2 * cold.requests, 2 * cold.points),
-                "{kind}: two concurrent passes are counted once each"
-            );
-        }
+        let (cold, unchanged) = (sequences[0], sequences[1]);
+        assert_eq!(
+            (unchanged.requests, unchanged.points),
+            (2 * cold.requests, 2 * cold.points),
+            "{kind}: two concurrent passes are counted once each"
+        );
     }
-    measured
+    sequences
 }
 
 /// The stale-option fallback, with the cache on and off: a priority write after the option it
@@ -601,20 +635,32 @@ fn stale_option(cache: bool) -> Value {
 // llmlint: ignore-block[budgets_reuse_gate_telemetry] The budget compares the same workload with the cache on and with it off, which no behavioural journey runs — the cache's journeys hold small boards to exact requests, cache on alone — and its task fixes the design: the e2e journeys record the four sequences in both modes, and the reporter only reads what they recorded.
 #[test]
 fn the_cache_spends_no_more_board_points_than_no_cache_over_every_kind_sequence_and_scale() {
-    let runs: Vec<(&str, bool, Vec<Vec<Spent>>)> = std::thread::scope(|scope| {
+    // Every cell of the grid at once — each scale, cache mode and kind on its own board — so
+    // the test takes as long as its slowest kind rather than every kind of a scale in turn.
+    let (runs, stale): (Vec<Run>, Value) = std::thread::scope(|scope| {
         let handles: Vec<_> = SCALES
             .iter()
             .flat_map(|(name, factor)| {
                 [false, true].map(|cache| {
                     let scale = Scale { factor: *factor };
-                    (*name, cache, scope.spawn(move || measured(scale, cache)))
+                    let kinds: Vec<_> = KINDS
+                        .iter()
+                        .map(|kind| scope.spawn(move || measured(scale, cache, kind)))
+                        .collect();
+                    (*name, cache, kinds)
                 })
             })
             .collect();
-        handles
+        let stale = [true, false].map(|cache| scope.spawn(move || stale_option(cache)));
+        let runs = handles
             .into_iter()
-            .map(|(name, cache, handle)| (name, cache, handle.join().expect("a run")))
-            .collect()
+            .map(|(name, cache, kinds)| {
+                let kinds = kinds.into_iter().map(|kind| kind.join().expect("a run"));
+                (name, cache, kinds.collect())
+            })
+            .collect();
+        let [on, off] = stale.map(|run| run.join().expect("a stale-option run"));
+        (runs, json!({"on": on, "off": off}))
     });
     let mut figure = i64::MIN;
     let mut scales = serde_json::Map::new();
@@ -654,7 +700,6 @@ fn the_cache_spends_no_more_board_points_than_no_cache_over_every_kind_sequence_
                                              "difference": total}}),
         );
     }
-    let stale = json!({"on": stale_option(true), "off": stale_option(false)});
     let detail = format!(
         "largest difference, cache on minus cache off, in GitHub GraphQL points over every \
          kind, sequence and scale and each scale's total: {figure}; by scale, kind and \

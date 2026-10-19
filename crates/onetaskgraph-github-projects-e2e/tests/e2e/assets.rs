@@ -854,6 +854,7 @@ fn malformed_asset_inputs_and_http_answers_refuse_writes_and_renders_without_cha
                     assert!(error.to_string().contains("next.png"),"{error}");
                     if matches!(fault,Fault::ForeignPort|Fault::HttpUrl|Fault::UnrelatedPath|Fault::EmptyPath|Fault::UsernameUrl|Fault::PasswordUrl) {assert!(error.to_string().contains("unexpected attachment URL"),"{error}");}
                     if matches!(fault,Fault::Truncated|Fault::RepositoryTruncated) {assert!(error.to_string().contains("response could not be read"),"{error}");}
+                    if matches!(fault,Fault::Transport|Fault::RepositoryTransport) {assert!(names_its_cause(&error.to_string()),"a connection that got no answer names what it met: {error}");}
                     assert_eq!(plan.github.body(&target.0),before,"a preparation refusal changed the issue");
                 }
             }
@@ -1872,4 +1873,13 @@ fn attachment_retry_records_both_http_outcomes_and_the_recovered_attempt() {
     assert!(snapshot.requests().iter().any(|request| request.name()
         == "GET /user-attachments/assets/{asset}"
         && request.response_outcome() == ResponseOutcome::Success));
+}
+
+/// Whether a failed request's message carries what its connection met after the request line
+/// reqwest reports — `error sending request for url (…): <cause>` — rather than stopping at it.
+fn names_its_cause(message: &str) -> bool {
+    message
+        .split_once("error sending request for url (")
+        .and_then(|(_, rest)| rest.split_once("): "))
+        .is_some_and(|(_, cause)| !cause.trim().is_empty())
 }

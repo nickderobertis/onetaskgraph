@@ -27,6 +27,23 @@ token read waits out the settling margin and may be asked again, so the session 
 more there than on the loopback; the credentialed lane's own session-points accounting is what
 measures it.
 
+The change-kind legs then stopped waiting for one another. Against GitHub every token read
+waits out the 62-second settling margin, and the task leg waited it once per change kind, one
+after another on one task — over 15 minutes of the session doing nothing. Its kinds now run in
+three lanes at once, each on a task of its own, so the leg writes two more tasks of this run's
+own: 16 more requests, to 206, and 287,997 worst-case nodes — two issues created, added to the
+board, given their status field, found on the board and later deleted, one dependency recorded
+(the dependency lane's task starts depending on `first`, as `task` did), and three more reads by
+id for the lanes' own first tokens. The facet legs read the project's and the document's tokens
+at once after each change both see, and the sub-issue leg runs beside them; that moves no count.
+The change-token phase measured 44 points against GitHub (below); these sixteen one-point
+requests take it to about its 60-point allocation, which is unchanged, as is the 299 the
+session's spend is held to.
+
+Merging `main`'s issue-closure work (#3677) on top added its own three requests — a batch read
+of issues by their references, the board's closed items, and one more board search — with their
+reconciliations, taking the record to 209 requests and 302,377 worst-case nodes.
+
 ## Whole credentialed lane
 
 The budget is `github-live-session-points`, max 299 in the GitHub e2e budgets file.

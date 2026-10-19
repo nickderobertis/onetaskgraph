@@ -213,6 +213,62 @@ async fn nominated_status_option(
     Ok(option.to_owned())
 }
 
+/// How long this entry point waits for the main one's contribution to complete, in seconds,
+/// when `GITHUB_LIVE_MAIN_WAIT_SECONDS` does not say: within the one job both run in.
+const MAIN_WAIT_SECONDS: u64 = 25 * 60;
+
+/// Wait for the main entry point's record to be complete before this one makes a request.
+///
+/// The two run as separate Nx tasks at once — nothing of this suite's loopback binaries needs
+/// the main session, so they no longer wait behind the plugin's whole test target — and the
+/// main record completing, which it does only after its own cleanup, is what keeps the lane's
+/// credentialed writes in one process at a time. A main entry point that ended without completing
+/// its record, or one that has not completed it by the bound, failed or never ran, and this one
+/// refuses before spending anything.
+async fn wait_for_current_main(
+    directory: &std::path::Path,
+    current: &onetaskgraph_github_live::quota::CurrentSession<'_>,
+) -> Result<(), String> {
+    let seconds = match std::env::var("GITHUB_LIVE_MAIN_WAIT_SECONDS") {
+        Ok(value) => value.parse::<u64>().map_err(|_| {
+            format!("GITHUB_LIVE_MAIN_WAIT_SECONDS must be whole seconds, not {value:?}")
+        })?,
+        Err(std::env::VarError::NotPresent) => MAIN_WAIT_SECONDS,
+        Err(std::env::VarError::NotUnicode(_)) => {
+            return Err("GITHUB_LIVE_MAIN_WAIT_SECONDS must be Unicode".to_owned());
+        }
+    };
+    let ended =
+        journey::quota::ended_marker(directory, onetaskgraph_github_live::quota::EntryPoint::Main);
+    let deadline = std::time::Instant::now()
+        .checked_add(std::time::Duration::from_secs(seconds))
+        .ok_or_else(|| {
+            format!(
+                "GITHUB_LIVE_MAIN_WAIT_SECONDS is {seconds}, past any deadline this clock holds"
+            )
+        })?;
+    loop {
+        match onetaskgraph_github_live::quota::require_current_main(directory, current) {
+            Ok(()) => return Ok(()),
+            // Its marker follows its final flush, so the record now is the record it left.
+            Err(_) if ended.exists() => {
+                return onetaskgraph_github_live::quota::require_current_main(directory, current)
+                    .map_err(|error| {
+                        format!("{error}; the main entry point ended without completing it")
+                    });
+            }
+            Err(error) if std::time::Instant::now() >= deadline => {
+                return Err(format!(
+                    "{error}, {seconds} seconds after this entry point began waiting for it; the \
+                     main contribution is onetaskgraph-github-projects:test's live journey, which \
+                     runs beside this one in the same `test budgets` invocation"
+                ));
+            }
+            Err(_) => tokio::time::sleep(std::time::Duration::from_secs(5)).await,
+        }
+    }
+}
+
 #[tokio::test]
 async fn disposable_task_and_document_asset_copies() {
     if !onetaskgraph_github_live::quota::live_selected().unwrap() {
@@ -257,13 +313,14 @@ async fn disposable_task_and_document_asset_copies() {
     .unwrap();
     if let Some(directory) = std::env::var_os("GITHUB_LIVE_SESSION_DIR") {
         use onetaskgraph_github_live::quota::{
-            CurrentSession, WORKSPACE_VERSION, reference_workload, require_current_main,
+            CurrentSession, WORKSPACE_VERSION, reference_workload,
         };
         let id = std::env::var("GITHUB_LIVE_SESSION_ID").unwrap();
         let revision = std::env::var("GITHUB_LIVE_SOURCE_REVISION").unwrap();
         let workload = reference_workload();
         let current = CurrentSession::new(&id, &revision, WORKSPACE_VERSION, &workload).unwrap();
-        require_current_main(std::path::Path::new(&directory), &current)
+        wait_for_current_main(std::path::Path::new(&directory), &current)
+            .await
             .unwrap_or_else(|error| panic!("current main contribution unavailable: {error}"));
     }
     let admitted = journey::budget::precondition_session(
@@ -1193,40 +1250,79 @@ fn propagated_selection_prevents_the_asset_entry_point_from_opening_a_session() 
 
 #[test]
 fn the_actual_asset_entry_point_refuses_missing_main_before_any_request() {
-    let sandbox = Sandbox::new();
-    let directory = sandbox.subdirectory("session");
-    std::fs::create_dir_all(&directory).unwrap();
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let host = format!("http://{}", listener.local_addr().unwrap());
-    drop(listener);
-    let output = std::process::Command::new(std::env::current_exe().unwrap())
-        .args([
-            "disposable_task_and_document_asset_copies",
-            "--exact",
-            "--nocapture",
-        ])
-        .env("GITHUB_LIVE_SELECTION", "run")
-        .env("GITHUB_LIVE_TEST_GRAPHQL", format!("{host}/graphql"))
-        .env("GITHUB_LIVE_TEST_REST", &host)
-        .env("ONETASKGRAPH_LIVE_REQUIRED", "1")
-        .env("GH_PROJECTS_TOKEN", "test-token")
-        .env("GH_PROJECTS_OWNER", "fixture-owner")
-        .env("GH_PROJECTS_NUMBER", "1")
-        .env("GH_PROJECTS_REPOSITORY", "fixture-owner/repository")
-        .env("GITHUB_LIVE_SESSION_DIR", &directory)
-        .env("GITHUB_LIVE_SESSION_ID", "missing-main-test")
-        .env("GITHUB_LIVE_SOURCE_REVISION", "a".repeat(40))
-        .output()
-        .unwrap();
-    assert!(!output.status.success());
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("current main contribution unavailable")
-    );
-    let record: onetaskgraph_github_live::quota::SessionRecord =
-        serde_json::from_slice(&std::fs::read(directory.join("assets.json")).unwrap()).unwrap();
-    assert!(!record.complete);
-    assert!(
-        record.calls.is_empty(),
-        "missing main evidence must not spend another API request"
-    );
+    // Waiting for the main entry point is bounded: with no bound, a refusal at once; with a few
+    // seconds, a refusal only once they have passed; a bound that is not whole seconds, and one
+    // past any deadline the clock holds, each refused by name. None of them spends a request,
+    // and each leaves the entry point marked ended. A main entry point that ended without its
+    // record is live_pair.rs's, which runs one.
+    for (wait, refused_after, says) in [
+        ("0", 0, "current main contribution unavailable"),
+        ("3", 3, "3 seconds after this entry point began waiting"),
+        (
+            "soon",
+            0,
+            "GITHUB_LIVE_MAIN_WAIT_SECONDS must be whole seconds",
+        ),
+        (
+            "18446744073709551615",
+            0,
+            "past any deadline this clock holds",
+        ),
+    ] {
+        let sandbox = Sandbox::new();
+        let directory = sandbox.subdirectory("session");
+        std::fs::create_dir_all(&directory).unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let host = format!("http://{}", listener.local_addr().unwrap());
+        drop(listener);
+        let started = std::time::Instant::now();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "disposable_task_and_document_asset_copies",
+                "--exact",
+                "--nocapture",
+            ])
+            .env("GITHUB_LIVE_SELECTION", "run")
+            .env("GITHUB_LIVE_TEST_GRAPHQL", format!("{host}/graphql"))
+            .env("GITHUB_LIVE_TEST_REST", &host)
+            .env("ONETASKGRAPH_LIVE_REQUIRED", "1")
+            .env("GH_PROJECTS_TOKEN", "test-token")
+            .env("GH_PROJECTS_OWNER", "fixture-owner")
+            .env("GH_PROJECTS_NUMBER", "1")
+            .env("GH_PROJECTS_REPOSITORY", "fixture-owner/repository")
+            .env("GITHUB_LIVE_SESSION_DIR", &directory)
+            .env("GITHUB_LIVE_SESSION_ID", "missing-main-test")
+            .env("GITHUB_LIVE_SOURCE_REVISION", "a".repeat(40))
+            .env("GITHUB_LIVE_MAIN_WAIT_SECONDS", wait)
+            .output()
+            .unwrap();
+        let said = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "{wait}: {said}");
+        assert!(
+            said.contains("current main contribution unavailable"),
+            "{wait}: {said}"
+        );
+        assert!(said.contains(says), "{wait}: {said}");
+        assert!(
+            started.elapsed() >= std::time::Duration::from_secs(refused_after),
+            "{wait}: refused after {:?}",
+            started.elapsed()
+        );
+        let record: onetaskgraph_github_live::quota::SessionRecord =
+            serde_json::from_slice(&std::fs::read(directory.join("assets.json")).unwrap()).unwrap();
+        assert!(!record.complete);
+        assert!(
+            record.calls.is_empty(),
+            "missing main evidence must not spend another API request"
+        );
+        // The refused journey's own record is final, so it says it has ended.
+        assert!(
+            journey::quota::ended_marker(
+                &directory,
+                onetaskgraph_github_live::quota::EntryPoint::Assets
+            )
+            .exists(),
+            "{wait}: the refused asset entry point left no ended marker beside its record"
+        );
+    }
 }

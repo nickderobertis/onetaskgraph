@@ -9,6 +9,19 @@
   { "id": "downstream", "event": "workflow_run", "action": "completed" },
   { "id": "dispatch", "event": "repository_dispatch", "action": "release-smoke" },
   { "id": "schedule", "event": "schedule" },
-  { "id": "manual-default", "event": "workflow_dispatch", "inputs": { "macos": false } },
-  { "id": "manual-opt-in", "event": "workflow_dispatch", "inputs": { "macos": true } }
+  {
+    "id": "manual-default",
+    "event": "workflow_dispatch",
+    "inputs": { "macos": false, "distribution": false }
+  },
+  {
+    "id": "manual-opt-in",
+    "event": "workflow_dispatch",
+    "inputs": { "macos": true, "distribution": false }
+  },
+  {
+    "id": "manual-distribution",
+    "event": "workflow_dispatch",
+    "inputs": { "macos": false, "distribution": true }
+  }
 ]

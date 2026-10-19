@@ -265,6 +265,19 @@ expect_refused "the demand set to 0 on a credentialed step" \
   "$WORKFLOW" "GH_PROJECTS_TOKEN" "which is not the demand"
 reset_fixture
 
+# 5b. The credentialed job moved off Linux. A job that is not a matrix is one lane by
+#     itself, and the guard reads its `runs-on`; scoped to another platform, it is not the
+#     one Linux lane the session belongs to.
+substitute "$WORKFLOW" "  test-linux:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest" "  test-linux:
+    if: github.event_name == 'pull_request'
+    runs-on: windows-latest"
+run_guard
+expect_refused "the credentialed job running on another platform" \
+  "$WORKFLOW" "GH_PROJECTS_TOKEN" "not scoped to one Linux"
+reset_fixture
+
 # 6. The fork exception with its two branches swapped, so the run that is NOT a fork pull
 #    request — every run the merge waits on — is the one that stops demanding a credential.
 substitute "$WORKFLOW" \
@@ -341,6 +354,19 @@ substitute "$FIXTURE_STEP" 'unset GH_PROJECTS_TOKEN LINEAR_API_KEY ONETASKGRAPH_
 run_guard
 expect_refused "a step re-running a live crate's package with the credentials intact" \
   "$FIXTURE_STEP" "does not clear GH_PROJECTS_TOKEN"
+reset_fixture
+
+# 13b. A new script re-running a live crate's package that is no crate's `test` target
+#      command. The script a live crate's `test` target runs is that target and is left to
+#      itself; anything else is a step outside it, held to clearing the credentials.
+# The fixture's one command, written in two parts so this script is not itself read as one.
+rerun="cargo test --quiet"
+printf '%s -p onetaskgraph-linear --all-features --locked\n' "$rerun" \
+  >"$scratch/repo/scripts/rerun-linear.sh"
+run_guard
+expect_refused "a new script re-running a live crate's package from outside its test target" \
+  "scripts/rerun-linear.sh" "is not in the CLEARERS map"
+rm -f "$scratch/repo/scripts/rerun-linear.sh"
 reset_fixture
 
 # 14. The fork exception itself, which the guard must ACCEPT. GitHub hands a fork pull

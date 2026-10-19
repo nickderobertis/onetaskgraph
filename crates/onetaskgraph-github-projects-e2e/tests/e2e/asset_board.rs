@@ -274,6 +274,14 @@ impl Board {
     pub fn calls(&self) -> Vec<Call> {
         self.state.lock().unwrap().calls.clone()
     }
+    /// How many calls [`Self::calls`] holds now: a mark to read [`Self::calls_since`] from.
+    pub fn calls_count(&self) -> usize {
+        self.state.lock().unwrap().calls.len()
+    }
+    /// The calls [`Self::calls`] holds from index `mark` on, copying none before it.
+    pub fn calls_since(&self, mark: usize) -> Vec<Call> {
+        self.state.lock().unwrap().calls[mark..].to_vec()
+    }
     /// The bytes this host holds at `path`, as an authenticated read of it would answer.
     pub fn attachment(&self, path: &str) -> Option<Vec<u8>> {
         self.state.lock().unwrap().assets.get(path).cloned()

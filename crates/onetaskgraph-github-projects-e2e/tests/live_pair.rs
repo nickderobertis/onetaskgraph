@@ -4,10 +4,67 @@ use onetaskgraph_github_live::quota::{
     reference_workload,
 };
 use std::{
+    io::{Read as _, Write as _},
+    net::{Shutdown, TcpListener, TcpStream},
     path::PathBuf,
     process::{Command, Stdio},
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
+
+/// A loopback relay in front of the fixture for one entry point: every byte it carries goes
+/// both ways unchanged, and it notes when it first accepted a connection and when it last
+/// carried a byte, so which entry point spoke to the fixture when is read off the wire.
+struct Relay {
+    origin: String,
+    first: Arc<Mutex<Option<Instant>>>,
+    last: Arc<Mutex<Option<Instant>>>,
+}
+
+impl Relay {
+    fn to(upstream: &str) -> Self {
+        let upstream = upstream
+            .strip_prefix("http://")
+            .expect("the fixture listens on plain HTTP")
+            .to_owned();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let first = Arc::new(Mutex::new(None));
+        let last = Arc::new(Mutex::new(None));
+        let (accepted, carried) = (first.clone(), last.clone());
+        std::thread::spawn(move || {
+            for client in listener.incoming() {
+                let Ok(client) = client else { return };
+                accepted.lock().unwrap().get_or_insert_with(Instant::now);
+                // A fixture already gone refuses the connection, as it would unrelayed.
+                let Ok(server) = TcpStream::connect(&upstream) else {
+                    continue;
+                };
+                for (mut from, mut into) in [
+                    (client.try_clone().unwrap(), server.try_clone().unwrap()),
+                    (server, client),
+                ] {
+                    let carried = carried.clone();
+                    std::thread::spawn(move || {
+                        let mut buffer = [0; 16 * 1024];
+                        while let Ok(read) = from.read(&mut buffer) {
+                            if read == 0 || into.write_all(&buffer[..read]).is_err() {
+                                break;
+                            }
+                            *carried.lock().unwrap() = Some(Instant::now());
+                        }
+                        let _ = into.shutdown(Shutdown::Write);
+                    });
+                }
+            }
+        });
+        Self {
+            origin,
+            first,
+            last,
+        }
+    }
+}
 
 fn executable(package: &str, target: &str) -> PathBuf {
     let directory = std::env::current_exe()
@@ -110,6 +167,11 @@ fn a_shared_board_smaller_than_the_measured_one_runs_and_bills_within_the_budget
 }
 
 #[test]
+fn an_asset_entry_point_started_before_main_waits_for_its_record_then_completes_the_session() {
+    run_pair("assets-first");
+}
+
+#[test]
 fn missing_or_unadmitted_board_observations_never_start_the_fixture_or_make_a_bill() {
     for scenario in ["missing-items", "missing-fields", "board-91", "board-50"] {
         run_pair(scenario);
@@ -147,6 +209,58 @@ fn run_pair(scenario: &str) {
     let endpoint = std::fs::read_to_string(&ready).unwrap();
     let host = endpoint.strip_suffix("/graphql").unwrap();
     let revision = "a".repeat(40);
+    // Each entry point reaches the fixture through a relay of its own: main for everything it
+    // sends, and the asset entry point for its REST requests, the first of which is the
+    // allowance read that follows its wait. Its GraphQL goes straight to the fixture, whose
+    // attachment URLs name the origin it is reached at.
+    let relays = [Relay::to(host), Relay::to(host)];
+    let entry_point = |package: &str, test: &str| {
+        let assets = package == "onetaskgraph-github-projects-e2e";
+        let relay = &relays[usize::from(assets)];
+        let graphql = if assets {
+            endpoint.clone()
+        } else {
+            format!("{}/graphql", relay.origin)
+        };
+        let mut command = Command::new(executable(package, "live"));
+        command
+            .args([test, "--exact", "--nocapture"])
+            .env("GITHUB_LIVE_SELECTION", "run")
+            .env("GITHUB_LIVE_TEST_GRAPHQL", graphql)
+            .env("GITHUB_LIVE_TEST_REST", &relay.origin)
+            .env("GH_PROJECTS_TOKEN", "test-token")
+            .env("GH_PROJECTS_OWNER", "octo-org")
+            .env("GH_PROJECTS_NUMBER", "7")
+            .env("GH_PROJECTS_REPOSITORY", "acme/work")
+            .env("ONETASKGRAPH_LIVE_REQUIRED", "1")
+            .env("GITHUB_LIVE_SESSION_DIR", &records)
+            .env("GITHUB_LIVE_SESSION_ID", "entry-point-pair")
+            .env("GITHUB_LIVE_SOURCE_REVISION", &revision)
+            .env("GITHUB_ACTIONS", "true")
+            .env("GITHUB_RUN_ID", "37616803489")
+            .env("GITHUB_RUN_ATTEMPT", "2");
+        command
+    };
+    // With `assets-first` the asset entry point starts before main, as Nx may start it, and is
+    // waiting on main's record once it has reserved its own; main then runs beside it.
+    let mut waiting = None;
+    if scenario == "assets-first" {
+        waiting = Some(
+            entry_point(
+                "onetaskgraph-github-projects-e2e",
+                "disposable_task_and_document_asset_copies",
+            )
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+        );
+        let reserved = Instant::now();
+        while !records.join("assets.json").exists() {
+            assert!(reserved.elapsed() < Duration::from_secs(60));
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
     let mut outputs = Vec::new();
     for (package, test) in [
         (
@@ -158,24 +272,13 @@ fn run_pair(scenario: &str) {
             "disposable_task_and_document_asset_copies",
         ),
     ] {
-        let output = Command::new(executable(package, "live"))
-            .args([test, "--exact", "--nocapture"])
-            .env("GITHUB_LIVE_SELECTION", "run")
-            .env("GITHUB_LIVE_TEST_GRAPHQL", &endpoint)
-            .env("GITHUB_LIVE_TEST_REST", host)
-            .env("GH_PROJECTS_TOKEN", "test-token")
-            .env("GH_PROJECTS_OWNER", "octo-org")
-            .env("GH_PROJECTS_NUMBER", "7")
-            .env("GH_PROJECTS_REPOSITORY", "acme/work")
-            .env("ONETASKGRAPH_LIVE_REQUIRED", "1")
-            .env("GITHUB_LIVE_SESSION_DIR", &records)
-            .env("GITHUB_LIVE_SESSION_ID", "entry-point-pair")
-            .env("GITHUB_LIVE_SOURCE_REVISION", &revision)
-            .env("GITHUB_ACTIONS", "true")
-            .env("GITHUB_RUN_ID", "37616803489")
-            .env("GITHUB_RUN_ATTEMPT", "2")
-            .output()
-            .unwrap();
+        let output = if package == "onetaskgraph-github-projects-e2e"
+            && let Some(asset) = waiting.take()
+        {
+            asset.wait_with_output().unwrap()
+        } else {
+            entry_point(package, test).output().unwrap()
+        };
         let success = output.status.success();
         outputs.push(output);
         if !success {
@@ -381,6 +484,23 @@ fn run_pair(scenario: &str) {
                 .any(|call| call.phase == Phase::Capabilities)
         );
         assert!(!records.join("assets.json").exists());
+        // Main ended without completing its record, and its own marker says so: an asset entry
+        // point waiting on it refuses at once, naming that, rather than at the end of its bound.
+        assert!(records.join("main.ended").exists());
+        let asset = entry_point(
+            "onetaskgraph-github-projects-e2e",
+            "disposable_task_and_document_asset_copies",
+        )
+        .env("GITHUB_LIVE_MAIN_WAIT_SECONDS", "600")
+        .output()
+        .unwrap();
+        let said = String::from_utf8_lossy(&asset.stderr);
+        assert!(!asset.status.success(), "{said}");
+        assert!(
+            said.contains("the main entry point ended without completing it"),
+            "{said}"
+        );
+        assert!(relays[1].first.lock().unwrap().is_none(), "{said}");
         let workload = reference_workload();
         let current =
             CurrentSession::new("entry-point-pair", &revision, WORKSPACE_VERSION, &workload)
@@ -388,7 +508,7 @@ fn run_pair(scenario: &str) {
         assert!(read_bill(&records, &current).is_err());
         return;
     }
-    for output in outputs {
+    for output in &outputs {
         assert!(
             output.status.success(),
             "stdout: {}\nstderr: {}\nfixture: {}",
@@ -402,6 +522,85 @@ fn run_pair(scenario: &str) {
         "{}",
         std::fs::read_to_string(directory.join("fixture.log")).unwrap()
     );
+    // Each entry point reports what each of its phases took, live, past the harness's capture:
+    // the one place a credentialed run's log says where the session's time went. The figures
+    // are the session's own: its phases' requests add up to every call its record holds, and
+    // its clock only moves forward, each phase within the time the session had taken by then.
+    for ((output, phases), record) in outputs
+        .iter()
+        .zip([
+            &["Admission", "Setup", "ChangeToken", "Cleanup"][..],
+            &["AssetSetup", "AssetTask", "AssetDocument"][..],
+        ])
+        .zip(["main.json", "assets.json"])
+    {
+        let said = String::from_utf8_lossy(&output.stderr);
+        let timings: Vec<(String, f64, usize, f64)> = said
+            .lines()
+            .filter_map(|line| line.strip_prefix("live-session timing: "))
+            .map(|line| {
+                let (phase, rest) = line.split_once(" took ").expect("a phase and its time");
+                let (took, rest) = rest.split_once("s and ").expect("its seconds");
+                let (requests, rest) = rest
+                    .split_once(" requests (session at ")
+                    .expect("its requests");
+                let at = rest.strip_suffix("s)").expect("the session's clock");
+                (
+                    phase.rsplit(' ').next().unwrap().to_owned(),
+                    took.parse().expect("seconds"),
+                    requests.parse().expect("a request count"),
+                    at.parse().expect("seconds"),
+                )
+            })
+            .collect();
+        for phase in phases {
+            assert!(
+                timings.iter().any(|(timed, ..)| timed == phase),
+                "no timing line for {phase}: {said}"
+            );
+        }
+        let recorded: SessionRecord =
+            serde_json::from_slice(&std::fs::read(records.join(record)).unwrap()).unwrap();
+        assert_eq!(
+            timings
+                .iter()
+                .map(|(_, _, requests, _)| requests)
+                .sum::<usize>(),
+            recorded.calls.len(),
+            "the phases' requests are every call {record} holds: {said}"
+        );
+        let mut clock = 0.0;
+        for (phase, took, _, at) in &timings {
+            assert!(
+                *took >= 0.0 && *took <= *at + 0.05,
+                "{phase} took {took}s by {at}s"
+            );
+            assert!(
+                *at >= clock,
+                "the session's clock went back to {at}s at {phase}"
+            );
+            clock = *at;
+        }
+    }
+    // An asset entry point started first sends nothing until main has sent everything: its
+    // first request is a REST one, through its relay.
+    if scenario == "assets-first" {
+        let main_last = relays[0]
+            .last
+            .lock()
+            .unwrap()
+            .expect("main reached the fixture");
+        let asset_first = relays[1]
+            .first
+            .lock()
+            .unwrap()
+            .expect("assets reached the fixture");
+        assert!(
+            asset_first >= main_last,
+            "the asset entry point connected {:?} before main's last byte",
+            main_last - asset_first
+        );
+    }
     let workload = reference_workload();
     let current =
         CurrentSession::new("entry-point-pair", &revision, WORKSPACE_VERSION, &workload).unwrap();

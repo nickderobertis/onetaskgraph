@@ -2,16 +2,15 @@
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
   "name": "sdk-python",
   "projectType": "library",
-  "tags": ["lang:python", "layer:sdk"],
+  "tags": ["lang:python", "layer:sdk", "test-in-coverage:sdk"],
   "implicitDependencies": ["onetaskgraph"],
   "targets": {
     "bootstrap": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "uv sync --frozen",
-        "cwd": "sdks/python"
+        "command": "bash sdks/python/sync.sh"
       },
-      "//": "Uncached: it reaches PyPI and writes a .venv outside the cacheable output set."
+      "//": "Uncached: it reaches PyPI and writes a .venv outside the cacheable output set. `uv sync --frozen`, leaving the CLI member out where CI asks (sdks/python/sync.sh)."
     },
     "check": {
       "executor": "nx:noop",
@@ -60,10 +59,20 @@
       "executor": "nx:run-commands",
       "dependsOn": ["onetaskgraph:build"],
       "options": {
-        "command": "uv run --frozen pytest -q --no-cov",
+        "commands": ["uv run --frozen pytest -q --no-cov", "bash check-sync.sh"],
+        "parallel": false,
         "cwd": "sdks/python"
       },
       "//": "The tests spawn target/debug/onetaskgraph, on the same terms as generate-check."
+    },
+    "test-uncovered": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bash check-sync.sh",
+        "cwd": "sdks/python"
+      },
+      "cache": false,
+      "//": "Uncached: it syncs the lock into a scratch environment, which reads the root workspace's manifests outside this project's inputs. The instrumented pytest run cannot stand in for it on Linux."
     },
     "coverage": {
       "executor": "nx:run-commands",

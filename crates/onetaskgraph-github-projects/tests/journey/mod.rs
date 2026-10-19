@@ -186,6 +186,19 @@ fn endpoints() -> &'static Endpoints {
     ENDPOINTS.get_or_init(Endpoints::github)
 }
 
+/// Wait on GitHub's clock, and only on GitHub's.
+///
+/// GitHub stamps every write to the whole second and lists what was just written a moment
+/// later, so the journey waits a second between two writes that must read as different
+/// seconds, and before listing what it has just deleted. A stand-in stamps each write with a
+/// later tick of its own and lists exactly what it holds, so against one there is nothing to
+/// wait for: the same journey, at the same checks, without the wall-clock time.
+async fn github_pause(duration: std::time::Duration) {
+    if endpoints().source.is_none() {
+        tokio::time::sleep(duration).await;
+    }
+}
+
 /// The configuration the source under test is built from, for one board.
 ///
 /// Everything the credentialed lane builds is here plus whatever [`Endpoints::source`]
@@ -902,7 +915,7 @@ async fn remove_live_origin_field(token: &str, project_id: &str) -> Result<(), S
             )
             .await?;
         }
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        github_pause(std::time::Duration::from_secs(1)).await;
     }
     Err("live origin field cleanup left the temporary field behind".to_owned())
 }
@@ -1035,7 +1048,7 @@ async fn remove_live_artifacts(
                 delete_issue(token, &issue_id).await?;
             }
         }
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        github_pause(std::time::Duration::from_secs(1)).await;
     }
     Err(format!(
         "live artifact cleanup left project items: {}{}",
@@ -3203,9 +3216,9 @@ async fn drive_every_declared_capability(
     )
     .map_err(|declined| declined.to_string())?;
     every_change_kind_moves_a_tasks_token(
+        run,
         writer,
         rebuilt,
-        (&run.token, &run.project_id),
         (&second_id, &first_id, &orphan_id),
         (&beta_id, &alpha_id),
         (&label_id, &run.title(6)),
@@ -3381,169 +3394,221 @@ async fn moved(
 }
 
 /// Every change kind `docs/plugin-protocol.md` §4.13d says a GitHub task's change token covers,
-/// made to one live task in turn, and the token held to moving to a later one after each.
+/// each made alone to a live task and the token held to moving to a later one after it.
 ///
 /// GitHub reports both of the token's times to the whole second, and the plugin gives a token
 /// only once its item's last change is more than `change_token::SETTLED` behind the server's
 /// clock, so every read of a token here — the first included, of a task this run just wrote —
-/// waits [`Endpoints::settle`] past the change before it. Each change also waits a second past
-/// the one before, so no two of them share a second.
+/// waits [`Endpoints::settle`] past the change before it. That wait, not the work, is what the
+/// leg costs, so its kinds run in three lanes at once, each on a task of its own: within a lane
+/// every kind waits a second past the one before, so no two share a second, and is asserted
+/// against that task's own token from before it, through the same read by id. A lane's tasks
+/// carry nothing another lane changes, so no kind's token can move for another lane's change.
 async fn every_change_kind_moves_a_tasks_token(
+    run: &LiveRun,
     writer: &dyn TaskSource,
     rebuilt: &dyn Fn() -> Box<dyn TaskSource>,
-    (token, board): (&str, &str),
     (task, first, orphan): (&NativeId, &NativeId, &NativeId),
     (filed_under, other_project): (&NativeId, &NativeId),
     (label_id, renamed): (&str, &str),
 ) -> Result<(), String> {
+    let (token, board) = (run.token.as_str(), run.project_id.as_str());
     let body = |text: &str| {
         CommentBody::new(text).map_err(|error| format!("a live comment body: {error}"))
     };
-    let pause = || tokio::time::sleep(std::time::Duration::from_millis(1_100));
-    tokio::time::sleep(endpoints().settle).await;
+    let pause = || github_pause(std::time::Duration::from_millis(1_100));
     let reader = TokenReader {
         rebuilt,
         kind: Observed::Task,
     };
-    let mut before = settled_token_of(reader, task, "before any change").await?;
-
-    pause().await;
-    let comment = writer
-        .add_comment(
-            task,
-            &NewComment {
-                body: body("temporary credentialed comment; the live lane removes it")?,
-                author: None,
-            },
-        )
-        .await
-        .map_err(|error| format!("live comment write failed: {error}"))?
-        .ok_or_else(|| "the task to comment on was not there".to_owned())?;
-    before = moved(reader, task, "a comment added", &before).await?;
-
-    pause().await;
-    writer
-        .edit_comment(
-            task,
-            &comment.id,
-            &body("temporary credentialed comment, edited")?,
-        )
-        .await
-        .map_err(|error| format!("live comment edit failed: {error}"))?
-        .ok_or_else(|| "the comment to edit was not there".to_owned())?;
-    before = moved(reader, task, "a comment edited", &before).await?;
-
-    pause().await;
-    writer
-        .delete_comment(task, &comment.id)
-        .await
-        .map_err(|error| format!("live comment deletion failed: {error}"))?
-        .ok_or_else(|| "the comment to delete was not there".to_owned())?;
-    before = moved(reader, task, "a comment deleted", &before).await?;
-
-    pause().await;
-    writer
-        .set_task_content(task, "temporary credentialed write, its body edited")
-        .await
-        .map_err(|error| format!("live content write failed: {error}"))?
-        .ok_or_else(|| "the task to edit was not there".to_owned())?;
-    before = moved(reader, task, "a body edit", &before).await?;
-
-    pause().await;
-    let renamed = TaskUpdate {
-        title: Some(renamed.to_owned()),
-        ..TaskUpdate::default()
-    };
-    writer
-        .update_task(task, &renamed)
-        .await
-        .map_err(|error| format!("live title write failed: {error}"))?
-        .ok_or_else(|| "the task to rename was not there".to_owned())?;
-    before = moved(reader, task, "a title edit", &before).await?;
-
-    pause().await;
-    attach_artifact_label(token, &task.0, label_id).await?;
-    before = moved(reader, task, "a label change", &before).await?;
-
-    pause().await;
-    writer
-        .set_task_metadata(
-            task,
-            &MetadataKey::new("live.change_kind").map_err(|error| format!("a key: {error}"))?,
-            &json!("metadata"),
-        )
-        .await
-        .map_err(|error| format!("live metadata write failed: {error}"))?
-        .ok_or_else(|| "the task to annotate was not there".to_owned())?;
-    before = moved(reader, task, "a metadata change", &before).await?;
-
-    // A board text field — the origin field, the one this lane's board holds — written as a
-    // person editing it would, so nothing else of the issue moves with it.
-    pause().await;
-    rewrite_origin_field(token, board, &task.0, "live:origin-rewritten").await?;
-    before = moved(reader, task, "a board text field change", &before).await?;
-
-    pause().await;
     let depends = |on: &[&NativeId]| TaskUpdate {
         depends_on: Some(on.iter().map(|far| blocks(far, ItemKind::Task)).collect()),
         ..TaskUpdate::default()
     };
-    writer
-        .update_task(task, &depends(&[first, orphan]))
-        .await
-        .map_err(|error| format!("live dependency write failed: {error}"))?
-        .ok_or_else(|| "the task to make depend was not there".to_owned())?;
-    before = moved(reader, task, "a dependency added", &before).await?;
+    // Two tasks of this run's own beside `task`, which keeps the project membership it was
+    // written with; the one whose dependencies change starts depending on `first`, as `task`
+    // was written, so each dependency kind is the same edit to the same set as before.
+    let open = Status {
+        category: StatusCategory::Todo,
+        name: run.status_option.clone(),
+    };
+    let mut lane_tasks = Vec::new();
+    for (offset, depends_on) in [
+        (CHANGE_LANE_OFFSET, vec![]),
+        (CHANGE_LANE_OFFSET + 1, vec![blocks(first, ItemKind::Task)]),
+    ] {
+        let id = writer
+            .write_task(&ItemWrite {
+                target: None,
+                item: artifact_task(
+                    &run.title(offset),
+                    "temporary credentialed write; the live lane removes this".into(),
+                    &open,
+                    None,
+                    BTreeMap::new(),
+                ),
+                depends_on,
+            })
+            .await
+            .map_err(|error| format!("live write of a change-kind task failed: {error}"))?;
+        await_on_board(rebuilt, &id, ItemKind::Task, &run.prefix(), BOARD_WAIT).await?;
+        lane_tasks.push(id);
+    }
+    let (written, related) = (&lane_tasks[0], &lane_tasks[1]);
+    tokio::time::sleep(endpoints().settle).await;
 
-    pause().await;
-    writer
-        .update_task(task, &depends(&[first]))
-        .await
-        .map_err(|error| format!("live dependency removal failed: {error}"))?
-        .ok_or_else(|| "the task to unhook was not there".to_owned())?;
-    before = moved(reader, task, "a dependency removed", &before).await?;
+    let text_and_comments = async {
+        let mut before = settled_token_of(reader, written, "before any change").await?;
+        pause().await;
+        let comment = writer
+            .add_comment(
+                written,
+                &NewComment {
+                    body: body("temporary credentialed comment; the live lane removes it")?,
+                    author: None,
+                },
+            )
+            .await
+            .map_err(|error| format!("live comment write failed: {error}"))?
+            .ok_or_else(|| "the task to comment on was not there".to_owned())?;
+        before = moved(reader, written, "a comment added", &before).await?;
 
-    // Replaced: one dependency removed and another added in one write, which leaves the count
-    // of what the task depends on where it was. GitHub moves neither of the token's times for a
-    // dependency, so this is the case only the dependency-event count can tell apart.
-    pause().await;
-    writer
-        .update_task(task, &depends(&[orphan]))
-        .await
-        .map_err(|error| format!("live dependency replacement failed: {error}"))?
-        .ok_or_else(|| "the task to rewire was not there".to_owned())?;
-    before = moved(reader, task, "a dependency replaced", &before).await?;
-
-    // Project membership, which is a parent issue: taken out of its project, then filed under
-    // another, each by the one relationship mutation a person's move sends, so nothing else of
-    // the issue moves with it.
-    pause().await;
-    refile(token, graphql::REMOVE_SUB_ISSUE, filed_under, task).await?;
-    before = moved(reader, task, "taken out of its project", &before).await?;
-
-    pause().await;
-    refile(token, graphql::ADD_SUB_ISSUE, other_project, task).await?;
-    before = moved(reader, task, "filed under another project", &before).await?;
-
-    if writer.capabilities().priority.is_native() {
         pause().await;
         writer
-            .set_task_priority(task, Priority::Low)
+            .edit_comment(
+                written,
+                &comment.id,
+                &body("temporary credentialed comment, edited")?,
+            )
             .await
-            .map_err(|error| format!("live priority write failed: {error}"))?
-            .ok_or_else(|| "the task to prioritise was not there".to_owned())?;
-        before = moved(reader, task, "a priority change", &before).await?;
-    }
+            .map_err(|error| format!("live comment edit failed: {error}"))?
+            .ok_or_else(|| "the comment to edit was not there".to_owned())?;
+        before = moved(reader, written, "a comment edited", &before).await?;
 
-    // Last, because it closes the issue: the status is a board field, and done is the state
-    // the board moves a task to without an option this board may not have.
-    pause().await;
-    writer
-        .set_task_status(task, StatusCategory::Done)
-        .await
-        .map_err(|error| format!("live status write failed: {error}"))?
-        .ok_or_else(|| "the task to finish was not there".to_owned())?;
-    moved(reader, task, "a status change", &before).await?;
+        pause().await;
+        writer
+            .delete_comment(written, &comment.id)
+            .await
+            .map_err(|error| format!("live comment deletion failed: {error}"))?
+            .ok_or_else(|| "the comment to delete was not there".to_owned())?;
+        before = moved(reader, written, "a comment deleted", &before).await?;
+
+        pause().await;
+        writer
+            .set_task_content(written, "temporary credentialed write, its body edited")
+            .await
+            .map_err(|error| format!("live content write failed: {error}"))?
+            .ok_or_else(|| "the task to edit was not there".to_owned())?;
+        before = moved(reader, written, "a body edit", &before).await?;
+
+        pause().await;
+        let renamed = TaskUpdate {
+            title: Some(renamed.to_owned()),
+            ..TaskUpdate::default()
+        };
+        writer
+            .update_task(written, &renamed)
+            .await
+            .map_err(|error| format!("live title write failed: {error}"))?
+            .ok_or_else(|| "the task to rename was not there".to_owned())?;
+        moved(reader, written, "a title edit", &before).await?;
+        Ok::<(), String>(())
+    };
+
+    let labels_metadata_and_dependencies = async {
+        let mut before = settled_token_of(reader, related, "before any change").await?;
+        pause().await;
+        attach_artifact_label(token, &related.0, label_id).await?;
+        before = moved(reader, related, "a label change", &before).await?;
+
+        pause().await;
+        writer
+            .set_task_metadata(
+                related,
+                &MetadataKey::new("live.change_kind").map_err(|error| format!("a key: {error}"))?,
+                &json!("metadata"),
+            )
+            .await
+            .map_err(|error| format!("live metadata write failed: {error}"))?
+            .ok_or_else(|| "the task to annotate was not there".to_owned())?;
+        before = moved(reader, related, "a metadata change", &before).await?;
+
+        pause().await;
+        writer
+            .update_task(related, &depends(&[first, orphan]))
+            .await
+            .map_err(|error| format!("live dependency write failed: {error}"))?
+            .ok_or_else(|| "the task to make depend was not there".to_owned())?;
+        before = moved(reader, related, "a dependency added", &before).await?;
+
+        pause().await;
+        writer
+            .update_task(related, &depends(&[first]))
+            .await
+            .map_err(|error| format!("live dependency removal failed: {error}"))?
+            .ok_or_else(|| "the task to unhook was not there".to_owned())?;
+        before = moved(reader, related, "a dependency removed", &before).await?;
+
+        // Replaced: one dependency removed and another added in one write, which leaves the
+        // count of what the task depends on where it was. GitHub moves neither of the token's
+        // times for a dependency, so this is the case only the dependency-event count can tell
+        // apart.
+        pause().await;
+        writer
+            .update_task(related, &depends(&[orphan]))
+            .await
+            .map_err(|error| format!("live dependency replacement failed: {error}"))?
+            .ok_or_else(|| "the task to rewire was not there".to_owned())?;
+        moved(reader, related, "a dependency replaced", &before).await?;
+        Ok::<(), String>(())
+    };
+
+    let board_fields_and_membership = async {
+        let mut before = settled_token_of(reader, task, "before any change").await?;
+        // A board text field — the origin field, the one this lane's board holds — written as
+        // a person editing it would, so nothing else of the issue moves with it.
+        pause().await;
+        rewrite_origin_field(token, board, &task.0, "live:origin-rewritten").await?;
+        before = moved(reader, task, "a board text field change", &before).await?;
+
+        // Project membership, which is a parent issue: taken out of its project, then filed
+        // under another, each by the one relationship mutation a person's move sends, so
+        // nothing else of the issue moves with it.
+        pause().await;
+        refile(token, graphql::REMOVE_SUB_ISSUE, filed_under, task).await?;
+        before = moved(reader, task, "taken out of its project", &before).await?;
+
+        pause().await;
+        refile(token, graphql::ADD_SUB_ISSUE, other_project, task).await?;
+        before = moved(reader, task, "filed under another project", &before).await?;
+
+        if writer.capabilities().priority.is_native() {
+            pause().await;
+            writer
+                .set_task_priority(task, Priority::Low)
+                .await
+                .map_err(|error| format!("live priority write failed: {error}"))?
+                .ok_or_else(|| "the task to prioritise was not there".to_owned())?;
+            before = moved(reader, task, "a priority change", &before).await?;
+        }
+
+        // Last, because it closes the issue: the status is a board field, and done is the state
+        // the board moves a task to without an option this board may not have.
+        pause().await;
+        writer
+            .set_task_status(task, StatusCategory::Done)
+            .await
+            .map_err(|error| format!("live status write failed: {error}"))?
+            .ok_or_else(|| "the task to finish was not there".to_owned())?;
+        moved(reader, task, "a status change", &before).await?;
+        Ok::<(), String>(())
+    };
+
+    tokio::try_join!(
+        text_and_comments,
+        labels_metadata_and_dependencies,
+        board_fields_and_membership
+    )?;
     Ok(())
 }
 
@@ -3581,96 +3646,112 @@ async fn every_facet_change_moves_a_projects_and_a_documents_token(
         rebuilt,
         kind: Observed::Document,
     };
-    attach_artifact_label(&run.token, &beta.0, label_id).await?;
-    attach_artifact_label(&run.token, &design.0, label_id).await?;
-    tokio::time::sleep(endpoints().settle).await;
-    let mut held_project = settled_token_of(project, beta, "before the label legs").await?;
-    let mut held_document = settled_token_of(document, design, "before the label legs").await?;
-
-    // Renamed to another of this run's own label names, so its cleanup still finds it.
-    let renamed = run.own.label(run.stamp_micros + 1);
-    change_artifact_label(run, label_name, json!({"new_name": renamed})).await?;
-    held_project = moved(project, beta, "its label renamed", &held_project).await?;
-    held_document = moved(document, design, "its label renamed", &held_document).await?;
-
-    change_artifact_label(run, &renamed, json!({"color": "5319e7"})).await?;
-    // The scratch leg reads its own token before its change, so this one is not held on.
-    moved(project, beta, "its label recoloured", &held_project).await?;
-    held_document = moved(document, design, "its label recoloured", &held_document).await?;
-
-    // The scratch field is removed whether or not the leg holds.
-    let scratch = create_scratch_field(run).await?;
-    let renamed_option = async {
-        set_scratch_value(run, beta, &scratch).await?;
-        tokio::time::sleep(endpoints().settle).await;
-        let before = settled_token_of(project, beta, "with a scratch option set").await?;
-        rename_scratch_option(run, &scratch).await?;
-        moved(project, beta, "a scratch field option renamed", &before).await
-    }
-    .await;
-    let removed = delete_scratch_field(run, &scratch).await;
-    held_project = renamed_option?;
-    removed?;
-
-    writer
-        .delete_project(alpha)
-        .await
-        .map_err(|error| format!("live project deletion failed: {error}"))?;
-    let after = moved(project, beta, "its native far end deleted", &held_project).await?;
-    ensure!(
-        order(&held_project, &after).is_none(),
-        "deleting beta's far end left its token {after} ordered against the one held, \
-         {held_project}; a cache would have served it"
-    );
-    let after = moved(document, design, "its project deleted", &held_document).await?;
-    ensure!(
-        order(&held_document, &after).is_none(),
-        "deleting the document's project left its token {after} ordered against the one held, \
-         {held_document}; a cache would have served it"
-    );
-
-    // A sub-issue makes the task a project.
-    let task = TokenReader {
-        rebuilt,
-        kind: Observed::Task,
-    };
-    let before = settled_token_of(task, orphan, "before it gains a sub-issue").await?;
-    let open = Status {
-        category: StatusCategory::Todo,
-        name: run.status_option.clone(),
-    };
-    let child = writer
-        .write_task(&ItemWrite {
-            target: None,
-            item: artifact_task(
-                &run.title(LAST_TITLE_OFFSET),
-                "temporary credentialed write; the live lane removes this".into(),
-                &open,
-                None,
-                BTreeMap::new(),
-            ),
-            depends_on: vec![],
-        })
-        .await
-        .map_err(|error| format!("live sub-issue write failed: {error}"))?;
-    refile(&run.token, graphql::ADD_SUB_ISSUE, orphan, &child).await?;
-    tokio::time::sleep(endpoints().settle).await;
-    let became = settled_token_of(
-        TokenReader {
+    // The sub-issue leg's task carries neither the label nor the scratch field nor a project the
+    // deletion reaches, so it runs beside the others rather than after them; each of the others
+    // reads the project's and the document's tokens at once after the one change both see.
+    let sub_issue = async {
+        let task = TokenReader {
             rebuilt,
-            kind: Observed::Project,
-        },
-        orphan,
-        "after it gained a sub-issue",
-    )
-    .await?;
-    ensure!(
-        !matches!(
-            order(&before, &became),
-            Some(std::cmp::Ordering::Equal | std::cmp::Ordering::Greater)
-        ),
-        "a task gaining a sub-issue left its token {became} at or after {before}"
-    );
+            kind: Observed::Task,
+        };
+        // Its last change, a dependency the lanes above made of it, settles first.
+        tokio::time::sleep(endpoints().settle).await;
+        let before = settled_token_of(task, orphan, "before it gains a sub-issue").await?;
+        let open = Status {
+            category: StatusCategory::Todo,
+            name: run.status_option.clone(),
+        };
+        let child = writer
+            .write_task(&ItemWrite {
+                target: None,
+                item: artifact_task(
+                    &run.title(LAST_TITLE_OFFSET),
+                    "temporary credentialed write; the live lane removes this".into(),
+                    &open,
+                    None,
+                    BTreeMap::new(),
+                ),
+                depends_on: vec![],
+            })
+            .await
+            .map_err(|error| format!("live sub-issue write failed: {error}"))?;
+        refile(&run.token, graphql::ADD_SUB_ISSUE, orphan, &child).await?;
+        tokio::time::sleep(endpoints().settle).await;
+        let became = settled_token_of(
+            TokenReader {
+                rebuilt,
+                kind: Observed::Project,
+            },
+            orphan,
+            "after it gained a sub-issue",
+        )
+        .await?;
+        ensure!(
+            !matches!(
+                order(&before, &became),
+                Some(std::cmp::Ordering::Equal | std::cmp::Ordering::Greater)
+            ),
+            "a task gaining a sub-issue left its token {became} at or after {before}"
+        );
+        Ok::<(), String>(())
+    };
+    let labels_fields_and_deletion = async {
+        attach_artifact_label(&run.token, &beta.0, label_id).await?;
+        attach_artifact_label(&run.token, &design.0, label_id).await?;
+        tokio::time::sleep(endpoints().settle).await;
+        let mut held_project = settled_token_of(project, beta, "before the label legs").await?;
+        let mut held_document = settled_token_of(document, design, "before the label legs").await?;
+
+        // Renamed to another of this run's own label names, so its cleanup still finds it.
+        let renamed = run.own.label(run.stamp_micros + 1);
+        change_artifact_label(run, label_name, json!({"new_name": renamed})).await?;
+        (held_project, held_document) = tokio::try_join!(
+            moved(project, beta, "its label renamed", &held_project),
+            moved(document, design, "its label renamed", &held_document),
+        )?;
+
+        change_artifact_label(run, &renamed, json!({"color": "5319e7"})).await?;
+        // The scratch leg reads its own token before its change, so this one is not held on.
+        (_, held_document) = tokio::try_join!(
+            moved(project, beta, "its label recoloured", &held_project),
+            moved(document, design, "its label recoloured", &held_document),
+        )?;
+
+        // The scratch field is removed whether or not the leg holds.
+        let scratch = create_scratch_field(run).await?;
+        let renamed_option = async {
+            set_scratch_value(run, beta, &scratch).await?;
+            tokio::time::sleep(endpoints().settle).await;
+            let before = settled_token_of(project, beta, "with a scratch option set").await?;
+            rename_scratch_option(run, &scratch).await?;
+            moved(project, beta, "a scratch field option renamed", &before).await
+        }
+        .await;
+        let removed = delete_scratch_field(run, &scratch).await;
+        held_project = renamed_option?;
+        removed?;
+
+        writer
+            .delete_project(alpha)
+            .await
+            .map_err(|error| format!("live project deletion failed: {error}"))?;
+        let (after_project, after_document) = tokio::try_join!(
+            moved(project, beta, "its native far end deleted", &held_project),
+            moved(document, design, "its project deleted", &held_document),
+        )?;
+        ensure!(
+            order(&held_project, &after_project).is_none(),
+            "deleting beta's far end left its token {after_project} ordered against the one \
+             held, {held_project}; a cache would have served it"
+        );
+        ensure!(
+            order(&held_document, &after_document).is_none(),
+            "deleting the document's project left its token {after_document} ordered against \
+             the one held, {held_document}; a cache would have served it"
+        );
+        Ok::<(), String>(())
+    };
+    tokio::try_join!(sub_issue, labels_fields_and_deletion)?;
     let as_task = rebuilt()
         .get_task(orphan)
         .await
@@ -3856,7 +3937,7 @@ async fn an_edited_comment_moves_its_issue_and_is_selected_since(
         .flatten()
         .fold(before_edit, std::cmp::max)
         + chrono::Duration::seconds(1);
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    github_pause(std::time::Duration::from_secs(2)).await;
     let commented_since = || TaskQuery {
         commented_since: Some(since),
         ..by_prefix()
@@ -4003,9 +4084,12 @@ pub struct Nomination {
     pub writer: Writer,
 }
 
+/// The first of the change-kind leg's own two tasks' title offsets.
+const CHANGE_LANE_OFFSET: u64 = 7;
+
 /// The highest offset [`LiveRun::title`] is asked for, so a run checks before it writes
 /// anything that every stamp it will write can be spelled.
-const LAST_TITLE_OFFSET: u64 = 7;
+const LAST_TITLE_OFFSET: u64 = 9;
 
 /// The credentialed lane's whole entry: admit it, open its one session, and run it.
 ///

@@ -1361,6 +1361,12 @@ fn malformed_upload_answers_and_transport_failures_refuse_before_content_is_writ
         if fault == "disconnect-read" {
             assert!(said.contains(&journey.workspace.endpoint));
         }
+        if matches!(fault, "disconnect-PUT" | "disconnect-read") {
+            assert!(
+                names_its_cause(said),
+                "{fault}: a connection that got no answer names what it met: {said}"
+            );
+        }
         if !fault.starts_with("disconnect") {
             assert!(said.contains("200"), "{said}");
         }
@@ -1816,4 +1822,13 @@ fn a_task_created_with_an_asset_retires_the_far_ends_reverse_edges_in_a_caching_
     let edges: Value = serde_json::from_str(&run(&reverse)).unwrap();
     assert!(sent() > before, "the next read is Linear's");
     assert_eq!(edges["items"].as_array().map(Vec::len), Some(1), "{edges}");
+}
+
+/// Whether a failed request's message carries what its connection met after the request line
+/// reqwest reports — `error sending request for url (…): <cause>` — rather than stopping at it.
+fn names_its_cause(message: &str) -> bool {
+    message
+        .split_once("error sending request for url (")
+        .and_then(|(_, rest)| rest.split_once("): "))
+        .is_some_and(|(_, cause)| !cause.trim().is_empty())
 }

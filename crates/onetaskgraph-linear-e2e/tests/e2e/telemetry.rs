@@ -5,7 +5,8 @@
 //! `budget_runner::report` reads it back with [`recorded`] for `onebudgetspec check`. The
 //! directory is `<target>/<profile>/telemetry/onetaskgraph-linear-e2e`, found from the running
 //! test executable the way `onetaskgraph_e2e_support::binary` finds the binary, so the writer and
-//! the reader agree on it whatever the target directory is. It is never committed, and it is the
+//! the reader agree on it whatever the target directory is — an instrumented writer standing in
+//! for `test` included (`onetaskgraph_e2e_support::telemetry::build_directory`). It is never committed, and it is the
 //! `test` target's declared output, so a cache hit of that target restores what its last run
 //! recorded. [`DIRECTORY`] names another, so a test can drive the runner over telemetry of its
 //! own without touching what the journeys recorded.
@@ -27,15 +28,9 @@ pub fn directory() -> PathBuf {
     if let Some(directory) = std::env::var_os(DIRECTORY) {
         return PathBuf::from(directory);
     }
-    let executable = std::env::current_exe().expect("the running test executable has a path");
-    let mut directory = executable
-        .parent()
+    onetaskgraph_e2e_support::telemetry::running_build_directory()
         .expect("a test executable sits inside a build directory")
-        .to_path_buf();
-    if directory.file_name().is_some_and(|leaf| leaf == "deps") {
-        directory.pop();
-    }
-    directory.join(Path::new(BELOW_BUILD))
+        .join(Path::new(BELOW_BUILD))
 }
 
 /// Record `value` as `budget`'s telemetry: the figure and how it was reached, and no judgement

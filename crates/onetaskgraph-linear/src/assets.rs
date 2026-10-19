@@ -256,7 +256,7 @@ impl LinearSource {
                     .body(bytes.clone())
                     .send()
                     .await
-                    .map_err(|error| failure(asset, Stage::Put, &error.to_string()))?;
+                    .map_err(|error| failure(asset, Stage::Put, &super::with_causes(&error)))?;
                 if response.status().as_u16() == 429 {
                     self.wait_asset(
                         asset,
@@ -287,7 +287,7 @@ impl LinearSource {
                         failure(
                             asset,
                             Stage::VerifyingRead,
-                            &format!("{}: {error}", upload.asset_url),
+                            &format!("{}: {}", upload.asset_url, super::with_causes(&error)),
                         )
                     })?;
                 if response.status().as_u16() == 429 {

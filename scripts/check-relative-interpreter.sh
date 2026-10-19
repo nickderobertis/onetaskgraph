@@ -49,7 +49,9 @@ readonly real_python3
 # root — the shape the defect needs — on all three platforms and without a path this script
 # has to compute. A scratch directory elsewhere would need a relative spelling of $TMPDIR,
 # which on Windows may be on another drive and have none at all.
-readonly probe="target/relative-interpreter-probe"
+# One per process: scripts:distribution-test runs this check too, beside scripts:test, where
+# scripts/ci-job.sh has the distribution journey run under it (see the list below).
+readonly probe="target/relative-interpreter-probe-$$"
 cleanup() {
   rm -rf "$ROOT/$probe" || {
     echo "check-relative-interpreter: could not remove the probe interpreter at $probe" >&2
@@ -119,11 +121,27 @@ esac
 # a PATH of this check's making, which is neither an input of the recipes that own them nor
 # something Nx can key a cache on — so a cached hit from `just distribution-test` or `just
 # script-check` would be a claim about a run made under some other PATH entirely.
+#
+# The scripts are the arguments, or all three. Where scripts/ci-job.sh sets
+# ONETASKGRAPH_DISTRIBUTION_UNDER_RELATIVE_INTERPRETER=1, scripts:distribution-test runs the
+# distribution journey under this check itself (scripts/test-distribution.sh hands itself
+# here), so it is not run a second time from the list; the variable is cleared before any
+# script runs, so the journey run here runs itself.
+if [ "$#" -gt 0 ]; then
+  scripts=("$@")
+elif [ "${ONETASKGRAPH_DISTRIBUTION_UNDER_RELATIVE_INTERPRETER:-}" = 1 ]; then
+  scripts=(scripts/check-guard-path-spelling.sh scripts/check-live-lane-selection.sh)
+else
+  scripts=(scripts/test-distribution.sh scripts/check-guard-path-spelling.sh scripts/check-live-lane-selection.sh)
+fi
+unset ONETASKGRAPH_DISTRIBUTION_UNDER_RELATIVE_INTERPRETER
+for script in "${scripts[@]}"; do
+  [ -f "$script" ] || fatal \
+    "$script is not a script of this repository" \
+    "name scripts by their path from the repository root, e.g. scripts/test-distribution.sh"
+done
 failures=0
-for script in \
-  scripts/test-distribution.sh \
-  scripts/check-guard-path-spelling.sh \
-  scripts/check-live-lane-selection.sh; do
+for script in "${scripts[@]}"; do
   if output="$(bash "$script" 2>&1)"; then
     continue
   fi

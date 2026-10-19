@@ -418,8 +418,11 @@ class Github:
                 del environment[name]
         command = [BINARY] + (arguments if arguments is not None else ['--loopback', f'http://127.0.0.1:{server.server_port}', '--virtual-clock'])
         command = [argument.replace('{origin}', f'http://127.0.0.1:{server.server_port}').replace('{host}', f'127.0.0.1:{server.server_port}') for argument in command]
+        # A guard against a hung janitor, not a duration: the janitor runs on the virtual clock,
+        # and the largest workload — 24,300 issues paged over loopback — took over 30 s on a
+        # 4-core Windows runner beside the distribution journey's release build.
         try:
-            result = subprocess.run(command, env=environment, capture_output=True, text=True, timeout=30)
+            result = subprocess.run(command, env=environment, capture_output=True, text=True, timeout=300)
         finally:
             server.shutdown()
             thread.join()

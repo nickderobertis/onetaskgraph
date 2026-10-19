@@ -68,7 +68,9 @@ mkdir -p "$scratch/bin" "$scratch/invocations" || fatal \
   "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
 
 # The stand-in answers the two outcomes the step demands — green, then a harness that
-# compiled, ran and FAILED — so the step reaches its own conclusion. It finds where to record
+# compiled, ran and FAILED — so the step reaches its own conclusion, and the one `cargo
+# metadata` the step reads its build directory and workspace members from, with a document
+# shaped as cargo's. It finds where to record
 # from its own path rather than from a variable, so a step that later cleared more of the
 # environment could not silently stop it recording. Names only, never values: a name is the
 # whole of what is asked, and a credential exported empty is still one the step failed to
@@ -82,7 +84,12 @@ index=1
 while [ -e "$record/$index.names" ]; do index=$((index + 1)); done
 python3 -c 'import os, sys; sys.stdout.write("".join(name + "\n" for name in sorted(os.environ)))' \
   >"$record/$index.names"
-if [ "$index" -eq 1 ]; then
+if [ "${1:-}" = metadata ]; then
+  printf '{"target_directory": "%s/../target", "workspace_members": ["member"], "packages": [{"id": "member", "name": "onetaskgraph-github-projects"}]}\n' "$here"
+  exit 0
+fi
+: >"$record/$index.test"
+if [ "$(find "$record" -name '*.test' | wc -l | tr -d ' ')" -eq 1 ]; then
   echo "test result: ok. 128 passed; 0 failed; 0 ignored"
   exit 0
 fi
