@@ -334,6 +334,7 @@ def build_target(row: PlatformTarget, tag: ReleaseTag, dist: Path) -> None:
         [PYTHON_EXECUTABLE, "scripts/verify-release-products.py", "--target", row.target, "--npm", row.npm_platform, "--tag", tag, "--ext", row.extension, "--dist", str(dist), "--install"],
         f"the {row.target} artifacts did not install and run",
         "nothing was published; fix the artifact the verification named above and rerun the build",
+        capture=True,
     )
 
 
