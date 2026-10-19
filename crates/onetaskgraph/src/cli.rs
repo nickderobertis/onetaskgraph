@@ -13,8 +13,8 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use onetaskgraph_core::config::{Layer, Origin, Setting, SettingPath, value_from_text};
 use onetaskgraph_core::{GlobalId, OutputFormat, PluginKind, SearchKind};
 use onetaskgraph_plugin_api::{
-    Classification, Direction, MetadataMatch, NativeId, Priority, Repository, StatusCategory,
-    TextFields,
+    Classification, Direction, IssueRef, MetadataMatch, NativeId, Priority, Repository,
+    StatusCategory, TextFields,
 };
 use serde_json::Value;
 
@@ -910,6 +910,91 @@ pub struct MetadataSetArgs {
 pub enum StatusCommand {
     /// Set one task's status to a category, and nothing else about it.
     Set(StatusSetArgs),
+    /// Bring every card of one source in line with its issue's closure — an on-demand tool,
+    /// run by a person after closures made outside the stack.
+    ///
+    /// An item needs it when its issue is closed with a reason that reads `done` (completed,
+    /// or no reason) or `cancelled` (not planned, duplicate) and its card does not sit at the
+    /// option the source's `status_mapping` gives that category. Only the card is written —
+    /// never the issue's state, which already says it — one write per item through the
+    /// source's own write pacing. Open items, other closures and items already in line are
+    /// never written and never listed.
+    ///
+    /// Candidates come from the board's own `is:closed` filter, never its unfiltered items,
+    /// and each is confirmed from what that read carries. A source whose status is its closure
+    /// — Linear, a folder of Markdown, an in-memory source, and a plugin that does not declare
+    /// `reconcile_status` — answers no items and is sent no request.
+    ///
+    /// Exits 0 when every listed item was updated (or would be, under --dry-run), 4 when any
+    /// failed, and 1 when the whole command was refused.
+    Reconcile(StatusReconcileArgs),
+    /// Move to `done` every item the configured sources hold for the issues a landing closed,
+    /// by issue reference.
+    ///
+    /// Every source the configuration declares is asked — not only the default selection — or
+    /// only those --source names, one after another in configuration order; each whose plugin
+    /// declares `complete_by_issue` is read once per 50 references, and no board is read whole.
+    /// Every other source is sent no request and listed under `unsupported`.
+    ///
+    /// Per reference and source: no item for the issue, or an issue the source's credential
+    /// cannot see, is `absent`; an issue closed as not planned or duplicate is `skipped`; one
+    /// closed as completed whose card already reads `done` is `unchanged`; every other item is
+    /// written `done` through the status write — its card moved, and its issue closed as
+    /// completed if it is still open, never reopened — and `updated`, with every task it
+    /// delivers kept in step as `task status set` keeps them.
+    ///
+    /// Exits 0 when no item failed, 4 when any failed or a delivered task could not be kept in
+    /// step, and 1 when the whole command was refused.
+    Complete(StatusCompleteArgs),
+}
+
+/// `onetaskgraph task status reconcile`.
+#[derive(Debug, Args)]
+pub struct StatusReconcileArgs {
+    /// The configured source whose cards to bring in line. A source name, never a qualified
+    /// id.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `CopyArgs::to`: a name that cannot
+    /// be a source name and one that names no configured source are the same typo, and both
+    /// owe the same next action.
+    #[arg(long, value_name = "SOURCE")]
+    pub source: String,
+
+    /// Read and list every item that would be brought in line, and write nothing.
+    #[arg(long = "dry-run")]
+    pub dry_run: bool,
+
+    #[command(flatten)]
+    pub term_scope: TermScopeArgs,
+}
+
+/// `onetaskgraph task status complete`.
+#[derive(Debug, Args)]
+pub struct StatusCompleteArgs {
+    /// An issue a landing closed, as `owner/name#N` — the spelling a landing event's `closes`
+    /// reports. Repeat it, or give several after one flag; a reference named twice is answered
+    /// once per source.
+    #[arg(long = "issue", value_name = "REF", num_args = 1.., required = true, value_parser = issue_ref)]
+    pub issue: Vec<IssueRef>,
+
+    /// Ask only this configured source. Repeat for several. Without it, every configured
+    /// source is asked.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `StatusReconcileArgs::source`.
+    #[arg(long = "source", value_name = "SOURCE")]
+    pub source: Vec<String>,
+
+    /// Read and list every item that would be moved, and write nothing.
+    #[arg(long = "dry-run")]
+    pub dry_run: bool,
+
+    #[command(flatten)]
+    pub term_scope: TermScopeArgs,
+}
+
+/// An issue reference, refused as a usage error naming it.
+fn issue_ref(value: &str) -> Result<IssueRef, String> {
+    value.parse()
 }
 
 /// `onetaskgraph task status set`.
@@ -1644,10 +1729,17 @@ Failure:
   way.
 ";
 
-/// The arguments both copy verbs share.
+/// The arguments every copy verb shares.
 ///
-/// A copy is one write into one destination, so there is no paging, no `--explain` and no
-/// `--allow-partial` here: a partial write is not an answer a caller could act on.
+/// A copy writes into one destination, so there is no paging and no `--explain` here. A task
+/// copy asks the destination about every task it plans before its first write, and carries
+/// every task past one the destination says it cannot represent — a status, content, a
+/// `delivers` list or any other field it cannot hold: that task is answered `failed`, with the
+/// destination's own reason, an edge to it is written as one to an item outside the copy, and
+/// the command exits 4. Every other refusal takes the whole copy back and exits 1, and a project
+/// copy is still one write, its tasks included, whole or not at all. There is no
+/// `--allow-partial`: what lands is decided before anything is written, never by a write that
+/// stopped part way.
 #[derive(Debug, Args)]
 pub struct CopyArgs {
     /// The configured source to copy into. A source name, never a qualified id.
@@ -1701,7 +1793,8 @@ pub struct TaskCopyArgs {
     pub id: Vec<String>,
 
     /// Copy what `task list` with the same narrowing returns, in place of ids: these sources,
-    /// and every task matching `--commented-since` and every `--metadata` given.
+    /// and every task matching `--commented-since`, every `--metadata` and any `--status`
+    /// given. `--status` alone is taken beside ids too.
     #[command(flatten)]
     pub query: CopyQueryArgs,
 
@@ -1771,13 +1864,32 @@ pub struct CopyQueryArgs {
         conflicts_with = "id"
     )]
     pub metadata: Vec<MetadataMatch>,
+
+    /// Copy only tasks at this status category, as `task list --status` keeps them; repeat for
+    /// several. A task at another category is not read for its comments, not copied and not
+    /// named in the answer.
+    ///
+    /// Also taken beside ids: an id whose task is at another category is read only as far as
+    /// its status, and answered `skipped` with that status, without changing the exit code.
+    #[arg(long = "status", value_name = "CATEGORY")]
+    pub status: Vec<StatusArg>,
 }
 
 impl CopyQueryArgs {
-    /// Whether any narrowing was given, so the copy names its tasks by a query.
+    /// Whether any narrowing was given, so the copy names its tasks by a query when it names
+    /// no ids.
     #[must_use]
     pub fn given(&self) -> bool {
-        !self.source.is_empty() || self.commented_since.is_some() || !self.metadata.is_empty()
+        !self.source.is_empty()
+            || self.commented_since.is_some()
+            || !self.metadata.is_empty()
+            || !self.status.is_empty()
+    }
+
+    /// The status categories `--status` keeps, empty when it was not given.
+    #[must_use]
+    pub fn statuses(&self) -> Vec<StatusCategory> {
+        self.status.iter().map(|status| status.category()).collect()
     }
 }
 

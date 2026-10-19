@@ -35,6 +35,8 @@
 //! | `filter_by_comment_activity` | **Supported and proven.** `comments:{some:{or:[{createdAt:{gte:…}},{updatedAt:{gte:…}}]}}` — the issues with a comment created or last edited at or after the instant, over the same two fields a comment read reports. |
 //! | `filter_by_metadata` | **Supported and proven.** `description:{contains:"\"<value>\""}` for each match — the value as every JSON encoder writes it, which a slot holding it contains however it spaces or spells its keys — and every candidate confirmed over the parsed slot, so prose carrying the phrase and a slot holding another value are both kept out. A value with a character an encoder may escape is not sent, and the confirmation decides alone. |
 //! | `filter_by_origin` | **Supported and proven,** on the same terms, for the slot's `onetaskgraph.origin`. |
+//! | `reconcile_status` | **Unsupported — unsupportable.** A Linear issue's workflow state *is* its closure: there is no card beside it to contradict it, so nothing could need reconciling and the source is sent nothing. |
+//! | `complete_by_issue` | **Unsupported — unsupportable** here: a Linear issue is not a GitHub issue a landing's `closes` names, and its state is its closure, so a completion lists this source unsupported and sends it nothing. |
 //! | `orphan_tasks` | **Supported and proven.** `issues(filter:{project:{null:true}})`. |
 //! | `filter_by_label` | **Supported and proven.** `labels:{some:{name:{eqIgnoreCase:…}}}` for what an item must carry — one per label, gathered under `or:` where any one of them will do — and `labels:{every:{name:{neqIgnoreCase:…}}}` for what it must not. Linear's `StringComparator` has no case-insensitive list operator; see the note beside `filter`. |
 //! | `filter_by_status` | **Supported and proven,** and spelled twice. An issue narrows by its workflow state's name, `state:{name:{eqIgnoreCase:…}}`; a project by its project status's name, `status:{name:{eqIgnoreCase:…}}` — a different member of a different filter over a different vocabulary — each by the names its kind's half of `status_mapping` gives, and `unknown` by every name that half does not give. See the ruling below. |
@@ -2943,6 +2945,8 @@ impl TaskSource for LinearSource {
             filter_by_comment_activity: Support::Native,
             filter_by_metadata: Support::Native,
             filter_by_origin: Support::Native,
+            reconcile_status: Support::Unsupported,
+            complete_by_issue: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,

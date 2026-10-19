@@ -76,6 +76,7 @@ fn copy_of(items: &[GlobalId], scope: CopyScope) -> CopyRequest {
         comments: false,
         no_link: false,
         expect: None,
+        statuses: Vec::new(),
     }
 }
 

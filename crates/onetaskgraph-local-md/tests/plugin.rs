@@ -1096,8 +1096,15 @@ async fn a_status_this_folder_reads_as_another_category_names_both_in_its_refusa
         else {
             panic!("{name} would be read as {reads_as} rather than {wanted}");
         };
+        // Each name is one the mapping already reads as another category, so remapping it
+        // would misread every other task at it: the refusal names the item and sends the
+        // reader to bring the item's own status in line instead.
         assert!(
-            message.contains(&format!("as {reads_as}, not {wanted}")),
+            message.contains("of task T-9 (\"Alpha\")")
+                && message.contains(&format!("its category {wanted} at the source"))
+                && message.contains(&format!("reads {name:?} as {reads_as}"))
+                && message.contains("onetaskgraph task status reconcile --source notes")
+                && !message.contains("status_mapping"),
             "{message}"
         );
     }
@@ -1473,6 +1480,8 @@ async fn every_declared_capability_is_applied_to_the_real_folder() {
             filter_by_comment_activity: Support::Native,
             filter_by_metadata: Support::Native,
             filter_by_origin: Support::Native,
+            reconcile_status: Support::Unsupported,
+            complete_by_issue: Support::Unsupported,
             orphan_tasks: onetaskgraph_plugin_api::Support::Native,
             filter_by_label: onetaskgraph_plugin_api::Support::Native,
             filter_by_status: onetaskgraph_plugin_api::Support::Native,

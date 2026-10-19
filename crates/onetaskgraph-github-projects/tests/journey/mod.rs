@@ -750,6 +750,13 @@ pub fn dry_run_variables(document: &str) -> Value {
     for slot in 0..onetaskgraph_github_projects::DETAIL_BATCH {
         bind(&format!("id{slot}"), json!("node-count-reconciliation"));
     }
+    // A read by issue reference names each of its slots, every one an issue of a repository.
+    for slot in 0..onetaskgraph_github_projects::REFERENCE_BATCH {
+        bind(&format!("owner{slot}"), json!("github"));
+        bind(&format!("name{slot}"), json!("docs"));
+        bind(&format!("number{slot}"), json!(1));
+    }
+    bind("statusField", json!("Status"));
     bind("comments", json!(true));
     bind("search", json!("repo:github/docs is:issue"));
     bind(
@@ -4161,6 +4168,8 @@ pub async fn run(nomination: Nomination) {
             filter_by_comment_activity: Support::Native,
             filter_by_metadata: Support::Native,
             filter_by_origin: Support::Native,
+            reconcile_status: Support::Native,
+            complete_by_issue: Support::Native,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,

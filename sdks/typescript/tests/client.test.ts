@@ -3,8 +3,10 @@ import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -12,7 +14,12 @@ import {
 import { tmpdir } from "node:os";
 import { delimiter, resolve } from "node:path";
 import Ajv2020 from "ajv/dist/2020.js";
-import type { CopyReport, FieldsReport, StatusNamesReport } from "../src/generated/models.ts";
+import type {
+  CopyReport,
+  FieldsReport,
+  StatusCategory,
+  StatusNamesReport,
+} from "../src/generated/models.ts";
 import { runtimeSchemas } from "../src/generated/schemas.ts";
 import {
   assertCompleteCommandSurface,
@@ -433,6 +440,78 @@ test("copy drives the real binary and reports what it did to each item", async (
   }
 });
 
+test("a copy keeps only the statuses it names, by query and beside ids, through the real binary", async () => {
+  const statusRoot = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-copy-status-"));
+  const plan: Record<string, StatusCategory> = {
+    proposal: "backlog",
+    ready: "todo",
+    shipped: "done",
+  };
+  mkdirSync(resolve(statusRoot, "plan/tasks"), { recursive: true });
+  for (const empty of ["by-query", "by-id"]) mkdirSync(resolve(statusRoot, empty));
+  for (const [name, category] of Object.entries(plan)) {
+    writeFileSync(
+      resolve(statusRoot, `plan/tasks/${name}.md`),
+      `---\ntitle: ${name}\nstatus: ${category}\n---\nThe body.\n`,
+    );
+  }
+  const folder = (name: string) => ({
+    plugin: "local-md",
+    config: { root: resolve(statusRoot, name) },
+  });
+  writeFileSync(
+    resolve(statusRoot, "onetaskgraph.yaml"),
+    JSON.stringify({
+      sources: { plan: folder("plan"), "by-query": folder("by-query"), "by-id": folder("by-id") },
+    }),
+  );
+  const held = (name: string) => {
+    const tasks = resolve(statusRoot, name, "tasks");
+    return existsSync(tasks) ? readdirSync(tasks).sort() : [];
+  };
+  try {
+    const statusClient = new OnetaskgraphClient({ binaryPath: binary, cwd: statusRoot });
+
+    // Two categories are two flags: both are kept, and the third task is neither named nor copied.
+    const byQuery = await statusClient.taskCopy([], "by-query", {
+      sources: ["plan"],
+      statuses: ["backlog", "todo"],
+    });
+    expect(byQuery.items.map((item) => [item.source, item.action])).toEqual([
+      ["plan:proposal", "created"],
+      ["plan:ready", "created"],
+    ]);
+    expect(held("by-query")).toEqual(["proposal.md", "ready.md"]);
+
+    // Beside ids, a task at another category is answered skipped with both categories named.
+    const byId = await statusClient.taskCopy(["plan:proposal", "plan:shipped"], "by-id", {
+      statuses: ["backlog"],
+    });
+    expect(byId.items).toEqual([
+      {
+        source: "plan:proposal",
+        action: "created",
+        destination: "by-id:proposal",
+        via: "created",
+        link: "recorded",
+      },
+      { source: "plan:shipped", action: "skipped", reason: "status done is not one of backlog" },
+    ]);
+    expect(held("by-id")).toEqual(["proposal.md"]);
+
+    // A board's option name where a category belongs reaches the binary and is refused by it.
+    await expect(
+      statusClient.taskCopy([], "by-id", {
+        sources: ["plan"],
+        statuses: JSON.parse('["shipped"]'),
+      }),
+    ).rejects.toThrow("--status");
+    expect(held("by-id")).toEqual(["proposal.md"]);
+  } finally {
+    rmSync(statusRoot, { recursive: true, force: true });
+  }
+});
+
 test("a document copy drives the real binary and is refused by a source with none", async () => {
   // `notes` is a folder of Markdown, whose documents are files that outlive the process,
   // so what one client call copied the next one reads back — which is what proves the copy
@@ -837,6 +916,7 @@ test("taskCopy sends exactly the flags the binary's task copy reports, no more a
         sources: ["work"],
         commentedSince: "2026-09-01T00:00:00Z",
         metadata: ["myapp.a=1"],
+        statuses: ["backlog"],
         termScope: ["github.com/example-org/widget"],
         expect: "gh2|v",
       }),
@@ -981,6 +1061,39 @@ test("task status set answers when a delivered task could not be kept in step", 
     const shown = await statusClient.taskShow("work:P");
     expect(shown.items[0]?.item.status.category).toBe("queued");
     expect(shown.items[0]?.item.delivers).toEqual(["nowhere:T-9"]);
+  } finally {
+    rmSync(statusRoot, { recursive: true, force: true });
+  }
+});
+
+test("a reconcile and a completion drive the real binary over a source whose status is its closure", async () => {
+  // A folder of Markdown has no card beside a closure, so both verbs answer nothing for it and
+  // send it nothing: what is proven here is the client's flags and the documents it validates.
+  const statusRoot = deliveringFolder();
+  try {
+    const statusClient = new OnetaskgraphClient({ binaryPath: binary, cwd: statusRoot });
+    expect(await statusClient.taskStatusReconcile("work", { dryRun: true })).toEqual({
+      items: [],
+    });
+    expect(
+      await statusClient.taskStatusComplete(["nickderobertis/onetaskgraph#3"], {
+        sources: ["work"],
+        dryRun: true,
+      }),
+    ).toEqual({ items: [], unsupported: ["work"] });
+    const malformed = statusClient.taskStatusComplete(["onetaskgraph#3"]);
+    await expect(malformed).rejects.toBeInstanceOf(OnetaskgraphExecutionError);
+    await expect(malformed).rejects.toMatchObject({ exitCode: 2 });
+    await expect(malformed).rejects.toThrow('"onetaskgraph#3" is not an issue reference');
+    // Refused before the binary is run at all.
+    expect(() => statusClient.taskStatusReconcile("work", { dryRun: JSON.parse('"yes"') })).toThrow(
+      "taskStatusReconcile: dryRun must be a boolean",
+    );
+    expect(() =>
+      statusClient.taskStatusComplete(["nickderobertis/onetaskgraph#3"], {
+        dryRun: JSON.parse('"yes"'),
+      }),
+    ).toThrow("taskStatusComplete: dryRun must be a boolean");
   } finally {
     rmSync(statusRoot, { recursive: true, force: true });
   }

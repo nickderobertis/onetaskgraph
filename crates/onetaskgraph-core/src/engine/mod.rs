@@ -18,6 +18,7 @@
 mod assets;
 pub mod boundary;
 mod cached;
+mod closure;
 mod comment;
 mod copy;
 mod delivery;
@@ -58,6 +59,10 @@ use local::{LocalDocuments, LocalProjects, LocalTasks};
 pub(crate) use resume::{Owed, Resumption, StreamState};
 use resume::{Resume, StreamKind};
 
+pub use closure::{
+    CompleteAction, IssueCompleted, IssuesCompleted, ReconcileOutcome, StatusReconciled,
+    StatusesReconciled,
+};
 pub use comment::{
     CommentList, CommentWritten, DeletedComment, DocumentDetail, TaskDetail, TaskDetails,
 };
@@ -1106,6 +1111,14 @@ pub enum EngineError {
          next: name the projects or documents to copy by their qualified ids."
     )]
     QueryNotTasks,
+
+    /// A copy of projects or documents was asked to keep only the tasks at some status
+    /// categories: `--status` narrows the tasks a task copy names, so only a task copy takes it.
+    #[error(
+        "a copy keeps the tasks at a status only when it copies tasks\n\
+         next: copy the projects or documents without --status, or copy the tasks with it."
+    )]
+    StatusesNotTasks,
 
     /// A copy of documents was asked to carry comments: a document holds none, so only a task
     /// or a project copy carries them.

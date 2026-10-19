@@ -16,21 +16,22 @@ use std::time::Duration;
 use async_trait::async_trait;
 use onetaskgraph_plugin_api::{
     AssetWrite, AssetsWritten, Capabilities, Comment, CommentBody, CommentCopy, DependencyEdge,
-    Direction, Document, DocumentQuery, Health, ItemWrite, Label, MetadataKey, MetadataRecord,
-    Metering, NativeId, NewComment, Page, PageRequest, Priority, Project, ProjectQuery,
-    SourceError, SourceName, Status, StatusCategory, Task, TaskDetailRead, TaskQuery, TaskRef,
-    TaskSource, TaskUpdate, TaskUpdateOutcome, WriteSupport, assetless, unwritable_field,
-    unwritable_metadata,
+    Direction, Document, DocumentQuery, Health, IssueHolding, IssueRef, ItemWrite, Label,
+    MetadataKey, MetadataRecord, Metering, NativeId, NewComment, Page, PageRequest, Priority,
+    Project, ProjectQuery, SourceError, SourceName, Status, StatusCategory, StatusContradiction,
+    Task, TaskDetailRead, TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome,
+    WriteSupport, assetless, unwritable_field, unwritable_metadata,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::connection::{Connection, Peer};
 use super::wire::{
-    AddCommentParams, CommentCopyParams, CommentResult, CommentsParams, CommentsResult,
-    ContentParams, ContentResult, DeleteCommentParams, DeleteParams, DeletedCommentResult,
-    DeliveredByParams, DeliveredByResult, DependencyParams, DocumentAssetWriteParams, DocumentDir,
-    DocumentQueryParams, DocumentResult, DocumentWriteParams, EditCommentParams, EngineIdentity,
+    AddCommentParams, CheckWriteParams, CommentCopyParams, CommentResult, CommentsParams,
+    CommentsResult, ContentParams, ContentResult, ContradictionsResult, DeleteCommentParams,
+    DeleteParams, DeletedCommentResult, DeliveredByParams, DeliveredByResult, DependencyParams,
+    DocumentAssetWriteParams, DocumentDir, DocumentQueryParams, DocumentResult,
+    DocumentWriteParams, EditCommentParams, EngineIdentity, HoldingsParams, HoldingsResult,
     IdParams, InitializeParams, InitializeResult, LabelParams, MetadataParams, MeteringResult,
     PROTOCOL_VERSION, PriorityParams, PriorityResult, ProjectQueryParams, ProjectResult,
     ProjectWriteParams, Request, StatusParams, StatusResult, TaskAssetWriteParams,
@@ -137,6 +138,9 @@ pub struct SubprocessSource {
     /// A plugin that said nothing is read a task and a page of its comments through
     /// `get_task` and `task_comments`, and is never sent the method.
     task_details: bool,
+    /// Whether the plugin answers `check_task_write` (§3.14). A plugin that said nothing is
+    /// never sent it, and every write it is planned is read as one it can represent.
+    write_checks: bool,
     /// The live process.
     connection: Connection,
 }
@@ -377,6 +381,7 @@ impl SubprocessSource {
             ends_commands,
             comment_copies,
             task_details,
+            write_checks,
         } = match result {
             Ok(result) => result,
             Err(error) => return Err(with_diagnostics(error, &mut peer)),
@@ -411,6 +416,7 @@ impl SubprocessSource {
             ends_commands,
             comment_copies,
             task_details,
+            write_checks,
             connection: Connection::adopt(peer),
         })
     }
@@ -903,6 +909,71 @@ impl TaskSource for SubprocessSource {
             )
             .await?;
         Ok(result.status)
+    }
+
+    async fn check_task_write(&self, write: &ItemWrite<Task>) -> Result<(), SourceError> {
+        // §3.14: sent only to a plugin whose handshake declares it, and every other plugin's
+        // writes are read as representable here and refused, if at all, by the write itself.
+        if !self.write_checks {
+            return Ok(());
+        }
+        let answered: Value = self
+            .ask(
+                "check_task_write",
+                params(&CheckWriteParams {
+                    write: write.clone(),
+                }),
+            )
+            .await?;
+        // §4.9b: the trait method carries `()`, so `result` is an object and nothing else; one
+        // that is not is no answer this engine may read as "representable".
+        if !answered.is_object() {
+            return Err(SourceError::Malformed {
+                message: format!(
+                    "plugin {} answered check_task_write with {answered}, where §4.9b asks for an \
+                     object",
+                    self.kind
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    async fn status_contradictions(&self) -> Result<Vec<StatusContradiction>, SourceError> {
+        // §4.23: sent only to a plugin whose handshake declares it.
+        if !self.capabilities.reconcile_status.is_native() {
+            return Err(SourceError::Refused {
+                message: format!(
+                    "plugin {} does not declare reconcile_status, so its status is read as its \
+                     closure and nothing needs reconciling",
+                    self.kind
+                ),
+            });
+        }
+        let result: ContradictionsResult = self.ask("status_contradictions", json!({})).await?;
+        Ok(result.items)
+    }
+
+    async fn issue_holdings(&self, issues: &[IssueRef]) -> Result<Vec<IssueHolding>, SourceError> {
+        // §4.24: sent only to a plugin whose handshake declares it.
+        if !self.capabilities.complete_by_issue.is_native() {
+            return Err(SourceError::Refused {
+                message: format!(
+                    "plugin {} does not declare complete_by_issue, so it holds no items by \
+                     issue reference",
+                    self.kind
+                ),
+            });
+        }
+        let result: HoldingsResult = self
+            .ask(
+                "issue_holdings",
+                params(&HoldingsParams {
+                    issues: issues.to_vec(),
+                }),
+            )
+            .await?;
+        Ok(result.holdings)
     }
 
     async fn set_task_priority(

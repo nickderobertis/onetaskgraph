@@ -307,7 +307,10 @@ fn run_pair(scenario: &str) {
         );
         let said = String::from_utf8_lossy(&outputs[0].stderr);
         assert!(said.contains("using executed read-only reconciliation"));
-        assert!(said.contains("18 documents agreed"));
+        // Every read document of `graphql::DOCUMENTS` is reconciled, the closed-items read of
+        // `task status reconcile` and the read by issue reference of `task status complete` among
+        // them.
+        assert!(said.contains("20 documents agreed"));
         assert!(!outputs[1].status.success());
         assert!(
             String::from_utf8_lossy(&outputs[1].stderr)
@@ -325,7 +328,7 @@ fn run_pair(scenario: &str) {
             .iter()
             .filter(|call| call.phase == Phase::Reconciliation)
             .collect();
-        assert_eq!(probes.len(), 21);
+        assert_eq!(probes.len(), 23);
         assert_eq!(
             probes[1].outcome,
             if scenario == "aliases" {

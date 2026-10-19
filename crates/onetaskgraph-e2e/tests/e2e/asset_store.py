@@ -21,6 +21,26 @@ a journey can make a copy fail on a write that left an item the engine never lea
 `answer_content` bends the answer to a write carrying assets: `"omit"` leaves its required
 `content` member out, the malformed answer a journey proves the engine refuses, and `"null"`
 answers `null`, which §4.9a allows.
+
+`write_checks: true` declares `check_task_write` (§4.9b) at the handshake, and every check it
+is sent is logged beside the writes, so a journey reads the order the two arrived in.
+`unrepresentable` names titles that check refuses as a field this source cannot represent;
+`check_unavailable` names titles it answers as unavailable instead — a refusal of another
+kind; and `refused_at_write` names titles whose check passes and whose create is then refused
+as unrepresentable all the same. `check_answer: "list"` answers every check with a list
+rather than the object §4.9b promises, so a journey proves the engine refuses that answer.
+
+`closure` declares `reconcile_status` and `complete_by_issue` `"native"` (§4.2) and
+`task_updates` (§3.6), and answers §4.23, §4.24 and `set_task_status` (§4.17) as its members
+say, so a journey can hand the engine each malformed answer those methods can carry.
+`contradictions` lists stored task ids, each answered as a card at `Todo` contradicting a
+closure that reads `done` — an id listed twice is a task answered twice. `holdings` is how
+§4.24 is answered: `"due"` answers the `N`th stored task due for the reference numbered `N`;
+`"missing"`, `"extra"`, `"reordered"` and `"renamed"` answer every reference absent and then
+drop the last, add one, swap the first two, or rename the first. `reads_back` is the category
+`set_task_status` answers whatever it was asked to write, and `removed` lists stored task ids it
+answers as no longer held — a task deleted after the closure method named it and before its
+write arrived.
 """
 
 # llmlint: ignore-file[modern_domain_modeling] This peer is a transcription of
@@ -558,6 +578,12 @@ def write(settings, kind, params):
             log(settings, entry)
             raise refused("the %s plugin cannot store image assets" % KIND)
         entry["received"] = store_assets(item, params["assets"], params.get("recorded_assets"))
+    if kind == "task" and item.get("title") in settings.get("refused_at_write", []):
+        log(settings, dict(entry, refused=True))
+        raise refused(
+            "cannot represent the field `status` of %s: refused at its write"
+            % item.get("title")
+        )
     store = settings["store"]
     held = read_store(store)
     items = held[KINDS[kind]]
@@ -590,6 +616,82 @@ def write(settings, kind, params):
     return answer
 
 
+def check(settings, params):
+    """`check_task_write` (§4.9b): whether this source could hold the task a write carries."""
+    written = params.get("write")
+    if not isinstance(written, dict) or not isinstance(written.get("item"), dict):
+        raise malformed("check_task_write needs a `write` carrying an `item`")
+    title = written["item"].get("title")
+    log(settings, {"method": "check_task_write", "title": title})
+    if title in settings.get("unrepresentable", []):
+        raise refused("cannot represent the field `status` of %s" % title)
+    if title in settings.get("check_unavailable", []):
+        raise Refusal(
+            {"kind": "unavailable", "message": "the store is not answering for %s" % title}
+        )
+    if settings.get("check_answer") == "list":
+        return []
+    return {}
+
+
+def contradictions(settings):
+    """`status_contradictions` (§4.23), answering each listed task as out of line with `done`."""
+    tasks = read_store(settings["store"])["tasks"]
+    items = []
+    for wanted in settings["closure"].get("contradictions", []):
+        task = [task for task in tasks if task["id"] == wanted][0]
+        items.append({"task": task, "option": "Todo", "closed_as": "done", "to": "Done"})
+    return {"items": items}
+
+
+def holdings(settings, params):
+    """`issue_holdings` (§4.24), answered as `closure.holdings` says."""
+    issues = params.get("issues")
+    if not isinstance(issues, list) or not all(isinstance(issue, str) for issue in issues):
+        raise malformed("issue_holdings needs `issues`, a list of references")
+    mode = settings["closure"].get("holdings", "due")
+    if mode == "due":
+        tasks = read_store(settings["store"])["tasks"]
+        answered = []
+        for issue in issues:
+            number = int(issue.rsplit("#", 1)[1])
+            if number > len(tasks):
+                answered.append({"issue": issue, "completion": "absent"})
+                continue
+            task = {"id": tasks[number - 1]["id"], "option": "Todo"}
+            answered.append({"issue": issue, "completion": "due", "task": task, "to": "Done"})
+        return {"holdings": answered}
+    answered = [{"issue": issue, "completion": "absent"} for issue in issues]
+    # llmlint: ignore-block[structural_pattern_matching] `match`/`case` is a syntax error before
+    # Python 3.10, and this peer is spawned by whichever interpreter the host has; see
+    # `document_store.py`, which records the same reason.
+    if mode == "missing":
+        answered = answered[:-1]
+    elif mode == "extra":
+        answered.append({"issue": "acme/other#1", "completion": "absent"})
+    elif mode == "reordered" and len(answered) > 1:
+        answered[0], answered[1] = answered[1], answered[0]
+    elif mode == "renamed":
+        answered[0] = {"issue": "acme/other#1", "completion": "absent"}
+    # llmlint: ignore-end[structural_pattern_matching]
+    return {"holdings": answered}
+
+
+def set_status(settings, params):
+    """`set_task_status` (§4.17), storing the category asked for and answering `reads_back`."""
+    wanted = params.get("id")
+    category = params.get("category")
+    log(settings, {"method": "set_task_status", "target": wanted, "category": category})
+    held = read_store(settings["store"])
+    found = [task for task in held["tasks"] if task["id"] == wanted]
+    if not found or wanted in settings["closure"].get("removed", []):
+        return {"status": None}
+    found[0]["status"] = {"category": category, "name": category}
+    write_store(settings["store"], held)
+    answered = settings["closure"].get("reads_back", category)
+    return {"status": {"category": answered, "name": answered}}
+
+
 def capabilities(settings):
     declared = {
         "projects": "native",
@@ -605,6 +707,9 @@ def capabilities(settings):
     }
     if settings.get("assets") == "native":
         declared["assets"] = "native"
+    if "closure" in settings:
+        declared["reconcile_status"] = "native"
+        declared["complete_by_issue"] = "native"
     return declared
 
 
@@ -645,6 +750,15 @@ def dispatch(settings, method, params):
         return page_of(read_store(store)["documents"], params.get("page"))
     if method in ("labels", "task_dependencies", "project_dependencies"):
         return {"items": [], "next": None}
+    if method == "check_task_write" and settings.get("write_checks"):
+        return check(settings, params)
+    if "closure" in settings:
+        if method == "status_contradictions":
+            return contradictions(settings)
+        if method == "issue_holdings":
+            return holdings(settings, params)
+        if method == "set_task_status":
+            return set_status(settings, params)
     for kind in KINDS:
         if method == "write_" + kind:
             return write(settings, kind, params)
@@ -679,21 +793,40 @@ def initialize(params):
         or not isinstance(settings.get("malformed_creates", []), list)
         or not all(isinstance(title, str) for title in settings.get("malformed_creates", []))
         or settings.get("answer_content", "omit") not in ("omit", "null")
+        or not isinstance(settings.get("write_checks", False), bool)
+        or settings.get("check_answer", "object") not in ("object", "list")
+        or not isinstance(settings.get("closure", {}), dict)
+        or settings.get("closure", {}).get("holdings", "due")
+        not in ("due", "missing", "extra", "reordered", "renamed")
+        or not all(
+            isinstance(settings.get(name, []), list)
+            and all(isinstance(title, str) for title in settings.get(name, []))
+            for name in ("unrepresentable", "check_unavailable", "refused_at_write")
+        )
     ):
         raise Refusal(
             {
                 "kind": "config",
                 "message": 'this source\'s settings are {"store": <path>, "log": <path>, '
                 '"assets": "native", "half_written": [<title>], "malformed_creates": '
-                '[<title>], "answer_content": "omit" | "null"}, all but the first optional',
+                '[<title>], "answer_content": "omit" | "null", "write_checks": <bool>, '
+                '"unrepresentable": [<title>], "check_unavailable": [<title>], '
+                '"refused_at_write": [<title>], "check_answer": "object" | "list", '
+                '"closure": {"contradictions": [<id>], "holdings": <mode>, '
+                '"reads_back": <category>}}, all but the first optional',
             }
         )
-    return settings, {
+    answer = {
         "protocol_version": PROTOCOL_VERSION,
         "kind": KIND,
         "capabilities": capabilities(settings),
         "writes": "supported",
     }
+    if settings.get("write_checks"):
+        answer["write_checks"] = True
+    if "closure" in settings:
+        answer["task_updates"] = True
+    return settings, answer
 
 
 def main():

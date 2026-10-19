@@ -1111,3 +1111,30 @@ mutations, the field discovery and the board item lookup the text-field write ne
 write, and one fresh read of the task after each leg — and its node count 271,031 → 272,519
 with those reads.
 
+## Reading a board's closed items, and a landing's issues by reference
+
+`task status reconcile` reads a board through its own `is:closed` item filter,
+`graphql::CLOSED_ITEMS` — the board read's shape narrowed by `items(query:)`, at the two points
+the whole board read costs — and `task status complete` reads the issues a landing closed by
+their references, `graphql::ISSUES_BY_REFERENCE`, fifty to a request at one point: each alias
+asks for one connection, its page of board memberships with each membership's `Status` read by
+name through `fieldValueByName`, rather than the five the issue fragment asks for. Neither verb
+is driven by the live journey, so nothing it writes or reads moved for them.
+
+**`session-cost.txt`** moves only by the reconciliation step's lines for the two new entries of
+`graphql::DOCUMENTS`: its request total 190 → 192, and its node count by the two documents' worst
+cases, 10,150 and 150 nodes, 278,469 → 288,769.
+
+## A status filter naming only open categories searches open issues alone
+
+A task read filtered to statuses none of which is `done` or `cancelled` — what `task copy
+--status backlog` and `task list --status todo` ask — narrows every issue search it sends with
+`is:open`: a closed issue reads as one of those two, so none it leaves out could have been kept.
+A read with no other narrowing still reads the board's own items, which are what list a draft,
+and narrows only the search half that completes them; a narrowed search never answers a draft
+in the first place. The narrowed search is not the whole-board search a command may already
+hold, so it is sent afresh.
+
+**`session-cost.txt`** moves by that one search: the live journey's read of the tasks in its
+board's first column is such a read, so its searches 11 → 12, its request total 192 → 193 and
+its node count by that page's 4,080 nodes, 288,769 → 292,849.

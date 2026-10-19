@@ -477,6 +477,11 @@ export const runtimeSchemas = {
         "default": "unsupported",
         "description": "Whether the source's tasks have comments at all.\n\nRead exactly as [`documents`](Self::documents) is: it says what the source *holds*,\nnot which predicate it applies, so the second capability rule does not reach it. A\nsource declaring `Unsupported` is never sent a comment call — the engine reads this\nonce at the handshake and refuses such a call before anything is read, naming the\nsource and its plugin. Adding, editing and removing a comment is a write, so a source\ndeclaring `Native` is written through only when\n[`TaskSource::writes`](crate::TaskSource::writes) says it can be written at all.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates comments says nothing here and is read as the comment-free source it is."
       },
+      "complete_by_issue": {
+        "$ref": "#/$defs/Support",
+        "default": "unsupported",
+        "description": "Whether the source answers\n[`TaskSource::issue_holdings`](crate::TaskSource::issue_holdings): which of its items\nan issue reference names, which `task status complete` moves to `done`.\n\nRead exactly as [`reconcile_status`](Self::reconcile_status) is: a source declaring\n`Unsupported` is never asked and sends no request, and is listed as unsupported.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, on the same terms."
+      },
       "documents": {
         "$ref": "#/$defs/Support",
         "default": "unsupported",
@@ -533,6 +538,11 @@ export const runtimeSchemas = {
         "$ref": "#/$defs/Support",
         "description": "Whether the source has projects at all."
       },
+      "reconcile_status": {
+        "$ref": "#/$defs/Support",
+        "default": "unsupported",
+        "description": "Whether the source answers\n[`TaskSource::status_contradictions`](crate::TaskSource::status_contradictions): the\nitems whose card contradicts their issue's closure, which `task status reconcile`\nbrings in line.\n\nNot a predicate, so the second capability rule does not reach it: a source declaring\n`Unsupported` is never asked, and is reported as holding nothing to reconcile. That is\nevery source whose status *is* its closure — a Linear workflow state, a file's own\n`status:` — because there a card cannot contradict anything.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates the method is never sent it."
+      },
       "search_content": {
         "$ref": "#/$defs/Support",
         "description": "Whether the source searches bodies itself."
@@ -576,6 +586,23 @@ export const runtimeSchemas = {
       }
     ],
     "title": "Classification"
+  },
+  "ClosedAs": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "The two closures a card is brought in line with: the categories a closed issue's reason can\nread as that name an option to move its card to.",
+    "oneOf": [
+      {
+        "const": "done",
+        "description": "Closed as completed, or with no reason: `done`.",
+        "type": "string"
+      },
+      {
+        "const": "cancelled",
+        "description": "Closed as not planned or as a duplicate: `cancelled`.",
+        "type": "string"
+      }
+    ],
+    "title": "ClosedAs"
   },
   "Comment": {
     "$defs": {
@@ -1186,6 +1213,196 @@ export const runtimeSchemas = {
     "title": "CommentWritten",
     "type": "object"
   },
+  "CompleteAction": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "What moving one issue's item to `done` came to at one source.",
+    "oneOf": [
+      {
+        "const": "updated",
+        "description": "The task was written `done`.",
+        "type": "string"
+      },
+      {
+        "const": "would-update",
+        "description": "The task would be written `done`; a dry run wrote nothing.",
+        "type": "string"
+      },
+      {
+        "const": "unchanged",
+        "description": "The issue is closed as completed and its card already reads `done`.",
+        "type": "string"
+      },
+      {
+        "const": "skipped",
+        "description": "The issue is closed some other way, which a landing does not overrule.",
+        "type": "string"
+      },
+      {
+        "const": "absent",
+        "description": "The source holds no item for the issue, or cannot see it.",
+        "type": "string"
+      },
+      {
+        "const": "failed",
+        "description": "The task could not be written, or the source could not be read; `error` says why.",
+        "type": "string"
+      }
+    ],
+    "title": "CompleteAction"
+  },
+  "Completion": {
+    "$defs": {
+      "Classification": {
+        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository or a\nprivate project — a classification only ever tightens.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
+        "oneOf": [
+          {
+            "const": "public",
+            "description": "Anybody who may read the destination may read it.",
+            "type": "string"
+          },
+          {
+            "const": "private",
+            "description": "It may be written only to a destination verified private, and nothing of it may\nreach a public one.",
+            "type": "string"
+          }
+        ]
+      },
+      "HeldTask": {
+        "description": "The task one source holds for an issue, as far as moving it to `done` needs it.\n\nIt carries of the task exactly what the write and the rules around it need — which task, the\ncard it sits at, the tasks it delivers, and what decides where its id may be written — rather\nthan the whole task, because the read that answers it is priced per issue and a whole task\nis not what a landing's closure needs.",
+        "properties": {
+          "classification": {
+            "$ref": "#/$defs/Classification",
+            "default": "public",
+            "description": "The task's own classification."
+          },
+          "delivers": {
+            "description": "The tasks it delivers, which a write of it to `done` keeps in step.",
+            "items": {
+              "$ref": "#/$defs/TaskRef"
+            },
+            "type": "array"
+          },
+          "id": {
+            "$ref": "#/$defs/NativeId",
+            "description": "The task, by this source's own id for it."
+          },
+          "option": {
+            "default": null,
+            "description": "The name of the option the task's card sits at, as the source spells it, when it sits\nat one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "repositories": {
+            "description": "The repositories the task names.",
+            "items": {
+              "$ref": "#/$defs/Repository"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "NativeId": {
+        "description": "A source's own opaque identifier for one item.\n\nDeliberately unvalidated: a native id is whatever the upstream system says it\nis, colons included. The engine parses a qualified id by splitting on the\n*first* colon precisely so this stays true.",
+        "type": "string"
+      },
+      "Repository": {
+        "description": "A repository identified by its normalized origin, without a URL scheme or `.git` suffix.",
+        "type": "string"
+      },
+      "TaskRef": {
+        "description": "One task named by another task's [`Task::delivers`] or [`Task::delivered_by`].\n\nA string with one of two spellings, decided the way a [`DependencyEndpoint`] decides it:\none holding a colon is `<source>:<native>` and names a task of any source, and one\nwithout is a bare native id naming a task of the source that holds the list. So a\nnative id holding a colon cannot be named bare, exactly as it cannot in\n`onetaskgraph.depends_on`.",
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "What moving one issue's item to `done` comes to at one source — the task it holds riding on\nevery outcome that has one, so none can be told without its task, or with one, that has not.",
+    "oneOf": [
+      {
+        "description": "The source holds no item for the issue, or cannot see the issue at all.",
+        "properties": {
+          "completion": {
+            "const": "absent",
+            "type": "string"
+          }
+        },
+        "required": [
+          "completion"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "The issue's closure already says something else, which a landing does not overrule.",
+        "properties": {
+          "completion": {
+            "const": "skipped",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Why, as `closed as <reason>`.",
+            "type": "string"
+          },
+          "task": {
+            "$ref": "#/$defs/HeldTask",
+            "description": "The task held for the issue."
+          }
+        },
+        "required": [
+          "completion",
+          "task",
+          "reason"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "The issue is closed as completed and its card already sits at the `done` option.",
+        "properties": {
+          "completion": {
+            "const": "unchanged",
+            "type": "string"
+          },
+          "task": {
+            "$ref": "#/$defs/HeldTask",
+            "description": "The task held for the issue."
+          }
+        },
+        "required": [
+          "completion",
+          "task"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "The item is to be written `done`: its card moved to the `done` option, and its issue\nclosed as completed if it is still open.",
+        "properties": {
+          "completion": {
+            "const": "due",
+            "type": "string"
+          },
+          "task": {
+            "$ref": "#/$defs/HeldTask",
+            "description": "The task held for the issue."
+          },
+          "to": {
+            "description": "The name of the option `done` writes it at.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "completion",
+          "task",
+          "to"
+        ],
+        "type": "object"
+      }
+    ],
+    "title": "Completion"
+  },
   "CopyAction": {
     "$defs": {
       "CommentCounts": {
@@ -1536,6 +1753,24 @@ export const runtimeSchemas = {
         "required": [
           "action",
           "error"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "The task named by id is at a status the copy's `--status` does not keep: read only as\nfar as its status, and neither copied nor read for its comments. It does not change the\ncopy's exit code.",
+        "properties": {
+          "action": {
+            "const": "skipped",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Why, as `status <category> is not one of <categories>`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "reason"
         ],
         "type": "object"
       }
@@ -2112,6 +2347,24 @@ export const runtimeSchemas = {
           "error"
         ],
         "type": "object"
+      },
+      {
+        "description": "The task named by id is at a status the copy's `--status` does not keep: read only as\nfar as its status, and neither copied nor read for its comments. It does not change the\ncopy's exit code.",
+        "properties": {
+          "action": {
+            "const": "skipped",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Why, as `status <category> is not one of <categories>`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "reason"
+        ],
+        "type": "object"
       }
     ],
     "properties": {
@@ -2445,6 +2698,24 @@ export const runtimeSchemas = {
             "required": [
               "action",
               "error"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The task named by id is at a status the copy's `--status` does not keep: read only as\nfar as its status, and neither copied nor read for its comments. It does not change the\ncopy's exit code.",
+            "properties": {
+              "action": {
+                "const": "skipped",
+                "type": "string"
+              },
+              "reason": {
+                "description": "Why, as `status <category> is not one of <categories>`.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "action",
+              "reason"
             ],
             "type": "object"
           }
@@ -5895,6 +6166,1016 @@ export const runtimeSchemas = {
       "reachable"
     ],
     "title": "Health",
+    "type": "object"
+  },
+  "HeldTask": {
+    "$defs": {
+      "Classification": {
+        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository or a\nprivate project — a classification only ever tightens.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
+        "oneOf": [
+          {
+            "const": "public",
+            "description": "Anybody who may read the destination may read it.",
+            "type": "string"
+          },
+          {
+            "const": "private",
+            "description": "It may be written only to a destination verified private, and nothing of it may\nreach a public one.",
+            "type": "string"
+          }
+        ]
+      },
+      "NativeId": {
+        "description": "A source's own opaque identifier for one item.\n\nDeliberately unvalidated: a native id is whatever the upstream system says it\nis, colons included. The engine parses a qualified id by splitting on the\n*first* colon precisely so this stays true.",
+        "type": "string"
+      },
+      "Repository": {
+        "description": "A repository identified by its normalized origin, without a URL scheme or `.git` suffix.",
+        "type": "string"
+      },
+      "TaskRef": {
+        "description": "One task named by another task's [`Task::delivers`] or [`Task::delivered_by`].\n\nA string with one of two spellings, decided the way a [`DependencyEndpoint`] decides it:\none holding a colon is `<source>:<native>` and names a task of any source, and one\nwithout is a bare native id naming a task of the source that holds the list. So a\nnative id holding a colon cannot be named bare, exactly as it cannot in\n`onetaskgraph.depends_on`.",
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "The task one source holds for an issue, as far as moving it to `done` needs it.\n\nIt carries of the task exactly what the write and the rules around it need — which task, the\ncard it sits at, the tasks it delivers, and what decides where its id may be written — rather\nthan the whole task, because the read that answers it is priced per issue and a whole task\nis not what a landing's closure needs.",
+    "properties": {
+      "classification": {
+        "$ref": "#/$defs/Classification",
+        "default": "public",
+        "description": "The task's own classification."
+      },
+      "delivers": {
+        "description": "The tasks it delivers, which a write of it to `done` keeps in step.",
+        "items": {
+          "$ref": "#/$defs/TaskRef"
+        },
+        "type": "array"
+      },
+      "id": {
+        "$ref": "#/$defs/NativeId",
+        "description": "The task, by this source's own id for it."
+      },
+      "option": {
+        "default": null,
+        "description": "The name of the option the task's card sits at, as the source spells it, when it sits\nat one.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "repositories": {
+        "description": "The repositories the task names.",
+        "items": {
+          "$ref": "#/$defs/Repository"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "id"
+    ],
+    "title": "HeldTask",
+    "type": "object"
+  },
+  "IssueCompleted": {
+    "$defs": {
+      "CompleteAction": {
+        "description": "What moving one issue's item to `done` came to at one source.",
+        "oneOf": [
+          {
+            "const": "updated",
+            "description": "The task was written `done`.",
+            "type": "string"
+          },
+          {
+            "const": "would-update",
+            "description": "The task would be written `done`; a dry run wrote nothing.",
+            "type": "string"
+          },
+          {
+            "const": "unchanged",
+            "description": "The issue is closed as completed and its card already reads `done`.",
+            "type": "string"
+          },
+          {
+            "const": "skipped",
+            "description": "The issue is closed some other way, which a landing does not overrule.",
+            "type": "string"
+          },
+          {
+            "const": "absent",
+            "description": "The source holds no item for the issue, or cannot see it.",
+            "type": "string"
+          },
+          {
+            "const": "failed",
+            "description": "The task could not be written, or the source could not be read; `error` says why.",
+            "type": "string"
+          }
+        ]
+      },
+      "Delivered": {
+        "description": "What keeping one delivered task in step with one deliverer came to.",
+        "oneOf": [
+          {
+            "description": "Its status was written.",
+            "properties": {
+              "from": {
+                "$ref": "#/$defs/StatusCategory",
+                "description": "The category it read."
+              },
+              "outcome": {
+                "const": "written",
+                "type": "string"
+              },
+              "to": {
+                "$ref": "#/$defs/StatusCategory",
+                "description": "The category written."
+              }
+            },
+            "required": [
+              "outcome",
+              "from",
+              "to"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The rule asked for what it already holds, or for nothing at all.",
+            "properties": {
+              "from": {
+                "$ref": "#/$defs/StatusCategory",
+                "description": "The category it read."
+              },
+              "outcome": {
+                "const": "unchanged",
+                "type": "string"
+              }
+            },
+            "required": [
+              "outcome",
+              "from"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "It is at `draft`, `backlog`, `unknown`, `done` or `cancelled`, which a claim never\naccepts, reopens or un-defers on a person's behalf.",
+            "properties": {
+              "from": {
+                "$ref": "#/$defs/StatusCategory",
+                "description": "The category it read."
+              },
+              "outcome": {
+                "const": "left",
+                "type": "string"
+              }
+            },
+            "required": [
+              "outcome",
+              "from"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "It, or a deliverer it names, could not be read or written; the rule did not guess.",
+            "properties": {
+              "failure": {
+                "$ref": "#/$defs/Failure",
+                "description": "Why, as the failure object itself: the same `class`, `kind`, `source`, `message`\nand `retry_after_seconds` a failure document carries under its own `failure`\nmember — not that whole document nested again."
+              },
+              "from": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/StatusCategory"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The category it read, when it could be read."
+              },
+              "outcome": {
+                "const": "failed",
+                "type": "string"
+              }
+            },
+            "required": [
+              "outcome",
+              "failure"
+            ],
+            "type": "object"
+          }
+        ],
+        "properties": {
+          "deliverer": {
+            "$ref": "#/$defs/GlobalId",
+            "description": "The deliverer whose write re-evaluated it — the one that just dropped it, when it was\nre-evaluated for being dropped."
+          },
+          "pruned": {
+            "default": [],
+            "description": "Deliverers its source read as not found, removed from its `delivered_by` on this\nwrite. Left out when there were none.",
+            "items": {
+              "$ref": "#/$defs/GlobalId"
+            },
+            "type": "array"
+          },
+          "ticket": {
+            "$ref": "#/$defs/GlobalId",
+            "description": "The delivered task."
+          }
+        },
+        "required": [
+          "ticket",
+          "deliverer"
+        ],
+        "type": "object"
+      },
+      "Failure": {
+        "description": "Why one command failed.\n\nEvery member is always written, `source` and `retry_after_seconds` as `null` when they\nhave nothing to say, so a caller reads a fixed shape.",
+        "properties": {
+          "class": {
+            "$ref": "#/$defs/FailureClass",
+            "description": "Whether repeating the request unchanged could change the answer."
+          },
+          "kind": {
+            "description": "What failed: the causing source error's own `kind` when a source caused it, and\notherwise this product's kebab-case name for the failure, such as `no-such-item`.",
+            "type": "string"
+          },
+          "message": {
+            "description": "What the command reported on standard error, without its `onetaskgraph: ` prefix.",
+            "type": "string"
+          },
+          "retry_after_seconds": {
+            "description": "How many seconds a rate limit asked the caller to wait, or `null` when it named no\nwait.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "source": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SourceName"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The configured source the failure came from, or `null` when none did."
+          }
+        },
+        "required": [
+          "class",
+          "kind",
+          "message",
+          "retry_after_seconds",
+          "source"
+        ],
+        "type": "object"
+      },
+      "FailureClass": {
+        "description": "Whether repeating a failed request unchanged could change the answer.\n\nClosed on purpose: a caller acts on this alone, so a third value would be one every\ncaller written before it silently misreads. What the failure *was* is\n[`Failure`]'s `kind`, which is the open half.",
+        "oneOf": [
+          {
+            "const": "refused",
+            "description": "The store or a source declined the request; repeating it unchanged cannot alter\nthe answer.",
+            "type": "string"
+          },
+          {
+            "const": "transient",
+            "description": "The request got no ruling a caller could act on, so the same request may succeed\nlater.",
+            "type": "string"
+          }
+        ]
+      },
+      "GlobalId": {
+        "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
+        "type": "string"
+      },
+      "IssueRef": {
+        "description": "One issue of one repository, as `owner/name#N`.",
+        "pattern": "^[A-Za-z0-9-]+/[A-Za-z0-9._-]+#[1-9][0-9]{0,18}$",
+        "type": "string"
+      },
+      "SourceName": {
+        "description": "The name a configuration document gives one configured source.",
+        "pattern": "^[a-z0-9][a-z0-9-]*$",
+        "type": "string"
+      },
+      "Status": {
+        "description": "A source's status, kept in both normalised and original form.\n\n`category` is what every filter compares against; `name` is the source's own\nwording, preserved so display never flattens \"In Review\" into \"In Progress\".",
+        "properties": {
+          "category": {
+            "$ref": "#/$defs/StatusCategory",
+            "description": "The normalised value filters compare against."
+          },
+          "name": {
+            "description": "The source's own label for this status.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "category",
+          "name"
+        ],
+        "type": "object"
+      },
+      "StatusCategory": {
+        "description": "The normalised status vocabulary shared across every source.",
+        "oneOf": [
+          {
+            "const": "draft",
+            "description": "Written down but not yet committed to as work.",
+            "type": "string"
+          },
+          {
+            "const": "backlog",
+            "description": "Known about, not yet accepted as ready to work.",
+            "type": "string"
+          },
+          {
+            "const": "todo",
+            "description": "Accepted and ready to be picked up, and nothing has claimed it.",
+            "type": "string"
+          },
+          {
+            "const": "queued",
+            "description": "Claimed by work that will do it, and not yet started.",
+            "type": "string"
+          },
+          {
+            "const": "in-progress",
+            "description": "Being worked on.",
+            "type": "string"
+          },
+          {
+            "const": "done",
+            "description": "Finished.",
+            "type": "string"
+          },
+          {
+            "const": "cancelled",
+            "description": "Abandoned.",
+            "type": "string"
+          },
+          {
+            "const": "unknown",
+            "description": "The source reported a status this vocabulary cannot place.",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "What one source holds for one issue reference, and what moving it to `done` came to.\n\nIts members are flat — `issue`, `source`, `task`, `from`, `to`, `action`, `reason`, `error`\n— because a landing's record of its closures and the read API consume exactly that shape;\n[`Engine::complete_issues`] is the one writer, and it fills them together from one\n[`Completion`].",
+    "properties": {
+      "action": {
+        "$ref": "#/$defs/CompleteAction",
+        "description": "What became of it."
+      },
+      "delivered": {
+        "default": [],
+        "description": "Every task the written task delivers, kept in step with it exactly as `task status set`\nkeeps them — left out when it delivers none.",
+        "items": {
+          "$ref": "#/$defs/Delivered"
+        },
+        "type": "array"
+      },
+      "error": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Failure"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "Why it failed — the failure object a failure document carries — present only then."
+      },
+      "from": {
+        "description": "The option the task's card sat at, or `null`.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "issue": {
+        "$ref": "#/$defs/IssueRef",
+        "description": "The issue, as `owner/name#N`."
+      },
+      "reason": {
+        "description": "Why it was skipped — `closed as <reason>` — present only then.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "source": {
+        "$ref": "#/$defs/SourceName",
+        "description": "The source asked."
+      },
+      "task": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/GlobalId"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "The task that source holds for the issue, by its qualified id — `null` when it holds\nnone."
+      },
+      "to": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Status"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "The status the task reads at once written, would read under a dry run, or already\nreads — `null` when nothing is held or the closure says otherwise."
+      }
+    },
+    "required": [
+      "issue",
+      "source",
+      "action"
+    ],
+    "title": "IssueCompleted",
+    "type": "object"
+  },
+  "IssueHolding": {
+    "$defs": {
+      "Classification": {
+        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository or a\nprivate project — a classification only ever tightens.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
+        "oneOf": [
+          {
+            "const": "public",
+            "description": "Anybody who may read the destination may read it.",
+            "type": "string"
+          },
+          {
+            "const": "private",
+            "description": "It may be written only to a destination verified private, and nothing of it may\nreach a public one.",
+            "type": "string"
+          }
+        ]
+      },
+      "HeldTask": {
+        "description": "The task one source holds for an issue, as far as moving it to `done` needs it.\n\nIt carries of the task exactly what the write and the rules around it need — which task, the\ncard it sits at, the tasks it delivers, and what decides where its id may be written — rather\nthan the whole task, because the read that answers it is priced per issue and a whole task\nis not what a landing's closure needs.",
+        "properties": {
+          "classification": {
+            "$ref": "#/$defs/Classification",
+            "default": "public",
+            "description": "The task's own classification."
+          },
+          "delivers": {
+            "description": "The tasks it delivers, which a write of it to `done` keeps in step.",
+            "items": {
+              "$ref": "#/$defs/TaskRef"
+            },
+            "type": "array"
+          },
+          "id": {
+            "$ref": "#/$defs/NativeId",
+            "description": "The task, by this source's own id for it."
+          },
+          "option": {
+            "default": null,
+            "description": "The name of the option the task's card sits at, as the source spells it, when it sits\nat one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "repositories": {
+            "description": "The repositories the task names.",
+            "items": {
+              "$ref": "#/$defs/Repository"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "IssueRef": {
+        "description": "One issue of one repository, as `owner/name#N`.",
+        "pattern": "^[A-Za-z0-9-]+/[A-Za-z0-9._-]+#[1-9][0-9]{0,18}$",
+        "type": "string"
+      },
+      "NativeId": {
+        "description": "A source's own opaque identifier for one item.\n\nDeliberately unvalidated: a native id is whatever the upstream system says it\nis, colons included. The engine parses a qualified id by splitting on the\n*first* colon precisely so this stays true.",
+        "type": "string"
+      },
+      "Repository": {
+        "description": "A repository identified by its normalized origin, without a URL scheme or `.git` suffix.",
+        "type": "string"
+      },
+      "TaskRef": {
+        "description": "One task named by another task's [`Task::delivers`] or [`Task::delivered_by`].\n\nA string with one of two spellings, decided the way a [`DependencyEndpoint`] decides it:\none holding a colon is `<source>:<native>` and names a task of any source, and one\nwithout is a bare native id naming a task of the source that holds the list. So a\nnative id holding a colon cannot be named bare, exactly as it cannot in\n`onetaskgraph.depends_on`.",
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "What one source holds for one issue a landing closed, and what moving it to `done` would\nwrite — the answer to [`TaskSource::issue_holdings`](crate::TaskSource::issue_holdings).",
+    "oneOf": [
+      {
+        "description": "The source holds no item for the issue, or cannot see the issue at all.",
+        "properties": {
+          "completion": {
+            "const": "absent",
+            "type": "string"
+          }
+        },
+        "required": [
+          "completion"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "The issue's closure already says something else, which a landing does not overrule.",
+        "properties": {
+          "completion": {
+            "const": "skipped",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Why, as `closed as <reason>`.",
+            "type": "string"
+          },
+          "task": {
+            "$ref": "#/$defs/HeldTask",
+            "description": "The task held for the issue."
+          }
+        },
+        "required": [
+          "completion",
+          "task",
+          "reason"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "The issue is closed as completed and its card already sits at the `done` option.",
+        "properties": {
+          "completion": {
+            "const": "unchanged",
+            "type": "string"
+          },
+          "task": {
+            "$ref": "#/$defs/HeldTask",
+            "description": "The task held for the issue."
+          }
+        },
+        "required": [
+          "completion",
+          "task"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "The item is to be written `done`: its card moved to the `done` option, and its issue\nclosed as completed if it is still open.",
+        "properties": {
+          "completion": {
+            "const": "due",
+            "type": "string"
+          },
+          "task": {
+            "$ref": "#/$defs/HeldTask",
+            "description": "The task held for the issue."
+          },
+          "to": {
+            "description": "The name of the option `done` writes it at.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "completion",
+          "task",
+          "to"
+        ],
+        "type": "object"
+      }
+    ],
+    "properties": {
+      "issue": {
+        "$ref": "#/$defs/IssueRef",
+        "description": "The issue asked about."
+      }
+    },
+    "required": [
+      "issue"
+    ],
+    "title": "IssueHolding",
+    "type": "object"
+  },
+  "IssueRef": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "One issue of one repository, as `owner/name#N`.",
+    "pattern": "^[A-Za-z0-9-]+/[A-Za-z0-9._-]+#[1-9][0-9]{0,18}$",
+    "title": "IssueRef",
+    "type": "string"
+  },
+  "IssuesCompleted": {
+    "$defs": {
+      "CompleteAction": {
+        "description": "What moving one issue's item to `done` came to at one source.",
+        "oneOf": [
+          {
+            "const": "updated",
+            "description": "The task was written `done`.",
+            "type": "string"
+          },
+          {
+            "const": "would-update",
+            "description": "The task would be written `done`; a dry run wrote nothing.",
+            "type": "string"
+          },
+          {
+            "const": "unchanged",
+            "description": "The issue is closed as completed and its card already reads `done`.",
+            "type": "string"
+          },
+          {
+            "const": "skipped",
+            "description": "The issue is closed some other way, which a landing does not overrule.",
+            "type": "string"
+          },
+          {
+            "const": "absent",
+            "description": "The source holds no item for the issue, or cannot see it.",
+            "type": "string"
+          },
+          {
+            "const": "failed",
+            "description": "The task could not be written, or the source could not be read; `error` says why.",
+            "type": "string"
+          }
+        ]
+      },
+      "Delivered": {
+        "description": "What keeping one delivered task in step with one deliverer came to.",
+        "oneOf": [
+          {
+            "description": "Its status was written.",
+            "properties": {
+              "from": {
+                "$ref": "#/$defs/StatusCategory",
+                "description": "The category it read."
+              },
+              "outcome": {
+                "const": "written",
+                "type": "string"
+              },
+              "to": {
+                "$ref": "#/$defs/StatusCategory",
+                "description": "The category written."
+              }
+            },
+            "required": [
+              "outcome",
+              "from",
+              "to"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The rule asked for what it already holds, or for nothing at all.",
+            "properties": {
+              "from": {
+                "$ref": "#/$defs/StatusCategory",
+                "description": "The category it read."
+              },
+              "outcome": {
+                "const": "unchanged",
+                "type": "string"
+              }
+            },
+            "required": [
+              "outcome",
+              "from"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "It is at `draft`, `backlog`, `unknown`, `done` or `cancelled`, which a claim never\naccepts, reopens or un-defers on a person's behalf.",
+            "properties": {
+              "from": {
+                "$ref": "#/$defs/StatusCategory",
+                "description": "The category it read."
+              },
+              "outcome": {
+                "const": "left",
+                "type": "string"
+              }
+            },
+            "required": [
+              "outcome",
+              "from"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "It, or a deliverer it names, could not be read or written; the rule did not guess.",
+            "properties": {
+              "failure": {
+                "$ref": "#/$defs/Failure",
+                "description": "Why, as the failure object itself: the same `class`, `kind`, `source`, `message`\nand `retry_after_seconds` a failure document carries under its own `failure`\nmember — not that whole document nested again."
+              },
+              "from": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/StatusCategory"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The category it read, when it could be read."
+              },
+              "outcome": {
+                "const": "failed",
+                "type": "string"
+              }
+            },
+            "required": [
+              "outcome",
+              "failure"
+            ],
+            "type": "object"
+          }
+        ],
+        "properties": {
+          "deliverer": {
+            "$ref": "#/$defs/GlobalId",
+            "description": "The deliverer whose write re-evaluated it — the one that just dropped it, when it was\nre-evaluated for being dropped."
+          },
+          "pruned": {
+            "default": [],
+            "description": "Deliverers its source read as not found, removed from its `delivered_by` on this\nwrite. Left out when there were none.",
+            "items": {
+              "$ref": "#/$defs/GlobalId"
+            },
+            "type": "array"
+          },
+          "ticket": {
+            "$ref": "#/$defs/GlobalId",
+            "description": "The delivered task."
+          }
+        },
+        "required": [
+          "ticket",
+          "deliverer"
+        ],
+        "type": "object"
+      },
+      "Failure": {
+        "description": "Why one command failed.\n\nEvery member is always written, `source` and `retry_after_seconds` as `null` when they\nhave nothing to say, so a caller reads a fixed shape.",
+        "properties": {
+          "class": {
+            "$ref": "#/$defs/FailureClass",
+            "description": "Whether repeating the request unchanged could change the answer."
+          },
+          "kind": {
+            "description": "What failed: the causing source error's own `kind` when a source caused it, and\notherwise this product's kebab-case name for the failure, such as `no-such-item`.",
+            "type": "string"
+          },
+          "message": {
+            "description": "What the command reported on standard error, without its `onetaskgraph: ` prefix.",
+            "type": "string"
+          },
+          "retry_after_seconds": {
+            "description": "How many seconds a rate limit asked the caller to wait, or `null` when it named no\nwait.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "source": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SourceName"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The configured source the failure came from, or `null` when none did."
+          }
+        },
+        "required": [
+          "class",
+          "kind",
+          "message",
+          "retry_after_seconds",
+          "source"
+        ],
+        "type": "object"
+      },
+      "FailureClass": {
+        "description": "Whether repeating a failed request unchanged could change the answer.\n\nClosed on purpose: a caller acts on this alone, so a third value would be one every\ncaller written before it silently misreads. What the failure *was* is\n[`Failure`]'s `kind`, which is the open half.",
+        "oneOf": [
+          {
+            "const": "refused",
+            "description": "The store or a source declined the request; repeating it unchanged cannot alter\nthe answer.",
+            "type": "string"
+          },
+          {
+            "const": "transient",
+            "description": "The request got no ruling a caller could act on, so the same request may succeed\nlater.",
+            "type": "string"
+          }
+        ]
+      },
+      "GlobalId": {
+        "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
+        "type": "string"
+      },
+      "IssueCompleted": {
+        "description": "What one source holds for one issue reference, and what moving it to `done` came to.\n\nIts members are flat — `issue`, `source`, `task`, `from`, `to`, `action`, `reason`, `error`\n— because a landing's record of its closures and the read API consume exactly that shape;\n[`Engine::complete_issues`] is the one writer, and it fills them together from one\n[`Completion`].",
+        "properties": {
+          "action": {
+            "$ref": "#/$defs/CompleteAction",
+            "description": "What became of it."
+          },
+          "delivered": {
+            "default": [],
+            "description": "Every task the written task delivers, kept in step with it exactly as `task status set`\nkeeps them — left out when it delivers none.",
+            "items": {
+              "$ref": "#/$defs/Delivered"
+            },
+            "type": "array"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Failure"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why it failed — the failure object a failure document carries — present only then."
+          },
+          "from": {
+            "description": "The option the task's card sat at, or `null`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "issue": {
+            "$ref": "#/$defs/IssueRef",
+            "description": "The issue, as `owner/name#N`."
+          },
+          "reason": {
+            "description": "Why it was skipped — `closed as <reason>` — present only then.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "$ref": "#/$defs/SourceName",
+            "description": "The source asked."
+          },
+          "task": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/GlobalId"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The task that source holds for the issue, by its qualified id — `null` when it holds\nnone."
+          },
+          "to": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Status"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The status the task reads at once written, would read under a dry run, or already\nreads — `null` when nothing is held or the closure says otherwise."
+          }
+        },
+        "required": [
+          "issue",
+          "source",
+          "action"
+        ],
+        "type": "object"
+      },
+      "IssueRef": {
+        "description": "One issue of one repository, as `owner/name#N`.",
+        "pattern": "^[A-Za-z0-9-]+/[A-Za-z0-9._-]+#[1-9][0-9]{0,18}$",
+        "type": "string"
+      },
+      "SourceName": {
+        "description": "The name a configuration document gives one configured source.",
+        "pattern": "^[a-z0-9][a-z0-9-]*$",
+        "type": "string"
+      },
+      "Status": {
+        "description": "A source's status, kept in both normalised and original form.\n\n`category` is what every filter compares against; `name` is the source's own\nwording, preserved so display never flattens \"In Review\" into \"In Progress\".",
+        "properties": {
+          "category": {
+            "$ref": "#/$defs/StatusCategory",
+            "description": "The normalised value filters compare against."
+          },
+          "name": {
+            "description": "The source's own label for this status.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "category",
+          "name"
+        ],
+        "type": "object"
+      },
+      "StatusCategory": {
+        "description": "The normalised status vocabulary shared across every source.",
+        "oneOf": [
+          {
+            "const": "draft",
+            "description": "Written down but not yet committed to as work.",
+            "type": "string"
+          },
+          {
+            "const": "backlog",
+            "description": "Known about, not yet accepted as ready to work.",
+            "type": "string"
+          },
+          {
+            "const": "todo",
+            "description": "Accepted and ready to be picked up, and nothing has claimed it.",
+            "type": "string"
+          },
+          {
+            "const": "queued",
+            "description": "Claimed by work that will do it, and not yet started.",
+            "type": "string"
+          },
+          {
+            "const": "in-progress",
+            "description": "Being worked on.",
+            "type": "string"
+          },
+          {
+            "const": "done",
+            "description": "Finished.",
+            "type": "string"
+          },
+          {
+            "const": "cancelled",
+            "description": "Abandoned.",
+            "type": "string"
+          },
+          {
+            "const": "unknown",
+            "description": "The source reported a status this vocabulary cannot place.",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "What `task status complete` and [`Engine::complete_issues`] answer with.",
+    "properties": {
+      "items": {
+        "description": "One entry per distinct reference for each source asked, sources in configuration order\nand references in the order given.",
+        "items": {
+          "$ref": "#/$defs/IssueCompleted"
+        },
+        "type": "array"
+      },
+      "unsupported": {
+        "description": "Every source that would have been asked and holds no item by issue reference — its\nstatus is its closure, or its plugin does not declare `complete_by_issue` — each sent\nno request.",
+        "items": {
+          "$ref": "#/$defs/SourceName"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "items",
+      "unsupported"
+    ],
+    "title": "IssuesCompleted",
     "type": "object"
   },
   "ItemKind": {
@@ -13366,6 +14647,124 @@ export const runtimeSchemas = {
     "title": "QueryResponse",
     "type": "object"
   },
+  "ReconcileOutcome": {
+    "$defs": {
+      "Failure": {
+        "description": "Why one command failed.\n\nEvery member is always written, `source` and `retry_after_seconds` as `null` when they\nhave nothing to say, so a caller reads a fixed shape.",
+        "properties": {
+          "class": {
+            "$ref": "#/$defs/FailureClass",
+            "description": "Whether repeating the request unchanged could change the answer."
+          },
+          "kind": {
+            "description": "What failed: the causing source error's own `kind` when a source caused it, and\notherwise this product's kebab-case name for the failure, such as `no-such-item`.",
+            "type": "string"
+          },
+          "message": {
+            "description": "What the command reported on standard error, without its `onetaskgraph: ` prefix.",
+            "type": "string"
+          },
+          "retry_after_seconds": {
+            "description": "How many seconds a rate limit asked the caller to wait, or `null` when it named no\nwait.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "source": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SourceName"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The configured source the failure came from, or `null` when none did."
+          }
+        },
+        "required": [
+          "class",
+          "kind",
+          "message",
+          "retry_after_seconds",
+          "source"
+        ],
+        "type": "object"
+      },
+      "FailureClass": {
+        "description": "Whether repeating a failed request unchanged could change the answer.\n\nClosed on purpose: a caller acts on this alone, so a third value would be one every\ncaller written before it silently misreads. What the failure *was* is\n[`Failure`]'s `kind`, which is the open half.",
+        "oneOf": [
+          {
+            "const": "refused",
+            "description": "The store or a source declined the request; repeating it unchanged cannot alter\nthe answer.",
+            "type": "string"
+          },
+          {
+            "const": "transient",
+            "description": "The request got no ruling a caller could act on, so the same request may succeed\nlater.",
+            "type": "string"
+          }
+        ]
+      },
+      "SourceName": {
+        "description": "The name a configuration document gives one configured source.",
+        "pattern": "^[a-z0-9][a-z0-9-]*$",
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "What reconciling one item came to.",
+    "oneOf": [
+      {
+        "description": "Its card was moved.",
+        "properties": {
+          "action": {
+            "const": "updated",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "Its card would be moved; a dry run wrote nothing.",
+        "properties": {
+          "action": {
+            "const": "would-update",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "Its card could not be moved.",
+        "properties": {
+          "action": {
+            "const": "failed",
+            "type": "string"
+          },
+          "error": {
+            "$ref": "#/$defs/Failure",
+            "description": "Why — the failure object a failure document carries."
+          }
+        },
+        "required": [
+          "action",
+          "error"
+        ],
+        "type": "object"
+      }
+    ],
+    "title": "ReconcileOutcome"
+  },
   "Regenerated": {
     "$defs": {
       "GlobalId": {
@@ -14519,6 +15918,11 @@ export const runtimeSchemas = {
             "default": "unsupported",
             "description": "Whether the source's tasks have comments at all.\n\nRead exactly as [`documents`](Self::documents) is: it says what the source *holds*,\nnot which predicate it applies, so the second capability rule does not reach it. A\nsource declaring `Unsupported` is never sent a comment call — the engine reads this\nonce at the handshake and refuses such a call before anything is read, naming the\nsource and its plugin. Adding, editing and removing a comment is a write, so a source\ndeclaring `Native` is written through only when\n[`TaskSource::writes`](crate::TaskSource::writes) says it can be written at all.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates comments says nothing here and is read as the comment-free source it is."
           },
+          "complete_by_issue": {
+            "$ref": "#/$defs/Support",
+            "default": "unsupported",
+            "description": "Whether the source answers\n[`TaskSource::issue_holdings`](crate::TaskSource::issue_holdings): which of its items\nan issue reference names, which `task status complete` moves to `done`.\n\nRead exactly as [`reconcile_status`](Self::reconcile_status) is: a source declaring\n`Unsupported` is never asked and sends no request, and is listed as unsupported.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, on the same terms."
+          },
           "documents": {
             "$ref": "#/$defs/Support",
             "default": "unsupported",
@@ -14574,6 +15978,11 @@ export const runtimeSchemas = {
           "projects": {
             "$ref": "#/$defs/Support",
             "description": "Whether the source has projects at all."
+          },
+          "reconcile_status": {
+            "$ref": "#/$defs/Support",
+            "default": "unsupported",
+            "description": "Whether the source answers\n[`TaskSource::status_contradictions`](crate::TaskSource::status_contradictions): the\nitems whose card contradicts their issue's closure, which `task status reconcile`\nbrings in line.\n\nNot a predicate, so the second capability rule does not reach it: a source declaring\n`Unsupported` is never asked, and is reported as holding nothing to reconcile. That is\nevery source whose status *is* its closure — a Linear workflow state, a file's own\n`status:` — because there a card cannot contradict anything.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates the method is never sent it."
           },
           "search_content": {
             "$ref": "#/$defs/Support",
@@ -14833,6 +16242,11 @@ export const runtimeSchemas = {
             "default": "unsupported",
             "description": "Whether the source's tasks have comments at all.\n\nRead exactly as [`documents`](Self::documents) is: it says what the source *holds*,\nnot which predicate it applies, so the second capability rule does not reach it. A\nsource declaring `Unsupported` is never sent a comment call — the engine reads this\nonce at the handshake and refuses such a call before anything is read, naming the\nsource and its plugin. Adding, editing and removing a comment is a write, so a source\ndeclaring `Native` is written through only when\n[`TaskSource::writes`](crate::TaskSource::writes) says it can be written at all.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates comments says nothing here and is read as the comment-free source it is."
           },
+          "complete_by_issue": {
+            "$ref": "#/$defs/Support",
+            "default": "unsupported",
+            "description": "Whether the source answers\n[`TaskSource::issue_holdings`](crate::TaskSource::issue_holdings): which of its items\nan issue reference names, which `task status complete` moves to `done`.\n\nRead exactly as [`reconcile_status`](Self::reconcile_status) is: a source declaring\n`Unsupported` is never asked and sends no request, and is listed as unsupported.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, on the same terms."
+          },
           "documents": {
             "$ref": "#/$defs/Support",
             "default": "unsupported",
@@ -14888,6 +16302,11 @@ export const runtimeSchemas = {
           "projects": {
             "$ref": "#/$defs/Support",
             "description": "Whether the source has projects at all."
+          },
+          "reconcile_status": {
+            "$ref": "#/$defs/Support",
+            "default": "unsupported",
+            "description": "Whether the source answers\n[`TaskSource::status_contradictions`](crate::TaskSource::status_contradictions): the\nitems whose card contradicts their issue's closure, which `task status reconcile`\nbrings in line.\n\nNot a predicate, so the second capability rule does not reach it: a source declaring\n`Unsupported` is never asked, and is reported as holding nothing to reconcile. That is\nevery source whose status *is* its closure — a Linear workflow state, a file's own\n`status:` — because there a card cannot contradict anything.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates the method is never sent it."
           },
           "search_content": {
             "$ref": "#/$defs/Support",
@@ -15443,6 +16862,371 @@ export const runtimeSchemas = {
     ],
     "title": "StatusCategory"
   },
+  "StatusContradiction": {
+    "$defs": {
+      "Classification": {
+        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository or a\nprivate project — a classification only ever tightens.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
+        "oneOf": [
+          {
+            "const": "public",
+            "description": "Anybody who may read the destination may read it.",
+            "type": "string"
+          },
+          {
+            "const": "private",
+            "description": "It may be written only to a destination verified private, and nothing of it may\nreach a public one.",
+            "type": "string"
+          }
+        ]
+      },
+      "ClosedAs": {
+        "description": "The two closures a card is brought in line with: the categories a closed issue's reason can\nread as that name an option to move its card to.",
+        "oneOf": [
+          {
+            "const": "done",
+            "description": "Closed as completed, or with no reason: `done`.",
+            "type": "string"
+          },
+          {
+            "const": "cancelled",
+            "description": "Closed as not planned or as a duplicate: `cancelled`.",
+            "type": "string"
+          }
+        ]
+      },
+      "Label": {
+        "description": "A tag a source attaches to work.",
+        "properties": {
+          "color": {
+            "description": "The source's own colour for the label, when it has one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "$ref": "#/$defs/NativeId",
+            "description": "The source's own opaque identifier."
+          },
+          "name": {
+            "description": "What a user filtering across sources actually types.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object"
+      },
+      "Location": {
+        "description": "Where an entity is, in the one form a consumer can act on without knowing the backend.\n\nExternally tagged with exactly two variants, so the JSON is `{\"url\": \"https://…\"}` or\n`{\"path\": \"/home/…\"}` and a consumer tells them apart by which key is present. A reader\nhanded one of these knows what to *do* with it — open a link, or print a path and read\nthe file out — which is what a bare string could not have said.\n\nIt carries no third case on purpose. `None` on the field is the third case, and it\nmeans the source did not say where the entity is, which is not the same as saying it is\nnowhere.\n\nThis does **not** redefine, replace or derive from the `url` field of [`Task`],\n[`Project`] or [`Document`]: a source that reports a web URL there goes on reporting\nit, and every existing consumer sees exactly what it saw.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "description": "The entity lives at an external website, and this is a link a reader can open.",
+            "properties": {
+              "url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "url"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "The entity is a file on the machine the source runs on, and this is that file's\nabsolute path, so a reader can print the path or read the contents out.",
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "NativeId": {
+        "description": "A source's own opaque identifier for one item.\n\nDeliberately unvalidated: a native id is whatever the upstream system says it\nis, colons included. The engine parses a qualified id by splitting on the\n*first* colon precisely so this stays true.",
+        "type": "string"
+      },
+      "Priority": {
+        "description": "How much a task matters, in the one vocabulary every source is normalised into.\n\nFive values, most pressing first after [`None`](Self::None): Linear's own priority has\nexactly these, and a source whose backend has none of its own maps its representation\nonto them. `none` is a value rather than an absent field, because \"no priority is set\" is\nsomething a person sets — writing `none` clears a priority — and a reader tells it apart\nfrom nothing by the value alone.",
+        "oneOf": [
+          {
+            "const": "none",
+            "description": "No priority is set.",
+            "type": "string"
+          },
+          {
+            "const": "urgent",
+            "description": "Drop everything for it.",
+            "type": "string"
+          },
+          {
+            "const": "high",
+            "description": "Next, before the rest.",
+            "type": "string"
+          },
+          {
+            "const": "medium",
+            "description": "In its turn.",
+            "type": "string"
+          },
+          {
+            "const": "low",
+            "description": "When there is nothing more pressing.",
+            "type": "string"
+          }
+        ]
+      },
+      "Repository": {
+        "description": "A repository identified by its normalized origin, without a URL scheme or `.git` suffix.",
+        "type": "string"
+      },
+      "Status": {
+        "description": "A source's status, kept in both normalised and original form.\n\n`category` is what every filter compares against; `name` is the source's own\nwording, preserved so display never flattens \"In Review\" into \"In Progress\".",
+        "properties": {
+          "category": {
+            "$ref": "#/$defs/StatusCategory",
+            "description": "The normalised value filters compare against."
+          },
+          "name": {
+            "description": "The source's own label for this status.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "category",
+          "name"
+        ],
+        "type": "object"
+      },
+      "StatusCategory": {
+        "description": "The normalised status vocabulary shared across every source.",
+        "oneOf": [
+          {
+            "const": "draft",
+            "description": "Written down but not yet committed to as work.",
+            "type": "string"
+          },
+          {
+            "const": "backlog",
+            "description": "Known about, not yet accepted as ready to work.",
+            "type": "string"
+          },
+          {
+            "const": "todo",
+            "description": "Accepted and ready to be picked up, and nothing has claimed it.",
+            "type": "string"
+          },
+          {
+            "const": "queued",
+            "description": "Claimed by work that will do it, and not yet started.",
+            "type": "string"
+          },
+          {
+            "const": "in-progress",
+            "description": "Being worked on.",
+            "type": "string"
+          },
+          {
+            "const": "done",
+            "description": "Finished.",
+            "type": "string"
+          },
+          {
+            "const": "cancelled",
+            "description": "Abandoned.",
+            "type": "string"
+          },
+          {
+            "const": "unknown",
+            "description": "The source reported a status this vocabulary cannot place.",
+            "type": "string"
+          }
+        ]
+      },
+      "Task": {
+        "description": "One unit of work as a source reports it.",
+        "properties": {
+          "classification": {
+            "$ref": "#/$defs/Classification",
+            "default": "public",
+            "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's\nrepositories and its project before it decides where the task may be written, and\nnothing written here can loosen either."
+          },
+          "content": {
+            "description": "The long-form body, when the source has one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "description": "When the source says the task was created.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "delivered_by": {
+            "default": [],
+            "description": "Every task that delivers this one, by qualified id: the reverse of [`Self::delivers`].\n\n**Owned by the store, not by a source record and not by a copy.** The engine keeps it\nin step whenever it writes a task's `delivers`, through\n[`TaskSource::set_delivered_by`](crate::TaskSource::set_delivered_by); a source holds\nand reports it, and a copy keeps the destination's own rather than taking the\nsource's. Empty by default and left out of the wire when empty, as `delivers` is.",
+            "items": {
+              "$ref": "#/$defs/TaskRef"
+            },
+            "type": "array"
+          },
+          "delivers": {
+            "default": [],
+            "description": "The tasks this one delivers: finishing this task finishes them.\n\nEach entry is a [`TaskRef`] — `<source>:<native>` names a task of any source, and a\nbare native id names a task of the source holding this one — with no repeats and\nnever this task itself. Empty by default, and left out of the wire when empty, so a\nreader written before the field existed reads exactly what it read before.",
+            "items": {
+              "$ref": "#/$defs/TaskRef"
+            },
+            "type": "array"
+          },
+          "id": {
+            "$ref": "#/$defs/NativeId",
+            "description": "The source's own opaque identifier."
+          },
+          "key": {
+            "default": null,
+            "description": "The short handle the backend shows people, beside [`id`](Self::id) and never\ninstead of it — a Linear issue's `ENG-123`, a GitHub issue's `1043`.\n\n**It is human-facing and it may change.** A Linear issue moved between teams gets a\nnew identifier and a GitHub issue transferred between repositories gets a new\nnumber, so nothing stores this in place of [`id`](Self::id) and nothing matches on\nit: `id` is what everything stores and matches on, and this is what a person says\nout loud.\n\nAbsent by default, so a source that predates this field — and every source with no\nseparate handle of its own — reads as `None`, which means *this backend has no\nshort handle for this task* rather than *the handle is the id*. A source never\ncopies [`id`](Self::id) here.\n\n**Read-only.** A source derives it on a read and never stores one it is handed: a\ntask arriving on an [`ItemWrite`](crate::ItemWrite) may still hold its source's key,\nand a destination ignores it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "labels": {
+            "description": "Inline rather than by id: a source returning a task already knows them.",
+            "items": {
+              "$ref": "#/$defs/Label"
+            },
+            "type": "array"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Location"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Where this task is, when the source says (see [`Location`]).\n\nAbsent by default, so a source that predates this field — and every source that\nsimply does not say — reads as `None`, which means *the source did not say where\nthis is* rather than *this is nowhere*. It neither replaces nor derives from\n[`url`](Self::url), which goes on meaning exactly what it always did."
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "default": {},
+            "description": "Caller-defined attributes, preserving their JSON types.\n\nKeys are free-form, with two reserved prefixes: `onetaskgraph.` belongs to this\nproduct — [`Repository::METADATA_KEY`] and [`DependencyEdge::RECORDED_KEY`] are\nthe two every source honours, and [`ItemKind::METADATA_KEY`] is one plugin's —\nand `onepipeline.` belongs to that consumer. Every other key is the caller's, and\na source returns it exactly as it holds it.",
+            "type": "object"
+          },
+          "priority": {
+            "$ref": "#/$defs/Priority",
+            "default": "none",
+            "description": "The task's priority; `none` means none is set, and a source that cannot hold one\nreports `none`.\n\nDefaulted when a document omits it, so a task written before this field existed —\nand every task of a plugin that predates it — reads as [`Priority::None`]. Always\nwritten, so a reader never has to tell an absent member from a `none` one. Whether a\nsource can hold one at all is [`Capabilities::priority`](crate::Capabilities::priority),\nand the engine never hands a source declaring it cannot a priority other than `none`."
+          },
+          "project": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/NativeId"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`None` is a first-class case — an orphan task — not an edge case."
+          },
+          "repositories": {
+            "default": [],
+            "description": "Normalized repository origins this task concerns, in source order and without\nrepeats.",
+            "items": {
+              "$ref": "#/$defs/Repository"
+            },
+            "type": "array"
+          },
+          "status": {
+            "$ref": "#/$defs/Status",
+            "description": "The source's status, normalised and preserved."
+          },
+          "title": {
+            "description": "The one-line summary a user recognises the task by.",
+            "type": "string"
+          },
+          "updated_at": {
+            "description": "When the source says the task last changed.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "url": {
+            "description": "Where a human can open this task.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "description": "The task's change token: an opaque value its source gives so a reader can tell whether\nthe task changed without reading it whole.\n\n**Two equal versions of one task from one source mean nothing in it has changed** — its\ntitle, body, status, priority, labels, project fields, metadata, edges and comments,\ncomments added, edited and deleted included. A source that cannot promise all of that\nfor a task leaves this absent, which means *always read it*. What each plugin keys its\ntoken on, and which change kinds it covers, is stated per plugin in\n`docs/plugin-protocol.md` §4.13d.\n\nOpaque to every caller: nothing compares one but for equality, and the one reader that\nlooks inside is the source that gave it, through\n[`TaskSource::order_versions`](crate::TaskSource::order_versions). Absent by default and left out of the wire when absent, so a source written\nbefore it existed is read as giving none.\n\n**Read-only.** A source derives it on a read and never stores one it is handed: a task\narriving on an [`ItemWrite`](crate::ItemWrite) may still hold its source's token, and a\ndestination ignores it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "status",
+          "labels"
+        ],
+        "type": "object"
+      },
+      "TaskRef": {
+        "description": "One task named by another task's [`Task::delivers`] or [`Task::delivered_by`].\n\nA string with one of two spellings, decided the way a [`DependencyEndpoint`] decides it:\none holding a colon is `<source>:<native>` and names a task of any source, and one\nwithout is a bare native id naming a task of the source that holds the list. So a\nnative id holding a colon cannot be named bare, exactly as it cannot in\n`onetaskgraph.depends_on`.",
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "One item whose card contradicts its issue's closure, and the option that brings it in line\n— one entry of [`TaskSource::status_contradictions`](crate::TaskSource::status_contradictions).",
+    "properties": {
+      "closed_as": {
+        "$ref": "#/$defs/ClosedAs",
+        "description": "What its closure reads as."
+      },
+      "option": {
+        "default": null,
+        "description": "The option its card sits at, or `None` for a card with no option.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "task": {
+        "$ref": "#/$defs/Task",
+        "description": "The task, as it reads now."
+      },
+      "to": {
+        "description": "The name of the option the source's mapping gives that category, which its card is\nmoved to.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "task",
+      "closed_as",
+      "to"
+    ],
+    "title": "StatusContradiction",
+    "type": "object"
+  },
   "StatusMapping": {
     "$defs": {
       "StatusCategory": {
@@ -15892,6 +17676,436 @@ export const runtimeSchemas = {
       "existing"
     ],
     "title": "StatusOptionsReport",
+    "type": "object"
+  },
+  "StatusReconciled": {
+    "$defs": {
+      "Failure": {
+        "description": "Why one command failed.\n\nEvery member is always written, `source` and `retry_after_seconds` as `null` when they\nhave nothing to say, so a caller reads a fixed shape.",
+        "properties": {
+          "class": {
+            "$ref": "#/$defs/FailureClass",
+            "description": "Whether repeating the request unchanged could change the answer."
+          },
+          "kind": {
+            "description": "What failed: the causing source error's own `kind` when a source caused it, and\notherwise this product's kebab-case name for the failure, such as `no-such-item`.",
+            "type": "string"
+          },
+          "message": {
+            "description": "What the command reported on standard error, without its `onetaskgraph: ` prefix.",
+            "type": "string"
+          },
+          "retry_after_seconds": {
+            "description": "How many seconds a rate limit asked the caller to wait, or `null` when it named no\nwait.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "source": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SourceName"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The configured source the failure came from, or `null` when none did."
+          }
+        },
+        "required": [
+          "class",
+          "kind",
+          "message",
+          "retry_after_seconds",
+          "source"
+        ],
+        "type": "object"
+      },
+      "FailureClass": {
+        "description": "Whether repeating a failed request unchanged could change the answer.\n\nClosed on purpose: a caller acts on this alone, so a third value would be one every\ncaller written before it silently misreads. What the failure *was* is\n[`Failure`]'s `kind`, which is the open half.",
+        "oneOf": [
+          {
+            "const": "refused",
+            "description": "The store or a source declined the request; repeating it unchanged cannot alter\nthe answer.",
+            "type": "string"
+          },
+          {
+            "const": "transient",
+            "description": "The request got no ruling a caller could act on, so the same request may succeed\nlater.",
+            "type": "string"
+          }
+        ]
+      },
+      "GlobalId": {
+        "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
+        "type": "string"
+      },
+      "SourceName": {
+        "description": "The name a configuration document gives one configured source.",
+        "pattern": "^[a-z0-9][a-z0-9-]*$",
+        "type": "string"
+      },
+      "Status": {
+        "description": "A source's status, kept in both normalised and original form.\n\n`category` is what every filter compares against; `name` is the source's own\nwording, preserved so display never flattens \"In Review\" into \"In Progress\".",
+        "properties": {
+          "category": {
+            "$ref": "#/$defs/StatusCategory",
+            "description": "The normalised value filters compare against."
+          },
+          "name": {
+            "description": "The source's own label for this status.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "category",
+          "name"
+        ],
+        "type": "object"
+      },
+      "StatusCategory": {
+        "description": "The normalised status vocabulary shared across every source.",
+        "oneOf": [
+          {
+            "const": "draft",
+            "description": "Written down but not yet committed to as work.",
+            "type": "string"
+          },
+          {
+            "const": "backlog",
+            "description": "Known about, not yet accepted as ready to work.",
+            "type": "string"
+          },
+          {
+            "const": "todo",
+            "description": "Accepted and ready to be picked up, and nothing has claimed it.",
+            "type": "string"
+          },
+          {
+            "const": "queued",
+            "description": "Claimed by work that will do it, and not yet started.",
+            "type": "string"
+          },
+          {
+            "const": "in-progress",
+            "description": "Being worked on.",
+            "type": "string"
+          },
+          {
+            "const": "done",
+            "description": "Finished.",
+            "type": "string"
+          },
+          {
+            "const": "cancelled",
+            "description": "Abandoned.",
+            "type": "string"
+          },
+          {
+            "const": "unknown",
+            "description": "The source reported a status this vocabulary cannot place.",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "One item `task status reconcile` brought in line, or would, or could not.",
+    "oneOf": [
+      {
+        "description": "Its card was moved.",
+        "properties": {
+          "action": {
+            "const": "updated",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "Its card would be moved; a dry run wrote nothing.",
+        "properties": {
+          "action": {
+            "const": "would-update",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "type": "object"
+      },
+      {
+        "description": "Its card could not be moved.",
+        "properties": {
+          "action": {
+            "const": "failed",
+            "type": "string"
+          },
+          "error": {
+            "$ref": "#/$defs/Failure",
+            "description": "Why — the failure object a failure document carries."
+          }
+        },
+        "required": [
+          "action",
+          "error"
+        ],
+        "type": "object"
+      }
+    ],
+    "properties": {
+      "from": {
+        "description": "The option its card sat at, or `null` for a card with none.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "source": {
+        "$ref": "#/$defs/GlobalId",
+        "description": "The item, by its qualified id."
+      },
+      "to": {
+        "$ref": "#/$defs/Status",
+        "description": "The status its closure implies, which its card was moved to."
+      }
+    },
+    "required": [
+      "source",
+      "to"
+    ],
+    "title": "StatusReconciled",
+    "type": "object"
+  },
+  "StatusesReconciled": {
+    "$defs": {
+      "Failure": {
+        "description": "Why one command failed.\n\nEvery member is always written, `source` and `retry_after_seconds` as `null` when they\nhave nothing to say, so a caller reads a fixed shape.",
+        "properties": {
+          "class": {
+            "$ref": "#/$defs/FailureClass",
+            "description": "Whether repeating the request unchanged could change the answer."
+          },
+          "kind": {
+            "description": "What failed: the causing source error's own `kind` when a source caused it, and\notherwise this product's kebab-case name for the failure, such as `no-such-item`.",
+            "type": "string"
+          },
+          "message": {
+            "description": "What the command reported on standard error, without its `onetaskgraph: ` prefix.",
+            "type": "string"
+          },
+          "retry_after_seconds": {
+            "description": "How many seconds a rate limit asked the caller to wait, or `null` when it named no\nwait.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "source": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SourceName"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The configured source the failure came from, or `null` when none did."
+          }
+        },
+        "required": [
+          "class",
+          "kind",
+          "message",
+          "retry_after_seconds",
+          "source"
+        ],
+        "type": "object"
+      },
+      "FailureClass": {
+        "description": "Whether repeating a failed request unchanged could change the answer.\n\nClosed on purpose: a caller acts on this alone, so a third value would be one every\ncaller written before it silently misreads. What the failure *was* is\n[`Failure`]'s `kind`, which is the open half.",
+        "oneOf": [
+          {
+            "const": "refused",
+            "description": "The store or a source declined the request; repeating it unchanged cannot alter\nthe answer.",
+            "type": "string"
+          },
+          {
+            "const": "transient",
+            "description": "The request got no ruling a caller could act on, so the same request may succeed\nlater.",
+            "type": "string"
+          }
+        ]
+      },
+      "GlobalId": {
+        "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
+        "type": "string"
+      },
+      "SourceName": {
+        "description": "The name a configuration document gives one configured source.",
+        "pattern": "^[a-z0-9][a-z0-9-]*$",
+        "type": "string"
+      },
+      "Status": {
+        "description": "A source's status, kept in both normalised and original form.\n\n`category` is what every filter compares against; `name` is the source's own\nwording, preserved so display never flattens \"In Review\" into \"In Progress\".",
+        "properties": {
+          "category": {
+            "$ref": "#/$defs/StatusCategory",
+            "description": "The normalised value filters compare against."
+          },
+          "name": {
+            "description": "The source's own label for this status.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "category",
+          "name"
+        ],
+        "type": "object"
+      },
+      "StatusCategory": {
+        "description": "The normalised status vocabulary shared across every source.",
+        "oneOf": [
+          {
+            "const": "draft",
+            "description": "Written down but not yet committed to as work.",
+            "type": "string"
+          },
+          {
+            "const": "backlog",
+            "description": "Known about, not yet accepted as ready to work.",
+            "type": "string"
+          },
+          {
+            "const": "todo",
+            "description": "Accepted and ready to be picked up, and nothing has claimed it.",
+            "type": "string"
+          },
+          {
+            "const": "queued",
+            "description": "Claimed by work that will do it, and not yet started.",
+            "type": "string"
+          },
+          {
+            "const": "in-progress",
+            "description": "Being worked on.",
+            "type": "string"
+          },
+          {
+            "const": "done",
+            "description": "Finished.",
+            "type": "string"
+          },
+          {
+            "const": "cancelled",
+            "description": "Abandoned.",
+            "type": "string"
+          },
+          {
+            "const": "unknown",
+            "description": "The source reported a status this vocabulary cannot place.",
+            "type": "string"
+          }
+        ]
+      },
+      "StatusReconciled": {
+        "description": "One item `task status reconcile` brought in line, or would, or could not.",
+        "oneOf": [
+          {
+            "description": "Its card was moved.",
+            "properties": {
+              "action": {
+                "const": "updated",
+                "type": "string"
+              }
+            },
+            "required": [
+              "action"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Its card would be moved; a dry run wrote nothing.",
+            "properties": {
+              "action": {
+                "const": "would-update",
+                "type": "string"
+              }
+            },
+            "required": [
+              "action"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Its card could not be moved.",
+            "properties": {
+              "action": {
+                "const": "failed",
+                "type": "string"
+              },
+              "error": {
+                "$ref": "#/$defs/Failure",
+                "description": "Why — the failure object a failure document carries."
+              }
+            },
+            "required": [
+              "action",
+              "error"
+            ],
+            "type": "object"
+          }
+        ],
+        "properties": {
+          "from": {
+            "description": "The option its card sat at, or `null` for a card with none.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "$ref": "#/$defs/GlobalId",
+            "description": "The item, by its qualified id."
+          },
+          "to": {
+            "$ref": "#/$defs/Status",
+            "description": "The status its closure implies, which its card was moved to."
+          }
+        },
+        "required": [
+          "source",
+          "to"
+        ],
+        "type": "object"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "What `task status reconcile` answers with.",
+    "properties": {
+      "items": {
+        "description": "One entry per item whose card contradicted its closure, in the order the source read\nthem. Empty for a source with nothing out of line, and for one that does not declare\n`reconcile_status`.",
+        "items": {
+          "$ref": "#/$defs/StatusReconciled"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "items"
+    ],
+    "title": "StatusesReconciled",
     "type": "object"
   },
   "Task": {

@@ -56,15 +56,24 @@ PLUGINS = {
 # that would otherwise leave two bad options: a verdict row claiming a capability the plugin
 # does not have, or a configuration key that could claim one it cannot serve.
 #
-# Empty today, and that is a state rather than a stub: every field of both `configured`
-# plugins is now read from something else. A fixed field is held to exactly what a
+# The in-memory source fixes the two closure capabilities, which describe a card beside a
+# closure that a task held in memory cannot have. A fixed field is held to exactly what a
 # `literal` plugin's field is held to — its verdict must be Unsupported, must say
 # `unimplemented` or `unsupportable`, and an unimplemented one must be tracked in
 # docs/follow-ups.md. What is not reconciled here is the declaration itself, because it is
 # not in the file this check reads: the shared journey
 # `every_row_declares_exactly_what_its_plugin_reports` is what holds a configured plugin's
 # real declaration against the table, at the boundary a user reads it from.
-FIXED: dict[tuple[str, str], str] = {}
+FIXED: dict[tuple[str, str], str] = {
+    ("in-memory", "reconcile_status"): (
+        "a task held in memory has a status and no closure beside it, so no configuration "
+        "could make one contradict the other"
+    ),
+    ("in-memory", "complete_by_issue"): (
+        "memory holds no issue a landing's `closes` names, so no configuration could make it "
+        "answer one"
+    ),
+}
 
 HEADING = "# What this source declares, field by field"
 VERDICT_ROW = re.compile(r"^//!\s*\|\s*`(\w+)`\s*\|\s*\*\*(Supported|Unsupported)(.*)$")

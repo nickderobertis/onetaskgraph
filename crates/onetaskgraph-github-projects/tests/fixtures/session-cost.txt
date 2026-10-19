@@ -1,5 +1,5 @@
-requests 190
-node count 278469
+requests 193
+node count 292849
 
 requests per call
     1       0  DELETE /repos/{owner}/{repo}/labels/{name}
@@ -29,6 +29,7 @@ requests per call
     1       0  live scratch field removal
     1       0  live scratch field value
     1     915  node-count and point-cost reconciliation while looking up the items copied from one origin
+    1     150  node-count and point-cost reconciliation while reading a batch of issues by their references
     1    7272  node-count and point-cost reconciliation while reading a batch of issues with their comments
     1    7413  node-count and point-cost reconciliation while reading a batch of issues with their comments and dependencies for a copy
     1   25400  node-count and point-cost reconciliation while reading a project's tasks
@@ -39,6 +40,7 @@ requests per call
     1     303  node-count and point-cost reconciliation while reading one issue with its comments
     1    5100  node-count and point-cost reconciliation while reading one issue's board memberships past the page it came with
     1   10150  node-count and point-cost reconciliation while reading the board
+    1   10150  node-count and point-cost reconciliation while reading the board's closed items
     1      50  node-count and point-cost reconciliation while reading the board's fields
     1      50  node-count and point-cost reconciliation while reading the board's fields and the destination repository
     1       0  node-count and point-cost reconciliation while reading the destination repository
@@ -58,7 +60,7 @@ requests per call
     4       0  recording a dependency
     2       0  removing a dependency
     1       0  safely replacing the board Status option list
-   11   77520  searching this board's issues
+   12   81600  searching this board's issues
     1       0  taking an issue out of its project
     2   20200  terminal status read-back
     6       0  updating an issue

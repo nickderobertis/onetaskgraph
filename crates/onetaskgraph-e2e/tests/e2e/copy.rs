@@ -4050,3 +4050,63 @@ fn a_document_copies_into_a_linear_workspace_and_the_next_invocation_reads_it_al
         );
     }
 }
+
+#[test]
+fn a_copy_by_id_beside_a_status_refuses_an_id_it_cannot_read_and_writes_nothing() {
+    let sandbox = Sandbox::new();
+    let plan = sandbox.subdirectory("plan");
+    std::fs::create_dir_all(plan.join("tasks")).expect("the task folder");
+    std::fs::write(
+        plan.join("tasks/proposal.md"),
+        "---\ntitle: A proposal\nstatus: backlog\n---\nAsked for.\n",
+    )
+    .expect("a task");
+    // A title that opens a YAML sequence it never closes: the folder cannot read this task.
+    std::fs::write(
+        plan.join("tasks/broken.md"),
+        "---\ntitle: [unclosed\nstatus: backlog\n---\nAsked for.\n",
+    )
+    .expect("an unreadable task");
+    let notes = sandbox.subdirectory(NOTES);
+    std::fs::create_dir_all(&notes).expect("the destination folder");
+    sandbox.project_document(&document(&json!({
+        "plan": {"plugin": "local-md", "config": {"root": plan}},
+        NOTES: {"plugin": "local-md", "config": {"root": notes}},
+        // A folder nothing created, so this source cannot start.
+        "gone": {"plugin": "local-md", "config": {"root": plan.with_file_name("nowhere")}},
+    })));
+    // Each id the copy names beside `--status` is read for its status before anything is
+    // written, so the readable task named first is not copied when a later one fails.
+    for (named, says) in [
+        ("gone:T-1", "source gone could not be built"),
+        ("plan:missing", "no task with the id plan:missing"),
+        ("plan:broken", "broken.md"),
+    ] {
+        let said = refused(
+            &sandbox,
+            &[
+                "task",
+                "copy",
+                "plan:proposal",
+                named,
+                "--status",
+                "backlog",
+                "--to",
+                NOTES,
+            ],
+            1,
+        );
+        assert!(said.contains(says), "{named}: {said}");
+        assert!(said.contains("next:"), "{named}: a next action: {said}");
+        assert!(
+            !notes.join("tasks").exists(),
+            "{named}: the destination holds nothing: {:?}",
+            std::fs::read_dir(&notes).map(|entries| entries.count())
+        );
+    }
+    assert_eq!(
+        std::fs::read_to_string(plan.join("tasks/proposal.md")).expect("the task"),
+        "---\ntitle: A proposal\nstatus: backlog\n---\nAsked for.\n",
+        "the source records no link to a copy that never happened"
+    );
+}

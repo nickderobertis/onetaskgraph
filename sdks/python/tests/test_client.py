@@ -21,12 +21,14 @@ from onetaskgraph_sdk import (
     Delivered,
     FieldsReport,
     GlobalId,
+    IssuesCompleted,
     MetadataSet,
     OnetaskgraphError,
     Priority,
     ProjectGraph,
     SourceName,
     StatusCategory,
+    StatusesReconciled,
     StatusNamesReport,
     TaskContentSet,
     TaskPrioritySet,
@@ -38,6 +40,7 @@ from onetaskgraph_sdk import (
 from onetaskgraph_sdk._generated.copy_report import (
     CopyOutcome,
     CopyOutcomeFailed,
+    CopyOutcomeSkipped,
     CopyOutcomeUnchanged,
 )
 from onetaskgraph_sdk._generated.copy_report import GlobalId as LandedAt
@@ -317,7 +320,7 @@ def test_status_options_method_decodes_a_real_binary_plan(binary: Path, tmp_path
 def landed(outcome: CopyOutcome) -> str:
     """The id a copy wrote to, absent only for a dry run that would have created one."""
     reported = outcome.root
-    assert not isinstance(reported, CopyOutcomeFailed), "this copy wrote whole"
+    assert not isinstance(reported, CopyOutcomeFailed | CopyOutcomeSkipped), "this copy wrote whole"
     assert reported.destination is not None, "this copy wrote, so it reports where"
     return reported.destination.root
 
@@ -336,7 +339,7 @@ def without_record(metadata: Mapping[str, object]) -> dict[str, object]:
 def destination_of(outcome: CopyOutcome) -> LandedAt | None:
     """Where one outcome landed, or `None` for a dry run's create and an item left unwritten."""
     reported = outcome.root
-    if isinstance(reported, CopyOutcomeFailed):
+    if isinstance(reported, CopyOutcomeFailed | CopyOutcomeSkipped):
         return None
     return reported.destination
 
@@ -853,6 +856,32 @@ def test_task_status_set_drives_the_binary(binary: Path, tmp_path: Path) -> None
     assert refused.value.exit_code == 1
     assert 'no source named "missing" is configured' in str(refused.value)
     assert run(client.task_show(id="work:T-1")).items[0].item.status.category == "in-progress"
+
+
+def test_reconcile_and_complete_drive_the_binary_over_a_source_whose_status_is_its_closure(
+    binary: Path, tmp_path: Path
+) -> None:
+    """Both closure verbs answer nothing for a folder of Markdown, and refuse a bad reference.
+
+    A folder has no card beside a closure, so what is proven here is the generated methods'
+    flags and the documents they decode, against the real binary.
+    """
+    client = Client(binary, cwd=delivering_folder(tmp_path))
+    reconciled = run(client.task_status_reconcile(source="work", dry_run=True))
+    assert isinstance(reconciled, StatusesReconciled)
+    assert reconciled.items == []
+    completed = run(
+        client.task_status_complete(
+            issue=["nickderobertis/onetaskgraph#3"], source=["work"], dry_run=True
+        )
+    )
+    assert isinstance(completed, IssuesCompleted)
+    assert completed.items == []
+    assert [source.root for source in completed.unsupported] == ["work"]
+    with pytest.raises(OnetaskgraphError) as refused:
+        run(client.task_status_complete(issue=["onetaskgraph#3"]))
+    assert refused.value.exit_code == 2
+    assert '"onetaskgraph#3" is not an issue reference' in str(refused.value)
 
 
 def test_task_status_set_answers_when_a_delivered_task_could_not_be_kept_in_step(

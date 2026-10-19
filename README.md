@@ -82,13 +82,17 @@ onetaskgraph task show <ID> [--no-comments] [--pin VERSION]
 onetaskgraph task show-many <ID>... [--no-comments] [--pin ID=VERSION]...
 onetaskgraph task deps <ID> [--direction depends-on|depended-on-by] [--pin VERSION] [--complete]
 onetaskgraph task copy <ID>... --to <SOURCE> [--match-by KEY] [--recreate] [--create] [--dry-run]
-                       [--expect VERSION]        # one task, bound to a caching destination
+                       [--status CATEGORY]... [--expect VERSION]  # --expect: one task, caching destination
+onetaskgraph task copy --to <SOURCE> [--source S]... [--commented-since RFC3339]
+                       [--metadata KEY[/SEGMENT...]=VALUE]... [--status CATEGORY]...  # by query
 onetaskgraph task comment add    <ID> [--body-file PATH] [--author NAME] [--expect VERSION]
 onetaskgraph task comment list   <ID> [--pin VERSION]
 onetaskgraph task comment edit   <ID> <COMMENT-ID> [--body-file PATH] [--expect VERSION]
 onetaskgraph task comment delete <ID> <COMMENT-ID> [--expect VERSION]
 onetaskgraph task status set <ID> draft|backlog|todo|queued|in-progress|done|cancelled|unknown
                              [--expect VERSION]
+onetaskgraph task status reconcile --source <SOURCE> [--dry-run]
+onetaskgraph task status complete --issue <OWNER/NAME#N>... [--source <SOURCE>]... [--dry-run]
 onetaskgraph task priority set <ID> none|urgent|high|medium|low [--expect VERSION]
 onetaskgraph task content set <ID> --file PATH [--expect VERSION]
 onetaskgraph task metadata set <ID> <KEY> <VALUE> [--expect VERSION]
@@ -596,6 +600,7 @@ copied from, which is what makes the next copy of it an update.
 | `--comments` | `task copy` and `project copy`: keep the destination's copies of each task's comments in step with the source's, as [below](#carrying-comments-and-copying-only-what-changed). Without it a copy reads and writes no comment. |
 | `--no-link` | Write nothing at all to the source — no `onetaskgraph.copies` link — and report every link `skipped`. The next copy finds each counterpart by the destination's own `onetaskgraph.origin`. |
 | `--source S`, `--commented-since RFC3339`, `--metadata KEY=VALUE` | `task copy` only, in place of ids: copy what `task list` with the same narrowing answers. Refused beside ids. |
+| `--status CATEGORY` | `task copy` only, repeatable: keep only the tasks at these categories, as `task list --status` keeps them. In a query a task at another category is not read for its comments, not copied and not named in the answer — and on a GitHub board, a status filter naming only open categories (any but `done`, `cancelled` and `unknown`, which a closed issue reads as when closed for a reason that implies neither) narrows the board-scoped issue search with `is:open`, each candidate's category still confirmed from its own item. Beside ids, an id whose task is at another category is read only as far as its status and answered `{"source": …, "action": "skipped", "reason": "status <category> is not one of <categories>"}`, neither copied nor read for its comments, without changing the exit code. The comment snapshot a host keeps is this shape: `task copy --source board --commented-since <instant> --status backlog --to snapshot`, into a folder configured with the board's own status names. |
 | `--member TASK-ID` | Copy the project and exactly the tasks named, repeating the flag for each, when you know which of them changed. A task not named is not read at the destination, not written and not reported, so a one-task change costs what one task costs rather than a read of the whole project. A named task the destination does not hold yet is still created. An edge to a task not named is written to the destination id that task records at `onetaskgraph.origin`, and a copy whose edge names a task recording none is refused before anything is written, naming that task. A copy naming members was not told about the rest, so it reports nothing `orphaned`. |
 
 `--dry-run` is how you read that table's first row before trusting it: every source is
@@ -621,10 +626,30 @@ key both hold takes the source's value, and a re-copy that changes nothing else 
 describe the item, are in [`docs/metadata.md`](docs/metadata.md).
 <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
-**A copy either completes or leaves the destination as it found it.** A copy that cannot
-finish — a field the destination refuses, a credential that expires, a rate limiter —
-undoes what it has already written and takes back the items it created in that run, so the
-retry starts from the destination you started from. That is what stops a half-written
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by the journeys in
+     `crates/onetaskgraph-e2e/tests/e2e/copy_per_item.rs`, which drive each kind of task a folder
+     cannot represent, the order the checks arrive in at a stdio plugin, a refusal at the write and
+     one of another kind, and a project copy. -->
+**A task copy carries every task past one its destination cannot represent.** Before anything
+is written, the copy asks the destination about each task it plans — its status, its content,
+the tasks it delivers and every other field a write of it would refuse as "cannot represent
+the field …". A task the destination refuses is answered
+`{"source": …, "action": "failed", "error": {"class": "refused", …, "message": <the
+destination's reason>}}` and left out; an edge or a `delivers` entry of another task naming it is
+written the way one naming an item outside the copy is — by its qualified id where it is, and
+never as a copy that is not there; and every other task lands as one copy, all or nothing among
+themselves. The command exits `4`, as for any failed item. A source answers that question
+through `check_task_write` ([`docs/plugin-protocol.md`](docs/plugin-protocol.md) §4.9b); a folder
+of Markdown does, and a source that does not is read as able to represent everything, refusing
+in its write instead. **`project copy` is unchanged**: a project and its tasks still copy whole
+or not at all, representability included.
+<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
+
+**Otherwise a copy either completes or leaves the destination as it found it.** A copy that
+cannot finish — a write the destination refuses after accepting the task at the check, a
+credential that expires, a rate limiter — undoes what it has already written and takes back
+the items it created in that run, exiting `1`, so the retry starts from the destination you
+started from. That is what stops a half-written
 project having to be re-run, and the re-run is the burst of writes that trips a hosted
 destination's rate limiter. When the destination will not take one of them back, the
 refusal says so and names what is still there rather than leaving you to find it. A
@@ -643,9 +668,10 @@ land a second one beside it.
 ```
 
 `action` says which of the things above happened to that item — `created`, `updated`,
-`unchanged`, `orphaned`, or `failed` for a task a copy left unwritten because it kept changing
-while it was read — and `destination` is `null` for a dry run that would have created
-something and absent from a `failed` item. The vocabulary itself is the
+`unchanged`, `orphaned`, `skipped` for an id `--status` left out, or `failed` for a task its
+destination cannot represent or a copy left unwritten because it kept changing while it was
+read — and `destination` is `null` for a dry run that would have created something and absent
+from a `failed` and a `skipped` item. The vocabulary itself is the
 `CopyAction` root of `onetaskgraph schema`, which is what both SDKs are generated from and
 what the journeys validate this output against.
 
@@ -662,6 +688,99 @@ one, or `skipped` under `--no-link`, which writes nothing at all to the source. 
 reports `via` and leaves `link` out, and an `orphaned` item and a `failed` one carry neither.
 In the generated SDKs the four rule words are the type `CopyVia` and `created` is
 `NoCounterpart`, and the link words are `CopyLink`.
+<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
+
+### When an issue closes: reconciling and completing its card
+
+A GitHub board holds a card beside an issue that closes on its own — a person closes it, a
+change request merges with a closing line, a landing closes it — and the card stays where it
+was. Every read already follows the closure (see [Status mapping](#status-mapping)); these two
+verbs move the cards themselves. A source whose status *is* its closure — Linear, whose
+workflow state is the closure, a folder of Markdown, an in-memory source — has no card to move:
+each verb sends it nothing and says so.
+
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by the journeys in
+     `crates/onetaskgraph-github-projects-e2e/tests/e2e/status_reconcile.rs` and
+     `status_complete.rs`, and `crates/onetaskgraph-e2e/tests/e2e/status_complete.rs`, which
+     assert each document below exactly, the requests each verb sends, and its exit codes. -->
+**`task status reconcile --source <SOURCE> [--dry-run]`** is an on-demand tool, run by a person
+— nothing runs it on a schedule — to bring one source's cards in line after closures made
+outside the stack. A task needs it when its issue is closed with a reason that reads `done` or
+`cancelled` and its card does not sit at the option the mapping gives that category, a card
+with no option included; it is written to that option and nothing else — never the issue's
+state, which already says it. Open items, other closures and cards already in line are never
+written and never listed. **It reaches task items only**: an item the board reads as a project
+is never listed or written, whatever its closure, and keeps its card as it was. Candidates come from the board's own `is:closed` filter, never its
+unfiltered items, and each is confirmed from the item it reads, so a filter that let open items
+through would cost reads and write nothing wrong. Writes go one per item through the source's
+own write pacing (`pacing.min_mutation_interval_ms`), which is what keeps a run of a couple of
+hundred under GitHub's secondary limit on content-creating requests. `--json` answers:
+
+```json
+{"items": [{"source": "board:I_7", "from": "Todo",
+            "to": {"category": "done", "name": "Done"}, "action": "updated"}]}
+```
+
+`from` is the card's option before, or `null`; `action` is `updated`, `would-update` under
+`--dry-run` — which writes nothing — or `failed`, with `error` the failure object a failure
+document carries. It exits `0` when every listed item was updated or would be, `4` when any
+failed, and `1` when the whole command was refused, with the failure document. Its human form is
+one line per item and a closing count, or, for a source whose status is its closure, that
+nothing needs reconciling. A source answers it only if its plugin declares the capability
+`reconcile_status`; an out-of-process plugin that does not is sent nothing
+([`docs/plugin-protocol.md`](docs/plugin-protocol.md) §4.23).
+
+**`task status complete --issue <OWNER/NAME#N>... [--source <SOURCE>]... [--dry-run]`** moves to
+`done` every task the configured sources hold for the issues a landing closed, by issue
+reference — `owner/name#N`, exactly the spelling a landing event's `closes` reports, its owner
+and name compared ignoring case; anything else is refused as a usage error naming it. **The
+caller names no source**: every source the configuration declares is asked — not only the
+`default_sources` — one after another in configuration order, or only those `--source` names, a
+narrowing for a person or a test; a name the configuration does not hold is a usage error
+naming it. Each source whose plugin declares the capability `complete_by_issue` — a GitHub
+board does — is read once per 50 references, and nothing else of it: no read of the board's
+items, no search, no project read, so a call costs one read per 50 references per GitHub
+source plus the writes for the items they hold, and never grows with a board's size. Every
+other source — Linear, a folder of Markdown, an in-memory source, an out-of-process plugin that
+does not declare it — is sent no request and listed in `unsupported`. Per reference and source:
+
+- no task for the issue, or an issue the source's credential cannot see: `absent`, no write.
+  **It reaches task items only**, so an issue the board holds as a project is `absent` too, and
+  neither its card nor its issue is written. On a GitHub board a number past GitHub's 32-bit
+  issue numbers names no issue at all, so it is `absent` without being sent;
+- closed as not planned or as duplicate: `skipped`, with `reason` `closed as <reason>`, no
+  write — the closure already says it, and a landing does not overrule it;
+- closed as completed with its card already at the `done` option: `unchanged`;
+- otherwise the item is written `done` through the status write — its card moved, and its issue
+  closed as completed if it is still open, never reopened — so every task it delivers is kept in
+  step exactly as after `task status set`: `updated`, or `would-update` under `--dry-run`, which
+  writes nothing.
+
+Because sources are asked one after another, an open issue held on two boards is closed by the
+first board's write and read closed as completed by the second, which moves only its card: one
+call closes an issue at most once. `--json` answers one item per distinct reference for each
+source asked, sources in configuration order and references in the order given:
+
+```json
+{"items": [{"issue": "acme/work#12", "source": "plans", "task": "plans:I_12",
+            "from": "Todo", "to": {"category": "done", "name": "Done"}, "action": "updated"},
+           {"issue": "acme/work#12", "source": "followups", "task": null,
+            "from": null, "to": null, "action": "absent"}],
+ "unsupported": ["notes"]}
+```
+
+`reason` is present on a `skipped` item and `error` — the failure object — on a `failed` one; an
+`updated` item whose task delivers others carries `delivered`, the entries `task status set`
+reports, and has none when it delivers nothing. It exits `0` when no item failed, `4` when one
+did or a delivered task could not be kept in step, and `1` when the whole command was refused.
+Its human form is one line per item, a line naming the unsupported sources, and a closing
+count.
+
+**Its library form** is `onetaskgraph_core::Engine::complete_issues(&self, issues: &[IssueRef],
+only: &[SourceName], dry_run: bool) -> Result<IssuesCompleted, EngineError>`, an empty `only`
+asking every configured source; it answers the very document above, and a delivered task it
+could not keep in step is reported in its result rather than failing the call. `IssueRef` is
+`onetaskgraph_plugin_api::IssueRef`, parsed from and displayed as `owner/name#N`.
 <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
 ### Carrying comments, and copying only what changed
@@ -955,7 +1074,7 @@ plugin is sent.
 | `0` | Success — every source asked, every source answered. A dependency read (`task deps`, `project graph`) of an item outside a source declared private also asks that private source what it records of it; one that could not be asked is not a failure of the read, because the item lives elsewhere, and is reported in the answer's `unanswered` and on standard error as a notice. `--complete` makes it a failure. |
 | `1` | The command failed while running: an id that names nothing, a configuration it will not run on, a source name nothing configures. |
 | `2` | The invocation itself was wrong — an unknown flag, a value out of range, or answers a template refuses. |
-| `4` | The query ran and at least one source did not answer. The others' results still stand and the failure is named on standard error. A write — a copy, `task status set` or `task update` — also exits `4` when it landed and a task it delivers could not be kept in step; its `delivered` list says which. |
+| `4` | The query ran and at least one source did not answer. The others' results still stand and the failure is named on standard error. A write — a copy, `task status set`, `task update` or `task status complete` — also exits `4` when it landed and a task it delivers could not be kept in step; its `delivered` list says which. `task status reconcile` and `task status complete` exit `4` when an item they list failed while the others were written, and name each such item and why on standard error beside the report. |
 
 `--allow-partial` says a partial answer is acceptable and turns `4` into `0`. Nothing else
 does: a run that lost a source never exits `0` unless you asked for that. A source in a
@@ -1074,6 +1193,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         comments: false,
         no_link: false,
         expect: None,
+        statuses: Vec::new(),
     }).await?;
 
     let outcome = &report.items[0];
@@ -1385,7 +1505,29 @@ category the source does not mention keeps its shipped default for both kinds �
 `Backlog`, `todo` → `Todo`, `queued` → `Queued`, `in-progress` → `In Progress`, `done` → `Done`,
 `cancelled` → `Cancelled`; `draft` and `unknown` have none — and a category it does mention uses
 only what it configures. `done` and `cancelled` close the issue as completed or not planned,
-for both kinds, and a closed issue reads by its state whatever its option.
+for both kinds.
+
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by the journeys in
+     `crates/onetaskgraph-github-projects-e2e/tests/e2e/closed_status.rs`, which close each item
+     on the loopback board and read it through `task show`, `task list --status` and a copy into
+     a folder of Markdown, and by `a_closed_issue_reports_the_closed_category_and_its_column_name`
+     in the plugin's own `tests/plugin.rs`, which reads every reason. -->
+**A closed issue reads as its closure says, whatever its card.** However it closed — by hand, by
+a change request merged with a closing line, by a landing's issue-closing line — what any reader
+of it sees is only its state and the reason it was closed with, so those decide:
+
+- **Category:** closed as completed, or with no reason, reads `done`; closed as not planned or as
+  duplicate reads `cancelled`; any other reason reads `unknown`.
+- **Name:** the card's own option, when the mapping reads that option as the same category or
+  does not name it at all — an issue closed as completed in a `Shipped` column reads `done`
+  named `Shipped`. Otherwise — the card's option reads as another category, or there is none —
+  the option the mapping gives the category: an issue closed as completed while its card still
+  says `Todo` reads `done` named `Done`, so no destination that reads `Todo` as todo is ever
+  handed it. An `unknown` closure keeps its option, or `Closed`.
+
+An open issue reads by its option alone, as above. `task status reconcile` brings the cards
+themselves in line; see [below](#when-an-issue-closes-reconciling-and-completing-its-card).
+<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
 **On Linear** a task's names are the configured team's workflow states and a project's are the
 workspace's project statuses — two vocabularies. Linear has no built-in names, so a source

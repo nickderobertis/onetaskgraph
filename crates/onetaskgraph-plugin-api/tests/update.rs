@@ -59,6 +59,8 @@ impl TaskSource for Rewritten {
             filter_by_comment_activity: Support::Unsupported,
             filter_by_metadata: Support::Unsupported,
             filter_by_origin: Support::Unsupported,
+            reconcile_status: Support::Unsupported,
+            complete_by_issue: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Unsupported,
             filter_by_status: Support::Unsupported,

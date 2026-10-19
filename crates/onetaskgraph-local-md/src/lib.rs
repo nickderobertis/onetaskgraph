@@ -26,6 +26,8 @@
 //! | `filter_by_comment_activity` | **Supported,** and proven by this crate's `tests/commented_since.rs`, over the comments section each task file already holds: a task is kept when one of its comments' `created_at` or `updated_at` is at or after `commented_since`. A task here has no `updated_at` of its own, so those comment times are the only evidence read, and a task with no comments section never matches. |
 //! | `filter_by_metadata` | **Supported,** and proven by this crate's `tests/metadata_origin.rs`, over the `metadata:` front-matter map each task file already holds: a task is kept when every value the query names is a string equal to it at that key and nested path. Applied in process over the files a task read parses anyway. |
 //! | `filter_by_origin` | **Supported,** and proven by the same tests, over the `onetaskgraph.origin` entry of that map: a task is kept when it is exactly the query's qualified id. |
+//! | `reconcile_status` | **Unsupported — unsupportable.** A file's own `status:` is the whole of a task's status, with no closure beside it to contradict it, so nothing could need reconciling. |
+//! | `complete_by_issue` | **Unsupported — unsupportable.** A folder holds no issue a landing's `closes` names, and its status is its closure. |
 //! | `orphan_tasks` | **Supported and proven.** A task document with no `project:` key belongs to none. |
 //! | `filter_by_label` | **Supported and proven,** over the `labels:` key, requiring every label asked for and excluding every label refused. |
 //! | `filter_by_status` | **Supported and proven,** over `status:` through this instance's own `status_mapping`. |
@@ -1127,6 +1129,8 @@ impl TaskSource for LocalMdSource {
             filter_by_comment_activity: Support::Native,
             filter_by_metadata: Support::Native,
             filter_by_origin: Support::Native,
+            reconcile_status: Support::Unsupported,
+            complete_by_issue: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,
@@ -1273,6 +1277,41 @@ impl TaskSource for LocalMdSource {
     async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
         self.write_task_with(write, None)
     }
+    /// Every refusal [`write_task`](TaskSource::write_task) makes of what a task carries — its
+    /// two task lists, its status against this folder's mapping, its content against the
+    /// sections this folder reads out of a file — made without touching a file.
+    async fn check_task_write(&self, write: &ItemWrite<Task>) -> Result<(), SourceError> {
+        let task = &write.item;
+        let near = write.target.as_ref().unwrap_or(&task.id);
+        for (field, list) in [
+            ("delivers", &task.delivers),
+            ("delivered_by", &task.delivered_by),
+        ] {
+            self.representable_list(field, near, list)?;
+        }
+        self.render(
+            &Outgoing::Work {
+                kind: WorkKind::Task,
+                status: &task.status,
+                priority: task.priority,
+                depends_on: &write.depends_on,
+                delivers: &task.delivers,
+                delivered_by: &task.delivered_by,
+                fields: Fields {
+                    id: &task.id,
+                    title: &task.title,
+                    content: task.content.as_deref(),
+                    labels: &task.labels,
+                    project: task.project.as_ref(),
+                    metadata: &task.metadata,
+                    repositories: &task.repositories,
+                    classification: task.classification,
+                },
+            },
+            None,
+        )
+        .map(|_| ())
+    }
     /// A task written with the answers it was rendered from stored after its content, in the
     /// one write that lands the file; see [`ANSWERS_OPEN`].
     async fn write_task_rendered(
@@ -1340,7 +1379,7 @@ impl TaskSource for LocalMdSource {
             category,
             name: word,
         };
-        self.representable_status(&status)?;
+        self.representable_status(&status, &StatusHolder::own(id))?;
         // A string always renders as a YAML scalar.
         let rendered = yaml::to_string(&status.name).expect("a status word renders");
         self.rewrite_front_entry(&path, "status", Some(rendered.trim_end()))?;
@@ -1468,7 +1507,11 @@ impl TaskSource for LocalMdSource {
         // as it is, or refused when the mapping would read it as something else.
         let status = update.status.as_ref().map(|status| {
             let canonical = status.name == category_name(status.category);
-            if canonical && self.representable_status(status).is_err() {
+            if canonical
+                && self
+                    .representable_status(status, &StatusHolder::own(id))
+                    .is_err()
+            {
                 Status {
                     category: status.category,
                     name: self.word_for(status.category),
@@ -1478,7 +1521,7 @@ impl TaskSource for LocalMdSource {
             }
         });
         if let Some(status) = &status {
-            self.representable_status(status)?;
+            self.representable_status(status, &StatusHolder::own(id))?;
         }
         let update = &TaskUpdate {
             status,
@@ -3030,6 +3073,35 @@ enum Outgoing<'a> {
     Document { fields: Fields<'a> },
 }
 
+/// The item a status refusal is about: what names it, and the item it was copied from.
+struct StatusHolder<'a> {
+    id: &'a NativeId,
+    title: Option<&'a str>,
+    /// The qualified id of the item this one was copied from, when it was.
+    origin: Option<&'a str>,
+}
+
+impl<'a> StatusHolder<'a> {
+    /// A task this folder already holds, written by a verb of its own.
+    const fn own(id: &'a NativeId) -> Self {
+        Self {
+            id,
+            title: None,
+            origin: None,
+        }
+    }
+
+    /// How a refusal names the item: by its origin when it has one, else by its own id, with
+    /// its title beside either.
+    fn described(&self) -> String {
+        let named = self.origin.unwrap_or(&self.id.0);
+        match self.title {
+            Some(title) => format!("task {named} ({title:?})"),
+            None => format!("task {named}"),
+        }
+    }
+}
+
 /// What every item on its way out carries, whichever kind it is.
 struct Fields<'a> {
     id: &'a NativeId,
@@ -3723,14 +3795,40 @@ impl LocalMdSource {
 
     /// Refuse a status this folder would read back as another category, in the one wording a
     /// copy and a status write share.
-    fn representable_status(&self, status: &Status) -> Result<(), SourceError> {
-        let mapped = self
-            .statuses
-            .get(&status.name.to_lowercase())
-            .copied()
-            .unwrap_or(StatusCategory::Unknown);
+    fn representable_status(
+        &self,
+        status: &Status,
+        item: &StatusHolder<'_>,
+    ) -> Result<(), SourceError> {
+        let held = self.statuses.get(&status.name.to_lowercase()).copied();
+        let mapped = held.unwrap_or(StatusCategory::Unknown);
         if mapped == status.category {
             return Ok(());
+        }
+        // A name the mapping already reads as another category is one every other item at
+        // that name is read by: remapping it would misread all of them, so the remedy is the
+        // item's own status, at the source whose name and category disagree.
+        if held.is_some() {
+            let source = item
+                .origin
+                .and_then(|origin| origin.split_once(':'))
+                .map(|(source, _)| source.to_owned())
+                .or_else(|| self.name.as_ref().map(ToString::to_string))
+                .unwrap_or_else(|| "<source>".to_owned());
+            return Err(SourceError::Refused {
+                message: format!(
+                    "cannot represent the field `status` of {}: its status name {:?} disagrees \
+                     with its category {} at the source, and this source reads {:?} as {}; \
+                     next: bring the item's status in line at the source — for a board, \
+                     `onetaskgraph task status reconcile --source {source}` — then write it \
+                     again",
+                    item.described(),
+                    status.name,
+                    category_name(status.category),
+                    status.name,
+                    category_name(mapped),
+                ),
+            });
         }
         Err(SourceError::Refused {
             message: format!(
@@ -4012,7 +4110,18 @@ impl LocalMdSource {
             ),
         };
         if let Some(status) = status {
-            self.representable_status(status)?;
+            let fields = outgoing.fields();
+            self.representable_status(
+                status,
+                &StatusHolder {
+                    id: fields.id,
+                    title: Some(fields.title),
+                    origin: fields
+                        .metadata
+                        .get(TaskQuery::ORIGIN_KEY)
+                        .and_then(serde_json::Value::as_str),
+                },
+            )?;
         }
         let outgoing = outgoing.fields();
         let front = WrittenFrontMatter {

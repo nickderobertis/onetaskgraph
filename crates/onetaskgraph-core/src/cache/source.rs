@@ -37,11 +37,12 @@ use std::sync::Arc;
 
 use onetaskgraph_plugin_api::{
     Asset, AssetName, AssetWrite, AssetsWritten, Capabilities, Comment, CommentBody, CommentCopy,
-    DependencyEdge, Direction, Document, DocumentQuery, DocumentVersionCoverage, Health, ItemKind,
-    ItemWrite, Label, MetadataKey, Metering, NativeId, NewComment, Page, PageRequest, PartOutcome,
-    Priority, Project, ProjectQuery, ProjectVersionCoverage, SourceError, Status, StatusCategory,
-    Task, TaskDetailRead, TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome,
-    VersionCoverage, Visibility, WriteJournal, WriteSupport, WriteTarget,
+    DependencyEdge, Direction, Document, DocumentQuery, DocumentVersionCoverage, Health,
+    IssueHolding, IssueRef, ItemKind, ItemWrite, Label, MetadataKey, Metering, NativeId,
+    NewComment, Page, PageRequest, PartOutcome, Priority, Project, ProjectQuery,
+    ProjectVersionCoverage, SourceError, Status, StatusCategory, StatusContradiction, Task,
+    TaskDetailRead, TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome, VersionCoverage,
+    Visibility, WriteJournal, WriteSupport, WriteTarget,
 };
 use serde_json::Value;
 
@@ -1206,6 +1207,22 @@ impl TaskSource for CachedSource {
             Box::pin(self.inner.set_task_status(id, category))
         })
         .await
+    }
+
+    // Both reads go straight to the source and are kept nowhere: each asks a question no
+    // pinned version answers — which items are out of line now, which items these issues are —
+    // and the status writes that follow go through `set_task_status` above, which retires
+    // what they change.
+    async fn status_contradictions(&self) -> Result<Vec<StatusContradiction>, SourceError> {
+        self.inner.status_contradictions().await
+    }
+
+    async fn check_task_write(&self, write: &ItemWrite<Task>) -> Result<(), SourceError> {
+        self.inner.check_task_write(write).await
+    }
+
+    async fn issue_holdings(&self, issues: &[IssueRef]) -> Result<Vec<IssueHolding>, SourceError> {
+        self.inner.issue_holdings(issues).await
     }
 
     async fn set_task_status_reading(
