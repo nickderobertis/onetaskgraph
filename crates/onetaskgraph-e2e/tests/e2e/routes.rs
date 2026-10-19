@@ -2043,6 +2043,7 @@ fn a_take_over_whose_task_cannot_be_written_leaves_every_folder_as_it_was() {
     assert_eq!(members_of(&sandbox, &home), vec![member]);
 }
 
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: the loopback GitHub and Linear stand-ins this file already drives for every routed journey, a few seconds in all. It crosses two plugins, so AGENTS.md ("A journey that crosses more than one plugin is the engine's") and this task put it in this suite.
 #[test]
 fn a_take_over_whose_former_home_refuses_its_list_leaves_both_sources_as_they_were() {
     let sandbox = Sandbox::new();
