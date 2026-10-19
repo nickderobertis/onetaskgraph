@@ -348,7 +348,7 @@ impl Workload {
 
     /// One command of host `host`, which had to succeed: what it printed and what it spent.
     fn run(&self, host: usize, arguments: &[&str]) -> (Value, Spent) {
-        let before = self.workspace.served().len();
+        let before = self.workspace.served_count();
         let output = self
             .sandbox
             .command()
@@ -367,10 +367,10 @@ impl Workload {
             arguments.join(" "),
             stderr(&output)
         );
-        let served = self.workspace.served();
-        let answered = self.workspace.answered();
+        let served = self.workspace.served_since(before);
+        let answered = self.workspace.answered_since(before);
         let mut spent = Spent::default();
-        for ((document, variables), answer) in served[before..].iter().zip(&answered[before..]) {
+        for ((document, variables), answer) in served.iter().zip(&answered) {
             let cost = complexity(document, variables, answer);
             let hour = *self.hour.lock().expect("the hour");
             let mut by_read = self.by_read.lock().expect("the breakdown");

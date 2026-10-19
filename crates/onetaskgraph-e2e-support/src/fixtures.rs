@@ -1329,6 +1329,25 @@ impl GitHubBoardFields {
             .collect()
     }
 
+    /// How many requests [`Self::served`] holds now: a mark to read [`Self::served_since`] from.
+    #[must_use]
+    pub fn served_count(&self) -> usize {
+        self.board.lock().unwrap().documents.len()
+    }
+
+    /// The requests [`Self::served`] holds from index `mark` on, copying none before it — what a
+    /// journey measuring thousands of commands one at a time reads, where copying the whole
+    /// ledger per command grows with the square of their number.
+    #[must_use]
+    pub fn served_since(&self, mark: usize) -> Vec<(String, Value)> {
+        let board = self.board.lock().unwrap();
+        board.documents[mark..]
+            .iter()
+            .cloned()
+            .zip(board.variables[mark..].iter().cloned())
+            .collect()
+    }
+
     /// Every request this server answered for the source whose credential is `token`, as
     /// [`Self::served`] reports them — one board's requests out of the one log two boards
     /// configured against this server share.
@@ -2365,7 +2384,7 @@ impl GitHubBoard {
     fn subs(&self, id: &str) -> usize {
         self.items
             .iter()
-            .filter(|item| item["parent"] == json!(id))
+            .filter(|item| item["parent"].as_str() == Some(&*id))
             .count()
     }
 
@@ -2559,6 +2578,29 @@ impl GitHubBoard {
     }
 
     fn content(&self, item: &Value) -> Value {
+        self.content_counted(item, None)
+    }
+
+    /// How many sub-issues and comments each issue holds, counted in one pass over the board —
+    /// for a request answering a page of issues, where counting both for each issue in turn
+    /// grows with the square of the board.
+    fn tallies(&self) -> Tallies {
+        let mut tallies = Tallies::default();
+        for parent in self.items.iter().filter_map(|item| item["parent"].as_str()) {
+            *tallies.subs.entry(parent.to_owned()).or_default() += 1;
+        }
+        for issue in self
+            .comments
+            .iter()
+            .filter_map(|held| held["issue"].as_str())
+        {
+            *tallies.comments.entry(issue.to_owned()).or_default() += 1;
+        }
+        tallies
+    }
+
+    /// [`Self::content`], its sub-issue and comment counts read from `tallies` when given.
+    fn content_counted(&self, item: &Value, tallies: Option<&Tallies>) -> Value {
         if Self::is_draft(item) {
             // A draft has no url, state, repository, parent, sub-issues or labels on GitHub,
             // which is what a board read of one selects nothing of.
@@ -2569,13 +2611,17 @@ impl GitHubBoard {
                "number":github_number(item["id"].as_str().unwrap()),
                "url":format!("https://example.invalid/{}", item["id"].as_str().unwrap()),
                "createdAt":item["createdAt"],"updatedAt":item["updatedAt"],
-               "commentCount":{"totalCount":self.comment_count(&item["id"])},
+               "commentCount":{"totalCount":tallies.map_or_else(
+                   || self.comment_count(&item["id"]),
+                   |tallies| tallies.comments(&item["id"]))},
                "relationshipEvents":{"totalCount":self.timeline_count(item)},
                "state":item["state"],
                "stateReason":item["reason"],
                "repository":item["repo"].as_str().map(|repo| json!({"nameWithOwner":repo})),
                "parent":item["parent"].as_str().map(|id| json!({"id":id})),
-               "subIssuesSummary":{"total":self.subs(item["id"].as_str().unwrap())},
+               "subIssuesSummary":{"total":tallies.map_or_else(
+                   || self.subs(item["id"].as_str().unwrap()),
+                   |tallies| tallies.subs(&item["id"]))},
                "labels":{"nodes":item["labels"].as_array().unwrap().iter()
                    .map(|pair| json!({"id":pair[0],"name":pair[1],
                                       "color":pair.get(2).cloned().unwrap_or(Value::Null)}))
@@ -2611,10 +2657,11 @@ impl GitHubBoard {
         let first = usize::try_from(variables["originFirst"].as_u64().expect("originFirst"))
             .expect("originFirst fits usize");
         let visible = self.items.len().saturating_sub(self.lagging_reads);
+        let tallies = self.tallies();
         let carriers = self.items[..visible]
             .iter()
             .filter(|item| Self::on_board(item) && item["origin"] == json!(wanted))
-            .map(|item| self.rendered(item))
+            .map(|item| self.rendered_counted(item, Some(&tallies)))
             .collect();
         let found = self.items[..visible]
             .iter()
@@ -2625,7 +2672,7 @@ impl GitHubBoard {
                     item["body"].as_str().unwrap_or_default(),
                 )
             })
-            .map(|item| self.as_issue(item))
+            .map(|item| self.as_issue_counted(item, Some(&tallies)))
             .collect();
         let page = |rows: Vec<Value>, after: &Value| {
             let offset = match after {
@@ -2649,7 +2696,12 @@ impl GitHubBoard {
     /// an item reached through the board and the same item reached through its own id
     /// cannot disagree about its status or its origin.
     fn as_issue(&self, item: &Value) -> Value {
-        let mut issue = self.content(item);
+        self.as_issue_counted(item, None)
+    }
+
+    /// [`Self::as_issue`], its counts read from `tallies` when given.
+    fn as_issue_counted(&self, item: &Value, tallies: Option<&Tallies>) -> Value {
+        let mut issue = self.content_counted(item, tallies);
         issue["projectItems"] =
             Self::membership_page(self.memberships(item), 0, self.membership_first);
         issue
@@ -2662,13 +2714,12 @@ impl GitHubBoard {
     /// item reached through the board and the same item reached through its own id cannot
     /// disagree about its status or its origin.
     fn memberships(&self, item: &Value) -> Vec<Value> {
-        let board_item = self.rendered(item);
         let mut nodes = Vec::new();
         if Self::on_board(item) {
-            nodes.push(json!({"id":board_item["id"],
-                              "updatedAt":board_item["updatedAt"],
+            nodes.push(json!({"id":item["item"],
+                              "updatedAt":item["itemUpdatedAt"],
                               "project":{"id":"PVT-board","number":7},
-                              "fieldValues":board_item["fieldValues"]}));
+                              "fieldValues":self.field_values(item)}));
         }
         for card in item["boards"].as_array().into_iter().flatten() {
             let number = card["number"].as_u64().expect("a card's board number");
@@ -2730,9 +2781,10 @@ impl GitHubBoard {
             .filter(|item| self.closed_filter_leaks || item["state"] == "CLOSED")
             .collect();
         let end = (offset + first).min(closed.len());
+        let tallies = self.tallies();
         let nodes: Vec<Value> = closed[offset.min(end)..end]
             .iter()
-            .map(|item| self.rendered(item))
+            .map(|item| self.rendered_counted(item, Some(&tallies)))
             .collect();
         let (more, cursor) = if self.closed_cursor_stalls && offset > 0 {
             (true, offset.to_string())
@@ -2832,6 +2884,18 @@ impl GitHubBoard {
     }
 
     fn rendered(&self, item: &Value) -> Value {
+        self.rendered_counted(item, None)
+    }
+
+    /// [`Self::rendered`], its content's counts read from `tallies` when given.
+    fn rendered_counted(&self, item: &Value, tallies: Option<&Tallies>) -> Value {
+        json!({"id":item["item"],"updatedAt":item["itemUpdatedAt"],
+               "fieldValues":self.field_values(item),
+               "content":self.content_counted(item, tallies)})
+    }
+
+    /// The board half of one item: its field values, as `fieldValues` answers them.
+    fn field_values(&self, item: &Value) -> Value {
         // No board field value carries labels: no document this source sends selects the
         // board's built-in `Labels` field, so an item's labels are its content's alone.
         // A card with no `Status` carries no node for the field, as GitHub leaves an empty
@@ -2872,9 +2936,7 @@ impl GitHubBoard {
                 );
             }
         }
-        json!({"id":item["item"],"updatedAt":item["itemUpdatedAt"],
-               "fieldValues":{"nodes":values,"pageInfo":{"hasNextPage":false}},
-               "content":self.content(item)})
+        json!({"nodes":values,"pageInfo":{"hasNextPage":false}})
     }
 
     /// Every far end one issue is related to, in the direction asked for.
@@ -2895,7 +2957,10 @@ impl GitHubBoard {
         Value::Array(
             ids.into_iter()
                 .map(|id| {
-                    let far = self.items.iter().find(|item| item["id"] == json!(id));
+                    let far = self
+                        .items
+                        .iter()
+                        .find(|item| item["id"].as_str() == Some(&*id));
                     json!({"id":id,
                            "title":far.map(|item| item["title"].clone()),
                            "body":far.map(|item| item["body"].clone()),
@@ -2905,6 +2970,31 @@ impl GitHubBoard {
                 })
                 .collect(),
         )
+    }
+}
+
+/// [`GitHubBoard::tallies`]: each issue's sub-issue and comment counts, by its id.
+#[derive(Default)]
+struct Tallies {
+    subs: std::collections::HashMap<String, usize>,
+    comments: std::collections::HashMap<String, usize>,
+}
+
+impl Tallies {
+    /// How many sub-issues the issue `id` holds, as [`GitHubBoard::subs`] counts them.
+    fn subs(&self, id: &Value) -> usize {
+        id.as_str()
+            .and_then(|id| self.subs.get(id))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// How many comments the issue `id` holds, as [`GitHubBoard::comment_count`] counts them.
+    fn comments(&self, id: &Value) -> usize {
+        id.as_str()
+            .and_then(|id| self.comments.get(id))
+            .copied()
+            .unwrap_or(0)
     }
 }
 
@@ -3217,7 +3307,9 @@ fn github_projects_board_at(
     thread::spawn(move || {
         for stream in listener.incoming() {
             let mut stream = stream.expect("GitHub fixture connection");
+            let __t0 = std::time::Instant::now();
             let (line, request, token) = read_http_request(&mut stream);
+            let __tr = __t0.elapsed();
             // The one REST read a write to a source declared private sends: the visibility of
             // the repository an issue lives in. Recorded beside the GraphQL documents, so a
             // journey counting what a write spent counts it too.
@@ -3335,11 +3427,35 @@ fn github_projects_board_at(
                 // A document selecting the whole issue it writes is answered as its plain twin
                 // is, and then with that issue as a read of it by its own id shows it.
                 let plain = github_plain_of(query);
+                let __ta = std::time::Instant::now();
                 let data = github_answer(&board, plain.unwrap_or(query), &variables);
                 let data = match plain {
                     Some(_) => board.lock().unwrap().whole(query, data, &variables),
                     None => data,
                 };
+                if let Ok(path) = std::env::var("ONETASKGRAPH_PROF_LOG") {
+                    use std::io::Write as _;
+                    let key: String = query
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join("")
+                        .chars()
+                        .take(70)
+                        .collect();
+                    let mut f = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(path)
+                        .unwrap();
+                    let line = format!(
+                        "{} {} {} {}\n",
+                        __ta.elapsed().as_micros(),
+                        __tr.as_micros(),
+                        query.len(),
+                        key
+                    );
+                    let _ = f.write_all(line.as_bytes());
+                }
                 {
                     let mut held = board.lock().unwrap();
                     if let Some(at) = held
@@ -4403,6 +4519,16 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         // GitHub's issue search is an index and is behind what the board really holds, the
         // same way its board read is; `lagging_reads` is how far.
         let visible = board.items.len().saturating_sub(board.lagging_reads);
+        let __cpu = || {
+            std::fs::read_to_string("/proc/thread-self/schedstat")
+                .unwrap()
+                .split_whitespace()
+                .next()
+                .unwrap()
+                .parse::<u64>()
+                .unwrap()
+        };
+        let __c0 = __cpu();
         let matched = board.items[..visible]
             .iter()
             // An issue search returns issues, and a draft is not one; a search scoped to this
@@ -4415,19 +4541,42 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
                 ) && wanted.recent(&item["updatedAt"])
                     && wanted.state.is_none_or(|state| item["state"] == state)
             })
-            .cloned()
             .collect::<Vec<_>>();
+        let __c1 = __cpu();
         let end = (offset + first).min(matched.len());
+        let tallies = board.tallies();
         let nodes = matched[offset.min(end)..end]
             .iter()
-            .map(|item| board.as_issue(item))
+            .map(|item| board.as_issue_counted(item, Some(&tallies)))
             .collect::<Vec<_>>();
+        let __c2 = __cpu();
+        if let Ok(path) = std::env::var("ONETASKGRAPH_PROF_LOG") {
+            use std::io::Write as _;
+            let line = format!(
+                "SEARCH {} {} {} {} {}\n",
+                __c1 - __c0,
+                __c2 - __c1,
+                visible,
+                matched.len(),
+                wanted.phrases.len()
+            );
+            let mut f = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .unwrap();
+            let _ = f.write_all(line.as_bytes());
+        }
         return json!({"search":{"nodes":nodes,
             "pageInfo":{"hasNextPage":end < matched.len(),"endCursor":end.to_string()}}});
     }
     if query.contains("subIssues(first:$first") {
         let id = variables["id"].as_str().expect("a node id").to_owned();
-        let Some(item) = board.items.iter().find(|item| item["id"] == json!(id)) else {
+        let Some(item) = board
+            .items
+            .iter()
+            .find(|item| item["id"].as_str() == Some(&*id))
+        else {
             return json!({ "node": null });
         };
         // A draft has no sub-issues to select, so the `... on Issue` arm selects nothing.
@@ -4448,7 +4597,7 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         let children = board
             .items
             .iter()
-            .filter(|item| item["parent"] == json!(id))
+            .filter(|item| item["parent"].as_str() == Some(&*id))
             .cloned()
             .collect::<Vec<_>>();
         let end = (offset + first).min(children.len());
@@ -4503,7 +4652,11 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
     }
     if query == onetaskgraph_github_projects::graphql::ISSUE_BOARD_ITEMS {
         let id = variables["id"].as_str().expect("a node id").to_owned();
-        let Some(item) = board.items.iter().find(|item| item["id"] == json!(id)) else {
+        let Some(item) = board
+            .items
+            .iter()
+            .find(|item| item["id"].as_str() == Some(&*id))
+        else {
             return json!({ "node": null });
         };
         let offset = variables["after"].as_str().map_or(0, |cursor| {
@@ -4517,7 +4670,11 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
     // One draft by its own id, with the one board item GitHub links it to.
     if query.contains("on DraftIssue{") && query.contains("projectV2Items(") {
         let id = variables["id"].as_str().expect("a node id").to_owned();
-        let Some(item) = board.items.iter().find(|item| item["id"] == json!(id)) else {
+        let Some(item) = board
+            .items
+            .iter()
+            .find(|item| item["id"].as_str() == Some(&*id))
+        else {
             return json!({ "node": null });
         };
         if !GitHubBoard::is_draft(item) {
@@ -4533,7 +4690,11 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
     }
     if query == onetaskgraph_github_projects::graphql::ISSUE {
         let id = variables["id"].as_str().expect("a node id").to_owned();
-        let Some(item) = board.items.iter().find(|item| item["id"] == json!(id)) else {
+        let Some(item) = board
+            .items
+            .iter()
+            .find(|item| item["id"].as_str() == Some(&*id))
+        else {
             return json!({ "node": null });
         };
         // A draft resolves as a node of its own type, and the fragment on `Issue` selects
@@ -4563,7 +4724,11 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
             variables["after"].is_null() || variables["after"].is_string(),
             "dependency after must be null or a string"
         );
-        let Some(near) = board.items.iter().find(|item| item["id"] == json!(id)) else {
+        let Some(near) = board
+            .items
+            .iter()
+            .find(|item| item["id"].as_str() == Some(&*id))
+        else {
             return json!({ "node": null });
         };
         // A draft has neither `blockedBy` nor `blocking`.
@@ -4604,10 +4769,11 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
     // the most recently filed ones it cannot yet; see the field's own documentation.
     let visible = board.items.len().saturating_sub(board.lagging_reads);
     let end = (offset + first).min(visible);
+    let tallies = board.tallies();
     let nodes = board.items[offset.min(visible)..end]
         .iter()
         .filter(|item| GitHubBoard::on_board(item))
-        .map(|item| board.rendered(item))
+        .map(|item| board.rendered_counted(item, Some(&tallies)))
         .collect::<Vec<_>>();
     let title = board.own["title"].clone();
     json!({"owner":{"projectV2":{"id":"PVT-board","title":title,
@@ -4720,12 +4886,14 @@ impl IssueSearch {
 
     /// Whether an issue holding this title and body is in the answer.
     fn admits(&self, title: &str, body: &str) -> bool {
-        let (title, body) = (search_words(title), search_words(body));
+        // Each field is split into words once, and only when a phrase is matched against it.
+        let (title_words, body_words) = (std::cell::OnceCell::new(), std::cell::OnceCell::new());
         let holds = |field: &[String], phrase: &[String]| {
             phrase.is_empty() || field.windows(phrase.len()).any(|window| window == phrase)
         };
         self.phrases.iter().all(|phrase| {
-            (self.in_title && holds(&title, phrase)) || (self.in_body && holds(&body, phrase))
+            (self.in_title && holds(title_words.get_or_init(|| search_words(title)), phrase))
+                || (self.in_body && holds(body_words.get_or_init(|| search_words(body)), phrase))
         })
     }
 }
@@ -5260,6 +5428,25 @@ impl LinearWorkspace {
     /// same index: the response body, `data` or `errors`.
     pub fn answered(&self) -> Vec<Value> {
         self.answers.lock().unwrap().clone()
+    }
+
+    /// How many requests [`served`](Self::served) holds now: a mark to read
+    /// [`served_since`](Self::served_since) and [`answered_since`](Self::answered_since) from.
+    pub fn served_count(&self) -> usize {
+        self.ledger.lock().unwrap().len()
+    }
+
+    /// The requests [`served`](Self::served) holds from index `mark` on, copying none before it —
+    /// what a journey measuring thousands of commands one at a time reads, where copying the
+    /// whole ledger per command grows with the square of their number.
+    pub fn served_since(&self, mark: usize) -> Vec<(String, Value)> {
+        self.ledger.lock().unwrap()[mark..].to_vec()
+    }
+
+    /// What [`answered`](Self::answered) holds from index `mark` on, as
+    /// [`served_since`](Self::served_since) reads the requests.
+    pub fn answered_since(&self, mark: usize) -> Vec<Value> {
+        self.answers.lock().unwrap()[mark..].to_vec()
     }
 
     /// The raw long-form field one held item carries — an issue's or a project's

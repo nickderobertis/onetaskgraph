@@ -273,12 +273,12 @@ impl Workload {
 
     /// Where the board's and the attachment host's ledgers stand now.
     fn mark(&self) -> (usize, usize) {
-        (self.github.served().len(), self.board.calls().len())
+        (self.github.served_count(), self.board.calls_count())
     }
 
     /// Every GraphQL request and attachment read the ledgers took since `mark`, each once.
     fn spent_since(&self, (documents, calls): (usize, usize)) -> Spent {
-        let served = &self.github.served()[documents..];
+        let served = &self.github.served_since(documents);
         Spent {
             requests: served.len() as u64,
             points: served
@@ -289,7 +289,9 @@ impl Workload {
                 })
                 .sum(),
             hits: 0,
-            rest: self.board.calls()[calls..]
+            rest: self
+                .board
+                .calls_since(calls)
                 .iter()
                 .filter(|call| call.path.starts_with("/user-attachments/assets/"))
                 .count() as u64,
