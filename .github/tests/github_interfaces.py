@@ -323,7 +323,13 @@ class Recorder(BaseHTTPRequestHandler):
         pass
 
     def answer(self) -> None:
-        body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        # Only a decimal length is read: a negative one would read to the end of the stream
+        # and a malformed one would raise, so either is refused before any body is read.
+        declared = self.headers.get("Content-Length") or "0"
+        if not declared.isdigit():
+            self.send_error(400, "unusable Content-Length")
+            return
+        body = self.rfile.read(int(declared))
         self.sent.append(Sent(self.command, self.path, body))
         call = next((call for call in self.calls if call.matches(self.command, self.path)), None)
         payload = b"" if call is None or self.answers[call.name] is None else json.dumps(self.answers[call.name]).encode()
