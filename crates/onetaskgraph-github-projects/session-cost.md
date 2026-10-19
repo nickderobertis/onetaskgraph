@@ -1206,10 +1206,12 @@ listing: the boundary's re-reads of a project still see it as it is.
 board memberships and their field values, and its fifty blockers — one issue rather than a
 page of them. Its price stays **6** points.
 
-**`session-cost.txt`** moves on two lines and its totals: the two `reading a project's tasks`
-requests by those 253 nodes each (50,800 → 51,306), and `reading one issue` from 37 requests and
-16,872 nodes to **36 and 16,416**: one read of one issue (456 nodes) that followed a listing
-of its project is now answered by that listing. Requests go 210 → **209**, nodes 292,849 → **293,152**.
+**`session-cost.txt`** moves on two lines and its node total: the two `reading a project's
+tasks` requests grow by 253 nodes each (50,800 → 51,306), and the reconciliation of that
+document grows by the same 253 nodes. Nodes go 292,849 → **293,608**. Requests stay **210**,
+including 37 `reading one issue` requests: this journey reads through the ordinary interface,
+which still reaches GitHub even after a project listing. Only a copy's `read_ahead_for_copy`
+takes the records that listing carried; the plan-copy journey proves that reuse.
 
 **`copy-cost.txt`** moves only (b), the uncached unchanged repeat, whose one `reading a
 project's tasks` grows by the same 253 nodes (30,734 → **30,987**) and whose two requests do
