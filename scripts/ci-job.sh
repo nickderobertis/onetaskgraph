@@ -165,6 +165,23 @@ run_phase() {
     arguments+=("${flag_words[@]}")
   fi
   echo "nx ${arguments[*]}" >"$scratch/command.$phase"
+  # DIAGNOSTIC, reverted after one hosted run: every bash script the distribution phases start,
+  # and every one those start, prints its elapsed seconds on exit.
+  if [ "$JOB" = test-windows ] && [ "${GITHUB_ACTIONS:-}" = true ] && [[ "$targets" == scripts:distribution-* ]]; then
+    cat >"$scratch/timing.bash" <<'TIMING'
+if [ -n "${ONETASKGRAPH_TIMING_WRAPPED:-}" ]; then
+  unset ONETASKGRAPH_TIMING_WRAPPED
+elif [ -f "$0" ] && [ "${ONETASKGRAPH_TIMING_DEPTH:-0}" -lt 2 ]; then
+  export ONETASKGRAPH_TIMING_DEPTH=$(( ${ONETASKGRAPH_TIMING_DEPTH:-0} + 1 ))
+  onetaskgraph_timing_start=$SECONDS
+  ONETASKGRAPH_TIMING_WRAPPED=1 bash "$0" "$@"
+  onetaskgraph_timing_status=$?
+  echo "[timing] depth=$ONETASKGRAPH_TIMING_DEPTH $(( SECONDS - onetaskgraph_timing_start ))s exit=$onetaskgraph_timing_status $0 $*" >&2
+  exit "$onetaskgraph_timing_status"
+fi
+TIMING
+    export BASH_ENV="$scratch/timing.bash"
+  fi
   if ! plan="$(selected_tasks "$phase" "${arguments[@]}" | tr -d '\r')"; then
     return 1
   fi
