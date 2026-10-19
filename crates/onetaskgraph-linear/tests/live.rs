@@ -674,7 +674,22 @@ async fn every_field_change_moves_a_linear_tasks_token(
                 order,
                 Some(std::cmp::Ordering::Equal | std::cmp::Ordering::Greater)
             ),
-            "{kind} left the task's token at or before {was}: it read {now} ({order:?})"
+            "{kind} left the task's token at or before {was}: it read {now} ({order:?}); \
+             updatedAt {:?} → {:?}, content {}, metadata {} — a read whose members are all \
+             unchanged is older than the write, and one whose content or metadata changed is \
+             Linear not moving updatedAt for it",
+            before.updated_at,
+            after.updated_at,
+            if before.content == after.content {
+                "unchanged"
+            } else {
+                "changed"
+            },
+            if before.metadata == after.metadata {
+                "unchanged"
+            } else {
+                "changed"
+            },
         );
         Ok::<(), String>(())
     };

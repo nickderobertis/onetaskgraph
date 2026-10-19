@@ -578,6 +578,62 @@ fn slotted_workspace(sandbox: &Sandbox) -> (Value, LinearWorkspace) {
     )
 }
 
+/// A metadata change through the binary moves the task's `lin1` token to one ordered after the
+/// token read before it.
+///
+/// The credentialed lane's `every_field_change_moves_a_linear_tasks_token` once read the token
+/// unmoved after the same write against real Linear (CI run 39184315799), and passed on two other
+/// runs of the same code. A task's token covers its description, and so its metadata slot, only
+/// through `Issue.updatedAt`, which `spike-linear-coverage` measured moving for a slot edit (§4.13d
+/// of `docs/plugin-protocol.md`). So this holds the plugin's half without a credential: what it
+/// sends for a metadata write and what it spells from the read after it. The loopback moves an
+/// issue's `updatedAt` on every `issueUpdate`, as the spike measured Linear doing. The ordering is
+/// the plugin's own, so a token read equal after the change fails here.
+#[test]
+fn a_metadata_set_moves_a_linear_tasks_change_token_past_the_one_read_before_it() {
+    let sandbox = Sandbox::new();
+    let (config, workspace) = slotted_workspace(&sandbox);
+    sandbox.project_document(&document(&json!({"linear": linear(&config, json!({}))})));
+
+    let before = shown(&sandbox, "linear:I-M");
+    let was = before["version"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a whole read carries a token: {before:#}"))
+        .to_owned();
+    let from = workspace.served().len();
+    answered(
+        &sandbox,
+        &[
+            "--json",
+            "task",
+            "metadata",
+            "set",
+            "linear:I-M",
+            "myapp.review",
+            r#"{"approved":true}"#,
+        ],
+    );
+    assert_eq!(
+        mutations_since(&workspace, from).len(),
+        1,
+        "the metadata write is one issueUpdate"
+    );
+    let after = shown(&sandbox, "linear:I-M");
+    assert_eq!(
+        after["metadata"]["myapp.review"],
+        json!({"approved": true}),
+        "the read after the write carries the key: {after:#}"
+    );
+    let now = after["version"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a whole read carries a token: {after:#}"));
+    assert_eq!(
+        onetaskgraph_linear::change_token::order(&was, now),
+        Some(std::cmp::Ordering::Less),
+        "a metadata change left the task's token at or before {was}: it read {now}"
+    );
+}
+
 /// `field` split at its trailing slot: the bytes above it, and the slot's parsed JSON.
 ///
 /// Either spelling: the one-line code span a source writes, and the multi-line one a
