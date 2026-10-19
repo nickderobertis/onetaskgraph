@@ -6050,7 +6050,11 @@ impl GitHubProjectsSource {
     ///
     /// What answers a project or document listing by origin, so finding every copy of one plan
     /// costs the items that carry its origin and never a page of the board.
-    async fn copied_from(&self, origin: &str, kind: BoardKind) -> Result<Vec<Resolved>, SourceError> {
+    async fn copied_from(
+        &self,
+        origin: &str,
+        kind: BoardKind,
+    ) -> Result<Vec<Resolved>, SourceError> {
         let wanted = TaskQuery {
             origin: Some(origin.to_owned()),
             ..TaskQuery::default()

@@ -1868,9 +1868,7 @@ impl Engine {
 
         let shapes: Vec<ProjectShape> = ready
             .iter()
-            .map(|source| {
-                shape_projects(&source.source().capabilities(), &request.filters, origin)
-            })
+            .map(|source| shape_projects(&source.source().capabilities(), &request.filters, origin))
             .collect();
         let counters: Vec<AtomicU32> = ready.iter().map(|_| AtomicU32::new(0)).collect();
         let outcomes: Vec<Outcomes> = shapes.iter().map(|shape| shape.outcomes.clone()).collect();

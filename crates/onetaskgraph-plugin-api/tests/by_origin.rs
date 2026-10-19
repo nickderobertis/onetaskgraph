@@ -94,10 +94,9 @@ impl TaskSource for Listing {
         page: &PageRequest,
     ) -> Result<Page<Project>, SourceError> {
         self.pages.fetch_add(1, Ordering::SeqCst);
-        let start: usize = page
-            .cursor
-            .as_ref()
-            .map_or(0, |cursor| cursor.0.parse().expect("a cursor this source gave"));
+        let start: usize = page.cursor.as_ref().map_or(0, |cursor| {
+            cursor.0.parse().expect("a cursor this source gave")
+        });
         let end = (start + 2).min(self.projects.len());
         Ok(Page {
             items: self.projects[start..end].to_vec(),
@@ -126,7 +125,10 @@ impl TaskSource for Listing {
 }
 
 fn ids(page: &Page<Project>) -> Vec<&str> {
-    page.items.iter().map(|project| project.id.0.as_str()).collect()
+    page.items
+        .iter()
+        .map(|project| project.id.0.as_str())
+        .collect()
 }
 
 #[tokio::test]
@@ -197,7 +199,10 @@ async fn the_default_lists_exactly_the_projects_recording_that_origin_across_its
         )
         .await
         .expect_err("a foreign cursor");
-    assert!(matches!(refused, SourceError::Refused { .. }), "{refused:?}");
+    assert!(
+        matches!(refused, SourceError::Refused { .. }),
+        "{refused:?}"
+    );
 }
 
 #[tokio::test]

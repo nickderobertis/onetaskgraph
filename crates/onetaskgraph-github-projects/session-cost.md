@@ -675,17 +675,16 @@ node count, **not points**:
 <!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] Held by a drift gate: the copy-cost test in `crates/onetaskgraph-github-projects-e2e/tests/e2e/copy_cost.rs` measures (g) and (h), holds `tests/fixtures/copy-cost.txt` to them, and fails unless this table's two rows state the same figures. -->
 |                    | (h) found by searching | (g) found by the link |
 | ------------------ | ---------------------: | --------------------: |
-| **requests**       |                      6 |                     4 |
-| **node count**     |                  21971 |                   912 |
+| **requests**       |                      5 |                     4 |
+| **node count**     |                   2286 |                   912 |
 
-(h) asks the board once for the item whose origin is the task (`looking up the items copied
-from one origin`, the lookup described under *Asking GitHub the narrower question* below)
-and searches the board's issues once to find the project the task is filed under (`searching
-this board's issues`), and that search grows with the board. (g) sends neither: it
-reads the task's issue and its project's issue by their node ids — one `reading one issue`
-more than (h) — and writes exactly what (h) writes. The test asserts on its own that (g)
-sends no board read and no board-scoped search, that (h) sends the one origin lookup and no
-board read, and that both copies update the one item.
+(h) asks the board once for the item whose origin is the task and once for the item whose
+origin is the project the task is filed under (`looking up the items copied from one origin`,
+the lookup described under *Asking GitHub the narrower question* below), and neither grows
+with the board. (g) sends neither: it reads the task's issue and its project's issue by their
+node ids — one `reading one issue` more than (h) — and writes exactly what (h) writes. The test asserts on its own that (g)
+sends no board read and no board-scoped search, that (h) sends the two origin lookups and no
+board read or board-scoped search, and that both copies update the one item.
 
 Rows (a) to (f) do not move. The link a whole copy records is written to the Markdown
 folder the plan lives in, which sends the board nothing, and every copy in (b) to (f) is of
@@ -1138,3 +1137,26 @@ hold, so it is sent afresh.
 **`session-cost.txt`** moves by that one search: the live journey's read of the tasks in its
 board's first column is such a read, so its searches 11 → 12, its request total 192 → 193 and
 its node count by that page's 4,080 nodes, 288,769 → 292,849.
+
+## A copy reads what its plan holds, never the whole board
+
+A copy used to walk its destination twice over: a project copy's orphan check listed every task
+the board holds to find those filed under the copied project, and a project's or a document's
+counterpart was found by the board-scoped issue search (`SEARCH_ISSUES`) or the whole-board read
+(`BOARD`), each growing with everything the board has accumulated. The orphan check now asks the
+destination project for its own members — one `reading a project's tasks` (`SUB_ISSUES`) — and a
+project or a document is found by `TaskSource::query_projects_by_origin` and
+`TaskSource::query_documents_by_origin`, which this source answers with the same
+`ORIGIN_LOOKUP` a task's origin is asked with. A document's references are mapped from each
+referent's own `onetaskgraph.copies` link, the record it names read by id, and only a referent
+with no confirmed link is asked for by origin.
+
+**`copy-cost.txt`** moves (a), (b), (h) and (i). (a), a whole copy of 10 tasks, keeps its 55
+requests and goes from 29,600 worst-case nodes to **10,115**: the project's own origin lookup
+(915) replaces the board-scoped search (20,400). (b), the unchanged repeat, goes from 13
+requests and 35,566 nodes to **12 and 30,416**: one read of the project's sub-issues (25,400)
+replaces the board read (10,150) and the search (20,400) — its node count is the project's
+worst case, which does not grow with the board, where the two it replaces did. (h) goes from 6
+requests and 21,971 nodes to **5 and 2,286**, and (i) keeps its 3 requests and goes from 21,771
+to **2,286**: each finds the task's project by the project's origin lookup instead of the
+search, and (h)'s one read of an issue's dependencies is no longer sent beside it. (c) to (g) and (j) do not move.

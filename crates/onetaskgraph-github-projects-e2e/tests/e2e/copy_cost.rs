@@ -387,10 +387,11 @@ fn a_task_copy_finding_no_counterpart() -> Measured {
 }
 
 /// Hold a task copy to its second rule's one question: the board is asked for the origin of
-/// `task` once, and its items are never walked.
+/// each of `items` once — the task, and the project it is filed under when the copy has no
+/// link to that project either — and its items are never walked nor its issues searched.
 fn asks_for_the_origin_and_never_walks_the_board(
     what: &str,
-    task: &str,
+    items: &[&str],
     served: &[(String, Value)],
 ) {
     let lookups = served
@@ -400,14 +401,23 @@ fn asks_for_the_origin_and_never_walks_the_board(
         .collect::<Vec<_>>();
     assert_eq!(
         lookups,
-        [json!(format!("onetaskgraph.origin:\"plans:{task}\""))],
-        "{what} asks the board for that origin once: {served:#?}"
+        items
+            .iter()
+            .map(|item| json!(format!("onetaskgraph.origin:\"plans:{item}\"")))
+            .collect::<Vec<_>>(),
+        "{what} asks the board for each origin once: {served:#?}"
     );
     let whole: Vec<&(String, Value)> = served
         .iter()
-        .filter(|(document, _)| document == onetaskgraph_github_projects::graphql::BOARD)
+        .filter(|(document, _)| {
+            document == onetaskgraph_github_projects::graphql::BOARD
+                || document == onetaskgraph_github_projects::graphql::SEARCH_ISSUES
+        })
         .collect();
-    assert!(whole.is_empty(), "{what} read the whole board: {whole:#?}");
+    assert!(
+        whole.is_empty(),
+        "{what} read the whole board or searched its issues: {whole:#?}"
+    );
 }
 
 #[test]
@@ -571,7 +581,7 @@ fn a_project_copy_into_a_board_costs_what_the_record_beside_the_session_record_s
             "(g) read the board or searched its issues: {walked:#?}"
         );
     }
-    asks_for_the_origin_and_never_walks_the_board("(h)", "T-3", &by_origin_served);
+    asks_for_the_origin_and_never_walks_the_board("(h)", &["T-3", "P"], &by_origin_served);
     assert!(
         by_link.total_node_count() < by_origin.total_node_count(),
         "(g) cost {} worst-case nodes and (h) {}",
@@ -605,9 +615,9 @@ fn a_project_copy_into_a_board_costs_what_the_record_beside_the_session_record_s
     // never by walking the board — one written the way the release before this one wrote it,
     // with its origin in the board field alone, included — and creates when there is none.
     let (found, found_served, _) = a_task_copy_finding_a_counterpart_written_before_this_release();
-    asks_for_the_origin_and_never_walks_the_board("(i)", "T-0", &found_served);
+    asks_for_the_origin_and_never_walks_the_board("(i)", &["T-0", "P"], &found_served);
     let (created, created_served, _) = a_task_copy_finding_no_counterpart();
-    asks_for_the_origin_and_never_walks_the_board("(j)", "L", &created_served);
+    asks_for_the_origin_and_never_walks_the_board("(j)", &["L"], &created_served);
 
     let measured = [
         rendered("(a) a whole copy of a project of 10 tasks", &whole),

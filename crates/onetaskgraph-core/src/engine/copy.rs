@@ -52,8 +52,8 @@ use onetaskgraph_plugin_api::{
     AssetPayload, AssetUploads, AssetWrite, Capabilities, Classification, Comment, CommentCopy,
     Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Document, DocumentQuery,
     ItemKind, ItemWrite, Location, MetadataKey, MetadataMatch, Metering, NativeId, Page,
-    PageRequest, Project, ProjectFilter, ProjectQuery, Repository, SourceError, SourceName, StatusCategory, Task,
-    TaskDetailRead, TaskQuery, TaskRef, TextFields, TextQuery, WriteTarget,
+    PageRequest, Project, ProjectFilter, ProjectQuery, Repository, SourceError, SourceName,
+    StatusCategory, Task, TaskDetailRead, TaskQuery, TaskRef, TextFields, TextQuery, WriteTarget,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -3089,7 +3089,12 @@ impl Engine {
         if unlinked.is_empty() {
             return Ok(found);
         }
-        if !destination.source().capabilities().filter_by_origin.is_native() {
+        if !destination
+            .source()
+            .capabilities()
+            .filter_by_origin
+            .is_native()
+        {
             let mut levels: Vec<Level> = unlinked.iter().map(|referent| referent.level).collect();
             levels.sort();
             levels.dedup();
@@ -3127,42 +3132,41 @@ impl Engine {
             let asked = cursor.clone();
             let request = request_for(destination, cursor);
             let source = destination.source();
-            let (held, next): (Vec<(NativeId, Option<Location>, BTreeMap<String, Value>)>, _) =
-                match level {
-                    Level::Task => {
-                        let page = source.query_tasks(&tasks, &request).await;
-                        let page = page.map_err(|error| refused(destination, error))?;
-                        let next = page.next;
-                        let held = page
-                            .items
-                            .into_iter()
-                            .map(|task| (task.id, task.location, task.metadata))
-                            .collect();
-                        (held, next)
-                    }
-                    Level::Project => {
-                        let page = source.query_projects_by_origin(origin, &request).await;
-                        let page = page.map_err(|error| refused(destination, error))?;
-                        let next = page.next;
-                        let held = page
-                            .items
-                            .into_iter()
-                            .map(|project| (project.id, project.location, project.metadata))
-                            .collect();
-                        (held, next)
-                    }
-                    Level::Document => {
-                        let page = source.query_documents_by_origin(origin, &request).await;
-                        let page = page.map_err(|error| refused(destination, error))?;
-                        let next = page.next;
-                        let held = page
-                            .items
-                            .into_iter()
-                            .map(|document| (document.id, document.location, document.metadata))
-                            .collect();
-                        (held, next)
-                    }
-                };
+            let (held, next): (Vec<HeldRecord>, _) = match level {
+                Level::Task => {
+                    let page = source.query_tasks(&tasks, &request).await;
+                    let page = page.map_err(|error| refused(destination, error))?;
+                    let next = page.next;
+                    let held = page
+                        .items
+                        .into_iter()
+                        .map(|task| (task.id, task.location, task.metadata))
+                        .collect();
+                    (held, next)
+                }
+                Level::Project => {
+                    let page = source.query_projects_by_origin(origin, &request).await;
+                    let page = page.map_err(|error| refused(destination, error))?;
+                    let next = page.next;
+                    let held = page
+                        .items
+                        .into_iter()
+                        .map(|project| (project.id, project.location, project.metadata))
+                        .collect();
+                    (held, next)
+                }
+                Level::Document => {
+                    let page = source.query_documents_by_origin(origin, &request).await;
+                    let page = page.map_err(|error| refused(destination, error))?;
+                    let next = page.next;
+                    let held = page
+                        .items
+                        .into_iter()
+                        .map(|document| (document.id, document.location, document.metadata))
+                        .collect();
+                    (held, next)
+                }
+            };
             fits(held.len(), request.limit).map_err(|error| refused(destination, error))?;
             for (id, location, metadata) in &held {
                 found.note(level, id, location.as_ref(), metadata);
@@ -6395,6 +6399,10 @@ fn located(location: Option<&Location>) -> Option<String> {
 fn confirms(referent: &Referent, metadata: &BTreeMap<String, Value>) -> bool {
     origin_of(metadata).is_some_and(|origin| referent.keys().contains(&origin.to_string()))
 }
+
+/// What a counterpart lookup keeps of each record it is answered with: its id, the location
+/// its source reports and its metadata.
+type HeldRecord = (NativeId, Option<Location>, BTreeMap<String, Value>);
 
 /// Record one candidate referent, when its source said where it is.
 fn note(

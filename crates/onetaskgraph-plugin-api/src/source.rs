@@ -106,9 +106,7 @@ fn page_of_matches<T>(matched: Vec<T>, page: &PageRequest) -> Result<Page<T>, So
                 ),
             })?,
     };
-    let end = start
-        .saturating_add(page.limit as usize)
-        .min(matched.len());
+    let end = start.saturating_add(page.limit as usize).min(matched.len());
     let next = (end < matched.len()).then(|| crate::Cursor(format!("{ORIGIN_CURSOR}{end}")));
     Ok(Page {
         items: matched.into_iter().skip(start).take(end - start).collect(),
