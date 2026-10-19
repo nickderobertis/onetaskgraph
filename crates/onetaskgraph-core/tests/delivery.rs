@@ -400,6 +400,87 @@ async fn a_status_set_is_refused_by_name_before_anything_is_written() {
     );
 }
 
+/// One project an `in-memory` source holds, at `category`.
+fn project(native: &str, category: StatusCategory) -> Value {
+    json!({
+        "id": native,
+        "title": native,
+        "content": null,
+        "status": {"category": spelled(category), "name": spelled(category)},
+        "labels": [],
+    })
+}
+
+#[tokio::test]
+async fn a_project_status_set_writes_the_held_project_and_answers_what_it_reads_back() {
+    let engine = engine_over(json!({
+        "plan": {"plugin": "in-memory", "config": {
+            "projects": [project("P-1", InProgress)],
+            "tasks": [task("T-1", Todo, &[], &[])]}},
+        "frozen": {"plugin": "in-memory", "config": {"capabilities": {"writes": "unsupported"},
+                   "projects": [project("P-1", Todo)]}},
+    }));
+    let set = engine
+        .set_project_status(&id("plan:P-1"), Done)
+        .await
+        .expect("set");
+    assert_eq!(
+        serde_json::to_value(&set).expect("it serialises"),
+        json!({"id": "plan:P-1", "status": {"category": "done", "name": "done"}})
+    );
+    let shown = engine
+        .project(&id("plan:P-1"))
+        .await
+        .expect("the project verb answers");
+    let held = &shown.items.first().expect("held").item;
+    assert_eq!(held.status, set.status, "the project reads at the status set");
+    assert_eq!(held.title, "P-1", "nothing else about it moved");
+    let (task, _, _) = read(&engine, "plan:T-1").await;
+    assert_eq!(task, Todo, "no task is touched");
+
+    let refused = |error: EngineError| error.to_string();
+    let missing = refused(
+        engine
+            .set_project_status(&id("plan:P-9"), Done)
+            .await
+            .expect_err("refused"),
+    );
+    assert!(
+        missing.starts_with("no project with the id plan:P-9"),
+        "{missing}"
+    );
+    let a_task = refused(
+        engine
+            .set_project_status(&id("plan:T-1"), Done)
+            .await
+            .expect_err("refused"),
+    );
+    assert!(
+        a_task.starts_with("no project with the id plan:T-1"),
+        "{a_task}"
+    );
+    let frozen = refused(
+        engine
+            .set_project_status(&id("frozen:P-1"), Done)
+            .await
+            .expect_err("refused"),
+    );
+    assert!(
+        frozen.starts_with("source frozen cannot write a status: its plugin is in-memory"),
+        "{frozen}"
+    );
+    let unknown = refused(
+        engine
+            .set_project_status(&id("gone:P-1"), Done)
+            .await
+            .expect_err("refused"),
+    );
+    assert!(
+        unknown.starts_with("no source named \"gone\" is configured"),
+        "{unknown}"
+    );
+}
+
 #[tokio::test]
 async fn every_verb_reports_both_lists_qualified() {
     let engine = engine_over(json!({
