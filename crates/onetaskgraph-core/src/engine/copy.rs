@@ -4450,12 +4450,22 @@ impl Engine {
         // answered is made anyway.
         let mut asked_before: BTreeSet<String> = BTreeSet::new();
         loop {
-            let Ok(page) = source
-                .query_tasks(&members, &request_for(destination, cursor))
-                .await
-            else {
+            let asked = cursor.clone();
+            let request = request_for(destination, cursor);
+            let Ok(page) = source.query_tasks(&members, &request).await else {
                 break;
             };
+            // A page the walk's own guards refuse ends the pinning, as a failed one does.
+            if fits(page.items.len(), request.limit).is_err()
+                || unrepeated(
+                    page.next.as_ref(),
+                    asked.as_ref(),
+                    "pinning a project's members",
+                )
+                .is_err()
+            {
+                break;
+            }
             match page.next {
                 Some(next) if asked_before.insert(next.0.clone()) => cursor = Some(next),
                 _ => break,
