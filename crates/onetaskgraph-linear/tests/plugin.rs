@@ -674,7 +674,7 @@ fn superset_server() -> (String, mpsc::Receiver<String>) {
                             "pageInfo":{"hasNextPage":false}},
         "workflowStateCreate": {"success":true,"workflowState":{"id":"NEW-STATE","name":"Queued","type":"unstarted"}},
         "projectStatusCreate": {"success":true,"status":{"id":"NEW-STATUS","name":"Queued","type":"planned","position":2.0}},
-        "issueCreate": {"success":true,"issue":{"id":"I"}},
+        "issueCreate": {"success":true,"issue":{"id":"I","description":null}},
         // The whole issue, for a status write and a targeted update, which answer the task
         // this payload reports; `priority` for the narrow priority write. Every other issue
         // write reads the id alone and passes over the rest.
@@ -683,11 +683,11 @@ fn superset_server() -> (String, mpsc::Receiver<String>) {
                         "archivedAt":null,"state":{"name":"In Progress","type":"started"},
                         "priority":2,"labels":{"nodes":[]},"project":null,
                         "relations":relations("blocks","relatedIssue","issue","IR")}},
-        "projectCreate": {"success":true,"project":{"id":"P"}},
-        "projectUpdate": {"success":true,"project":{"id":"P",
+        "projectCreate": {"success":true,"project":{"id":"P","content":null}},
+        "projectUpdate": {"success":true,"project":{"id":"P","content":null,
                           "relations":relations("dependency","relatedProject","project","PR")}},
-        "documentCreate": {"success":true,"document":{"id":"D"}},
-        "documentUpdate": {"success":true,"document":{"id":"D"}},
+        "documentCreate": {"success":true,"document":{"id":"D","content":null}},
+        "documentUpdate": {"success":true,"document":{"id":"D","content":null}},
         "issueRelationCreate": {"success":true,"issueRelation":{"id":"R"}},
         "projectRelationCreate": {"success":true,"projectRelation":{"id":"R"}},
         "issueRelationDelete": {"success":true},
@@ -1398,21 +1398,21 @@ async fn writes_create_update_and_route_task_and_project_edges_over_real_http() 
     let (endpoint, wire) = response_server(vec![
         writable_resolution(),
         id_page("issueLabels", "LABEL"),
-        serde_json::json!({"issueCreate":{"success":true,"issue":{"id":"I-NEW"}}}),
+        serde_json::json!({"issueCreate":{"success":true,"issue":{"id":"I-NEW","description":null}}}),
         serde_json::json!({"issueRelationCreate":{"success":true,"issueRelation":{"id":"R-I"}}}),
         serde_json::json!({"issues":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"next"}}}),
         serde_json::json!({"issues":{"nodes":[{"id":"I-FAR","identifier":"ENG-9","title":"far","description":"\n\n<!-- onetaskgraph.metadata\n{\"onetaskgraph.origin\":\"authored:FAR\"}\n-->","url":null,"createdAt":null,"updatedAt":null,"state":{"name":"Todo","type":"unstarted"},"priority":0,"labels":{"nodes":[]},"project":null}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}),
         id_page("issueLabels", "LABEL"),
         // A rewrite reads back the relations it replaces in its own answer.
-        serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"I-NEW","relations":{"nodes":[{"id":"OLD","type":"blocks","relatedIssue":{"id":"OLD-FAR"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}),
+        serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"I-NEW","description":null,"relations":{"nodes":[{"id":"OLD","type":"blocks","relatedIssue":{"id":"OLD-FAR"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}),
         serde_json::json!({"issueRelationDelete":{"success":true}}),
         serde_json::json!({"projects":{"nodes":[{"id":"P-FAR","name":"far","content":"<!-- onetaskgraph.metadata\n{\"onetaskgraph.origin\":\"authored:PFAR\"}\n-->","url":null,"createdAt":null,"updatedAt":null,"status":{"name":"Todo","type":"unstarted"},"labels":{"nodes":[]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}),
         id_page("projectLabels", "PLABEL"),
-        serde_json::json!({"projectCreate":{"success":true,"project":{"id":"P-NEW"}}}),
+        serde_json::json!({"projectCreate":{"success":true,"project":{"id":"P-NEW","content":null}}}),
         serde_json::json!({"projectRelationCreate":{"success":true,"projectRelation":{"id":"R-P"}}}),
         serde_json::json!({"projects":{"nodes":[{"id":"P-FAR","name":"far","content":"<!-- onetaskgraph.metadata\n{\"onetaskgraph.origin\":\"authored:PFAR\"}\n-->","url":null,"createdAt":null,"updatedAt":null,"status":{"name":"Todo","type":"unstarted"},"labels":{"nodes":[]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}),
         id_page("projectLabels", "PLABEL"),
-        serde_json::json!({"projectUpdate":{"success":true,"project":{"id":"P-NEW","relations":{"nodes":[{"id":"OLD-P","type":"dependency","relatedProject":{"id":"P-FAR"}}],"pageInfo":{"hasNextPage":true,"endCursor":"next"}}}}}),
+        serde_json::json!({"projectUpdate":{"success":true,"project":{"id":"P-NEW","content":null,"relations":{"nodes":[{"id":"OLD-P","type":"dependency","relatedProject":{"id":"P-FAR"}}],"pageInfo":{"hasNextPage":true,"endCursor":"next"}}}}}),
         serde_json::json!({"projectRelationDelete":{"success":true}}),
         serde_json::json!({"project":{"content":null,"relations":{"nodes":[{"id":"OLD-P2","type":"related","relatedProject":{"id":"P-OTHER"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
         serde_json::json!({"projectRelationDelete":{"success":true}}),
@@ -1722,7 +1722,7 @@ async fn an_unordered_project_edge_is_refused_before_anything_is_written_over_re
 async fn an_unordered_task_edge_is_still_written_as_related_over_real_http() {
     let (endpoint, wire) = response_server(vec![
         writable_resolution(),
-        serde_json::json!({"issueCreate":{"success":true,"issue":{"id":"I-NEW"}}}),
+        serde_json::json!({"issueCreate":{"success":true,"issue":{"id":"I-NEW","description":null}}}),
         serde_json::json!({"issueRelationCreate":{"success":true,"issueRelation":{"id":"R-I"}}}),
     ]);
     let task: Task = serde_json::from_value(serde_json::json!({"id":"authored:T","title":"task","content":null,"status":{"category":"todo","name":"Todo"},"labels":[],"project":null,"repositories":[],"metadata":{}})).unwrap();
@@ -1756,7 +1756,7 @@ async fn an_unordered_task_edge_is_still_written_as_related_over_real_http() {
 async fn a_write_with_no_visible_description_or_metadata_sends_null_over_real_http() {
     let (endpoint, wire) = response_server(vec![
         writable_resolution(),
-        serde_json::json!({"issueCreate":{"success":true,"issue":{"id":"NEW"}}}),
+        serde_json::json!({"issueCreate":{"success":true,"issue":{"id":"NEW","description":null}}}),
     ]);
     let item = serde_json::from_value::<Task>(serde_json::json!({
         "id":"from:T", "title":"task", "content":null,
@@ -1818,7 +1818,7 @@ async fn write_failures_from_lookups_and_mutation_payloads_cross_the_http_bounda
     drop(wire);
     let (endpoint, wire) = response_server(vec![
         writable_resolution(),
-        serde_json::json!({"issueCreate":{"success":true,"issue":{"id":""}}}),
+        serde_json::json!({"issueCreate":{"success":true,"issue":{"id":"","description":null}}}),
     ]);
     assert!(
         format!(
@@ -1837,7 +1837,7 @@ async fn write_failures_from_lookups_and_mutation_payloads_cross_the_http_bounda
     drop(wire);
     let (endpoint, wire) = response_server(vec![
         writable_resolution(),
-        serde_json::json!({"projectCreate":{"success":true,"project":{"id":""}}}),
+        serde_json::json!({"projectCreate":{"success":true,"project":{"id":"","content":null}}}),
     ]);
     assert!(
         format!(
@@ -1938,7 +1938,7 @@ async fn write_failures_from_lookups_and_mutation_payloads_cross_the_http_bounda
     };
     let (endpoint, wire) = response_server(vec![
         writable_resolution(),
-        serde_json::json!({"issueCreate":{"success":true,"issue":{"id":"NEW"}}}),
+        serde_json::json!({"issueCreate":{"success":true,"issue":{"id":"NEW","description":null}}}),
         serde_json::json!({"issueRelationCreate":{"success":false,"issueRelation":null}}),
     ]);
     let error = writable_source(&endpoint)
@@ -1958,7 +1958,7 @@ async fn write_failures_from_lookups_and_mutation_payloads_cross_the_http_bounda
     };
     let (endpoint, wire) = response_server(vec![
         writable_resolution(),
-        serde_json::json!({"projectCreate":{"success":true,"project":{"id":"NEW"}}}),
+        serde_json::json!({"projectCreate":{"success":true,"project":{"id":"NEW","content":null}}}),
         serde_json::json!({"projectRelationCreate":{"success":true,"projectRelation":{"id":""}}}),
     ]);
     let error = writable_source(&endpoint)
@@ -1973,7 +1973,7 @@ async fn write_failures_from_lookups_and_mutation_payloads_cross_the_http_bounda
     drop(wire);
     let (endpoint, wire) = response_server(vec![
         writable_resolution(),
-        serde_json::json!({"projectUpdate":{"success":true,"project":{"id":"P","relations":{"nodes":[{"id":"R"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}),
+        serde_json::json!({"projectUpdate":{"success":true,"project":{"id":"P","content":null,"relations":{"nodes":[{"id":"R"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}),
         serde_json::json!({"projectRelationDelete":{"success":false}}),
     ]);
     let error = writable_source(&endpoint)
@@ -1995,27 +1995,27 @@ async fn write_failures_from_lookups_and_mutation_payloads_cross_the_http_bounda
     let more = serde_json::json!({"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"next"}});
     for (answered, followed, expected) in [
         (
-            serde_json::json!({"id":"NEW"}),
+            serde_json::json!({"id":"NEW","description":null}),
             None,
             "a rewrite answered without the relations",
         ),
         (
-            serde_json::json!({"id":"NEW","relations":{"nodes":7,"pageInfo":{"hasNextPage":false,"endCursor":null}}}),
+            serde_json::json!({"id":"NEW","description":null,"relations":{"nodes":7,"pageInfo":{"hasNextPage":false,"endCursor":null}}}),
             None,
             "missing relations.nodes",
         ),
         (
-            serde_json::json!({"id":"NEW","relations":{"nodes":[{"id":""}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}),
+            serde_json::json!({"id":"NEW","description":null,"relations":{"nodes":[{"id":""}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}),
             None,
             "empty backend id",
         ),
         (
-            serde_json::json!({"id":"NEW","relations":more.clone()}),
+            serde_json::json!({"id":"NEW","description":null,"relations":more.clone()}),
             Some(serde_json::json!({})),
             "missing relation item",
         ),
         (
-            serde_json::json!({"id":"NEW","relations":more.clone()}),
+            serde_json::json!({"id":"NEW","description":null,"relations":more.clone()}),
             Some(serde_json::json!({"issue":{}})),
             "missing relations",
         ),
@@ -2087,7 +2087,7 @@ async fn write_failures_from_lookups_and_mutation_payloads_cross_the_http_bounda
     }
     let (endpoint, wire) = response_server(vec![
         writable_resolution(),
-        serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"I","relations":{"nodes":[{"id":"R"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}),
+        serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"I","description":null,"relations":{"nodes":[{"id":"R"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}),
         serde_json::json!({"issueRelationDelete":{"success":false}}),
     ]);
     assert!(
@@ -2122,7 +2122,7 @@ async fn a_project_status_is_matched_locally_because_linear_narrows_that_connect
             {"id":"S-TODO","name":"todo","type":"planned","position":2.0},
             {"id":"S-DONE","name":"Done","type":"completed","position":3.0}
         ])),
-        serde_json::json!({"projectCreate":{"success":true,"project":{"id":"P-NEW"}}}),
+        serde_json::json!({"projectCreate":{"success":true,"project":{"id":"P-NEW","content":null}}}),
     ]);
     writable_source(&endpoint)
         .write_project(&ItemWrite {
@@ -2194,7 +2194,7 @@ async fn a_project_status_is_matched_locally_because_linear_narrows_that_connect
         // fixture running out of answers.
         let (endpoint, wire) = response_server(vec![
             statuses(unreadable.clone()),
-            serde_json::json!({"projectCreate":{"success":true,"project":{"id":"P-NEW"}}}),
+            serde_json::json!({"projectCreate":{"success":true,"project":{"id":"P-NEW","content":null}}}),
         ]);
         let malformed = writable_source(&endpoint)
             .write_project(&ItemWrite {
@@ -2220,7 +2220,7 @@ async fn replacing_more_than_one_full_relation_page_deletes_every_existing_edge(
     // The first page is the rewrite's own answer; the second is read after it.
     let mut responses = vec![
         writable_resolution(),
-        serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"I","relations":relations(
+        serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"I","description":null,"relations":relations(
             (0..250)
                 .map(|index| serde_json::json!({"id":format!("R{index}")}))
                 .collect(),
@@ -3940,7 +3940,7 @@ async fn a_document_is_created_updated_and_removed_again_over_real_http() {
 
     // Created into a project: the team is not asked for, because the project is the home.
     let (endpoint, wire) = response_server(vec![
-        serde_json::json!({"documentCreate":{"success":true,"document":{"id":"D-NEW"}}}),
+        serde_json::json!({"documentCreate":{"success":true,"document":{"id":"D-NEW","content":null}}}),
     ]);
     let created = writable_source(&endpoint)
         .write_document(&written("Design", Some("Body"), Some("p1")))
@@ -3968,7 +3968,7 @@ async fn a_document_is_created_updated_and_removed_again_over_real_http() {
     // Created under no project: the configured team is what gives it one.
     let (endpoint, wire) = response_server(vec![
         writable_resolution(),
-        serde_json::json!({"documentCreate":{"success":true,"document":{"id":"D-LOOSE"}}}),
+        serde_json::json!({"documentCreate":{"success":true,"document":{"id":"D-LOOSE","content":null}}}),
     ]);
     writable_source(&endpoint)
         .write_document(&written("Loose", None, None))
@@ -3990,7 +3990,7 @@ async fn a_document_is_created_updated_and_removed_again_over_real_http() {
     // Updated: the target is read first, so a second copy addresses the one already there.
     let (endpoint, wire) = response_server(vec![
         document("D-NEW"),
-        serde_json::json!({"documentUpdate":{"success":true,"document":{"id":"D-NEW"}}}),
+        serde_json::json!({"documentUpdate":{"success":true,"document":{"id":"D-NEW","content":null}}}),
     ]);
     let updated = writable_source(&endpoint)
         .write_document(&ItemWrite {
@@ -4011,7 +4011,7 @@ async fn a_document_is_created_updated_and_removed_again_over_real_http() {
     // `project: null` to exactly that update on 2026-09-04.
     let (endpoint, wire) = response_server(vec![
         document("D-NEW"),
-        serde_json::json!({"documentUpdate":{"success":true,"document":{"id":"D-NEW"}}}),
+        serde_json::json!({"documentUpdate":{"success":true,"document":{"id":"D-NEW","content":null}}}),
     ]);
     writable_source(&endpoint)
         .write_document(&ItemWrite {
@@ -4876,7 +4876,7 @@ async fn a_metadata_key_is_set_by_rewriting_the_slot_alone_for_every_record() {
 
     let (endpoint, wire) = response_server(vec![
         prioritised_issue("i1", Some(held), serde_json::json!(2)),
-        serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"i1"}}}),
+        serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"i1","description":null}}}),
         prioritised_issue("i1", Some(sent_back), serde_json::json!(2)),
     ]);
     let task = writable_source(&endpoint)
@@ -4905,7 +4905,7 @@ async fn a_metadata_key_is_set_by_rewriting_the_slot_alone_for_every_record() {
 
     let (endpoint, wire) = response_server(vec![
         held_project("p1", held),
-        serde_json::json!({"projectUpdate":{"success":true,"project":{"id":"p1"}}}),
+        serde_json::json!({"projectUpdate":{"success":true,"project":{"id":"p1","content":null}}}),
         held_project("p1", sent_back),
     ]);
     let project = writable_source(&endpoint)
@@ -4929,7 +4929,7 @@ async fn a_metadata_key_is_set_by_rewriting_the_slot_alone_for_every_record() {
 
     let (endpoint, wire) = response_server(vec![
         held_document("d1", held),
-        serde_json::json!({"documentUpdate":{"success":true,"document":{"id":"d1"}}}),
+        serde_json::json!({"documentUpdate":{"success":true,"document":{"id":"d1","content":null}}}),
         held_document("d1", sent_back),
     ]);
     let document = writable_source(&endpoint)
@@ -4954,7 +4954,7 @@ async fn a_metadata_key_is_set_by_rewriting_the_slot_alone_for_every_record() {
     // A description holding no slot gains one after a blank line, and nothing above it moves.
     let (endpoint, wire) = response_server(vec![
         prioritised_issue("i1", Some("Bare prose\n"), serde_json::json!(0)),
-        serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"i1"}}}),
+        serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"i1","description":null}}}),
         prioritised_issue("i1", Some("Bare prose\n"), serde_json::json!(0)),
     ]);
     writable_source(&endpoint)
@@ -5020,7 +5020,7 @@ async fn a_rendering_replaces_the_content_and_its_provenance_in_one_write() {
     let expected = "New rendering\n\n<!-- onetaskgraph.metadata `{\"caller.kept\":[1],\"onetaskgraph.template\":{\"digest\":\"new\"}}` -->";
     let (endpoint, wire) = response_server(vec![
         prioritised_issue("i1", Some(held), serde_json::json!(2)),
-        serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"i1"}}}),
+        serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"i1","description":null}}}),
     ]);
     writable_source(&endpoint)
         .set_task_rendering(
@@ -5043,7 +5043,7 @@ async fn a_rendering_replaces_the_content_and_its_provenance_in_one_write() {
 
     let (endpoint, wire) = response_server(vec![
         held_document("d1", held),
-        serde_json::json!({"documentUpdate":{"success":true,"document":{"id":"d1"}}}),
+        serde_json::json!({"documentUpdate":{"success":true,"document":{"id":"d1","content":null}}}),
     ]);
     writable_source(&endpoint)
         .set_document_rendering(
@@ -5069,7 +5069,7 @@ async fn a_rendering_replaces_the_content_and_its_provenance_in_one_write() {
     let quoted = "Quotes a slot\n\n<!-- onetaskgraph.metadata\n{}\n-->";
     let (endpoint, wire) = response_server(vec![
         prioritised_issue("i1", Some(held), serde_json::json!(2)),
-        serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"i1"}}}),
+        serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"i1","description":null}}}),
     ]);
     writable_source(&endpoint)
         .set_task_rendering(
@@ -5229,7 +5229,7 @@ async fn delivery_lists_are_read_out_of_the_slot_and_never_left_in_free_metadata
     // beside the caller's metadata, rather than being dropped.
     let (endpoint, wire) = response_server(vec![
         writable_resolution(),
-        serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"i1",
+        serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"i1","description":null,
             "relations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}),
     ]);
     writable_source(&endpoint)
@@ -5258,7 +5258,7 @@ async fn delivery_lists_are_read_out_of_the_slot_and_never_left_in_free_metadata
     // Written back without them, the caller's metadata goes back exactly and neither key does.
     let (endpoint, wire) = response_server(vec![
         writable_resolution(),
-        serde_json::json!({"issueCreate":{"success":true,"issue":{"id":"I-NEW"}}}),
+        serde_json::json!({"issueCreate":{"success":true,"issue":{"id":"I-NEW","description":null}}}),
     ]);
     writable_source(&endpoint)
         .write_task(&ItemWrite {
@@ -5451,7 +5451,7 @@ async fn delivered_by_is_written_into_the_slot_and_moves_nothing_else() {
     let held = "Prose a person wrote,\nwith its own spacing.  \n\n<!-- onetaskgraph.metadata\n{\"caller.kept\":[1]}\n\\-->";
     let (endpoint, wire) = response_server(vec![
         prioritised_issue("i1", Some(held), serde_json::json!(2)),
-        serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"i1"}}}),
+        serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"i1","description":null}}}),
     ]);
     writable_source(&endpoint)
         .set_delivered_by(&"i1".into(), &[TaskRef::new("plan:T-1").unwrap()])
@@ -5605,6 +5605,46 @@ async fn a_priority_off_linears_scale_is_refused_naming_the_field() {
     );
 }
 
+/// A long-form write's answer is held to the selection it was sent with: a create answered
+/// without the `description` it selected, or with one that is not a string, landed in Linear
+/// but cannot say what Linear stored, so it fails rather than skip the comparison.
+#[tokio::test]
+async fn a_write_answered_without_what_linear_stored_is_malformed() {
+    for (issue, expected) in [
+        (
+            serde_json::json!({"id":"I-NEW"}),
+            "left out the selected `description`",
+        ),
+        (
+            serde_json::json!({"id":"I-NEW","description":7}),
+            "gave a non-string `description`",
+        ),
+    ] {
+        let (endpoint, wire) = response_server(vec![
+            writable_resolution(),
+            serde_json::json!({"issueCreate":{"success":true,"issue":issue}}),
+        ]);
+        let task: Task = serde_json::from_value(serde_json::json!({"id":"authored:T",
+            "title":"task","content":"body","status":{"category":"todo","name":"Todo"},
+            "labels":[],"repositories":[],"metadata":{}}))
+        .unwrap();
+        let refusal = writable_source(&endpoint)
+            .write_task(&ItemWrite {
+                target: None,
+                item: task,
+                depends_on: Vec::new(),
+            })
+            .await
+            .expect_err("the answer cannot say what Linear stored");
+        assert!(
+            matches!(&refusal, SourceError::Malformed { message }
+                if message.contains("task I-NEW") && message.contains(expected)),
+            "{refusal:?}"
+        );
+        drop(wire);
+    }
+}
+
 /// A copy carries the priority as Linear's own number, on a create and on an update alike —
 /// `0` included, so moving a task back to no priority is written rather than left out.
 #[tokio::test]
@@ -5621,7 +5661,7 @@ async fn a_copy_sends_linears_priority_on_create_and_on_update_including_none() 
             };
             // An update replaces the relations the issue holds, so its answer reads them back;
             // a create holds none.
-            let mut written = serde_json::json!({"id":"I-OLD"});
+            let mut written = serde_json::json!({"id":"I-OLD","description":null});
             if target.is_some() {
                 written["relations"] = no_relations["issue"]["relations"].clone();
             }
@@ -5758,7 +5798,7 @@ async fn a_narrow_write_linear_did_not_confirm_is_not_reported_written() {
             false,
         ),
         (
-            serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"I-1"}}}),
+            serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"I-1","description":null}}}),
             false,
         ),
         (
@@ -5797,7 +5837,7 @@ async fn a_narrow_write_linear_did_not_confirm_is_not_reported_written() {
             false,
         ),
         (
-            serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"I-2"}}}),
+            serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"I-2","description":null}}}),
             false,
         ),
     ] {
@@ -5869,7 +5909,7 @@ async fn a_content_write_sends_only_the_description_and_moves_nothing_else() {
     ] {
         let (endpoint, wire) = response_server(vec![
             prioritised_issue("I-1", before.as_deref(), 2.into()),
-            serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"I-1"}}}),
+            serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"I-1","description":null}}}),
         ]);
         assert_eq!(
             writable_source(&endpoint)
@@ -5933,7 +5973,7 @@ async fn content_that_would_read_back_as_metadata_is_refused_before_it_is_sent()
     let slot = "<!-- onetaskgraph.metadata\n{\"caller.number\":7}\n-->";
     let (endpoint, wire) = response_server(vec![
         prioritised_issue("I-1", Some(&format!("Old.\n\n{slot}")), 0.into()),
-        serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"I-1"}}}),
+        serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"I-1","description":null}}}),
     ]);
     writable_source(&endpoint)
         .set_task_content(&"I-1".into(), lookalike)
@@ -6020,7 +6060,7 @@ async fn a_project_scoped_source_reads_and_writes_that_project_alone() {
     .unwrap();
     let (endpoint, wire) = response_server(vec![
         writable_resolution(),
-        serde_json::json!({"issueCreate":{"success":true,"issue":{"id":"I-NEW"}}}),
+        serde_json::json!({"issueCreate":{"success":true,"issue":{"id":"I-NEW","description":null}}}),
     ]);
     configured_source(&endpoint, scope.clone())
         .write_task(&ItemWrite {
@@ -6240,7 +6280,7 @@ async fn the_cross_source_edge_scan_is_narrowed_to_this_source_and_the_far_ends_
             writable_resolution(),
             serde_json::json!({"issues":{"nodes":[decoy],
                 "pageInfo":{"hasNextPage":false,"endCursor":null}}}),
-            serde_json::json!({"issueCreate":{"success":true,"issue":{"id":"I-NEW"}}}),
+            serde_json::json!({"issueCreate":{"success":true,"issue":{"id":"I-NEW","description":null}}}),
         ]);
         configured_source(&endpoint, extra)
             .write_task(&ItemWrite {
@@ -6283,7 +6323,7 @@ async fn the_slot_is_written_in_the_one_spelling_linear_keeps_byte_for_byte() {
     let hostile = serde_json::json!(["a --> b <!-- c", "`tick`", "github.com/a/b", "_y_ [z]"]);
     let (endpoint, wire) = response_server(vec![
         prioritised_issue("i1", Some("Prose."), serde_json::json!(0)),
-        serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"i1"}}}),
+        serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"i1","description":null}}}),
         prioritised_issue("i1", Some("Prose."), serde_json::json!(0)),
     ]);
     writable_source(&endpoint)
@@ -6351,7 +6391,7 @@ async fn a_slot_in_the_multi_line_spelling_written_before_still_parses() {
 
         let (endpoint, wire) = response_server(vec![
             prioritised_issue("i1", Some(old), serde_json::json!(0)),
-            serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"i1"}}}),
+            serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"i1","description":null}}}),
             prioritised_issue("i1", Some(old), serde_json::json!(0)),
         ]);
         writable_source(&endpoint)
@@ -6383,7 +6423,7 @@ async fn a_narrow_slot_write_that_lands_elsewhere_or_vanishes_is_not_reported_wr
     let value = serde_json::json!(true);
     let (endpoint, _) = response_server(vec![
         held_project("p1", "Prose."),
-        serde_json::json!({"projectUpdate":{"success":true,"project":{"id":"p-other"}}}),
+        serde_json::json!({"projectUpdate":{"success":true,"project":{"id":"p-other","content":null}}}),
     ]);
     let refused = writable_source(&endpoint)
         .set_project_metadata(&"p1".into(), &key, &value)
@@ -6395,7 +6435,7 @@ async fn a_narrow_slot_write_that_lands_elsewhere_or_vanishes_is_not_reported_wr
     );
     let (endpoint, _) = response_server(vec![
         held_document("d1", "Prose."),
-        serde_json::json!({"documentUpdate":{"success":true,"document":{"id":"d-other"}}}),
+        serde_json::json!({"documentUpdate":{"success":true,"document":{"id":"d-other","content":null}}}),
     ]);
     let refused = writable_source(&endpoint)
         .set_document_metadata(&"d1".into(), &key, &value)
@@ -6412,19 +6452,19 @@ async fn a_narrow_slot_write_that_lands_elsewhere_or_vanishes_is_not_reported_wr
         (
             "task",
             prioritised_issue("i1", Some("Prose."), serde_json::json!(0)),
-            serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"i1"}}}),
+            serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"i1","description":null}}}),
             serde_json::json!({"issue":null}),
         ),
         (
             "project",
             held_project("p1", "Prose."),
-            serde_json::json!({"projectUpdate":{"success":true,"project":{"id":"p1"}}}),
+            serde_json::json!({"projectUpdate":{"success":true,"project":{"id":"p1","content":null}}}),
             serde_json::json!({"project":null}),
         ),
         (
             "document",
             held_document("d1", "Prose."),
-            serde_json::json!({"documentUpdate":{"success":true,"document":{"id":"d1"}}}),
+            serde_json::json!({"documentUpdate":{"success":true,"document":{"id":"d1","content":null}}}),
             serde_json::json!({"document":null}),
         ),
     ] {
@@ -6608,9 +6648,9 @@ fn project_workspace() -> (String, std::sync::Arc<std::sync::Mutex<Option<String
                 );
                 *kept.lock().unwrap() = input["content"].as_str().map(str::to_owned);
                 if query.contains("projectCreate(") {
-                    serde_json::json!({"projectCreate":{"success":true,"project":{"id":"P-BIG"}}})
+                    serde_json::json!({"projectCreate":{"success":true,"project":{"id":"P-BIG","content":null}}})
                 } else {
-                    serde_json::json!({"projectUpdate":{"success":true,"project":{"id":"P-BIG"}}})
+                    serde_json::json!({"projectUpdate":{"success":true,"project":{"id":"P-BIG","content":null}}})
                 }
             } else if query.contains("project(id:$id)") {
                 serde_json::json!({"project":{"id":"P-BIG","name":"The plan",

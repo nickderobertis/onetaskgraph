@@ -4895,6 +4895,7 @@ pub fn linear_workspace_failing(
     (config, workspace)
 }
 
+// llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] The shared e2e harness is where the agreed e2e layout puts every loopback server, `linear_workspace` among them, and what this loopback Linear stores of a long form it is written is decided inside its own write handlers (`linear_write_item`, `linear_write_document`, `linear_narrow_issue_update`) in this file, so the rewrite it applies and the handle method that switches it on cannot live in one suite. The engine's own suite drives this same loopback, and editing the harness re-selects every suite as editing any shared harness does.
 /// What a Linear workspace does to the Markdown of a long form it is written.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinearMarkdown {
@@ -4935,6 +4936,7 @@ fn linear_stored(data: &Value, written: Option<&Value>) -> Value {
         _ => json!(text),
     }
 }
+// llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 
 /// One change a journey has a Linear workspace make part way through a command: after the
 /// `skip + 1`th request `matches` holds of, and before the workspace reads another.
@@ -5297,6 +5299,7 @@ impl LinearWorkspace {
         self.ledger.lock().unwrap().clone()
     }
 
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] The shared e2e harness is where the agreed e2e layout puts every loopback server, `linear_workspace` among them, and what this loopback Linear stores of a long form it is written is decided inside its own write handlers (`linear_write_item`, `linear_write_document`, `linear_narrow_issue_update`) in this file, so the rewrite it applies and the handle method that switches it on cannot live in one suite. The engine's own suite drives this same loopback, and editing the harness re-selects every suite as editing any shared harness does.
     /// Have this workspace store every long form it is written — an issue's `description`, a
     /// project's and a document's `content` — as `rewrite` says Linear does, from the next
     /// write on.

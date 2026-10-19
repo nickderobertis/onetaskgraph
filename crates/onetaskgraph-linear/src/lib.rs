@@ -3276,7 +3276,7 @@ impl TaskSource for LinearSource {
                     message: format!("missing {}.issue", root.as_str()),
                 })?;
         let id = NativeId(backend_id(issue, "id")?.into());
-        self.hold_stored(MetadataRecord::Task, &id, issue);
+        self.hold_stored(MetadataRecord::Task, &id, issue)?;
         let held = held_relations(write.target.as_ref(), issue)?;
         self.write_relations(&id, &edges, WriteKind::Task, held)
             .await?;
@@ -3347,7 +3347,7 @@ impl TaskSource for LinearSource {
                 message: format!("missing {}.project", root.as_str()),
             })?;
         let id = NativeId(backend_id(project, "id")?.into());
-        self.hold_stored(MetadataRecord::Project, &id, project);
+        self.hold_stored(MetadataRecord::Project, &id, project)?;
         let held = held_relations(write.target.as_ref(), project)?;
         self.write_relations(&id, &edges, WriteKind::Project, held)
             .await?;
@@ -3568,7 +3568,7 @@ impl TaskSource for LinearSource {
                 message: format!("missing {}.document", root.as_str()),
             })?;
         let id = NativeId(backend_id(document, "id")?.into());
-        self.hold_stored(MetadataRecord::Document, &id, document);
+        self.hold_stored(MetadataRecord::Document, &id, document)?;
         Ok(id)
     }
     async fn delete_document(&self, id: &NativeId) -> Result<(), SourceError> {
@@ -3793,7 +3793,7 @@ impl TaskSource for LinearSource {
                 message: "missing issueUpdate.issue".into(),
             })?;
         written_is(written, &issue)?;
-        self.hold_stored(MetadataRecord::Task, &issue, written);
+        self.hold_stored(MetadataRecord::Task, &issue, written)?;
         Ok(Some(()))
     }
     async fn set_delivered_by(
@@ -4233,25 +4233,42 @@ impl LinearSource {
     }
 
     /// Hold what `payload` — a long-form write's own answer — says Linear now stores as the
-    /// content of `record` `id`, its slot taken off exactly as a read takes it off; nothing when
-    /// the answer does not carry the field, or carries one no read could take a content out of.
-    fn hold_stored(&self, record: MetadataRecord, id: &NativeId, payload: &Value) {
+    /// content of `record` `id`, its slot taken off exactly as a read takes it off.
+    ///
+    /// # Errors
+    ///
+    /// [`SourceError::Malformed`] naming the field when the answer leaves out the long form the
+    /// write selected, gives it as anything but a string or a null, or ends it in a slot no read
+    /// could take a content out of: the write landed, and what it stored cannot be vouched for.
+    fn hold_stored(
+        &self,
+        record: MetadataRecord,
+        id: &NativeId,
+        payload: &Value,
+    ) -> Result<(), SourceError> {
         let field = match record {
             MetadataRecord::Task => "description",
             MetadataRecord::Project | MetadataRecord::Document => "content",
         };
+        let malformed = |problem: &str| SourceError::Malformed {
+            message: format!(
+                "the answer to a write of {} {} {problem} `{field}`",
+                record.noun(),
+                id.0
+            ),
+        };
         let long_form = match payload.get(field) {
             Some(Value::String(long_form)) => Some(long_form.clone()),
             Some(Value::Null) => None,
-            _ => return,
+            Some(_) => return Err(malformed("gave a non-string")),
+            None => return Err(malformed("left out the selected")),
         };
-        let Ok((content, _)) = metadata_description(long_form) else {
-            return;
-        };
+        let (content, _) = metadata_description(long_form)?;
         self.stored
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert((record, id.clone()), content.unwrap_or_default());
+        Ok(())
     }
 
     fn edges_versions(
@@ -4456,8 +4473,7 @@ impl LinearSource {
                 message: "missing issueUpdate.issue".into(),
             })?;
         written_is(issue, id)?;
-        self.hold_stored(MetadataRecord::Task, id, issue);
-        Ok(())
+        self.hold_stored(MetadataRecord::Task, id, issue)
     }
 
     /// Send one project's new `content` alone.
@@ -4479,8 +4495,7 @@ impl LinearSource {
                 message: "missing projectUpdate.project".into(),
             })?;
         acknowledged(project, id, MutationRoot::ProjectUpdate)?;
-        self.hold_stored(MetadataRecord::Project, id, project);
-        Ok(())
+        self.hold_stored(MetadataRecord::Project, id, project)
     }
 
     /// Send one document's new `content` alone.
@@ -4502,8 +4517,7 @@ impl LinearSource {
                 message: "missing documentUpdate.document".into(),
             })?;
         acknowledged(document, id, MutationRoot::DocumentUpdate)?;
-        self.hold_stored(MetadataRecord::Document, id, document);
-        Ok(())
+        self.hold_stored(MetadataRecord::Document, id, document)
     }
 
     /// What `sources fields` reports — and, with `apply`, does first: every name the mapping

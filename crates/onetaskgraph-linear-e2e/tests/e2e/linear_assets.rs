@@ -16,7 +16,7 @@ const REQUEST_LIMIT: usize = 2_500;
 const REQUEST_WINDOW: Duration = Duration::from_secs(3_600);
 // llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
-use crate::fixtures::{LinearWorkspace, document, linear_workspace};
+use crate::fixtures::{LinearMarkdown, LinearWorkspace, document, linear_workspace};
 
 #[derive(Default)]
 struct Upload {
@@ -1816,4 +1816,144 @@ fn a_task_created_with_an_asset_retires_the_far_ends_reverse_edges_in_a_caching_
     let edges: Value = serde_json::from_str(&run(&reverse)).unwrap();
     assert!(sent() > before, "the next read is Linear's");
     assert_eq!(edges["items"].as_array().map(Vec::len), Some(1), "{edges}");
+}
+
+/// `sha256:` and the hex SHA-256 of `content`, hashed here rather than taken from the engine.
+fn content_digest(content: &str) -> String {
+    use sha2::Digest as _;
+    let digest = sha2::Sha256::digest(content.as_bytes());
+    let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    format!("sha256:{hex}")
+}
+
+#[test]
+fn an_asset_carrying_rendering_records_what_linear_stores_and_an_undeclared_rewrite_is_refused() {
+    let journey = Journey::new();
+    journey
+        .workspace
+        .held
+        .rewrite_markdown_on_write(LinearMarkdown::Declared);
+    let inputs = journey.sandbox.subdirectory("stored-inputs");
+    let template = inputs.join("shot.md");
+    let image = inputs.join("shot.png");
+    // A bullet Linear stores as `* `, the image its upload serves at a URL, and a line only the
+    // rewrite the ruling does not declare touches.
+    std::fs::write(&template, "- ![shot](./shot.png)\n1) Then review it.\n").unwrap();
+    std::fs::write(&image, images::png(700, 60_000)).unwrap();
+    let run = |arguments: &[&str]| {
+        journey
+            .sandbox
+            .command()
+            .envs(journey.workspace.clock.client_env(0))
+            .args(arguments)
+            .output()
+            .unwrap()
+    };
+    let shown = |kind: &str, id: &str| -> Value {
+        let output = run(&[kind, "show", id, "--json"]);
+        assert!(output.status.success(), "{}", stderr(&output));
+        serde_json::from_str::<Value>(&stdout(&output)).unwrap()["items"][0]["item"].clone()
+    };
+    let verifiable = |item: &Value| {
+        let content = item["content"].as_str().expect("content");
+        assert!(content.starts_with("* ![shot](http://"), "{content}");
+        assert_eq!(
+            item["metadata"]["onetaskgraph.template"]["body_digest"],
+            content_digest(content),
+            "{item}"
+        );
+    };
+    let failure_kind = |output: &std::process::Output| -> Value {
+        let printed: Value = serde_json::from_str(&stdout(output)).unwrap_or(Value::Null);
+        printed["failure"]["kind"].clone()
+    };
+    let template = template.to_str().unwrap();
+    let image_path = image.to_str().unwrap();
+    for (index, kind) in ["task", "document"].into_iter().enumerate() {
+        let create = |source: &str, title: &str| {
+            run(&[
+                kind,
+                "create",
+                source,
+                "--project",
+                "launch",
+                "--title",
+                title,
+                "--template",
+                template,
+                "--asset",
+                image_path,
+                "--no-interactive",
+                "--json",
+            ])
+        };
+        // A copy out of a folder of Markdown, then the same rendering created in Linear itself
+        // and rendered again there: each records the digest of what Linear stores.
+        let created = create("notes", "Shot");
+        assert!(created.status.success(), "{}", stderr(&created));
+        let source = serde_json::from_str::<Value>(&stdout(&created)).unwrap()["items"][0]["id"]
+            .as_str()
+            .expect("an id")
+            .to_owned();
+        let copied = journey.copy(kind, &source, true);
+        let landed = copied["items"][0]["destination"]
+            .as_str()
+            .expect("an id")
+            .to_owned();
+        verifiable(&shown(kind, &landed));
+        let direct = create("dest", "Shot in Linear");
+        assert!(direct.status.success(), "{}", stderr(&direct));
+        let direct = serde_json::from_str::<Value>(&stdout(&direct)).unwrap()["items"][0]["id"]
+            .as_str()
+            .expect("an id")
+            .to_owned();
+        verifiable(&shown(kind, &direct));
+        std::fs::write(&image, images::png(710 + index as u64, 60_000)).unwrap();
+        let render = |id: &str| {
+            run(&[
+                kind,
+                "render",
+                id,
+                "--asset",
+                image_path,
+                "--no-interactive",
+                "--json",
+            ])
+        };
+        let rendered = render(&direct);
+        assert!(rendered.status.success(), "{}", stderr(&rendered));
+        verifiable(&shown(kind, &direct));
+
+        // With a rewrite the ruling does not declare, the asset-carrying copy, create and render
+        // are each refused as diverged, the copy reporting its item failed.
+        journey
+            .workspace
+            .held
+            .rewrite_markdown_on_write(LinearMarkdown::Undeclared);
+        // The record's own asset changes, so the copy writes rather than finding it unchanged.
+        let output = run(&["--json", kind, "show", &source]);
+        let held = serde_json::from_str::<Value>(&stdout(&output)).unwrap()["assets"][0]["path"]
+            .as_str()
+            .expect("the record's asset")
+            .to_owned();
+        std::fs::write(held, images::png(720 + index as u64, 60_000)).unwrap();
+        let recopied = run(&["--json", kind, "copy", &source, "--to", "dest"]);
+        assert_eq!(recopied.status.code(), Some(4), "{}", stderr(&recopied));
+        let report: Value = serde_json::from_str(&stdout(&recopied)).unwrap();
+        assert_eq!(
+            report["items"][0]["error"]["kind"], "stored-content-diverged",
+            "{report}"
+        );
+        let refused = create("dest", "Refused");
+        assert_eq!(refused.status.code(), Some(1), "{}", stderr(&refused));
+        assert_eq!(failure_kind(&refused), "stored-content-diverged");
+        std::fs::write(&image, images::png(730 + index as u64, 60_000)).unwrap();
+        let refused = render(&direct);
+        assert_eq!(refused.status.code(), Some(1), "{}", stderr(&refused));
+        assert_eq!(failure_kind(&refused), "stored-content-diverged");
+        journey
+            .workspace
+            .held
+            .rewrite_markdown_on_write(LinearMarkdown::Declared);
+    }
 }

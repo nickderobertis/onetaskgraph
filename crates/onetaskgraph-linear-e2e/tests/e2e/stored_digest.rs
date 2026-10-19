@@ -100,6 +100,12 @@ struct Plan {
 
 impl Plan {
     fn new() -> Self {
+        Self::caching(false)
+    }
+
+    /// [`Plan::new`], with the Linear source's local cache on when `cache` says so — the store
+    /// then reaches the plugin through the cache that stands in front of it.
+    fn caching(cache: bool) -> Self {
         let sandbox = Sandbox::new();
         let held = json!({
             "tasks": [], "documents": [], "labels": [],
@@ -118,8 +124,12 @@ impl Plan {
                 std::fs::create_dir_all(root.join(kind)).expect("a folder");
             }
         }
+        let mut linear = json!({"plugin": "linear", "config": config});
+        if cache {
+            linear["cache"] = json!({"enabled": true, "dir": sandbox.subdirectory("cache")});
+        }
         sandbox.project_document(&document(&json!({
-            "linear": {"plugin": "linear", "config": config},
+            "linear": linear,
             "plan": {"plugin": "local-md", "config": {"root": plan}},
             "back": {"plugin": "local-md", "config": {"root": back}},
         })));
@@ -322,19 +332,24 @@ fn verifiable(item: &Value, what: &str) {
 
 #[test]
 fn a_copied_plan_reads_back_from_linear_as_the_digest_its_provenance_records() {
-    let plan = Plan::new();
-    let (task, design) = plan.rendered_plan();
-    let (items, errors, sent) = plan.copy_plan(&design, 0);
-    assert!(errors.is_empty(), "{errors}");
-    // Exactly the eight requests this copy sent before the store recorded what Linear stores —
-    // measured with the 0.8.0 binary over this same journey. What Linear stores is read off each
-    // mutation's own answer, never by a read of its own.
-    assert_eq!(sent, 8, "the first copy's requests, unchanged");
-    for source in ["plan:goal", task.as_str(), design.as_str()] {
-        let landed = outcome(&items, source);
-        assert_eq!(landed["action"], "created", "{landed}");
-        let destination = landed["destination"].as_str().expect("an id");
-        verifiable(&plan.show(kind_of(source), destination), destination);
+    for cache in [false, true] {
+        let plan = Plan::caching(cache);
+        let (task, design) = plan.rendered_plan();
+        let (items, errors, sent) = plan.copy_plan(&design, 0);
+        assert!(errors.is_empty(), "{errors}");
+        if !cache {
+            // Exactly the eight requests this copy sent before the store recorded what Linear
+            // stores — measured with the 0.8.0 binary over this same journey. What Linear stores
+            // is read off each mutation's own answer, never by a read of its own.
+            // llmlint: ignore[tests_hold_no_nonfunctional_thresholds] The change's own acceptance criterion: the first copy sends exactly the requests it sent before, asserted exactly off the loopback's request log. A budget's threshold would admit the extra read this assertion exists to refuse, and the Linear budgets file is not this change's to edit.
+            assert_eq!(sent, 8, "the first copy's requests, unchanged");
+        }
+        for source in ["plan:goal", task.as_str(), design.as_str()] {
+            let landed = outcome(&items, source);
+            assert_eq!(landed["action"], "created", "cache {cache}: {landed}");
+            let destination = landed["destination"].as_str().expect("an id");
+            verifiable(&plan.show(kind_of(source), destination), destination);
+        }
     }
 }
 
@@ -449,7 +464,15 @@ fn a_re_rendered_plan_updates_each_linear_item_to_a_digest_its_content_reads_as(
 
 #[test]
 fn a_rewrite_the_ruling_does_not_declare_is_refused_as_stored_content_diverged() {
-    let plan = Plan::new();
+    for cache in [false, true] {
+        refused_as_diverged(cache);
+    }
+}
+
+/// [`a_rewrite_the_ruling_does_not_declare_is_refused_as_stored_content_diverged`], with the
+/// Linear source's cache on or off.
+fn refused_as_diverged(cache: bool) {
+    let plan = Plan::caching(cache);
     let (task, design) = plan.rendered_plan();
     plan.workspace
         .rewrite_markdown_on_write(LinearMarkdown::Undeclared);
@@ -486,6 +509,12 @@ fn a_rewrite_the_ruling_does_not_declare_is_refused_as_stored_content_diverged()
             item["metadata"]["onetaskgraph.template"]["body_digest"],
             sha256(item["content"].as_str().expect("content")),
             "{item}"
+        );
+        // Refused, so no link names the item as this copy's counterpart.
+        let copied = plan.show(kind_of(source), source);
+        assert!(
+            copied["metadata"]["onetaskgraph.copies"]["linear"].is_null(),
+            "cache {cache}: {copied}"
         );
     }
 }

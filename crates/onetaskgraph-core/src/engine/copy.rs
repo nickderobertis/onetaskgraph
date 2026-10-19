@@ -3180,14 +3180,6 @@ impl Engine {
         }
     }
 
-    /// Resolve and write every item planned, holding back the ones whose edges are not
-    /// resolvable yet.
-    ///
-    /// An edge between two items of one copy can point at a member whose destination id
-    /// does not exist until it has been created, so the item that points at it lands
-    /// without that edge and is handed to `deferred`. [`Engine::repair`] finishes it once
-    /// the *whole* request has landed — not once this call has, because the far end may
-    /// be in another project of the same command.
     /// Make each planned item's content and status what its destination will store — see
     /// [`stored::apply`] and `TaskSource::stored_status` — so it is compared and written in
     /// that form.
@@ -3214,6 +3206,14 @@ impl Engine {
         Ok(())
     }
 
+    /// Resolve and write every item planned, holding back the ones whose edges are not
+    /// resolvable yet.
+    ///
+    /// An edge between two items of one copy can point at a member whose destination id
+    /// does not exist until it has been created, so the item that points at it lands
+    /// without that edge and is handed to `deferred`. [`Engine::repair`] finishes it once
+    /// the *whole* request has landed — not once this call has, because the far end may
+    /// be in another project of the same command.
     async fn copy_items(
         &self,
         request: &CopyRequest,
