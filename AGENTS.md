@@ -477,7 +477,8 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   refused for anything else and carrying no figures says nothing about the budget, so it
   goes on and fails as itself — a journey that cannot reach its host is a defect, not a
   decline. The free read stays first; each recheck reads the budgets again, the same three
-  ways, before it decides on the least of them. `tests/recheck_gate.rs` drives
+  ways, before it decides on the least of them — unless the session's own last answer already
+  declines it, which no lower reading could undo, and then it reads nothing more. `tests/recheck_gate.rs` drives
   all of that against a loopback stand-in. `scripts/check-budget-decline.sh`, a command in that plugin's `test`
   target, follows a decline on each reading through to the conclusion the required check
   reads, because a test that asserts a panic passes and the half worth proving is that the

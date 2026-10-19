@@ -657,7 +657,7 @@ async fn precondition_estimated(
 /// neither is decided on alone: the least of them and of the last real answer's headers is.
 /// It is a query and may cost a point, and it is recorded like every other request, so what
 /// the gate costs is in every session report.
-pub const RATE_LIMIT_OBJECT: &str = "query{rateLimit{limit remaining resetAt}}";
+pub const RATE_LIMIT_OBJECT: &str = "query{rateLimit{cost limit remaining resetAt}}";
 
 /// How that read is named, in the accounting and in every reason it is part of.
 pub const RATE_LIMIT_OBJECT_READ: &str = "the GraphQL rateLimit object";
@@ -832,14 +832,15 @@ async fn read_rate_limit_object(
     rest_host: &str,
     into: &Accounting,
 ) -> Result<Value, String> {
-    let sending = || {
+    let sending = |reported_cost| {
         Request::graphql(
             RATE_LIMIT_OBJECT,
             &json!({}),
             Some(RATE_LIMIT_OBJECT_READ),
-            None,
+            reported_cost,
         )
     };
+    let unanswered = || onetaskgraph_github_projects::accounting::ResponseOutcome::TransportError;
     // The GraphQL endpoint of the API the journey is pointed at when that is the API whose
     // REST host this reads, and the one beside the REST host otherwise — which is GitHub's
     // own arrangement, and a stand-in's that answers both on one host.
@@ -857,7 +858,11 @@ async fn read_rate_limit_object(
     let response = match sent {
         Ok(response) => response,
         Err(error) => {
-            into.record(sending().finished(Outcome::Refused, RateLimit::default()));
+            into.record(
+                sending(None)
+                    .finished(Outcome::Refused, RateLimit::default())
+                    .with_execution(Some(RATE_LIMIT_OBJECT.to_owned()), unanswered(), 1),
+            );
             return Err(format!(
                 "{RATE_LIMIT_OBJECT_READ} could not reach GitHub: {error}"
             ));
@@ -869,7 +874,11 @@ async fn read_rate_limit_object(
     let body = match response.text().await {
         Ok(body) => body,
         Err(error) => {
-            into.record(sending().finished(Outcome::Refused, limits));
+            into.record(
+                sending(None)
+                    .finished(Outcome::Refused, limits)
+                    .with_execution(Some(RATE_LIMIT_OBJECT.to_owned()), unanswered(), 1),
+            );
             return Err(format!(
                 "{RATE_LIMIT_OBJECT_READ} returned no readable body: {error}"
             ));
@@ -886,7 +895,22 @@ async fn read_rate_limit_object(
     } else {
         Outcome::of_response(status, exhausted, &body)
     };
-    into.record(sending().finished(outcome, limits));
+    // Recorded as the journey records its own GraphQL calls: with the protocol's own outcome
+    // and the price GitHub reported for it.
+    let protocol = onetaskgraph_github_projects::accounting::ResponseOutcome::of_graphql_reply(
+        status,
+        parsed.as_ref().ok(),
+    );
+    let reported_cost = parsed
+        .as_ref()
+        .ok()
+        .and_then(|answer| answer.pointer("/data/rateLimit/cost"))
+        .and_then(Value::as_u64);
+    into.record(
+        sending(reported_cost)
+            .finished(outcome, limits)
+            .with_execution(Some(RATE_LIMIT_OBJECT.to_owned()), protocol, 1),
+    );
     if !status.is_success() {
         return Err(format!(
             "{RATE_LIMIT_OBJECT_READ} failed with HTTP {status}: {body}"
@@ -1135,6 +1159,43 @@ impl Admitted {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
+        // The least of every reading is at most what the session's own answers say, so where
+        // one of them already declines it — and the 40% rule would not wait on it — reading
+        // the budget again could only decline it too: it is declined on that answer, with no
+        // further request.
+        let now = epoch_now();
+        for answer in &answers {
+            let Ok(carried) = answer.allowance() else {
+                continue;
+            };
+            let Some(cost) = remaining
+                .iter()
+                .find(|(metered, _)| *metered == answer.metered())
+                .map(|(_, cost)| *cost)
+            else {
+                continue;
+            };
+            let Some(admitted) = admission
+                .demands()
+                .into_iter()
+                .find(|demand| demand.metered() == answer.metered())
+            else {
+                continue;
+            };
+            let (Ok(claimed), onetaskgraph_live::pace::Pace::Go) = (
+                admitted.allowance(),
+                onetaskgraph_live::pace::pace(carried, cost, now, WINDOW_SECONDS),
+            ) else {
+                continue;
+            };
+            let owed = Demand::read(admitted.metered(), cost, claimed);
+            let claimed_by = admission
+                .admitted_by(admitted.metered())
+                .unwrap_or_default()
+                .to_owned();
+            still_affordable(&owed, &claimed_by, Ok(carried), answer.by())
+                .map_err(|cause| Declined::unaffordable(SESSION_NAME, cause))?;
+        }
         let paused = admission.pauses().len();
         let mut gauge = answers.into_iter().fold(
             GitHubGauge::new(&self.token, &self.rest_host, into),

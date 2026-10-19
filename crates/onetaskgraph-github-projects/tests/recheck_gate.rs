@@ -362,10 +362,10 @@ fn a_journey_whose_first_call_carries_less_than_the_endpoint_claimed_does_not_ru
             "{figure} is missing from {message}"
         );
     }
-    // The admission's reads, the one real call, and the recheck's reads of the budgets — and
-    // nothing else, so nothing was written and there is no partial artifact for anything to
-    // leave behind.
-    assert_eq!(drive.asked, and_the_recheck_reads());
+    // The admission's reads and the one real call, and nothing else — the answer's own headers
+    // already decline it, so the recheck reads nothing more — so nothing was written and there
+    // is no partial artifact for anything to leave behind.
+    assert_eq!(drive.asked, the_free_read_and_one_real_call());
 
     if std::env::var_os(budget::FOLLOW_THROUGH).is_some() {
         std::panic::resume_unwind(drive.panic);
@@ -650,7 +650,13 @@ fn a_reported_first_query_price_retires_demand_before_the_header_recheck() {
                 "{message}"
             );
         }
-        let mut expected = and_the_recheck_reads();
+        // Declined on the answer's own headers with no further read; afforded, the recheck
+        // reads the budgets again before the session goes on.
+        let mut expected = if declined {
+            the_free_read_and_one_real_call()
+        } else {
+            and_the_recheck_reads()
+        };
         if !declined {
             expected.push("POST /graphql".into());
         }
