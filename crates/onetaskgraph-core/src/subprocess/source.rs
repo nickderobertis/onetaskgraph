@@ -927,16 +927,15 @@ impl TaskSource for SubprocessSource {
             return Err(unwritable_field(self.kind, "status"));
         }
         self.knows(category)?;
-        let result: StatusResult = self
-            .ask(
-                "set_project_status",
-                params(&StatusParams {
-                    id: id.clone(),
-                    category,
-                }),
-            )
-            .await?;
-        Ok(result.status)
+        // §4.17a: the result is the `Status` itself, or `null` for no such project.
+        self.ask(
+            "set_project_status",
+            params(&StatusParams {
+                id: id.clone(),
+                category,
+            }),
+        )
+        .await
     }
 
     async fn check_task_write(&self, write: &ItemWrite<Task>) -> Result<(), SourceError> {

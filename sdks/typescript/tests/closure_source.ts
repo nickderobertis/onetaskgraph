@@ -73,12 +73,13 @@ function malformed(message: string): object {
   return { error: { kind: "malformed", message } };
 }
 
-// A status write of the one item of its kind this source holds, read back as written.
-function statusWritten(params: Record<string, unknown>, held: string): object {
+// A status write of the one item of its kind this source holds, read back as written: under
+// a `status` member for a task (§4.17), and as the whole result for a project (§4.17a).
+function statusWritten(params: Record<string, unknown>, held: string, wrapped: boolean): object {
   const category = params.category;
   if (typeof category !== "string") return malformed("a status write names its category");
-  if (params.id !== held) return { result: { status: null } };
-  return { result: { status: { category, name: NAMES[category] ?? category } } };
+  const status = params.id === held ? { category, name: NAMES[category] ?? category } : null;
+  return { result: wrapped ? { status } : status };
 }
 
 function answer(request: Request): object {
@@ -120,9 +121,9 @@ function answer(request: Request): object {
       };
     }
     case "set_task_status":
-      return statusWritten(request.params, "t1");
+      return statusWritten(request.params, "t1", true);
     case "set_project_status":
-      return statusWritten(request.params, "home");
+      return statusWritten(request.params, "home", false);
     default:
       return malformed(
         `protocol version ${PROTOCOL_VERSION} has no method ${request.method} this source serves`,

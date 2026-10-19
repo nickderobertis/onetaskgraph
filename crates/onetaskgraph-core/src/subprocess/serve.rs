@@ -489,7 +489,8 @@ async fn dispatch(
             let status = source
                 .set_project_status(&params.id, params.category)
                 .await?;
-            encode(json!({ "status": status.map(|status| told(status, known)) }))
+            // §4.17a: the result is the `Status` itself, or `null`, with no wrapping member.
+            encode(status.map(|status| told(status, known)))
         }
         "check_task_write" => {
             let params: CheckWriteParams = decode(method, params)?;

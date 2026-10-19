@@ -169,14 +169,22 @@ def _contradiction(
     }
 
 
-def _status_written(params: dict[str, object], held: NativeId) -> Answered | Refused:
-    """A status write of the one item of its kind this source holds, read back as written."""
+def _status_written(
+    params: dict[str, object], held: NativeId, *, wrapped: bool
+) -> Answered | Refused:
+    """A status write of the one item of its kind this source holds, read back as written.
+
+    A task's status is under a `status` member (§4.17); a project's is the whole result
+    (§4.17a).
+    """
     match params:
         case {"id": str(wanted), "category": str(category)}:
-            if wanted != held:
-                return {"result": {"status": None}}
-            name = NAMES.get(category, category)
-            return {"result": {"status": {"category": category, "name": name}}}
+            status = (
+                {"category": category, "name": NAMES.get(category, category)}
+                if wanted == held
+                else None
+            )
+            return {"result": {"status": status} if wrapped else status}
         case _:
             return _malformed("a status write names its item by `id` and its `category`")
 
@@ -216,9 +224,9 @@ def _answer(request: Request) -> Answered | Refused:
         case "issue_holdings", _:
             return _malformed("issue_holdings names its issues as a list")
         case "set_task_status", params:
-            return _status_written(params, TASK["id"])
+            return _status_written(params, TASK["id"], wrapped=True)
         case "set_project_status", params:
-            return _status_written(params, HOME["id"])
+            return _status_written(params, HOME["id"], wrapped=False)
         case method, _:
             return _malformed(
                 f"protocol version {PROTOCOL_VERSION} has no method {method!r} this source serves"

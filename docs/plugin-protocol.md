@@ -119,7 +119,8 @@ Every response is an object with exactly two or three members:
 | `error` | object | Present on failure. A `SourceError` (§5). |
 
 Exactly one of `result` and `error` is present. A response carrying both, or
-neither, is a protocol violation (§6.3).
+neither, is a protocol violation (§6.3). A `result` of `null` is present: it is the whole
+answer of a method whose result may be `null` (§4.17a).
 
 A response to a request the plugin never received an `id` for — or a second response
 to one `id` — is a protocol violation.
@@ -1857,16 +1858,17 @@ ever sent it. It writes one field of one project and nothing else.
 
 ```json
 { "id": "18", "method": "set_project_status", "params": { "id": "I_40", "category": "done" } }
-{ "id": "18", "result": { "status": { "category": "done", "name": "Done" } } }
+{ "id": "18", "result": { "category": "done", "name": "Done" } }
 ```
 
 `id` is the `NativeId` of a project at **this** source and `category` a `StatusCategory`. The
 plugin sets that project's status to where its own mapping sends the category for a project —
 exactly where a `write_project` of a project in that category would put it — and changes
 **nothing else**: title, content, labels, metadata, repositories, dependencies and the project's
-tasks stay as they are. `result.status` is the `Status` the plugin now reads for that project,
-category and name, or `null` when it holds no such project — an id naming one of its tasks
-among them. A category this plugin has disabled is refused with `{"kind": "refused"}`, in the
+tasks stay as they are. `result` is the `Status` object the plugin now reads for that project,
+its `category` and `name`, or `null` when it holds no such project — an id naming one of its
+tasks among them. Unlike `set_task_status` (§4.17), the status is the result itself, with no
+`status` member around it. A category this plugin has disabled is refused with `{"kind": "refused"}`, in the
 words its `write_project` refuses that status with. A project delivers no task, so the engine
 keeps nothing in step after it.
 
