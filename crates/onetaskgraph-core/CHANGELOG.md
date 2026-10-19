@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.3](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.7.2...onetaskgraph-core-v0.7.3) - 2026-10-18
+
+### Fixed
+
+- *(config)* leave a source no layer defines unconfigured instead of failing ([#3650](https://github.com/nickderobertis/onetaskgraph/pull/3650))
+- *(deps)* answer a dependency read partially when a private source cannot ([#3651](https://github.com/nickderobertis/onetaskgraph/pull/3651))
+
 ## [0.7.2](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.7.1...onetaskgraph-core-v0.7.2) - 2026-10-18
 
 ### Fixed

@@ -145,7 +145,11 @@ pub fn clear(config: &Config, only: Option<&SourceName>) -> Result<CacheCleared,
     if let Some(name) = only
         && !all.iter().any(|(source, _)| source == name)
     {
-        return Err(if config.sources().contains_key(name) {
+        return Err(if config.incomplete().contains(name) {
+            crate::EngineError::IncompleteSource { name: name.clone() }
+                .to_string()
+                .replacen('\n', "; ", 1)
+        } else if config.sources().contains_key(name) {
             format!(
                 "source {name} keeps no cache: it has no remote, or its cache.enabled is not \
                  set; next: set sources.{name}.cache.enabled, or name a source that caches"

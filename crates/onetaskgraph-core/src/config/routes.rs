@@ -18,7 +18,7 @@
 //! less safe. Every other item tries its classification entries, then its repository
 //! entries, each in order, and no match leaves it in the source itself.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use onetaskgraph_plugin_api::{Classification, Repository, SourceName};
 use schemars::JsonSchema;
@@ -163,6 +163,9 @@ pub struct SourceRoute {
 pub struct Routes(
     BTreeMap<SourceName, Vec<Route>>,
     BTreeMap<SourceName, SourceVisibility>,
+    /// Sources a route may name that no layer gives a `plugin`: placed to like any other
+    /// destination, so the command following the route refuses it rather than skipping it.
+    BTreeSet<SourceName>,
 );
 
 impl Routes {
@@ -189,7 +192,11 @@ impl Routes {
                 routes
                     .iter()
                     .enumerate()
-                    .filter(|(_, route)| classification.is_public() || self.is_private(&route.to))
+                    .filter(|(_, route)| {
+                        classification.is_public()
+                            || self.is_private(&route.to)
+                            || self.2.contains(&route.to)
+                    })
                     .collect()
             })
             .unwrap_or_default();
@@ -229,6 +236,13 @@ impl Routes {
     #[must_use]
     pub fn with_visibility(mut self, declared: BTreeMap<SourceName, SourceVisibility>) -> Self {
         self.1 = declared;
+        self
+    }
+
+    /// The same routes, knowing `incomplete` names sources no layer gives a `plugin`.
+    #[must_use]
+    pub(super) fn with_incomplete(mut self, incomplete: BTreeSet<SourceName>) -> Self {
+        self.2 = incomplete;
         self
     }
 
@@ -279,7 +293,7 @@ impl Routes {
             }
             built.insert(source, parsed);
         }
-        let routes = Self(built, BTreeMap::new());
+        let routes = Self(built, BTreeMap::new(), BTreeSet::new());
         check(&routes, configured)?;
         Ok(routes)
     }
@@ -585,7 +599,10 @@ pub(super) fn check_classified(
 ) -> Result<(), ConfigError> {
     for (source, entries) in &routes.0 {
         for (index, route) in entries.iter().enumerate() {
+            // An incomplete destination's visibility is declared, if anywhere, in a layer this
+            // merge did not read; the command that would follow the entry refuses it instead.
             if route.classification() == Some(Classification::Private)
+                && !routes.2.contains(&route.to)
                 && declared.get(&route.to) != Some(&SourceVisibility::Private)
             {
                 return Err(ConfigError::setting(

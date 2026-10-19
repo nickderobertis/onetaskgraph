@@ -4954,11 +4954,24 @@ export const runtimeSchemas = {
       "SettingPath": {
         "description": "A dotted path to one setting, such as `sources.work.config.root`.",
         "type": "string"
+      },
+      "SourceName": {
+        "description": "The name a configuration document gives one configured source.",
+        "pattern": "^[a-z0-9][a-z0-9-]*$",
+        "type": "string"
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "description": "Every setting this build reads, with its value and where the value came from.",
     "properties": {
+      "incomplete_sources": {
+        "default": [],
+        "description": "Every source some layer refines but no layer gives a `plugin`, in name order.\n\nIts settings are among [`settings`](Self::settings) with the layer each came from;\nthis says the source they belong to is incomplete, and so not configured here. Left\nout when there are none.",
+        "items": {
+          "$ref": "#/$defs/SourceName"
+        },
+        "type": "array"
+      },
       "secrets": {
         "$ref": "#/$defs/SecretsReport",
         "description": "What the credentials file supplied, by name, and which layer answers for each.\n\nBeside the settings because it is the same question — where does this value\ncome from — asked of the one kind of value that may never be printed. So the\nname and the layer are reported and the value never is."
