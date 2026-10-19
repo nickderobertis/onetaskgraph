@@ -11851,7 +11851,6 @@ impl TaskSource for GitHubProjectsSource {
         let mut resolved = self.resolved_cache()?;
         let mut ahead = self.read_ahead()?;
         let mut carried = self.carried()?;
-        // What the batches read is remembered as any read of it is.
         for item in read.iter().filter_map(|(_, held)| held.as_ref()) {
             resolved.insert(item.id.clone(), item.clone());
         }

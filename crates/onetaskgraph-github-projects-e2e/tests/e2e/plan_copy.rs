@@ -345,7 +345,6 @@ pub(super) fn operation(call: &Call) -> String {
         )
 }
 
-/// Every request of `calls`, counted by operation.
 pub(super) fn tally(calls: &[Call]) -> BTreeMap<String, usize> {
     let mut counted = BTreeMap::new();
     for call in calls {
@@ -736,7 +735,6 @@ impl Plan {
     }
 }
 
-/// The ids of every plan item at the destination.
 fn plan_ids(at: &Counterparts) -> std::collections::BTreeSet<String> {
     at.values().cloned().collect()
 }
