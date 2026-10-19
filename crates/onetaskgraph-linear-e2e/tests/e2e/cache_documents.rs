@@ -7,7 +7,10 @@
 //! only documents that differ are the seven the cache sends in place of `ISSUES`, `ISSUE`,
 //! `ISSUE_DETAIL`, `ISSUE_RELATIONS`, `PROJECTS`, `PROJECT` and `PROJECT_RELATIONS`, each the one it stands in for with exactly the selections the cache's
 //! token reads and nothing else — and a write's own read of its target sends the plain one,
-//! since its answer fills no entry.
+//! since its answer fills no entry. Beside those, with the cache on or off, the eight mutations
+//! that write a long form each select what Linear stored in their own answer — `description`
+//! or `content` after the `id` 0.6.0 selected, and nothing else — which is what the store
+//! compares with what it sent.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -21,6 +24,37 @@ fn released() -> BTreeMap<String, String> {
     let fixture: Value =
         serde_json::from_str(include_str!("fixtures/documents-0.6.0.json")).expect("the fixture");
     serde_json::from_value(fixture["documents"].clone()).expect("documents by name")
+}
+
+/// Each mutation that writes a long form, by its 0.6.0 name, as this build sends it and the one
+/// member it adds to 0.6.0's selection: what Linear stored, read off the write's own answer.
+fn widened_mutations() -> [(&'static str, &'static str, &'static str); 8] {
+    [
+        ("ISSUE_CREATE", graphql::ISSUE_CREATE, "description"),
+        ("ISSUE_UPDATE", graphql::ISSUE_UPDATE, "description"),
+        ("ISSUE_REWRITE", graphql::ISSUE_REWRITE, "description"),
+        ("PROJECT_CREATE", graphql::PROJECT_CREATE, "content"),
+        ("PROJECT_UPDATE", graphql::PROJECT_UPDATE, "content"),
+        ("PROJECT_REWRITE", graphql::PROJECT_REWRITE, "content"),
+        ("DOCUMENT_CREATE", graphql::DOCUMENT_CREATE, "content"),
+        ("DOCUMENT_UPDATE", graphql::DOCUMENT_UPDATE, "content"),
+    ]
+}
+
+/// Every document 0.6.0 sent, and in place of each long-form mutation the one this build sends,
+/// held here to be 0.6.0's with exactly its one member added.
+fn released_or_widened() -> BTreeSet<String> {
+    let released = released();
+    let mut allowed: BTreeSet<String> = released.values().cloned().collect();
+    for (name, current, added) in widened_mutations() {
+        assert_eq!(
+            current.replacen(&format!("{{id {added}"), "{id", 1),
+            released[name],
+            "{name} is 0.6.0's with `{added}` added after its `id`, and nothing else"
+        );
+        allowed.insert(current.to_owned());
+    }
+    allowed
 }
 
 /// The read and write verbs the Linear journeys drive, in an order each can follow the last.
@@ -137,8 +171,8 @@ fn the_documents_0_6_0_sent_are_the_ones_this_build_sends_unchanged() {
 }
 
 #[test]
-fn with_the_cache_off_every_document_is_one_0_6_0_sent_byte_for_byte() {
-    let released: BTreeSet<String> = released().into_values().collect();
+fn with_the_cache_off_every_document_is_one_0_6_0_sent_or_a_write_selecting_what_linear_stored() {
+    let released = released_or_widened();
     let cached = Cached::with(dataset(), &serde_json::json!({"enabled": false}));
     let sent = sent(&cached);
     let unreleased: Vec<&String> = sent
@@ -161,7 +195,7 @@ fn with_the_cache_off_every_document_is_one_0_6_0_sent_byte_for_byte() {
 
 #[test]
 fn with_the_cache_on_only_seven_documents_differ_each_by_exactly_what_the_cache_adds() {
-    let released: BTreeSet<String> = released().into_values().collect();
+    let released = released_or_widened();
     let cached = Cached::new(dataset());
     let sent = sent(&cached);
     // Each widened document, the plain one it stands in for, and every selection it adds — each

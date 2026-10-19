@@ -1151,6 +1151,15 @@ them do; this is the inventory of what is owed, not a status board.
     written as one outside the copy; every check precedes the first write; any other refusal,
     and a project copy holding such a task, writes nothing; and a ticket write onto a board
     refused part way leaves no item behind and no issue closed behind an unwritten card.
+112. A plan task, a project description and a design document rendered in a folder of Markdown
+    and copied to a Linear source, and each created and re-rendered in Linear itself, read back
+    through the binary as content whose SHA-256 is the `body_digest` their
+    `onetaskgraph.template` records: the destination's declared rewrite is applied before the
+    write, a code span and a fenced block come back byte for byte, a hand edit's provenance is
+    carried unrestamped, and the first copy sends the requests it sent before. A repeat copy of
+    the unchanged plan sends no update, and a rewrite the Linear plugin's ruling does not declare
+    refuses each item as `stored-content-diverged` — naming its id, the line and both texts — on
+    a create, an update and a render alike.
 
 ## The public boundary
 

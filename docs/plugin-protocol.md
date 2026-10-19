@@ -487,6 +487,13 @@ declares, and treats it as public for everything else. Its writes still cross on
 engine has applied the same classification and term checks it applies to every source, so a
 hosted plugin cannot be a way around them.
 
+`stored_form`, `stored_status` and `stored_content` — what a backend does to the content and
+the status it is written, declared by the source so the engine sends what the backend keeps and
+compares the write's own answer with what it sent — are not carried either. A source hosted
+over this protocol declares the identity for both and answers no stored content, so the engine
+writes the content and the status exactly as it was given them and compares nothing: a hosted
+plugin's writes are what they were before the engine learned to ask.
+
 ### 4.1 Common parameter shapes
 
 **`PageRequest`** — every paged method takes one under `page`:

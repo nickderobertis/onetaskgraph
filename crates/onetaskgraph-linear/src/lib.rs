@@ -106,6 +106,57 @@
 //!   `METADATA_OPEN_SPAN`), and a marker meant to survive an issue's description or a
 //!   document's content belongs in one too.
 //!
+//! ## Ruling: what Linear does to Markdown on write, declared
+//!
+//! Linear stores an issue's `description`, a project's `content` and a document's `content` as
+//! Markdown it normalizes on write, so the bytes a read hands back are not the bytes a write
+//! sent. A rendering's `onetaskgraph.template` `body_digest` is the digest of its content, so
+//! a store recording it over what it sent records a digest no read of the item matches. This
+//! source therefore **declares** the rewrite, as [`TaskSource::stored_form`] — the one function
+//! [`stored_form::stored_form`] — and the engine applies it before a copy, a create or a render
+//! sends the content: what it sends is already what Linear keeps, and the digest it records is
+//! of that. Each of the eight writes that carry the long form — [`graphql::ISSUE_CREATE`],
+//! [`graphql::ISSUE_UPDATE`], [`graphql::ISSUE_REWRITE`], [`graphql::PROJECT_CREATE`],
+//! [`graphql::PROJECT_UPDATE`], [`graphql::PROJECT_REWRITE`], [`graphql::DOCUMENT_CREATE`] and
+//! [`graphql::DOCUMENT_UPDATE`] — selects what Linear stored in its own answer, with no request
+//! of its own, and [`TaskSource::stored_content`] hands it to the
+//! engine, which compares it with what it sent byte for byte and refuses the item as
+//! `stored-content-diverged` where they differ. **A difference is a rule missing from this
+//! section, and the fix is to add it here and to [`stored_form`] together.**
+//!
+//! Every rule applies outside a fenced block — from a line of three or more backticks or tildes,
+//! indented at most three spaces, to the line closing it with at least as many of the same — and
+//! outside an inline code span opened and closed on one line; both are kept byte for byte, which
+//! is what the HTML-comment ruling above observed of a code span. A Markdown link or image,
+//! `[text](target)` or `![alt](target)`, is kept as written too, which is why rewriting Linear's
+//! own output changes nothing more. A relative image reference goes on through the asset upload
+//! ([`assets`]), which points it at its `uploads.linear.app` URL before the write.
+//!
+//! | Rule | Written | Stored |
+//! | --- | --- | --- |
+//! | A line opening `- `, indented or not, is a `* ` bullet | ``- one\n  - two`` | ``* one\n  * two`` |
+//! | A table's delimiter row is one `--` a cell, its alignment colons kept, one space beside every pipe | ``\| --- \|:---:\|`` | ``\| -- \| :--: \|`` |
+//! | A URL opening `http://` or `https://` is linked to itself, trailing punctuation outside the link | ``see https://example.com/a.`` | ``see [https://example.com/a](<https://example.com/a>).`` |
+//! | A domain-like token under one of [`stored_form::AUTOLINKED_TOP_LEVEL_DOMAINS`], not following a letter, a digit or one of `@ / . - _ : \ # = + %`, is linked to `http://` and itself | ``example.com and "caller.live"`` | ``[example.com](<http://example.com>) and "[caller.live](<http://caller.live>)"`` |
+//! | A `[` that opens no link, and every `]`, are escaped | ``[x] done`` | ``\[x\] done`` |
+//! | A `~` is escaped | ``~5 days`` | ``\~5 days`` |
+//! | A single-underscore emphasis is written with asterisks; an underscore inside a word is not one | ``_y_ and snake_case`` | ``*y* and snake_case`` |
+//! | The backslash of `\"` is dropped | ``say \"hi\"`` | ``say "hi"`` |
+//! | A backslash before a letter is doubled | ``a \d b`` | ``a \\d b`` |
+//! | A line opening `-->` is escaped | ``-->`` | ``\-->`` |
+//! | A fenced block is kept byte for byte | `` ```\n- [x] _y_ example.com ~\n```\n- z `` | `` ```\n- [x] _y_ example.com ~\n```\n* z `` |
+//! | An inline code span is kept byte for byte | ``a `- [x] _y_ example.com ~` b`` | ``a `- [x] _y_ example.com ~` b`` |
+//!
+//! Each example is the rule's input and the stored form it produces, and
+//! `every_example_the_ruling_states_is_what_the_rewrite_stores` reads this table and fails when
+//! [`stored_form`] stores anything else. The HTML-comment probe above is held to it as well:
+//! [`stored_form`] of that probe is exactly what Linear handed back on 2026-10-02. The comparison
+//! against Linear itself is `drive_follow_ups` in `tests/live.rs`, a leg of
+//! `real_linear_applies_every_declared_capability_and_leaves_no_residue`, which writes a probe
+//! holding one instance of each rule to an issue's description and a document's content and
+//! asserts its stored form exactly. Text none of these rules names — `**bold**`, `1. one`,
+//! `snake_case`, `README.md`, `caller.key` — comes back as written.
+//!
 //! ## Ruling: a Linear document carries no label, and that is Linear's
 //!
 //! Unlike the two searches above, this one *is* a property of the remote service. The
@@ -230,6 +281,10 @@
 //! naming the name, after the resolution and before any mutation. Nothing falls back by type, or
 //! by the name a status was called where it came from, and a source with no mapping refuses
 //! every status write.
+//!
+//! So what a write leaves an item at is the mapped name, whatever the name it was given, and
+//! [`TaskSource::stored_status`] says so: a copy compares an item already in Linear with the
+//! status at that name, and an item whose category Linear already holds reads as unchanged.
 //!
 //! **A read** of an item at a name its kind's mapping gives is that category, under the name;
 //! every other name reads as `unknown`, under its own name, whatever its type — the review
@@ -359,16 +414,18 @@
 
 /// The image upload mechanism and its bounded verification rule.
 pub mod assets;
+/// What Linear stores when it is written Markdown, as the ruling above declares it.
+pub mod stored_form;
 
 use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
     Capabilities, Classification, Comment, CommentBody, CommentOrigin, Cursor, DependencyEdge,
     DependencyEndpoint, DependencyKind, DependencySupport, Direction, Document, DocumentQuery,
-    Health, ItemKind, ItemWrite, Label, LabelFilter, Location, MetadataKey, NativeId, NewComment,
-    Page, PageRequest, Priority, Project, ProjectFilter, ProjectQuery, Repository, SecretResolver,
-    SourceError, SourceName, SourcePlugin, Status, StatusCategory, StatusMapping, StatusName,
-    Support, Task, TaskDetailRead, TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome,
-    TextFields, TextQuery, UpdatedField, WriteSupport,
+    Health, ItemKind, ItemWrite, Label, LabelFilter, Location, MetadataKey, MetadataRecord,
+    NativeId, NewComment, Page, PageRequest, Priority, Project, ProjectFilter, ProjectQuery,
+    Repository, SecretResolver, SourceError, SourceName, SourcePlugin, Status, StatusCategory,
+    StatusMapping, StatusName, Support, Task, TaskDetailRead, TaskQuery, TaskRef, TaskSource,
+    TaskUpdate, TaskUpdateOutcome, TextFields, TextQuery, UpdatedField, WriteSupport,
 };
 use schemars::{Schema, schema_for};
 use secrecy::{ExposeSecret, SecretString};
@@ -491,10 +548,9 @@ pub mod graphql {
     pub const PROJECT_LABEL: &str =
         "query($name:String!){ projectLabels(filter:{name:{eqIgnoreCase:$name}}){nodes{id}} }";
     /// Create an issue.
-    pub const ISSUE_CREATE: &str =
-        "mutation($input:IssueCreateInput!){ issueCreate(input:$input){success issue{id}} }";
+    pub const ISSUE_CREATE: &str = "mutation($input:IssueCreateInput!){ issueCreate(input:$input){success issue{id description}} }";
     /// Update an issue.
-    pub const ISSUE_UPDATE: &str = "mutation($id:String!,$input:IssueUpdateInput!){ issueUpdate(id:$id,input:$input){success issue{id}} }";
+    pub const ISSUE_UPDATE: &str = "mutation($id:String!,$input:IssueUpdateInput!){ issueUpdate(id:$id,input:$input){success issue{id description}} }";
     /// Update an issue and read back, in the same request, everything a task is read as.
     ///
     /// What a status write and a targeted update answer with: the selection is [`ISSUE`]'s, so
@@ -515,15 +571,14 @@ pub mod graphql {
     /// given, so it has to know which it holds; selected here, that is the update's own answer
     /// rather than a read of its own, and a re-write with no relations to replace is the one
     /// request. The relations are read after the update, which moves none of them.
-    pub const ISSUE_REWRITE: &str = "mutation($id:String!,$input:IssueUpdateInput!,$first:Int!){ issueUpdate(id:$id,input:$input){success issue{id relations(first:$first){nodes{id type relatedIssue{id}} pageInfo{hasNextPage endCursor}}}} }";
+    pub const ISSUE_REWRITE: &str = "mutation($id:String!,$input:IssueUpdateInput!,$first:Int!){ issueUpdate(id:$id,input:$input){success issue{id description relations(first:$first){nodes{id type relatedIssue{id}} pageInfo{hasNextPage endCursor}}}} }";
     /// Rewrite a project whole, and read back the first page of its relations, on the terms of
     /// [`ISSUE_REWRITE`].
-    pub const PROJECT_REWRITE: &str = "mutation($id:String!,$input:ProjectUpdateInput!,$first:Int!){ projectUpdate(id:$id,input:$input){success project{id relations(first:$first){nodes{id type relatedProject{id}} pageInfo{hasNextPage endCursor}}}} }";
+    pub const PROJECT_REWRITE: &str = "mutation($id:String!,$input:ProjectUpdateInput!,$first:Int!){ projectUpdate(id:$id,input:$input){success project{id content relations(first:$first){nodes{id type relatedProject{id}} pageInfo{hasNextPage endCursor}}}} }";
     /// Create a project.
-    pub const PROJECT_CREATE: &str =
-        "mutation($input:ProjectCreateInput!){ projectCreate(input:$input){success project{id}} }";
+    pub const PROJECT_CREATE: &str = "mutation($input:ProjectCreateInput!){ projectCreate(input:$input){success project{id content}} }";
     /// Update a project.
-    pub const PROJECT_UPDATE: &str = "mutation($id:String!,$input:ProjectUpdateInput!){ projectUpdate(id:$id,input:$input){success project{id}} }";
+    pub const PROJECT_UPDATE: &str = "mutation($id:String!,$input:ProjectUpdateInput!){ projectUpdate(id:$id,input:$input){success project{id content}} }";
     /// Create a native issue dependency.
     pub const ISSUE_RELATION_CREATE: &str = "mutation($input:IssueRelationCreateInput!){ issueRelationCreate(input:$input){success issueRelation{id}} }";
     /// Create a native project dependency.
@@ -546,9 +601,9 @@ pub mod graphql {
     /// connection declares, unlike its `issues` one.
     pub const DOCUMENTS: &str = "query($first:Int,$after:String,$filter:DocumentFilter){ documents(first:$first,after:$after,filter:$filter){ nodes{id title content url createdAt updatedAt project{id}} pageInfo{hasNextPage endCursor} } }";
     /// Create a document.
-    pub const DOCUMENT_CREATE: &str = "mutation($input:DocumentCreateInput!){ documentCreate(input:$input){success document{id}} }";
+    pub const DOCUMENT_CREATE: &str = "mutation($input:DocumentCreateInput!){ documentCreate(input:$input){success document{id content}} }";
     /// Update a document.
-    pub const DOCUMENT_UPDATE: &str = "mutation($id:String!,$input:DocumentUpdateInput!){ documentUpdate(id:$id,input:$input){success document{id}} }";
+    pub const DOCUMENT_UPDATE: &str = "mutation($id:String!,$input:DocumentUpdateInput!){ documentUpdate(id:$id,input:$input){success document{id content}} }";
     /// Delete a document, so a copy that could not finish can take back what it created.
     pub const DOCUMENT_DELETE: &str = "mutation($id:String!){ documentDelete(id:$id){success} }";
     /// One page of an issue's comments, walked backwards.
@@ -1349,6 +1404,10 @@ struct LinearSource {
     /// direction spelled, while that walk's pages agree on it; see
     /// [`TaskSource::edges_version`].
     edges_versions: std::sync::Mutex<std::collections::HashMap<EdgesRead, String>>,
+    /// What the answer to this instance's latest long-form write of each item said Linear now
+    /// stores as its content, until [`TaskSource::stored_content`] takes it; see the ruling on
+    /// what Linear does to Markdown on write.
+    stored: std::sync::Mutex<std::collections::HashMap<(MetadataRecord, NativeId), String>>,
 }
 
 /// One item's dependency read in one direction, as [`LinearSource::edges_versions`] keys it.
@@ -1388,6 +1447,7 @@ impl LinearSource {
             vocabulary: std::sync::Mutex::new(None),
             attached: std::sync::atomic::AtomicBool::new(false),
             edges_versions: std::sync::Mutex::new(std::collections::HashMap::new()),
+            stored: std::sync::Mutex::new(std::collections::HashMap::new()),
         })
     }
 }
@@ -2960,6 +3020,28 @@ impl TaskSource for LinearSource {
     fn writes(&self) -> WriteSupport {
         WriteSupport::Supported
     }
+    /// The rewrite the ruling on what Linear does to Markdown on write declares.
+    fn stored_form(&self, content: &str) -> String {
+        stored_form::stored_form(content)
+    }
+    /// The name `status_mapping` gives the kind and the category, which is the whole of what a
+    /// write sends; see the ruling on what a status is. A category it gives no name is left as
+    /// it is, for the write to refuse.
+    fn stored_status(&self, kind: ItemKind, status: &Status) -> Status {
+        match self.statuses.name_for(status.category, kind) {
+            Ok(name) => Status {
+                category: status.category,
+                name: name.as_str().to_owned(),
+            },
+            Err(_) => status.clone(),
+        }
+    }
+    fn stored_content(&self, record: MetadataRecord, id: &NativeId) -> Option<String> {
+        self.stored
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&(record, id.clone()))
+    }
     /// Private, once this instance's credential has reached its workspace: a Linear workspace
     /// is readable by its members alone and no setting of Linear's makes it readable by
     /// anybody else, so what is verified is that the workspace is really there to write into.
@@ -3194,6 +3276,7 @@ impl TaskSource for LinearSource {
                     message: format!("missing {}.issue", root.as_str()),
                 })?;
         let id = NativeId(backend_id(issue, "id")?.into());
+        self.hold_stored(MetadataRecord::Task, &id, issue);
         let held = held_relations(write.target.as_ref(), issue)?;
         self.write_relations(&id, &edges, WriteKind::Task, held)
             .await?;
@@ -3264,6 +3347,7 @@ impl TaskSource for LinearSource {
                 message: format!("missing {}.project", root.as_str()),
             })?;
         let id = NativeId(backend_id(project, "id")?.into());
+        self.hold_stored(MetadataRecord::Project, &id, project);
         let held = held_relations(write.target.as_ref(), project)?;
         self.write_relations(&id, &edges, WriteKind::Project, held)
             .await?;
@@ -3483,7 +3567,9 @@ impl TaskSource for LinearSource {
             .ok_or_else(|| SourceError::Malformed {
                 message: format!("missing {}.document", root.as_str()),
             })?;
-        Ok(NativeId(backend_id(document, "id")?.into()))
+        let id = NativeId(backend_id(document, "id")?.into());
+        self.hold_stored(MetadataRecord::Document, &id, document);
+        Ok(id)
     }
     async fn delete_document(&self, id: &NativeId) -> Result<(), SourceError> {
         // An id naming nothing is the state this asks for, on exactly the terms
@@ -3707,6 +3793,7 @@ impl TaskSource for LinearSource {
                 message: "missing issueUpdate.issue".into(),
             })?;
         written_is(written, &issue)?;
+        self.hold_stored(MetadataRecord::Task, &issue, written);
         Ok(Some(()))
     }
     async fn set_delivered_by(
@@ -4145,6 +4232,28 @@ impl LinearSource {
         }
     }
 
+    /// Hold what `payload` — a long-form write's own answer — says Linear now stores as the
+    /// content of `record` `id`, its slot taken off exactly as a read takes it off; nothing when
+    /// the answer does not carry the field, or carries one no read could take a content out of.
+    fn hold_stored(&self, record: MetadataRecord, id: &NativeId, payload: &Value) {
+        let field = match record {
+            MetadataRecord::Task => "description",
+            MetadataRecord::Project | MetadataRecord::Document => "content",
+        };
+        let long_form = match payload.get(field) {
+            Some(Value::String(long_form)) => Some(long_form.clone()),
+            Some(Value::Null) => None,
+            _ => return,
+        };
+        let Ok((content, _)) = metadata_description(long_form) else {
+            return;
+        };
+        self.stored
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert((record, id.clone()), content.unwrap_or_default());
+    }
+
     fn edges_versions(
         &self,
     ) -> std::sync::MutexGuard<'_, std::collections::HashMap<EdgesRead, String>> {
@@ -4346,7 +4455,9 @@ impl LinearSource {
             .ok_or_else(|| SourceError::Malformed {
                 message: "missing issueUpdate.issue".into(),
             })?;
-        written_is(issue, id)
+        written_is(issue, id)?;
+        self.hold_stored(MetadataRecord::Task, id, issue);
+        Ok(())
     }
 
     /// Send one project's new `content` alone.
@@ -4367,7 +4478,9 @@ impl LinearSource {
             .ok_or_else(|| SourceError::Malformed {
                 message: "missing projectUpdate.project".into(),
             })?;
-        acknowledged(project, id, MutationRoot::ProjectUpdate)
+        acknowledged(project, id, MutationRoot::ProjectUpdate)?;
+        self.hold_stored(MetadataRecord::Project, id, project);
+        Ok(())
     }
 
     /// Send one document's new `content` alone.
@@ -4388,7 +4501,9 @@ impl LinearSource {
             .ok_or_else(|| SourceError::Malformed {
                 message: "missing documentUpdate.document".into(),
             })?;
-        acknowledged(document, id, MutationRoot::DocumentUpdate)
+        acknowledged(document, id, MutationRoot::DocumentUpdate)?;
+        self.hold_stored(MetadataRecord::Document, id, document);
+        Ok(())
     }
 
     /// What `sources fields` reports — and, with `apply`, does first: every name the mapping

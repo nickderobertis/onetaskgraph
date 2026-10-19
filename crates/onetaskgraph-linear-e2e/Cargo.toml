@@ -28,6 +28,8 @@ regex.workspace = true
 serde_json.workspace = true
 # Reads budgets.yaml in the test holding its commands to what every runner can start.
 serde-saphyr.workspace = true
+# Hashes what a read hands back on its own, so a recorded digest is checked rather than echoed.
+sha2.workspace = true
 tokio.workspace = true
 
 # The asset live journey opens the same credential gate as the plugin lane.

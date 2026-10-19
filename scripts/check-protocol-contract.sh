@@ -157,6 +157,18 @@ NOT_METHODS = {
         "not carried: the paragraph after §4's method table says a source over this protocol "
         "answers `unknown`, which is never private"
     ),
+    "stored_form": (
+        "not carried: the paragraph after §4's method table says a source over this protocol "
+        "declares the identity"
+    ),
+    "stored_status": (
+        "not carried: the paragraph after §4's method table says a source over this protocol "
+        "declares the identity"
+    ),
+    "stored_content": (
+        "not carried: the paragraph after §4's method table says a source over this protocol "
+        "answers no stored content"
+    ),
     "version_coverage": CACHE_ONLY_REASON,
     "project_version_coverage": CACHE_ONLY_REASON,
     "document_version_coverage": CACHE_ONLY_REASON,

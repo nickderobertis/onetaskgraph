@@ -915,6 +915,16 @@ const PROBE: &str = "P.\n\n<!-- probe {\"site\":\"example.com\",\"list\":[1]} --
 /// comment's closing line is escaped, and the code span comes back as it was written.
 const PROBE_STORED: &str = "P.\n\n<!-- probe {\"site\":\"[example.com](<http://example.com>)\",\"list\":\\[1\\]} -->\n\n<!-- probe\n{\"k\":\"v\"}\n\\-->\n\n<!-- probe `{\"site\":\"example.com\",\"list\":[1]}` -->";
 
+/// One instance of each rule the plugin's ruling on what Linear does to Markdown on write
+/// declares: a bullet, a table's delimiter row, a URL, two domain-like tokens, brackets, a tilde,
+/// an underscore emphasis, an escaped quote, a backslash before a letter, a line opening `-->`,
+/// and the same text inside a fenced block and an inline code span, where it is kept.
+const MARKDOWN_PROBE: &str = "- bullet\n| a | b |\n| --- | --- |\nsee https://example.com/a.\nexample.com and \"caller.live\"\n[x] done ~5 _y_\nsay \\\"hi\\\" a \\d b\n-->\n```\n- [x] _y_ example.com ~\n```\nkept `- [x] _y_ example.com ~` span";
+
+/// What that ruling declares Linear stores [`MARKDOWN_PROBE`] as — the plugin's `stored_form`
+/// of it, which its unit tests hold to this — and what the live leg asserts Linear hands back.
+const MARKDOWN_PROBE_STORED: &str = "* bullet\n| a | b |\n| -- | -- |\nsee [https://example.com/a](<https://example.com/a>).\n[example.com](<http://example.com>) and \"[caller.live](<http://caller.live>)\"\n\\[x\\] done \\~5 *y*\nsay \"hi\" a \\\\d b\n\\-->\n```\n- [x] _y_ example.com ~\n```\nkept `- [x] _y_ example.com ~` span";
+
 /// What the follow-up flow rests on, against Linear itself: what Linear does to an HTML comment
 /// in an issue's description, a comment's body and a document's content, recorded in the
 /// plugin's module documentation; the metadata slot, written as a code span, keeping values
@@ -1109,6 +1119,32 @@ async fn drive_follow_ups(
     ensure!(
         content == PROBE_STORED,
         "a document's HTML comments came back as {content:?}, not as recorded"
+    );
+
+    // What Linear does to Markdown on write, rule by rule, in both long-form fields.
+    linear(
+        &run.key,
+        "mutation($id:String!,$input:IssueUpdateInput!){ issueUpdate(id:$id,input:$input){success} }",
+        json!({"id":probe_id.0,"input":{"description":MARKDOWN_PROBE}}),
+        "live Markdown description probe",
+    )
+    .await?;
+    let stored = raw_description(run, &probe_id).await?;
+    ensure!(
+        stored == MARKDOWN_PROBE_STORED,
+        "an issue description's Markdown came back as {stored:?}, not as the ruling declares"
+    );
+    linear(
+        &run.key,
+        "mutation($id:String!,$input:DocumentUpdateInput!){ documentUpdate(id:$id,input:$input){success} }",
+        json!({"id":document_id.0,"input":{"content":MARKDOWN_PROBE}}),
+        "live Markdown content probe",
+    )
+    .await?;
+    let content = raw_content(run, &document_id).await?;
+    ensure!(
+        content == MARKDOWN_PROBE_STORED,
+        "a document's Markdown came back as {content:?}, not as the ruling declares"
     );
 
     // Each follow-up search, narrowed by Linear and confirmed here: the decoy's prose carries

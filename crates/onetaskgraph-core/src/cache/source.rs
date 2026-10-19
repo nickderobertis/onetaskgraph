@@ -38,8 +38,8 @@ use std::sync::Arc;
 use onetaskgraph_plugin_api::{
     Asset, AssetName, AssetWrite, AssetsWritten, Capabilities, Comment, CommentBody, CommentCopy,
     DependencyEdge, Direction, Document, DocumentQuery, DocumentVersionCoverage, Health,
-    IssueHolding, IssueRef, ItemKind, ItemWrite, Label, MetadataKey, Metering, NativeId,
-    NewComment, Page, PageRequest, PartOutcome, Priority, Project, ProjectQuery,
+    IssueHolding, IssueRef, ItemKind, ItemWrite, Label, MetadataKey, MetadataRecord, Metering,
+    NativeId, NewComment, Page, PageRequest, PartOutcome, Priority, Project, ProjectQuery,
     ProjectVersionCoverage, SourceError, Status, StatusCategory, StatusContradiction, Task,
     TaskDetailRead, TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome, VersionCoverage,
     Visibility, WriteJournal, WriteSupport, WriteTarget,
@@ -1166,6 +1166,18 @@ impl TaskSource for CachedSource {
 
     fn writes(&self) -> WriteSupport {
         self.inner.writes()
+    }
+
+    fn stored_form(&self, content: &str) -> String {
+        self.inner.stored_form(content)
+    }
+
+    fn stored_status(&self, kind: ItemKind, status: &Status) -> Status {
+        self.inner.stored_status(kind, status)
+    }
+
+    fn stored_content(&self, record: MetadataRecord, id: &NativeId) -> Option<String> {
+        self.inner.stored_content(record, id)
     }
 
     async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {

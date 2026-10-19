@@ -51,9 +51,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use onetaskgraph_plugin_api::{
     AssetPayload, AssetUploads, AssetWrite, Capabilities, Classification, Comment, CommentCopy,
     Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Document, DocumentQuery,
-    ItemKind, ItemWrite, Location, MetadataKey, MetadataMatch, Metering, NativeId, Page,
-    PageRequest, Project, ProjectQuery, Repository, SourceError, SourceName, StatusCategory, Task,
-    TaskDetailRead, TaskQuery, TaskRef, TextFields, TextQuery, WriteTarget,
+    ItemKind, ItemWrite, Location, MetadataKey, MetadataMatch, MetadataRecord, Metering, NativeId,
+    Page, PageRequest, Project, ProjectQuery, Repository, SourceError, SourceName, StatusCategory,
+    Task, TaskDetailRead, TaskQuery, TaskRef, TextFields, TextQuery, WriteTarget,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -72,6 +72,7 @@ use super::dependents::{self, Dependents};
 use super::fetch::{fits, unrepeated};
 use super::local::ProjectSelector;
 use super::narrow::holds_priority;
+use super::stored;
 use super::{
     DocumentFilters, DocumentRequest, Engine, EngineError, Filters, LeftBehind, Paging, Qualified,
     TaskRequest,
@@ -1139,6 +1140,9 @@ struct Running {
     /// asked whether it could skip it — taken by the plan that lands it, so the destination is
     /// not read for it twice.
     aimed: HashMap<String, (Target, Option<Prior>)>,
+    /// Every item this copy wrote whose destination's answer says it stores the content other
+    /// than it was sent, by its source id: landed, and reported `failed` once the copy is done.
+    diverged: Vec<(GlobalId, EngineError)>,
 }
 
 /// The member project a routed write was filed under, and what finding it wrote.
@@ -1396,6 +1400,17 @@ pub(super) enum Level {
     Project,
     /// `get_document`, `write_document`, `delete_document`.
     Document,
+}
+
+impl Level {
+    /// The record a write at this level writes the content of.
+    fn record(self) -> MetadataRecord {
+        match self {
+            Self::Task => MetadataRecord::Task,
+            Self::Project => MetadataRecord::Project,
+            Self::Document => MetadataRecord::Document,
+        }
+    }
 }
 
 /// One record filed under a document's own project, and the location string its source
@@ -1810,7 +1825,13 @@ impl Engine {
                 before: task.before.clone(),
             })
             .collect();
-        let linking = std::mem::take(&mut running.linking);
+        // An item whose destination stores other than it was sent is refused: no link records it
+        // as this copy's counterpart, and it is reported `failed` with why.
+        let diverged = std::mem::take(&mut running.diverged);
+        let linking: Vec<Linking> = std::mem::take(&mut running.linking)
+            .into_iter()
+            .filter(|entry| diverged.iter().all(|(source, _)| source != &entry.item))
+            .collect();
         let homes = std::mem::take(&mut running.homes);
         let recordings = self.recordings(&running);
         self.repair(request, running, journal).await?;
@@ -1821,6 +1842,13 @@ impl Engine {
         let mut items = items;
         self.link(linking, &mut items, request.no_link, journal)
             .await?;
+        for (source, error) in &diverged {
+            for outcome in items.iter_mut().filter(|outcome| &outcome.source == source) {
+                outcome.action = CopyAction::Failed {
+                    error: Failure::from(error),
+                };
+            }
+        }
         Ok((
             CopyReport {
                 items,
@@ -2457,6 +2485,8 @@ impl Engine {
             }
         }
         let home_source = project.to.clone();
+        let mut project = project;
+        self.store_forms(std::slice::from_mut(&mut project))?;
         let unchanged = match &project.target {
             Target::Update { id: target, .. } => {
                 let settled = self.shown_edges(
@@ -3158,6 +3188,32 @@ impl Engine {
     /// without that edge and is handed to `deferred`. [`Engine::repair`] finishes it once
     /// the *whole* request has landed — not once this call has, because the far end may
     /// be in another project of the same command.
+    /// Make each planned item's content and status what its destination will store — see
+    /// [`stored::apply`] and `TaskSource::stored_status` — so it is compared and written in
+    /// that form.
+    fn store_forms(&self, planned: &mut [Planned]) -> Result<(), EngineError> {
+        for item in planned {
+            let destination = self.writable(&item.to)?;
+            let (content, metadata) = match &mut item.item {
+                Item::Task(task) => {
+                    task.status = destination
+                        .source()
+                        .stored_status(ItemKind::Task, &task.status);
+                    (&mut task.content, &mut task.metadata)
+                }
+                Item::Project(project) => {
+                    project.status = destination
+                        .source()
+                        .stored_status(ItemKind::Project, &project.status);
+                    (&mut project.content, &mut project.metadata)
+                }
+                Item::Document(document) => (&mut document.content, &mut document.metadata),
+            };
+            stored::apply(destination, content, metadata);
+        }
+        Ok(())
+    }
+
     async fn copy_items(
         &self,
         request: &CopyRequest,
@@ -3177,6 +3233,10 @@ impl Engine {
             self.rewrite_references(&mut planned, &mut running.references)
                 .await?;
         }
+        // Once a document's references point where they land, and before anything is compared
+        // with the destination or written to it: every content is what its destination will
+        // store, so an unchanged item reads as unchanged and what is sent is what is kept.
+        self.store_forms(&mut planned)?;
         // A task copy carries every task past one its destination cannot represent: each is
         // asked about before anything is written, and one refused is left out — reported
         // `failed` with the destination's own reason — and read by every other task as an item
@@ -3375,7 +3435,7 @@ impl Engine {
                 unresolved.push(index);
             }
             let resolvable_delivers = resolved_entries(&delivers);
-            let (outcome, prior) = self
+            let (outcome, prior, diverged) = self
                 .land(
                     destination,
                     request,
@@ -3388,6 +3448,9 @@ impl Engine {
                     journal,
                 )
                 .await?;
+            if let Some(error) = diverged {
+                running.diverged.push((item.source.clone(), error));
+            }
             if let Some(id) = outcome.destination()
                 && !request.dry_run
                 && let Item::Task(_) = &item.item
@@ -4553,7 +4616,7 @@ impl Engine {
         project: Option<NativeId>,
         pointing: Pointing<'_>,
         journal: &mut Journal,
-    ) -> Result<(CopyOutcome, Option<Prior>), EngineError> {
+    ) -> Result<(CopyOutcome, Option<Prior>, Option<EngineError>), EngineError> {
         let Pointing { edges, delivers } = pointing;
         let (target, found) = match &item.target {
             Target::Update { id, found } => (Some(id.clone()), Some(*found)),
@@ -4607,7 +4670,11 @@ impl Engine {
         if item.skipped
             && let Some(id) = &target
         {
-            return Ok((outcome(reached(Some(qualified(id.clone())), false)), prior));
+            return Ok((
+                outcome(reached(Some(qualified(id.clone())), false)),
+                prior,
+                None,
+            ));
         }
         let edges = resolved(edges);
         let comments_move = item
@@ -4645,14 +4712,22 @@ impl Engine {
             && !changed
             && !rerecord
         {
-            return Ok((outcome(reached(Some(qualified(id.clone())), false)), prior));
+            return Ok((
+                outcome(reached(Some(qualified(id.clone())), false)),
+                prior,
+                None,
+            ));
         }
         if request.dry_run {
             // Null only for a create here: nothing was created, so there is no id to report.
-            return Ok((outcome(reached(target.map(qualified), changed)), prior));
+            return Ok((
+                outcome(reached(target.map(qualified), changed)),
+                prior,
+                None,
+            ));
         }
-        let written = qualified(
-            self.write(
+        let (written, sent) = self
+            .write(
                 destination,
                 item,
                 target,
@@ -4662,8 +4737,14 @@ impl Engine {
                 prior.clone(),
                 journal,
             )
-            .await?,
+            .await?;
+        let diverged = stored::diverged(
+            destination,
+            item.item.level().record(),
+            &written,
+            sent.as_deref(),
         );
+        let written = qualified(written);
         let expected = self.take_expected(&written).unwrap_or_default();
         if let Some(plan) = &item.comment_plan {
             self.write_comments(destination, &written.native, plan, journal)
@@ -4671,7 +4752,7 @@ impl Engine {
         }
         let mut landed = outcome(reached(Some(written), changed));
         landed.expected = expected;
-        Ok((landed, prior))
+        Ok((landed, prior, diverged))
     }
 
     /// Make one destination task's comments what `plan` decided, recording how to take each
@@ -5431,7 +5512,7 @@ impl Engine {
         delivers: &[TaskRef],
         prior: Option<Prior>,
         journal: &mut Journal,
-    ) -> Result<NativeId, EngineError> {
+    ) -> Result<(NativeId, Option<String>), EngineError> {
         let created_kind = item.item.level();
         let suggested = target
             .clone()
@@ -5504,6 +5585,16 @@ impl Engine {
             None => create_refused(destination, operation, error),
             Some(_) => refused(destination, error),
         };
+        // What this write's own answer says the destination stores is what is compared with
+        // what it sends, so nothing an earlier write of the item left behind is.
+        if let Some(id) = &target {
+            stored::forget(destination, created_kind.record(), id);
+        }
+        let mut sent = match &landing {
+            Item::Task(task) => task.content.clone(),
+            Item::Project(project) => project.content.clone(),
+            Item::Document(document) => document.content.clone(),
+        };
         let landed = match landing {
             Item::Task(task) if carrying => destination
                 .source()
@@ -5517,7 +5608,10 @@ impl Engine {
                     &assets::write_of(item.assets.clone(), recorded.clone()),
                 )
                 .await
-                .map(|written| written.id)
+                .map(|written| {
+                    sent = written.content;
+                    written.id
+                })
                 .map_err(|error| failed(Creating::Task, error))?,
             Item::Document(document) if carrying => destination
                 .source()
@@ -5531,7 +5625,10 @@ impl Engine {
                     &assets::write_of(item.assets.clone(), recorded.clone()),
                 )
                 .await
-                .map(|written| written.id)
+                .map(|written| {
+                    sent = written.content;
+                    written.id
+                })
                 .map_err(|error| failed(Creating::Document, error))?,
             Item::Task(task) => destination
                 .source()
@@ -5575,7 +5672,7 @@ impl Engine {
                 id: landed.clone(),
             });
         }
-        Ok(landed)
+        Ok((landed, sent))
     }
 
     /// A configured source that built, for reading an item out of.
@@ -6317,7 +6414,7 @@ fn substitute(content: &str, table: &[(String, Resolution)]) -> (String, Counted
 ///
 /// `None` unless `read` is still the rendering its entry vouches for, because only then is
 /// the one change between it and `written` this copy's own: a hand edit is never laundered.
-fn restamped(
+pub(super) fn restamped(
     metadata: &BTreeMap<String, Value>,
     read: &str,
     written: &str,
