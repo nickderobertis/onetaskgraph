@@ -493,6 +493,80 @@ fn a_reconcile_walks_every_page_of_the_closed_items() {
     setup.item_reads_are_closed_filtered();
 }
 
+/// GitHub's secondary rate limit on GraphQL points: no more than 2,000 points per minute for
+/// the endpoint, as "Rate limits and query limits for the GraphQL API" publishes it
+/// (<https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api#secondary-rate-limits>).
+/// A dry run finishes well inside a minute, so every point it sends counts against one minute.
+const GRAPHQL_POINTS_PER_MINUTE: u64 = 2_000;
+
+/// The largest `first` GitHub accepts on any connection, as the same page publishes it: a
+/// value outside 1 to 100 is refused before the query runs.
+const GITHUB_PAGE_ARGUMENT_LIMIT: u64 = 100;
+
+/// Every document a reconcile dry run sends, held to the limits GitHub publishes for one query
+/// and for one minute, with no credential.
+///
+/// The credentialed lane's run of `a_reconcile_dry_run_reads_the_live_board_through_its_closed_filter_alone`
+/// was refused once with GitHub's generic "Something went wrong while executing your query"
+/// (CI run 39180155490). The same document passed on the next run (39184315799). This rules out
+/// the causes a document's own text can carry: GitHub refuses a document at or above its node
+/// limit before executing it, with a message naming the limit; a page argument outside 1 to 100
+/// is refused the same way; and a dry run past the per-minute point limit trips the secondary
+/// limiter. Each document is counted from what the binary actually sent, under the largest page
+/// sizes this source can bind, so this holds the whole of what a dry run sends rather than the
+/// one document it was written for. Two pages of closed items make the run page.
+#[test]
+fn every_document_a_reconcile_dry_run_sends_is_within_githubs_published_query_limits() {
+    let setup = closed_at_todo(150);
+    setup.json(
+        &[
+            "--json",
+            "task",
+            "status",
+            "reconcile",
+            "--source",
+            "board",
+            "--dry-run",
+        ],
+        0,
+    );
+    let sent = setup.board.served();
+    let largest = onetaskgraph_github_projects::largest_page_sizes();
+    let mut points = 0;
+    for (query, variables) in &sent {
+        for (name, bound) in &largest {
+            if let Some(value) = variables.get(name).and_then(Value::as_u64) {
+                assert!(
+                    (1..=GITHUB_PAGE_ARGUMENT_LIMIT).contains(&value) && value <= u64::from(*bound),
+                    "${name} was bound to {value}, outside GitHub's 1 to \
+                     {GITHUB_PAGE_ARGUMENT_LIMIT} or this source's largest {bound}: {query}"
+                );
+            }
+        }
+        let nodes = onetaskgraph_github_projects::worst_case_node_count(query)
+            .unwrap_or_else(|error| panic!("a document the dry run sent is countable: {error}"));
+        assert!(
+            nodes < onetaskgraph_github_projects::NODE_COUNT_LIMIT,
+            "a document the dry run sent may return {nodes} nodes, at or above GitHub's limit \
+             of {}: {query}",
+            onetaskgraph_github_projects::NODE_COUNT_LIMIT
+        );
+        points += onetaskgraph_github_projects::worst_case_point_cost(query)
+            .unwrap_or_else(|error| panic!("a document the dry run sent is priced: {error}"));
+    }
+    assert!(
+        points <= GRAPHQL_POINTS_PER_MINUTE,
+        "the dry run may spend {points} points, past GitHub's {GRAPHQL_POINTS_PER_MINUTE} a minute"
+    );
+    assert!(
+        sent.iter()
+            .filter(|(query, _)| query == onetaskgraph_github_projects::graphql::CLOSED_ITEMS)
+            .count()
+            >= 2,
+        "the dry run paged the closed items, so a later page is held here too"
+    );
+}
+
 #[test]
 fn a_closed_items_cursor_that_does_not_advance_refuses_the_reconcile_whole_writing_nothing() {
     let setup = closed_at_todo(150);
