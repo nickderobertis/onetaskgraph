@@ -433,7 +433,10 @@ async fn a_project_status_set_writes_the_held_project_and_answers_what_it_reads_
         .await
         .expect("the project verb answers");
     let held = &shown.items.first().expect("held").item;
-    assert_eq!(held.status, set.status, "the project reads at the status set");
+    assert_eq!(
+        held.status, set.status,
+        "the project reads at the status set"
+    );
     assert_eq!(held.title, "P-1", "nothing else about it moved");
     let (task, _, _) = read(&engine, "plan:T-1").await;
     assert_eq!(task, Todo, "no task is touched");

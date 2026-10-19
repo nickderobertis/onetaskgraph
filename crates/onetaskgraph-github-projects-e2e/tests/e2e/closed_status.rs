@@ -267,9 +267,12 @@ fn reconcile_owed(action: &str) -> Value {
     ]})
 }
 
+/// One item as the board holds it: its id, its card's option, and its issue's state and reason.
+type Held = (String, Option<String>, (String, Option<String>));
+
 impl Setup {
     /// Each item's card and its issue's state and reason.
-    fn held(&self, ids: &[&str]) -> Vec<(String, Option<String>, (String, Option<String>))> {
+    fn held(&self, ids: &[&str]) -> Vec<Held> {
         ids.iter()
             .map(|id| {
                 (

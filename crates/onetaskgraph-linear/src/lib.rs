@@ -3677,9 +3677,11 @@ impl TaskSource for LinearSource {
             })?;
         acknowledged(project, id, MutationRoot::ProjectUpdate)?;
         mapped_status(
-            project.get("status").ok_or_else(|| SourceError::Malformed {
-                message: "missing projectUpdate.project.status".into(),
-            })?,
+            project
+                .get("status")
+                .ok_or_else(|| SourceError::Malformed {
+                    message: "missing projectUpdate.project.status".into(),
+                })?,
             &self.statuses,
             ItemKind::Project,
         )

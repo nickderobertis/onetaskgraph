@@ -3004,7 +3004,8 @@ const PUBLISHED_BUNDLES: &[(u32, Published)] = &[
             roots: &FORTY_FIRST_BUNDLE_SHAPE,
             beside: &THIRTY_EIGHTH_BUNDLE_BESIDE,
         },
-    ),    (
+    ),
+    (
         42,
         Published::Whole {
             roots: &FORTY_SECOND_BUNDLE_SHAPE,
