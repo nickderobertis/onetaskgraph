@@ -214,7 +214,7 @@ impl Engine {
             running.linking.push(Linking {
                 item: listed.id.clone(),
                 level: Level::Task,
-                found: Some(*found),
+                found: Some(found.clone()),
                 destination: landed.clone(),
                 held: listed.item.metadata.get(MetadataKey::COPIES_KEY).cloned(),
             });

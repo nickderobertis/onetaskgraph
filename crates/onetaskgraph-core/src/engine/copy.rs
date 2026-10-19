@@ -764,7 +764,7 @@ enum Target {
 /// about the origin, which is why the distinction is carried this far rather than dropped
 /// where it is made. See [`recorded`]. It is also what the report's [`CopyVia`] says and
 /// what decides whether the copied item's link is written.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 enum Found {
     /// The item's own link named it, and it names the item back.
     Link,
@@ -777,7 +777,10 @@ enum Found {
     /// The project a copy would otherwise create is one the destination already holds of the
     /// same plan — the member its counterpart home elsewhere names there, or one naming that
     /// home as the project it is a member of — and it becomes this project's own copy.
-    Member,
+    Member {
+        /// That home, which names it no longer once it lands.
+        home: GlobalId,
+    },
 }
 
 impl Found {
@@ -786,11 +789,11 @@ impl Found {
     /// A member taken over is reported as found by a search of the destination: it is one,
     /// for the plan's project rather than for an origin, and a word of its own would be a new
     /// value in every consumer's schema for a distinction none of them acts on.
-    fn via(self) -> CopyVia {
+    fn via(&self) -> CopyVia {
         match self {
             Self::Link => CopyVia::Link,
             Self::Origin => CopyVia::Origin,
-            Self::Scan | Self::Member => CopyVia::Scan,
+            Self::Scan | Self::Member { .. } => CopyVia::Scan,
             Self::Match => CopyVia::Match,
         }
     }
@@ -798,9 +801,9 @@ impl Found {
 
 impl Target {
     /// Which rule found this target, or `None` for one this copy creates.
-    fn found(&self) -> Option<Found> {
+    fn found(&self) -> Option<&Found> {
         match self {
-            Self::Update { found, .. } => Some(*found),
+            Self::Update { found, .. } => Some(found),
             Self::Create => None,
         }
     }
@@ -1372,9 +1375,6 @@ struct Planned {
     /// Whether the copy found it unchanged at both ends by its change tokens alone, so nothing
     /// of it is written or compared.
     skipped: bool,
-    /// For a project landing on the member project of its plan's home elsewhere
-    /// ([`Found::Member`]), that home, which no longer names it once it lands.
-    promotes: Option<GlobalId>,
 }
 
 /// One item read out of its source, before anything decides where it lands.
@@ -2654,7 +2654,10 @@ impl Engine {
         // A project this copy creates holds nothing it did not file itself, so nothing filed
         // under it can be an orphan and the destination is not walked for one.
         let created = matches!(project.target, Target::Create);
-        let promotes = project.promotes.clone();
+        let promotes = match project.target.found() {
+            Some(Found::Member { home }) => Some(home.clone()),
+            _ => None,
+        };
         let mut outcomes = self
             .copy_items(request, vec![project], None, running, journal)
             .await?;
@@ -3630,7 +3633,7 @@ impl Engine {
                     running.linking.push(Linking {
                         item: item.source.clone(),
                         level: item.item.level(),
-                        found: item.target.found(),
+                        found: item.target.found().cloned(),
                         destination: id.clone(),
                         held: described(&item.item)
                             .1
@@ -4451,7 +4454,6 @@ impl Engine {
         };
         // A project the destination already holds a member of the same plan for is that
         // member, never a second project beside it.
-        let mut promotes = None;
         if matches!(target, Target::Create)
             && item.level() == Level::Project
             && !request.create
@@ -4461,10 +4463,9 @@ impl Engine {
         {
             target = Target::Update {
                 id: member,
-                found: Found::Member,
+                found: Found::Member { home },
             };
             held = prior;
-            promotes = Some(home);
         }
         Ok(Planned {
             source: id,
@@ -4480,7 +4481,6 @@ impl Engine {
             carried,
             comment_plan: None,
             skipped: false,
-            promotes,
         })
     }
 
@@ -4863,7 +4863,7 @@ impl Engine {
     ) -> Result<(CopyOutcome, Option<Prior>), EngineError> {
         let Pointing { edges, delivers } = pointing;
         let (target, found) = match &item.target {
-            Target::Update { id, found } => (Some(id.clone()), Some(*found)),
+            Target::Update { id, found } => (Some(id.clone()), Some(found.clone())),
             Target::Create => (None, None),
         };
         // Every link is settled once the whole copy has landed, by `Engine::link`, so none
@@ -6827,7 +6827,7 @@ fn outgoing(
         Item::Project(project) => {
             let mut metadata = carried(&project.metadata);
             // A member taken over as this project's copy is a member no longer.
-            if item.target.found() == Some(Found::Member) {
+            if matches!(item.target.found(), Some(Found::Member { .. })) {
                 metadata.remove(MetadataKey::MEMBER_OF_KEY);
             }
             Item::Project(Box::new(Project {
