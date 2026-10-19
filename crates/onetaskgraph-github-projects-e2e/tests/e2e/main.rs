@@ -26,6 +26,7 @@ mod fields;
 mod github_status_by_kind;
 mod graph;
 mod metadata_fields;
+mod project_status;
 mod status_complete;
 mod status_reconcile;
 mod write_order;

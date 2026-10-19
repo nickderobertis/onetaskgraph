@@ -8,12 +8,12 @@ use std::collections::BTreeMap;
 
 use onetaskgraph_plugin_api::{
     Asset, AssetContentType, AssetName, AssetPayload, AssetUpload, AssetUploads, AssetWrite,
-    AssetsWritten, Capabilities, Classification, ClosedAs, Comment, Completion, DependencyEdge,
-    DependencyEndpoint, DependencyKind, Direction, Document, DocumentQuery, Health, HeldTask,
-    IssueHolding, IssueRef, ItemKind, Label, Location, NativeId, NewComment, Page, PageRequest,
-    Priority, Project, ProjectQuery, Repository, SourceError, SourceName, Status, StatusCategory,
-    StatusContradiction, StatusMapping, Task, TaskQuery, TaskRef, TaskUpdate, TaskUpdateOutcome,
-    TextFields, UpdatedField,
+    AssetsWritten, Capabilities, Classification, ClosedAs, Comment, Completion, ContradictedItem,
+    DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Document, DocumentQuery, Health,
+    HeldTask, IssueHolding, IssueRef, ItemKind, Label, Location, NativeId, NewComment, Page,
+    PageRequest, Priority, Project, ProjectQuery, Repository, SourceError, SourceName, Status,
+    StatusCategory, StatusContradiction, StatusMapping, Task, TaskQuery, TaskRef, TaskUpdate,
+    TaskUpdateOutcome, TextFields, UpdatedField,
 };
 use schemars::{Schema, schema_for};
 use serde_json::{Value, json};
@@ -34,10 +34,10 @@ use crate::{
     CommentList, CommentWritten, CompleteAction, CopyAction, CopyLink, CopyOutcome, CopyReport,
     CopyVia, DeletedComment, Delivered, DeliveryOutcome, DocumentDetail, Failure, FailureClass,
     FailureDocument, GlobalId, IssueCompleted, IssuesCompleted, MetadataSet, PageToken, Predicate,
-    ProjectGraph, Qualified, QualifiedEdge, QualifiedEndpoint, QueryPlan, QueryResponse,
-    ReconcileOutcome, Regenerated, SearchHit, SearchKind, SourceFailure, SourceListing, SourcePlan,
-    StatusReconciled, StatusesReconciled, TaskContentSet, TaskDetail, TaskDetails, TaskPrioritySet,
-    TaskStatusSet, TaskUpdated, TemplateAnswers,
+    ProjectGraph, ProjectStatusSet, Qualified, QualifiedEdge, QualifiedEndpoint, QueryPlan,
+    QueryResponse, ReconcileOutcome, Regenerated, SearchHit, SearchKind, SourceFailure,
+    SourceListing, SourcePlan, StatusReconciled, StatusesReconciled, TaskContentSet, TaskDetail,
+    TaskDetails, TaskPrioritySet, TaskStatusSet, TaskUpdated, TemplateAnswers,
 };
 
 /// The bundle's own version, bumped whenever any root's schema changes — added, removed,
@@ -53,7 +53,7 @@ use crate::{
 /// that it moves whenever [`schema_bundle`] below emits a different document. The golden
 /// that holds it to that is `PUBLISHED_BUNDLES` in `tests/engine.rs`, which records every
 /// root's schema by digest from this version on.
-pub const SCHEMA_BUNDLE_VERSION: u32 = 41;
+pub const SCHEMA_BUNDLE_VERSION: u32 = 42;
 
 /// Every contract root, keyed by name, plus each registered plugin's config schema.
 #[must_use]
@@ -190,6 +190,8 @@ pub fn schema_bundle() -> Value {
     // the delivered tasks they kept in step — plus the entry type both of a task's lists hold.
     roots.insert("TaskRef", schema_for!(TaskRef));
     roots.insert("TaskStatusSet", schema_for!(TaskStatusSet));
+    // What `project status set` answers with.
+    roots.insert("ProjectStatusSet", schema_for!(ProjectStatusSet));
     roots.insert("Delivered", schema_for!(Delivered));
     roots.insert("DeliveryOutcome", schema_for!(DeliveryOutcome));
 
@@ -209,6 +211,7 @@ pub fn schema_bundle() -> Value {
     roots.insert("ClosedAs", schema_for!(ClosedAs));
     roots.insert("Completion", schema_for!(Completion));
     roots.insert("StatusContradiction", schema_for!(StatusContradiction));
+    roots.insert("ContradictedItem", schema_for!(ContradictedItem));
 
     // What `task priority set` and `task content set` answer with.
     roots.insert("TaskPrioritySet", schema_for!(TaskPrioritySet));

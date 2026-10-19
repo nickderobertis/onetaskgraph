@@ -133,6 +133,14 @@ mod priority;
 // plugin crate's edge, which AGENTS.md forbids depending on the engine at any depth.
 mod project_render;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
+// narrower edge for it: every journey here drives the binary against folders of Markdown, in
+// process and over the stdio plugin protocol, and an in-memory source, with no credential and no
+// network, in about a second. `project status set` and its refusals are the engine's and the
+// binary's, so they cannot sit behind a plugin crate's edge, which AGENTS.md forbids depending on
+// the engine at any depth; the GitHub board's and the Linear workspace's halves are proven behind
+// their own plugins' edges, in their e2e suites.
+mod project_status;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
 // narrower edge for it: every journey here drives the binary against folders of Markdown, an
 // in-memory source and the loopback GitHub board, with no credential and no network, in a few
 // seconds. Creating and regenerating an item is the engine's, so it cannot sit behind a plugin

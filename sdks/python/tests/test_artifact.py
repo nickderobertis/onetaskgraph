@@ -271,7 +271,16 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # read from the raw document and the roots from the validated one.
     bundle = generate.validate_schema_bundle(emitted_bundle)
 
-    assert emitted_bundle["version"] == 41
+    assert emitted_bundle["version"] == 42
+    # Version 42 published each closure item's `kind`, the project item a held issue can name,
+    # and what `project status set` answers with.
+    for root in ("IssueCompleted", "StatusReconciled"):
+        schema = json.dumps(emitted_bundle["roots"][root])
+        assert '"kind"' in schema, root
+    assert "kind" in emitted_bundle["roots"]["HeldTask"]["properties"]
+    assert "kind" not in emitted_bundle["roots"]["HeldTask"].get("required", [])
+    for root in ("ProjectStatusSet", "ContradictedItem"):
+        assert root in emitted_bundle["roots"], root
     # Version 41 published the two capabilities `task status reconcile` and `task status
     # complete` are asked through, and the documents both verbs answer with.
     for member in ("reconcile_status", "complete_by_issue"):

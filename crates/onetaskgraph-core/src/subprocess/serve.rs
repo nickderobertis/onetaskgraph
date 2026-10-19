@@ -15,8 +15,9 @@ use std::collections::BTreeMap;
 use std::io::{BufRead, Write};
 
 use onetaskgraph_plugin_api::{
-    Document, NativeId, Page, Project, SecretResolver, SourceError, SourceName, Status,
-    StatusCategory, StatusContradiction, Task, TaskDetailRead, TaskSource, TaskUpdateOutcome,
+    ContradictedItem, Document, NativeId, Page, Project, SecretResolver, SourceError, SourceName,
+    Status, StatusCategory, StatusContradiction, Task, TaskDetailRead, TaskSource,
+    TaskUpdateOutcome,
 };
 use secrecy::SecretString;
 use serde::Deserialize;
@@ -279,6 +280,9 @@ async fn initialize(
                 // And a write checked before it is sent, which every plugin of this build answers
                 // through its own check or the contract's default.
                 write_checks: true,
+                // And a project's status set on its own, which every plugin of this build writes
+                // or refuses in the contract's own words.
+                project_status: true,
             };
             *source = Some(Hosted {
                 source: built,
@@ -480,6 +484,14 @@ async fn dispatch(
             let status = source.set_task_status(&params.id, params.category).await?;
             encode(json!({ "status": status.map(|status| told(status, known)) }))
         }
+        "set_project_status" => {
+            let params: StatusParams = decode(method, params)?;
+            let status = source
+                .set_project_status(&params.id, params.category)
+                .await?;
+            // §4.17a: the result is the `Status` itself, or `null`, with no wrapping member.
+            encode(status.map(|status| told(status, known)))
+        }
         "check_task_write" => {
             let params: CheckWriteParams = decode(method, params)?;
             source.check_task_write(&params.write).await?;
@@ -491,7 +503,14 @@ async fn dispatch(
                 items: items
                     .into_iter()
                     .map(|contradiction| StatusContradiction {
-                        task: told_task(contradiction.task, known),
+                        item: match contradiction.item {
+                            ContradictedItem::Task(task) => {
+                                ContradictedItem::Task(told_task(task, known))
+                            }
+                            ContradictedItem::Project(project) => {
+                                ContradictedItem::Project(told_project(project, known))
+                            }
+                        },
                         ..contradiction
                     })
                     .collect(),

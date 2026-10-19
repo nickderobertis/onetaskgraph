@@ -1066,6 +1066,85 @@ test("task status set answers when a delivered task could not be kept in step", 
   }
 });
 
+// A folder of Markdown `work` holding project `P-1`, beside `closures`, a stdio peer answering
+// both closure methods with a plan's home project `home` and a task `t1` (closure_source.ts).
+function closureFolder(): string {
+  const closureRoot = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-closure-"));
+  mkdirSync(resolve(closureRoot, "work/projects"), { recursive: true });
+  writeFileSync(
+    resolve(closureRoot, "work/projects/P-1.md"),
+    "---\ntitle: Engine\nstatus: todo\n---\nPlan.\n",
+  );
+  writeFileSync(
+    resolve(closureRoot, "onetaskgraph.yaml"),
+    JSON.stringify({
+      sources: {
+        work: { plugin: "local-md", config: { root: resolve(closureRoot, "work") } },
+        closures: {
+          plugin: "subprocess",
+          // Absolute, because the engine spawns a plugin with a cleared environment and so no
+          // PATH to resolve a bare name against.
+          config: {
+            command: process.execPath,
+            args: [resolve(import.meta.dir, "closure_source.ts")],
+          },
+        },
+      },
+    }),
+  );
+  return closureRoot;
+}
+
+test("a reconcile and a completion name each item's kind through the real binary", async () => {
+  const closureRoot = closureFolder();
+  try {
+    const closureClient = new OnetaskgraphClient({ binaryPath: binary, cwd: closureRoot });
+    const reconciled = await closureClient.taskStatusReconcile("closures");
+    expect(
+      reconciled.items.map((item) => [item.source, item.kind, item.to.name, item.action]),
+    ).toEqual([
+      ["closures:home", "project", "Done", "updated"],
+      ["closures:t1", "task", "Cancelled", "updated"],
+    ]);
+    const completed = await closureClient.taskStatusComplete(
+      ["acme/plan#1", "acme/plan#2", "acme/plan#3"],
+      { sources: ["closures"] },
+    );
+    expect(completed.items.map((item) => [item.issue, item.task, item.kind, item.action])).toEqual([
+      ["acme/plan#1", "closures:home", "project", "updated"],
+      ["acme/plan#2", "closures:t1", "task", "updated"],
+      ["acme/plan#3", null, "task", "absent"],
+    ]);
+    expect(completed.items[0]?.delivered ?? []).toEqual([]);
+  } finally {
+    rmSync(closureRoot, { recursive: true, force: true });
+  }
+});
+
+test("a project's status is set through the real binary, read back, and refused by name", async () => {
+  const closureRoot = closureFolder();
+  try {
+    const closureClient = new OnetaskgraphClient({ binaryPath: binary, cwd: closureRoot });
+    const answer = await closureClient.projectStatusSet("work:P-1", "done");
+    expect(answer).toEqual({ id: "work:P-1", status: { category: "done", name: "done" } });
+    expect(readFileSync(resolve(closureRoot, "work/projects/P-1.md"), "utf8")).toBe(
+      "---\ntitle: Engine\nstatus: done\n---\nPlan.\n",
+    );
+    const shown = await closureClient.projectShow("work:P-1");
+    expect(shown.items[0]?.item.status.category).toBe("done");
+
+    const hosted = await closureClient.projectStatusSet("closures:home", "cancelled");
+    expect(hosted.status).toEqual({ category: "cancelled", name: "Cancelled" });
+
+    const refused = closureClient.projectStatusSet("work:P-404", "done");
+    await expect(refused).rejects.toBeInstanceOf(OnetaskgraphExecutionError);
+    await expect(refused).rejects.toMatchObject({ exitCode: 1 });
+    await expect(refused).rejects.toThrow("no project with the id work:P-404");
+  } finally {
+    rmSync(closureRoot, { recursive: true, force: true });
+  }
+});
+
 test("a reconcile and a completion drive the real binary over a source whose status is its closure", async () => {
   // A folder of Markdown has no card beside a closure, so both verbs answer nothing for it and
   // send it nothing: what is proven here is the client's flags and the documents it validates.

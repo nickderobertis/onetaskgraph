@@ -84,7 +84,8 @@ silence. See the note on `Health` below for the one difference it carries delibe
   `StatusNames`, `StatusName` and `UnmappedStatus`; the image-asset types `Asset`,
   `AssetName`, `AssetContentType`, `AssetPayload`, `AssetUpload`, `AssetUploads`, `AssetWrite`
   and `AssetsWritten`; the clock types `Clock` and `SharedClock`; the closure types `IssueRef`,
-  `IssueHolding`, `HeldTask`, `Completion`, `ClosedAs` and `StatusContradiction`; the local-cache types
+  `IssueHolding`, `HeldTask`, `Completion`, `ClosedAs`, `StatusContradiction` and
+  `ContradictedItem`; the local-cache types
   `Coverage`, `VersionCoverage`, `ProjectVersionCoverage`, `DocumentVersionCoverage`,
   `WriteJournal`, `JournalEntry`, `RequestKind`, `PartOutcome`,
   `Shown` and `WholeTask`; and `SourceError`.
