@@ -292,29 +292,30 @@ for script in test-distribution check-guard-path-spelling check-live-lane-select
 done
 relative_check() {
   : >"$scratch/interpreter-record"
-  (cd "$REPO" && INTERPRETER_RECORD="$scratch/interpreter-record" bash scripts/check-relative-interpreter.sh "$@") \
-    >/dev/null 2>&1 && INTERPRETER_STATUS=0 || INTERPRETER_STATUS=$?
+  INTERPRETER_OUTPUT="$(cd "$REPO" && INTERPRETER_RECORD="$scratch/interpreter-record" \
+    bash scripts/check-relative-interpreter.sh "$@" 2>&1)" && INTERPRETER_STATUS=0 || INTERPRETER_STATUS=$?
   INTERPRETED="$(tr '\n' ' ' <"$scratch/interpreter-record")"
 }
 ONETASKGRAPH_DISTRIBUTION_UNDER_RELATIVE_INTERPRETER=1 relative_check
 [ "$INTERPRETER_STATUS" -eq 0 ] && [ "$INTERPRETED" = "check-guard-path-spelling cleared check-live-lane-selection cleared " ] \
-  || fail "under the relative interpreter, check-relative-interpreter.sh ran '$INTERPRETED' (exit $INTERPRETER_STATUS), not every script but the distribution journey"
+  || fail "under the relative interpreter, check-relative-interpreter.sh ran '$INTERPRETED' (exit $INTERPRETER_STATUS), not every script but the distribution journey: it said: $INTERPRETER_OUTPUT"
 ONETASKGRAPH_DISTRIBUTION_UNDER_RELATIVE_INTERPRETER=1 relative_check scripts/test-distribution.sh
 [ "$INTERPRETER_STATUS" -eq 0 ] && [ "$INTERPRETED" = "test-distribution cleared " ] \
-  || fail "check-relative-interpreter.sh given the distribution journey ran '$INTERPRETED' (exit $INTERPRETER_STATUS)"
+  || fail "check-relative-interpreter.sh given the distribution journey ran '$INTERPRETED' (exit $INTERPRETER_STATUS): it said: $INTERPRETER_OUTPUT"
 relative_check
 [ "$INTERPRETER_STATUS" -eq 0 ] && [ "$INTERPRETED" = "test-distribution cleared check-guard-path-spelling cleared check-live-lane-selection cleared " ] \
-  || fail "elsewhere, check-relative-interpreter.sh ran '$INTERPRETED' (exit $INTERPRETER_STATUS), not all three"
+  || fail "elsewhere, check-relative-interpreter.sh ran '$INTERPRETED' (exit $INTERPRETER_STATUS), not all three: it said: $INTERPRETER_OUTPUT"
 relative_check scripts/no-such-script.sh
 [ "$INTERPRETER_STATUS" -ne 0 ] && [ -z "$INTERPRETED" ] \
-  || fail "check-relative-interpreter.sh given a script that is not there ran '$INTERPRETED' (exit $INTERPRETER_STATUS)"
+  || fail "check-relative-interpreter.sh given a script that is not there ran '$INTERPRETED' (exit $INTERPRETER_STATUS): it said: $INTERPRETER_OUTPUT"
 git -C "$REPO" checkout --quiet -- scripts/test-distribution.sh
 printf '#!/usr/bin/env bash\necho "check $*" >>"$INTERPRETER_RECORD"\n' >"$REPO/scripts/check-relative-interpreter.sh"
 : >"$scratch/interpreter-record"
-(cd "$REPO" && INTERPRETER_RECORD="$scratch/interpreter-record" ONETASKGRAPH_DISTRIBUTION_UNDER_RELATIVE_INTERPRETER=1 \
-  bash scripts/test-distribution.sh) >/dev/null 2>&1 || true
-[ "$(cat "$scratch/interpreter-record")" = "check scripts/test-distribution.sh" ] \
-  || fail "the distribution journey under the relative interpreter did not hand itself to check-relative-interpreter.sh: $(cat "$scratch/interpreter-record")"
+HANDED_OUTPUT="$(cd "$REPO" && INTERPRETER_RECORD="$scratch/interpreter-record" \
+  ONETASKGRAPH_DISTRIBUTION_UNDER_RELATIVE_INTERPRETER=1 bash scripts/test-distribution.sh 2>&1)" \
+  && HANDED_STATUS=0 || HANDED_STATUS=$?
+[ "$HANDED_STATUS" -eq 0 ] && [ "$(cat "$scratch/interpreter-record")" = "check scripts/test-distribution.sh" ] \
+  || fail "the distribution journey under the relative interpreter did not hand itself to check-relative-interpreter.sh (exit $HANDED_STATUS, recorded '$(cat "$scratch/interpreter-record")'): it said: $HANDED_OUTPUT"
 git -C "$REPO" checkout --quiet -- .
 
 record_targets
