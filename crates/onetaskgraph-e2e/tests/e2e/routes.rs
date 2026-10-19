@@ -1649,6 +1649,414 @@ fn a_project_whose_tasks_and_own_repositories_disagree_keeps_its_home_in_the_nam
     );
 }
 
+/// Every item `source` lists, of each kind, by qualified id.
+fn listed(sandbox: &Sandbox, source: &str) -> Vec<String> {
+    let mut ids = Vec::new();
+    for kind in ["task", "project", "document"] {
+        let page = answer(sandbox, &[kind, "list", "--source", source]);
+        for item in page["items"].as_array().expect("a listing") {
+            ids.push(item["id"].as_str().expect("a qualified id").to_owned());
+        }
+    }
+    ids
+}
+
+#[test]
+fn a_task_naming_no_repository_follows_the_home_its_routed_tasks_place() {
+    let sandbox = Sandbox::new();
+    let plan = folders(&sandbox);
+    record(&plan, "projects", "goal", "title: Goal\nstatus: todo");
+    for (task, repository) in [("api", "api"), ("web", "web"), ("app", "app")] {
+        record(
+            &plan,
+            "tasks",
+            task,
+            &format!(
+                "title: Widget {task}\nstatus: todo\nproject: goal\n\
+                 repositories: [github.com/widgetco/{repository}]"
+            ),
+        );
+    }
+    // The person's own step: it names no repository, so it has no say in where the plan goes.
+    record(
+        &plan,
+        "tasks",
+        "review",
+        "title: Review it\nstatus: todo\nproject: goal\ndepends_on: [app]",
+    );
+    record(&plan, "documents", "design", "title: Design\nproject: goal");
+
+    let report = answer(&sandbox, &["project", "copy", "plan:goal", "--to", NOTES]);
+    assert_eq!(landed(&report, "plan:goal"), "team:goal", "{report:#}");
+    for item in [
+        "plan:goal",
+        "plan:api",
+        "plan:web",
+        "plan:app",
+        "plan:review",
+    ] {
+        assert_eq!(
+            source_of(&landed(&report, item)),
+            TEAM,
+            "{item}: {report:#}"
+        );
+        assert_eq!(
+            outcome(&report, item)["placed"],
+            json!({"destination": TEAM, "route": 0}),
+            "{item}"
+        );
+    }
+    // Every task lands under the home itself: there is no member, because nothing went
+    // anywhere else.
+    assert!(members_of(&sandbox, "team:goal").is_empty());
+    assert_eq!(
+        filed_under(&sandbox, &landed(&report, "plan:review")),
+        "team:goal"
+    );
+    // The document goes with its home.
+    let document = answer(
+        &sandbox,
+        &["document", "copy", "plan:design", "--to", NOTES],
+    );
+    assert_eq!(
+        source_of(&landed(&document, "plan:design")),
+        TEAM,
+        "{document:#}"
+    );
+    // And the source the plan was copied to holds nothing of it.
+    assert_eq!(listed(&sandbox, NOTES), Vec::<String>::new());
+    assert!(tree(&sandbox.project().join(NOTES)).is_empty());
+}
+
+#[test]
+fn a_plan_with_no_routed_voter_keeps_its_home_where_it_always_went() {
+    let sandbox = Sandbox::new();
+    let plan = folders(&sandbox);
+    // No task names a repository: nothing votes, so the home is the named destination.
+    record(&plan, "projects", "quiet", "title: Quiet\nstatus: todo");
+    for task in ["first", "second"] {
+        record(
+            &plan,
+            "tasks",
+            task,
+            &format!("title: {task}\nstatus: todo\nproject: quiet"),
+        );
+    }
+    // One task names a repository no route matches, and one names none: the one voter places
+    // the home in the named destination, and the other follows it.
+    record(&plan, "projects", "own", "title: Own\nstatus: todo");
+    record(
+        &plan,
+        "tasks",
+        "lib",
+        "title: Lib\nstatus: todo\nproject: own\nrepositories: [github.com/nickderobertis/lib]",
+    );
+    record(
+        &plan,
+        "tasks",
+        "loose",
+        "title: Loose\nstatus: todo\nproject: own",
+    );
+    for (project, tasks) in [
+        ("plan:quiet", ["plan:first", "plan:second"]),
+        ("plan:own", ["plan:lib", "plan:loose"]),
+    ] {
+        let report = answer(&sandbox, &["project", "copy", project, "--to", NOTES]);
+        for item in std::iter::once(project).chain(tasks) {
+            assert_eq!(
+                source_of(&landed(&report, item)),
+                NOTES,
+                "{item}: {report:#}"
+            );
+            assert_eq!(
+                outcome(&report, item)["placed"],
+                json!({"destination": NOTES, "route": null}),
+                "{item}"
+            );
+        }
+    }
+    assert!(tree(&sandbox.project().join(TEAM)).is_empty());
+}
+
+#[test]
+fn a_project_naming_a_routed_repository_takes_its_unnamed_tasks_with_it() {
+    let sandbox = Sandbox::new();
+    let plan = folders(&sandbox);
+    record(
+        &plan,
+        "projects",
+        "pets",
+        "title: Pets\nstatus: todo\nrepositories: [github.com/widgetco/app]",
+    );
+    for task in ["design", "build"] {
+        record(
+            &plan,
+            "tasks",
+            task,
+            &format!("title: {task}\nstatus: todo\nproject: pets"),
+        );
+    }
+    let report = answer(&sandbox, &["project", "copy", "plan:pets", "--to", NOTES]);
+    assert_eq!(landed(&report, "plan:pets"), "team:pets", "{report:#}");
+    for task in ["plan:design", "plan:build"] {
+        assert_eq!(
+            source_of(&landed(&report, task)),
+            TEAM,
+            "{task}: {report:#}"
+        );
+        assert_eq!(filed_under(&sandbox, &landed(&report, task)), "team:pets");
+    }
+    assert!(tree(&sandbox.project().join(NOTES)).is_empty());
+}
+
+#[test]
+fn a_project_and_a_task_naming_repositories_routed_apart_disagree_as_two_tasks_do() {
+    let sandbox = Sandbox::new();
+    let plan = folders(&sandbox);
+    // The project votes widgetco and its task votes nickderobertis.
+    record(
+        &plan,
+        "projects",
+        "split",
+        "title: Split\nstatus: todo\nrepositories: [github.com/widgetco/app]",
+    );
+    record(
+        &plan,
+        "tasks",
+        "own",
+        "title: Own\nstatus: todo\nproject: split\nrepositories: [github.com/nickderobertis/lib]",
+    );
+    record(
+        &plan,
+        "tasks",
+        "plain",
+        "title: Plain\nstatus: todo\nproject: split",
+    );
+    // Two tasks voting the same two ways, under a project naming nothing.
+    record(&plan, "projects", "pair", "title: Pair\nstatus: todo");
+    record(
+        &plan,
+        "tasks",
+        "pets",
+        "title: Pets\nstatus: todo\nproject: pair\nrepositories: [github.com/widgetco/app]",
+    );
+    record(
+        &plan,
+        "tasks",
+        "mine",
+        "title: Mine\nstatus: todo\nproject: pair\nrepositories: [github.com/nickderobertis/lib]",
+    );
+    record(
+        &plan,
+        "tasks",
+        "loose",
+        "title: Loose\nstatus: todo\nproject: pair",
+    );
+    let split = answer(&sandbox, &["project", "copy", "plan:split", "--to", NOTES]);
+    let pair = answer(&sandbox, &["project", "copy", "plan:pair", "--to", NOTES]);
+    // Each keeps its home in the named destination, and its unnamed task follows it there.
+    for (report, project, own, plain) in [
+        (&split, "plan:split", "plan:own", "plan:plain"),
+        (&pair, "plan:pair", "plan:mine", "plan:loose"),
+    ] {
+        let home = landed(report, project);
+        assert_eq!(source_of(&home), NOTES, "{report:#}");
+        assert_eq!(
+            outcome(report, project)["placed"],
+            json!({"destination": NOTES, "route": null})
+        );
+        for task in [own, plain] {
+            assert_eq!(filed_under(&sandbox, &landed(report, task)), home, "{task}");
+        }
+    }
+    // The pair's widgetco task goes into a member, as a routed task does.
+    let pets = landed(&pair, "plan:pets");
+    assert_eq!(source_of(&pets), TEAM);
+    assert_eq!(
+        members_of(&sandbox, &landed(&pair, "plan:pair")),
+        vec![filed_under(&sandbox, &pets)]
+    );
+}
+
+/// A plan of one unrouted task and two widgetco ones, copied to `notes`: its home there, and
+/// its member in `team` filing the widgetco tasks. Answers the home and the member.
+fn split_plan_copied(sandbox: &Sandbox) -> (std::path::PathBuf, String, String) {
+    let plan = folders(sandbox);
+    record(&plan, "projects", "goal", "title: Goal\nstatus: todo");
+    record(
+        &plan,
+        "tasks",
+        "own",
+        "title: Own\nstatus: todo\nproject: goal\nrepositories: [github.com/nickderobertis/lib]",
+    );
+    for task in ["api", "web"] {
+        record(
+            &plan,
+            "tasks",
+            task,
+            &format!(
+                "title: Pets {task}\nstatus: todo\nproject: goal\n\
+                 repositories: [github.com/widgetco/{task}]"
+            ),
+        );
+    }
+    let report = answer(sandbox, &["project", "copy", "plan:goal", "--to", NOTES]);
+    let home = landed(&report, "plan:goal");
+    assert_eq!(source_of(&home), NOTES, "{report:#}");
+    let members = members_of(sandbox, &home);
+    assert_eq!(members.len(), 1, "{report:#}");
+    (plan, home, members[0].clone())
+}
+
+/// The projects `source` lists, by qualified id.
+fn projects_in(sandbox: &Sandbox, source: &str) -> Vec<String> {
+    answer(sandbox, &["project", "list", "--source", source])["items"]
+        .as_array()
+        .expect("a listing")
+        .iter()
+        .map(|project| project["id"].as_str().expect("a qualified id").to_owned())
+        .collect()
+}
+
+/// The metadata a project carries, read back through the binary.
+fn metadata_of(sandbox: &Sandbox, project: &str) -> Value {
+    answer(sandbox, &["project", "show", project])["items"][0]["item"]["metadata"].clone()
+}
+
+/// Rewrite one of `folder`'s project records as `front`, by its qualified id.
+fn rewrite(sandbox: &Sandbox, project: &str, front: &str) {
+    let (folder, native) = project.split_once(':').expect("a qualified id");
+    record(&sandbox.project().join(folder), "projects", native, front);
+}
+
+/// Assert `member`, in `team`, is now the plan's only project there and its own copy: no
+/// longer a member, recording the plan's project as its origin and recorded as its copy there,
+/// and filing every widgetco task.
+fn assert_taken_over(sandbox: &Sandbox, member: &str, report: &Value) {
+    assert_eq!(landed(report, "plan:goal"), member, "{report:#}");
+    assert_ne!(
+        outcome(report, "plan:goal")["action"],
+        "created",
+        "{report:#}"
+    );
+    assert_eq!(projects_in(sandbox, TEAM), vec![member.to_owned()]);
+    let held = metadata_of(sandbox, member);
+    assert!(held.get("onetaskgraph.member_of").is_none(), "{held:#}");
+    assert_eq!(held["onetaskgraph.origin"], "plan:goal", "{held:#}");
+    assert_eq!(
+        metadata_of(sandbox, "plan:goal")["onetaskgraph.copies"][TEAM],
+        member,
+        "the plan's project records its copy in team"
+    );
+    for task in ["plan:api", "plan:web"] {
+        assert_eq!(
+            filed_under(sandbox, &landed(report, task)),
+            member,
+            "{task}"
+        );
+    }
+}
+
+#[test]
+fn a_copy_to_the_routed_source_takes_over_the_plan_s_member_rather_than_adding_a_second_project() {
+    let sandbox = Sandbox::new();
+    let (_, home, member) = split_plan_copied(&sandbox);
+    let report = answer(&sandbox, &["project", "copy", "plan:goal", "--to", TEAM]);
+    assert_taken_over(&sandbox, &member, &report);
+    // The unrouted task comes too, under the same project.
+    assert_eq!(filed_under(&sandbox, &landed(&report, "plan:own")), member);
+    // The former home names it no longer, and is otherwise as it was.
+    let held = metadata_of(&sandbox, &home);
+    assert!(held.get("onetaskgraph.members").is_none(), "{held:#}");
+    assert_eq!(held["onetaskgraph.origin"], "plan:goal", "{held:#}");
+
+    // A repeat creates and changes nothing anywhere.
+    let before: Vec<_> = [PLAN, NOTES, TEAM]
+        .iter()
+        .map(|folder| tree(&sandbox.project().join(folder)))
+        .collect();
+    let again = answer(&sandbox, &["project", "copy", "plan:goal", "--to", TEAM]);
+    for item in again["items"].as_array().expect("items") {
+        assert_eq!(item["action"], "unchanged", "{again:#}");
+    }
+    let after: Vec<_> = [PLAN, NOTES, TEAM]
+        .iter()
+        .map(|folder| tree(&sandbox.project().join(folder)))
+        .collect();
+    assert_eq!(before, after);
+    assert_eq!(projects_in(&sandbox, TEAM), vec![member]);
+}
+
+#[test]
+fn a_member_found_by_one_link_alone_becomes_the_home_rather_than_a_second_project() {
+    // The home no longer lists its member, which still names it; and the member names no
+    // home, while the home still lists it.
+    for home_lists_it in [false, true] {
+        let sandbox = Sandbox::new();
+        let (_, home, member) = split_plan_copied(&sandbox);
+        if home_lists_it {
+            rewrite(&sandbox, &member, "title: Goal\nstatus: todo");
+        } else {
+            rewrite(
+                &sandbox,
+                &home,
+                "title: Goal\nstatus: todo\nmetadata: {onetaskgraph.origin: \"plan:goal\"}",
+            );
+        }
+        let report = answer(&sandbox, &["project", "copy", "plan:goal", "--to", TEAM]);
+        assert_taken_over(&sandbox, &member, &report);
+        assert!(
+            metadata_of(&sandbox, &home)
+                .get("onetaskgraph.members")
+                .is_none(),
+            "home lists it: {home_lists_it}"
+        );
+    }
+}
+
+#[test]
+fn a_member_found_by_one_link_alone_files_the_routed_tasks_rather_than_a_second_member() {
+    for home_lists_it in [false, true] {
+        let sandbox = Sandbox::new();
+        let (plan, home, member) = split_plan_copied(&sandbox);
+        if home_lists_it {
+            rewrite(&sandbox, &member, "title: Goal\nstatus: todo");
+        } else {
+            rewrite(
+                &sandbox,
+                &home,
+                "title: Goal\nstatus: todo\nmetadata: {onetaskgraph.origin: \"plan:goal\"}",
+            );
+        }
+        // A widgetco task added since is filed under that member too.
+        record(
+            &plan,
+            "tasks",
+            "app",
+            "title: Pets app\nstatus: todo\nproject: goal\n\
+             repositories: [github.com/widgetco/app]",
+        );
+        let report = answer(&sandbox, &["project", "copy", "plan:goal", "--to", NOTES]);
+        assert_eq!(landed(&report, "plan:goal"), home, "{report:#}");
+        assert_eq!(projects_in(&sandbox, TEAM), vec![member.clone()]);
+        for task in ["plan:api", "plan:web", "plan:app"] {
+            assert_eq!(
+                filed_under(&sandbox, &landed(&report, task)),
+                member,
+                "{task}: {report:#}"
+            );
+        }
+        // The home lists it again, and it stays a member.
+        assert_eq!(members_of(&sandbox, &home), vec![member.clone()]);
+        assert!(
+            metadata_of(&sandbox, &member)
+                .get("onetaskgraph.origin")
+                .is_none(),
+            "home lists it: {home_lists_it}"
+        );
+    }
+}
+
 #[test]
 fn a_document_with_no_home_to_follow_goes_where_its_own_repositories_route_it() {
     let sandbox = Sandbox::new();

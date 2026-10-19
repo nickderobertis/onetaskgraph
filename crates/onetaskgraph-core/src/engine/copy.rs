@@ -774,15 +774,23 @@ enum Found {
     Scan,
     /// The caller's matching escape.
     Match,
+    /// The project a copy would otherwise create is one the destination already holds of the
+    /// same plan — the member its counterpart home elsewhere names there, or one naming that
+    /// home as the project it is a member of — and it becomes this project's own copy.
+    Member,
 }
 
 impl Found {
     /// The word the report says it in.
+    ///
+    /// A member taken over is reported as found by a search of the destination: it is one,
+    /// for the plan's project rather than for an origin, and a word of its own would be a new
+    /// value in every consumer's schema for a distinction none of them acts on.
     fn via(self) -> CopyVia {
         match self {
             Self::Link => CopyVia::Link,
             Self::Origin => CopyVia::Origin,
-            Self::Scan => CopyVia::Scan,
+            Self::Scan | Self::Member => CopyVia::Scan,
             Self::Match => CopyVia::Match,
         }
     }
@@ -1149,6 +1157,23 @@ pub(super) struct Filed {
     journal: Journal,
 }
 
+/// The tasks a member project is found or created to file, as a routed project copy knows them.
+struct MemberFiling {
+    /// The strictest of their classifications.
+    classification: Classification,
+    /// The tasks, by their source ids.
+    tasks: Vec<GlobalId>,
+}
+
+/// Where a routed project copy lands its home, and whether everything it carries goes there.
+struct Homing {
+    /// The home's placement.
+    home: Placement,
+    /// Whether every task goes with the home, whatever its repositories say — a plan holding
+    /// anything private that a `classification: private` route sends wholly to one source.
+    whole: bool,
+}
+
 /// One home project, and the member projects it names at `onetaskgraph.members`.
 struct Home {
     /// The home, where it landed.
@@ -1161,8 +1186,8 @@ struct Home {
     classification: Classification,
     /// The members it names, at most one per source.
     members: Vec<GlobalId>,
-    /// Whether this copy added or replaced one, so the home's own list is written once the
-    /// copy has landed.
+    /// Whether this copy added, replaced or released one, so the home's own list is written
+    /// once the copy has landed.
     grew: bool,
 }
 
@@ -1338,6 +1363,9 @@ struct Planned {
     /// Whether the copy found it unchanged at both ends by its change tokens alone, so nothing
     /// of it is written or compared.
     skipped: bool,
+    /// For a project landing on the member project of its plan's home elsewhere
+    /// ([`Found::Member`]), that home, which no longer names it once it lands.
+    promotes: Option<GlobalId>,
 }
 
 /// One item read out of its source, before anything decides where it lands.
@@ -2135,7 +2163,7 @@ impl Engine {
         let mut running = Running::default();
         let mut journal = Journal::default();
         let mut filed = self
-            .member_in(false, home, to, &mut running, &mut journal)
+            .member_in(false, home, to, None, &mut running, &mut journal)
             .await;
         if filed.is_ok() {
             let homes = std::mem::take(&mut running.homes);
@@ -2216,14 +2244,10 @@ impl Engine {
                     }
                 }
                 let class = self.read_project_class(&project, &reads, running).await?;
-                // A project holding anything private goes, with everything it holds, wholly
-                // to one private destination, whatever its tasks' repositories would say.
-                let home = if class == Classification::Private {
-                    self.routes
-                        .place_classified(&request.destination, class, &[])
-                } else {
-                    self.home_placement(request, &project, &reads).await?
-                };
+                let homing = self
+                    .home_placement(request, &project, &reads, class)
+                    .await?;
+                let home = homing.home;
                 let project = self
                     .aim(
                         request,
@@ -2236,15 +2260,31 @@ impl Engine {
                     .await?;
                 let mut tasks = Vec::new();
                 for read in reads {
-                    let placement = match &read.item {
-                        _ if class == Classification::Private => home.clone(),
-                        Item::Task(task) => self.routes.place_classified(
-                            &request.destination,
-                            class,
-                            &task.repositories,
-                        ),
+                    let (placement, classification) = match &read.item {
+                        // A task naming no repository has no say in where it goes: it follows
+                        // its home, wherever that went.
+                        Item::Task(task) if !homing.whole && !task.repositories.is_empty() => {
+                            let own = self
+                                .own_class(class, task.classification, &task.repositories)
+                                .await;
+                            let placement = self.routes.place_classified(
+                                &request.destination,
+                                own,
+                                &task.repositories,
+                            );
+                            // A task landing beside its home is the plan's, and lands as the
+                            // plan does; one its own repositories send elsewhere is held to
+                            // who may read it alone, in a member project of its own source.
+                            let landing = if placement.destination == home.destination {
+                                class
+                            } else {
+                                own
+                            };
+                            (placement, landing)
+                        }
+                        Item::Task(_) => (home.clone(), class),
                         Item::Project(_) | Item::Document(_) => {
-                            self.placed_at(request, &request.destination)
+                            (self.placed_at(request, &request.destination), class)
                         }
                     };
                     tasks.push(
@@ -2252,7 +2292,7 @@ impl Engine {
                             request,
                             read,
                             placement,
-                            class,
+                            classification,
                             None,
                             &mut running.home_members,
                         )
@@ -2353,41 +2393,80 @@ impl Engine {
         Ok(class)
     }
 
-    /// Where a routed project copy lands the project: its **home**.
+    /// Where a routed project copy lands the project: its **home**, and whether everything it
+    /// carries goes there with it.
+    ///
+    /// A project holding anything private goes, with everything it holds, wholly to the
+    /// private source a `classification: private` route names — and so does one in a store
+    /// whose boundary is inactive, which is today's rule for it.
+    ///
+    /// Otherwise the home is decided by its **voters**: every task copied that names a
+    /// repository, and the project's own repositories when it names any. A task naming none,
+    /// and every document, never votes, and follows the home wherever it goes. When every voter
+    /// places at one source the home goes there. When they disagree, a plan holding anything
+    /// private while the boundary is active goes to the one source declared private its private
+    /// voters place at — refused, before anything is written, when they place at two — and any
+    /// other plan's home is the copy's destination. With no voter at all, it is the copy's
+    /// destination too.
     ///
     /// A home that already exists, in any source the copy can reach, stays where it is —
-    /// found by the project's own link or origin. Otherwise the home follows its tasks only
-    /// when every one copied routes to one source, and so does the project's own
-    /// repositories when it names any; any other project's home is the copy's destination.
-    /// With no task copied, the project's own repositories alone decide.
+    /// found by the project's own link or origin.
     async fn home_placement(
         &self,
         request: &CopyRequest,
         project: &Read,
         tasks: &[Read],
-    ) -> Result<Placement, EngineError> {
+        class: Classification,
+    ) -> Result<Homing, EngineError> {
         let Item::Project(held) = &project.item else {
-            return Ok(self.placed_at(request, &request.destination));
+            return Ok(Homing {
+                home: self.placed_at(request, &request.destination),
+                whole: false,
+            });
         };
-        let mut placements: Vec<Placement> = tasks
-            .iter()
-            .filter_map(|read| match &read.item {
-                Item::Task(task) => {
-                    Some(self.routes.place(&request.destination, &task.repositories))
-                }
-                Item::Project(_) | Item::Document(_) => None,
-            })
-            .collect();
-        if !held.repositories.is_empty() {
-            placements.push(self.routes.place(&request.destination, &held.repositories));
+        if class == Classification::Private
+            && (self.routes.classifies_private(&request.destination) || !self.boundary_active())
+        {
+            return Ok(Homing {
+                home: self
+                    .routes
+                    .place_classified(&request.destination, class, &[]),
+                whole: true,
+            });
         }
-        let rule = match placements.first() {
-            Some(first)
-                if placements
+        let mut voters: Vec<(GlobalId, Classification, Placement)> = Vec::new();
+        for read in tasks {
+            if let Item::Task(task) = &read.item
+                && !task.repositories.is_empty()
+            {
+                let own = self
+                    .own_class(class, task.classification, &task.repositories)
+                    .await;
+                let placement =
+                    self.routes
+                        .place_classified(&request.destination, own, &task.repositories);
+                voters.push((read.source.clone(), own, placement));
+            }
+        }
+        if !held.repositories.is_empty() {
+            let own = self
+                .own_class(class, held.classification, &held.repositories)
+                .await;
+            let placement =
+                self.routes
+                    .place_classified(&request.destination, own, &held.repositories);
+            voters.push((project.source.clone(), own, placement));
+        }
+        let rule = match voters.first() {
+            Some((_, _, first))
+                if voters
                     .iter()
-                    .all(|placement| placement.destination == first.destination) =>
+                    .all(|(_, _, placement)| placement.destination == first.destination) =>
             {
                 first.clone()
+            }
+            Some(_) if class == Classification::Private && self.boundary_active() => {
+                self.private_home(request, &project.source, &voters)?
             }
             _ => self.placed_at(request, &request.destination),
         };
@@ -2406,10 +2485,70 @@ impl Engine {
             };
             let names_back = origin_of(described(&found.item).1).as_ref() == Some(&project.source);
             if names_back || origin_of(&held.metadata).as_ref() == Some(&named) {
-                return Ok(self.placed_at(request, &elsewhere));
+                return Ok(Homing {
+                    home: self.placed_at(request, &elsewhere),
+                    whole: false,
+                });
             }
         }
-        Ok(rule)
+        Ok(Homing {
+            home: rule,
+            whole: false,
+        })
+    }
+
+    /// The one source declared private that a plan's private voters place at, when its voters
+    /// disagree: the copy's destination when none places anywhere declared private, which the
+    /// boundary then refuses.
+    ///
+    /// # Errors
+    ///
+    /// [`EngineError::SplitPrivateHome`] when they place at more than one, naming each with the
+    /// voters placing there.
+    fn private_home(
+        &self,
+        request: &CopyRequest,
+        project: &GlobalId,
+        voters: &[(GlobalId, Classification, Placement)],
+    ) -> Result<Placement, EngineError> {
+        let mut destinations: Vec<(Placement, Vec<GlobalId>)> = Vec::new();
+        for (voter, own, placement) in voters {
+            if *own != Classification::Private || !self.routes.is_private(&placement.destination) {
+                continue;
+            }
+            match destinations
+                .iter_mut()
+                .find(|(held, _)| held.destination == placement.destination)
+            {
+                Some((_, items)) => items.push(voter.clone()),
+                None => destinations.push((placement.clone(), vec![voter.clone()])),
+            }
+        }
+        match destinations.len() {
+            0 => Ok(self.placed_at(request, &request.destination)),
+            1 => Ok(destinations.remove(0).0),
+            _ => Err(EngineError::SplitPrivateHome {
+                project: project.clone(),
+                destinations: destinations
+                    .into_iter()
+                    .map(|(placement, items)| (placement.destination, items))
+                    .collect(),
+            }),
+        }
+    }
+
+    /// Who may read one voter of a plan classified `class`, by its own record and repositories
+    /// alone: public without asking anything, where the plan is.
+    async fn own_class(
+        &self,
+        class: Classification,
+        declared: Classification,
+        repositories: &[Repository],
+    ) -> Classification {
+        if class.is_public() {
+            return Classification::Public;
+        }
+        self.classify(declared, repositories).await
     }
 
     /// Land one planned project, then the tasks planned beside it.
@@ -2503,9 +2642,19 @@ impl Engine {
         // A project this copy creates holds nothing it did not file itself, so nothing filed
         // under it can be an orphan and the destination is not walked for one.
         let created = matches!(project.target, Target::Create);
+        let promotes = project.promotes.clone();
         let mut outcomes = self
             .copy_items(request, vec![project], None, running, journal)
             .await?;
+        // The home whose member this project took over names it no longer, once the copy has
+        // landed.
+        if let (Some(home), Some(landed), false) = (
+            promotes,
+            outcomes[0].destination().cloned(),
+            request.dry_run,
+        ) {
+            self.release_member(&home, &landed, running).await?;
+        }
         if let (Some(unchanged), Some(landed), Some(via)) = (
             unchanged,
             outcomes[0].destination().cloned(),
@@ -2549,8 +2698,17 @@ impl Engine {
                     }
                 }
                 for to in elsewhere {
+                    // As private as the tasks it files, which a plan's home may not be: a
+                    // private plan's public work lands in a public member of its own source.
+                    let filed = || tasks.iter().filter(|task| task.to == to);
+                    let files = MemberFiling {
+                        classification: filed().fold(Classification::Public, |class, task| {
+                            class.strictest(task.classification)
+                        }),
+                        tasks: filed().map(|task| task.source.clone()).collect(),
+                    };
                     if let Some(member) = self
-                        .member_in(request.dry_run, home, &to, running, journal)
+                        .member_in(request.dry_run, home, &to, Some(&files), running, journal)
                         .await?
                     {
                         filing.insert(to, member);
@@ -2584,6 +2742,40 @@ impl Engine {
             }
         }
         Ok(outcomes)
+    }
+
+    /// Take `member` off the member projects `home` names, to be written once the whole copy
+    /// has landed — nothing at all when the home is gone or names it not.
+    async fn release_member(
+        &self,
+        home: &GlobalId,
+        member: &GlobalId,
+        running: &mut Running,
+    ) -> Result<(), EngineError> {
+        let key = home.to_string();
+        if !running.homes.contains_key(&key) {
+            let at = self.writable(&home.source)?;
+            let Some(held) = at
+                .source()
+                .get_project(&home.native)
+                .await
+                .map_err(|error| refused(at, error))?
+            else {
+                return Ok(());
+            };
+            running
+                .homes
+                .insert(key.clone(), Home::of(home.clone(), &held)?);
+        }
+        let entry = running
+            .homes
+            .get_mut(&key)
+            .expect("the home was recorded above");
+        if entry.members.contains(member) {
+            entry.members.retain(|named| named != member);
+            entry.grew = true;
+        }
+        Ok(())
     }
 
     /// The member projects `home` names: the list this copy already holds for it, grown
@@ -4238,13 +4430,30 @@ impl Engine {
         }
         // A task copied by query was already aimed from its listing, when the copy asked
         // whether it could skip it.
-        let (target, held) = match aimed {
+        let (mut target, mut held) = match aimed {
             Some(aimed) => aimed,
             None => {
                 self.target(destination, request, &id, &item, withheld)
                     .await?
             }
         };
+        // A project the destination already holds a member of the same plan for is that
+        // member, never a second project beside it.
+        let mut promotes = None;
+        if matches!(target, Target::Create)
+            && item.level() == Level::Project
+            && !request.create
+            && let Some((member, home, prior)) = self
+                .plan_project_in(destination, &id, &item, request.comments)
+                .await?
+        {
+            target = Target::Update {
+                id: member,
+                found: Found::Member,
+            };
+            held = prior;
+            promotes = Some(home);
+        }
         Ok(Planned {
             source: id,
             item,
@@ -4259,7 +4468,93 @@ impl Engine {
             carried,
             comment_plan: None,
             skipped: false,
+            promotes,
         })
+    }
+
+    /// The project `destination` already holds of the plan the project `id` is the source of,
+    /// with the plan's counterpart home elsewhere and what the destination holds there: the
+    /// member that home names in `destination`, or else the project there naming that home at
+    /// `onetaskgraph.member_of`.
+    ///
+    /// The counterpart home is a project `id`'s own `onetaskgraph.copies` links to in another
+    /// source, which names `id` back as its origin — or names none, where that copy withheld it
+    /// (see [`Engine::linked_project`]) — and is no member itself. `None` when there is no
+    /// such home, or `destination` holds neither.
+    async fn plan_project_in(
+        &self,
+        destination: &ResolvedSource,
+        id: &GlobalId,
+        item: &Item,
+        comments: bool,
+    ) -> Result<Option<(NativeId, GlobalId, Option<Prior>)>, EngineError> {
+        let links = well_formed(described(item).1.get(MetadataKey::COPIES_KEY));
+        for linked in links
+            .values()
+            .filter_map(|linked| linked.as_str()?.parse::<GlobalId>().ok())
+        {
+            if &linked.source == destination.name() {
+                continue;
+            }
+            let Ok(at) = self.readable(&linked.source) else {
+                continue;
+            };
+            if !at.source().capabilities().projects.is_native() {
+                continue;
+            }
+            let Some(home) = at
+                .source()
+                .get_project(&linked.native)
+                .await
+                .map_err(|error| refused(at, error))?
+            else {
+                continue;
+            };
+            let names_back = match origin_of(&home.metadata) {
+                Some(origin) => &origin == id,
+                None => {
+                    self.declared(&id.source) == crate::config::SourceVisibility::Private
+                        && self.declared(&linked.source) != crate::config::SourceVisibility::Private
+                }
+            };
+            if !names_back || home.metadata.contains_key(MetadataKey::MEMBER_OF_KEY) {
+                continue;
+            }
+            let named = Home::of(linked.clone(), &home)?
+                .members
+                .into_iter()
+                .find(|member| &member.source == destination.name());
+            let held = match named {
+                Some(member) => destination
+                    .source()
+                    .get_project(&member.native)
+                    .await
+                    .map_err(|error| refused(destination, error))?
+                    .map(|_| member.native),
+                None => None,
+            };
+            let found = match held {
+                Some(member) => Some(member),
+                None => {
+                    self.scan(
+                        destination,
+                        Level::Project,
+                        &Wanted::Metadata(
+                            MetadataKey::MEMBER_OF_KEY.to_owned(),
+                            Value::String(linked.to_string()),
+                        ),
+                    )
+                    .await?
+                }
+            };
+            if let Some(member) = found {
+                let prior = self
+                    .prior_reading(destination, Level::Project, &member, comments)
+                    .await?;
+                return Ok(Some((member, linked, prior)));
+            }
+        }
+        Ok(None)
     }
 
     /// Refuse an item whose existing counterpart, by its link or its origin, sits in a source
@@ -4824,7 +5119,7 @@ impl Engine {
         let filed = match self.find_home(request, &qualified, running).await? {
             Some(home) if home.source == item.to => Some(home.native),
             Some(home) => {
-                self.member_in(request.dry_run, &home, &item.to, running, journal)
+                self.member_in(request.dry_run, &home, &item.to, None, running, journal)
                     .await?
             }
             None => Some(project.clone()),
@@ -4916,15 +5211,25 @@ impl Engine {
 
     /// The member project `home` names in `to`, creating it when it names none there.
     ///
-    /// Found through the home's `onetaskgraph.members`, read once per command. A member it
-    /// names that `to` no longer holds is replaced rather than refused: the member exists
-    /// only to file the home's routed tasks, and nothing a person wrote lives on it. A dry
-    /// run creates nothing, so a member it would create files its tasks under nothing.
+    /// Found through the home's `onetaskgraph.members`, read once per command — or, when the
+    /// home names none `to` still holds, as the project in `to` whose `onetaskgraph.member_of`
+    /// names the home, which is recorded on the home rather than created beside. A member it
+    /// names that `to` no longer holds is otherwise replaced rather than refused: the member
+    /// exists only to file the home's routed tasks, and nothing a person wrote lives on it. A
+    /// dry run creates nothing, so a member it would create files its tasks under nothing.
+    ///
+    /// A member it creates is as private as its home and `classification`, the tasks it is
+    /// created to file, together — or as `classification` alone where the home is in a source
+    /// declared private and `to` is not. There it holds only the public work filed under it,
+    /// and its home's id is withheld from it as any other provenance naming a private source
+    /// is: the home's own list is what ties the two. Everywhere else it names its home at
+    /// `onetaskgraph.member_of`.
     async fn member_in(
         &self,
         dry_run: bool,
         home: &GlobalId,
         to: &SourceName,
+        filing: Option<&MemberFiling>,
         running: &mut Running,
         journal: &mut Journal,
     ) -> Result<Option<NativeId>, EngineError> {
@@ -4959,10 +5264,63 @@ impl Engine {
         {
             return Ok(Some(member.native));
         }
+        // A home this copy created has no member anywhere to find.
+        let created = running
+            .linking
+            .iter()
+            .any(|landed| &landed.destination == home && landed.found.is_none());
+        if !created
+            && let Some(found) = self
+                .scan(
+                    there,
+                    Level::Project,
+                    &Wanted::Metadata(
+                        MetadataKey::MEMBER_OF_KEY.to_owned(),
+                        Value::String(home.to_string()),
+                    ),
+                )
+                .await?
+        {
+            let entry = running
+                .homes
+                .get_mut(&key)
+                .expect("the home was recorded above");
+            entry.members.retain(|member| &member.source != to);
+            entry.members.push(GlobalId::new(to.clone(), found.clone()));
+            entry.grew = true;
+            return Ok(Some(found));
+        }
         if dry_run {
             return Ok(None);
         }
         let held = &running.homes[&key];
+        // A home in a source declared private, with a member somewhere that is not: the member
+        // holds only the public work filed under it, and names nothing of where its home is.
+        let apart = self.withholds(to, home, &[]);
+        let mut metadata = BTreeMap::new();
+        if !apart {
+            metadata.insert(
+                MetadataKey::MEMBER_OF_KEY.to_owned(),
+                Value::String(home.to_string()),
+            );
+        }
+        let classification = match filing {
+            Some(filing) if apart => filing.classification,
+            Some(filing) => filing.classification.strictest(held.classification),
+            None => held.classification,
+        };
+        let item = match filing {
+            Some(filing) => format!(
+                "the member project of {home} in {to}, for {}",
+                filing
+                    .tasks
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            None => format!("the member project of {home}"),
+        };
         let member = Project {
             version: None,
             id: home.native.clone(),
@@ -4974,17 +5332,14 @@ impl Engine {
             location: None,
             created_at: None,
             updated_at: None,
-            metadata: BTreeMap::from([(
-                MetadataKey::MEMBER_OF_KEY.to_owned(),
-                Value::String(home.to_string()),
-            )]),
+            metadata,
             repositories: Vec::new(),
-            classification: held.classification,
+            classification,
         };
         self.admit(
             there,
             &Outbound {
-                item: format!("the member project of {home}"),
+                item,
                 classification: member.classification,
                 target: WriteTarget::New {
                     repositories: &[],
@@ -5211,15 +5566,20 @@ impl Engine {
             let Item::Project(mut project) = prior.item.clone() else {
                 continue;
             };
-            project.metadata.insert(
-                MetadataKey::MEMBERS_KEY.to_owned(),
-                Value::Array(
-                    home.members
-                        .iter()
-                        .map(|member| Value::String(member.to_string()))
-                        .collect(),
-                ),
-            );
+            // A home left naming no member records no list, rather than an empty one.
+            if home.members.is_empty() {
+                project.metadata.remove(MetadataKey::MEMBERS_KEY);
+            } else {
+                project.metadata.insert(
+                    MetadataKey::MEMBERS_KEY.to_owned(),
+                    Value::Array(
+                        home.members
+                            .iter()
+                            .map(|member| Value::String(member.to_string()))
+                            .collect(),
+                    ),
+                );
+            }
             let edges = prior.edges.clone();
             at.source()
                 .check_status_write(
@@ -6452,16 +6812,23 @@ fn outgoing(
             classification,
             ..(**task).clone()
         })),
-        Item::Project(project) => Item::Project(Box::new(Project {
-            id,
-            url: None,
-            location: None,
-            created_at: None,
-            updated_at: None,
-            metadata: carried(&project.metadata),
-            classification,
-            ..(**project).clone()
-        })),
+        Item::Project(project) => {
+            let mut metadata = carried(&project.metadata);
+            // A member taken over as this project's copy is a member no longer.
+            if item.target.found() == Some(Found::Member) {
+                metadata.remove(MetadataKey::MEMBER_OF_KEY);
+            }
+            Item::Project(Box::new(Project {
+                id,
+                url: None,
+                location: None,
+                created_at: None,
+                updated_at: None,
+                metadata,
+                classification,
+                ..(**project).clone()
+            }))
+        }
         Item::Document(document) => Item::Document(Box::new(Document {
             id,
             url: None,

@@ -1224,6 +1224,34 @@ pub enum EngineError {
         route: SourceName,
     },
 
+    /// A routed copy of a plan holding private work could not choose one home for it: the
+    /// items whose repositories decide where its home goes, among those classified private,
+    /// route to more than one source declared private.
+    ///
+    /// Refused before anything is written. A plan is one home, and choosing one of the two
+    /// private sources would file the other's work under a member the first one names.
+    #[error(
+        "{project}'s private work routes to more than one private source, so it has no one \
+         home: {split}\n\
+         next: route the plan's private repositories to one source declared private, or add a \
+         `{{classification: private, to: <source>}}` route to the source it was copied to.",
+        split = .destinations
+            .iter()
+            .map(|(destination, items)| format!(
+                "{destination} for {}",
+                items.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
+            ))
+            .collect::<Vec<_>>()
+            .join("; ")
+    )]
+    SplitPrivateHome {
+        /// The project being copied.
+        project: GlobalId,
+        /// Each private source its private work routes to, in the order first met, with the
+        /// items that route there.
+        destinations: Vec<(SourceName, Vec<GlobalId>)>,
+    },
+
     /// A source refused something the copy asked of it.
     ///
     /// Distinct from a [`SourceFailure`], which leaves the other sources' results

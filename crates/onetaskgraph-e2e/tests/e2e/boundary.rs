@@ -31,6 +31,8 @@ const B: &str = "github.com/lanternco/brightwater";
 const B_TEXT: &str = "Mirror the retry loop lanternco/brightwater uses.";
 /// A public repository.
 const OPEN: &str = "github.com/openco/openwidget";
+/// A second public repository, under an owner no route names.
+const SHOP: &str = "github.com/shopco/storefront";
 /// Text naming nothing private.
 const PLAIN: &str = "Retry with a capped exponential backoff.";
 
@@ -229,7 +231,8 @@ fn tree(root: &Path) -> BTreeMap<String, Vec<u8>> {
 fn registered(home: &mut OnevcsHome) {
     home.private("hiddenco", "quietharbor")
         .private("lanternco", "brightwater")
-        .public("openco", "openwidget");
+        .public("openco", "openwidget")
+        .public("shopco", "storefront");
 }
 
 fn files_under(store: &Store, folder: &str) -> Vec<String> {
@@ -3883,7 +3886,9 @@ fn merged(mut base: Value, extra: Value) -> Value {
 }
 
 /// A plan authored in the public `draft` folder whose `openco` task `site` routes to `vault`:
-/// a home on `site` with a member on `vault`, and an edge each way across the two.
+/// a home on `site` with a member on `vault`, and an edge each way across the two. Its
+/// `shopco` task is what keeps the home on `site`: a task naming no repository has no say in
+/// where the home goes, so with the `openco` task alone voting it would follow it to `vault`.
 fn routed_plan() -> Store {
     routed_plan_in("draft")
 }
@@ -3931,7 +3936,10 @@ fn routed_plan_in(author: &str) -> Store {
         author,
         "tasks",
         "rollout",
-        "title: Rollout\nstatus: todo\nproject: goal\ndepends_on: [consumer]",
+        &format!(
+            "title: Rollout\nstatus: todo\nproject: goal\nrepositories: [{SHOP}]\n\
+             depends_on: [consumer]"
+        ),
         PLAIN,
     );
     store

@@ -220,6 +220,29 @@ impl Routes {
         )
     }
 
+    /// Where a private item with `repositories` written to `source` lands, when that is a
+    /// source declared private: [`place_classified`](Self::place_classified) restricted to
+    /// destinations declared private, `None` where it would leave the item somewhere else.
+    #[must_use]
+    pub fn place_private(
+        &self,
+        source: &SourceName,
+        repositories: &[Repository],
+    ) -> Option<Placement> {
+        let placement = self.place_classified(source, Classification::Private, repositories);
+        self.is_private(&placement.destination).then_some(placement)
+    }
+
+    /// Whether `source` holds a classification entry a private item may take: one that sends
+    /// every private item it is written to somewhere declared private, whatever its
+    /// repositories.
+    #[must_use]
+    pub fn classifies_private(&self, source: &SourceName) -> bool {
+        self.place_classified(source, Classification::Private, &[])
+            .route
+            .is_some()
+    }
+
     /// Whether `source` is declared private.
     #[must_use]
     pub fn is_private(&self, source: &SourceName) -> bool {
@@ -744,6 +767,39 @@ mod tests {
                 .destination,
             name("team")
         );
+    }
+
+    #[test]
+    fn a_private_placement_is_only_ever_a_source_declared_private() {
+        let configured = [name("plans"), name("team"), name("vault")];
+        let routes = Routes::new(
+            BTreeMap::from([(
+                name("plans"),
+                vec![
+                    (vec!["github.com/widgetco/*".to_owned()], name("team")),
+                    (vec!["github.com/hiddenco/*".to_owned()], name("vault")),
+                ],
+            )]),
+            &configured,
+        )
+        .expect("repository routes")
+        .with_visibility(BTreeMap::from([(name("vault"), SourceVisibility::Private)]));
+        assert_eq!(
+            routes.place_private(&name("plans"), &[origin("github.com/hiddenco/a")]),
+            Some(Placement {
+                destination: name("vault"),
+                route: Some(1)
+            })
+        );
+        // `team` is not declared private, so a widgetco item has no private placement, and
+        // neither has an item no entry matches.
+        assert_eq!(
+            routes.place_private(&name("plans"), &[origin("github.com/widgetco/a")]),
+            None
+        );
+        assert_eq!(routes.place_private(&name("plans"), &[]), None);
+        assert!(!routes.classifies_private(&name("plans")));
+        assert!(classified().classifies_private(&name("plans")));
     }
 
     #[test]
