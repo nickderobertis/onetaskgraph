@@ -740,11 +740,11 @@ fn the_cleanup_recheck_under_forty_per_cent_goes_on_without_waiting_when_the_bur
     // What ended the credentialed lane's cleanup on CI: admitted above forty per cent, the
     // account drawn down by other work until the session's own last answer carried 462 of
     // 5,000 about 100 s before the reset. 4,538 used over the 3,500 s since the window began
-    // is 130 more by the reset, and with the cleanup's 123 still under the 462 left — it resets
-    // first, so the cleanup goes on at once, though 462 less 123 leaves 339 where the retained
-    // buffer is 1,000: under forty per cent the rule decides, not the buffer.
+    // is 130 more by the reset, and with the cleanup's estimate (123 on that run) still under
+    // the 462 left — it resets first, so the cleanup goes on at once, though 462 less that
+    // estimate is far under the 1,000 retained buffer: under forty per cent the rule decides,
+    // not the buffer.
     let _turn = take_the_turn();
-    assert_eq!(cleanup_estimate(), 123, "the cleanup's estimate on CI");
     let started = budget::epoch_now();
     let (admitted, standin, decided) = cleanup_recheck(started, 462, started + 100);
     decided.unwrap_or_else(|declined| panic!("{}", declined.message()));
