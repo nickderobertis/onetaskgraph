@@ -674,7 +674,22 @@ async fn every_field_change_moves_a_linear_tasks_token(
                 order,
                 Some(std::cmp::Ordering::Equal | std::cmp::Ordering::Greater)
             ),
-            "{kind} left the task's token at or before {was}: it read {now} ({order:?})"
+            "{kind} left the task's token at or before {was}: it read {now} ({order:?}); \
+             updatedAt {:?} → {:?}, content {}, metadata {} — a read whose members are all \
+             unchanged is older than the write, and one whose content or metadata changed is \
+             Linear not moving updatedAt for it",
+            before.updated_at,
+            after.updated_at,
+            if before.content == after.content {
+                "unchanged"
+            } else {
+                "changed"
+            },
+            if before.metadata == after.metadata {
+                "unchanged"
+            } else {
+                "changed"
+            },
         );
         Ok::<(), String>(())
     };
@@ -1492,6 +1507,8 @@ async fn real_linear_applies_every_declared_capability_and_leaves_no_residue() {
             filter_by_comment_activity: Support::Native,
             filter_by_metadata: Support::Native,
             filter_by_origin: Support::Native,
+            reconcile_status: Support::Unsupported,
+            complete_by_issue: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,

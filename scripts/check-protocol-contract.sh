@@ -68,6 +68,7 @@ contract_rs = (
     + api("work.rs")
     + api("write.rs")
     + api("metering.rs")
+    + api("issue.rs")
 )
 
 # Why the template operations are exempt: the protocol does not carry them at all, the engine
@@ -198,6 +199,7 @@ METHOD_SECTIONS = {
     "project_dependencies": "### 4.8 `task_dependencies` and `project_dependencies`",
     "write_task": "### 4.9 `write_task` and `write_project`",
     "write_project": "### 4.9 `write_task` and `write_project`",
+    "check_task_write": "### 4.9b `check_task_write`",
     "delete_task": "### 4.10 `delete_task` and `delete_project`",
     "delete_project": "### 4.10 `delete_task` and `delete_project`",
     "get_document": "### 4.11 `get_document` and `query_documents`",
@@ -225,6 +227,8 @@ METHOD_SECTIONS = {
     "set_task_content": "### 4.20 `set_task_content`",
     "update_task": "### 4.21 `update_task`",
     "end_command": "### 4.22 `end_command`",
+    "status_contradictions": "### 4.23 `status_contradictions`",
+    "issue_holdings": "### 4.24 `issue_holdings`",
 }
 
 ENUM_SECTIONS = {
@@ -240,6 +244,7 @@ ENUM_SECTIONS = {
     "Location": "### 4.13 `Location`",
     "Priority": "### 4.13b A task's `priority`",
     "Classification": "### 4.13c A record's `classification`",
+    "ClosedAs": "### 4.23 `status_contradictions`",
 }
 
 # Values a section spells although the enum declaring them is specified elsewhere, each with
@@ -251,6 +256,8 @@ ENUM_VALUE_CROSS_REFERENCES = {
         "both-directions": "DependencySupport",
         "forward-only": "DependencySupport",
     },
+    # §4.23 says which plugin is sent the method by the `Support` value it declares (§4.2).
+    "### 4.23 `status_contradictions`": {"native": "Support"},
 }
 
 # `SourceError` is the one kebab-case enum with no entry above, because §5 specifies it as a
@@ -1018,8 +1025,9 @@ for (struct, member), specified in MEMBER_SECTIONS.items():
 # section, the method its example line is the request of, the path to the object inside that
 # request or its answer, and the struct that object is: every key of the example object has
 # to be a field of the struct, and every field of the struct has to be named in the section,
-# where an optional member the example leaves out is still specified in prose.
-comment_rs = api("comment.rs")
+# where an optional member the example leaves out is still specified in prose. A path step
+# that is a number indexes a list — the first entry of a list stands for every entry — and a
+# struct declared in the api crate is named with the module that declares it.
 
 
 def struct_fields(struct, text, visibility):
@@ -1042,7 +1050,8 @@ def struct_fields(struct, text, visibility):
 
 
 PAYLOAD_EXAMPLES = (
-    # (section, method, "params" or "result", path inside it, struct, where it is declared)
+    # (section, method, "params" or "result", path inside it, struct, where it is declared:
+    # "wire", or the api crate's module)
     ("### 4.4a `get_task_detail`", "get_task_detail", "params", (), "TaskDetailParams", "wire"),
     ("### 4.4a `get_task_detail`", "get_task_detail", "result", (), "TaskDetailResult", "wire"),
     (
@@ -1059,7 +1068,7 @@ PAYLOAD_EXAMPLES = (
         "params",
         ("copy",),
         "CommentCopy",
-        "api",
+        "comment.rs",
     ),
     (
         "### 4.16a `write_comment_copy`",
@@ -1067,7 +1076,34 @@ PAYLOAD_EXAMPLES = (
         "params",
         ("copy", "origin"),
         "CommentOrigin",
-        "api",
+        "comment.rs",
+    ),
+    ("### 4.9b `check_task_write`", "check_task_write", "params", (), "CheckWriteParams", "wire"),
+    (
+        "### 4.23 `status_contradictions`",
+        "status_contradictions",
+        "result",
+        (),
+        "ContradictionsResult",
+        "wire",
+    ),
+    (
+        "### 4.23 `status_contradictions`",
+        "status_contradictions",
+        "result",
+        ("items", 0),
+        "StatusContradiction",
+        "issue.rs",
+    ),
+    ("### 4.24 `issue_holdings`", "issue_holdings", "params", (), "HoldingsParams", "wire"),
+    ("### 4.24 `issue_holdings`", "issue_holdings", "result", (), "HoldingsResult", "wire"),
+    (
+        "### 4.24 `issue_holdings`",
+        "issue_holdings",
+        "result",
+        ("holdings", 0, "task"),
+        "HeldTask",
+        "issue.rs",
     ),
 )
 
@@ -1098,7 +1134,7 @@ for heading, method, half, path, struct, declared_in in PAYLOAD_EXAMPLES:
     if declared_in == "wire":
         fields = struct_fields(struct, wire, r"pub\(crate\)")
     else:
-        fields = struct_fields(struct, comment_rs, "pub")
+        fields = struct_fields(struct, api(declared_in), "pub")
     messages = example_lines(heading)
     request = next((m for m in messages if m.get("method") == method), None)
     if request is None:
@@ -1114,8 +1150,11 @@ for heading, method, half, path, struct, declared_in in PAYLOAD_EXAMPLES:
             None,
         )
     for step in path:
-        shown = shown.get(step) if isinstance(shown, dict) else None
-    where = ".".join((half,) + path)
+        if isinstance(step, int):
+            shown = shown[step] if isinstance(shown, list) and len(shown) > step else None
+        else:
+            shown = shown.get(step) if isinstance(shown, dict) else None
+    where = ".".join((half,) + tuple(str(step) for step in path))
     if not isinstance(shown, dict):
         failures.append(
             f'"{heading}" shows no `{where}` object in its `{method}` example, which is the '
@@ -1142,12 +1181,12 @@ for heading, method, half, path, struct, declared_in in PAYLOAD_EXAMPLES:
 COMMENTS_SECTION = "### 4.15 `task_comments`"
 compare(
     "comment member",
-    struct_fields("Comment", comment_rs, "pub"),
+    struct_fields("Comment", api("comment.rs"), "pub"),
     first_column("| Member | Type | Meaning |", after=(COMMENTS_SECTION,)),
     {},
     "`Comment`",
 )
-for field in sorted(struct_fields("CommentOrigin", comment_rs, "pub")):
+for field in sorted(struct_fields("CommentOrigin", api("comment.rs"), "pub")):
     if not spelled(field, section(COMMENTS_SECTION)):
         failures.append(
             f'`CommentOrigin` carries the field "{field}" but "{COMMENTS_SECTION}", which '
@@ -1218,6 +1257,69 @@ if declared_field.group(1) != documented_field.group(1):
         f"§1 documents `{documented_field.group(1)}` but SubprocessConfig declares "
         f"`{declared_field.group(1)}`. Rename one so the configuration contract agrees."
     )
+
+# `Completion` is internally tagged, so it is not one of the kebab-case enums above: its
+# variants are the values of one member and each carries members of its own, which §4.24 lists
+# one bullet per variant — "- `due`, with `task` and `to`". Both halves are read back both ways,
+# because a variant gaining a member, or a bullet losing one, is a holding a plugin author
+# writing from the section alone would answer the engine refuses.
+COMPLETION_SECTION = "### 4.24 `issue_holdings`"
+completion = re.search(
+    r'#\[serde\(tag = "(\w+)", rename_all = "kebab-case"\)\]\s*pub enum Completion \{(.*?)\n\}',
+    contract_rs,
+    re.DOTALL,
+)
+if completion is None:
+    refuse(
+        "could not read the internally tagged `Completion` enum from the api crate's issue.rs.",
+        "restore its `#[serde(tag = ..., rename_all = \"kebab-case\")]` shape, or teach this "
+        "script the shape it has now.",
+    )
+completion_tag, completion_body = completion.groups()
+declared_completions = {
+    kebab(variant): set(re.findall(r"^        (\w+):", members, re.MULTILINE))
+    for variant, members in re.findall(
+        r"^    ([A-Z]\w*)(?: \{(.*?)^    \})?,", completion_body, re.DOTALL | re.MULTILINE
+    )
+}
+if not declared_completions:
+    refuse(
+        "read no variants from the `Completion` enum of the api crate.",
+        "restore its variants, or teach this script the shape they have now.",
+    )
+holdings_section = section(COMPLETION_SECTION)
+if f"`{completion_tag}`" not in holdings_section:
+    failures.append(
+        f"`Completion` is tagged by the member `{completion_tag}`, but "
+        f"\"{COMPLETION_SECTION}\" never names it. Say which member a holding's variant is in."
+    )
+documented_completions = {
+    variant: set(re.findall(r"`(\w+)`", members or ""))
+    for variant, members in re.findall(
+        r"^- `([a-z][a-z-]*)`(?:, with ((?:`\w+`(?:, | and )?)+))?",
+        holdings_section,
+        re.MULTILINE,
+    )
+}
+compare(
+    "completion",
+    set(declared_completions),
+    set(documented_completions),
+    {},
+    "`Completion`",
+)
+for variant in sorted(set(declared_completions) & set(documented_completions)):
+    for member in sorted(declared_completions[variant] - documented_completions[variant]):
+        failures.append(
+            f"`Completion::{variant}` carries the member `{member}` but "
+            f"\"{COMPLETION_SECTION}\"'s `{variant}` bullet does not list it. Add it — a plugin "
+            "author answering from that list alone would omit it."
+        )
+    for member in sorted(documented_completions[variant] - declared_completions[variant]):
+        failures.append(
+            f"\"{COMPLETION_SECTION}\"'s `{variant}` bullet lists the member `{member}` but "
+            f"`Completion::{variant}` does not carry it. Correct the bullet, or declare it."
+        )
 
 if failures:
     for failure in failures:

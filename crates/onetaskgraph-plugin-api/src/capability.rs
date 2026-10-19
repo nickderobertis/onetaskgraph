@@ -121,6 +121,32 @@ pub struct Capabilities {
     /// Defaulted to [`Support::Unsupported`] when a wire value omits it, on the same terms.
     #[serde(default = "no_origin_filter")]
     pub filter_by_origin: Support,
+    /// Whether the source answers
+    /// [`TaskSource::status_contradictions`](crate::TaskSource::status_contradictions): the
+    /// items whose card contradicts their issue's closure, which `task status reconcile`
+    /// brings in line.
+    ///
+    /// Not a predicate, so the second capability rule does not reach it: a source declaring
+    /// `Unsupported` is never asked, and is reported as holding nothing to reconcile. That is
+    /// every source whose status *is* its closure — a Linear workflow state, a file's own
+    /// `status:` — because there a card cannot contradict anything.
+    ///
+    /// Defaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that
+    /// predates the method is never sent it.
+    // llmlint: ignore[names_match_behavior, invalid_states_unrepresentable] the reason recorded at `documents` above, at a new field: whether a source answers one kind of question, in the shape its sibling declarations already use, and a second enum here would say the same thing a sixth way.
+    #[serde(default = "no_reconcile")]
+    pub reconcile_status: Support,
+    /// Whether the source answers
+    /// [`TaskSource::issue_holdings`](crate::TaskSource::issue_holdings): which of its items
+    /// an issue reference names, which `task status complete` moves to `done`.
+    ///
+    /// Read exactly as [`reconcile_status`](Self::reconcile_status) is: a source declaring
+    /// `Unsupported` is never asked and sends no request, and is listed as unsupported.
+    ///
+    /// Defaulted to [`Support::Unsupported`] when a wire value omits it, on the same terms.
+    // llmlint: ignore[names_match_behavior, invalid_states_unrepresentable] the reason recorded at `reconcile_status` above.
+    #[serde(default = "no_complete_by_issue")]
+    pub complete_by_issue: Support,
     /// Whether the source can select tasks belonging to no project.
     pub orphan_tasks: Support,
     /// Whether the source filters by label itself.
@@ -192,6 +218,18 @@ fn no_metadata_filter() -> Support {
 /// What [`Capabilities::filter_by_origin`] means when a wire value does not carry it: a
 /// plugin that has never heard of the predicate, on the terms [`no_priority_filter`] gives.
 fn no_origin_filter() -> Support {
+    Support::Unsupported
+}
+
+/// What [`Capabilities::reconcile_status`] means when a wire value does not carry it: a plugin
+/// written before the method, on the terms [`no_documents`] gives.
+fn no_reconcile() -> Support {
+    Support::Unsupported
+}
+
+/// What [`Capabilities::complete_by_issue`] means when a wire value does not carry it: a plugin
+/// written before the method, on the terms [`no_documents`] gives.
+fn no_complete_by_issue() -> Support {
     Support::Unsupported
 }
 

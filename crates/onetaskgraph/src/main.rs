@@ -23,7 +23,7 @@ use onetaskgraph_core::{
     Delivered, DeliveryOutcome, DependencyRequest, DocumentFilters, DocumentRequest, Engine,
     Environment, ExpectedWrite, Failure, FailureDocument, Filters, GlobalId, LabelRequest, Loaded,
     MatchBy, OutputFormat, PageToken, Paging, ProjectGraphRequest, ProjectRequest, ProjectSelector,
-    QueryResponse, RenderedRecord, SearchRequest, SourceFailure, TaskRequest,
+    QueryResponse, ReconcileOutcome, RenderedRecord, SearchRequest, SourceFailure, TaskRequest,
 };
 use onetaskgraph_plugin_api::{
     CommentBody, LabelFilter, MetadataKey, MetadataRecord, NativeId, NewComment, SharedClock,
@@ -438,6 +438,88 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
 
         Command::Task {
             command:
+                TaskCommand::Status {
+                    command: StatusCommand::Reconcile(args),
+                },
+        } => {
+            let Some(source) = usable_source(&args.source, loaded) else {
+                return Ok(EXIT_USAGE);
+            };
+            let engine = engine(loaded);
+            let reconciled = engine
+                .reconcile_statuses(&source, args.dry_run)
+                .await
+                .map_err(|error| Failure::from(&error))?;
+            // A source whose status is its closure answers the document with no items.
+            let document = reconciled.clone().unwrap_or_default();
+            let rendered = rendering(
+                loaded,
+                &document,
+                |_| render::statuses_reconciled(source.as_str(), reconciled.as_ref()),
+                "the reconciled statuses",
+            )?;
+            emit(out, rendered.trim_end(), "the reconciled statuses")?;
+            for item in &document.items {
+                if let ReconcileOutcome::Failed { error } = &item.outcome {
+                    eprintln!(
+                        "onetaskgraph: {} was not reconciled: {}",
+                        item.source,
+                        error.message()
+                    );
+                }
+            }
+            Ok(if document.failed() {
+                EXIT_PARTIAL
+            } else {
+                EXIT_OK
+            })
+        }
+
+        Command::Task {
+            command:
+                TaskCommand::Status {
+                    command: StatusCommand::Complete(args),
+                },
+        } => {
+            let mut only = Vec::with_capacity(args.source.len());
+            for name in &args.source {
+                let Some(source) = usable_source(name, loaded) else {
+                    return Ok(EXIT_USAGE);
+                };
+                only.push(source);
+            }
+            let engine = engine(loaded);
+            let completed = engine
+                .complete_issues(&args.issue, &only, args.dry_run)
+                .await
+                .map_err(|error| Failure::from(&error))?;
+            let rendered = rendering(
+                loaded,
+                &completed,
+                render::issues_completed,
+                "the completed issues",
+            )?;
+            emit(out, rendered.trim_end(), "the completed issues")?;
+            for item in &completed.items {
+                if let Some(error) = &item.error {
+                    eprintln!(
+                        "onetaskgraph: {} was not completed in {}: {}",
+                        item.issue,
+                        item.source,
+                        error.message()
+                    );
+                }
+                delivery_exit(&item.delivered);
+            }
+            Ok(if completed.failed() {
+                EXIT_PARTIAL
+            } else {
+                EXIT_OK
+            })
+        }
+
+        Command::Task {
+            command:
                 TaskCommand::Priority {
                     command: PriorityCommand::Set(args),
                 },
@@ -572,7 +654,7 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
         Command::Task {
             command: TaskCommand::Copy(args),
         } => {
-            let items = if args.query.given() {
+            let items = if args.id.is_empty() && args.query.given() {
                 CopyItems::matching(TaskRequest {
                     sources: selection(&SelectionArgs {
                         source: args.query.source.clone(),
@@ -593,6 +675,7 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
                 named(args.id.iter().map(String::as_str))?
             };
             let mut request = copy_request(items, CopyScope::Tasks, &args.copy)?;
+            request.statuses = args.query.statuses();
             request.create = args.create;
             request.comments = args.comments;
             request.expect.clone_from(&args.expect.expect);
@@ -889,6 +972,31 @@ fn engine(loaded: &Loaded) -> Engine {
     .with_term_scope(TERM_SCOPE.get().cloned().flatten())
 }
 
+/// A `--source` this command was given, as a configured source's name — or `None`, having
+/// said why on standard error, when it names none: a usage error, refused before any source
+/// is built or asked.
+fn usable_source(name: &str, loaded: &Loaded) -> Option<SourceName> {
+    let configured: Vec<String> = loaded
+        .config
+        .sources()
+        .keys()
+        .map(ToString::to_string)
+        .collect();
+    match SourceName::new(name.to_owned()) {
+        Ok(source) if configured.iter().any(|held| held == source.as_str()) => Some(source),
+        _ => {
+            let _ = writeln!(
+                io::stderr(),
+                "onetaskgraph: --source {name}: no source named {name:?} is configured\n\
+                 next: name one of the configured sources ({}) — `onetaskgraph sources list` \
+                 reports them.",
+                configured.join(", ")
+            );
+            None
+        }
+    }
+}
+
 /// The term scope `command` names, when it is a writing verb that takes one.
 fn term_scope(command: &Command) -> Option<Vec<String>> {
     let named = match command {
@@ -896,6 +1004,12 @@ fn term_scope(command: &Command) -> Option<Vec<String>> {
             TaskCommand::Copy(args) => &args.copy.term_scope,
             TaskCommand::Status {
                 command: StatusCommand::Set(args),
+            } => &args.term_scope,
+            TaskCommand::Status {
+                command: StatusCommand::Reconcile(args),
+            } => &args.term_scope,
+            TaskCommand::Status {
+                command: StatusCommand::Complete(args),
             } => &args.term_scope,
             TaskCommand::Priority {
                 command: PriorityCommand::Set(args),
@@ -1494,6 +1608,7 @@ fn copy_request(
         comments: false,
         no_link: args.no_link,
         expect: None,
+        statuses: Vec::new(),
     })
 }
 
@@ -1985,6 +2100,8 @@ mod tests {
                 "task comment edit",
                 "task comment delete",
                 "task status set",
+                "task status reconcile",
+                "task status complete",
                 "task priority set",
                 "task content set",
                 "task metadata set",

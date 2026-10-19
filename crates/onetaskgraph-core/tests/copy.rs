@@ -91,6 +91,7 @@ fn many(items: &[&str], scope: CopyScope) -> CopyRequest {
         comments: false,
         no_link: false,
         expect: None,
+        statuses: Vec::new(),
     }
 }
 
@@ -628,9 +629,10 @@ async fn a_dry_run_reads_everything_and_writes_nothing() {
 
 #[tokio::test]
 async fn a_rust_caller_asking_what_only_a_task_copy_can_do_of_another_is_refused_first() {
-    // The command line offers neither on a document copy, so a Rust caller is the one that
-    // can ask: comments of documents, which hold none, and a query naming projects, when a
-    // query names tasks. Each is refused before anything is read or written.
+    // The command line offers none of these on a document or a project copy, so a Rust caller
+    // is the one that can ask: comments of documents, which hold none, a query naming projects,
+    // when a query names tasks, and statuses to narrow a copy of projects or documents by, when
+    // only a task copy is narrowed by them. Each is refused before anything is read or written.
     let everything = TaskRequest {
         sources: vec![name("from")],
         filters: onetaskgraph_core::Filters::default(),
@@ -660,6 +662,20 @@ async fn a_rust_caller_asking_what_only_a_task_copy_can_do_of_another_is_refused
             },
             "only when it copies tasks",
         ),
+        (
+            CopyRequest {
+                statuses: vec![StatusCategory::Todo],
+                ..many(&["from:P-1"], CopyScope::Projects { tasks: true })
+            },
+            "at a status only when it copies tasks",
+        ),
+        (
+            CopyRequest {
+                statuses: vec![StatusCategory::Done],
+                ..many(&["from:D-1"], CopyScope::Documents)
+            },
+            "at a status only when it copies tasks",
+        ),
     ] {
         let engine = pair();
         let Err(refused) = engine.copy(&request).await else {
@@ -668,7 +684,9 @@ async fn a_rust_caller_asking_what_only_a_task_copy_can_do_of_another_is_refused
         assert!(
             matches!(
                 refused,
-                EngineError::CommentsNotDocuments | EngineError::QueryNotTasks
+                EngineError::CommentsNotDocuments
+                    | EngineError::QueryNotTasks
+                    | EngineError::StatusesNotTasks
             ),
             "{refused:?}"
         );
@@ -2693,6 +2711,8 @@ impl TaskSource for Misbehaving {
             filter_by_comment_activity: Support::Unsupported,
             filter_by_metadata: Support::Unsupported,
             filter_by_origin: Support::Unsupported,
+            reconcile_status: Support::Unsupported,
+            complete_by_issue: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,

@@ -30,6 +30,8 @@
 //! | `filter_by_comment_activity` | **Supported and proven** — the hosted source's own, forwarded, and a query's `commented_since` carried over the pipe as §4.5 specifies; absent from an older handshake, and then read as unsupported, so the engine narrows over the plugin's comments. |
 //! | `filter_by_metadata` | **Supported and proven** — the hosted source's own, forwarded, and a query's `metadata` matches carried over the pipe as §4.5 specifies; absent from an older handshake, and then read as unsupported, so the engine narrows over each task's metadata. |
 //! | `filter_by_origin` | **Supported and proven** — the hosted source's own, forwarded, and a query's `origin` carried over the pipe as §4.5 specifies, on the same terms. |
+//! | `reconcile_status` | **Supported,** as the hosted source declares it — forwarded at the handshake, and `status_contradictions` carried over the pipe as §4.23 specifies; a plugin that does not declare it is sent nothing. |
+//! | `complete_by_issue` | **Supported,** as the hosted source declares it — forwarded at the handshake, and `issue_holdings` carried over the pipe as §4.24 specifies; a plugin that does not declare it is sent nothing. |
 //! | `orphan_tasks` | **Supported and proven** — the hosted source's own, forwarded. |
 //! | `filter_by_label` | **Supported and proven** — the hosted source's own, forwarded. |
 //! | `filter_by_status` | **Supported and proven** — the hosted source's own, forwarded. |

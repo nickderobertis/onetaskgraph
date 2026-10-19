@@ -271,7 +271,13 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # read from the raw document and the roots from the validated one.
     bundle = generate.validate_schema_bundle(emitted_bundle)
 
-    assert emitted_bundle["version"] == 40
+    assert emitted_bundle["version"] == 41
+    # Version 41 published the two capabilities `task status reconcile` and `task status
+    # complete` are asked through, and the documents both verbs answer with.
+    for member in ("reconcile_status", "complete_by_issue"):
+        assert member in emitted_bundle["roots"]["Capabilities"]["properties"], member
+    for root in ("StatusesReconciled", "IssuesCompleted", "IssueRef"):
+        assert root in emitted_bundle["roots"], root
     # Version 40 published the sources a layer refines but no layer gives a plugin, left out
     # when there are none, so a configuration with none reads as it did.
     effective = emitted_bundle["roots"]["EffectiveConfig"]

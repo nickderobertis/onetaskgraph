@@ -297,7 +297,18 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 40);
+    assert_eq!(bundle["version"], 41);
+    // Version 41: the two capabilities `task status reconcile` and `task status complete` are
+    // asked through, and the documents both verbs answer with.
+    for member in ["reconcile_status", "complete_by_issue"] {
+        assert!(
+            bundle["roots"]["Capabilities"]["properties"][member].is_object(),
+            "Capabilities declares {member}"
+        );
+    }
+    for root in ["StatusesReconciled", "IssuesCompleted", "IssueRef"] {
+        assert!(bundle["roots"][root].is_object(), "{root} is a root");
+    }
     // Version 40: the sources a layer refines but no layer gives a plugin, named by
     // `config show` and left out of the wire when there are none.
     assert_eq!(
@@ -359,6 +370,8 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
             "task comment edit",
             "task comment delete",
             "task status set",
+            "task status reconcile",
+            "task status complete",
             "task priority set",
             "task content set",
             "task metadata set",

@@ -10,12 +10,13 @@ use serde_json::Value;
 
 use crate::{
     Asset, AssetName, AssetWrite, AssetsWritten, Capabilities, Comment, CommentBody, CommentCopy,
-    DependencyEdge, Direction, Document, DocumentQuery, DocumentVersionCoverage, ItemKind,
-    ItemWrite, Label, MetadataKey, MetadataRecord, Metering, NativeId, NewComment, Page,
-    PageRequest, Priority, Project, ProjectQuery, ProjectVersionCoverage, SharedClock, SourceError,
-    SourceName, Status, StatusCategory, Task, TaskDetailRead, TaskQuery, TaskRef, TaskUpdate,
-    TaskUpdateOutcome, VersionCoverage, Visibility, WriteJournal, WriteSupport, WriteTarget,
-    assetless, commentless, documentless, unwritable, unwritable_field, unwritable_metadata,
+    DependencyEdge, Direction, Document, DocumentQuery, DocumentVersionCoverage, IssueHolding,
+    IssueRef, ItemKind, ItemWrite, Label, MetadataKey, MetadataRecord, Metering, NativeId,
+    NewComment, Page, PageRequest, Priority, Project, ProjectQuery, ProjectVersionCoverage,
+    SharedClock, SourceError, SourceName, Status, StatusCategory, StatusContradiction, Task,
+    TaskDetailRead, TaskQuery, TaskRef, TaskUpdate, TaskUpdateOutcome, VersionCoverage, Visibility,
+    WriteJournal, WriteSupport, WriteTarget, assetless, commentless, documentless, unwritable,
+    unwritable_field, unwritable_metadata,
 };
 
 /// Whether a source is answering right now.
@@ -417,6 +418,28 @@ pub trait TaskSource: Send + Sync {
         Err(unwritable(self.kind()))
     }
 
+    /// Whether this source can represent every field of `write` — its status, its content, the
+    /// tasks it delivers and every other field a [`write_task`](Self::write_task) of it would
+    /// refuse as "cannot represent the field …" — asked before anything is written and changing
+    /// nothing.
+    ///
+    /// A task copy asks it of every task it plans before its first write, and leaves out each
+    /// task this refuses — answered `failed`, with this refusal as its reason — writing the rest
+    /// as one copy. It answers what the write itself would refuse in the same words; and it is a
+    /// promise only about representability, so a write may still fail for any other reason.
+    ///
+    /// Defaulted to `Ok(())`: a source that does not answer it in advance still refuses such a
+    /// write in its write, which a copy then takes back whole, exactly as before.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SourceError::Refused`] naming the field this source cannot represent; and
+    /// whatever else kept it from finding out.
+    async fn check_task_write(&self, write: &ItemWrite<Task>) -> Result<(), SourceError> {
+        let _ = write;
+        Ok(())
+    }
+
     /// Whether a write of an item of `kind` at `category` — over the item `target` names, or
     /// creating one when it is `None` — would have a status to write, asked before the write
     /// and changing nothing.
@@ -505,6 +528,55 @@ pub trait TaskSource: Send + Sync {
         };
         task.status = status;
         Ok(Some(task))
+    }
+
+    /// Every task this source holds whose card contradicts its issue's closure, each with the
+    /// status that brings it in line — what `task status reconcile` writes, through
+    /// [`set_task_status`](Self::set_task_status), one task at a time.
+    ///
+    /// A task needs it when its issue is closed with a reason that reads `done` or
+    /// `cancelled` and its card does not sit at the option this source's mapping gives that
+    /// category. An open task, a closure that reads `unknown` and a card already in line are
+    /// never answered. Changes nothing.
+    ///
+    /// Asked only of a source declaring
+    /// [`Capabilities::reconcile_status`](crate::Capabilities::reconcile_status); defaulted to a
+    /// refusal saying so, which no caller holding to that declaration ever receives.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SourceError::Refused`] when this source answers no such question; and whatever
+    /// kept it from reading its items.
+    async fn status_contradictions(&self) -> Result<Vec<StatusContradiction>, SourceError> {
+        Err(SourceError::Refused {
+            message: format!(
+                "a {} source's status is its closure, so nothing needs reconciling",
+                self.kind()
+            ),
+        })
+    }
+
+    /// For each issue in `issues`, in order and once each, the task this source holds for it
+    /// and what moving it to `done` comes to — what `task status complete` writes, through
+    /// [`set_task_status`](Self::set_task_status), for each one answered
+    /// [`Completion::Due`](crate::Completion::Due).
+    ///
+    /// The read is proportional to `issues` and never to the size of what this source holds,
+    /// and an empty `issues` reads nothing. Changes nothing.
+    ///
+    /// Asked only of a source declaring
+    /// [`Capabilities::complete_by_issue`](crate::Capabilities::complete_by_issue); defaulted
+    /// to a refusal saying so, which no caller holding to that declaration ever receives.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SourceError::Refused`] when this source answers no such question; and whatever
+    /// kept it from reading the issues.
+    async fn issue_holdings(&self, issues: &[IssueRef]) -> Result<Vec<IssueHolding>, SourceError> {
+        let _ = issues;
+        Err(SourceError::Refused {
+            message: format!("a {} source holds no items by issue reference", self.kind()),
+        })
     }
 
     /// Set the priority of one task this source holds, and change nothing else about it,
