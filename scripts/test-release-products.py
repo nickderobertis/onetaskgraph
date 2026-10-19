@@ -345,7 +345,9 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
             refuses(reason)
             canonical.write_bytes(original_binary)
             wheel_path.write_bytes(original_wheel)
-            subprocess.run([bash_executable(platform.system()), '-c', body], cwd=tree, env=env, check=True, stdout=subprocess.DEVNULL)
+        # Each case above packages its own corrupted products over the last one's, so the
+        # pristine products are packaged once, after the last, for the verification that passes.
+        subprocess.run([bash_executable(platform.system()), '-c', body], cwd=tree, env=env, check=True, stdout=subprocess.DEVNULL)
         subprocess.run(command, cwd=tree, check=True, stdout=subprocess.DEVNULL)
 
 
