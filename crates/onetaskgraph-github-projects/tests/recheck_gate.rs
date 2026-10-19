@@ -307,9 +307,10 @@ fn estimated() -> u64 {
     budget::estimate()[&Budget::Graphql]
 }
 
-/// The free read and the first real call, and nothing else: what a session declined on its
-/// second reading has sent.
-fn the_free_read_and_one_real_call() -> Vec<String> {
+/// Both admission reads — the free `GET /rate_limit` and GraphQL's own `rateLimit` object —
+/// and the first real call, and nothing else: what a session declined on its second reading
+/// has sent.
+fn the_admission_reads_and_one_real_call() -> Vec<String> {
     vec![
         "GET /rate_limit".to_owned(),
         OBJECT_READ.to_owned(),
@@ -317,10 +318,10 @@ fn the_free_read_and_one_real_call() -> Vec<String> {
     ]
 }
 
-/// [`the_free_read_and_one_real_call`], and the two reads a recheck under the 40% rule makes
+/// [`the_admission_reads_and_one_real_call`], and the two reads a recheck under the 40% rule makes
 /// of the budgets again before it decides on the least of every reading.
 fn and_the_recheck_reads() -> Vec<String> {
-    let mut asked = the_free_read_and_one_real_call();
+    let mut asked = the_admission_reads_and_one_real_call();
     asked.extend(["GET /rate_limit".to_owned(), OBJECT_READ.to_owned()]);
     asked
 }
@@ -365,7 +366,7 @@ fn a_journey_whose_first_call_carries_less_than_the_endpoint_claimed_does_not_ru
     // The admission's reads and the one real call, and nothing else — the answer's own headers
     // already decline it, so the recheck reads nothing more — so nothing was written and there
     // is no partial artifact for anything to leave behind.
-    assert_eq!(drive.asked, the_free_read_and_one_real_call());
+    assert_eq!(drive.asked, the_admission_reads_and_one_real_call());
 
     if std::env::var_os(budget::FOLLOW_THROUGH).is_some() {
         std::panic::resume_unwind(drive.panic);
@@ -407,7 +408,7 @@ fn a_journey_whose_first_call_is_refused_for_a_rate_limit_is_declined_rather_tha
         )),
         "{message}"
     );
-    assert_eq!(drive.asked, the_free_read_and_one_real_call());
+    assert_eq!(drive.asked, the_admission_reads_and_one_real_call());
 }
 
 #[test]
@@ -429,7 +430,7 @@ fn a_first_call_refused_with_the_budget_still_showing_room_is_declined_as_the_se
         )),
         "{message}"
     );
-    assert_eq!(drive.asked, the_free_read_and_one_real_call());
+    assert_eq!(drive.asked, the_admission_reads_and_one_real_call());
 }
 
 #[test]
@@ -454,7 +455,7 @@ fn an_answered_first_call_carrying_no_readable_allowance_declines_rather_than_as
             "{headers:?}: {message}"
         );
         assert!(message.contains("not one it may assume"), "{message}");
-        assert_eq!(drive.asked, the_free_read_and_one_real_call());
+        assert_eq!(drive.asked, the_admission_reads_and_one_real_call());
     }
 }
 
@@ -472,7 +473,7 @@ fn a_first_call_that_never_reached_the_host_fails_as_itself_rather_than_declinin
     assert!(!message.contains("DID NOT RUN"), "{message}");
     // The stand-in recorded the call before hanging up on it, and the journey did not
     // retry it: one free read, one real call.
-    assert_eq!(drive.asked, the_free_read_and_one_real_call());
+    assert_eq!(drive.asked, the_admission_reads_and_one_real_call());
 }
 
 #[test]
@@ -491,7 +492,10 @@ fn a_first_call_carrying_the_allowance_the_endpoint_claimed_lets_the_session_go_
         "a session the second reading affords goes on past its first real call: {:?}",
         drive.asked
     );
-    assert_eq!(drive.asked[..3], the_free_read_and_one_real_call()[..]);
+    assert_eq!(
+        drive.asked[..3],
+        the_admission_reads_and_one_real_call()[..]
+    );
 }
 
 /// A recorded first real call, for the cases below that need no journey to reach.
@@ -653,7 +657,7 @@ fn a_reported_first_query_price_retires_demand_before_the_header_recheck() {
         // Declined on the answer's own headers with no further read; afforded, the recheck
         // reads the budgets again before the session goes on.
         let mut expected = if declined {
-            the_free_read_and_one_real_call()
+            the_admission_reads_and_one_real_call()
         } else {
             and_the_recheck_reads()
         };
