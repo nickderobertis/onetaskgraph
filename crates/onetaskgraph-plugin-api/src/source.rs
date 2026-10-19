@@ -77,12 +77,12 @@ fn overran(returned: usize, asked_for: u32) -> Result<(), SourceError> {
     })
 }
 
-/// What a by-origin default answers when the listing it walks hands back the cursor it was
-/// just given, which would walk forever.
+/// What a by-origin default answers when the listing it walks hands back a cursor it has
+/// already handed out, which would walk forever.
 fn repeated_cursor() -> SourceError {
     SourceError::Malformed {
-        message: "the source returned the cursor it was given while its listing was walked \
-                  for one origin, so the walk would never end"
+        message: "the source returned a cursor it had already handed out while its listing \
+                  was walked for one origin, so the walk would never end"
             .to_owned(),
     }
 }
@@ -114,7 +114,6 @@ fn page_of_matches<T>(matched: Vec<T>, page: &PageRequest) -> Result<Page<T>, So
     })
 }
 
-/// What every cursor a by-origin default hands out starts with.
 const ORIGIN_CURSOR: &str = "origin:";
 
 /// One configured source, as the engine drives it.
@@ -438,6 +437,9 @@ pub trait TaskSource: Send + Sync {
         let wanted = origin_query(origin);
         let mut matched = Vec::new();
         let mut cursor: Option<crate::Cursor> = None;
+        // Every cursor the listing handed out, so one cycling through several is caught as
+        // one repeating the last is.
+        let mut visited: Vec<String> = Vec::new();
         loop {
             let listed = self
                 .query_projects(
@@ -457,8 +459,11 @@ pub trait TaskSource: Send + Sync {
             );
             cursor = match listed.next {
                 None => break,
-                Some(next) if cursor.as_ref() == Some(&next) => return Err(repeated_cursor()),
-                Some(next) => Some(next),
+                Some(next) if visited.contains(&next.0) => return Err(repeated_cursor()),
+                Some(next) => {
+                    visited.push(next.0.clone());
+                    Some(next)
+                }
             };
         }
         page_of_matches(matched, page)
@@ -976,6 +981,9 @@ pub trait TaskSource: Send + Sync {
         let wanted = origin_query(origin);
         let mut matched = Vec::new();
         let mut cursor: Option<crate::Cursor> = None;
+        // Every cursor the listing handed out, so one cycling through several is caught as
+        // one repeating the last is.
+        let mut visited: Vec<String> = Vec::new();
         loop {
             let listed = self
                 .query_documents(
@@ -995,8 +1003,11 @@ pub trait TaskSource: Send + Sync {
             );
             cursor = match listed.next {
                 None => break,
-                Some(next) if cursor.as_ref() == Some(&next) => return Err(repeated_cursor()),
-                Some(next) => Some(next),
+                Some(next) if visited.contains(&next.0) => return Err(repeated_cursor()),
+                Some(next) => {
+                    visited.push(next.0.clone());
+                    Some(next)
+                }
             };
         }
         page_of_matches(matched, page)

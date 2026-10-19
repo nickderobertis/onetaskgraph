@@ -31,6 +31,9 @@ enum Paging {
     /// Two a page, and the cursor `0` after every one — the cursor it was given, from the
     /// second page on.
     Repeats,
+    /// Two a page, and cursors that cycle: `2` after the first page and `0` after the second,
+    /// so no page repeats the cursor it was just given and the walk still never ends.
+    Cycles,
 }
 
 impl Listing {
@@ -52,6 +55,7 @@ impl Listing {
         let end = (start + size).min(held.len());
         let next = match self.paging {
             Paging::Repeats => Some(Cursor("0".to_owned())),
+            Paging::Cycles => Some(Cursor(if start == 0 { "2" } else { "0" }.to_owned())),
             _ => (end < held.len()).then(|| Cursor(end.to_string())),
         };
         Page {
@@ -339,7 +343,7 @@ async fn the_document_default_lists_exactly_the_documents_recording_that_origin_
 
 #[tokio::test]
 async fn a_listing_that_overruns_its_page_or_repeats_its_cursor_is_refused_by_either_default() {
-    for paging in [Paging::Overran, Paging::Repeats] {
+    for paging in [Paging::Overran, Paging::Repeats, Paging::Cycles] {
         let source: Box<dyn TaskSource> = Box::new(Listing::of(
             (0..6)
                 .map(|n| project(&format!("P{n}"), Some(json!("plans:X"))))

@@ -1142,7 +1142,7 @@ struct Running {
     /// Each source project an item of this copy is filed under, read once when the copy read
     /// the destination counterparts ahead — see [`Engine::read_ahead`] — so the filing lookup's
     /// own read of it, [`Engine::linked_project`], is that read rather than a second one.
-    source_projects: HashMap<String, Project>,
+    source_projects: HashMap<GlobalId, Project>,
 }
 
 /// The member project a routed write was filed under, and what finding it wrote.
@@ -3157,7 +3157,23 @@ impl Engine {
             origin: Some(origin.to_owned()),
             ..TaskQuery::default()
         };
+        // Every cursor already sent, so a source cycling through several is caught as one
+        // repeating the last is.
+        let mut asked_before: BTreeSet<String> = BTreeSet::new();
         loop {
+            if let Some(next) = &cursor
+                && !asked_before.insert(next.0.clone())
+            {
+                return Err(refused(
+                    destination,
+                    SourceError::Malformed {
+                        message: "the source returned a cursor it had already been given while \
+                                  it was being asked for the records copied from one origin, so \
+                                  the walk would never end"
+                            .to_owned(),
+                    },
+                ));
+            }
             let asked = cursor.clone();
             let request = request_for(destination, cursor);
             let source = destination.source();
@@ -4306,7 +4322,7 @@ impl Engine {
         // Each destination project this copy names, with the origin it records there and why
         // the copy names it: what a cache standing in front of that destination is pinned
         // from, below.
-        let mut homes: Vec<(SourceName, NativeId, String, ProjectNamed)> = Vec::new();
+        let mut homes: Vec<(SourceName, NativeId, GlobalId, ProjectNamed)> = Vec::new();
         for read in reads {
             let metadata = described(&read.item).1;
             if read.item.level() == Level::Project {
@@ -4315,7 +4331,7 @@ impl Engine {
                         homes.push((
                             there.clone(),
                             link.native,
-                            read.source.to_string(),
+                            read.source.clone(),
                             ProjectNamed::Copied,
                         ));
                     }
@@ -4343,8 +4359,7 @@ impl Engine {
                 continue;
             };
             let qualified = GlobalId::new(read.source.source.clone(), project);
-            let key = qualified.to_string();
-            if running.counterparts.contains_key(&key)
+            if running.counterparts.contains_key(&qualified.to_string())
                 || reads.iter().any(|other| other.source == qualified)
             {
                 continue;
@@ -4354,7 +4369,7 @@ impl Engine {
             if self.caches(&qualified.source) {
                 continue;
             }
-            if !running.source_projects.contains_key(&key) {
+            if !running.source_projects.contains_key(&qualified) {
                 let Ok(source) = self.readable(&qualified.source) else {
                     continue;
                 };
@@ -4364,15 +4379,15 @@ impl Engine {
                 let Ok(Some(held)) = source.source().get_project(&qualified.native).await else {
                     continue;
                 };
-                running.source_projects.insert(key.clone(), held);
+                running.source_projects.insert(qualified.clone(), held);
             }
             for there in &reachable {
-                if let Some(link) = link_of(&running.source_projects[&key].metadata, there) {
+                if let Some(link) = link_of(&running.source_projects[&qualified].metadata, there) {
                     want(there, link.native.clone());
                     homes.push((
                         there.clone(),
                         link.native,
-                        key.clone(),
+                        qualified.clone(),
                         ProjectNamed::FiledUnder,
                     ));
                 }
@@ -4392,7 +4407,7 @@ impl Engine {
                     .reason()
                     .is_none();
                 let pinned = named == ProjectNamed::FiledUnder || covered;
-                self.pin_members(destination, &project, pinned.then_some(&*origin))
+                self.pin_members(destination, &project, pinned.then_some(&origin))
                     .await;
             }
         }
@@ -4423,7 +4438,7 @@ impl Engine {
         &self,
         destination: &ResolvedSource,
         project: &NativeId,
-        origin: Option<&str>,
+        origin: Option<&GlobalId>,
     ) {
         let source = destination.source();
         let members = TaskQuery {
@@ -4431,8 +4446,10 @@ impl Engine {
             ..TaskQuery::default()
         };
         let mut cursor: Option<Cursor> = None;
+        // A cursor already sent ends the pinning: it only pins, and every read it would have
+        // answered is made anyway.
+        let mut asked_before: BTreeSet<String> = BTreeSet::new();
         loop {
-            let asked = cursor.clone();
             let Ok(page) = source
                 .query_tasks(&members, &request_for(destination, cursor))
                 .await
@@ -4440,7 +4457,7 @@ impl Engine {
                 break;
             };
             match page.next {
-                Some(next) if Some(&next) != asked.as_ref() => cursor = Some(next),
+                Some(next) if asked_before.insert(next.0.clone()) => cursor = Some(next),
                 _ => break,
             }
         }
@@ -4455,7 +4472,7 @@ impl Engine {
         }
         if let Some(origin) = origin {
             let _ = source
-                .query_projects_by_origin(origin, &request_for(destination, None))
+                .query_projects_by_origin(&origin.to_string(), &request_for(destination, None))
                 .await;
         }
     }
@@ -5328,11 +5345,7 @@ impl Engine {
             return Ok(Some(landed.clone()));
         }
         if let Some(linked) = self
-            .linked_project(
-                request,
-                project,
-                running.source_projects.get(&project.to_string()),
-            )
+            .linked_project(request, project, running.source_projects.get(project))
             .await?
         {
             return Ok(Some(linked));

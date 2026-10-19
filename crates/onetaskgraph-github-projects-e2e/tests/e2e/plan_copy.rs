@@ -888,5 +888,11 @@ fn a_recopy_whose_pinning_listing_is_refused_reads_what_it_would_have_pinned_and
         expected,
         "every counterpart is read instead"
     );
+    assert_eq!(
+        tally(&calls)["reading a project's tasks"],
+        2,
+        "the refused pinning listing, then the orphan check's own: {:?}",
+        tally(&calls)
+    );
     holds_the_plan(&plan, &at, None);
 }

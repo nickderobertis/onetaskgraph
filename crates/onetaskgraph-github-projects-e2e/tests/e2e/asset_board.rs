@@ -45,11 +45,9 @@ pub(super) enum Kind {
 }
 
 impl Kind {
-    /// The spike report's mean latency for this kind of request, in milliseconds: item read
-    /// 554, board page 6,948 and search page 6,791 (both measured on the 1,986-item `plans`
-    /// board), mutation 1,082, a request of up to eleven aliased mutations 3,700, upload 927,
-    /// its repository read 526, its verification 1,140, and — by the table's note — a read
-    /// batching several items 4,551.
+    /// The spike report's mean latency for this kind of request, in milliseconds — its
+    /// "Latency per request kind" table, the board and search pages as measured on the
+    /// 1,986-item `plans` board, and a batched read charged as the table's note says.
     pub const fn measured_millis(self) -> u64 {
         match self {
             Self::ItemRead => 554,
