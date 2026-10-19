@@ -1151,6 +1151,14 @@ them do; this is the inventory of what is owed, not a status board.
     written as one outside the copy; every check precedes the first write; any other refusal,
     and a project copy holding such a task, writes nothing; and a ticket write onto a board
     refused part way leaves no item behind and no issue closed behind an unwritten card.
+112. A routed project copy places its home by the tasks naming repositories and the project's
+    own: a task naming none follows the home; voters that disagree keep it in the named source,
+    or, while the boundary is active and the plan holds private work, send it to the one
+    private source its private voters route to — refused naming each when they route to two,
+    and refused when an existing home sits somewhere not private — with the public work in a
+    public member whose refused write takes the whole copy back. A copy that would create a
+    second project of a plan in a source takes over the member already there, found by either
+    link alone.
 
 ## The public boundary
 
