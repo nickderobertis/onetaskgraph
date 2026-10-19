@@ -49,6 +49,11 @@ const EDGES: [(usize, usize); 10] = [
     (8, 2),
 ];
 
+/// The board text fields the plan's records carry values of, each projected from the caller
+/// metadata key beside it: two on the project and on every task, the first alone on the
+/// document, as the workload states.
+const FIELDS: [(&str, &str); 2] = [("Area", "plan.area"), ("Owner", "plan.owner")];
+
 /// The PNG the document references, the spike's 104,072 bytes.
 const PNG_BYTES: usize = 104_072;
 
@@ -99,12 +104,15 @@ impl Seeded {
 
 /// The plan the copy budgets' workload states: a project of about 50 KB, eight tasks of 45 to
 /// 49 KB with ten blocked-by edges among them, and a document of about 35 KB naming every task
-/// by the path its folder reports and referencing one 104 KB PNG.
+/// by the path its folder reports and referencing one 104 KB PNG — the project and every task
+/// carrying a value of both [`FIELDS`], the document one of the first.
 pub(super) struct Generated {
     pub project: String,
     pub tasks: Vec<String>,
     pub document: String,
     pub png: Vec<u8>,
+    /// The values of [`FIELDS`] each record carries, by its id in the folder.
+    pub fields: BTreeMap<String, Vec<String>>,
 }
 
 impl Generated {
@@ -115,11 +123,26 @@ impl Generated {
             .map(|index| stream.prose(45_200 + index * 500))
             .collect();
         let document = stream.prose(33_000);
+        let png = images::png(seed, PNG_BYTES);
+        const AREAS: [&str; 4] = ["engine", "board plugin", "live lane", "journeys"];
+        let mut value = |prefix: &str| {
+            format!(
+                "{prefix} {}",
+                AREAS[(stream.next() % AREAS.len() as u64) as usize]
+            )
+        };
+        let mut fields = BTreeMap::new();
+        fields.insert("P".to_owned(), vec![value("area"), value("owner")]);
+        for n in 1..=TASKS {
+            fields.insert(format!("T-{n}"), vec![value("area"), value("owner")]);
+        }
+        fields.insert("D".to_owned(), vec![value("area")]);
         Self {
             project,
             tasks,
             document,
-            png: images::png(seed, PNG_BYTES),
+            png,
+            fields,
         }
     }
 }
@@ -178,6 +201,15 @@ impl Plan {
         board.measure_latency();
         config["endpoint"] = json!(board.endpoint);
         config["pacing"] = json!({});
+        config["metadata_fields"] = json!(
+            FIELDS
+                .iter()
+                .map(|(field, key)| json!({"field": field, "key": key}))
+                .collect::<Vec<_>>()
+        );
+        for (field, _) in FIELDS {
+            github.with_text_field(field);
+        }
         let root = sandbox.subdirectory("notes");
         for directory in ["projects", "tasks", "documents/D.assets"] {
             std::fs::create_dir_all(root.join(directory)).unwrap();
@@ -214,13 +246,24 @@ impl Plan {
             .to_owned()
     }
 
-    /// Write the project, its tasks and its document, each with the content generated for it.
+    /// The front matter giving record `id` its generated board field values.
+    fn field_values(&self, id: &str) -> String {
+        let mut metadata = String::from("metadata:\n");
+        for ((_, key), value) in FIELDS.iter().zip(&self.generated.fields[id]) {
+            metadata.push_str(&format!("  {key}: {value}\n"));
+        }
+        metadata
+    }
+
+    /// Write the project, its tasks and its document, each with the content and the board field
+    /// values generated for it.
     fn author(&self) {
         let generated = &self.generated;
         std::fs::write(
             self.root.join("projects/P.md"),
             format!(
-                "---\ntitle: Copy the plan in a fraction of the time\nstatus: todo\n---\n{}",
+                "---\ntitle: Copy the plan in a fraction of the time\nstatus: todo\n{}---\n{}",
+                self.field_values("P"),
                 generated.project
             ),
         )
@@ -240,7 +283,8 @@ impl Plan {
         std::fs::write(
             self.root.join("documents/D.md"),
             format!(
-                "---\ntitle: Design of the plan copy\nproject: P\n---\n{}\n## Planned tasks\n\n{table}\n![Where the copy spends its time](./diagram.png)\n",
+                "---\ntitle: Design of the plan copy\nproject: P\n{}---\n{}\n## Planned tasks\n\n{table}\n![Where the copy spends its time](./diagram.png)\n",
+                self.field_values("D"),
                 generated.document
             ),
         )
@@ -248,7 +292,8 @@ impl Plan {
     }
 
     /// Write task `n` with `content`, filed under the project or not, keeping whatever metadata
-    /// an earlier copy recorded in its front matter.
+    /// an earlier copy recorded in its front matter — its generated board field values when
+    /// nothing was recorded yet.
     pub fn write_task(&self, n: usize, content: &str, filed: bool) {
         let path = self.root.join(format!("tasks/T-{n}.md"));
         let kept = std::fs::read_to_string(&path)
@@ -262,7 +307,7 @@ impl Plan {
                 let at = front.find("metadata:")?;
                 Some(format!("{}\n", &front[at..]))
             })
-            .unwrap_or_default();
+            .unwrap_or_else(|| self.field_values(&format!("T-{n}")));
         let depends: Vec<String> = EDGES
             .iter()
             .filter(|(task, _)| *task == n)
@@ -394,9 +439,22 @@ fn split_slot(body: &str) -> (&str, Value) {
 /// Every id the board holds a counterpart of the plan under, by the plan's own ids.
 pub(super) type Counterparts = BTreeMap<String, String>;
 
+/// Hold the board item `native` to carrying the board field values generated for `source` in
+/// its text fields, and nothing in a field the source gives it no value of.
+fn carries_fields(plan: &Plan, native: &str, source: &str) {
+    let values = &plan.generated.fields[source];
+    for (index, (field, _)) in FIELDS.iter().enumerate() {
+        assert_eq!(
+            plan.github.text_of(native, field),
+            values.get(index).cloned(),
+            "{source}'s {field} field on the board"
+        );
+    }
+}
+
 /// Hold the board to holding exactly the generated plan, `changed` naming a task whose
 /// content was replaced since: the project, eight tasks and the document each with the
-/// source's title, content, state and board fields, every task a sub-issue of the project,
+/// source's title, content, state, status and generated board field values, every task a sub-issue of the project,
 /// the ten blocked-by edges and no others, and the document referencing each task's
 /// counterpart and its PNG as an uploaded asset whose bytes are the source's.
 fn holds_the_plan(plan: &Plan, at: &Counterparts, changed: Option<(usize, &str)>) {
@@ -412,6 +470,7 @@ fn holds_the_plan(plan: &Plan, at: &Counterparts, changed: Option<(usize, &str)>
     let (content, slot) = split_slot(held["body"].as_str().unwrap());
     assert_eq!(content.trim_end(), plan.generated.project.trim_end());
     assert_eq!(slot["onetaskgraph.item_kind"], "project");
+    carries_fields(plan, project, "P");
     for n in 1..=TASKS {
         let native = &at[&format!("T-{n}")];
         let held = item(native);
@@ -430,6 +489,7 @@ fn holds_the_plan(plan: &Plan, at: &Counterparts, changed: Option<(usize, &str)>
         );
         let (content, _) = split_slot(held["body"].as_str().unwrap());
         assert_eq!(content.trim_end(), expected.trim_end(), "T-{n}'s body");
+        carries_fields(plan, native, &format!("T-{n}"));
         let mut blockers = github.blockers(native);
         blockers.sort();
         let mut expected: Vec<String> = EDGES
@@ -458,6 +518,7 @@ fn holds_the_plan(plan: &Plan, at: &Counterparts, changed: Option<(usize, &str)>
     assert_eq!(held["state"], "OPEN");
     assert_eq!(held["origin"], "notes:D");
     assert_eq!(held["parent"], json!(project));
+    carries_fields(plan, &at["D"], "D");
     let (content, slot) = split_slot(held["body"].as_str().unwrap());
     let asset = &slot["onetaskgraph.assets"]["diagram.png"];
     let url = asset["url"].as_str().unwrap();
