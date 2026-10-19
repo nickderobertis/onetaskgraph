@@ -660,6 +660,67 @@ fn the_lanes_own_recheck_pauses_on_a_real_answers_headers_and_decides_after_the_
 }
 
 #[test]
+fn a_recheck_whose_burn_resets_first_but_whose_estimate_breaches_the_buffer_pauses_rather_than_declines()
+ {
+    // What declined the credentialed lane's cleanup on CI: admitted above forty per cent, the
+    // account was drawn down by other work until the session's own last answer carried 462 of
+    // 5,000 a minute before the reset. The burn rate since the window began resets first, but
+    // 462 less what the session still owes leaves under the retained buffer — so the recheck
+    // waits for that reset and decides on what it reads after it, rather than declining.
+    let _turn = take_the_turn();
+    let started = budget::epoch_now();
+    let standin = Standin::start(Reported {
+        endpoint: 4_000,
+        object: 3_800,
+        headers: 3_600,
+        reset: started + 3_000,
+    });
+    let into = Accounting::new();
+    let admitted = block_on(budget::precondition("test-token", &standin.host, &into))
+        .unwrap_or_else(|declined| panic!("{}", declined.message()));
+    assert!(admitted.pauses().is_empty());
+
+    let reset = started + 60;
+    let low = 462;
+    into.record(
+        onetaskgraph_github_projects::accounting::Request::graphql(
+            "query { __typename }",
+            &json!({}),
+            Some("a real answer"),
+            None,
+        )
+        .finished(
+            onetaskgraph_github_projects::accounting::Outcome::Answered,
+            onetaskgraph_github_projects::accounting::RateLimit::read(|name| match name {
+                "x-ratelimit-limit" => Some(LIMIT.to_string()),
+                "x-ratelimit-remaining" => Some(low.to_string()),
+                "x-ratelimit-used" => Some((LIMIT - low).to_string()),
+                "x-ratelimit-reset" => Some(reset.to_string()),
+                "x-ratelimit-resource" => Some("graphql".to_owned()),
+                _ => None,
+            }),
+        ),
+    );
+    block_on(budget::recheck_remaining(&admitted, &into, 123))
+        .unwrap_or_else(|declined| panic!("{}", declined.message()));
+
+    assert_eq!(
+        budget::epoch_now(),
+        reset,
+        "waited until the answer's reset"
+    );
+    let pauses = admitted.pauses();
+    assert_eq!(pauses.len(), 1, "{pauses:?}");
+    assert_eq!(pauses[0].decided_on.remaining(), low);
+    assert!(
+        pauses[0].by.contains("headers of a real answer"),
+        "{}",
+        pauses[0].by
+    );
+    assert_eq!(standin.asked(), [ONE_READ, ONE_READ, ONE_READ].concat());
+}
+
+#[test]
 fn a_budget_that_never_comes_back_is_waited_for_a_bounded_number_of_times_then_declined() {
     // Ten per cent, half an hour from its reset, and still ten per cent after every reset: the
     // session pauses `MOST_PAUSES` times, reading again after each, and then the retained

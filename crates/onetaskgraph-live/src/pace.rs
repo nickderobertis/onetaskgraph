@@ -25,7 +25,10 @@ use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 
-use crate::{Allowance, Demand, Fraction, Metered, Unaffordable, affordable, still_affordable};
+use crate::{
+    Allowance, Demand, Fraction, Metered, RETAINED_BUFFER, Unaffordable, affordable,
+    still_affordable,
+};
 
 /// The share of a budget's whole allowance under which a live session pauses for the reset.
 ///
@@ -145,7 +148,10 @@ pub enum Pace {
 /// since the window began — what has been used, over the time since `reset - window` — is
 /// projected to the reset: when what remains still covers that projection and the session's
 /// estimate, the budget resets before it would be exhausted and the answer is [`Pace::Go`];
-/// otherwise [`Pace::Wait`] until the reset. A reset already past is never waited for — the
+/// otherwise [`Pace::Wait`] until the reset. Going on under it also needs what the estimate
+/// leaves to keep [`RETAINED_BUFFER`]: a budget the session cannot afford before its reset is
+/// one to wait for, not one to be declined on, because the reset is what makes it affordable
+/// again. A reset already past is never waited for — the
 /// reading is behind its own window, and the next read is what tells — and a window with no
 /// time behind it yet has no rate to project, so it waits.
 #[must_use]
@@ -164,7 +170,11 @@ pub fn pace(allowance: Allowance, estimated_cost: u64, now: u64, window: u64) ->
         let to_reset = reset - now;
         // Rounded up, so a rate that only just fits is not taken to fit.
         let projected = (u128::from(used) * u128::from(to_reset)).div_ceil(u128::from(elapsed));
-        if projected + u128::from(estimated_cost) < u128::from(allowance.remaining()) {
+        let keeps_buffer = allowance.remaining().saturating_sub(estimated_cost)
+            >= RETAINED_BUFFER.of(allowance.limit());
+        if keeps_buffer
+            && projected + u128::from(estimated_cost) < u128::from(allowance.remaining())
+        {
             return Pace::Go;
         }
     }
@@ -409,6 +419,21 @@ mod tests {
         );
         // A reset already past is not waited for.
         assert_eq!(pace(allowance(10, 900), 100, 1_000, 3_600), Pace::Go);
+    }
+
+    #[test]
+    fn under_forty_per_cent_a_burn_that_resets_first_still_waits_when_the_estimate_breaches_the_buffer()
+     {
+        // 4,538 used over the 3,500 s since the window began at 500: the 100 s to the reset at
+        // that rate is 130 more, which with an estimate of 123 is under the 462 left — it
+        // resets first. But 462 less 123 leaves 339 where the retained buffer is 1,000, which
+        // `affordable` would refuse: the session waits for the reset that restores it instead.
+        assert_eq!(
+            pace(allowance(462, 4_100), 123, 4_000, 3_600),
+            Pace::Wait { until: 4_100 }
+        );
+        // The same burn with 1,200 left keeps the buffer after the estimate, and goes on.
+        assert_eq!(pace(allowance(1_200, 4_100), 123, 4_000, 3_600), Pace::Go);
     }
 
     /// A gauge whose budget never recovers: every read reports ten per cent left, resetting a

@@ -456,7 +456,9 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   answer's headers. **Before the buffer, the 40% rule:** a budget is the least of every reading
   of it (`onetaskgraph_live::pace`), and one under `PAUSE_BELOW` — forty per cent of its limit —
   is a reason to *pause* until its reset, not to decline, unless the burn rate since its window
-  began says it resets before the session would exhaust it; it is read again after the wait,
+  began says it resets before the session would exhaust it and its estimate keeps the retained
+  buffer — a budget it cannot afford until the reset is waited for, never declined on; it is
+  read again after the wait,
   every pause is on the session's report, and every recheck below applies the same rule. The
   product's own copy keeps its rate-limit backoff and never pauses this way.
   `tests/pause_gate.rs` drives admission and recheck on a virtual clock. The estimate it decides
