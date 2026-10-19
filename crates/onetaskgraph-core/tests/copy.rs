@@ -3825,7 +3825,7 @@ fn board_holding_counterparts() -> Value {
 }
 
 #[tokio::test]
-async fn the_destination_is_walked_once_for_a_whole_invocation_and_not_at_all_for_nothing() {
+async fn each_referent_is_asked_for_once_for_a_whole_invocation_and_nothing_for_nothing() {
     let (engine, task_pages) =
         into_counting(two_documents_of_one_project(), board_holding_counterparts());
 
