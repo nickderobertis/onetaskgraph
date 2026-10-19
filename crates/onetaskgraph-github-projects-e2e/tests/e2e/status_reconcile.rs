@@ -493,28 +493,19 @@ fn a_reconcile_walks_every_page_of_the_closed_items() {
     setup.item_reads_are_closed_filtered();
 }
 
-/// GitHub's secondary rate limit on GraphQL points: no more than 2,000 points per minute for
-/// the endpoint, as "Rate limits and query limits for the GraphQL API" publishes it
-/// (<https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api#secondary-rate-limits>).
-/// A dry run finishes well inside a minute, so every point it sends counts against one minute.
+/// GitHub's secondary rate limit on GraphQL points, per minute, from
+/// <https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api#secondary-rate-limits>.
+/// A dry run finishes inside a minute, so all of its points count against one.
+// llmlint: ignore[contracts_have_one_source_or_a_drift_gate] GitHub publishes this limit only in that prose, and `github-graphql-node-count`, where this workspace takes GitHub's published query rules from, carries no constant for it; this is the tree's one copy, cited where it is written.
 const GRAPHQL_POINTS_PER_MINUTE: u64 = 2_000;
 
-/// The largest `first` GitHub accepts on any connection, as the same page publishes it: a
-/// value outside 1 to 100 is refused before the query runs.
-const GITHUB_PAGE_ARGUMENT_LIMIT: u64 = 100;
-
-/// Every document a reconcile dry run sends, held to the limits GitHub publishes for one query
-/// and for one minute, with no credential.
+/// Every document a reconcile dry run sends, held to the limits GitHub refuses a query or a
+/// minute of queries past, with no credential.
 ///
-/// The credentialed lane's run of `a_reconcile_dry_run_reads_the_live_board_through_its_closed_filter_alone`
-/// was refused once with GitHub's generic "Something went wrong while executing your query"
-/// (CI run 39180155490). The same document passed on the next run (39184315799). This rules out
-/// the causes a document's own text can carry: GitHub refuses a document at or above its node
-/// limit before executing it, with a message naming the limit; a page argument outside 1 to 100
-/// is refused the same way; and a dry run past the per-minute point limit trips the secondary
-/// limiter. Each document is counted from what the binary actually sent, under the largest page
-/// sizes this source can bind, so this holds the whole of what a dry run sends rather than the
-/// one document it was written for. Two pages of closed items make the run page.
+/// It reads what the binary actually sent rather than a list of documents, so a read added to
+/// the dry run later is held too, and it pages the closed items so a later page is among them.
+/// Each document is counted under the largest page sizes this source can bind, which the
+/// node-count rules hold to GitHub's 1 to 100, and each binding the run made is held to those.
 #[test]
 fn every_document_a_reconcile_dry_run_sends_is_within_githubs_published_query_limits() {
     let setup = closed_at_todo(150);
@@ -537,14 +528,15 @@ fn every_document_a_reconcile_dry_run_sends_is_within_githubs_published_query_li
         for (name, bound) in &largest {
             if let Some(value) = variables.get(name).and_then(Value::as_u64) {
                 assert!(
-                    (1..=GITHUB_PAGE_ARGUMENT_LIMIT).contains(&value) && value <= u64::from(*bound),
-                    "${name} was bound to {value}, outside GitHub's 1 to \
-                     {GITHUB_PAGE_ARGUMENT_LIMIT} or this source's largest {bound}: {query}"
+                    (1..=u64::from(*bound)).contains(&value),
+                    "${name} was bound to {value}, outside 1 to this source's largest {bound}: \
+                     {query}"
                 );
             }
         }
         let nodes = onetaskgraph_github_projects::worst_case_node_count(query)
             .unwrap_or_else(|error| panic!("a document the dry run sent is countable: {error}"));
+        // llmlint: ignore-block[tests_hold_no_nonfunctional_thresholds] Both are GitHub's refusals, not this product's performance: a document at or above the node limit is refused before it runs, and points past the per-minute limit trip the secondary limiter, which then refuses reads too. The task's acceptance criterion asks for exactly this hold, and `tests/node_count.rs` holds every document to the same node limit.
         assert!(
             nodes < onetaskgraph_github_projects::NODE_COUNT_LIMIT,
             "a document the dry run sent may return {nodes} nodes, at or above GitHub's limit \
@@ -558,6 +550,7 @@ fn every_document_a_reconcile_dry_run_sends_is_within_githubs_published_query_li
         points <= GRAPHQL_POINTS_PER_MINUTE,
         "the dry run may spend {points} points, past GitHub's {GRAPHQL_POINTS_PER_MINUTE} a minute"
     );
+    // llmlint: ignore-end[tests_hold_no_nonfunctional_thresholds]
     assert!(
         sent.iter()
             .filter(|(query, _)| query == onetaskgraph_github_projects::graphql::CLOSED_ITEMS)

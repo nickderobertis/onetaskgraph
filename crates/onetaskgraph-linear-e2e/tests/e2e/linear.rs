@@ -578,17 +578,13 @@ fn slotted_workspace(sandbox: &Sandbox) -> (Value, LinearWorkspace) {
     )
 }
 
-/// A metadata change through the binary moves the task's `lin1` token to one ordered after the
-/// token read before it.
+/// A metadata change through the binary moves the task's `lin1` token past the one read before it.
 ///
-/// The credentialed lane's `every_field_change_moves_a_linear_tasks_token` once read the token
-/// unmoved after the same write against real Linear (CI run 39184315799), and passed on two other
-/// runs of the same code. A task's token covers its description, and so its metadata slot, only
-/// through `Issue.updatedAt`, which `spike-linear-coverage` measured moving for a slot edit (§4.13d
-/// of `docs/plugin-protocol.md`). So this holds the plugin's half without a credential: what it
-/// sends for a metadata write and what it spells from the read after it. The loopback moves an
-/// issue's `updatedAt` on every `issueUpdate`, as the spike measured Linear doing. The ordering is
-/// the plugin's own, so a token read equal after the change fails here.
+/// A task's token covers its description, and so its metadata slot, only through
+/// `Issue.updatedAt` (§4.13d of `docs/plugin-protocol.md`). The loopback moves that time on every
+/// `issueUpdate`, as `spike-linear-coverage` measured Linear doing, so this holds the plugin's half
+/// of the property: one write, and a token spelled from the read after it that the plugin's own
+/// ordering puts later.
 #[test]
 fn a_metadata_set_moves_a_linear_tasks_change_token_past_the_one_read_before_it() {
     let sandbox = Sandbox::new();
