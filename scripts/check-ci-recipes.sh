@@ -380,6 +380,7 @@ for job in test-linux; do
   expect "$job after a change to $NOTHING_FILE" ran "$CHANGED:coverage" absent
   expect "$job after a change to $NOTHING_FILE" ran "workspace:test" absent
   expect "$job after a change to $NOTHING_FILE" ran "scripts:distribution-test"
+  expect "$job after a change to $NOTHING_FILE" ran "scripts:fixture-discrimination"
 done
 for job in test-windows test-macos; do
   recipe "ci-$job" --select-only
@@ -388,6 +389,7 @@ for job in test-windows test-macos; do
   expect "$job after a change to $NOTHING_FILE" selects "$CHANGED:test" absent
   expect "$job after a change to $NOTHING_FILE" selects "scripts:distribution-check"
   expect "$job after a change to $NOTHING_FILE" selects "scripts:distribution-test"
+  expect "$job after a change to $NOTHING_FILE" selects "scripts:fixture-discrimination"
 done
 
 # 3. One of the changed project's targets failing fails the recipe that ran it, and every
