@@ -79,10 +79,7 @@ const files = {
     name: "@onetaskgraph/cli",
     version: "1.2.3",
     optionalDependencies: Object.fromEntries(
-      ["linux-x64", "linux-arm64", "darwin-arm64", "win32-x64"].map((x) => [
-        `@onetaskgraph/cli-${x}`,
-        "1.2.3",
-      ]),
+      ["linux-x64", "darwin-arm64", "win32-x64"].map((x) => [`@onetaskgraph/cli-${x}`, "1.2.3"]),
     ),
   }),
   "bun.lock": JSON.stringify(
@@ -636,7 +633,7 @@ test("publication workload reconciles actual workflow condition variables", () =
     "vars[inputs.control] == 'true'",
   ]) {
     const definitions = workflows();
-    definitions["release.yml"].jobs["publish-npm"].if = expression;
+    definitions["release.yml"].jobs.publish.if = expression;
     assert.throws(() => validatePublishControls(definitions), /Unmeasured|Unresolved/);
   }
 });
@@ -712,7 +709,7 @@ test("workflow matrices, event fan-out and exact release head model record sched
                 entry.id === "manual-opt-in",
               );
             if (entry.event === "release" && run.workflow === "release.yml")
-              assert.ok(macs.some((r) => r.job === "macos-assets-carriers-and-wheels"));
+              assert.ok(macs.some((r) => r.job === "build-macos"));
             run.macJobs = macs.length;
           }
           scenarios.push({ ...scenario, policy: policyResult, runs });

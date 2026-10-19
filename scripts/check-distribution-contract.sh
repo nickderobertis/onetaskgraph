@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-fail() { echo "distribution contract drift: $1" >&2; echo "next: update the release matrix, installer, launcher, and carrier manifests together" >&2; exit 1; }
+fail() { echo "distribution contract drift: $1" >&2; echo "next: update the release platform table, installer, launcher, and carrier manifests together" >&2; exit 1; }
 # The path is assembled from BASH_SOURCE at runtime, so shellcheck cannot resolve it.
 # Naming the file has it follow and check read-lines.sh (SC1091) rather than skip it unread.
 # shellcheck source=scripts/read-lines.sh
@@ -10,7 +10,7 @@ fail() { echo "distribution contract drift: $1" >&2; echo "next: update the rele
 # directory", which names the sourcing line rather than the file to put back.
 read_lines_path="$(dirname "${BASH_SOURCE[0]}")/read-lines.sh"
 if [ ! -r "$read_lines_path" ] || ! source "$read_lines_path"; then echo "distribution contract drift: could not load scripts/read-lines.sh, which reads both inventories below into arrays" >&2; echo "next: restore it with 'git checkout -- scripts/read-lines.sh'" >&2; exit 1; fi
-expected=(darwin-arm64 linux-arm64 linux-x64 win32-x64)
+expected=(darwin-arm64 linux-x64 win32-x64)
 packages_file="$(mktemp)" || fail "could not create a temporary carrier inventory"
 trap 'rm -f "$packages_file"' EXIT
 if ! find npm/platforms -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort > "$packages_file"; then
@@ -18,83 +18,89 @@ if ! find npm/platforms -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | s
 fi
 read_lines packages < "$packages_file"
 [[ ${packages[*]} == "${expected[*]}" ]] || fail "npm carriers are '${packages[*]}', expected '${expected[*]}'"
-# Both packaging jobs carry the grammar, so every occurrence has to be the installer's one.
-release_tag_pattern=$(sed -n "/invalid release tag:/s/.*grep -Eq '\([^']*\)'.*/\1/p" .github/workflows/release.yml | sort -u)
+# What a release builds is scripts/release_products.py's platform table, and every CD job
+# reads it through scripts/release_cd.py; the installer, the carriers and each build job's
+# runner are held to it here. The tag grammar lives there too, and the installer carries a copy.
+release_table="$(python3 -c '
+import sys
+sys.path.insert(0, "scripts")
+from release_products import PLATFORM_TARGETS, RELEASE_TAG_PATTERN
+print(RELEASE_TAG_PATTERN)
+for row in PLATFORM_TARGETS:
+    print(row.platform, row.runner, row.target, row.extension, row.npm_platform)
+' | tr -d '\r')" || fail "could not read the release platform table from scripts/release_products.py"
+release_tag_pattern=$(sed -n 1p <<< "$release_table")
 installer_tag_pattern=$(sed -n "/unsupported release tag:/s/.*grep -Eq '\([^']*\)'.*/\1/p" scripts/install.sh)
-[[ -n $release_tag_pattern && $release_tag_pattern == "$installer_tag_pattern" ]] || fail "release workflow and installer accept different release-tag grammars"
-while read -r os target ext npm; do
-  grep -Fq -- "- { os: $os, target: $target, ext: $ext, npm: $npm }" .github/workflows/release.yml || fail "$target is not mapped to $os/$ext/$npm in the release matrix"
+[[ -n $release_tag_pattern && $release_tag_pattern == "$installer_tag_pattern" ]] || fail "the release platform table and installer accept different release-tag grammars"
+mappings=$(sed 1d <<< "$release_table")
+[[ $mappings == "linux ubuntu-latest x86_64-unknown-linux-gnu tar.gz linux-x64
+macos macos-latest aarch64-apple-darwin tar.gz darwin-arm64
+windows windows-latest x86_64-pc-windows-msvc zip win32-x64" ]] || fail "the release platform table builds '${mappings//$'\n'/; }', not x86_64 Linux, Apple Silicon and x86_64 Windows, one job each"
+# Read before it is judged: under `set -e` a sed that cannot open the workflow would end the
+# script here on sed's own diagnostic, and the refusal below — which is where the next action
+# lives — would never run.
+workflow=$(sed -n '1,$p' .github/workflows/release.yml) || { echo "distribution contract drift: could not read .github/workflows/release.yml, which carries the build jobs" >&2; echo "next: restore it with 'git checkout -- .github/workflows/release.yml'" >&2; exit 1; }
+while read -r platform runner target ext npm; do
   grep -Fq "$target; ext=$ext" scripts/install.sh || fail "$target is not mapped to $ext in the installer"
-done <<'MAPPINGS'
-ubuntu-latest x86_64-unknown-linux-gnu tar.gz linux-x64
-ubuntu-24.04-arm aarch64-unknown-linux-gnu tar.gz linux-arm64
-windows-latest x86_64-pc-windows-msvc zip win32-x64
-MAPPINGS
-# macOS is ONE job on the small shared Mac pool, building Apple Silicon artifacts only; the
-# installer refuses Intel macOS by name. Downstream artifact names are held here so the job
-# cannot rename one.
-macos_job=$(sed -n '/^  macos-assets-carriers-and-wheels:/,/^  collect-wheels:/p' .github/workflows/release.yml)
-[[ -n $macos_job ]] || fail "the release workflow has no macos-assets-carriers-and-wheels job ahead of collect-wheels"
-! grep -Fq -- '- { os: macos-latest' .github/workflows/release.yml || fail "macOS must not be a row of a sequential matrix; Apple Silicon builds in the one macOS job"
-grep -Fq 'runs-on: macos-latest' <<< "$macos_job" || fail "the macOS job must run on macos-latest"
-grep -Fq 'TARGETS: aarch64-apple-darwin=darwin-arm64' <<< "$macos_job" || fail "the macOS job must package exactly aarch64-apple-darwin=darwin-arm64"
-grep -Fq 'EXT: tar.gz' <<< "$macos_job" || fail "the macOS job must archive as tar.gz, which is what the installer expects"
-grep -Fq 'with: { target: "aarch64-apple-darwin" }' <<< "$macos_job" || fail "the macOS job must install the Apple Silicon Rust target"
-! grep -RqiE 'x86_64-apple-darwin|darwin-x64|rosetta' .github/workflows release-targets.toml npm/platforms npm/cli/package.json scripts/product_versions.py scripts/verify-release-products.py || fail "an Intel macOS target, carrier or Rosetta step is still declared; Intel macOS is no longer released"
+  job=$(sed -n "/^  build-$platform:\$/,/^  [a-z-]*:\$/p" <<< "$workflow")
+  [[ -n $job ]] || fail "the release workflow has no build-$platform job"
+  grep -Fq "runs-on: $runner" <<< "$job" || fail "the build-$platform job must run on $runner"
+  grep -Fq "with: { target: $target }" <<< "$job" || fail "the build-$platform job must install the $target Rust target"
+  grep -Fq "run: just release-$platform build --tag" <<< "$job" || fail "the build-$platform job must build, package and test-install through 'just release-$platform build'"
+done <<< "$mappings"
+! grep -RqiE 'x86_64-apple-darwin|darwin-x64|rosetta' .github/workflows release-targets.toml npm/platforms npm/cli/package.json scripts/product_versions.py scripts/verify-release-products.py scripts/release_products.py scripts/release_cd.py || fail "an Intel macOS target, carrier or Rosetta step is still declared; Intel macOS is no longer released"
 grep -Fq 'Darwin:x86_64) die 69 "Intel macOS is no longer supported' scripts/install.sh || fail "the installer must refuse Intel macOS by name"
-target=aarch64-apple-darwin npm=darwin-arm64
-grep -Fq "$target; ext=tar.gz" scripts/install.sh || fail "$target is not mapped to tar.gz in the installer"
-grep -Fq "with: { target: \"$target\", args: \"--release --locked --out dist/wheels/$target\" }" <<< "$macos_job" || fail "the macOS job does not build the $target wheel into dist/wheels/$target"
-grep -Fq "with: { name: \"wheels-$target\", path: dist/wheels/$target }" <<< "$macos_job" || fail "the macOS job does not upload the $target wheels as wheels-$target, the name publish-python downloads"
-grep -Fq "with: { name: \"carrier-$npm\", path: \"dist/carriers/$npm/*.tgz\" }" <<< "$macos_job" || fail "the macOS job does not upload the $npm carrier as carrier-$npm, the name publish-npm downloads"
-# Maturin owns the canonical bytes. Every other form is staged from those bytes,
-# and all registry publication waits for the Linux archive attachment after install proofs.
-wheel_line=$(grep -Fn 'PyO3/maturin-action' <<< "$macos_job" | head -n1 | cut -d: -f1) || fail "the macOS job must declare its canonical wheel build"
-archive_line=$(grep -Fn 'name: Archive, checksum, and stage' <<< "$macos_job" | head -n1 | cut -d: -f1) || fail "the macOS job must name its archive staging step 'Archive, checksum, and stage'"
-[[ -n $archive_line && -n $wheel_line && $wheel_line -lt $archive_line ]] || fail "the macOS job must build its canonical wheels before packaging archives"
-grep -Fq 'python3 scripts/release-wheel-binary.py' <<< "$macos_job" || fail "the macOS job must reuse maturin wheel binaries"
-grep -Fq 'python3 scripts/verify-release-products.py' <<< "$macos_job" || fail "the macOS job must install and run its staged products before publication"
-# One packaging body, in both jobs, byte for byte: a fix to one that left the other behind
-# would ship two releases' worth of archives from two different scripts.
-python3 - <<'PY' || fail "the two 'Archive, checksum, and stage' steps of the release workflow differ; keep their run bodies identical"
+! grep -RqiE 'aarch64-unknown-linux-gnu|linux-arm64|ubuntu-24.04-arm' .github/workflows release-targets.toml npm/platforms npm/cli/package.json scripts/product_versions.py scripts/release_products.py scripts/release_cd.py justfile || fail "a Linux arm64 target, carrier or runner is still declared; Linux arm64 is no longer released"
+grep -Fq "Linux:aarch64|Linux:arm64) die 69 \"Linux arm64 is no longer supported" scripts/install.sh || fail "the installer must refuse Linux arm64 by name"
+# Maturin owns the canonical bytes, and every other form is staged from them: the wheel is
+# built, its binary taken out, the archive and carrier packed from that, and all of it
+# installed and run — in that order, inside the build phase, before any publication.
+python3 - <<'PY' || fail "scripts/release_cd.py must build the wheel, take its binary out, pack the archive and carrier from it, and install and run them, in that order, before publishing"
 import re
 from pathlib import Path
 
-workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
-bodies = re.findall(r"(?ms)^      - name: Archive, checksum, and stage\n.*?^        run: \|\n(.*?)(?=^      - )", workflow)
-raise SystemExit(0 if len(bodies) == 2 and bodies[0] == bodies[1] else 1)
+driver = Path("scripts/release_cd.py").read_text(encoding="utf-8")
+build = re.search(r"(?ms)^def build_target\(.*?(?=^def )", driver)
+package = re.search(r"(?ms)^def package_target\(.*?(?=^def )", driver)
+if not build or not package:
+    raise SystemExit(1)
+in_order = lambda body, steps: all(body.find(step) >= 0 for step in steps) and [body.find(step) for step in steps] == sorted(body.find(step) for step in steps)
+built = in_order(build.group(0), ['"maturin", "build"', "package_target(row, tag, dist)", "scripts/verify-release-products.py", '"--install"'])
+packed = in_order(package.group(0), ["scripts/release-wheel-binary.py", "tarfile.open(archive", '"pack"'])
+raise SystemExit(0 if built and packed else 1)
 PY
-wheel_job=$(sed -n '/^  collect-wheels:/,/^  build-distributions:/p' .github/workflows/release.yml)
-grep -Fq 'runs-on: ubuntu-latest' <<< "$wheel_job" || fail "wheel fan-in and asset attachment must run on Linux"
-grep -Fq 'pattern: "wheels-*"' <<< "$wheel_job" || fail "wheel fan-in must read every built target"
-grep -Fq 'needs: [collect-wheels, macos-assets-carriers-and-wheels, build-distributions, publish-assets]' .github/workflows/release.yml || fail "publish-python must wait on installed macOS wheels and attached archives"
-grep -Fq 'needs: [native-assets-carriers-and-wheels, macos-assets-carriers-and-wheels, build-distributions, publish-assets]' .github/workflows/release.yml || fail "publish-npm must wait on installed Darwin carriers and attached archives"
-grep -Fq 'gh release upload "$TAG" dist/assets/* --clobber --repo "$GITHUB_REPOSITORY"' .github/workflows/release.yml || fail "Linux release asset uploads must replace assets left by an earlier attempt"
-crate_job=$(sed -n '/^  publish-crates:/,/^  publish-python:/p' .github/workflows/release.yml)
-grep -Fq 'publication=$(scripts/crate-publication-status.sh "$crate" "$version") || exit $?' <<< "$crate_job" || fail "crate publication must decide from scripts/crate-publication-status.sh, which identifies the caller to crates.io"
-! grep -Eq 'curl|wget' <<< "$crate_job" || fail "the crates.io existence query must stay in scripts/crate-publication-status.sh, where the caller is identified to the registry"
-grep -Fq 'published) ;;' <<< "$crate_job" || fail "a crate already on crates.io must be left alone"
-grep -Fq 'absent) scripts/crate-sibling-resolution.sh "$crate" || exit $?; RUSTFLAGS=' <<< "$crate_job" || fail "a crate absent from crates.io must be published, and only after scripts/crate-sibling-resolution.sh finds every sibling it requires resolving to the version released with it"
+crate_body=$(sed -n '/^def publish_crates(/,/^def /p' scripts/release_cd.py)
+grep -Fq '"scripts/crate-publication-status.sh", crate, version_of(tag)' <<< "$crate_body" || fail "crate publication must decide from scripts/crate-publication-status.sh, which identifies the caller to crates.io"
+! grep -Eq 'curl|wget' scripts/release_cd.py || fail "the crates.io existence query must stay in scripts/crate-publication-status.sh, where the caller is identified to the registry"
+grep -Fq 'if status == "published":' <<< "$crate_body" || fail "a crate already on crates.io must be left alone"
+python3 - <<'PY' || fail "a crate absent from crates.io must be published, and only after scripts/crate-sibling-resolution.sh finds every sibling it requires resolving to the version released with it"
+import re
+from pathlib import Path
+
+body = re.search(r"(?ms)^def publish_crates\(.*?(?=^def |\Z)", Path("scripts/release_cd.py").read_text(encoding="utf-8"))
+text = body.group(0) if body else ""
+resolution, publication = text.find('"scripts/crate-sibling-resolution.sh", crate'), text.find('"publish", "-p", crate')
+raise SystemExit(0 if 0 <= resolution < publication else 1)
+PY
 grep -Fq -- '--user-agent "$agent"' scripts/crate-publication-status.sh || fail "the crates.io existence query must send an explicit user agent; the registry answers curl's default with 403"
 grep -Fq 'agent="onetaskgraph-release (https://github.com/nickderobertis/onetaskgraph)"' scripts/crate-publication-status.sh || fail "the crates.io user agent must name this release and a contact URL for it"
 grep -Fq 'NPM_TOKEN is required (received ${#token} characters)' scripts/publish-npm.sh || fail "the npm token guard must report only the received token length"
 grep -Fq 'token=${NODE_AUTH_TOKEN:-}' scripts/publish-npm.sh || fail "the npm token must be read through a default before its length is taken; under 'set -u' an unset one ends the script on bash's own diagnostic instead of the guard's message"
 # npm authentication drift is repaired in the publication path rather than in the
 # manifests the generic next action names, so it reports its own.
-fail_npm_auth() { echo "distribution contract drift: $1" >&2; echo "next: restore the npm registry authentication in .github/workflows/release.yml and scripts/npm-registry-auth.sh together" >&2; exit 1; }
-# Read before it is judged: under `set -e` a sed that cannot open the workflow would end
-# the script here on sed's own diagnostic, and the refusal below — which is where the next
-# action lives — would never run.
-npm_job=$(sed -n '/^  publish-npm:/,$p' .github/workflows/release.yml) || { echo "distribution contract drift: could not read .github/workflows/release.yml, which carries the publish-npm job" >&2; echo "next: restore it with 'git checkout -- .github/workflows/release.yml'" >&2; exit 1; }
-[[ -n $npm_job ]] || fail_npm_auth "the release workflow has no publish-npm job to authenticate"
+fail_npm_auth() { echo "distribution contract drift: $1" >&2; echo "next: restore the npm registry authentication in .github/workflows/release.yml, scripts/publish-npm.sh and scripts/npm-registry-auth.sh together" >&2; exit 1; }
+npm_steps=$(grep -F 'publish --to npm' <<< "$workflow" || true)
+[[ -n $npm_steps ]] || fail_npm_auth "the release workflow has no npm publication step to authenticate"
 # The publication itself lives in scripts/publish-npm.sh, which scripts/check-npm-publish.sh
-# drives against a registry of its own on every gate run — the job must invoke that script
-# rather than carry a second copy of it that nothing has ever run.
-grep -Fq 'run: scripts/publish-npm.sh' <<< "$npm_job" || fail_npm_auth "the publish-npm job must run scripts/publish-npm.sh, which is the publication scripts/check-npm-publish.sh exercises"
-! grep -Fq 'npm publish' <<< "$npm_job" || fail_npm_auth "the publish-npm job must not publish inline; scripts/publish-npm.sh is the one publication path anything can drive"
+# drives against a registry of its own on every gate run and scripts/release_cd.py runs for
+# each job — so every step publishing to npm goes through a recipe, never a copy inline.
+[[ $(grep -Fc 'run: just release-' <<< "$npm_steps") -eq $(wc -l <<< "$npm_steps") ]] || fail_npm_auth "every npm publication step must run 'just release-<job> publish --to npm', which runs scripts/publish-npm.sh — the publication scripts/check-npm-publish.sh exercises"
+! grep -Fq 'npm publish' <<< "$workflow" || fail_npm_auth "the release workflow must not publish inline; scripts/publish-npm.sh is the one publication path anything can drive"
+grep -Fq '[bash, "scripts/publish-npm.sh"]' scripts/release_cd.py || fail_npm_auth "scripts/release_cd.py must publish to npm through scripts/publish-npm.sh"
+! grep -E 'tool\("npm"\)|npm_command\(' scripts/release_cd.py | grep -Fq '"publish"' || fail_npm_auth "scripts/release_cd.py must not run npm publish itself; scripts/publish-npm.sh is the one publication path anything can drive"
 # The public registry is the default and nothing in the workflow may choose another: the
-# override exists so scripts/check-npm-publish.sh can point one run at its own stub.
-! grep -Fq 'NPM_REGISTRY' <<< "$npm_job" || fail_npm_auth "the release workflow must not set NPM_REGISTRY; the public registry is scripts/publish-npm.sh's default"
+# override exists so the checks and journeys can point one run at their own stub.
+! grep -Fq 'NPM_REGISTRY' <<< "$workflow" || fail_npm_auth "the release workflow must not set NPM_REGISTRY; the public registry is scripts/publish-npm.sh's default"
 grep -Fq 'registry=${NPM_REGISTRY:-https://registry.npmjs.org/}' scripts/publish-npm.sh || fail_npm_auth "scripts/publish-npm.sh must default to the public npm registry"
 grep -Fq 'NPM_CONFIG_USERCONFIG=$(scripts/npm-registry-auth.sh "$registry")' scripts/publish-npm.sh || fail_npm_auth "npm publication must configure registry authentication with scripts/npm-registry-auth.sh; NODE_AUTH_TOKEN alone leaves the npm client logged out"
 grep -Fq 'export NPM_CONFIG_USERCONFIG' scripts/publish-npm.sh || fail_npm_auth "the npm configuration must be exported as NPM_CONFIG_USERCONFIG, which is how the npm client finds it"
@@ -185,9 +191,7 @@ PY
 then
   fail "release-plz commit eligibility does not match the release policy"
 fi
-grep -q 'npm pack ./carrier' .github/workflows/release.yml || fail "release workflow does not build npm carrier tarballs"
-grep -q 'cp "$bin"' .github/workflows/release.yml || fail "release workflow does not put native binaries in npm carriers"
-grep -q 'pattern: "carrier-\*"' .github/workflows/release.yml || fail "npm publish does not download built carrier tarballs"
+crate_order=$(python3 -c 'import sys; sys.path.insert(0, "scripts"); from release_cd import CRATE_PUBLICATION_ORDER; print(" ".join(CRATE_PUBLICATION_ORDER))' | tr -d '\r') || fail "could not read the crate publication order from scripts/release_cd.py"
 read_lines crates < <(for manifest in crates/*/Cargo.toml; do basename "$(dirname "$manifest")"; done | sort)
 # Both ways. A crate this workspace publishes has to be in release-plz's inventory and in
 # the publish order, or a release ships without it; a crate marked `publish = false` — the
@@ -197,11 +201,11 @@ read_lines crates < <(for manifest in crates/*/Cargo.toml; do basename "$(dirnam
 for crate in "${crates[@]}"; do
   if grep -Fxq 'publish = false' "crates/$crate/Cargo.toml"; then
     if grep -q "name = \"$crate\"" release-plz.toml; then fail "$crate is publish = false but is in the release-plz package inventory"; fi
-    if grep -q "for crate in .*$crate" .github/workflows/release.yml; then fail "$crate is publish = false but is in the publish order"; fi
+    if [[ " $crate_order " == *" $crate "* ]]; then fail "$crate is publish = false but is in the publish order"; fi
     continue
   fi
   grep -q "name = \"$crate\"" release-plz.toml || [[ $crate == onetaskgraph ]] || fail "$crate missing from release-plz package inventory"
-  grep -q "for crate in .*$crate" .github/workflows/release.yml || fail "$crate missing from publish order"
+  [[ " $crate_order " == *" $crate "* ]] || fail "$crate missing from publish order"
 done
 # Every edge between two crates this workspace publishes is an exact requirement on the
 # version the other is released at. These pre-1.0 crates are lock-step, and a caret lets a

@@ -77,7 +77,7 @@ binary=onetaskgraph
 case "$(uname -s):$(uname -m)" in
   Darwin:x86_64) echo "distribution test cannot run on Intel macOS, which is no longer released; next: run it on Apple Silicon, Linux or Windows" >&2; exit 1;;
   Darwin:arm64|Darwin:aarch64) target=aarch64-apple-darwin;;
-  Linux:aarch64|Linux:arm64) target=aarch64-unknown-linux-gnu;;
+  Linux:aarch64|Linux:arm64) echo "distribution test cannot run on Linux arm64, which is no longer released; next: run it on x86_64 Linux, Apple Silicon or Windows" >&2; exit 1;;
   MINGW*:x86_64|MSYS*:x86_64|CYGWIN*:x86_64) target=x86_64-pc-windows-msvc; ext=zip; binary=onetaskgraph.exe;;
 esac
 name="onetaskgraph-${tag}-${target}.${ext}"
@@ -192,6 +192,12 @@ if PATH="$tmp/shims:$PATH" ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE
 [[ $intel_mac_status -eq 69 ]] || { cat "$tmp/error" >&2; echo "Intel macOS install exited $intel_mac_status, expected 69; next: inspect the Darwin:x86_64 branch of scripts/install.sh" >&2; exit 1; }
 grep -q 'Intel macOS is no longer supported' "$tmp/error" || { cat "$tmp/error" >&2; echo "Intel macOS refusal did not say Intel macOS is no longer supported; next: inspect platform diagnostics" >&2; exit 1; }
 [[ ! -e "$tmp/intel-mac-bin" ]] || { echo "the Intel macOS refusal created an installation directory; next: refuse before any download or write" >&2; exit 1; }
+# Linux arm64 is no longer released either, and is refused the same way, naming cargo.
+printf '#!/bin/sh\ncase "$1" in -s) echo Linux;; -m) echo aarch64;; esac\n' > "$tmp/shims/uname"
+if PATH="$tmp/shims:$PATH" ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL="file://$tmp/releases" ONETASKGRAPH_CHECKSUM_BASE_URL="file://$tmp/canonical" ONETASKGRAPH_INSTALL_DIR="$tmp/linux-arm64-bin" "$root/scripts/install.sh" 2>"$tmp/error"; then linux_arm64_status=0; else linux_arm64_status=$?; fi
+[[ $linux_arm64_status -eq 69 ]] || { cat "$tmp/error" >&2; echo "Linux arm64 install exited $linux_arm64_status, expected 69; next: inspect the Linux:aarch64 branch of scripts/install.sh" >&2; exit 1; }
+grep -q "Linux arm64 is no longer supported.*cargo install onetaskgraph" "$tmp/error" || { cat "$tmp/error" >&2; echo "Linux arm64 refusal did not name cargo; next: inspect platform diagnostics" >&2; exit 1; }
+[[ ! -e "$tmp/linux-arm64-bin" ]] || { echo "the Linux arm64 refusal created an installation directory; next: refuse before any download or write" >&2; exit 1; }
 rm "$tmp/shims/uname" "$tmp/shims/curl"
 printf 'not a directory' > "$tmp/not-a-directory"
 if ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL="file://$tmp/releases" ONETASKGRAPH_CHECKSUM_BASE_URL="file://$tmp/canonical" ONETASKGRAPH_INSTALL_DIR="$tmp/not-a-directory/child" "$root/scripts/install.sh" 2>"$tmp/error"; then echo "uncreatable installation directory was accepted; next: inspect directory creation" >&2; exit 1; fi
@@ -339,6 +345,25 @@ grep -q 'unsupported platform' "$tmp/error" || { cat "$tmp/error" >&2; echo "uns
 if node -e 'Object.defineProperty(process,"platform",{value:"darwin"}); Object.defineProperty(process,"arch",{value:"x64"}); require(process.argv[1])' "$root/npm/cli/bin/onetaskgraph.js" 2>"$tmp/error"; then intel_launcher_status=0; else intel_launcher_status=$?; fi
 [[ $intel_launcher_status -eq 64 ]] || { cat "$tmp/error" >&2; echo "Intel macOS launcher exited $intel_launcher_status, expected 64; next: inspect the darwin-x64 refusal in npm/cli/bin/onetaskgraph.js" >&2; exit 1; }
 grep -q 'Intel macOS is no longer supported' "$tmp/error" || { cat "$tmp/error" >&2; echo "Intel macOS launcher refusal did not say Intel macOS is no longer supported; next: inspect launcher diagnostics" >&2; exit 1; }
+# Linux arm64 is refused by the launcher too, naming cargo, while every platform still
+# released resolves its own carrier: the spawn is intercepted, so this proves which binary
+# the launcher would run for each platform on any host, Windows included.
+if node -e 'Object.defineProperty(process,"platform",{value:"linux"}); Object.defineProperty(process,"arch",{value:"arm64"}); require(process.argv[1])' "$root/npm/cli/bin/onetaskgraph.js" 2>"$tmp/error"; then linux_arm64_launcher_status=0; else linux_arm64_launcher_status=$?; fi
+[[ $linux_arm64_launcher_status -eq 64 ]] || { cat "$tmp/error" >&2; echo "Linux arm64 launcher exited $linux_arm64_launcher_status, expected 64; next: inspect the linux-arm64 refusal in npm/cli/bin/onetaskgraph.js" >&2; exit 1; }
+grep -q 'Linux arm64 is no longer supported.*cargo install onetaskgraph' "$tmp/error" || { cat "$tmp/error" >&2; echo "Linux arm64 launcher refusal did not name cargo; next: inspect launcher diagnostics" >&2; exit 1; }
+for supported in linux:x64 darwin:arm64 win32:x64; do
+  supported_platform="${supported%%:*}"; supported_arch="${supported#*:}"; supported_key="$supported_platform-$supported_arch"
+  supported_binary=onetaskgraph; [[ $supported_platform != win32 ]] || supported_binary=onetaskgraph.exe
+  supported_dir="$tmp/supported/node_modules/@onetaskgraph/cli-$supported_key"
+  mkdir -p "$supported_dir/bin"
+  printf '{"name":"@onetaskgraph/cli-%s","version":"0.0.0"}\n' "$supported_key" > "$supported_dir/package.json"
+  printf 'stand-in carrier\n' > "$supported_dir/bin/$supported_binary"
+  resolved=$(cd "$tmp/supported" && NODE_PATH="$tmp/supported/node_modules" node -e 'require("node:child_process").spawnSync = (command) => { process.stdout.write(command); return { status: 0 }; }; Object.defineProperty(process,"platform",{value:process.argv[2]}); Object.defineProperty(process,"arch",{value:process.argv[3]}); require(process.argv[1])' "$root/npm/cli/bin/onetaskgraph.js" "$supported_platform" "$supported_arch" 2>"$tmp/error") || { cat "$tmp/error" >&2; echo "the launcher did not resolve the $supported_key carrier; next: inspect the package map in npm/cli/bin/onetaskgraph.js" >&2; exit 1; }
+  case "${resolved//\\//}" in
+    */cli-"$supported_key"/bin/"$supported_binary") ;;
+    *) echo "the launcher resolved '$resolved' for $supported_key, not its own carrier's binary; next: inspect the package map in npm/cli/bin/onetaskgraph.js" >&2; exit 1;;
+  esac
+done
 uv run --quiet --locked --package onetaskgraph-sdk onetaskgraph --help | grep -q 'Usage:' || { echo "Python SDK dependency did not supply the real command; next: inspect the SDK carrier dependency" >&2; exit 1; }
 mkdir -p "$tmp/python-wheel"
 (cd "$root" && uv tool run --from 'maturin>=1.9,<2' maturin build --release --locked --target "$target" --out "$tmp/python-wheel")
@@ -807,6 +832,10 @@ restore_contract_repo() {
   cp "$root/scripts/publish-npm.sh" "$tmp/contract-repo/scripts/publish-npm.sh"
   cp "$root/scripts/npm-registry-auth.sh" "$tmp/contract-repo/scripts/npm-registry-auth.sh"
   cp "$root/scripts/check-distribution-contract.sh" "$tmp/contract-repo/scripts/check-distribution-contract.sh"
+  cp "$root/scripts/release_cd.py" "$root/scripts/release_products.py" "$root/scripts/install.sh" "$tmp/contract-repo/scripts/"
+  cp "$root/release-targets.toml" "$tmp/contract-repo/release-targets.toml"
+  rm -rf "$tmp/contract-repo/npm"
+  cp -R "$root/npm" "$tmp/contract-repo/npm"
 }
 restore_contract_repo
 (cd "$tmp/contract-repo" && ./scripts/check-distribution-contract.sh) || { echo "the distribution contract refused the release path it is meant to accept; next: rerun scripts/check-distribution-contract.sh" >&2; exit 1; }
@@ -814,7 +843,7 @@ restore_contract_repo
 # would end the contract on sed's own diagnostic, before the refusal that carries the next
 # action. A sed that fails for that one read and no other is what forces the handler.
 mkdir -p "$tmp/contract-shims"
-printf '#!/bin/sh\ncase "$*" in *publish-npm*) echo "sed: simulated read failure" >&2; exit 2;; esac\nexec %s "$@"\n' "$(command -v sed)" > "$tmp/contract-shims/sed"
+printf '#!/bin/sh\ncase "$*" in *release.yml*) echo "sed: simulated read failure" >&2; exit 2;; esac\nexec %s "$@"\n' "$(command -v sed)" > "$tmp/contract-shims/sed"
 chmod +x "$tmp/contract-shims/sed"
 if (cd "$tmp/contract-repo" && PATH="$tmp/contract-shims:$PATH" ./scripts/check-distribution-contract.sh) >"$tmp/contract-output" 2>"$tmp/error"; then
   echo "the distribution contract accepted a release workflow it could not read; next: inspect scripts/check-distribution-contract.sh" >&2
@@ -840,4 +869,4 @@ assert_contract_refuses() {
 assert_contract_refuses 'NODE_AUTH_TOKEN alone leaves the npm client logged out' scripts/publish-npm.sh 'NPM_CONFIG_USERCONFIG=$(scripts/npm-registry-auth.sh'
 assert_contract_refuses 'must be exported as NPM_CONFIG_USERCONFIG' scripts/publish-npm.sh 'export NPM_CONFIG_USERCONFIG'
 assert_contract_refuses 'must name NODE_AUTH_TOKEN rather than carry a token value' scripts/npm-registry-auth.sh ':_authToken=${NODE_AUTH_TOKEN}'
-assert_contract_refuses 'no publish-npm job to authenticate' .github/workflows/release.yml '  publish-npm:'
+assert_contract_refuses 'no npm publication step to authenticate' .github/workflows/release.yml 'publish --to npm'

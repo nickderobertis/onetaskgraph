@@ -347,7 +347,9 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
 - **One target directory per clone, and the binary the journeys spawn is built once.**
   `.cargo/config.toml` points every cargo invocation inside a clone at `<clone>/target` and
   builds dev and test at `debug = 0`, with no debuginfo; nothing in the tree names a target directory of its
-  own. The Rust e2e suites, both SDKs' tests and generators and the distribution
+  own but crate publication, whose packaging verification builds under other `RUSTFLAGS`
+  and so verifies in `target/crate-publication` — inside that one target, where the
+  `release-cd` journeys running beside the e2e suites cannot relink the file they spawn. The Rust e2e suites, both SDKs' tests and generators and the distribution
   journey all spawn `target/debug/onetaskgraph`, and the binary crate's `test` target once
   kept a private directory because another target's `cargo build` could replace that file
   between a test resolving it and spawning it. What replaced the private directory is
@@ -1298,6 +1300,43 @@ The capture drives `local-md` and `in-memory` only: no credential or socket.
   unreleased commits into a PR, merging it cuts the release, and the tag fires build and
   publish. It must authenticate with `RELEASE_PLZ_TOKEN` — a tag pushed by the default
   `GITHUB_TOKEN` fires no workflow, so the release would silently ship nothing.
+  `.github/workflows/release-plz.yml` is one job, `release-plz`, whose first step is the
+  guard that was a job of its own: without both `RELEASE_PLZ_TOKEN` and
+  `CARGO_REGISTRY_TOKEN` every later step is skipped. **The release PR merges itself**:
+  its last step, `scripts/enable-release-automerge.py`, asks GitHub's
+  `enablePullRequestAutoMerge` to squash-merge the newest open `release-plz-` pull request
+  of this repository — never a fork's, never another branch, and never a direct merge — so
+  it lands once its required checks pass, and a refusal fails the step visibly.
+  `.github/tests/release-plz.test.mjs` drives the guard's four cases, that step against a
+  GitHub double, and the release and preparation steps over a scratch repository with the
+  real pinned release-plz. What GitHub answers those calls and the release's asset uploads
+  with is pinned, with its provenance, in `config/github-interfaces.toml`, and
+  `.github/tests/github-interfaces.test.mjs` holds both scripts and the double to it.
+- **A release is five CD jobs, and each platform publishes its own artifacts.**
+  `release-plz` cuts the tag and the GitHub Release; `.github/workflows/release.yml` then
+  runs `build-linux` (x86_64 Linux), `build-macos` (Apple Silicon) and `build-windows`
+  (x86_64 Windows) side by side, and `publish` after all three, each inside 30 minutes.
+  Every step of them is one phase of one justfile recipe — `release-linux`,
+  `release-macos`, `release-windows`, `release-publish`, all `scripts/release_cd.py` — so
+  nothing a release does is YAML only a release could run. A build job builds each of its
+  targets once with maturin, packages the archive, the wheel and the npm platform package
+  from that one binary, installs and runs those exact files, publishes them (the archive
+  to the GitHub Release, the wheel to PyPI, the package to npm), and installs each back out
+  of its registry on its own OS and runs it. `publish` first confirms every registry
+  serves every platform, then builds and publishes what is the same everywhere — the
+  crates, the Python SDK, the npm launcher and the TypeScript SDK, which it builds before
+  publishing so the package carries `dist/` — and confirms each resolves. No CD job
+  re-runs the checks CI already ran. **A failed build job leaves the other platforms'
+  artifacts published and the platform-independent ones unpublished until it is re-run**,
+  and every publication skips what a registry already holds, so the re-run sends only
+  what is missing. The platforms are `PLATFORM_TARGETS` in `scripts/release_products.py`,
+  with the wheel tag each must carry: **Linux arm64 and Intel macOS are no longer
+  released**, and the installer and the npm launcher refuse both by name, pointing at
+  `cargo install onetaskgraph`. `.github/tests/release.test.mjs` holds the job set, which
+  one step uploads each artifact, the order of test-install, publication and
+  verification, and each platform's plan against `v0.7.1`'s published artifacts;
+  `.github/tests/release-cd.test.mjs` drives the Linux recipe end to end and every
+  publication against `scripts/loopback-release-registries.py`.
 - **The release PR is prepared by `scripts/prepare-release-pr.sh`, never by
   `release-plz release-pr` alone.** release-plz writes the Cargo manifests and nothing
   else — no `package.json`, no `pyproject.toml`, not even the version under
@@ -1338,10 +1377,10 @@ The capture drives `local-md` and `in-memory` only: no credential or socket.
   only from a same-repository `release-plz-` branch with a semantic version/changelog-only
   diff; an unreadable PR requires coverage. The author is not authority: release-plz
   uses the owner's PAT. An explicit manual diagnostic is default off.
-  Release builds the Apple Silicon wheel on one Apple Silicon runner, then uses its binary
-  for the archive and npm carrier; Intel macOS is no longer released, and the installer
-  and npm launcher refuse it by name. Native install/run proofs precede Linux asset
-  attachment and registry publication. The production packaging journey and
+  A release's one Mac job is `build-macos`, which builds the Apple Silicon wheel once and
+  uses its binary for the archive and npm carrier; Intel macOS is no longer released, and
+  the installer and npm launcher refuse it by name. Its native install/run proof precedes
+  its own publication. The production packaging journey and
   `.github/tests/` hold payload hashes, required names, event routing and reusable calls;
   `github-workflows:test` records ignored telemetry and its `budgets` target alone applies
   the two limits in `.github/budgets.yaml`. No Mac work runs on schedules or downstream
@@ -1363,11 +1402,12 @@ The capture drives `local-md` and `in-memory` only: no credential or socket.
   and it cannot see this file to notice one moved or a sixth appeared. A name is one of
   the five when a dependent writes it down, which is why both SDKs are targets and neither
   is folded into the binary's: `sdk-npm` is to `npm` what `sdk-pypi` is to `pypi`.
-  Everything else this repository publishes — the four per-platform npm carriers, the six
+  Everything else this repository publishes — the three per-platform npm carriers, the
   sibling crates — is covered by the target whose release carries it. Both rules go
   through `scripts/check-release-targets.sh`, the drift gate that makes the second
-  spelling safe and that reconciles the declared set against the real release workflow
-  both ways.
+  spelling safe and that reconciles the declared set against the plan
+  `scripts/release_cd.py` gives each CD job both ways; each target's `published_by` names
+  the jobs that publish it and everything it covers.
 - **The probe's three answers are not interchangeable.** `scripts/release-probe.sh` prints
   a version, prints nothing when that registry serves none, or exits non-zero because the
   lookup could not be made — and a consumer holds indefinitely on the third and stops
