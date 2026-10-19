@@ -3386,6 +3386,53 @@ fn a_narrow_write_to_an_item_private_by_inheritance_held_by_a_public_source_is_r
 }
 
 #[test]
+fn a_project_status_set_to_a_private_project_held_by_a_public_source_is_refused() {
+    let store = Store::new(Some(registered), json!({}));
+    // Held there by hand: one project private by its own record, one only by a task in it.
+    store.record(
+        "site",
+        "projects",
+        "closed-plan",
+        "title: Closed plan\nstatus: todo\nclassification: private",
+        PLAIN,
+    );
+    store.record(
+        "site",
+        "projects",
+        "mixed",
+        "title: Mixed\nstatus: todo",
+        PLAIN,
+    );
+    store.record(
+        "site",
+        "tasks",
+        "inner",
+        "title: Inner\nstatus: todo\nproject: mixed\nclassification: private",
+        PLAIN,
+    );
+    store.record(
+        "site",
+        "projects",
+        "open-plan",
+        "title: Open plan\nstatus: todo",
+        PLAIN,
+    );
+    let before = store.tree();
+    for project in ["site:closed-plan", "site:mixed"] {
+        let (kind, said) = store.refused(&["project", "status", "set", project, "done"]);
+        assert_eq!(kind, "not-private-destination", "{project}: {said}");
+    }
+    assert_eq!(store.tree(), before, "nothing was written");
+    // A public project with no private member is written as before.
+    store.ok(&["project", "status", "set", "site:open-plan", "done"]);
+    assert!(
+        held_text(&store, "site").contains("title: Open plan\nstatus: done"),
+        "{}",
+        held_text(&store, "site")
+    );
+}
+
+#[test]
 fn a_delivered_task_private_only_by_its_project_is_reported_failed_and_left_as_it_was() {
     let store = Store::laid(
         Some(registered),

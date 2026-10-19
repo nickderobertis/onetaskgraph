@@ -1367,7 +1367,7 @@ impl TaskSource for LocalMdSource {
         id: &NativeId,
         category: StatusCategory,
     ) -> Result<Option<Status>, SourceError> {
-        self.set_status(Kind::Task, WorkKind::Task, id, category)
+        self.set_status(WorkKind::Task, id, category)
     }
 
     /// Rewrite the one `status:` entry of the project file's front matter, and nothing else,
@@ -1377,7 +1377,7 @@ impl TaskSource for LocalMdSource {
         id: &NativeId,
         category: StatusCategory,
     ) -> Result<Option<Status>, SourceError> {
-        self.set_status(Kind::Project, WorkKind::Project, id, category)
+        self.set_status(WorkKind::Project, id, category)
     }
 
     /// Rewrite the one `priority:` entry of the task's front matter, and nothing else —
@@ -3791,12 +3791,11 @@ impl LocalMdSource {
     /// else — the shared body of the two status writes.
     fn set_status(
         &self,
-        kind: Kind,
         work: WorkKind,
         id: &NativeId,
         category: StatusCategory,
     ) -> Result<Option<Status>, SourceError> {
-        let Some(path) = self.locate(kind, id)? else {
+        let Some(path) = self.locate(work.kind(), id)? else {
             return Ok(None);
         };
         let entry = self.parse(work, &path)?;

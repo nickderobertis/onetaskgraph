@@ -14,15 +14,107 @@ and none of the SDK's own models, so what the SDK decodes is not its own types r
 
 import json
 import sys
+from dataclasses import dataclass
+from typing import Literal, NewType, NotRequired, TypedDict
 
 KIND = "closure-source"
 PROTOCOL_VERSION = 2
 
-# What a write of each terminal category reads back as, as a board's options spell them.
-NAMES = {"done": "Done", "cancelled": "Cancelled"}
+# The source's own id for an item, an issue reference as `owner/name#N`, and the id a request
+# is answered under: three domains that are all strings on the wire and never interchangeable.
+NativeId = NewType("NativeId", str)
+IssueRef = NewType("IssueRef", str)
+RequestId = NewType("RequestId", str)
 
-HOME = {
-    "id": "home",
+type Support = Literal["native", "unsupported"]
+type DependencySupport = Literal["both-directions", "forward-only"]
+type ClosedAs = Literal["done", "cancelled"]
+
+
+class Status(TypedDict):
+    """An item's status, as the closure methods send it (§4.4)."""
+
+    category: str
+    name: str
+
+
+class Project(TypedDict):
+    """A project on the wire (§4.4), as `get_project` would read it."""
+
+    id: NativeId
+    title: str
+    content: str | None
+    status: Status
+    labels: list[dict[str, str]]
+    url: str | None
+    created_at: str | None
+    updated_at: str | None
+
+
+class Task(Project):
+    """A task on the wire (§4.4): a project's shape, filed under one."""
+
+    project: NativeId | None
+
+
+class Capabilities(TypedDict):
+    """What this source declares once, at the handshake (§4.2)."""
+
+    projects: Support
+    documents: Support
+    orphan_tasks: Support
+    filter_by_label: Support
+    filter_by_status: Support
+    search_title: Support
+    search_content: Support
+    task_dependencies: DependencySupport
+    project_dependencies: DependencySupport
+    max_page_size: int
+    reconcile_status: Support
+    complete_by_issue: Support
+
+
+class HeldTask(TypedDict):
+    """The item one issue is held for (§4.24); `kind` is left out for a task, as 0.8.0 sent it."""
+
+    id: NativeId
+    kind: NotRequired[Literal["project"]]
+    option: str
+
+
+class SourceError(TypedDict):
+    """The contract's `SourceError`, in its serialized shape (§5)."""
+
+    kind: Literal["malformed"]
+    message: str
+
+
+class Answered(TypedDict):
+    """A response carrying a result (§2)."""
+
+    result: object
+
+
+class Refused(TypedDict):
+    """A response carrying an error (§2)."""
+
+    error: SourceError
+
+
+@dataclass(frozen=True)
+class Request:
+    """One request line (§2): an `id` to echo, the method, and its object `params`."""
+
+    id: RequestId
+    method: str
+    params: dict[str, object]
+
+
+# What a write of each terminal category reads back as, as a board's options spell them.
+NAMES: dict[str, str] = {"done": "Done", "cancelled": "Cancelled"}
+
+HOME: Project = {
+    "id": NativeId("home"),
     "title": "A plan's home",
     "content": None,
     "status": {"category": "in-progress", "name": "In Progress"},
@@ -31,19 +123,15 @@ HOME = {
     "created_at": None,
     "updated_at": None,
 }
-TASK = {
-    "id": "t1",
+TASK: Task = {
+    **HOME,
+    "id": NativeId("t1"),
     "title": "A task of the plan",
-    "content": None,
     "status": {"category": "todo", "name": "Todo"},
-    "labels": [],
-    "project": "home",
-    "url": None,
-    "created_at": None,
-    "updated_at": None,
+    "project": NativeId("home"),
 }
 
-CAPABILITIES = {
+CAPABILITIES: Capabilities = {
     "projects": "native",
     "documents": "unsupported",
     "orphan_tasks": "native",
@@ -59,94 +147,112 @@ CAPABILITIES = {
 }
 
 # The issue each item is held for: `acme/plan#1` is the home's, `acme/plan#2` the task's.
-HOLDINGS = {
-    "acme/plan#1": {"id": "home", "kind": "project", "option": "In Progress"},
-    "acme/plan#2": {"id": "t1", "option": "Todo"},
+HOLDINGS: dict[IssueRef, HeldTask] = {
+    IssueRef("acme/plan#1"): {"id": NativeId("home"), "kind": "project", "option": "In Progress"},
+    IssueRef("acme/plan#2"): {"id": NativeId("t1"), "option": "Todo"},
 }
 
 
-def malformed(message: str) -> dict[str, object]:
-    """The error envelope this peer answers a request it cannot read with (§5)."""
+def _malformed(message: str) -> Refused:
     return {"error": {"kind": "malformed", "message": message}}
 
 
-def status_written(params: dict[str, object], held: str) -> dict[str, object]:
+def _contradiction(
+    kind: Literal["task", "project"], item: Project, closed_as: ClosedAs
+) -> dict[str, object]:
+    """One item out of line with its closure, under the member naming its kind (§4.23)."""
+    return {
+        kind: item,
+        "option": item["status"]["name"],
+        "closed_as": closed_as,
+        "to": NAMES[closed_as],
+    }
+
+
+def _status_written(params: dict[str, object], held: NativeId) -> Answered | Refused:
     """A status write of the one item of its kind this source holds, read back as written."""
-    category = params.get("category")
-    if not isinstance(category, str):
-        return malformed("a status write names its category as a string")
-    if params.get("id") != held:
-        return {"result": {"status": None}}
-    return {"result": {"status": {"category": category, "name": NAMES.get(category, category)}}}
+    match params:
+        case {"id": str(wanted), "category": str(category)}:
+            if wanted != held:
+                return {"result": {"status": None}}
+            name = NAMES.get(category, category)
+            return {"result": {"status": {"category": category, "name": name}}}
+        case _:
+            return _malformed("a status write names its item by `id` and its `category`")
 
 
-def answer(method: str, params: dict[str, object]) -> dict[str, object]:
-    """The `result` or `error` member answering one request (§2)."""
-    if method == "initialize":
-        return {
-            "result": {
-                "protocol_version": PROTOCOL_VERSION,
-                "kind": KIND,
-                "capabilities": CAPABILITIES,
-                "writes": "supported",
-                "task_updates": True,
-                "project_status": True,
+def _holding(issue: object) -> dict[str, object]:
+    """What this source holds for one issue it was asked about (§4.24)."""
+    match HOLDINGS.get(IssueRef(issue)) if isinstance(issue, str) else None:
+        case None:
+            return {"issue": issue, "completion": "absent"}
+        case held:
+            return {"issue": issue, "completion": "due", "task": held, "to": "Done"}
+
+
+def _answer(request: Request) -> Answered | Refused:
+    match request.method, request.params:
+        case "initialize", _:
+            return {
+                "result": {
+                    "protocol_version": PROTOCOL_VERSION,
+                    "kind": KIND,
+                    "capabilities": CAPABILITIES,
+                    "writes": "supported",
+                    "task_updates": True,
+                    "project_status": True,
+                }
             }
-        }
-    if method == "health":
-        return {"result": {"reachable": True, "detail": "one project and one task"}}
-    if method == "status_contradictions":
-        return {
-            "result": {
-                "items": [
-                    {"project": HOME, "option": "In Progress", "closed_as": "done", "to": "Done"},
-                    {"task": TASK, "option": "Todo", "closed_as": "cancelled", "to": "Cancelled"},
-                ]
-            }
-        }
-    if method == "issue_holdings":
-        issues = params.get("issues")
-        if not isinstance(issues, list):
-            return malformed("issue_holdings names its issues as a list")
-        holdings: list[dict[str, object]] = []
-        for issue in issues:
-            held = HOLDINGS.get(issue) if isinstance(issue, str) else None
-            if held is None:
-                holdings.append({"issue": issue, "completion": "absent"})
-            else:
-                holdings.append({"issue": issue, "completion": "due", "task": held, "to": "Done"})
-        return {"result": {"holdings": holdings}}
-    if method == "set_task_status":
-        return status_written(params, "t1")
-    if method == "set_project_status":
-        return status_written(params, "home")
-    return malformed(
-        f"protocol version {PROTOCOL_VERSION} has no method {method} this source serves"
-    )
+        case "health", _:
+            return {"result": {"reachable": True, "detail": "one project and one task"}}
+        case "status_contradictions", _:
+            items = [
+                _contradiction("project", HOME, "done"),
+                _contradiction("task", TASK, "cancelled"),
+            ]
+            return {"result": {"items": items}}
+        case "issue_holdings", {"issues": list(issues)}:
+            return {"result": {"holdings": [_holding(issue) for issue in issues]}}
+        case "issue_holdings", _:
+            return _malformed("issue_holdings names its issues as a list")
+        case "set_task_status", params:
+            return _status_written(params, TASK["id"])
+        case "set_project_status", params:
+            return _status_written(params, HOME["id"])
+        case method, _:
+            return _malformed(
+                f"protocol version {PROTOCOL_VERSION} has no method {method!r} this source serves"
+            )
 
 
-def main() -> None:
-    """Answer each request line on standard input with one response line (§1)."""
+def request_of(line: str) -> Request | None:
+    """One request line read into its shape, or `None` if it is not a request.
+
+    A line without a string `id` has no address a response could echo, so it is set aside on
+    stderr rather than answered.
+    """
+    try:
+        decoded = json.loads(line)
+    except ValueError:
+        return None
+    match decoded:
+        case {"id": str(identifier), "method": str(method), "params": dict(params)}:
+            return Request(RequestId(identifier), method, params)
+        case _:
+            return None
+
+
+def _main() -> None:
     for line in sys.stdin:
         if not line.strip():
             continue
-        try:
-            request = json.loads(line)
-        except ValueError:
+        request = request_of(line)
+        if request is None:
             print(f"{KIND}: ignoring a line that is not a request", file=sys.stderr)
             continue
-        if not isinstance(request, dict) or not isinstance(request.get("id"), str):
-            print(f"{KIND}: ignoring a line with no string id", file=sys.stderr)
-            continue
-        method = request.get("method")
-        params = request.get("params")
-        if not isinstance(method, str) or not isinstance(params, dict):
-            reply = malformed("a request names its method as a string and carries object params")
-        else:
-            reply = answer(method, params)
-        sys.stdout.write(json.dumps({"id": request["id"], **reply}) + "\n")
+        sys.stdout.write(json.dumps({"id": request.id, **_answer(request)}) + "\n")
         sys.stdout.flush()
 
 
 if __name__ == "__main__":
-    main()
+    _main()

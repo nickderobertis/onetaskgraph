@@ -158,6 +158,8 @@ pub struct IssueHolding {
 /// of which kind, the card it sits at, the tasks it delivers, and what decides where its id may
 /// be written — rather than the whole item, because the read that answers it is priced per issue
 /// and a whole item is not what a landing's closure needs.
+// llmlint: ignore[names_match_behavior] The contract this change lands names the struct `HeldTask` — the engine and the read API that build against the release name it so, and its wire member is `task` — and widening what it holds to a project is a change to that contract's breadth that only its owner may answer with a rename; its documentation and `kind` say what it holds.
+// llmlint: ignore[invalid_states_unrepresentable] The wire form must stay one flat object in which an absent `kind` reads as a task, so a plugin built against 0.8.0 is read unchanged; a tagged split of `delivers` into a task variant would make that absent tag unreadable. The engine's one reader, `answered_each` in `onetaskgraph-core`'s `engine/closure.rs`, refuses as malformed a held project that names a delivered task, so the combination never reaches a write.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct HeldTask {
     /// The item, by this source's own id for it.

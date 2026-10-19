@@ -1331,3 +1331,58 @@ fn the_library_form_completes_a_plan_home_as_the_command_line_does() {
         ("CLOSED".to_owned(), Some("COMPLETED".to_owned()))
     );
 }
+
+#[test]
+fn a_dry_run_names_a_plan_home_would_update_and_a_refused_home_write_fails_beside_the_task() {
+    let stores = Stores::new();
+    let answer = stores.complete(&[reference(HOME), reference("N-1")], &["--dry-run"], 0);
+    assert_eq!(answer, home_and_task_owed("would-update"), "{answer:#}");
+    assert_eq!(
+        mutations_to(&stores, "test-token"),
+        Vec::new(),
+        "a dry run writes nothing"
+    );
+    assert_eq!(stores.board.status(HOME).as_deref(), Some("In Progress"));
+    assert_eq!(stores.board.state(HOME).0, "OPEN");
+
+    // The home is written first, so the one refused option write is its own.
+    stores
+        .board
+        .refuse_once("updateProjectV2ItemFieldValue(input:$input)");
+    let output = stores.run(&[
+        "--json",
+        "task",
+        "status",
+        "complete",
+        "--issue",
+        &reference(HOME),
+        "--issue",
+        &reference("N-1"),
+        "--source",
+        "board-a",
+    ]);
+    assert_eq!(output.status.code(), Some(4), "{}", stderr(&output));
+    let answer: Value = serde_json::from_str(&stdout(&output)).expect("JSON");
+    let home = &answer["items"][0];
+    assert_eq!(
+        (&home["kind"], &home["action"], &home["error"]["class"]),
+        (&json!("project"), &json!("failed"), &json!("refused")),
+        "{answer:#}"
+    );
+    assert_eq!(answer["items"][1]["action"], "updated", "{answer:#}");
+    assert_eq!(stores.board.status(HOME).as_deref(), Some("In Progress"));
+    assert_eq!(
+        stores.board.state(HOME).0,
+        "OPEN",
+        "a refused option leaves the home's issue open"
+    );
+    assert_eq!(stores.board.status("N-1").as_deref(), Some("Done"));
+    assert!(
+        stderr(&output).contains(&format!(
+            "onetaskgraph: {} was not completed in board-a: ",
+            reference(HOME)
+        )),
+        "{}",
+        stderr(&output)
+    );
+}

@@ -485,8 +485,9 @@ impl Engine {
 }
 
 /// A source's holdings, held to what `issue_holdings` promises: one per reference it was asked
-/// about, in the order asked, each about that very reference. Anything else is a malformed
-/// answer, refused for the whole source rather than read as some references holding nothing.
+/// about, in the order asked, each about that very reference, and no project naming a task it
+/// delivers — a project delivers none. Anything else is a malformed answer, refused for the
+/// whole source rather than read as some references holding nothing.
 fn answered_each(
     asked: &[IssueRef],
     holdings: Vec<IssueHolding>,
@@ -506,6 +507,23 @@ fn answered_each(
                 message: format!(
                     "issue_holdings answered {} where {issue} was asked about",
                     holding.issue
+                ),
+            });
+        }
+        let held = match &holding.completion {
+            Completion::Absent => None,
+            Completion::Skipped { task, .. }
+            | Completion::Unchanged { task }
+            | Completion::Due { task, .. } => Some(task),
+        };
+        if let Some(project) =
+            held.filter(|held| held.kind == ItemKind::Project && !held.delivers.is_empty())
+        {
+            return Err(SourceError::Malformed {
+                message: format!(
+                    "issue_holdings answered project {} for {issue} as delivering tasks, and a \
+                     project delivers none",
+                    project.id
                 ),
             });
         }

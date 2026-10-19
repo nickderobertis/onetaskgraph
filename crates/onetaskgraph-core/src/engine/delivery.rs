@@ -213,6 +213,20 @@ impl Engine {
             .await
             .map_err(|error| source_failed(source, error))?
             .ok_or_else(|| EngineError::NoSuchProject { id: id.to_string() })?;
+        // What a plugin answers is input: a write that reads back as another category did not
+        // land as asked, and is refused as malformed rather than reported as having written it.
+        if status.category != category {
+            return Err(source_failed(
+                source,
+                SourceError::Malformed {
+                    message: format!(
+                        "a write of {id} to {} read back as {}",
+                        category_name(category),
+                        category_name(status.category)
+                    ),
+                },
+            ));
+        }
         Ok(ProjectStatusSet {
             id: id.clone(),
             status,
