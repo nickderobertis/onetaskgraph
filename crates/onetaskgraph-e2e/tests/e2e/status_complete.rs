@@ -244,7 +244,7 @@ fn named() -> Vec<String> {
 fn owed(updated: &str) -> Value {
     let item = |id: &str, source: &str, task: Option<&str>, from: Value, to: Value, action| {
         json!({"issue":reference(id),"source":source,
-               "task":task.map(|task| format!("{source}:{task}")),
+               "task":task.map(|task| format!("{source}:{task}")),"kind":"task",
                "from":from,"to":to,"action":action})
     };
     let done = json!({"category":"done","name":"Done"});
@@ -891,9 +891,9 @@ fn a_board_hosted_over_the_stdio_protocol_reconciles_and_completes_as_one_in_pro
     assert_eq!(
         reconciled,
         json!({"items": [
-            {"source":"hosted:N-2","from":"In Progress",
+            {"source":"hosted:N-2","kind":"task","from":"In Progress",
              "to":{"category":"cancelled","name":"Cancelled"},"action":"updated"},
-            {"source":"hosted:N-3","from":"Todo",
+            {"source":"hosted:N-3","kind":"task","from":"Todo",
              "to":{"category":"done","name":"Done"},"action":"updated"},
         ]}),
         "{reconciled:#}"
@@ -915,9 +915,11 @@ fn a_board_hosted_over_the_stdio_protocol_reconciles_and_completes_as_one_in_pro
     assert_eq!(
         completed,
         json!({"items": [
-            {"issue":reference("N-1"),"source":"hosted","task":"hosted:N-1","from":"Todo",
+            {"issue":reference("N-1"),"source":"hosted","task":"hosted:N-1","kind":"task",
+             "from":"Todo",
              "to":done,"action":"updated"},
-            {"issue":reference("N-3"),"source":"hosted","task":"hosted:N-3","from":"Done",
+            {"issue":reference("N-3"),"source":"hosted","task":"hosted:N-3","kind":"task",
+             "from":"Done",
              "to":done,"action":"unchanged"},
         ], "unsupported": []}),
         "{completed:#}"
