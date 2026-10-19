@@ -269,6 +269,13 @@ impl fmt::Display for Fraction {
 /// Nothing lowers it: it is a constant, and no environment variable, command-line option
 /// or configuration file reads it or replaces it. A session that cannot fit under it does
 /// not run.
+///
+/// **Where it does not decide.** Under [`PAUSE_BELOW`] of a budget's limit the 40% rule is the
+/// one decision, at admission, at every recheck and at cleanup alike: when the burn rate shows
+/// the budget resetting before the session's estimate would exhaust it, the session goes on
+/// with no wait and no retained-buffer refusal at that decision
+/// ([`pace::Pace::ResetsFirst`]); without that, it waits for the reset and reads the budget
+/// again. At or above [`PAUSE_BELOW`] this buffer decides, as it always has.
 pub const RETAINED_BUFFER: Fraction = Fraction::new(20, 100);
 
 /// A budget, and what it is metered in — one fact rather than two fields.

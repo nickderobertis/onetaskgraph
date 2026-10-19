@@ -418,6 +418,41 @@ fn named(on: &str) -> String {
     }
 }
 
+/// Record a real GraphQL answer into `into` whose headers report `remaining` of the budget,
+/// resetting at `reset` — the session's own last answer, which every later recheck reads.
+fn answered(into: &Accounting, remaining: u64, reset: u64) {
+    into.record(
+        onetaskgraph_github_projects::accounting::Request::graphql(
+            "query { __typename }",
+            &json!({}),
+            Some("a real answer"),
+            None,
+        )
+        .finished(
+            onetaskgraph_github_projects::accounting::Outcome::Answered,
+            onetaskgraph_github_projects::accounting::RateLimit::read(|name| match name {
+                "x-ratelimit-limit" => Some(LIMIT.to_string()),
+                "x-ratelimit-remaining" => Some(remaining.to_string()),
+                "x-ratelimit-used" => Some((LIMIT - remaining).to_string()),
+                "x-ratelimit-reset" => Some(reset.to_string()),
+                "x-ratelimit-resource" => Some("graphql".to_owned()),
+                _ => None,
+            }),
+        ),
+    );
+}
+
+/// Readings all well above forty per cent, which a session is admitted on before a later
+/// decision finds the bucket drawn down.
+fn full(started: u64) -> Reported {
+    Reported {
+        endpoint: 4_000,
+        object: 3_800,
+        headers: 3_600,
+        reset: started + 3_000,
+    }
+}
+
 #[test]
 fn admission_under_forty_per_cent_waits_for_the_reset_decided_on_the_least_reading() {
     let _turn = take_the_turn();
@@ -465,24 +500,28 @@ fn admission_under_forty_per_cent_waits_for_the_reset_decided_on_the_least_readi
 #[test]
 fn admission_under_forty_per_cent_goes_on_when_the_burn_rate_resets_first() {
     let _turn = take_the_turn();
-    for on in ["endpoint", "object", "headers"] {
-        let started = budget::epoch_now();
-        // Thirty per cent left a minute before the reset, 3,500 used over the 59 minutes since
-        // the window began: about 60 more by the reset at that rate, and the 100 this session
-        // needs, are well under the 1,500 left — so it resets before it would run out.
-        let low = LIMIT * 30 / 100;
-        let standin = Standin::start(only_one_under(low, on, started + 60));
-        let into = Accounting::new();
-        let session = open(&standin, &into);
+    // Thirty per cent left a minute before the reset, 3,500 used over the 59 minutes since the
+    // window began: about 60 more by the reset at that rate, and the 100 this session needs,
+    // are well under the 1,500 left — so it resets before it would run out. And 462 left 100 s
+    // before it, 4,538 used over 3,500 s: 130 more by the reset and the 100 needed are under
+    // the 462 left, though 462 less 100 is under the 1,000 retained buffer — the rule decides
+    // under forty per cent, so the buffer does not refuse it.
+    for (low, to_reset) in [(LIMIT * 30 / 100, 60), (462, 100)] {
+        for on in ["endpoint", "object", "headers"] {
+            let started = budget::epoch_now();
+            let standin = Standin::start(only_one_under(low, on, started + to_reset));
+            let into = Accounting::new();
+            let session = open(&standin, &into);
 
-        assert_eq!(budget::epoch_now(), started, "{on}: no wait at all");
-        assert!(session.pauses().is_empty(), "{on}: {:?}", session.pauses());
-        assert_eq!(standin.asked(), ONE_READ, "{on}: read once, and not again");
-        assert!(
-            session.report().contains("took no pause"),
-            "{}",
-            session.report()
-        );
+            assert_eq!(budget::epoch_now(), started, "{on}: no wait at all");
+            assert!(session.pauses().is_empty(), "{on}: {:?}", session.pauses());
+            assert_eq!(standin.asked(), ONE_READ, "{on}: read once, and not again");
+            assert!(
+                session.report().contains("took no pause"),
+                "{}",
+                session.report()
+            );
+        }
     }
 }
 
@@ -574,6 +613,28 @@ fn a_recheck_under_forty_per_cent_goes_on_when_the_burn_rate_resets_first() {
 }
 
 #[test]
+fn a_recheck_at_or_above_forty_per_cent_goes_on_at_once() {
+    let _turn = take_the_turn();
+    let started = budget::epoch_now();
+    let standin = Standin::start(full(started));
+    let into = Accounting::new();
+    let mut session = open(&standin, &into);
+    // Drawn down to exactly forty per cent on the least of the three, half an hour from the
+    // reset at a rate that would empty it first: at forty per cent the rule does not pause.
+    let at = PAUSE_BELOW.of(LIMIT);
+    standin.report(Reported {
+        endpoint: at + 1_000,
+        object: at + 500,
+        headers: at,
+        reset: started + 1_800,
+    });
+    recheck(&mut session, &standin, &into);
+    assert_eq!(budget::epoch_now(), started, "no wait");
+    assert!(session.pauses().is_empty(), "{:?}", session.pauses());
+    assert_eq!(standin.asked(), [ONE_READ, ONE_READ].concat());
+}
+
+#[test]
 fn the_lanes_own_admission_pauses_under_the_same_rule() {
     // `journey::budget::precondition`, which the credentialed journey opens every session
     // through, decides by the same admission as `Session::open_paced`.
@@ -615,25 +676,7 @@ fn the_lanes_own_recheck_pauses_on_a_real_answers_headers_and_decides_after_the_
 
     let reset = started + 1_800;
     let low = LIMIT * 20 / 100;
-    into.record(
-        onetaskgraph_github_projects::accounting::Request::graphql(
-            "query { __typename }",
-            &json!({}),
-            Some("a real answer"),
-            None,
-        )
-        .finished(
-            onetaskgraph_github_projects::accounting::Outcome::Answered,
-            onetaskgraph_github_projects::accounting::RateLimit::read(|name| match name {
-                "x-ratelimit-limit" => Some(LIMIT.to_string()),
-                "x-ratelimit-remaining" => Some(low.to_string()),
-                "x-ratelimit-used" => Some((LIMIT - low).to_string()),
-                "x-ratelimit-reset" => Some(reset.to_string()),
-                "x-ratelimit-resource" => Some("graphql".to_owned()),
-                _ => None,
-            }),
-        ),
-    );
+    answered(&into, low, reset);
     block_on(budget::recheck_remaining(&admitted, &into, ESTIMATE))
         .unwrap_or_else(|declined| panic!("{}", declined.message()));
 
@@ -659,51 +702,73 @@ fn the_lanes_own_recheck_pauses_on_a_real_answers_headers_and_decides_after_the_
     );
 }
 
-#[test]
-fn a_recheck_whose_burn_resets_first_but_whose_estimate_breaches_the_buffer_pauses_rather_than_declines()
- {
-    // What declined the credentialed lane's cleanup on CI: admitted above forty per cent, the
-    // account was drawn down by other work until the session's own last answer carried 462 of
-    // 5,000 a minute before the reset. The burn rate since the window began resets first, but
-    // 462 less what the session still owes leaves under the retained buffer — so the recheck
-    // waits for that reset and decides on what it reads after it, rather than declining.
-    let _turn = take_the_turn();
-    let started = budget::epoch_now();
-    let standin = Standin::start(Reported {
-        endpoint: 4_000,
-        object: 3_800,
-        headers: 3_600,
-        reset: started + 3_000,
-    });
+/// What the credentialed lane's cleanup is still estimated to spend: its recheck before owned
+/// cleanup is `recheck_remaining` with this, exactly as `tests/journey/mod.rs` calls it.
+fn cleanup_estimate() -> u64 {
+    budget::remaining_design_points(onetaskgraph_github_live::quota::Phase::Cleanup)
+}
+
+/// Admit a session through the lane's own precondition on full readings, then record a real
+/// answer reporting `low` of the GraphQL budget resetting at `reset`, and recheck before the
+/// cleanup as the credentialed journey does. Answers the admitted session, its stand-in, and
+/// whether that recheck let it go on.
+fn cleanup_recheck(
+    started: u64,
+    low: u64,
+    reset: u64,
+) -> (
+    budget::Admitted,
+    Standin,
+    Result<(), onetaskgraph_live::Declined>,
+) {
+    let standin = Standin::start(full(started));
     let into = Accounting::new();
     let admitted = block_on(budget::precondition("test-token", &standin.host, &into))
         .unwrap_or_else(|declined| panic!("{}", declined.message()));
     assert!(admitted.pauses().is_empty());
+    answered(&into, low, reset);
+    let decided = block_on(budget::recheck_remaining(
+        &admitted,
+        &into,
+        cleanup_estimate(),
+    ));
+    (admitted, standin, decided)
+}
 
-    let reset = started + 60;
-    let low = 462;
-    into.record(
-        onetaskgraph_github_projects::accounting::Request::graphql(
-            "query { __typename }",
-            &json!({}),
-            Some("a real answer"),
-            None,
-        )
-        .finished(
-            onetaskgraph_github_projects::accounting::Outcome::Answered,
-            onetaskgraph_github_projects::accounting::RateLimit::read(|name| match name {
-                "x-ratelimit-limit" => Some(LIMIT.to_string()),
-                "x-ratelimit-remaining" => Some(low.to_string()),
-                "x-ratelimit-used" => Some((LIMIT - low).to_string()),
-                "x-ratelimit-reset" => Some(reset.to_string()),
-                "x-ratelimit-resource" => Some("graphql".to_owned()),
-                _ => None,
-            }),
-        ),
+#[test]
+fn the_cleanup_recheck_under_forty_per_cent_goes_on_without_waiting_when_the_burn_resets_first() {
+    // What ended the credentialed lane's cleanup on CI: admitted above forty per cent, the
+    // account drawn down by other work until the session's own last answer carried 462 of
+    // 5,000 about 100 s before the reset. 4,538 used over the 3,500 s since the window began
+    // is 130 more by the reset, and with the cleanup's 123 still under the 462 left — it resets
+    // first, so the cleanup goes on at once, though 462 less 123 leaves 339 where the retained
+    // buffer is 1,000: under forty per cent the rule decides, not the buffer.
+    let _turn = take_the_turn();
+    assert_eq!(cleanup_estimate(), 123, "the cleanup's estimate on CI");
+    let started = budget::epoch_now();
+    let (admitted, standin, decided) = cleanup_recheck(started, 462, started + 100);
+    decided.unwrap_or_else(|declined| panic!("{}", declined.message()));
+    assert_eq!(budget::epoch_now(), started, "no wait");
+    assert!(admitted.pauses().is_empty(), "{:?}", admitted.pauses());
+    // Admission's read and the recheck's, which found the answer's 462 the least: no other.
+    assert_eq!(standin.asked(), [ONE_READ, ONE_READ].concat());
+    assert!(
+        admitted.report().contains("took no pause"),
+        "{}",
+        admitted.report()
     );
-    block_on(budget::recheck_remaining(&admitted, &into, 123))
-        .unwrap_or_else(|declined| panic!("{}", declined.message()));
+}
 
+#[test]
+fn the_cleanup_recheck_under_forty_per_cent_waits_for_the_reset_and_reads_again_when_it_does_not() {
+    // The same 462 half an hour before the reset: 4,538 used over the half hour since the
+    // window began would empty it long before then, so the cleanup waits for that reset,
+    // reads the budget again, and goes on on what it reads after the window came back.
+    let _turn = take_the_turn();
+    let started = budget::epoch_now();
+    let reset = started + 1_800;
+    let (admitted, standin, decided) = cleanup_recheck(started, 462, reset);
+    decided.unwrap_or_else(|declined| panic!("{}", declined.message()));
     assert_eq!(
         budget::epoch_now(),
         reset,
@@ -711,13 +776,40 @@ fn a_recheck_whose_burn_resets_first_but_whose_estimate_breaches_the_buffer_paus
     );
     let pauses = admitted.pauses();
     assert_eq!(pauses.len(), 1, "{pauses:?}");
-    assert_eq!(pauses[0].decided_on.remaining(), low);
+    assert_eq!(
+        pauses[0].decided_on.remaining(),
+        462,
+        "decided on the least"
+    );
     assert!(
         pauses[0].by.contains("headers of a real answer"),
         "{}",
         pauses[0].by
     );
+    assert_eq!((pauses[0].from, pauses[0].until), (started, reset));
+    // Admission's read, the recheck's, and the recheck's again after its wait.
     assert_eq!(standin.asked(), [ONE_READ, ONE_READ, ONE_READ].concat());
+    assert!(
+        admitted
+            .report()
+            .contains("paused 1800 s for the graphql budget"),
+        "{}",
+        admitted.report()
+    );
+}
+
+#[test]
+fn the_cleanup_recheck_at_or_above_forty_per_cent_goes_on_at_once() {
+    // Exactly forty per cent on the session's own answer, half an hour before the reset at a
+    // rate that would empty it first: at forty per cent the rule does not pause.
+    let _turn = take_the_turn();
+    let started = budget::epoch_now();
+    let (admitted, standin, decided) =
+        cleanup_recheck(started, PAUSE_BELOW.of(LIMIT), started + 1_800);
+    decided.unwrap_or_else(|declined| panic!("{}", declined.message()));
+    assert_eq!(budget::epoch_now(), started, "no wait");
+    assert!(admitted.pauses().is_empty(), "{:?}", admitted.pauses());
+    assert_eq!(standin.asked(), [ONE_READ, ONE_READ].concat());
 }
 
 #[test]

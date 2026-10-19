@@ -456,12 +456,13 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   answer's headers. **Before the buffer, the 40% rule:** a budget is the least of every reading
   of it (`onetaskgraph_live::pace`), and one under `PAUSE_BELOW` — forty per cent of its limit —
   is a reason to *pause* until its reset, not to decline, unless the burn rate since its window
-  began says it resets before the session would exhaust it and its estimate keeps the retained
-  buffer — a budget it cannot afford until the reset is waited for, never declined on; it is
-  read again after the wait,
-  every pause is on the session's report, and every recheck below applies the same rule. The
+  began says it resets before the session would exhaust it — then it goes on with no wait and
+  no retained-buffer refusal at that decision, the buffer deciding only at or above forty per
+  cent; it is read again after the wait,
+  every pause is on the session's report, and every recheck below — the cleanup's included —
+  applies the same rule. The
   product's own copy keeps its rate-limit backoff and never pauses this way.
-  `tests/pause_gate.rs` drives admission and recheck on a virtual clock. The estimate it decides
+  `tests/pause_gate.rs` drives admission, recheck and cleanup on a virtual clock. The estimate it decides
   on is derived offline from that plugin's own per-call record of the session and a cost
   model stated once in `tests/journey/budget.rs`, so it needs no credential and moves with
   the session rather than with an edit; node count is **not** that estimate and cannot stand
