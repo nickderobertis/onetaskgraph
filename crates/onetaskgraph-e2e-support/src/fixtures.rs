@@ -1225,6 +1225,9 @@ struct GitHubBoard {
 /// Whether one request — its document and its variables — is one a [`BoardHook`] counts.
 type RequestMatch = Box<dyn Fn(&str, &Value) -> bool + Send>;
 
+/// A rewrite of one answer, given the request's variables and the `data` it would have carried.
+type AnswerBend = Box<dyn FnMut(&Value, &mut Value) + Send>;
+
 /// One change a journey has the board make part way through a command: after the
 /// `skip + 1`th request `matches` holds of, and before the board reads another.
 struct BoardHook {
@@ -4920,9 +4923,21 @@ pub fn linear_workspace_failing(
         ledger: Arc::new(Mutex::new(Vec::new())),
         answers: Arc::new(Mutex::new(Vec::new())),
         hooks: Arc::new(Mutex::new(Vec::new())),
+        bends: Arc::new(Mutex::new(Vec::new())),
     };
     let config = linear_serve(sandbox, workspace.clone(), None, failing);
     (config, workspace)
+}
+
+/// A rewrite of what a Linear workspace answers, applied to the next `times` requests
+/// `matches` holds of.
+struct LinearBend {
+    /// Whether one request is one this bend rewrites.
+    matches: RequestMatch,
+    /// How many more matching requests it rewrites.
+    times: usize,
+    /// The rewrite, given the request's variables and the `data` it would have answered.
+    bend: AnswerBend,
 }
 
 /// One change a journey has a Linear workspace make part way through a command: after the
@@ -4957,9 +4972,27 @@ pub struct LinearWorkspace {
     /// What this workspace answered each of those requests with, at the same index.
     answers: Arc<Mutex<Vec<Value>>>,
     hooks: Arc<Mutex<Vec<LinearHook>>>,
+    bends: Arc<Mutex<Vec<LinearBend>>>,
 }
 
 impl LinearWorkspace {
+    /// Have this workspace rewrite its answer to each of the next `times` requests `matches`
+    /// holds of through `bend`, given that request's variables and the `data` it would have
+    /// answered — a Linear whose connections answer as no correct one does.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback Linear's answers, which its request loop builds from its private state: like `after_request` above it can only be a method of this handle, and a suite of one plugin could not add it from outside.
+    pub fn bend_answers(
+        &self,
+        matches: impl Fn(&str, &Value) -> bool + Send + 'static,
+        times: usize,
+        bend: impl FnMut(&Value, &mut Value) + Send + 'static,
+    ) {
+        self.bends.lock().unwrap().push(LinearBend {
+            matches: Box::new(matches),
+            times,
+            bend: Box::new(bend),
+        });
+    }
+
     /// Have this workspace make `change` once it has answered the `skip + 1`th request that
     /// `matches` holds of — its GraphQL document and its variables — and before it reads the
     /// next: a person editing an issue part way through a command.
@@ -5428,6 +5461,7 @@ fn linear_server_over(
         ledger: Arc::new(Mutex::new(Vec::new())),
         answers: Arc::new(Mutex::new(Vec::new())),
         hooks: Arc::new(Mutex::new(Vec::new())),
+        bends: Arc::new(Mutex::new(Vec::new())),
     };
     linear_serve(sandbox, workspace, recorded, failing)
 }
@@ -5575,7 +5609,19 @@ fn linear_serve(
             }
             let (status, response) =
                 match linear_response(&request, recorded.as_ref(), &mut state.lock().unwrap()) {
-                    Ok(body) => ("200 OK", json!({"data":body})),
+                    Ok(mut body) => {
+                        let operation = request["query"].as_str().unwrap_or_default();
+                        let variables = request.get("variables").cloned().unwrap_or(Value::Null);
+                        let mut bends = workspace.bends.lock().unwrap();
+                        if let Some(bend) = bends
+                            .iter_mut()
+                            .find(|bend| bend.times > 0 && (bend.matches)(operation, &variables))
+                        {
+                            bend.times -= 1;
+                            (bend.bend)(&variables, &mut body);
+                        }
+                        ("200 OK", json!({"data":body}))
+                    }
                     Err(message) => ("400 Bad Request", json!({"errors":[{"message":message}]})),
                 };
             answers.lock().unwrap().push(response.clone());
