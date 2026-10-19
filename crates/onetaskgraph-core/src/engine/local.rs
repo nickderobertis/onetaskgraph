@@ -107,7 +107,7 @@ pub(crate) struct LocalProjects {
     pub text: Option<TextQuery>,
     /// The copy origin a listing by origin keeps, checked again over what the source
     /// answered.
-    pub origin: Option<String>,
+    pub origin: Option<GlobalId>,
 }
 
 impl LocalProjects {
@@ -115,7 +115,7 @@ impl LocalProjects {
     pub fn keeps(&self, project: &Project) -> bool {
         if let Some(origin) = &self.origin
             && !(TaskQuery {
-                origin: Some(origin.clone()),
+                origin: Some(origin.to_string()),
                 ..TaskQuery::default()
             })
             .origin_matches(&project.metadata)

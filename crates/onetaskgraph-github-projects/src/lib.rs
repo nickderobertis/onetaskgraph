@@ -11752,6 +11752,9 @@ impl TaskSource for GitHubProjectsSource {
             cursor: None,
             limit: 1,
         };
+        // Held only once every batch has been answered, so a read-ahead that fails part way
+        // holds nothing and every item is read on its own, as the method promises.
+        let mut read: Vec<(NativeId, Option<Resolved>)> = Vec::new();
         for batch in unread.chunks(COPY_DETAIL_BATCH) {
             let data = match self
                 .graphql(
@@ -11776,16 +11779,20 @@ impl TaskSource for GitHubProjectsSource {
                         Some("Issue") if required_str(node, "id")? != id.0 => continue,
                         _ => {}
                     }
-                    let item = self.resolve_issue(node).await?;
-                    // The whole of what it is blocked by came with it, so the dependency read a
-                    // copy makes next is answered from this one, as a copy's detail read is.
-                    if let Some(read) = item.as_ref().filter(|item| item.blocked_by.is_some()) {
-                        self.resolved_cache()?.insert(read.id.clone(), read.clone());
-                    }
-                    item
+                    self.resolve_issue(node).await?
                 };
-                self.read_ahead()?.insert(id.clone(), held);
+                read.push((id.clone(), held));
             }
+        }
+        let mut resolved = self.resolved_cache()?;
+        let mut ahead = self.read_ahead()?;
+        for (id, held) in read {
+            // The whole of what it is blocked by came with it, so the dependency read a copy
+            // makes next is answered from this one, as a copy's detail read is.
+            if let Some(item) = held.as_ref().filter(|item| item.blocked_by.is_some()) {
+                resolved.insert(item.id.clone(), item.clone());
+            }
+            ahead.insert(id, held);
         }
         Ok(())
     }

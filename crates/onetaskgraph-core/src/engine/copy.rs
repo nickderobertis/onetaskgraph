@@ -1354,6 +1354,16 @@ struct Read {
     comments: Option<Vec<Comment>>,
 }
 
+/// Why a copy names one destination project, which decides whether pinning the project itself
+/// in that destination's cache can save a read.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ProjectNamed {
+    /// The project's counterpart, which the copy writes and so reads with its forward edges.
+    Copied,
+    /// The project a copied document is filed under, which the filing lookup reads alone.
+    FiledUnder,
+}
+
 /// A task, a project or a document, so the copy path is written once.
 #[derive(Clone)]
 enum Item {
@@ -1453,6 +1463,17 @@ impl Referent {
     /// would put a third party's availability inside a copy; a durable lineage id would
     /// identify only records written after it landed, so it would resolve nothing already
     /// on a destination.
+    fn keys(&self) -> Vec<String> {
+        let mut keys = vec![self.id.to_string()];
+        if let Some(origin) = &self.origin {
+            let recorded = origin.to_string();
+            if recorded != keys[0] {
+                keys.push(recorded);
+            }
+        }
+        keys
+    }
+
     /// The counterpart its own `onetaskgraph.copies` link names at `destination`, when it
     /// records one there.
     fn link(&self, destination: &SourceName) -> Option<NativeId> {
@@ -1463,17 +1484,6 @@ impl Referent {
             .parse::<GlobalId>()
             .ok()?;
         (&linked.source == destination).then_some(linked.native)
-    }
-
-    fn keys(&self) -> Vec<String> {
-        let mut keys = vec![self.id.to_string()];
-        if let Some(origin) = &self.origin {
-            let recorded = origin.to_string();
-            if recorded != keys[0] {
-                keys.push(recorded);
-            }
-        }
-        keys
     }
 }
 
@@ -4265,13 +4275,6 @@ impl Engine {
         Err(EngineError::ChangedWhileCopied { item: id.clone() })
     }
 
-    /// Read the first detail page of every task in `ids` whose comments the copy reads — to
-    /// carry them, or to confirm a comment-activity query's match — as few requests as each
-    /// source's own batched detail read takes, for [`Engine::read_for_copy`] to start from: each
-    /// task with the first page of its comments beside it.
-    ///
-    /// Nothing for a copy that reads no comment, which reads each task by itself as it always
-    /// did.
     /// Read the destination counterparts of every item of `reads` ahead of aiming any of
     /// them, in each source this copy can reach: what each item's own link names there, what
     /// its own origin names there, and — for a document filed under a project this command
@@ -4300,16 +4303,21 @@ impl Engine {
             Some((_, natives)) => natives.push(native),
             None => wanted.push((there.clone(), vec![native])),
         };
-        // Each destination project this copy names, with the origin it records there and
-        // whether the copy reads it for itself: what a cache standing in front of that
-        // destination is pinned from, below.
-        let mut homes: Vec<(SourceName, NativeId, String, bool)> = Vec::new();
+        // Each destination project this copy names, with the origin it records there and why
+        // the copy names it: what a cache standing in front of that destination is pinned
+        // from, below.
+        let mut homes: Vec<(SourceName, NativeId, String, ProjectNamed)> = Vec::new();
         for read in reads {
             let metadata = described(&read.item).1;
             if read.item.level() == Level::Project {
                 for there in &reachable {
                     if let Some(link) = link_of(metadata, there) {
-                        homes.push((there.clone(), link.native, read.source.to_string(), true));
+                        homes.push((
+                            there.clone(),
+                            link.native,
+                            read.source.to_string(),
+                            ProjectNamed::Copied,
+                        ));
                     }
                 }
             }
@@ -4361,11 +4369,16 @@ impl Engine {
             for there in &reachable {
                 if let Some(link) = link_of(&running.source_projects[&key].metadata, there) {
                     want(there, link.native.clone());
-                    homes.push((there.clone(), link.native, key.clone(), false));
+                    homes.push((
+                        there.clone(),
+                        link.native,
+                        key.clone(),
+                        ProjectNamed::FiledUnder,
+                    ));
                 }
             }
         }
-        for (there, project, origin, copied) in homes {
+        for (there, project, origin, named) in homes {
             if self.caches(&there)
                 && let Ok(destination) = self.writable(&there)
             {
@@ -4378,12 +4391,9 @@ impl Engine {
                     .forward_edges
                     .reason()
                     .is_none();
-                self.pin_members(
-                    destination,
-                    &project,
-                    (!copied || covered).then_some(&*origin),
-                )
-                .await;
+                let pinned = named == ProjectNamed::FiledUnder || covered;
+                self.pin_members(destination, &project, pinned.then_some(&*origin))
+                    .await;
             }
         }
         // One counterpart of a task or a document copied on its own is read by its own read,
@@ -4450,6 +4460,13 @@ impl Engine {
         }
     }
 
+    /// Read the first detail page of every task in `ids` whose comments the copy reads — to
+    /// carry them, or to confirm a comment-activity query's match — as few requests as each
+    /// source's own batched detail read takes, for [`Engine::read_for_copy`] to start from: each
+    /// task with the first page of its comments beside it.
+    ///
+    /// Nothing for a copy that reads no comment, which reads each task by itself as it always
+    /// did.
     async fn prefetch(&self, request: &CopyRequest, ids: &[GlobalId], running: &mut Running) {
         if !reads_comments(request) {
             return;

@@ -410,6 +410,69 @@ mod tests {
         assert_eq!(pace(allowance(10, 900), 100, 1_000, 3_600), Pace::Go);
     }
 
+    /// A gauge whose budget never recovers: every read reports ten per cent left, resetting a
+    /// minute after now, and each wait moves now to the reset asked for.
+    struct Stuck {
+        now: u64,
+        reads: usize,
+        waits: Vec<u64>,
+    }
+
+    impl Gauge for Stuck {
+        fn read(&mut self) -> Pin<Box<dyn Future<Output = Vec<Reading>> + Send + '_>> {
+            self.reads += 1;
+            let reading = Reading::new(GRAPHQL, "stuck", Ok(allowance(500, self.now + 60)));
+            Box::pin(std::future::ready(vec![reading]))
+        }
+        fn now(&self) -> u64 {
+            self.now
+        }
+        fn wait_until(&mut self, until: u64) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+            self.waits.push(until);
+            self.now = until;
+            Box::pin(std::future::ready(()))
+        }
+        fn window(&self, _: Metered) -> u64 {
+            // A window that began a moment ago, so the burn rate never says it resets first.
+            61
+        }
+    }
+
+    /// Drive a future whose every await is ready, with no runtime.
+    fn ready<T>(future: impl Future<Output = T>) -> T {
+        let mut future = std::pin::pin!(future);
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        match future.as_mut().poll(&mut context) {
+            std::task::Poll::Ready(value) => value,
+            std::task::Poll::Pending => panic!("every await here is ready"),
+        }
+    }
+
+    #[test]
+    fn a_budget_that_never_recovers_is_paused_for_at_most_most_pauses_times_then_decided() {
+        let mut gauge = Stuck {
+            now: 1_000,
+            reads: 0,
+            waits: Vec::new(),
+        };
+        let mut pauses = Vec::new();
+        let decided = ready(paced(&mut gauge, &[(GRAPHQL, 100)], &mut pauses));
+        assert_eq!(pauses.len(), MOST_PAUSES);
+        assert_eq!(gauge.waits, [1_060, 1_120, 1_180, 1_240]);
+        assert_eq!(gauge.reads, MOST_PAUSES + 1, "read again after every pause");
+        assert_eq!(decided[0].0.allowance().map(Allowance::remaining), Ok(500));
+        // And then the retained buffer decides, on that last reading.
+        let mut gauge = Stuck {
+            now: 1_000,
+            reads: 0,
+            waits: Vec::new(),
+        };
+        assert!(matches!(
+            ready(Admission::admit(&mut gauge, &[(GRAPHQL, 100)])),
+            Err(Unaffordable::Short { remaining: 500, .. })
+        ));
+    }
+
     #[test]
     fn the_least_reading_is_the_smallest_share_of_its_own_limit() {
         let readings = vec![

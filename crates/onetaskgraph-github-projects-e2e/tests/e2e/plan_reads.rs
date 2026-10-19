@@ -256,3 +256,85 @@ fn success_text(output: &std::process::Output) -> String {
     );
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
+
+#[test]
+fn project_list_by_origin_applies_every_other_filter_and_pages_under_its_own_origin() {
+    // Three copies of one plan, labelled and placed differently, beside the near misses.
+    let mut extra = Vec::new();
+    for (id, labels, status) in [
+        ("COPY-0", json!([["L-1", "bug"]]), "Todo"),
+        ("COPY-1", json!([]), "Doing"),
+        ("COPY-2", json!([["L-1", "bug"]]), "Doing"),
+    ] {
+        let mut copy = stamped(id, ORIGIN, true);
+        copy["labels"] = labels;
+        copy["status"] = json!(status);
+        extra.push(copy);
+    }
+    extra.push(stamped("NEAR-1", "plans:ORIGIN-10", true));
+    let plan = Plan::new(SMALL, extra);
+    let listed = |extra: &[&str]| {
+        let mut arguments = vec!["project", "list", "--source", "board", "--origin", ORIGIN];
+        arguments.extend_from_slice(extra);
+        arguments.push("--json");
+        let (answer, calls) = plan.measured(&arguments);
+        never_walks("a filtered listing by origin", &calls);
+        answer
+    };
+    let set =
+        |names: &[&str]| -> BTreeSet<String> { names.iter().map(|n| (*n).to_owned()).collect() };
+
+    // Every other filter is applied over the origin's copies.
+    assert_eq!(
+        ids(&listed(&["--label", "bug"])),
+        set(&["COPY-0", "COPY-2"])
+    );
+    assert_eq!(ids(&listed(&["--not-label", "bug"])), set(&["COPY-1"]));
+    assert_eq!(ids(&listed(&["--status", "todo"])), set(&["COPY-0"]));
+    assert_eq!(
+        ids(&listed(&["--search", "COPY-2", "--in", "title"])),
+        set(&["COPY-2"])
+    );
+
+    // A page smaller than the copies walks them all, each once, by its own token.
+    let mut seen = Vec::new();
+    let mut token: Option<String> = None;
+    loop {
+        let mut extra = vec!["--limit", "1"];
+        if let Some(token) = &token {
+            extra.extend(["--page", token.as_str()]);
+        }
+        let answer = listed(&extra);
+        seen.extend(ids(&answer));
+        match answer["next"].as_str() {
+            Some(next) => token = Some(next.to_owned()),
+            None => break,
+        }
+        assert!(seen.len() <= 3, "the walk does not end: {seen:?}");
+    }
+    seen.sort();
+    assert_eq!(seen, ["COPY-0", "COPY-1", "COPY-2"]);
+
+    // A token one origin's listing handed out resumes no other's.
+    let answer = listed(&["--limit", "1"]);
+    let token = answer["next"].as_str().expect("a further page").to_owned();
+    let lease = plan.clock.lease(0);
+    let refused = plan.run(&[
+        "project",
+        "list",
+        "--source",
+        "board",
+        "--origin",
+        "plans:ORIGIN-10",
+        "--limit",
+        "1",
+        "--page",
+        &token,
+        "--json",
+    ]);
+    lease.wait_for_detach();
+    drop(lease);
+    assert_ne!(refused.status.code(), Some(0), "a foreign token is refused");
+    let said = String::from_utf8_lossy(&refused.stderr);
+    assert!(said.to_lowercase().contains("page"), "{said}");
+}

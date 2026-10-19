@@ -24,6 +24,11 @@ use onetaskgraph_github_projects::accounting::{Accounting, Budget};
 use onetaskgraph_live::{Credential, Exclusivity, Metered, PAUSE_BELOW, Session};
 use serde_json::json;
 
+// The credentialed lane's own halves again: `journey` for the gauge, the admission and the
+// clock under test, and `lane` for the session name they report under. Most of each is for the
+// target that drives the journey against GitHub, so what this one does not reach is the other
+// drive's rather than dead code — the same reason `tests/budget_gate.rs` and
+// `tests/recheck_gate.rs` carry these two.
 #[allow(dead_code)]
 mod journey;
 #[allow(dead_code)]

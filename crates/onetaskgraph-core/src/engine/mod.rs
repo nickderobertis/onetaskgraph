@@ -2515,7 +2515,7 @@ struct ProjectShape {
     outcomes: Outcomes,
     /// The copy origin the source is asked for instead of `pushed`, when the listing is one
     /// origin's.
-    origin: Option<String>,
+    origin: Option<GlobalId>,
 }
 
 /// As [`TaskShape`], for documents.
@@ -3125,7 +3125,7 @@ fn shape_projects(
         local.labels = (!filters.labels.is_empty()).then(|| filters.labels.clone());
         local.statuses.clone_from(&filters.statuses);
         local.text.clone_from(&filters.text);
-        local.origin = Some(origin.to_string());
+        local.origin = Some(origin.clone());
         if !filters.labels.is_empty() {
             outcomes.record(Predicate::Label, Outcome::AppliedLocally);
         }
@@ -3140,7 +3140,7 @@ fn shape_projects(
             pushed,
             local,
             outcomes,
-            origin: Some(origin.to_string()),
+            origin: Some(origin.clone()),
         };
     }
 
@@ -3345,7 +3345,7 @@ async fn fetch_projects(
                 Some(origin) => {
                     source
                         .source()
-                        .query_projects_by_origin(origin, &request)
+                        .query_projects_by_origin(&origin.to_string(), &request)
                         .await
                 }
                 None => {

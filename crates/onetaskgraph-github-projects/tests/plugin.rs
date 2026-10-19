@@ -18510,6 +18510,92 @@ async fn a_copys_batch_read_is_read_again_alone_refused_whole_or_refused_for_a_m
     );
 }
 
+/// What a copy reads ahead answers each item's next read by id, once, and nothing it cannot
+/// vouch for: an id the batch answers with no node is held as absent; a draft, and an answer
+/// naming another issue than the one asked for, are left to their own reads; a batch refused
+/// for an id naming no node holds nothing; and one refused for anything else — the first or a
+/// later one — is the read-ahead's failure and holds nothing either, so every item is read on
+/// its own exactly as it was before there was a read-ahead.
+#[tokio::test]
+async fn a_read_ahead_answers_each_items_next_read_once_and_holds_nothing_it_cannot_vouch_for() {
+    let no_comments = json!({"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}});
+    let node = |id: &str| issue_with_comments(id, no_comments.clone())["data"]["node"].clone();
+    let unresolvable = json!({"errors":[{
+        "message":"Could not resolve to a node with the global id of 'garbage'"}]});
+    let refused = json!({"errors":[{"message":"Something went wrong while executing your query"}]});
+
+    // The batch is the one request I_1 and GONE cost: the next one the script answers is
+    // I_9's own read, which only an item the batch did not vouch for sends.
+    let endpoint = sequence_server(vec![
+        json!({"data":{"i0": node("I_1"), "i1": null, "i2": node("I_2"),
+                       "i3": {"__typename":"DraftIssue","id":"DI_1"}}}),
+        issue_read("I_9"),
+    ]);
+    let source = configured(&endpoint, json!({}));
+    source
+        .read_ahead_for_copy(&[native("I_1"), native("GONE"), native("I_9"), native("DI_1")])
+        .await
+        .expect("a batch it can read is held");
+    let held = source.get_task(&native("I_1")).await.unwrap();
+    assert_eq!(held.map(|task| task.id), Some(native("I_1")));
+    assert!(source.get_task(&native("GONE")).await.unwrap().is_none());
+    let own = source.get_task(&native("I_9")).await.unwrap();
+    assert_eq!(
+        own.map(|task| task.id),
+        Some(native("I_9")),
+        "an answer naming I_2 is not I_9's"
+    );
+    // Once: the script is spent, so a second read of I_1 — or any read of the draft the batch
+    // left alone — is sent and refused rather than answered from what was held.
+    assert!(source.get_task(&native("I_1")).await.is_err());
+    assert!(source.get_task(&native("DI_1")).await.is_err());
+
+    // A batch refused for an id naming no node holds nothing, and is no failure of its own.
+    let endpoint = sequence_server(vec![unresolvable, issue_read("I_1")]);
+    let source = configured(&endpoint, json!({}));
+    source
+        .read_ahead_for_copy(&[native("I_1"), native("garbage")])
+        .await
+        .expect("an id naming no node is each item's own read to answer");
+    let own = source.get_task(&native("I_1")).await.unwrap();
+    assert_eq!(own.map(|task| task.id), Some(native("I_1")));
+
+    // Refused for anything else — on its only batch, or on its second after the first was
+    // answered — the read-ahead fails and holds nothing of either.
+    let ids: Vec<NativeId> = (0..=onetaskgraph_github_projects::COPY_DETAIL_BATCH)
+        .map(|n| native(&format!("I_{n}")))
+        .collect();
+    let first: serde_json::Map<String, Value> = ids
+        [..onetaskgraph_github_projects::COPY_DETAIL_BATCH]
+        .iter()
+        .enumerate()
+        .map(|(slot, id)| (format!("i{slot}"), node(&id.0)))
+        .collect();
+    // Its own read answers under a title the batch never held, so a read answered from the
+    // batch could not pass for it.
+    let mut alone = issue_read("I_0");
+    alone["data"]["node"]["title"] = json!("read on its own");
+    for script in [
+        vec![refused.clone(), alone.clone()],
+        vec![json!({"data": first}), refused, alone],
+    ] {
+        let endpoint = sequence_server(script);
+        let source = configured(&endpoint, json!({}));
+        let failed = source.read_ahead_for_copy(&ids).await;
+        assert!(
+            matches!(&failed, Err(SourceError::Refused { message })
+                if message.contains("Something went wrong")),
+            "{failed:?}"
+        );
+        let own = source.get_task(&native("I_0")).await.unwrap();
+        assert_eq!(
+            own.map(|task| task.title),
+            Some("read on its own".to_owned()),
+            "nothing was held"
+        );
+    }
+}
+
 /// The origin field is the one piece of an existing item's metadata written before its body,
 /// so a write refused after it moved puts it back: the item's metadata is as it stood.
 #[tokio::test]
