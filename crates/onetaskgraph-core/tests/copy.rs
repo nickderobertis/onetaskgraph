@@ -3407,6 +3407,42 @@ fn figures(report: &onetaskgraph_core::CopyReport) -> (u64, u64, u64) {
 }
 
 #[tokio::test]
+async fn a_reference_whose_link_no_longer_names_its_counterpart_is_found_by_its_origin() {
+    // Alpha's link names a record the destination no longer holds, and Beta's names one a
+    // person re-pointed at something else. Neither link is believed: each referent is asked
+    // for by its origin instead, and the document names the records that really are theirs.
+    let mut from = authoring_store(Some(("root:P-1", "root:A", "root:B")));
+    from["tasks"][0]["metadata"][MetadataKey::COPIES_KEY] = json!({"into": "into:GONE"});
+    from["tasks"][1]["metadata"][MetadataKey::COPIES_KEY] = json!({"into": "into:X"});
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "config": from},
+        "into": {"plugin": "in-memory", "config": {
+            "capabilities": {"documents": "native"},
+            "projects": [located_project("/srv/into/board", Some("root:P-1"))],
+            "tasks": [
+                located("A", "Alpha", "/srv/into/board/A.md", Some("root:A")),
+                located("B", "Beta", "/srv/into/board/B.md", Some("root:B")),
+                located("X", "Someone else's", "/srv/into/board/X.md", Some("elsewhere:X")),
+            ],
+        }},
+    }));
+    let report = copy_document(&engine, "from:D-1").await;
+    let landed = report.items[0]
+        .destination()
+        .expect("the document landed")
+        .to_string();
+    let content = body(&engine, &landed).await;
+    assert!(content.contains("`/srv/into/board/A.md`"), "{content}");
+    assert!(content.contains("`/srv/into/board/B.md`"), "{content}");
+    assert!(!content.contains("/srv/into/board/X.md"), "{content}");
+    assert_eq!(
+        figures(&report).0,
+        3,
+        "both tasks and the project are rewritten"
+    );
+}
+
+#[tokio::test]
 async fn a_document_arrives_naming_the_destinations_own_records_across_a_one_level_fan_out() {
     // The fan-out: `root` is where all three records were authored, `from` and `into` are
     // the two stores they were copied into, and the document travels by the `from` route

@@ -98,6 +98,9 @@ struct Standin {
     host: String,
     reported: Arc<Mutex<Reported>>,
     asked: Arc<Mutex<Vec<String>>>,
+    /// Whether the budget stays where it is past every reset, as one another consumer keeps
+    /// drawing down would — reporting the same remainder, against the next window's reset.
+    stuck: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Standin {
@@ -106,7 +109,9 @@ impl Standin {
         let host = format!("http://{}", listener.local_addr().unwrap());
         let reported = Arc::new(Mutex::new(reported));
         let asked = Arc::new(Mutex::new(Vec::new()));
+        let stuck = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let (script, recorded) = (Arc::clone(&reported), Arc::clone(&asked));
+        let held_down = Arc::clone(&stuck);
         thread::spawn(move || {
             for stream in listener.incoming() {
                 let mut stream = stream.expect("a stand-in connection");
@@ -122,19 +127,23 @@ impl Standin {
                 let now = budget::epoch_now();
                 let held = *script.lock().unwrap();
                 // Past its reset the window has come back whole, and a new one has begun.
-                let (scripted, reset) = if now >= held.reset {
-                    (
-                        Reported {
-                            endpoint: LIMIT,
-                            object: LIMIT,
-                            headers: LIMIT,
-                            reset: now + 3_600,
-                        },
-                        now + 3_600,
-                    )
-                } else {
-                    (held, held.reset)
-                };
+                let (scripted, reset) =
+                    if now >= held.reset && held_down.load(std::sync::atomic::Ordering::SeqCst) {
+                        let reset = now + 1_800;
+                        (Reported { reset, ..held }, reset)
+                    } else if now >= held.reset {
+                        (
+                            Reported {
+                                endpoint: LIMIT,
+                                object: LIMIT,
+                                headers: LIMIT,
+                                reset: now + 3_600,
+                            },
+                            now + 3_600,
+                        )
+                    } else {
+                        (held, held.reset)
+                    };
                 let (status, headers, body) = match called.as_str() {
                     "GET /rate_limit" => (
                         "200 OK",
@@ -176,7 +185,13 @@ impl Standin {
             host,
             reported,
             asked,
+            stuck,
         }
+    }
+
+    /// Keep the budget where it is past every reset from now on.
+    fn hold_down(&self) {
+        self.stuck.store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// Report `reported` from now on — the bucket moving under a session already admitted.
@@ -516,5 +531,51 @@ fn the_lanes_own_recheck_pauses_on_a_real_answers_headers_and_decides_after_the_
         admitted.report().contains("paused 1800 s"),
         "{}",
         admitted.report()
+    );
+}
+
+#[test]
+fn a_budget_that_never_comes_back_is_waited_for_a_bounded_number_of_times_then_declined() {
+    // Ten per cent, half an hour from its reset, and still ten per cent after every reset: the
+    // session pauses `MOST_PAUSES` times, reading again after each, and then the retained
+    // buffer decides on the last reading — which it cannot afford, so it does not run.
+    let _turn = take_the_turn();
+    let started = budget::epoch_now();
+    let low = LIMIT / 10;
+    let standin = Standin::start(Reported {
+        endpoint: low,
+        object: low,
+        headers: low,
+        reset: started + 1_800,
+    });
+    standin.hold_down();
+    let into = Accounting::new();
+    let mut gauge = budget::GitHubGauge::new("test-token", &standin.host, &into);
+    let declined = block_on(Session::open_paced(
+        "pause-gate",
+        Credential::new("test-token").unwrap(),
+        Exclusivity::Shared,
+        &mut gauge,
+        &demands(),
+    ))
+    .expect_err("a budget that never comes back is not one this session can afford");
+    let pauses = u64::try_from(onetaskgraph_live::pace::MOST_PAUSES).unwrap();
+    assert_eq!(
+        budget::epoch_now(),
+        started + pauses * 1_800,
+        "bounded waiting"
+    );
+    assert_eq!(
+        standin.asked().len(),
+        ONE_READ.len() * (onetaskgraph_live::pace::MOST_PAUSES + 1),
+        "read again after every pause, and no more"
+    );
+    assert!(
+        matches!(
+            declined.unaffordable_because(),
+            Some(onetaskgraph_live::Unaffordable::Short { remaining, .. }) if *remaining == low
+        ),
+        "{}",
+        declined.message()
     );
 }
