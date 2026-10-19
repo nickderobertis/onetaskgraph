@@ -2495,6 +2495,9 @@ struct Misbehaving {
     project: bool,
     /// Whether it declares documents, without which a copy never names it at either end.
     documents: bool,
+    /// Whether it declares `filter_by_origin`, which sends a copy's search for the records
+    /// copied from one origin to it as that one question rather than walking it.
+    origins: bool,
     /// The largest page it serves.
     ceiling: u32,
     /// Every page it has served, of any kind, counted so a test can show the walk stopped
@@ -2520,6 +2523,7 @@ impl Misbehaving {
             onset,
             project: false,
             documents: false,
+            origins: false,
             ceiling: 2,
             pages_served: Arc::new(AtomicU32::new(0)),
             tasks_written: AtomicU32::new(0),
@@ -2548,6 +2552,14 @@ impl Misbehaving {
     fn with_documents(self) -> Self {
         Self {
             documents: true,
+            ..self
+        }
+    }
+
+    /// The same source, declaring that it answers a question about one origin natively.
+    fn filtering_by_origin(self) -> Self {
+        Self {
+            origins: true,
             ..self
         }
     }
@@ -2710,7 +2722,11 @@ impl TaskSource for Misbehaving {
             filter_by_priority: Support::Unsupported,
             filter_by_comment_activity: Support::Unsupported,
             filter_by_metadata: Support::Unsupported,
-            filter_by_origin: Support::Unsupported,
+            filter_by_origin: if self.origins {
+                Support::Native
+            } else {
+                Support::Unsupported
+            },
             reconcile_status: Support::Unsupported,
             complete_by_issue: Support::Unsupported,
             orphan_tasks: Support::Native,
@@ -4401,6 +4417,68 @@ async fn a_destination_whose_cursors_cycle_stops_the_walk_for_a_documents_refere
         pages.load(Ordering::Relaxed) <= 6,
         "the walk stopped early rather than cycling"
     );
+}
+
+/// A document copy into a destination answering a question about one origin natively, so the
+/// counterparts its references name are asked for one origin at a time rather than walked —
+/// and that question's own guards are what stop a destination misbehaving under it.
+async fn origin_question_refusal(fault: Fault) -> (String, u32) {
+    let (engine, pages) = into_misbehaving_over(
+        naming_every_level(),
+        Misbehaving::new(At::Tasks, fault, Onset::FirstRead)
+            .with_documents()
+            .filtering_by_origin(),
+    );
+    let refused = document_refusal(&engine).await;
+    // The pages the copy was served before its task level was asked are the same whatever
+    // the fault, so what each case adds to them is the walk it is about.
+    (
+        refused,
+        pages.load(Ordering::Relaxed) - ANSWERED_BEFORE_THE_TASK_LEVEL,
+    )
+}
+
+/// The pages a document copy over [`naming_every_level`] is served before its task level's
+/// question about one origin is asked.
+const ANSWERED_BEFORE_THE_TASK_LEVEL: u32 = 3;
+
+#[tokio::test]
+async fn a_destination_overrunning_its_page_under_the_origin_question_stops_the_copy() {
+    let (refused, pages) = origin_question_refusal(Fault::OverrunsThePage).await;
+    assert!(
+        refused.contains("the source returned 3 rows for a page of at most 2"),
+        "{refused}"
+    );
+    // The task level's first page, and nothing after it.
+    assert_eq!(pages, 1, "the question stopped at the page it refused");
+}
+
+#[tokio::test]
+async fn a_destination_repeating_its_cursor_under_the_origin_question_stops_the_copy() {
+    let (refused, pages) = origin_question_refusal(Fault::RepeatsTheCursor).await;
+    assert!(
+        refused.contains("the records copied from one origin a document's references name"),
+        "the refusal names what the question was for: {refused}"
+    );
+    // The first page, and the one answering with the cursor it was given.
+    assert_eq!(pages, 2, "the question stopped at the cursor it repeated");
+}
+
+#[tokio::test]
+async fn a_destination_whose_cursors_cycle_under_the_origin_question_stops_the_copy() {
+    // Two cursors answering each other: every page advances, so only the question's memory
+    // of every cursor it has sent can see it.
+    let (refused, pages) = origin_question_refusal(Fault::CyclesItsCursors).await;
+    assert!(
+        refused.contains(
+            "cursor it had already been given while it was being asked for the \
+                          records copied from one origin"
+        ),
+        "the refusal says the question would never end: {refused}"
+    );
+    // The full half, the empty half and the full half again, whose next cursor is refused
+    // before it is sent.
+    assert_eq!(pages, 3, "the question stopped rather than cycling");
 }
 
 #[tokio::test]
