@@ -95,7 +95,7 @@ fn page_of_matches<T>(matched: Vec<T>, page: &PageRequest) -> Result<Page<T>, So
         None => 0,
         Some(cursor) => cursor
             .0
-            .strip_prefix(ORIGIN_CURSOR)
+            .strip_prefix(MATCHED_PAGE_CURSOR)
             .and_then(|position| position.parse::<usize>().ok())
             .filter(|position| *position <= matched.len())
             .ok_or_else(|| SourceError::Refused {
@@ -107,14 +107,14 @@ fn page_of_matches<T>(matched: Vec<T>, page: &PageRequest) -> Result<Page<T>, So
             })?,
     };
     let end = start.saturating_add(page.limit as usize).min(matched.len());
-    let next = (end < matched.len()).then(|| crate::Cursor(format!("{ORIGIN_CURSOR}{end}")));
+    let next = (end < matched.len()).then(|| crate::Cursor(format!("{MATCHED_PAGE_CURSOR}{end}")));
     Ok(Page {
         items: matched.into_iter().skip(start).take(end - start).collect(),
         next,
     })
 }
 
-const ORIGIN_CURSOR: &str = "origin:";
+const MATCHED_PAGE_CURSOR: &str = "origin:";
 
 /// One configured source, as the engine drives it.
 ///
