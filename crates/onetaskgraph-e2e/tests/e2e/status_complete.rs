@@ -42,6 +42,17 @@ fn issue(id: &str, status: &str) -> Value {
            "repo":REPOSITORY,"status":status,"origin":"","labels":[]})
 }
 
+/// One task issue filed as a sub-issue of `parent`, its card at `status`.
+fn sub_issue(id: &str, parent: &str, status: &str) -> Value {
+    let mut item = issue(id, status);
+    item["parent"] = json!(parent);
+    item
+}
+
+/// A plan's home on board A — `N-9`, its issue open at `In Progress`, holding the plan's two
+/// task issues `N-10` and `N-11` as sub-issues, which is what makes it a project item.
+const HOME: &str = "N-9";
+
 /// The references every journey below names, in this order: an open issue at `Todo` and one at
 /// `In Progress`; one closed as completed at `Todo` and one at `Done`; one closed as not planned
 /// and one as duplicate; an issue no board holds a card for; the first again; and an open issue
@@ -83,6 +94,9 @@ impl Stores {
             issue("N-8", "Todo"),
             issue("F-1", "Todo"),
             issue("F-2", "In Progress"),
+            issue(HOME, "In Progress"),
+            sub_issue("N-10", HOME, "Todo"),
+            sub_issue("N-11", HOME, "Todo"),
         ];
         let (mut first, board) = github_projects_with_items(&sandbox, items);
         board.with_status_option("OPT-in-progress", "In Progress");
@@ -1134,4 +1148,186 @@ fn a_reference_past_githubs_issue_number_range_is_absent_and_never_sent() {
         }
     }
     assert_eq!(stores.board.status("N-1").as_deref(), Some("Done"));
+}
+
+/// The mutations `token`'s board was sent, each as its root field and the item or issue it
+/// names.
+fn mutations_to(stores: &Stores, token: &str) -> Vec<(String, Value)> {
+    stores
+        .board
+        .served_to(token)
+        .into_iter()
+        .filter(|(document, _)| document.trim_start().starts_with("mutation"))
+        .map(|(document, variables)| {
+            if document.contains("updateIssue(input:") {
+                ("close".to_owned(), variables["input"]["id"].clone())
+            } else if document.contains("updateProjectV2ItemFieldValue(input:") {
+                ("option".to_owned(), variables["input"]["itemId"].clone())
+            } else {
+                (document, variables)
+            }
+        })
+        .collect()
+}
+
+/// What completing the home and the task `N-1` owes, naming no source: both written on board A,
+/// the home named a project; neither held on board B.
+fn home_and_task_owed(action: &str) -> Value {
+    let done = json!({"category":"done","name":"Done"});
+    json!({"items": [
+        {"issue":reference(HOME),"source":"board-a","task":format!("board-a:{HOME}"),
+         "kind":"project","from":"In Progress","to":done,"action":action},
+        {"issue":reference("N-1"),"source":"board-a","task":"board-a:N-1","kind":"task",
+         "from":"Todo","to":done,"action":action},
+        {"issue":reference(HOME),"source":"board-b","task":null,"kind":"task","from":null,
+         "to":null,"action":"absent"},
+        {"issue":reference("N-1"),"source":"board-b","task":null,"kind":"task","from":null,
+         "to":null,"action":"absent"},
+    ], "unsupported": ["docs", "linear", "notes"]})
+}
+
+#[test]
+fn a_plan_home_closes_beside_its_task_as_a_project_item_from_the_reads_a_task_takes() {
+    let stores = Stores::new();
+    let notes = stores.notes();
+    let second_before = stores.board.second_board_status("N-8");
+    let answer = stores.complete(&[reference(HOME), reference("N-1")], &[], 0);
+    assert_eq!(answer, home_and_task_owed("updated"), "{answer:#}");
+
+    assert_eq!(
+        stores.board.status(HOME).as_deref(),
+        Some("Done"),
+        "the home's card sits at the project kind's done option"
+    );
+    assert_eq!(
+        stores.board.state(HOME),
+        ("CLOSED".to_owned(), Some("COMPLETED".to_owned())),
+        "the home's issue is closed as completed"
+    );
+    assert_eq!(stores.board.status("N-1").as_deref(), Some("Done"));
+    for sub in ["N-10", "N-11"] {
+        assert_eq!(stores.board.status(sub).as_deref(), Some("Todo"), "{sub}");
+        assert_eq!(stores.board.state(sub).0, "OPEN", "{sub}");
+    }
+    assert_eq!(
+        mutations_to(&stores, "test-token"),
+        vec![
+            ("option".to_owned(), json!(format!("ITEM-{HOME}"))),
+            ("close".to_owned(), json!(HOME)),
+            ("option".to_owned(), json!("ITEM-N-1")),
+            ("close".to_owned(), json!("N-1")),
+        ],
+        "one option write and one close per moved item"
+    );
+    assert_eq!(
+        mutations_to(&stores, GITHUB_SECOND_BOARD_TOKEN),
+        Vec::new(),
+        "board B is written nothing"
+    );
+    assert_eq!(stores.board.second_board_status("N-8"), second_before);
+    // One batched read by reference per board, and no read of either board's items.
+    stores.one_read_of_the_named_issues("test-token");
+    stores.one_read_of_the_named_issues(GITHUB_SECOND_BOARD_TOKEN);
+    assert_eq!(stores.linear.served(), Vec::new(), "Linear is sent nothing");
+    assert_eq!(
+        stores.plugin_requests(),
+        vec!["initialize"],
+        "the plugin is sent nothing after its handshake"
+    );
+    assert_eq!(stores.notes(), notes, "the folder of Markdown is unchanged");
+
+    let fresh = Stores::new();
+    let human = fresh.run(&[
+        "task",
+        "status",
+        "complete",
+        "--issue",
+        &reference(HOME),
+        "--issue",
+        &reference("N-1"),
+        "--source",
+        "board-a",
+    ]);
+    assert_eq!(human.status.code(), Some(0), "{}", stderr(&human));
+    let said = stdout(&human);
+    assert!(
+        said.contains(&format!(
+            "{} in board-a: updated project board-a:{HOME} (In Progress -> Done)",
+            reference(HOME)
+        )) && said.contains(&format!(
+            "{} in board-a: updated board-a:N-1 (Todo -> Done)",
+            reference("N-1")
+        )),
+        "{said}"
+    );
+}
+
+#[test]
+fn a_plan_home_closed_as_not_planned_is_skipped_and_one_already_done_is_unchanged() {
+    let stores = Stores::new();
+    stores.board.close(HOME, Some("NOT_PLANNED"));
+    let answer = stores.complete(&[reference(HOME)], &["--source", "board-a"], 0);
+    assert_eq!(
+        answer,
+        json!({"items": [{"issue":reference(HOME),"source":"board-a",
+                          "task":format!("board-a:{HOME}"),"kind":"project",
+                          "from":"In Progress","to":null,"action":"skipped",
+                          "reason":"closed as not planned"}],
+               "unsupported": []}),
+        "{answer:#}"
+    );
+    assert_eq!(stores.board.status(HOME).as_deref(), Some("In Progress"));
+
+    stores.board.close(HOME, Some("COMPLETED"));
+    stores.board.move_card(HOME, "Done");
+    let answer = stores.complete(&[reference(HOME)], &["--source", "board-a"], 0);
+    assert_eq!(
+        answer,
+        json!({"items": [{"issue":reference(HOME),"source":"board-a",
+                          "task":format!("board-a:{HOME}"),"kind":"project","from":"Done",
+                          "to":{"category":"done","name":"Done"},"action":"unchanged"}],
+               "unsupported": []}),
+        "{answer:#}"
+    );
+    assert_eq!(
+        mutations_to(&stores, "test-token"),
+        Vec::new(),
+        "neither is written"
+    );
+    assert_eq!(
+        stores.board.state(HOME),
+        ("CLOSED".to_owned(), Some("COMPLETED".to_owned()))
+    );
+}
+
+#[test]
+fn the_library_form_completes_a_plan_home_as_the_command_line_does() {
+    let cli = Stores::new();
+    let answer = cli.complete(&[reference(HOME), reference("N-1")], &[], 0);
+
+    let library = Stores::new();
+    let engine = library_engine(&library);
+    let issues: Vec<IssueRef> = [HOME, "N-1"]
+        .iter()
+        .map(|id| reference(id).parse().expect("a reference"))
+        .collect();
+    let completed = completed_by(&engine, &issues);
+    assert_eq!(
+        completed.items[0].kind,
+        onetaskgraph_plugin_api::ItemKind::Project
+    );
+    assert!(
+        completed.items[0].delivered.is_empty(),
+        "a project delivers none"
+    );
+    assert_eq!(
+        serde_json::to_value(&completed).expect("it serialises"),
+        answer
+    );
+    assert_eq!(answer, home_and_task_owed("updated"), "{answer:#}");
+    assert_eq!(library.board.status(HOME).as_deref(), Some("Done"));
+    assert_eq!(
+        library.board.state(HOME),
+        ("CLOSED".to_owned(), Some("COMPLETED".to_owned()))
+    );
 }
