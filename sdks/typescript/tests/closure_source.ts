@@ -66,7 +66,9 @@ function requestOf(line: string): Request | undefined {
   const { id, method, params } = value;
   if (typeof id !== "string" || typeof method !== "string") return undefined;
   if (typeof params !== "object" || params === null || Array.isArray(params)) return undefined;
-  return { id, method, params: params as Record<string, unknown> };
+  // Rebuilt from its own entries, which the checks above make sound, rather than asserted.
+  const named: Record<string, unknown> = Object.fromEntries(Object.entries(params));
+  return { id, method, params: named };
 }
 
 function malformed(message: string): object {
