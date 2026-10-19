@@ -18617,6 +18617,50 @@ async fn a_read_ahead_answers_each_items_next_read_once_and_holds_nothing_it_can
     }
 }
 
+/// A read-ahead of more ids than one batch holds is sent as consecutive batches of at most
+/// [`COPY_DETAIL_BATCH`](onetaskgraph_github_projects::COPY_DETAIL_BATCH), and once every batch
+/// is answered each id's next read is answered from the batch that carried it — the last,
+/// short batch's as much as the first, full one's — without another request.
+#[tokio::test]
+async fn a_read_ahead_past_one_batch_answers_every_items_next_read_from_its_own_batch() {
+    let batch = onetaskgraph_github_projects::COPY_DETAIL_BATCH;
+    let no_comments = json!({"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}});
+    let node = |id: &str| {
+        let mut node = issue_with_comments(id, no_comments.clone())["data"]["node"].clone();
+        node["title"] = json!(format!("held {id}"));
+        node
+    };
+    let ids: Vec<NativeId> = (0..batch + 3).map(|n| native(&format!("I_{n}"))).collect();
+    let answered = |part: &[NativeId]| {
+        let slots: serde_json::Map<String, Value> = part
+            .iter()
+            .enumerate()
+            .map(|(slot, id)| (format!("i{slot}"), node(&id.0)))
+            .collect();
+        json!({ "data": slots })
+    };
+    // Exactly two answers: a third request of any kind is refused, so every read below that
+    // succeeds was answered from what the two batches held.
+    let endpoint = sequence_server(vec![answered(&ids[..batch]), answered(&ids[batch..])]);
+    let source = configured(&endpoint, json!({}));
+    source
+        .read_ahead_for_copy(&ids)
+        .await
+        .expect("both batches are answered");
+    for id in &ids {
+        let held = source.get_task(id).await.unwrap();
+        assert_eq!(
+            held.map(|task| task.title),
+            Some(format!("held {}", id.0)),
+            "{} is answered from its batch",
+            id.0
+        );
+    }
+    // Once each: with the script spent, a second read is sent and refused.
+    assert!(source.get_task(&ids[0]).await.is_err());
+    assert!(source.get_task(&ids[batch + 2]).await.is_err());
+}
+
 /// A read held ahead for a copy answers nothing once its item has been written or the command
 /// has ended: a delete of the item before its held read is taken, and a person's change after
 /// the command it was read in, are each what the next read of it observes.
