@@ -4300,8 +4300,19 @@ impl Engine {
             Some((_, natives)) => natives.push(native),
             None => wanted.push((there.clone(), vec![native])),
         };
+        // Each destination project this copy names, with the origin it records there and
+        // whether the copy reads it for itself: what a cache standing in front of that
+        // destination is pinned from, below.
+        let mut homes: Vec<(SourceName, NativeId, String, bool)> = Vec::new();
         for read in reads {
             let metadata = described(&read.item).1;
+            if read.item.level() == Level::Project {
+                for there in &reachable {
+                    if let Some(link) = link_of(metadata, there) {
+                        homes.push((there.clone(), link.native, read.source.to_string(), true));
+                    }
+                }
+            }
             if !(request.comments && read.item.level() == Level::Task) {
                 for there in &reachable {
                     if let Some(link) = link_of(metadata, there) {
@@ -4344,17 +4355,93 @@ impl Engine {
             }
             for there in &reachable {
                 if let Some(link) = link_of(&running.source_projects[&key].metadata, there) {
-                    want(there, link.native);
+                    want(there, link.native.clone());
+                    homes.push((there.clone(), link.native, key.clone(), false));
                 }
             }
         }
-        // One counterpart is read by its own read, which costs what a batch of one does and
-        // carries what a write of it needs besides.
-        for (name, natives) in wanted.into_iter().filter(|(_, natives)| natives.len() > 1) {
+        for (there, project, origin, copied) in homes {
+            if self.caches(&there)
+                && let Ok(destination) = self.writable(&there)
+            {
+                // A project the copy writes is read with its forward edges, which only a token
+                // covering them could answer from the cache; where it does not, pinning the
+                // project would spend a request on a read that is made anyway.
+                let covered = destination
+                    .source()
+                    .project_version_coverage()
+                    .forward_edges
+                    .reason()
+                    .is_none();
+                self.pin_members(
+                    destination,
+                    &project,
+                    (!copied || covered).then_some(&*origin),
+                )
+                .await;
+            }
+        }
+        // One counterpart of a task or a document copied on its own is read by its own read,
+        // which costs what a batch of one does and carries what a write of it needs besides; a
+        // project copy reads what its cache could not answer together, however few.
+        let projects = matches!(request.scope, CopyScope::Projects { .. });
+        for (name, natives) in wanted
+            .into_iter()
+            .filter(|(_, natives)| natives.len() > 1 || (projects && !natives.is_empty()))
+        {
             if let Ok(there) = self.writable(&name) {
                 // Nothing is decided by it: each read it would have answered is made as before.
                 let _ = there.source().read_ahead_for_copy(&natives).await;
             }
+        }
+    }
+
+    /// Pin, in the cache standing in front of `destination`, every member of its project
+    /// `project` — and, given the `origin` its counterpart records, that project itself — by
+    /// the listings that carry their change tokens: the project's own tasks and documents, the
+    /// members the orphan check lists anyway, and the projects recording `origin`.
+    ///
+    /// So the read-before-write of every item those tokens vouch for is answered by the cache
+    /// at no request, and only an item changed since its entry — or with none — is read. A
+    /// listing that fails pins nothing, and every read it would have answered is made.
+    async fn pin_members(
+        &self,
+        destination: &ResolvedSource,
+        project: &NativeId,
+        origin: Option<&str>,
+    ) {
+        let source = destination.source();
+        let members = TaskQuery {
+            project: ProjectFilter::Is(project.clone()),
+            ..TaskQuery::default()
+        };
+        let mut cursor: Option<Cursor> = None;
+        loop {
+            let asked = cursor.clone();
+            let Ok(page) = source
+                .query_tasks(&members, &request_for(destination, cursor))
+                .await
+            else {
+                break;
+            };
+            match page.next {
+                Some(next) if Some(&next) != asked.as_ref() => cursor = Some(next),
+                _ => break,
+            }
+        }
+        if source.capabilities().documents.is_native() {
+            let documents = DocumentQuery {
+                project: ProjectFilter::Is(project.clone()),
+                ..DocumentQuery::default()
+            };
+            let _ = source
+                .query_documents(&documents, &request_for(destination, None))
+                .await;
+        }
+        if let Some(origin) = origin {
+            let _ = source
+                .query_projects_by_origin(origin, &request_for(destination, None))
+                .await;
         }
     }
 

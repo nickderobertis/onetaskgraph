@@ -33,7 +33,7 @@ pub(super) const SMALL: usize = 2_000;
 pub(super) const LARGE: usize = 20_000;
 
 /// The plan's tasks, `T-1` to `T-8`.
-const TASKS: usize = 8;
+pub(super) const TASKS: usize = 8;
 
 /// The plan's ten blocked-by edges, as (task, the task it depends on).
 const EDGES: [(usize, usize); 10] = [
@@ -164,6 +164,11 @@ impl Plan {
     /// The generated plan in a folder, beside a board holding `items` unrelated items and
     /// `extra` more, every request to it answered after the spike's latency for its kind.
     pub fn new(items: usize, extra: Vec<Value>) -> Self {
+        Self::configured(items, extra, None)
+    }
+
+    /// [`Plan::new`], with the board source's `cache` block set to `cache` when one is given.
+    pub fn configured(items: usize, extra: Vec<Value>, cache: Option<Value>) -> Self {
         let clock = SimulatedClock::start(1);
         let sandbox = Sandbox::new();
         let mut held: Vec<Value> = (0..items).map(background).collect();
@@ -178,9 +183,15 @@ impl Plan {
             std::fs::create_dir_all(root.join(directory)).unwrap();
         }
         let root = std::fs::canonicalize(root).unwrap();
+        let mut board_source = json!({"plugin":"github-projects","config": config});
+        if let Some(mut cache) = cache {
+            // Inside the sandbox, so what the cache keeps is this journey's and nobody else's.
+            cache["dir"] = json!(sandbox.subdirectory("board-cache"));
+            board_source["cache"] = cache;
+        }
         sandbox.project_document(&document(&json!({
             "notes": {"plugin":"local-md","config":{"root":root}},
-            "board": {"plugin":"github-projects","config": config}
+            "board": board_source
         })));
         let plan = Self {
             sandbox,
@@ -382,7 +393,7 @@ fn split_slot(body: &str) -> (&str, Value) {
 }
 
 /// Every id the board holds a counterpart of the plan under, by the plan's own ids.
-type Counterparts = BTreeMap<String, String>;
+pub(super) type Counterparts = BTreeMap<String, String>;
 
 /// Hold the board to holding exactly the generated plan, `changed` naming a task whose
 /// content was replaced since: the project, eight tasks and the document each with the
@@ -476,7 +487,7 @@ fn holds_the_plan(plan: &Plan, at: &Counterparts, changed: Option<(usize, &str)>
 }
 
 /// The board ids of the plan's counterparts, from a scenario's two reports.
-fn counterparts(project: &Value, document: &Value) -> Counterparts {
+pub(super) fn counterparts(project: &Value, document: &Value) -> Counterparts {
     let mut at = Counterparts::new();
     at.insert("P".into(), landed(project, "notes:P"));
     for n in 1..=TASKS {
@@ -643,4 +654,209 @@ fn the_board_holds_each_request_for_the_spikes_mean_latency_of_its_kind() {
             "{kind:?} is the spike's mean"
         );
     }
+}
+
+/// The documents that read items of the board by their node ids — the reads a change token
+/// stands in for — rather than listing them.
+const ITEM_READS: [&str; 4] = [
+    graphql::ISSUE,
+    graphql::ISSUE_DETAIL,
+    graphql::ISSUE_DETAILS,
+    graphql::ISSUE_COPY_DETAILS,
+];
+
+/// Every item read among `calls`, as its document and the ids its variables name.
+fn item_reads(calls: &[Call]) -> Vec<(String, std::collections::BTreeSet<String>)> {
+    calls
+        .iter()
+        .filter_map(|call| {
+            let request: Value = serde_json::from_slice(&call.bytes).ok()?;
+            let query = request["query"].as_str()?;
+            ITEM_READS.contains(&query).then(|| {
+                let ids = request["variables"]
+                    .as_object()
+                    .into_iter()
+                    .flatten()
+                    .filter(|(name, _)| {
+                        name.strip_prefix("id")
+                            .is_some_and(|slot| slot.bytes().all(|byte| byte.is_ascii_digit()))
+                    })
+                    .filter_map(|(_, id)| id.as_str().map(str::to_owned))
+                    .collect();
+                (query.to_owned(), ids)
+            })
+        })
+        .collect()
+}
+
+/// Every id an item read among `calls` names.
+fn named_by_item_reads(calls: &[Call]) -> std::collections::BTreeSet<String> {
+    item_reads(calls)
+        .into_iter()
+        .flat_map(|(_, ids)| ids)
+        .collect()
+}
+
+impl Plan {
+    /// Fill the board's cache with what the reads a person makes leave there: every task of
+    /// the plan, the project and the document, each at its current change token.
+    fn read_back(&self, at: &Counterparts) {
+        let lease = self.clock.lease(0);
+        let mut tasks = vec!["task".to_owned(), "show-many".to_owned()];
+        tasks.extend((1..=TASKS).map(|n| format!("board:{}", at[&format!("T-{n}")])));
+        tasks.push("--json".to_owned());
+        for arguments in [
+            tasks,
+            vec![
+                "project".into(),
+                "show".into(),
+                format!("board:{}", at["P"]),
+                "--json".into(),
+            ],
+            vec![
+                "document".into(),
+                "show".into(),
+                format!("board:{}", at["D"]),
+                "--json".into(),
+            ],
+        ] {
+            success(&self.run(&arguments.iter().map(String::as_str).collect::<Vec<_>>()));
+            lease.wait_for_detach();
+        }
+    }
+
+    /// One command through the binary, and every request the board answered for it.
+    pub(super) fn measured(&self, arguments: &[&str]) -> (Value, Vec<Call>) {
+        let before = self.board.calls().len();
+        let lease = self.clock.lease(0);
+        let report = success(&self.run(arguments));
+        lease.wait_for_detach();
+        drop(lease);
+        (report, self.board.calls()[before..].to_vec())
+    }
+}
+
+/// The ids of every plan item at the destination.
+fn plan_ids(at: &Counterparts) -> std::collections::BTreeSet<String> {
+    at.values().cloned().collect()
+}
+
+#[test]
+fn a_recopy_with_no_token_reads_every_counterpart_in_batches_and_none_on_its_own() {
+    // (b): no cache, so no item has a token the copy could vouch for: the ten are read, every
+    // one of them in an aliased batch of at most COPY_DETAIL_BATCH, and none by its own read.
+    let plan = Plan::new(SMALL, Vec::new());
+    let (project, document, _) = plan.copy();
+    let at = counterparts(&project, &document);
+    let (_, _, calls) = plan.copy();
+    let reads = item_reads(&calls);
+    assert!(
+        reads
+            .iter()
+            .all(|(document, ids)| document == graphql::ISSUE_COPY_DETAILS
+                && ids.len() <= onetaskgraph_github_projects::COPY_DETAIL_BATCH),
+        "an item read that is not a batch: {reads:?}"
+    );
+    assert_eq!(
+        named_by_item_reads(&calls),
+        plan_ids(&at),
+        "every counterpart was read"
+    );
+    holds_the_plan(&plan, &at, None);
+}
+
+#[test]
+fn a_recopy_reads_nothing_its_cache_holds_at_the_token_the_listing_carries() {
+    // (a): the cache holds every item at the token the copy's own listings carry, so the
+    // project copy reads none of its tasks — the project alone is read, once and in a batch,
+    // for the forward edges a GitHub token does not cover — and the document copy does not
+    // read the document. What the project copy then rewrites, unchanged, the document copy
+    // reads again; leaving unchanged items unwritten is the write path's to do.
+    let plan = Plan::configured(SMALL, Vec::new(), Some(json!({"enabled": true})));
+    let (project, document, _) = plan.copy();
+    let at = counterparts(&project, &document);
+    plan.read_back(&at);
+
+    let (_, calls) = plan.measured(&["project", "copy", "notes:P", "--to", "board", "--json"]);
+    never_walks("a cached project copy", &calls);
+    let named = named_by_item_reads(&calls);
+    for n in 1..=TASKS {
+        assert!(
+            !named.contains(&at[&format!("T-{n}")]),
+            "T-{n} was read though its cache entry is at its token: {:?}",
+            item_reads(&calls)
+        );
+    }
+    assert_eq!(
+        item_reads(&calls),
+        [(
+            graphql::ISSUE_COPY_DETAILS.to_owned(),
+            std::collections::BTreeSet::from([at["P"].clone()])
+        )],
+        "the project, alone, in one batch"
+    );
+    let (_, calls) = plan.measured(&["document", "copy", "notes:D", "--to", "board", "--json"]);
+    assert!(
+        !named_by_item_reads(&calls).contains(&at["D"]),
+        "the document was read though its cache entry is at its token: {:?}",
+        item_reads(&calls)
+    );
+    holds_the_plan(&plan, &at, None);
+}
+
+#[test]
+fn a_recopy_reads_only_what_neither_token_nor_cache_answers_and_keeps_a_persons_edit() {
+    // (c): the cache holds the plan at its tokens; then a person fills in a board field of
+    // their own on T-3's card, which moves its token past its entry, and the plan gains a ninth
+    // task never copied. The copy reads T-3 — before it writes it — and of the plan's items
+    // only it and the project, whose edges no token covers; creates the ninth; and leaves T-3
+    // the field the copy never writes.
+    let plan = Plan::configured(SMALL, Vec::new(), Some(json!({"enabled": true})));
+    let (project, document, _) = plan.copy();
+    let at = counterparts(&project, &document);
+    plan.read_back(&at);
+    let edited = &at["T-3"];
+    plan.github.set_card_field(edited, "Reviewer", "a person");
+    std::fs::write(
+        plan.root.join("tasks/T-9.md"),
+        "---\ntitle: Step 9 of the plan\nstatus: todo\nproject: P\n---\nA step added since.\n",
+    )
+    .unwrap();
+
+    let (report, calls) = plan.measured(&["project", "copy", "notes:P", "--to", "board", "--json"]);
+    never_walks("a partly cached project copy", &calls);
+    let reads = item_reads(&calls);
+    assert!(
+        reads
+            .iter()
+            .all(|(document, ids)| document == graphql::ISSUE_COPY_DETAILS
+                && ids.len() <= onetaskgraph_github_projects::COPY_DETAIL_BATCH),
+        "{reads:?}"
+    );
+    let named = named_by_item_reads(&calls);
+    let unanswered = std::collections::BTreeSet::from([at["P"].clone(), edited.clone()]);
+    assert_eq!(
+        named, unanswered,
+        "only the project and the task edited since were read"
+    );
+    // Read before it was written.
+    let read_at = calls
+        .iter()
+        .position(|call| named_by_item_reads(std::slice::from_ref(call)).contains(edited))
+        .unwrap();
+    let written_at = calls.iter().position(|call| {
+        call.kind == Kind::Mutation
+            && String::from_utf8_lossy(&call.bytes).contains(edited.as_str())
+    });
+    assert!(
+        written_at.is_none_or(|written| read_at < written),
+        "read before written"
+    );
+    assert_eq!(
+        plan.github.item(edited).unwrap()["own_fields"]["Reviewer"],
+        json!("a person"),
+        "the person's edit is kept"
+    );
+    let ninth = landed(&report, "notes:T-9");
+    assert_eq!(plan.github.item(&ninth).unwrap()["parent"], json!(at["P"]));
 }
