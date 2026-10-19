@@ -6043,6 +6043,27 @@ impl GitHubProjectsSource {
         self.with_own_writes(found).map(Some)
     }
 
+    /// Every `kind` item of this board whose own origin is exactly `origin`: the candidates
+    /// [`Self::narrowed`] reads for a task query carrying that origin — one
+    /// [`graphql::ORIGIN_LOOKUP`] walk, held for the command under the same key, completed with
+    /// what this process wrote — each confirmed against its own origin entry.
+    ///
+    /// What answers a project or document listing by origin, so finding every copy of one plan
+    /// costs the items that carry its origin and never a page of the board.
+    async fn copied_from(&self, origin: &str, kind: BoardKind) -> Result<Vec<Resolved>, SourceError> {
+        let wanted = TaskQuery {
+            origin: Some(origin.to_owned()),
+            ..TaskQuery::default()
+        };
+        Ok(self
+            .narrowed(&wanted)
+            .await?
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|item| item.kind == kind && wanted.origin_matches(&item.metadata()))
+            .collect())
+    }
+
     /// Every item of this board that may carry `origin` — a superset of those that do — found
     /// by [`graphql::ORIGIN_LOOKUP`] and never by enumerating the board.
     ///
@@ -11150,12 +11171,48 @@ impl TaskSource for GitHubProjectsSource {
             page.limit.min(MAX_PAGE_SIZE) as usize,
         ))
     }
+    async fn query_projects_by_origin(
+        &self,
+        origin: &str,
+        page: &PageRequest,
+    ) -> Result<Page<Project>, SourceError> {
+        validate_page(page)?;
+        let projects = self
+            .copied_from(origin, BoardKind::Work(ItemKind::Project))
+            .await?
+            .iter()
+            .map(Resolved::project)
+            .collect();
+        Ok(offset_page(
+            projects,
+            numeric_cursor(page.cursor.as_ref())?,
+            page.limit.min(MAX_PAGE_SIZE) as usize,
+        ))
+    }
     async fn get_document(&self, id: &NativeId) -> Result<Option<Document>, SourceError> {
         Ok(self
             .item_by_id(id)
             .await?
             .filter(|item| item.kind == BoardKind::Document)
             .map(|item| item.document()))
+    }
+    async fn query_documents_by_origin(
+        &self,
+        origin: &str,
+        page: &PageRequest,
+    ) -> Result<Page<Document>, SourceError> {
+        validate_page(page)?;
+        let documents = self
+            .copied_from(origin, BoardKind::Document)
+            .await?
+            .iter()
+            .map(Resolved::document)
+            .collect();
+        Ok(offset_page(
+            documents,
+            numeric_cursor(page.cursor.as_ref())?,
+            page.limit.min(MAX_PAGE_SIZE) as usize,
+        ))
     }
     async fn query_documents(
         &self,

@@ -52,7 +52,7 @@ use onetaskgraph_plugin_api::{
     AssetPayload, AssetUploads, AssetWrite, Capabilities, Classification, Comment, CommentCopy,
     Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Document, DocumentQuery,
     ItemKind, ItemWrite, Location, MetadataKey, MetadataMatch, Metering, NativeId, Page,
-    PageRequest, Project, ProjectQuery, Repository, SourceError, SourceName, StatusCategory, Task,
+    PageRequest, Project, ProjectFilter, ProjectQuery, Repository, SourceError, SourceName, StatusCategory, Task,
     TaskDetailRead, TaskQuery, TaskRef, TextFields, TextQuery, WriteTarget,
 };
 use schemars::JsonSchema;
@@ -1417,6 +1417,9 @@ struct Referent {
     level: Level,
     /// The non-empty location string its source reports for it.
     location: String,
+    /// The well-formed entries of its own `onetaskgraph.copies`: the counterpart it records
+    /// at each destination it was copied into.
+    links: serde_json::Map<String, Value>,
 }
 
 impl Referent {
@@ -1446,6 +1449,18 @@ impl Referent {
     /// would put a third party's availability inside a copy; a durable lineage id would
     /// identify only records written after it landed, so it would resolve nothing already
     /// on a destination.
+    /// The counterpart its own `onetaskgraph.copies` link names at `destination`, when it
+    /// records one there.
+    fn link(&self, destination: &SourceName) -> Option<NativeId> {
+        let linked = self
+            .links
+            .get(destination.as_str())?
+            .as_str()?
+            .parse::<GlobalId>()
+            .ok()?;
+        (&linked.source == destination).then_some(linked.native)
+    }
+
     fn keys(&self) -> Vec<String> {
         let mut keys = vec![self.id.to_string()];
         if let Some(origin) = &self.origin {
@@ -2856,22 +2871,25 @@ impl Engine {
         // The destination is walked only for a copy that really names something, and only
         // for the interfaces those referents are read from — in each source a document of
         // this call lands in, which a routed copy decides per document.
-        let mut levels: BTreeMap<SourceName, Vec<Level>> = BTreeMap::new();
+        let mut wanted: BTreeMap<SourceName, Vec<&Referent>> = BTreeMap::new();
         for (item, referents) in planned.iter().zip(&named) {
             for referent in referents {
-                let wanted = levels.entry(item.to.clone()).or_default();
-                if !wanted.contains(&referent.level) {
-                    wanted.push(referent.level);
+                let at = wanted.entry(item.to.clone()).or_default();
+                if !at
+                    .iter()
+                    .any(|held| held.id == referent.id && held.level == referent.level)
+                {
+                    at.push(referent);
                 }
             }
         }
-        if levels.is_empty() {
+        if wanted.is_empty() {
             return Ok(());
         }
         let mut walked: BTreeMap<SourceName, Counterparts> = BTreeMap::new();
-        for (to, levels) in levels {
+        for (to, referents) in wanted {
             let destination = self.writable(&to)?;
-            walked.insert(to, self.counterparts(destination, &levels).await?);
+            walked.insert(to, self.counterparts(destination, &referents).await?);
         }
         for (item, referents) in planned.iter_mut().zip(named) {
             let Some(counterparts) = walked.get(&item.to) else {
@@ -2981,25 +2999,202 @@ impl Engine {
         Ok(referents)
     }
 
-    /// Walk the destination once for every record it holds at the levels named, one page
-    /// at a time.
+    /// The destination's records for `referents`, found from what each referent records
+    /// rather than by walking everything the destination holds.
     ///
-    /// One page is *read* at a time, and what is kept from each is three fields of each
-    /// record — its id, the origin it records and the location the destination reports —
-    /// never the page. That is more than [`Engine::scan`] keeps, and deliberately: the whole
-    /// point of this walk is that one pass answers every document and every referent of the
-    /// invocation, so what it learns has to outlive the page it learned it from. Nothing is
-    /// written down and the index is dropped with the call.
+    /// **A link first.** A referent whose own `onetaskgraph.copies` names a record at this
+    /// destination has that record read by id — every linked task in one batched
+    /// [`TaskSource::get_task_details`] read — and when the record's own origin is one of the
+    /// referent's two keys it is the counterpart, exactly as a copy takes a link it follows
+    /// (rule 0). The copy that recorded the link wrote that record, so it is the one record
+    /// the correspondence names, and no other record is looked for.
     ///
-    /// The other difference from `scan` is the *answer*: this one keeps every match, so a
-    /// destination holding two records for one work item is reported as ambiguous rather
-    /// than resolved to the first.
+    /// **Then the origin.** Every other referent — no link here, or a link the record it
+    /// names no longer confirms — has the destination asked, at its own level, for the
+    /// records recording each of its two keys as their origin: a question about one origin,
+    /// which a source declaring [`Capabilities::filter_by_origin`] answers without listing
+    /// what it holds. A source that does not is walked once per level instead, as every
+    /// destination used to be, because asking it once per key would walk it once per key.
+    ///
+    /// What is kept from either is three fields of each record found — its id, the origin it
+    /// records and the location the destination reports — in the index
+    /// [`Counterparts::resolve`] reads, which keeps every match, so a destination holding two
+    /// records for one origin is reported as ambiguous rather than resolved to the first.
+    /// That is the difference from [`Engine::scan`]. Nothing is written down and the index is
+    /// dropped with the call.
     async fn counterparts(
         &self,
         destination: &ResolvedSource,
-        levels: &[Level],
+        referents: &[&Referent],
     ) -> Result<Counterparts, EngineError> {
         let mut found = Counterparts::default();
+        let name = destination.name();
+        let mut unlinked: Vec<&Referent> = Vec::new();
+        let linked_tasks: Vec<(&Referent, NativeId)> = referents
+            .iter()
+            .filter(|referent| referent.level == Level::Task)
+            .filter_map(|referent| referent.link(name).map(|id| (*referent, id)))
+            .collect();
+        if !linked_tasks.is_empty() {
+            let ids: Vec<NativeId> = linked_tasks.iter().map(|(_, id)| id.clone()).collect();
+            let read = destination.source().get_task_details(&ids, None).await;
+            if read.len() != ids.len() {
+                return Err(refused(
+                    destination,
+                    SourceError::Malformed {
+                        message: format!(
+                            "the source answered a read of {} tasks with {} answers",
+                            ids.len(),
+                            read.len()
+                        ),
+                    },
+                ));
+            }
+            for ((referent, _), answer) in linked_tasks.iter().zip(read) {
+                match answer.map_err(|error| refused(destination, error))? {
+                    Some(detail) if confirms(referent, &detail.task.metadata) => found.note(
+                        Level::Task,
+                        &detail.task.id,
+                        detail.task.location.as_ref(),
+                        &detail.task.metadata,
+                    ),
+                    _ => unlinked.push(referent),
+                }
+            }
+        }
+        for referent in referents {
+            let held = match (referent.level, referent.link(name)) {
+                (Level::Task, Some(_)) => continue,
+                (_, None) => None,
+                (Level::Project, Some(id)) => destination
+                    .source()
+                    .get_project(&id)
+                    .await
+                    .map_err(|error| refused(destination, error))?
+                    .map(|project| (project.id, project.location, project.metadata)),
+                (Level::Document, Some(id)) => destination
+                    .source()
+                    .get_document(&id)
+                    .await
+                    .map_err(|error| refused(destination, error))?
+                    .map(|document| (document.id, document.location, document.metadata)),
+            };
+            match held {
+                Some((id, location, metadata)) if confirms(referent, &metadata) => {
+                    found.note(referent.level, &id, location.as_ref(), &metadata);
+                }
+                _ => unlinked.push(referent),
+            }
+        }
+        if unlinked.is_empty() {
+            return Ok(found);
+        }
+        if !destination.source().capabilities().filter_by_origin.is_native() {
+            let mut levels: Vec<Level> = unlinked.iter().map(|referent| referent.level).collect();
+            levels.sort();
+            levels.dedup();
+            self.walk_counterparts(destination, &levels, &mut found)
+                .await?;
+            return Ok(found);
+        }
+        let mut asked: BTreeSet<(Level, String)> = BTreeSet::new();
+        for referent in unlinked {
+            for key in referent.keys() {
+                if asked.insert((referent.level, key.clone())) {
+                    self.copied_from(destination, referent.level, &key, &mut found)
+                        .await?;
+                }
+            }
+        }
+        Ok(found)
+    }
+
+    /// Note in `found` every record of `destination` at `level` recording `origin` as its
+    /// origin, asked of the destination as that one question and walked to its end.
+    async fn copied_from(
+        &self,
+        destination: &ResolvedSource,
+        level: Level,
+        origin: &str,
+        found: &mut Counterparts,
+    ) -> Result<(), EngineError> {
+        let mut cursor: Option<Cursor> = None;
+        let tasks = TaskQuery {
+            origin: Some(origin.to_owned()),
+            ..TaskQuery::default()
+        };
+        loop {
+            let asked = cursor.clone();
+            let request = request_for(destination, cursor);
+            let source = destination.source();
+            let (held, next): (Vec<(NativeId, Option<Location>, BTreeMap<String, Value>)>, _) =
+                match level {
+                    Level::Task => {
+                        let page = source.query_tasks(&tasks, &request).await;
+                        let page = page.map_err(|error| refused(destination, error))?;
+                        let next = page.next;
+                        let held = page
+                            .items
+                            .into_iter()
+                            .map(|task| (task.id, task.location, task.metadata))
+                            .collect();
+                        (held, next)
+                    }
+                    Level::Project => {
+                        let page = source.query_projects_by_origin(origin, &request).await;
+                        let page = page.map_err(|error| refused(destination, error))?;
+                        let next = page.next;
+                        let held = page
+                            .items
+                            .into_iter()
+                            .map(|project| (project.id, project.location, project.metadata))
+                            .collect();
+                        (held, next)
+                    }
+                    Level::Document => {
+                        let page = source.query_documents_by_origin(origin, &request).await;
+                        let page = page.map_err(|error| refused(destination, error))?;
+                        let next = page.next;
+                        let held = page
+                            .items
+                            .into_iter()
+                            .map(|document| (document.id, document.location, document.metadata))
+                            .collect();
+                        (held, next)
+                    }
+                };
+            fits(held.len(), request.limit).map_err(|error| refused(destination, error))?;
+            for (id, location, metadata) in &held {
+                found.note(level, id, location.as_ref(), metadata);
+            }
+            unrepeated(
+                next.as_ref(),
+                asked.as_ref(),
+                "the destination was being asked for the records copied from one origin a \
+                 document's references name",
+            )
+            .map_err(|error| refused(destination, error))?;
+            match next {
+                Some(next) => cursor = Some(next),
+                None => return Ok(()),
+            }
+        }
+    }
+
+    /// Walk the destination once for every record it holds at the levels named, one page
+    /// at a time — what [`Self::counterparts`] asks of a destination that cannot answer a
+    /// question about one origin without listing everything anyway.
+    ///
+    /// One page is *read* at a time, and what is kept from each is three fields of each
+    /// record, as [`Self::counterparts`] keeps — never the page. One pass answers every
+    /// referent of the invocation at those levels, so what it learns outlives the page it
+    /// learned it from.
+    async fn walk_counterparts(
+        &self,
+        destination: &ResolvedSource,
+        levels: &[Level],
+        found: &mut Counterparts,
+    ) -> Result<(), EngineError> {
         for level in levels {
             // Every cursor this level has already been sent. `unrepeated` below catches a
             // source that hands back the cursor it was just given, and its own note says
@@ -3093,13 +3288,16 @@ impl Engine {
                 }
             }
         }
-        Ok(found)
+        Ok(())
     }
 
     /// Destination tasks filed under the copied project whose origin the source no longer
     /// holds.
     ///
-    /// A copy never deletes, so each is left exactly as it is and reported.
+    /// Asked of the destination project's own members — a query narrowed to that one project
+    /// — so what it costs is that project's tasks and never the rest of the store; each answer
+    /// is still held to its filing here, so a source that answers the wider set is read
+    /// exactly as before. A copy never deletes, so each is left exactly as it is and reported.
     async fn orphans(
         &self,
         destination: &ResolvedSource,
@@ -3109,12 +3307,16 @@ impl Engine {
     ) -> Result<Vec<CopyOutcome>, EngineError> {
         let mut orphans = Vec::new();
         let mut cursor: Option<Cursor> = None;
+        let members = TaskQuery {
+            project: ProjectFilter::Is(at_destination.clone()),
+            ..TaskQuery::default()
+        };
         loop {
             let asked = cursor.clone();
             let request = request_for(destination, cursor);
             let page: Page<Task> = destination
                 .source()
-                .query_tasks(&TaskQuery::default(), &request)
+                .query_tasks(&members, &request)
                 .await
                 .map_err(|error| refused(destination, error))?;
             fits(page.items.len(), request.limit).map_err(|error| refused(destination, error))?;
@@ -4496,12 +4698,24 @@ impl Engine {
                     }
                     page.next
                 }
+                // An origin is asked for as itself, so a source that can find the items one
+                // origin names answers without listing everything it holds.
                 Level::Project => {
-                    let page = destination
-                        .source()
-                        .query_projects(&ProjectQuery::default(), &request)
-                        .await
-                        .map_err(|error| refused(destination, error))?;
+                    let page = match wanted {
+                        Wanted::Origin(origin) => {
+                            destination
+                                .source()
+                                .query_projects_by_origin(origin, &request)
+                                .await
+                        }
+                        _ => {
+                            destination
+                                .source()
+                                .query_projects(&ProjectQuery::default(), &request)
+                                .await
+                        }
+                    }
+                    .map_err(|error| refused(destination, error))?;
                     fits(page.items.len(), request.limit)
                         .map_err(|error| refused(destination, error))?;
                     for project in &page.items {
@@ -4512,11 +4726,21 @@ impl Engine {
                     page.next
                 }
                 Level::Document => {
-                    let page = destination
-                        .source()
-                        .query_documents(&DocumentQuery::default(), &request)
-                        .await
-                        .map_err(|error| refused(destination, error))?;
+                    let page = match wanted {
+                        Wanted::Origin(origin) => {
+                            destination
+                                .source()
+                                .query_documents_by_origin(origin, &request)
+                                .await
+                        }
+                        _ => {
+                            destination
+                                .source()
+                                .query_documents(&DocumentQuery::default(), &request)
+                                .await
+                        }
+                    }
+                    .map_err(|error| refused(destination, error))?;
                     fits(page.items.len(), request.limit)
                         .map_err(|error| refused(destination, error))?;
                     for document in &page.items {
@@ -6165,6 +6389,13 @@ fn located(location: Option<&Location>) -> Option<String> {
     (!held.is_empty()).then(|| held.clone())
 }
 
+/// Whether a destination record a referent's link names still names it back: its own
+/// origin is one of the referent's two keys. A record somebody re-pointed is no counterpart
+/// by its link, and the referent is looked for by its origin instead.
+fn confirms(referent: &Referent, metadata: &BTreeMap<String, Value>) -> bool {
+    origin_of(metadata).is_some_and(|origin| referent.keys().contains(&origin.to_string()))
+}
+
 /// Record one candidate referent, when its source said where it is.
 fn note(
     into: &mut Vec<Referent>,
@@ -6179,6 +6410,7 @@ fn note(
             origin: origin_of(metadata),
             level,
             location,
+            links: well_formed(metadata.get(MetadataKey::COPIES_KEY)),
         });
     }
 }

@@ -1105,6 +1105,24 @@ impl TaskSource for CachedSource {
         Ok(listed)
     }
 
+    async fn query_projects_by_origin(
+        &self,
+        origin: &str,
+        page: &PageRequest,
+    ) -> Result<Page<Project>, SourceError> {
+        let listed = self.inner.query_projects_by_origin(origin, page).await?;
+        let mut command = self.cache.command();
+        for project in &listed.items {
+            if let Some(version) = &project.version {
+                command
+                    .project_listed
+                    .insert(project.id.clone(), version.clone());
+            }
+        }
+        drop(command);
+        Ok(listed)
+    }
+
     async fn labels(&self, page: &PageRequest) -> Result<Page<Label>, SourceError> {
         self.inner.labels(page).await
     }
@@ -1400,6 +1418,24 @@ impl TaskSource for CachedSource {
         page: &PageRequest,
     ) -> Result<Page<Document>, SourceError> {
         let listed = self.inner.query_documents(query, page).await?;
+        let mut command = self.cache.command();
+        for document in &listed.items {
+            if let Some(version) = &document.version {
+                command
+                    .document_listed
+                    .insert(document.id.clone(), version.clone());
+            }
+        }
+        drop(command);
+        Ok(listed)
+    }
+
+    async fn query_documents_by_origin(
+        &self,
+        origin: &str,
+        page: &PageRequest,
+    ) -> Result<Page<Document>, SourceError> {
+        let listed = self.inner.query_documents_by_origin(origin, page).await?;
         let mut command = self.cache.command();
         for document in &listed.items {
             if let Some(version) = &document.version {

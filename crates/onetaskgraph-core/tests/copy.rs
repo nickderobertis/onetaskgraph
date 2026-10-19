@@ -3833,13 +3833,15 @@ async fn the_destination_is_walked_once_for_a_whole_invocation_and_not_at_all_fo
         .copy(&many(&["from:D-1", "from:D-2"], CopyScope::Documents))
         .await
         .expect("the document copy runs");
-    // Three references apiece, and one walk serving both documents and every referent.
+    // Three references apiece. The destination is asked about each referent's two keys once
+    // for the whole invocation — Alpha's own id and its recorded origin, and Beta's — however
+    // many documents name them, and never walked: it answers a question about one origin.
     assert_eq!(figures(&report), (6, 0, 0));
     assert_eq!(
         task_pages.load(Ordering::Relaxed),
-        1,
-        "the destination is walked for counterparts once per copy invocation, not once \
-         per document"
+        4,
+        "the destination is asked for each referent's counterparts once per copy \
+         invocation, not once per document"
     );
 
     // A copy whose documents hold no candidate reference makes no such walk at all: the

@@ -16,7 +16,7 @@
 use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
     Document, Label, LabelFilter, MetadataMatch, NativeId, Priority, Project, ProjectFilter,
-    StatusCategory, Task, TextFields, TextQuery,
+    StatusCategory, Task, TaskQuery, TextFields, TextQuery,
 };
 use serde_json::Value;
 
@@ -105,11 +105,23 @@ pub(crate) struct LocalProjects {
     pub statuses: Vec<StatusCategory>,
     /// Free text, when the source does not search every field the query names.
     pub text: Option<TextQuery>,
+    /// The copy origin a listing by origin keeps, checked again over what the source
+    /// answered.
+    pub origin: Option<String>,
 }
 
 impl LocalProjects {
     /// Whether `project` survives every predicate left to the engine.
     pub fn keeps(&self, project: &Project) -> bool {
+        if let Some(origin) = &self.origin
+            && !(TaskQuery {
+                origin: Some(origin.clone()),
+                ..TaskQuery::default()
+            })
+            .origin_matches(&project.metadata)
+        {
+            return false;
+        }
         if let Some(filter) = &self.labels
             && !labels_match(&project.labels, filter)
         {

@@ -52,6 +52,73 @@ pub struct Health {
     pub detail: Option<String>,
 }
 
+/// The task query whose [`TaskQuery::origin_matches`] is the one statement of what "copied
+/// from `origin`" means, so the by-origin defaults read a project's and a document's entry
+/// exactly as a task's is read.
+fn origin_query(origin: &str) -> TaskQuery {
+    TaskQuery {
+        origin: Some(origin.to_owned()),
+        ..TaskQuery::default()
+    }
+}
+
+/// Refuse a page of the listing a by-origin default walks that holds more rows than it was
+/// asked for, in the words the engine refuses one in: a source may return fewer and never
+/// more, and a default that narrowed such a page would hide the defect behind it.
+fn overran(returned: usize, asked_for: u32) -> Result<(), SourceError> {
+    if returned as u64 <= u64::from(asked_for) {
+        return Ok(());
+    }
+    Err(SourceError::Malformed {
+        message: format!(
+            "the source returned {returned} rows for a page of at most {asked_for}; a source \
+             may return fewer than it was asked for and never more"
+        ),
+    })
+}
+
+/// What a by-origin default answers when the listing it walks hands back the cursor it was
+/// just given, which would walk forever.
+fn repeated_cursor() -> SourceError {
+    SourceError::Malformed {
+        message: "the source returned the cursor it was given while its listing was walked \
+                  for one origin, so the walk would never end"
+            .to_owned(),
+    }
+}
+
+/// The page `page` asks for of `matched`, every item a by-origin default kept: the cursor
+/// it hands out is the position of the next match, so a walk of its pages neither repeats
+/// nor drops one while the listing under it holds still.
+fn page_of_matches<T>(matched: Vec<T>, page: &PageRequest) -> Result<Page<T>, SourceError> {
+    let start = match &page.cursor {
+        None => 0,
+        Some(cursor) => cursor
+            .0
+            .strip_prefix(ORIGIN_CURSOR)
+            .and_then(|position| position.parse::<usize>().ok())
+            .filter(|position| *position <= matched.len())
+            .ok_or_else(|| SourceError::Refused {
+                message: format!(
+                    "cursor {:?} was not handed out by this by-origin listing; start the walk \
+                     again without one",
+                    cursor.0
+                ),
+            })?,
+    };
+    let end = start
+        .saturating_add(page.limit as usize)
+        .min(matched.len());
+    let next = (end < matched.len()).then(|| crate::Cursor(format!("{ORIGIN_CURSOR}{end}")));
+    Ok(Page {
+        items: matched.into_iter().skip(start).take(end - start).collect(),
+        next,
+    })
+}
+
+/// What every cursor a by-origin default hands out starts with.
+const ORIGIN_CURSOR: &str = "origin:";
+
 /// One configured source, as the engine drives it.
 ///
 /// Dyn-compatible through `async_trait` because the engine holds
@@ -346,6 +413,58 @@ pub trait TaskSource: Send + Sync {
         query: &ProjectQuery,
         page: &PageRequest,
     ) -> Result<Page<Project>, SourceError>;
+
+    /// One page of the projects whose [`TaskQuery::ORIGIN_KEY`] entry is a string equal to
+    /// `origin`, exactly — the projects copied from that qualified id, and none other.
+    ///
+    /// `origin` is compared byte for byte, on the terms [`TaskQuery::origin`] states, and is
+    /// never constructed or interpreted here. Zero, one or several projects may match; which
+    /// of several a caller wants is the caller's question.
+    ///
+    /// Defaulted to [`query_projects`](Self::query_projects) unfiltered, walked to its end on
+    /// every call and narrowed here, so a source that implements nothing answers exactly what
+    /// its own listing holds; the default's cursor is a position among the matches. A source
+    /// that can ask its store for one origin overrides it, which is the whole reason it
+    /// exists: a caller looking for the copies of one plan pays for those copies rather than
+    /// for every project the store holds.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`SourceError`] when the source could not answer, and
+    /// [`SourceError::Refused`] for a cursor the default did not hand out.
+    async fn query_projects_by_origin(
+        &self,
+        origin: &str,
+        page: &PageRequest,
+    ) -> Result<Page<Project>, SourceError> {
+        let wanted = origin_query(origin);
+        let mut matched = Vec::new();
+        let mut cursor: Option<crate::Cursor> = None;
+        loop {
+            let listed = self
+                .query_projects(
+                    &ProjectQuery::default(),
+                    &PageRequest {
+                        cursor: cursor.clone(),
+                        limit: page.limit,
+                    },
+                )
+                .await?;
+            overran(listed.items.len(), page.limit)?;
+            matched.extend(
+                listed
+                    .items
+                    .into_iter()
+                    .filter(|project| wanted.origin_matches(&project.metadata)),
+            );
+            cursor = match listed.next {
+                None => break,
+                Some(next) if cursor.as_ref() == Some(&next) => return Err(repeated_cursor()),
+                Some(next) => Some(next),
+            };
+        }
+        page_of_matches(matched, page)
+    }
 
     /// One page of every label this source knows.
     ///
@@ -837,6 +956,52 @@ pub trait TaskSource: Send + Sync {
     ) -> Result<Page<Document>, SourceError> {
         let _ = (query, page);
         Err(documentless(self.kind()))
+    }
+
+    /// One page of the documents whose [`TaskQuery::ORIGIN_KEY`] entry is a string equal to
+    /// `origin`, exactly, on the terms of
+    /// [`query_projects_by_origin`](Self::query_projects_by_origin).
+    ///
+    /// Defaulted to [`query_documents`](Self::query_documents) unfiltered, walked and narrowed
+    /// as that default is — so a source with no documents refuses exactly as its
+    /// `query_documents` does.
+    ///
+    /// # Errors
+    ///
+    /// As [`query_documents`](Self::query_documents), and [`SourceError::Refused`] for a
+    /// cursor the default did not hand out.
+    async fn query_documents_by_origin(
+        &self,
+        origin: &str,
+        page: &PageRequest,
+    ) -> Result<Page<Document>, SourceError> {
+        let wanted = origin_query(origin);
+        let mut matched = Vec::new();
+        let mut cursor: Option<crate::Cursor> = None;
+        loop {
+            let listed = self
+                .query_documents(
+                    &DocumentQuery::default(),
+                    &PageRequest {
+                        cursor: cursor.clone(),
+                        limit: page.limit,
+                    },
+                )
+                .await?;
+            overran(listed.items.len(), page.limit)?;
+            matched.extend(
+                listed
+                    .items
+                    .into_iter()
+                    .filter(|document| wanted.origin_matches(&document.metadata)),
+            );
+            cursor = match listed.next {
+                None => break,
+                Some(next) if cursor.as_ref() == Some(&next) => return Err(repeated_cursor()),
+                Some(next) => Some(next),
+            };
+        }
+        page_of_matches(matched, page)
     }
 
     /// Create or update one document, on exactly the terms of
