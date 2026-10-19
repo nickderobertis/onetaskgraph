@@ -25,7 +25,7 @@ mod layer;
 mod relative;
 mod routes;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;
 use std::path::Path;
 
@@ -145,10 +145,17 @@ impl SourceConfig {
 }
 
 /// One named source as a document spells it, before its plugin name is checked.
+///
+/// `plugin` is optional here because a layer may refine a source another layer declares —
+/// its `routes`, one `config` field — and the merge may hold no layer that declares it. Such
+/// an entry is a refinement with nothing to refine: [`Config::from_document`] leaves the
+/// source unconfigured and records its name, so the rest of the configuration still loads
+/// and only a command naming that source is refused.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SourceShape {
-    plugin: String,
+    #[serde(default)]
+    plugin: Option<String>,
     #[serde(default = "empty_block")]
     config: Value,
     /// Read by [`routes::parse`] rather than by serde, so a refusal names the entry.
@@ -298,6 +305,8 @@ pub struct Config {
     output: OutputFormat,
     interactive: bool,
     sources: BTreeMap<SourceName, SourceConfig>,
+    /// Sources some layer refines but no layer gives a `plugin`, which are not configured.
+    incomplete: BTreeSet<SourceName>,
     write_policy: Option<WritePolicyConfig>,
     /// The directory every source's cache defaults to living under, read from the
     /// environment the configuration was loaded in: `$XDG_CACHE_HOME`, or `$HOME/.cache`.
@@ -364,6 +373,11 @@ impl Config {
     /// [`SOURCE_NAME_PATTERN`](onetaskgraph_plugin_api::SOURCE_NAME_PATTERN), a
     /// `default_sources` entry naming a source nothing configures, or a `config:`
     /// block the source's own plugin refuses.
+    ///
+    /// A source entry no layer gives a `plugin` is not refused: it is left out of
+    /// [`sources`](Self::sources) and named by [`incomplete`](Self::incomplete), and a
+    /// `default_sources` entry or a route naming it is kept, to be refused by the command
+    /// that would read or follow it.
     pub fn from_document(document: Value) -> Result<Self, ConfigError> {
         let shape: DocumentShape = serde_path_to_error::deserialize(document).map_err(|error| {
             let key = error.path().to_string();
@@ -381,10 +395,16 @@ impl Config {
         })?;
 
         let mut sources = BTreeMap::new();
+        let mut incomplete = BTreeSet::new();
         for (name, source) in shape.sources {
             let key = format!("sources.{name}");
-            let plugin = PluginKind::parse(&source.plugin)
-                .ok_or_else(|| plugin_not_in_this_build(&key, &source.plugin))?;
+            let plugin = source
+                .plugin
+                .as_deref()
+                .map(|plugin| {
+                    PluginKind::parse(plugin).ok_or_else(|| plugin_not_in_this_build(&key, plugin))
+                })
+                .transpose()?;
             let name = SourceName::new(name).map_err(|error| {
                 ConfigError::setting(
                     &key,
@@ -394,6 +414,10 @@ impl Config {
                      ambiguous.",
                 )
             })?;
+            let Some(plugin) = plugin else {
+                incomplete.insert(name);
+                continue;
+            };
             let routes = routes::parse(&name, &source.routes)?;
             sources.insert(
                 name,
@@ -407,15 +431,23 @@ impl Config {
                 },
             );
         }
+        // A route may name an incomplete source as where it sends: the command that would
+        // follow it is what refuses, so a store whose layers refine a destination they do not
+        // declare still loads everywhere.
+        let routes = routes_of(&sources, &incomplete);
         routes::check(
-            &routes_of(&sources),
-            &sources.keys().cloned().collect::<Vec<_>>(),
+            &routes,
+            &sources
+                .keys()
+                .chain(&incomplete)
+                .cloned()
+                .collect::<Vec<_>>(),
         )?;
-        routes::check_classified(&routes_of(&sources), &visibilities_of(&sources))?;
+        routes::check_classified(&routes, &visibilities_of(&sources))?;
 
         let default_sources = shape
             .default_sources
-            .map(|names| resolve_default_sources(&names, &sources))
+            .map(|names| resolve_default_sources(&names, &sources, &incomplete))
             .transpose()?;
 
         let config = Self {
@@ -424,6 +456,7 @@ impl Config {
             output: shape.output,
             interactive: shape.interactive,
             sources,
+            incomplete,
             write_policy: shape.write_policy,
             cache_home: None,
         };
@@ -463,10 +496,20 @@ impl Config {
         &self.sources
     }
 
+    /// Every source some layer refines but no layer gives a `plugin`, in name order.
+    ///
+    /// None of them is configured: [`sources`](Self::sources) leaves each out, and a command
+    /// naming one — by `--source`, a qualified id, `default_sources` or a route — is refused
+    /// with [`EngineError::IncompleteSource`](crate::EngineError::IncompleteSource).
+    #[must_use]
+    pub fn incomplete(&self) -> &BTreeSet<SourceName> {
+        &self.incomplete
+    }
+
     /// Every source's routes, for placing an item written to one of them.
     #[must_use]
     pub fn routes(&self) -> Routes {
-        routes_of(&self.sources)
+        routes_of(&self.sources, &self.incomplete)
     }
 
     /// The commands this store asks about the public boundary, when the document names any.
@@ -514,12 +557,17 @@ impl Config {
 }
 
 /// The routes every source declares, gathered for placing items.
-fn routes_of(sources: &BTreeMap<SourceName, SourceConfig>) -> Routes {
+fn routes_of(
+    sources: &BTreeMap<SourceName, SourceConfig>,
+    incomplete: &BTreeSet<SourceName>,
+) -> Routes {
     let mut routes = Routes::default();
     for (name, source) in sources {
         routes.insert(name.clone(), source.routes.clone());
     }
-    routes.with_visibility(visibilities_of(sources))
+    routes
+        .with_visibility(visibilities_of(sources))
+        .with_incomplete(incomplete.clone())
 }
 
 /// Who each source is declared readable by.
@@ -533,9 +581,13 @@ fn visibilities_of(
 }
 
 /// Check every `default_sources` entry against the sources that exist.
+///
+/// An entry naming an incomplete source is kept, so the commands that read the default
+/// selection refuse it by name and the ones that name their own sources still run.
 fn resolve_default_sources(
     names: &[String],
     sources: &BTreeMap<SourceName, SourceConfig>,
+    incomplete: &BTreeSet<SourceName>,
 ) -> Result<Vec<SourceName>, ConfigError> {
     names
         .iter()
@@ -547,7 +599,7 @@ fn resolve_default_sources(
                     "name a configured source; `onetaskgraph config show` lists them.",
                 )
             })?;
-            if sources.contains_key(&selected) {
+            if sources.contains_key(&selected) || incomplete.contains(&selected) {
                 Ok(selected)
             } else {
                 Err(ConfigError::setting(

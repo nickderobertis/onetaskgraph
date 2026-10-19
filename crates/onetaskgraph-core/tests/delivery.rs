@@ -466,6 +466,7 @@ fn copy(items: &[&str], scope: CopyScope, into: &str) -> CopyRequest {
         comments: false,
         no_link: false,
         expect: None,
+        statuses: Vec::new(),
     }
 }
 

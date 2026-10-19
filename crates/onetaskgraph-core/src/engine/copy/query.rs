@@ -15,10 +15,11 @@
 //! task's comments are read from its source more than once in one invocation.
 
 use chrono::{DateTime, Utc};
-use onetaskgraph_plugin_api::{MetadataKey, Task};
+use onetaskgraph_plugin_api::{MetadataKey, StatusCategory, Task};
 
 use crate::{Failure, GlobalId};
 
+use super::super::delivery::source_failed;
 use super::super::{Engine, EngineError, Qualified, TaskRequest};
 use super::{
     CopyAction, CopyOutcome, CopyRequest, Item, Level, Linking, Running, Target, origin_of,
@@ -46,7 +47,59 @@ pub(super) fn failed(source: GlobalId, error: &EngineError) -> CopyOutcome {
     }
 }
 
+/// A status category as the command line spells it.
+fn spelled(category: StatusCategory) -> String {
+    serde_json::to_value(category)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_default()
+}
+
 impl Engine {
+    /// Each id a task copy names beside `--status`, in order: left to be read when its task is
+    /// at one of `statuses`, and otherwise read only as far as its status and skipped.
+    ///
+    /// The read here is the task's own and nothing else of it — no comments — so an id the copy
+    /// leaves out costs one read of its task and is reported, without changing the copy's exit
+    /// code.
+    pub(super) async fn at_statuses(
+        &self,
+        ids: &[GlobalId],
+        statuses: &[StatusCategory],
+    ) -> Result<Vec<Slot>, EngineError> {
+        let kept = statuses
+            .iter()
+            .map(|category| spelled(*category))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut slots = Vec::with_capacity(ids.len());
+        for id in ids {
+            let source = self.built(&id.source)?;
+            let task = source
+                .source()
+                .get_task(&id.native)
+                .await
+                .map_err(|error| source_failed(source, error))?
+                .ok_or_else(|| EngineError::NoSuchTask { id: id.to_string() })?;
+            if statuses.contains(&task.status.category) {
+                slots.push(Slot::Read(id.clone()));
+                continue;
+            }
+            slots.push(Slot::Done(Box::new(CopyOutcome {
+                expected: crate::cache::ExpectedWrite::default(),
+                source: id.clone(),
+                action: CopyAction::Skipped {
+                    reason: format!(
+                        "status {} is not one of {kept}",
+                        spelled(task.status.category)
+                    ),
+                },
+                placed: None,
+            })));
+        }
+        Ok(slots)
+    }
+
     /// Every task `query` lists — its comment-activity instant still to be confirmed, by the
     /// read of each task's comments — each either skipped from its listing or left to be read.
     pub(super) async fn candidates(

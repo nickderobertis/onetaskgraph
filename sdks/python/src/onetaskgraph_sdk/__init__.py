@@ -6,4 +6,4 @@ from .client import OnetaskgraphError as OnetaskgraphError
 
 #: The version this package publishes. `pyproject.toml`, the Cargo workspace and the
 #: TypeScript package must all agree; scripts/check-workspace-config.sh reconciles them.
-__version__ = "0.7.1"
+__version__ = "0.8.0"

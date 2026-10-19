@@ -51,6 +51,12 @@ mod commented_since;
 // they prove is a contract member of every plugin read through the engine — a task's change
 // token, ordered by the engine's own reader — so no one plugin crate's edge is narrower.
 mod change_tokens;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No credential and no network: the
+// journeys drive the binary against a folder of Markdown and the Python store over a real pipe,
+// in about a second. What they prove — that the engine refuses each malformed answer a source
+// can give `status_contradictions`, `issue_holdings`, `set_task_status` and `check_task_write`
+// — is the engine's reading of its own protocol, so no one plugin crate's edge is narrower.
+mod closure_answers;
 mod comments;
 mod copy;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No credential and no network: the
@@ -59,6 +65,11 @@ mod copy;
 // every pair of plugins, so no one plugin crate's edge is narrower.
 mod copy_comments;
 mod copy_link;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No credential and no network: the
+// journeys drive the binary from a loopback board and a folder of Markdown into a folder of
+// Markdown and the Python store over a real pipe, in a few seconds. Which tasks a copy leaves
+// out is the engine's copy, across plugins, so no one plugin crate's edge is narrower.
+mod copy_per_item;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No credential and no network: the
 // journeys drive the binary between loopback boards and a folder of Markdown in seconds, and
 // read the boards' own request logs. What they prove — a copy's skip and its copy by query — is
@@ -70,6 +81,9 @@ mod copy_skip;
 // revision of an item and never a mix — is the engine's read, so no plugin crate's edge is
 // narrower.
 mod copy_snapshot;
+// A copy whose create the destination answers malformed, against the Python asset store over a
+// real pipe.
+mod copy_uncertain;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
 // narrower edge for it: every journey here drives the binary against folders of Markdown and a
 // loopback fixture board, with no credential and no network, and the whole module finishes in
@@ -139,6 +153,13 @@ mod routes;
 // depending on the engine at any depth.
 mod show_many;
 mod source_host;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
+// narrower edge for it: no credential and no network, a few seconds against one loopback GitHub
+// serving two boards, a loopback Linear workspace, a folder of Markdown and a Python peer over a
+// pipe. Which configured sources a completion asks is the engine's decision, across every plugin
+// kind at once, so it cannot sit behind one plugin crate's edge, which AGENTS.md forbids
+// depending on the engine at any depth.
+mod status_complete;
 mod surface;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
 // narrower edge for it: the template journeys configure no source, reach no network and finish

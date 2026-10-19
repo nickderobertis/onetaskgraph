@@ -111,7 +111,7 @@ fn validate(value: &Value, expected: Workload) -> Result<(), String> {
     Ok(())
 }
 // Each registered command selects its workload by exact filter; telemetry cannot select it.
-// llmlint: ignore-block[tests_assert_real_behavior] These five functions are report-only command entry points selected by budgets.yaml, using the landed test-harness runner convention. Ordinary tests must not report without ONEBUDGETSPEC_BUDGET_ID. The real_report_boundary journey below invokes this executable and asserts success, refusal, and whether a figure was written, including mismatched workloads; these entry points themselves are not behavioral tests.
+// llmlint: ignore-block[tests_assert_real_behavior] Every `report_*` function in this block is a report-only command entry point selected by budgets.yaml, using the landed test-harness runner convention. Ordinary tests must not report without ONEBUDGETSPEC_BUDGET_ID. The journeys in this file that run this executable through those entries assert success, refusal, and whether a figure was written, including mismatched workloads; these entry points themselves are not behavioral tests.
 #[test]
 fn report_new() {
     report_expected(Workload::New);
@@ -140,6 +140,16 @@ fn report_visibility_reads() {
     let (value, detail) = read_visibility(&budget).unwrap_or_else(|error| refuse(&error));
     hand_over(value, &detail);
 }
+// llmlint: ignore-block[budget_commands_measure_directly] Every budget of this crate selects its own report-only entry here, the harness-runner convention it landed with (report_visibility_reads, report_metadata_fields), and the task registering this one names that pattern. It reads only the telemetry the `status_complete` journey recorded, refuses a recording of another workload, and hands the figure to onebudgetspec, which alone judges it.
+#[test]
+fn report_landing_closure() {
+    let Some(budget) = selected() else {
+        return;
+    };
+    let (value, detail) = read_landing_closure(&budget).unwrap_or_else(|error| refuse(&error));
+    hand_over(value, &detail);
+}
+// llmlint: ignore-end[budget_commands_measure_directly]
 // llmlint: ignore-block[budget_commands_measure_directly] Every budget of this crate selects its own report-only entry here, the harness-runner convention it landed with (report_visibility_reads, report_metadata_fields), and the task registering this one names that pattern. It reads only the telemetry the journeys recorded, refuses a recording of another workload, and hands the figure to onebudgetspec, which alone judges it.
 #[test]
 fn report_cache_points() {
@@ -450,6 +460,205 @@ fn read_visibility(budget: &str) -> Result<(f64, String), String> {
     let detail = value["detail"].as_str().ok_or("missing detail")?.to_owned();
     let figure = u32::try_from(figure).map_err(|_| "figure out of range")?;
     Ok((f64::from(figure), detail))
+}
+
+/// What `status_complete` recorded for `budget`, refused unless it is that journey's recording
+/// at its workload with both scales measured, each source's reads and writes adding up to that
+/// scale's points, and the figure the 10x scale's.
+fn read_landing_closure(budget: &str) -> Result<(f64, String), String> {
+    landing_closure_of(&recorded(budget)?)
+}
+
+/// [`read_landing_closure`]'s judgement of one recording, `value`.
+fn landing_closure_of(value: &Value) -> Result<(f64, String), String> {
+    use super::status_complete::{SCALES, WORKLOAD};
+    if value["workload"].as_str() != Some(WORKLOAD) {
+        return Err("workload does not match one landing's closures over two boards".into());
+    }
+    let figure = value["value"]
+        .as_u64()
+        .ok_or("missing whole-number figure")?;
+    for (scale, issues, board, second) in SCALES {
+        let recorded = &value["scales"][scale];
+        if recorded["issues"].as_u64() != Some(issues as u64)
+            || recorded["board"].as_u64() != Some(board as u64)
+            || recorded["second_board"].as_u64() != Some(second as u64)
+        {
+            return Err(format!(
+                "the {scale} scale is not the workload the budget states"
+            ));
+        }
+        let points = recorded["points"]
+            .as_u64()
+            .ok_or_else(|| format!("the {scale} scale carries no points"))?;
+        let sources = recorded["sources"]
+            .as_object()
+            .filter(|sources| sources.len() == 2)
+            .ok_or_else(|| format!("the {scale} scale does not break down two sources"))?;
+        let mut sum = 0;
+        for spent in sources.values() {
+            for key in ["reads", "read_points", "writes", "write_points"] {
+                spent[key]
+                    .as_u64()
+                    .ok_or_else(|| format!("the {scale} scale's {key} is not a count"))?;
+            }
+            sum += spent["read_points"].as_u64().unwrap_or(0)
+                + spent["write_points"].as_u64().unwrap_or(0);
+        }
+        if sum != points {
+            return Err(format!(
+                "the {scale} breakdown does not add up to its points"
+            ));
+        }
+        if scale == "10x" && points != figure {
+            return Err("the figure is not the 10x scale's".into());
+        }
+    }
+    let detail = value["detail"].as_str().ok_or("missing detail")?.to_owned();
+    let figure = u32::try_from(figure).map_err(|_| "figure out of range")?;
+    Ok((f64::from(figure), detail))
+}
+
+/// A recording `landing_closure_of` accepts: both scales at the workload the budget states, each
+/// source spending one read point, the 10x scale's figure the recording's.
+fn landing_closure_recording() -> Value {
+    use super::status_complete::{SCALES, WORKLOAD};
+    let mut scales = serde_json::Map::new();
+    for (scale, issues, board, second) in SCALES {
+        let spent = serde_json::json!({"reads":1,"read_points":1,"writes":0,"write_points":0});
+        scales.insert(
+            scale.to_owned(),
+            serde_json::json!({"issues":issues,"board":board,"second_board":second,"points":2,
+                               "sources":{"plans":spent,"followups":spent}}),
+        );
+    }
+    serde_json::json!({"workload":WORKLOAD,"value":2,"scales":scales,"detail":"2 points"})
+}
+
+#[test]
+fn a_landing_closure_recording_is_refused_unless_it_is_that_journeys_whole_measurement() {
+    assert_eq!(
+        landing_closure_of(&landing_closure_recording()),
+        Ok((2.0, "2 points".to_owned()))
+    );
+    let bent = |bend: &dyn Fn(&mut Value)| {
+        let mut recording = landing_closure_recording();
+        bend(&mut recording);
+        landing_closure_of(&recording).expect_err("a bent recording is refused")
+    };
+    for (bend, says) in [
+        (
+            Box::new(|value: &mut Value| value["workload"] = "another".into())
+                as Box<dyn Fn(&mut Value)>,
+            "workload does not match",
+        ),
+        (
+            Box::new(|value: &mut Value| value["scales"]["1x"]["issues"] = 2.into()),
+            "the 1x scale is not the workload the budget states",
+        ),
+        (
+            Box::new(|value: &mut Value| {
+                value["scales"]["10x"]["sources"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("plans");
+            }),
+            "the 10x scale does not break down two sources",
+        ),
+        (
+            Box::new(|value: &mut Value| {
+                value["scales"]["1x"]["sources"]["plans"]["write_points"] = "1".into();
+            }),
+            "the 1x scale's write_points is not a count",
+        ),
+        (
+            Box::new(|value: &mut Value| value["scales"]["10x"]["points"] = 3.into()),
+            "the 10x breakdown does not add up to its points",
+        ),
+        (
+            Box::new(|value: &mut Value| value["value"] = 1.into()),
+            "the figure is not the 10x scale's",
+        ),
+        (
+            Box::new(|value: &mut Value| value["value"] = "2".into()),
+            "missing whole-number figure",
+        ),
+        (
+            Box::new(|value: &mut Value| {
+                value.as_object_mut().unwrap().remove("detail");
+            }),
+            "missing detail",
+        ),
+    ] {
+        let refused = bent(&*bend);
+        assert!(refused.contains(says), "{refused} does not say {says}");
+    }
+}
+
+#[test]
+fn the_landing_closure_report_hands_over_the_recorded_figure_and_refuses_what_it_cannot_vouch_for()
+{
+    use onetaskgraph_e2e_support::common::Sandbox;
+    use serde_json::json;
+    let sandbox = Sandbox::new();
+    let directory = sandbox.subdirectory("landing-closure");
+    let budget = super::status_complete::BUDGET;
+    let mut valid = landing_closure_recording();
+    valid["budget"] = json!(budget);
+    let run = |recorded: Option<Value>| {
+        let path = onetaskgraph_e2e_support::telemetry::file_in(&directory, budget);
+        let _ = std::fs::remove_file(&path);
+        if let Some(recorded) = recorded {
+            std::fs::write(&path, recorded.to_string()).unwrap();
+        }
+        let result = directory.join("result.json");
+        let _ = std::fs::remove_file(&result);
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "budget_runner::report_landing_closure",
+                "--exact",
+                "--nocapture",
+            ])
+            .env("GITHUB_ASSET_TELEMETRY_DIR", &directory)
+            .env("ONEBUDGETSPEC_BUDGET_ID", budget)
+            .env("ONEBUDGETSPEC_RESULT", &result)
+            .output()
+            .unwrap();
+        let reported = std::fs::read_to_string(&result)
+            .ok()
+            .map(|text| serde_json::from_str::<Value>(&text).unwrap());
+        (output, reported)
+    };
+    let mut foreign = valid.clone();
+    foreign["budget"] = json!("visibility-write-requests");
+    let mut unbalanced = valid.clone();
+    unbalanced["scales"]["10x"]["points"] = json!(3);
+    for (recorded, message) in [
+        (None, "no telemetry"),
+        (Some(foreign), "telemetry belongs to a different budget"),
+        (
+            Some(unbalanced),
+            "the 10x breakdown does not add up to its points",
+        ),
+    ] {
+        let (output, reported) = run(recorded);
+        assert!(!output.status.success(), "accepted: {message}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(message),
+            "{message}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(reported.is_none(), "reported a figure over {message}");
+    }
+    let (output, reported) = run(Some(valid));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let reported = reported.expect("a valid recording is reported");
+    assert_eq!(reported["value"].as_f64(), Some(2.0), "{reported}");
+    assert_eq!(reported["detail"], "2 points", "{reported}");
 }
 
 /// What `cache_budget` recorded for `budget`, refused unless it is that journey's recording at

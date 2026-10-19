@@ -216,7 +216,7 @@ impl Folders {
 
 /// The asset store over a real pipe, keeping its records at `at`, logging every write to
 /// `log`, and taking `more` of its settings besides.
-fn store(at: &Path, log: &Path, more: Value) -> Value {
+pub(crate) fn store(at: &Path, log: &Path, more: Value) -> Value {
     let mut settings = json!({"store": at, "log": log});
     for (key, value) in more.as_object().expect("settings") {
         settings[key] = value.clone();

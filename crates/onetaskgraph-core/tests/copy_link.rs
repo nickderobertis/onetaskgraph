@@ -318,6 +318,7 @@ fn copy_of(items: &[&str], scope: CopyScope) -> CopyRequest {
         comments: false,
         no_link: false,
         expect: None,
+        statuses: Vec::new(),
     }
 }
 
@@ -354,7 +355,9 @@ fn via(outcome: &CopyOutcome) -> Option<String> {
     });
     match &outcome.action {
         CopyAction::Created { .. } => assert_eq!(word.as_deref(), Some("created")),
-        CopyAction::Orphaned { .. } | CopyAction::Failed { .. } => assert_eq!(word, None),
+        CopyAction::Orphaned { .. } | CopyAction::Failed { .. } | CopyAction::Skipped { .. } => {
+            assert_eq!(word, None);
+        }
         CopyAction::Updated { .. } | CopyAction::Unchanged { .. } => assert_eq!(word, typed),
     }
     word

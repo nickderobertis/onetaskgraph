@@ -100,6 +100,10 @@ EXCEPTIONS = {
         "a const, not one of the contract's types — the inventory enumerates the traits "
         "and types a plugin author implements against"
     ),
+    "ISSUE_REF_PATTERN": (
+        "a const, not one of the contract's types — the pattern `IssueRef`'s own schema "
+        "publishes, on the terms `SOURCE_NAME_PATTERN` is left out"
+    ),
 }
 
 document = open(agents_md, encoding="utf-8").read()

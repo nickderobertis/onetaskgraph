@@ -418,6 +418,7 @@ async fn disposable_task_and_document_asset_copies() {
                 comments: false,
                 no_link: false,
                 expect: None,
+                statuses: Vec::new(),
             };
             let report = engine
                 .copy(&request)
@@ -557,6 +558,241 @@ async fn disposable_task_and_document_asset_copies() {
     cleanup_recording.unwrap();
     cleanup_budget.unwrap_or_else(|declined| declined.refuse());
     journey::quota::complete().unwrap();
+}
+
+/// Every `Status` option name the nominated board's field holds, in the board's order.
+async fn status_option_names(
+    endpoint: &str,
+    token: &str,
+    owner: &str,
+    number: u32,
+    ledger: &Accounting,
+) -> Result<Vec<String>, String> {
+    let variables = json!({"owner":owner,"number":number,"nestedFirst":100});
+    let answer = asset_graphql(endpoint, token, graphql::BOARD_FIELDS, &variables, ledger).await?;
+    let nodes = answer["data"]["boardFields"]["projectV2"]["fields"]["nodes"]
+        .as_array()
+        .ok_or("missing nominated board fields")?;
+    let status = nodes
+        .iter()
+        .find(|field| field["name"] == "Status")
+        .ok_or("missing nominated board Status field")?;
+    Ok(status["options"]
+        .as_array()
+        .ok_or("missing nominated board Status options")?
+        .iter()
+        .filter_map(|option| option["name"].as_str().map(str::to_owned))
+        .collect())
+}
+
+/// `task status reconcile --dry-run` against the live lane's own board: one task closed as
+/// completed outside the stack while its card still reads the board's first option, and one
+/// written `done` through the source, card and closure in line.
+///
+/// It reads the board through its own `is:closed` filter, so what GitHub answers that filter
+/// with is the fact this journey re-takes on every run: every item the filtered read returns is
+/// a closed issue. The dry run then has to list the contradicting task, from its option to the
+/// `done` option, and not the one in line — and writes nothing. Both tasks are taken back
+/// afterwards, whatever came of the assertions.
+#[tokio::test]
+async fn a_reconcile_dry_run_reads_the_live_board_through_its_closed_filter_alone() {
+    if !onetaskgraph_github_live::quota::live_selected().unwrap() {
+        journey::say(
+            "live reconcile journey did not run: existing selection policy did not select the lane",
+        );
+        return;
+    }
+    // This binary's asset journey points the shared journey at its API, once per binary, so
+    // this one reads the same configuration and points nothing: the two run in either order.
+    let endpoints = journey::Endpoints::configured().unwrap();
+    let graphql_endpoint = endpoints.graphql.clone();
+    let rest_host = endpoints.rest_host.clone();
+    let admission = lane::admit(&|variable| match std::env::var(variable) {
+        Ok(value) => Some(value),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(std::env::VarError::NotUnicode(_)) => panic!("{variable} must be Unicode"),
+    })
+    .unwrap();
+    let (token, owner, number, repository, writer) = match admission {
+        lane::Admission::Skip(reason) => {
+            journey::say(&format!("live reconcile journey did not run: {reason}"));
+            return;
+        }
+        lane::Admission::Run {
+            token,
+            owner,
+            project_number,
+            repository,
+            writer,
+        } => (token, owner, project_number, repository, writer),
+    };
+    let session = Session::open(lane::SESSION_NAME, token, Exclusivity::Shared)
+        .unwrap_or_else(|declined| declined.refuse());
+    let token = session.credential().expose();
+    let ledger = Arc::new(Accounting::with_query_prices());
+    journey::budget::precondition_reconcile(token, &rest_host, &ledger)
+        .await
+        .unwrap_or_else(|declined| declined.refuse());
+    let options = status_option_names(&graphql_endpoint, token, &owner, number, &ledger)
+        .await
+        .unwrap();
+    let [first, done, ..] = options.as_slice() else {
+        panic!("the nominated board's Status field holds fewer than two options: {options:?}");
+    };
+    let mut config = lane::live_write_config(&owner, number, &repository, first);
+    for (key, value) in endpoints
+        .source
+        .as_ref()
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+    {
+        config[key] = value.clone();
+    }
+    config["status_mapping"]["done"] = json!(done);
+    config["status_mapping"]["cancelled"] = Value::Null;
+    let secrets = lane::LiveSecret(token.to_owned().into());
+    let sandbox = Sandbox::new();
+    let root = sandbox.subdirectory("notes");
+    std::fs::create_dir_all(root.join("tasks")).unwrap();
+    let stamp = onetaskgraph_live::artifact::now_micros();
+    writer.check_clock(stamp, 1).unwrap();
+    for (offset, id) in [(0, "LINE"), (1, "CONTRADICT")] {
+        std::fs::write(
+            root.join(format!("tasks/{id}.md")),
+            format!(
+                "---\ntitle: {}\nstatus: todo\n---\nA reconcile journey's task.\n",
+                lane::artifact_title(writer, stamp + offset)
+            ),
+        )
+        .unwrap();
+    }
+    let board = Plugin
+        .build_recording_into(&name("board"), &config, &secrets, ledger.clone())
+        .unwrap();
+    let notes_name = name(&format!("live-reconcile-{stamp}"));
+    let notes = onetaskgraph_local_md::Plugin
+        .build(&notes_name, &json!({"root":root}), &secrets)
+        .unwrap();
+    let engine = Engine::new(
+        vec![
+            ConfiguredSource::Ready(ResolvedSource::adopt(notes_name.clone(), notes)),
+            ConfiguredSource::Ready(ResolvedSource::adopt(name("board"), board)),
+        ],
+        vec![notes_name.clone(), name("board")],
+    );
+    let mut created: Vec<onetaskgraph_core::GlobalId> = Vec::new();
+    let outcome: Result<(), String> = async {
+        let request = CopyRequest {
+            items: CopyItems::new(vec![
+                format!("{notes_name}:LINE").parse().unwrap(),
+                format!("{notes_name}:CONTRADICT").parse().unwrap(),
+            ])
+            .unwrap(),
+            scope: CopyScope::Tasks,
+            destination: name("board"),
+            match_by: None,
+            recreate: false,
+            create: true,
+            dry_run: false,
+            comments: false,
+            no_link: true,
+            expect: None,
+            statuses: Vec::new(),
+        };
+        let report = engine
+            .copy(&request)
+            .await
+            .map_err(|error| error.to_string())?;
+        for item in &report.items {
+            created.push(item.destination().ok_or("a copied task")?.clone());
+        }
+        let [in_line, contradicting] = created.as_slice() else {
+            return Err(format!("two tasks were created: {created:?}"));
+        };
+        engine
+            .set_task_status(in_line, onetaskgraph_plugin_api::StatusCategory::Done)
+            .await
+            .map_err(|error| error.to_string())?;
+        // Closed as a person or a merged change request closes one: the issue alone, its card
+        // left where it was.
+        asset_graphql(
+            &graphql_endpoint,
+            token,
+            graphql::UPDATE_ISSUE,
+            &json!({"input":{"id":contradicting.native.0,
+                             "stateInput":{"value":"CLOSED","stateReason":"COMPLETED"}}}),
+            &ledger,
+        )
+        .await?;
+        engine
+            .end_command()
+            .await
+            .map_err(|error| error.to_string())?;
+        // What GitHub answers the board's closed filter with: closed issues, and nothing else.
+        let closed = asset_graphql(
+            &graphql_endpoint,
+            token,
+            graphql::CLOSED_ITEMS,
+            &json!({"owner":owner,"number":number,"first":100,"after":null,
+                    "filter":"is:closed","nestedFirst":50,"duplicates":true}),
+            &ledger,
+        )
+        .await?;
+        let nodes = closed["data"]["closedItems"]["projectV2"]["items"]["nodes"]
+            .as_array()
+            .ok_or("the closed filter answered no items")?;
+        for node in nodes {
+            let content = &node["content"];
+            if content["__typename"] == "Issue" && content["state"] != "CLOSED" {
+                return Err(format!(
+                    "the board's is:closed filter returned an open issue: {}",
+                    content["id"]
+                ));
+            }
+        }
+        journey::say(&format!(
+            "the board's is:closed filter returned {} item(s) on its first page, every issue \
+             among them closed",
+            nodes.len()
+        ));
+        let reconciled = engine
+            .reconcile_statuses(&name("board"), true)
+            .await
+            .map_err(|error| error.to_string())?
+            .ok_or("the board does not declare reconcile_status")?;
+        let listed = |id: &onetaskgraph_core::GlobalId| {
+            reconciled.items.iter().find(|item| item.source == *id)
+        };
+        let item = listed(contradicting).ok_or("the contradicting task was not listed")?;
+        if item.from.as_deref() != Some(first.as_str())
+            || item.to.name != *done
+            || item.outcome != onetaskgraph_core::ReconcileOutcome::WouldUpdate
+        {
+            return Err(format!("the contradicting task was listed as {item:?}"));
+        }
+        if listed(in_line).is_some() {
+            return Err("the task in line was listed".into());
+        }
+        Ok(())
+    }
+    .await;
+    let cleanup = Plugin
+        .build_recording_into(&name("board"), &config, &secrets, ledger.clone())
+        .unwrap();
+    let mut failures = Vec::new();
+    for id in &created {
+        let result = cleanup.delete_task(&id.native).await;
+        journey::say(&format!("removed reconcile journey task {id}: {result:?}"));
+        if let Err(error) = result {
+            failures.push(error.to_string());
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "live cleanup failures: {failures:?}; outcome {outcome:?}"
+    );
+    assert!(outcome.is_ok(), "live reconcile journey: {outcome:?}");
 }
 
 #[tokio::test]

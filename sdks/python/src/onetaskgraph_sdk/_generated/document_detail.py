@@ -342,3 +342,10 @@ class DocumentDetail(BaseModel):
         QueryPlan,
         Field(description="What each source was asked to do, and what the engine did instead."),
     ]
+    unanswered: Annotated[
+        list[SourceFailure],
+        Field(
+            description="Each source declared private that a task's dependency read could not ask what it\nrecords of that task — its credential absent or refused, or it unreachable or\nrate-limited — and why. Not a failure of the read: the task lives elsewhere and every\nsource holding it answered, so `items` is every edge this reader can be shown. Only\nthat read fills it, and only while it does not ask for\n[`Completeness::Required`](crate::Completeness::Required), which reports such a source\nin `errors` instead. Left out when empty.",
+            validate_default=True,
+        ),
+    ] = []

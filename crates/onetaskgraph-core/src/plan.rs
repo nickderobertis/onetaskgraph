@@ -23,6 +23,16 @@ pub struct QueryResponse<T> {
     pub plan: QueryPlan,
     /// Sources that failed. One failure never fails the whole query.
     pub errors: Vec<SourceFailure>,
+    /// Each source declared private that a task's dependency read could not ask what it
+    /// records of that task — its credential absent or refused, or it unreachable or
+    /// rate-limited — and why. Not a failure of the read: the task lives elsewhere and every
+    /// source holding it answered, so `items` is every edge this reader can be shown. Only
+    /// that read fills it, and only while it does not ask for
+    /// [`Completeness::Required`](crate::Completeness::Required), which reports such a source
+    /// in `errors` instead. Left out when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(!skip_serializing_if)]
+    pub unanswered: Vec<SourceFailure>,
 }
 
 /// What the engine did, per source.

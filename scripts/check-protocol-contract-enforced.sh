@@ -141,3 +141,27 @@ names "a comment member gone from its table" \
   'comment member `origin` is declared in `Comment`'
 names "a comment member gone from its table" \
   'comment member `source` is specified by docs/plugin-protocol.md'
+
+# `ClosedAs` is read from issue.rs beside the other kebab-case enums, and `Completion`'s
+# variants and members from §4.24's bullets; were either reading to stop, a closure value or a
+# holding's member the section stops spelling would pass in silence.
+run_case "a closure value the section stops spelling" \
+  's/`"done"` or `"cancelled"`, the$/`"done"` or cancelled, the/' \
+  refuse \
+  "restore issue.rs in the enum inventory and ClosedAs in ENUM_SECTIONS in $GUARD"
+names "a closure value the section stops spelling" \
+  '`ClosedAs` serializes the value "cancelled"'
+
+run_case "a holding member gone from its bullet" \
+  's/^- `unchanged`, with `task` — /- `unchanged` — /' \
+  refuse \
+  "restore the reconciliation of \`Completion\` against §4.24's bullets in $GUARD"
+names "a holding member gone from its bullet" \
+  '`Completion::unchanged` carries the member `task`'
+
+run_case "a holding variant the section does not declare" \
+  's/^- `absent` — this source/- `withdrawn` — this source/' \
+  refuse \
+  "restore the reconciliation of \`Completion\` against §4.24's bullets in $GUARD"
+names "a holding variant the section does not declare" \
+  'completion `withdrawn`'

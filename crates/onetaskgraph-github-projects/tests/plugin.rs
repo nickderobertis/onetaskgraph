@@ -2174,7 +2174,7 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
                     &item.title,
                     item.body.as_deref().unwrap_or_default(),
                     item.updated_at.as_deref(),
-                )
+                ) && wanted.admits_state(item.state)
             })
             .collect::<Vec<_>>();
         if state.search_order_varies_with_first {
@@ -2643,6 +2643,8 @@ struct IssueSearch {
     in_body: bool,
     /// Every phrase, as its tokens; each must hold of one of the fields above.
     phrases: Vec<Vec<String>>,
+    /// The issue state an `is:open` or `is:closed` qualifier keeps, as GitHub spells it.
+    state: Option<&'static str>,
 }
 
 impl IssueSearch {
@@ -2653,6 +2655,7 @@ impl IssueSearch {
             in_title: true,
             in_body: true,
             phrases: Vec::new(),
+            state: None,
         };
         let mut chars = wanted.chars().peekable();
         while let Some(&next) = chars.peek() {
@@ -2681,7 +2684,9 @@ impl IssueSearch {
                 word.push(next);
                 chars.next();
             }
-            if let Some(fields) = word.strip_prefix("in:") {
+            if word == "is:open" || word == "is:closed" {
+                parsed.state = Some(if word == "is:open" { "OPEN" } else { "CLOSED" });
+            } else if let Some(fields) = word.strip_prefix("in:") {
                 let fields: Vec<&str> = fields.split(',').collect();
                 parsed.in_title = fields.contains(&"title");
                 parsed.in_body = fields.contains(&"body");
@@ -2695,6 +2700,11 @@ impl IssueSearch {
             }
         }
         parsed
+    }
+
+    /// Whether an issue in `state` survives the search's state qualifier, when it carries one.
+    fn admits_state(&self, state: &str) -> bool {
+        self.state.is_none_or(|wanted| wanted == state)
     }
 
     /// Whether an issue holding this title, body and `updatedAt` is in the answer.
@@ -3277,7 +3287,7 @@ fn committed_server() -> String {
                             node["title"].as_str().unwrap_or_default(),
                             node["body"].as_str().unwrap_or_default(),
                             node["updatedAt"].as_str(),
-                        )
+                        ) && wanted.admits_state(node["state"].as_str().unwrap_or("OPEN"))
                     })
                     .cloned()
                     .collect::<Vec<_>>();
@@ -6158,6 +6168,21 @@ async fn a_closed_issue_reports_the_closed_category_and_its_column_name() {
         Item::issue("I_reopened", "odd").closed(Some("REOPENED")),
         Item::issue("I_legacy", "old").closed(None),
         Item::issue("I_open", "doing").status("In Progress"),
+        Item::issue("I_done_at_todo", "landed")
+            .closed(Some("COMPLETED"))
+            .status("Todo"),
+        Item::issue("I_bare_at_todo", "landed")
+            .closed(None)
+            .status("Todo"),
+        Item::issue("I_dropped_doing", "dropped")
+            .closed(Some("NOT_PLANNED"))
+            .status("In Progress"),
+        Item::issue("I_again_doing", "again")
+            .closed(Some("DUPLICATE"))
+            .status("In Progress"),
+        Item::issue("I_dropped_done", "dropped")
+            .closed(Some("NOT_PLANNED"))
+            .status("Done"),
     ]);
     let source = source(&fixture);
     async fn read(source: &dyn TaskSource, id: &str) -> Status {
@@ -6183,8 +6208,9 @@ async fn a_closed_issue_reports_the_closed_category_and_its_column_name() {
     );
     assert_eq!(
         read(source.as_ref(), "I_duplicate").await,
-        status(StatusCategory::Unknown, "Shipped"),
-        "a closed-as-duplicate task is not finished work, whatever column it sits in"
+        status(StatusCategory::Cancelled, "Shipped"),
+        "a closed-as-duplicate task is work nobody will do here, named by the column the \
+         mapping does not read"
     );
     assert_eq!(
         read(source.as_ref(), "I_reopened").await,
@@ -6199,6 +6225,20 @@ async fn a_closed_issue_reports_the_closed_category_and_its_column_name() {
         status(StatusCategory::InProgress, "In Progress"),
         "an open issue reads both from its option"
     );
+    for (id, category, name) in [
+        ("I_done_at_todo", StatusCategory::Done, "Done"),
+        ("I_bare_at_todo", StatusCategory::Done, "Done"),
+        ("I_dropped_doing", StatusCategory::Cancelled, "Cancelled"),
+        ("I_again_doing", StatusCategory::Cancelled, "Cancelled"),
+        ("I_dropped_done", StatusCategory::Cancelled, "Cancelled"),
+    ] {
+        assert_eq!(
+            read(source.as_ref(), id).await,
+            status(category, name),
+            "{id}: an option the mapping reads as another category contradicts the closure, \
+             so the name is the option the mapping gives the closure's category"
+        );
+    }
 }
 
 #[tokio::test]
@@ -8393,6 +8433,8 @@ async fn health_names_the_board_it_read_and_the_source_declares_what_it_applies(
             filter_by_comment_activity: Support::Native,
             filter_by_metadata: Support::Native,
             filter_by_origin: Support::Native,
+            reconcile_status: Support::Native,
+            complete_by_issue: Support::Native,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,
@@ -15764,8 +15806,23 @@ async fn a_text_metadata_or_origin_query_asks_a_narrower_question_than_the_board
         ["I_ship", "I_shipment", "I_owned", "I_copied", "D_ship"]
     );
     assert_eq!(fixture.requests("board"), 1);
-    assert_eq!(fixture.searches(), ["project:octo-org/7 is:issue"]);
+    // A filter naming only an open category narrows the search half to open issues, and the
+    // board's own items still list the draft, which no issue search answers.
+    assert_eq!(fixture.searches(), ["project:octo-org/7 is:issue is:open"]);
     assert_eq!(fixture.origin_filters(), Vec::<String>::new());
+
+    // And a query naming `done` asks the search for every issue, open or closed.
+    let fixture = narrowing_board();
+    let wider = self::source(&fixture);
+    selected_tasks(
+        wider.as_ref(),
+        &TaskQuery {
+            statuses: vec![StatusCategory::Todo, StatusCategory::Done],
+            ..TaskQuery::default()
+        },
+    )
+    .await;
+    assert_eq!(fixture.searches(), ["project:octo-org/7 is:issue"]);
 }
 
 #[tokio::test]

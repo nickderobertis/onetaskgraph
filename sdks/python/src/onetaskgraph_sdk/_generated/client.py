@@ -18,6 +18,7 @@ from .models import (
     EffectiveConfig,
     FieldsReport,
     GlobalId,
+    IssuesCompleted,
     MetadataSet,
     NativeId,
     Priority,
@@ -34,6 +35,7 @@ from .models import (
     SourceName,
     SourceRoute,
     StatusCategory,
+    StatusesReconciled,
     StatusNamesReport,
     StatusOptionsReport,
     TaskContentSet,
@@ -643,6 +645,7 @@ class GeneratedClient:
         self,
         id: GlobalId | str,
         *,
+        complete: bool | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
         direction: Literal["auto", "td", "lr"] | None = None,
         group_by: str | None = None,
@@ -654,6 +657,7 @@ class GeneratedClient:
             ["project", "graph"],
             ProjectGraph,
             id=id,
+            complete=complete,
             default_sources=default_sources,
             direction=direction,
             group_by=group_by,
@@ -1061,6 +1065,18 @@ class GeneratedClient:
         recreate: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         source: list[str] | tuple[str, ...] | None = None,
+        status: list[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ]
+        ]
+        | tuple[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ],
+            ...,
+        ]
+        | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
         to: str | None = None,
     ) -> CopyReport:
@@ -1082,6 +1098,7 @@ class GeneratedClient:
             recreate=recreate,
             set=set,
             source=source,
+            status=status,
             term_scope=_strings("task_copy", "term_scope", term_scope),
             to=to,
         )
@@ -1153,6 +1170,7 @@ class GeneratedClient:
         id: GlobalId | str,
         *,
         allow_partial: bool | None = None,
+        complete: bool | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
         direction: Literal["depends-on", "depended-on-by"] | None = None,
         explain: bool | None = None,
@@ -1168,6 +1186,7 @@ class GeneratedClient:
             QueryResponseOfQualifiedEdge,
             id=id,
             allow_partial=allow_partial,
+            complete=complete,
             default_sources=default_sources,
             direction=direction,
             explain=explain,
@@ -1374,6 +1393,52 @@ class GeneratedClient:
             page_size=page_size,
             pin=pin,
             set=set,
+        )
+
+    async def task_status_complete(
+        self,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        dry_run: bool | None = None,
+        issue: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        source: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> IssuesCompleted:
+        """Run ``onetaskgraph task status complete``."""
+        return await self._invoke(
+            ["task", "status", "complete"],
+            IssuesCompleted,
+            default_sources=default_sources,
+            dry_run=dry_run,
+            issue=issue,
+            page_size=page_size,
+            set=set,
+            source=source,
+            term_scope=_strings("task_status_complete", "term_scope", term_scope),
+        )
+
+    async def task_status_reconcile(
+        self,
+        source: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        dry_run: bool | None = None,
+        page_size: int | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> StatusesReconciled:
+        """Run ``onetaskgraph task status reconcile``."""
+        return await self._invoke(
+            ["task", "status", "reconcile"],
+            StatusesReconciled,
+            source=source,
+            default_sources=default_sources,
+            dry_run=dry_run,
+            page_size=page_size,
+            set=set,
+            term_scope=_strings("task_status_reconcile", "term_scope", term_scope),
         )
 
     async def task_status_set(

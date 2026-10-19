@@ -40,6 +40,10 @@ The change-token phase measured 44 points against GitHub (below); these sixteen 
 requests take it to about its 60-point allocation, which is unchanged, as is the 299 the
 session's spend is held to.
 
+Merging `main`'s issue-closure work (#3677) on top added its own three requests — a batch read
+of issues by their references, the board's closed items, and one more board search — with their
+reconciliations, taking the record to 209 requests and 302,377 worst-case nodes.
+
 ## Whole credentialed lane
 
 The budget is `github-live-session-points`, max 299 in the GitHub e2e budgets file.

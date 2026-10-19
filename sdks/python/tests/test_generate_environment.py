@@ -11,9 +11,13 @@ import pytest
 
 PACKAGE = Path(__file__).parents[1]
 
-# Half a source — a setting with no plugin — is what a host exporting one source's settings
-# into every process hands the generator, and every verb refuses it, `schema` included.
-STRAY = "ONETASKGRAPH_SOURCES__STRAY__CONFIG__TEAM"
+# A source its own plugin refuses — a field that plugin does not accept — is what a host
+# exporting one source's settings into every process can hand the generator, and every verb
+# refuses it, `schema` included.
+STRAY = {
+    "ONETASKGRAPH_SOURCES__STRAY__PLUGIN": "in-memory",
+    "ONETASKGRAPH_SOURCES__STRAY__CONFIG__TEAM": "ENG",
+}
 
 
 async def schema(binary: Path) -> tuple[int | None, str]:
@@ -35,7 +39,8 @@ def test_a_callers_configuration_does_not_reach_the_binary(
     sys.path.insert(0, str(PACKAGE))
     import generate
 
-    monkeypatch.setenv(STRAY, "ENG")
+    for name, value in STRAY.items():
+        monkeypatch.setenv(name, value)
     code, stderr = asyncio.run(schema(generate.BINARY))
     assert code != 0, "the stray setting no longer makes the binary refuse"
     assert "sources.stray" in stderr

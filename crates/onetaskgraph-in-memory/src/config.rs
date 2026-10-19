@@ -512,6 +512,9 @@ impl From<&CapabilityConfig> for Capabilities {
             filter_by_comment_activity: value.filter_by_comment_activity,
             filter_by_metadata: value.filter_by_metadata,
             filter_by_origin: value.filter_by_origin,
+            // A task held in memory has a status and no closure to contradict it.
+            reconcile_status: Support::Unsupported,
+            complete_by_issue: Support::Unsupported,
             orphan_tasks: value.orphan_tasks,
             filter_by_label: value.filter_by_label,
             filter_by_status: value.filter_by_status,

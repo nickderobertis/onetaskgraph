@@ -208,6 +208,7 @@ the source can do natively, and what configuration it is being built with.
 | `ends_commands` | boolean | Whether this plugin answers `end_command`. Optional; see §3.11. |
 | `comment_copies` | boolean | Whether this plugin answers `write_comment_copy`. Optional; see §3.12. |
 | `task_details` | boolean | Whether this plugin answers `get_task_detail`. Optional; see §3.13. |
+| `write_checks` | boolean | Whether this plugin answers `check_task_write`. Optional; see §3.14. |
 
 An `initialize` that fails answers with an `error` envelope, ordinarily
 `{"kind": "config"}` for a `config` block this plugin cannot use, or
@@ -399,6 +400,13 @@ and then `task_comments`, which is the trait's own default. A plugin that can re
 one — and so promise they are one revision of the task — answers `true`. Added without a
 protocol version bump.
 
+### 3.14 `write_checks`
+
+Optional, and absent means `false`: a plugin that answers `check_task_write` (§4.9b) says so
+here. One that does not is never sent the method; every task a copy plans for it is read as one
+it can represent, and a write it refuses as one it cannot takes the whole copy back, as it did
+before the method existed. Omitted when `false`.
+
 ## 4. The methods
 
 One method per trait method, named after it. Each is given below as its `params` and
@@ -419,6 +427,7 @@ its `result`; the JSON shape of every contract type in them is what
 | `project_dependencies` | `TaskSource::project_dependencies` |
 | `write_task` | `TaskSource::write_task` |
 | `write_project` | `TaskSource::write_project` |
+| `check_task_write` | `TaskSource::check_task_write` |
 | `delete_task` | `TaskSource::delete_task` |
 | `delete_project` | `TaskSource::delete_project` |
 | `get_document` | `TaskSource::get_document` |
@@ -440,6 +449,8 @@ its `result`; the JSON shape of every contract type in them is what
 | `set_document_metadata` | `TaskSource::set_document_metadata` |
 | `update_task` | `TaskSource::update_task` |
 | `end_command` | `TaskSource::end_command` |
+| `status_contradictions` | `TaskSource::status_contradictions` |
+| `issue_holdings` | `TaskSource::issue_holdings` |
 
 `kind`, `capabilities` and `writes` are not methods of their own: all three are settled
 by the handshake, and the engine reads capabilities once per connection.
@@ -503,16 +514,17 @@ returning fewer items than `limit` is not thereby saying there are no more: only
 ### 4.2 `Capabilities`
 
 `projects`, `documents`, `comments`, `assets`, `priority`, `filter_by_priority`,
-`filter_by_comment_activity`, `filter_by_metadata`, `filter_by_origin`, `orphan_tasks`,
-`filter_by_label`, `filter_by_status`, `search_title` and `search_content` are each
-`"native"` or `"unsupported"`.
+`filter_by_comment_activity`, `filter_by_metadata`, `filter_by_origin`, `reconcile_status`,
+`complete_by_issue`, `orphan_tasks`, `filter_by_label`, `filter_by_status`, `search_title` and
+`search_content` are each `"native"` or `"unsupported"`.
 `task_dependencies` and `project_dependencies` are each `"both-directions"` or
 `"forward-only"` — there is deliberately **no** unsupported value for these two.
 `max_page_size` is a positive integer.
 
 `documents`, `comments`, `assets`, `priority`, `filter_by_priority`,
-`filter_by_comment_activity`, `filter_by_metadata` and `filter_by_origin` are the eight members
-of this object that are **optional**, and an absent one means `"unsupported"`. That is §2.1
+`filter_by_comment_activity`, `filter_by_metadata`, `filter_by_origin`, `reconcile_status` and
+`complete_by_issue` are the ten members of this object that are **optional**, and an absent one
+means `"unsupported"`. That is §2.1
 doing its job, exactly as it does for the write-support member §3.3 specifies: a plugin written
 before there were documents, comments, image assets, priorities, a comment-activity filter or a
 metadata or origin filter says nothing here and is read as the source without them it is, with
@@ -573,6 +585,16 @@ matching by title or by a metadata value (`--match-by`) never asks a native sour
 title or value, and reads the destination's tasks instead, as it did before either predicate
 could be pushed down.
 
+`reconcile_status` and `complete_by_issue` are not predicates either. Each says whether this
+source answers one question — which of its tasks contradict their closure (§4.23), and which of
+its items issue references name (§4.24) — and only a plugin that answered `"native"` is ever
+sent it. Both belong to a source whose status is
+a card on a board beside an issue that closes on its own; a source whose status *is* its
+closure — a Linear workflow state, a file's own `status:` — has nothing for either to find, and
+declares neither. The engine sends a plugin that answered `"unsupported"`, or said nothing,
+neither method: `task status reconcile` answers it no items, and `task status complete` lists
+it as unsupported.
+
 Three rules bind every plugin, and the engine's compensation is only correct while
 all three hold:
 
@@ -584,7 +606,8 @@ all three hold:
    searchable — must be declared unsupported and ignored outright, because half
    applying it narrows.
 3. This reaches the ten `"native"`/`"unsupported"` predicates alone — not `documents`,
-   `comments`, `assets` or `priority`, which are not among them. A dependency read is never ignored
+   `comments`, `assets`, `priority`, `reconcile_status` or `complete_by_issue`, which are not
+   among them. A dependency read is never ignored
    and never silently empty.
    A `"forward-only"` plugin still answers `depended-on-by` — see §4.8.
 
@@ -858,7 +881,10 @@ to the empty list.
 
 `result` is `{"id": …}`, carrying the `NativeId` this source now holds the item under. A
 create is free to choose an id other than the one `item` suggested; an update answers
-with `target`.
+with `target`. A create's answer is the only way the engine learns that id, so a create
+answered in any other shape is reported to a copy's caller as a destination that may hold
+an item the copy could not take back, rather than as a refusal: a plugin that refuses a
+create answers `error` and holds nothing.
 
 `url`, `location` (§4.13), `created_at` and `updated_at` are the destination's own and are
 never written — where the *source* holds an item says nothing about where this one does.
@@ -959,6 +985,26 @@ with nothing recorded to reuse, and one whose `bytes` do not hash to its `sha256
 
 A create from a template, and a regenerate, carrying assets are template operations, and are
 not carried (§4).
+
+### 4.9b `check_task_write`
+
+Sent only to a plugin that answered `write_checks: true` at the handshake (§3.14). It changes
+nothing: it says whether this plugin can represent every field of one task write — its status,
+its content, the tasks it delivers and every other field a `write_task` (§4.9) of it would
+refuse as one it cannot represent.
+
+```json
+{ "id": "27", "method": "check_task_write", "params": { "write": { "target": null, "item": { "id": "Q-1", "title": "…", "…": "…" }, "depends_on": [] } } }
+{ "id": "27", "result": {} }
+```
+
+`params.write` is the `ItemWrite` a `write_task` of the task would carry. The trait method
+carries `()`, so `result` is an empty object, and it means the plugin can represent it; `{"kind": "refused"}`, naming the field and why, means it
+cannot — in the words its `write_task` would refuse it with. A task copy asks this of every task
+it plans before its first write, and leaves out each one refused: answered `failed` with that
+refusal as its reason, while the rest land as one copy. Any other error fails the whole copy, as
+a failed write would. It is a promise about representability alone: a write the check accepted
+may still fail, and a copy then takes back everything it wrote.
 
 ### 4.10 `delete_task` and `delete_project`
 
@@ -2009,6 +2055,69 @@ plugin could not be sure it dropped what it held, and the engine reports it agai
 as `Engine::end_command`'s failure; the caller should not go on to the next command on that
 source.
 
+### 4.23 `status_contradictions`
+
+Sent only to a plugin that declared `reconcile_status` `"native"` (§4.2). It changes nothing:
+it answers every task this source holds whose **card contradicts its issue's closure**, each
+with the status that brings it in line, and the engine writes each one through
+`set_task_status` (§4.17).
+
+```json
+{ "id": "25", "method": "status_contradictions", "params": {} }
+{ "id": "25", "result": { "items": [ { "task": { "id": "I_7", "title": "…", "status": { "category": "done", "name": "Done" }, "…": "…" }, "option": "Todo", "closed_as": "done", "to": "Done" } ] } }
+```
+
+The trait method answers `Vec<StatusContradiction>`, carried as `result.items`, one
+`StatusContradiction` per task. A task is answered when its issue is closed with a reason that
+reads `done` (completed, or no reason) or `cancelled` (not planned, duplicate) and its card does
+not sit at the option this source's mapping gives that category; `option` is the option it sits
+at, or `null`, `closed_as` the category its closure reads as — `"done"` or `"cancelled"`, the
+only two a card is brought in line with — and `to` the name of the option that category is written
+at. An open task, a closure that reads `unknown` and a card already in line are never answered —
+nor is any item this source reads as a project rather than a task, whatever its closure, because
+this method reaches task items only — and no task is answered twice: the engine refuses an
+answer naming one task twice as malformed. `task` is the task as `get_task` reads it.
+
+The `set_task_status` the engine sends for each moves the card alone: an issue already closed
+in a way that reads as the category is not closed again, so its state and its reason — a
+duplicate's among them — stay as they are.
+
+### 4.24 `issue_holdings`
+
+Sent only to a plugin that declared `complete_by_issue` `"native"` (§4.2), and never with an
+empty list. It changes nothing: for each issue reference, in the order given and once each, it
+answers the task this source holds for that issue and what moving it to `done` comes to. It
+reaches task items only: an issue this source holds as a project is answered `absent`, exactly
+as one it holds nothing for.
+
+```json
+{ "id": "26", "method": "issue_holdings", "params": { "issues": ["acme/work#12", "acme/work#40"] } }
+{ "id": "26", "result": { "holdings": [ { "issue": "acme/work#12", "completion": "due", "to": "Done", "task": { "id": "I_12", "option": "Todo", "classification": "public", "delivers": ["tickets:T-1"] } }, { "issue": "acme/work#40", "completion": "absent" } ] } }
+```
+
+An issue reference is `owner/name#N` — exactly the spelling `onevcs` reports in a landing
+event's `closes` — the `IssueRef` root of `onetaskgraph schema`, its owner and name compared
+ignoring case. The trait method answers `Vec<IssueHolding>`, carried as `result.holdings`, one
+`IssueHolding` per reference; the engine refuses, as malformed, an answer that does not name
+each reference it was asked about exactly once and in the order given. Each holding's `completion` is one
+of:
+
+- `absent` — this source holds no item for the issue, or cannot see the issue at all; it alone
+  carries no `task`;
+- `skipped`, with `task` and `reason` — `closed as not planned` or `closed as duplicate`: the
+  closure already says the work will not be done here, which a landing does not overrule;
+- `unchanged`, with `task` — the issue is closed as completed and its card already sits at the
+  `done` option;
+- `due`, with `task` and `to`, the name of the `done` option — every other task: the engine
+  writes it `done` through `set_task_status` (§4.17), which selects the `done` option and closes
+  the issue as completed if it is still open, never reopening one.
+
+`task` is the `HeldTask` root: the task's own `id`, the `option` its card sits at, and what the
+write and the rules around it need of it — `classification`, `repositories` and `delivers` — so
+the engine keeps every task it delivers in step exactly as after any status write (§4.17),
+without reading the task again. A plugin's read
+is proportional to the references it is given and never to the size of what it holds.
+
 ## 5. The error envelope
 
 `error` carries a `SourceError` whole. It is internally tagged on `kind`, and every
@@ -2102,6 +2211,16 @@ The `filter_by_metadata` and `filter_by_origin` members of §4.2 and the `metada
 `origin` members of §4.5 were added **without** a bump on the same terms: a plugin written
 before them omits both capabilities, is read as applying neither, and is never sent either
 member — the engine narrows the wider set it returns over each task's own `metadata`.
+
+`check_task_write` (§4.9b) and the `write_checks` member of §3.14 were added **without** a
+bump: the method reaches only a plugin that declared the member, which a plugin written before
+them cannot have done.
+
+`status_contradictions` (§4.23), `issue_holdings` (§4.24) and the `reconcile_status` and
+`complete_by_issue` members of §4.2 were added **without** a bump on the same terms: each method
+reaches only a plugin that declared its member `"native"`, which a plugin written before them
+cannot have done, so such a plugin is reported as holding nothing to reconcile and listed as
+unsupported by a completion — and is sent nothing either time.
 
 `set_task_priority` (§4.19), `set_task_content` (§4.20) and the `content_updates` member of
 §3.9 were added **without** a bump, as the methods of §4.18 were: the first reaches only a

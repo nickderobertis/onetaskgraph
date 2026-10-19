@@ -210,6 +210,7 @@ fn cause(error: &EngineError) -> (String, Option<SourceName>, Option<&SourceErro
     let configured = |name: &str| SourceName::new(name.to_owned()).ok();
     match error {
         EngineError::UnknownSource { .. } => ("unknown-source".to_owned(), None, None),
+        EngineError::IncompleteSource { .. } => ("incomplete-source".to_owned(), None, None),
         EngineError::Token { .. } => ("page-token".to_owned(), None, None),
         EngineError::NoSources => ("no-sources".to_owned(), None, None),
         EngineError::NotWritable { name, .. } => {
@@ -225,6 +226,7 @@ fn cause(error: &EngineError) -> (String, Option<SourceName>, Option<&SourceErro
         }
         EngineError::ChangedWhileCopied { .. } => ("changed-while-copied".to_owned(), None, None),
         EngineError::QueryNotTasks => ("query-not-tasks".to_owned(), None, None),
+        EngineError::StatusesNotTasks => ("statuses-not-tasks".to_owned(), None, None),
         EngineError::CommentsNotDocuments => ("comments-not-documents".to_owned(), None, None),
         EngineError::NoPriority { name, .. } => ("no-priority".to_owned(), configured(name), None),
         EngineError::CommentsNotWritable { name, .. }
@@ -315,7 +317,8 @@ fn cause(error: &EngineError) -> (String, Option<SourceName>, Option<&SourceErro
         | EngineError::SourceFailed { name, error } => {
             (source_kind(error), configured(name), Some(error))
         }
-        EngineError::CopyNotUndone { error, .. } => cause(error),
+        EngineError::CopyNotUndone { error, .. }
+        | EngineError::CopyDestinationUncertain { error, .. } => cause(error),
     }
 }
 

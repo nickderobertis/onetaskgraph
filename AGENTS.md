@@ -83,7 +83,8 @@ silence. See the note on `Health` below for the one difference it carries delibe
   metering types `Metering` and `Metered`; the `status_mapping` types `StatusMapping`,
   `StatusNames`, `StatusName` and `UnmappedStatus`; the image-asset types `Asset`,
   `AssetName`, `AssetContentType`, `AssetPayload`, `AssetUpload`, `AssetUploads`, `AssetWrite`
-  and `AssetsWritten`; the clock types `Clock` and `SharedClock`; the local-cache types
+  and `AssetsWritten`; the clock types `Clock` and `SharedClock`; the closure types `IssueRef`,
+  `IssueHolding`, `HeldTask`, `Completion`, `ClosedAs` and `StatusContradiction`; the local-cache types
   `Coverage`, `VersionCoverage`, `ProjectVersionCoverage`, `DocumentVersionCoverage`,
   `WriteJournal`, `JournalEntry`, `RequestKind`, `PartOutcome`,
   `Shown` and `WholeTask`; and `SourceError`.
@@ -184,6 +185,10 @@ the user's explicit request, is not the state `DependencyEdge`'s own documentati
 forbids, because the engine holds nothing between calls and reads nothing back to answer a
 later query.
 
+**A task copy leaves out, up front, every task its destination says it cannot represent**
+(`TaskSource::check_task_write`, asked of every planned task before the first write), answering
+each `failed`; what follows holds of the tasks it then writes, and of every project copy whole.
+
 **A copy is either complete or it never happened, and undoing one is not a delete verb.**
 A copy that cannot finish removes the items *it created in that run* and writes back the
 items it overwrote, through `TaskSource::delete_task` and `TaskSource::delete_project`.
@@ -194,7 +199,12 @@ to be run again, and the re-run is the mutation burst that trips a hosted destin
 secondary rate limiter, which then refuses even reads for the next fifty minutes. A
 destination that will not take one of its items back is not papered over: the copy refuses
 with `EngineError::CopyNotUndone`, naming why it failed, why it could not be undone, and
-what is still there.
+what is still there. A create the destination answered malformed is the one write the journal
+cannot name — the plugin may have stored the item under an id it never said — so after undoing
+every write it can identify the copy refuses with `EngineError::CopyDestinationUncertain`,
+naming the destination and the plugin method whose answer was malformed and saying to inspect
+that destination before copying again; a malformed answer to any other call keeps its own
+failure. Taking an item back stays the source's duty (§4.9), so the plugin contract is unchanged.
 
 1. `deny.toml` refuses every embedded store, index and cache crate, and `deny` is a
    required check — so reaching for one cannot merge.
@@ -1117,12 +1127,40 @@ them do; this is the inventory of what is owed, not a status board.
     the public home task's dependency on the private member task: `task deps` reads it from
     either end and `project graph` draws it, while nothing on the public folder names the
     private task; a second copy writes nothing and keeps one edge, dropping the edge at the
-    draft takes it off, and a private source that cannot answer, or a recorded entry that does
-    not say what it names, fails the read rather than dropping the edge.
+    draft takes it off, and a record a private source answers with, or a recorded entry, that
+    does not say what it names fails the read rather than dropping the edge.
 105. That public home copied on to another public folder routing to a private one carries its
     member's task and the recorded edge between their copies, read from either end and drawn
     by `project graph`, with nothing on that folder naming either private task; a second copy
     writes nothing anywhere and keeps one edge.
+106. A private source that could not be asked — its credential absent — leaves `task deps` of
+    a public task and `project graph` of a public project exiting 0 with every other edge,
+    naming that source on standard error and in `unanswered`, never `errors`, through the binary
+    and the linked engine alike; `--complete` refuses that answer, and a read of an item that
+    lives in that source still fails naming it.
+107. A closed issue reads as its closure says on a GitHub board — completed or no reason `done`,
+    not planned or duplicate `cancelled` — named by its card's option when the mapping reads that
+    option the same way or not at all and otherwise by the option the mapping gives the
+    category, through `task show`, `task list --status` and a copy into a folder of Markdown.
+108. `task status reconcile` moves exactly each closed task's contradicting card to its
+    closure's option, reading the board through its `is:closed` filter alone, confirming every
+    candidate, pacing every write, answering `would-update` under `--dry-run` and `failed` per
+    refused write; a source whose status is its closure answers nothing and is sent nothing; and
+    a project's issue, closed against its card, is never listed or written — both verbs reach
+    task items only, and `task status complete` answers it `absent`.
+109. `task status complete` asks every configured source declaring `complete_by_issue`, one read
+    per 50 references and no board read, answering `updated`, `unchanged`, `skipped`, `absent`
+    and `failed` per reference and source, closing an issue at most once, keeping delivered
+    tasks in step, listing every other source `unsupported`; `Engine::complete_issues` answers
+    the same.
+110. `task copy --status` keeps only the tasks at the named categories, by query — a GitHub
+    board's search narrowed to open issues when every category is open — and beside ids, where a
+    task at another category is answered `skipped` without its comments being read.
+111. A task copy leaves out each task its destination says it cannot represent — a status,
+    content or `delivers` — answered `failed` and exit `4`, the rest landing and an edge to it
+    written as one outside the copy; every check precedes the first write; any other refusal,
+    and a project copy holding such a task, writes nothing; and a ticket write onto a board
+    refused part way leaves no item behind and no issue closed behind an unwritten card.
 
 ## The public boundary
 

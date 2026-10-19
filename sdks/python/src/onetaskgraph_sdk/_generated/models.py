@@ -16,6 +16,7 @@ from .expected_write import ExpectedWrite as ExpectedWrite
 from .failure_document import FailureDocument as FailureDocument
 from .fields_report import FieldsReport as FieldsReport
 from .global_id import GlobalId as GlobalId
+from .issues_completed import IssuesCompleted as IssuesCompleted
 from .item_type import ItemType as ItemType
 from .linear_config import LinearConfig as LinearConfig
 from .location import Location as Location
@@ -45,6 +46,7 @@ from .status_category import StatusCategory as StatusCategory
 from .status_mapping import StatusMapping as StatusMapping
 from .status_names_report import StatusNamesReport as StatusNamesReport
 from .status_options_report import StatusOptionsReport as StatusOptionsReport
+from .statuses_reconciled import StatusesReconciled as StatusesReconciled
 from .task_content_set import TaskContentSet as TaskContentSet
 from .task_detail import TaskDetail as TaskDetail
 from .task_details import TaskDetails as TaskDetails
@@ -84,6 +86,7 @@ __all__ = [
     "FailureDocument",
     "FieldsReport",
     "GlobalId",
+    "IssuesCompleted",
     "ItemType",
     "LinearConfig",
     "Location",
@@ -113,6 +116,7 @@ __all__ = [
     "StatusMapping",
     "StatusNamesReport",
     "StatusOptionsReport",
+    "StatusesReconciled",
     "TaskContentSet",
     "TaskDetail",
     "TaskDetails",

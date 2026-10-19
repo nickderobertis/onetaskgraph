@@ -78,6 +78,16 @@ class SettingPath(RootModel[str]):
     ]
 
 
+class SourceName(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="The name a configuration document gives one configured source.",
+            pattern="^[a-z0-9][a-z0-9-]*$",
+        ),
+    ]
+
+
 class Setting(BaseModel):
     key: Annotated[SettingPath, Field(description="The dotted path of the setting.")]
     origin: Annotated[Origin, Field(description="Where the value came from.")]
@@ -86,6 +96,13 @@ class Setting(BaseModel):
 
 
 class EffectiveConfig(BaseModel):
+    incomplete_sources: Annotated[
+        list[SourceName],
+        Field(
+            description="Every source some layer refines but no layer gives a `plugin`, in name order.\n\nIts settings are among [`settings`](Self::settings) with the layer each came from;\nthis says the source they belong to is incomplete, and so not configured here. Left\nout when there are none.",
+            validate_default=True,
+        ),
+    ] = []
     secrets: Annotated[
         SecretsReport,
         Field(

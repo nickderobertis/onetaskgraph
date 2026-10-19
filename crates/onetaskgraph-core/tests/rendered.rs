@@ -882,6 +882,7 @@ async fn copy_into_back(
             comments: false,
             no_link: false,
             expect: None,
+            statuses: Vec::new(),
         })
         .await
         .expect("the copy runs")

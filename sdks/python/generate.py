@@ -33,6 +33,11 @@ RESPONSE_ROOTS = {
     "task_comment_edit": "CommentWritten",
     "task_comment_delete": "DeletedComment",
     "task_status_set": "TaskStatusSet",
+    # Every card of one source brought in line with its issue's closure, or none for a source
+    # whose status is its closure.
+    "task_status_reconcile": "StatusesReconciled",
+    # The items the configured sources hold for the issues a landing closed, moved to `done`.
+    "task_status_complete": "IssuesCompleted",
     "task_priority_set": "TaskPrioritySet",
     "task_content_set": "TaskContentSet",
     "task_metadata_set": "MetadataSet",
@@ -150,6 +155,7 @@ RETURN_TYPES = {"sources_list": "list[SourceListing]"}
 OPTION_TYPES = {
     "apply": "bool",
     "allow_partial": "bool",
+    "complete": "bool",
     "no_comments": "bool",
     "comments": "bool",
     "no_link": "bool",
@@ -172,6 +178,8 @@ OPTION_TYPES = {
     "group_by": "str",
     "id": "str",
     "in_": "choices",
+    # The issue references a landing closed, each `owner/name#N`.
+    "issue": "list[str] | tuple[str, ...]",
     "kind": "choices",
     "label": "list[str] | tuple[str, ...]",
     "limit": "int",
@@ -214,6 +222,7 @@ OPTION_TYPES = {
 OPTION_PLACEHOLDERS = {
     "apply": None,
     "allow_partial": None,
+    "complete": None,
     "no_comments": None,
     "comments": None,
     "no_link": None,
@@ -235,6 +244,7 @@ OPTION_PLACEHOLDERS = {
     "group_by": "KEY",
     "id": "DOC",
     "in_": "FIELDS",
+    "issue": "REF",
     "kind": "KIND",
     "label": "L",
     "limit": "N",
@@ -302,11 +312,19 @@ COMMAND_OPTIONS: dict[tuple[str, ...], dict[str, OptionShape]] = {
     ("task", "copy"): {
         "metadata": OptionShape(
             type="list[str] | tuple[str, ...]", placeholder="KEY[/SEGMENT...]=VALUE"
-        )
+        ),
+        # The status categories a copy keeps, beside ids or a query, named as a category.
+        "status": OptionShape(type="choice_list", placeholder="CATEGORY"),
     },
     # `task show-many` pins each of several tasks, `<ID>=<VERSION>`, where `task show` pins one.
     ("task", "show-many"): {
         "pin": OptionShape(type="list[str] | tuple[str, ...]", placeholder="ID=VERSION")
+    },
+    # `task status reconcile` brings one source's cards in line, and names it once.
+    ("task", "status", "reconcile"): {"source": OptionShape(type="str", placeholder="SOURCE")},
+    # `task status complete` narrows the sources it asks, each by name.
+    ("task", "status", "complete"): {
+        "source": OptionShape(type="list[str] | tuple[str, ...]", placeholder="SOURCE")
     },
     # `task update` names one status and one priority, the ones it writes.
     ("task", "update"): {
@@ -369,8 +387,9 @@ def run_workspace_binary(*args: str) -> str:
     command = [str(BINARY), *args]
     # Every verb validates the configuration it is handed, `schema` and `help` included, so a
     # caller's own `ONETASKGRAPH_` settings would decide whether the contract can be emitted
-    # at all: a host exporting half a source makes the binary refuse. What is generated is the
-    # build's contract and nothing of any configuration, so none of it reaches the binary.
+    # at all: a host exporting a source its plugin refuses makes the binary refuse. What is
+    # generated is the build's contract and nothing of any configuration, so none of it
+    # reaches the binary.
     environment = {
         name: value
         for name, value in os.environ.items()
@@ -768,6 +787,8 @@ REQUIRED_OPTIONS: dict[tuple[str, ...], tuple[str, ...]] = {
     ("task", "create"): ("project", "title"),
     ("document", "create"): ("project", "title"),
     ("project", "create"): ("id", "title"),
+    # A reconcile has no source to bring in line without `--source`.
+    ("task", "status", "reconcile"): ("source",),
 }
 
 # The commands that read a body from standard input when `--body-file` is absent, which

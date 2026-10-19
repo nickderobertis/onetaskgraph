@@ -129,6 +129,8 @@ impl TaskSource for Counting {
             filter_by_comment_activity: Support::Unsupported,
             filter_by_metadata: Support::Unsupported,
             filter_by_origin: Support::Unsupported,
+            reconcile_status: Support::Unsupported,
+            complete_by_issue: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,
@@ -247,6 +249,7 @@ async fn the_same_query_asked_twice_reaches_the_source_twice() {
     let dependencies = DependencyRequest {
         id: id.clone(),
         direction: Direction::DependedOnBy,
+        completeness: onetaskgraph_core::Completeness::NamingUnasked,
         paging: one_page(),
     };
 

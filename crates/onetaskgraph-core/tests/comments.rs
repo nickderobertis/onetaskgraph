@@ -186,6 +186,7 @@ async fn copies_on_a_source_keeping_the_marker_read_back_as_copies_and_stay_so_t
         comments: true,
         no_link: true,
         expect: None,
+        statuses: Vec::new(),
     };
     let counts = |report: &CopyReport| report.items[0].comments().copied();
     let first = engine.copy(&copy).await.expect("the copy lands");
@@ -437,6 +438,8 @@ impl TaskSource for Misbehaving {
             filter_by_comment_activity: Support::Unsupported,
             filter_by_metadata: Support::Unsupported,
             filter_by_origin: Support::Unsupported,
+            reconcile_status: Support::Unsupported,
+            complete_by_issue: Support::Unsupported,
             orphan_tasks: Support::Native,
             filter_by_label: Support::Native,
             filter_by_status: Support::Native,

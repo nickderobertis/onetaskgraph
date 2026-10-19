@@ -139,6 +139,16 @@ pub struct CopyRequest {
     /// than one item, a query, a project or a document, and onto a destination keeping no
     /// cache.
     pub expect: Option<String>,
+    /// The status categories a task copy keeps — `--status`, repeatable. Empty keeps every
+    /// task.
+    ///
+    /// Beside a query it narrows the query exactly as `task list --status` does: a task at
+    /// another category is not read for its comments, not copied and not named in the report.
+    /// Beside ids, an id whose task is at another category is read only as far as its status,
+    /// then reported [`CopyAction::Skipped`], neither copied nor read for its comments. Only a
+    /// task copy takes it: beside a project or a document copy it is refused as
+    /// [`EngineError::StatusesNotTasks`] before anything is read.
+    pub statuses: Vec<StatusCategory>,
 }
 
 /// A way of looking for a counterpart that [`CopyRequest::create`] says not to take, named as
@@ -626,6 +636,13 @@ pub enum CopyAction {
         /// Why, in the failure document every verb reports a failure in.
         error: Failure,
     },
+    /// The task named by id is at a status the copy's `--status` does not keep: read only as
+    /// far as its status, and neither copied nor read for its comments. It does not change the
+    /// copy's exit code.
+    Skipped {
+        /// Why, as `status <category> is not one of <categories>`.
+        reason: String,
+    },
 }
 
 impl CopyAction {
@@ -637,7 +654,7 @@ impl CopyAction {
             Self::Updated { destination, .. }
             | Self::Unchanged { destination, .. }
             | Self::Orphaned { destination } => Some(destination),
-            Self::Failed { .. } => None,
+            Self::Failed { .. } | Self::Skipped { .. } => None,
         }
     }
 
@@ -647,7 +664,10 @@ impl CopyAction {
     pub fn found_by(&self) -> Option<CopyVia> {
         match self {
             Self::Updated { via, .. } | Self::Unchanged { via, .. } => Some(*via),
-            Self::Created { .. } | Self::Orphaned { .. } | Self::Failed { .. } => None,
+            Self::Created { .. }
+            | Self::Orphaned { .. }
+            | Self::Failed { .. }
+            | Self::Skipped { .. } => None,
         }
     }
 
@@ -659,7 +679,7 @@ impl CopyAction {
             Self::Created { link, .. }
             | Self::Updated { link, .. }
             | Self::Unchanged { link, .. } => *link,
-            Self::Orphaned { .. } | Self::Failed { .. } => None,
+            Self::Orphaned { .. } | Self::Failed { .. } | Self::Skipped { .. } => None,
         }
     }
 
@@ -671,7 +691,7 @@ impl CopyAction {
             Self::Created { comments, .. }
             | Self::Updated { comments, .. }
             | Self::Unchanged { comments, .. } => comments.as_ref(),
-            Self::Orphaned { .. } | Self::Failed { .. } => None,
+            Self::Orphaned { .. } | Self::Failed { .. } | Self::Skipped { .. } => None,
         }
     }
 
@@ -685,7 +705,10 @@ impl CopyAction {
     /// Whether this item landed — was created, updated or found unchanged — rather than being
     /// an orphan the copy left alone or an item it failed to read whole.
     fn landed(&self) -> bool {
-        !matches!(self, Self::Orphaned { .. } | Self::Failed { .. })
+        !matches!(
+            self,
+            Self::Orphaned { .. } | Self::Failed { .. } | Self::Skipped { .. }
+        )
     }
 
     /// The link slot of an item this copy landed, `None` for an orphan and a failed item.
@@ -694,7 +717,7 @@ impl CopyAction {
             Self::Created { link, .. }
             | Self::Updated { link, .. }
             | Self::Unchanged { link, .. } => Some(link),
-            Self::Orphaned { .. } | Self::Failed { .. } => None,
+            Self::Orphaned { .. } | Self::Failed { .. } | Self::Skipped { .. } => None,
         }
     }
 
@@ -1564,6 +1587,9 @@ impl Engine {
         if request.comments && request.scope == CopyScope::Documents {
             return Err(EngineError::CommentsNotDocuments);
         }
+        if !request.statuses.is_empty() && request.scope != CopyScope::Tasks {
+            return Err(EngineError::StatusesNotTasks);
+        }
         let destination = self.writable(&request.destination)?;
         // Before anything is read, and from the declaration rather than from a failed
         // write: a destination that says it has no documents has nowhere to put one.
@@ -1662,7 +1688,17 @@ impl Engine {
                     Level::Task
                 };
                 let slots = match request.items.query() {
-                    Some(query) => self.candidates(request, query, &mut running).await?,
+                    Some(query) => {
+                        let mut query = query.clone();
+                        if !request.statuses.is_empty() {
+                            query.filters.statuses.clone_from(&request.statuses);
+                        }
+                        self.candidates(request, &query, &mut running).await?
+                    }
+                    None if !request.statuses.is_empty() => {
+                        self.at_statuses(request.items.as_slice(), &request.statuses)
+                            .await?
+                    }
                     None => request
                         .items
                         .as_slice()
@@ -3141,6 +3177,25 @@ impl Engine {
             self.rewrite_references(&mut planned, &mut running.references)
                 .await?;
         }
+        // A task copy carries every task past one its destination cannot represent: each is
+        // asked about before anything is written, and one refused is left out — reported
+        // `failed` with the destination's own reason — and read by every other task as an item
+        // outside the copy. A project copy is still one write, whole or not at all.
+        let mut left_out: Vec<(usize, CopyOutcome)> = Vec::new();
+        if request.scope == CopyScope::Tasks && project.is_none() {
+            let mut kept = Vec::with_capacity(planned.len());
+            for (index, item) in planned.into_iter().enumerate() {
+                match self.unrepresentable(&item, running).await? {
+                    None => kept.push(item),
+                    Some(error) => {
+                        running.resolvable.retain(|copied| copied != &item.source);
+                        running.counterparts.remove(&item.source.to_string());
+                        left_out.push((index, failed(item.source.clone(), &error)));
+                    }
+                }
+            }
+            planned = kept;
+        }
         for item in &planned {
             if let Target::Update { id, .. } = &item.target {
                 running.counterparts.insert(
@@ -3420,7 +3475,76 @@ impl Engine {
                 });
             }
         }
+        // Each task left out answers where it was planned, among the rest.
+        for (index, outcome) in left_out {
+            outcomes.insert(index.min(outcomes.len()), outcome);
+        }
         Ok(outcomes)
+    }
+
+    /// Why the destination cannot represent `item` — a task whose write it refuses at
+    /// [`TaskSource::check_task_write`](onetaskgraph_plugin_api::TaskSource::check_task_write) —
+    /// or `None` when it can, or when `item` is no task.
+    ///
+    /// The write asked about is the one this copy would send first: the task as it lands, with
+    /// the edges and the tasks it delivers that can already be named at the destination. Only a
+    /// refusal leaves the task out; anything else that keeps the destination from answering
+    /// fails the copy, as a failed write would.
+    async fn unrepresentable(
+        &self,
+        item: &Planned,
+        running: &Running,
+    ) -> Result<Option<EngineError>, EngineError> {
+        if item.skipped || !matches!(item.item, Item::Task(_)) {
+            return Ok(None);
+        }
+        let destination = self.writable(&item.to)?;
+        let target = match &item.target {
+            Target::Update { id, .. } => Some(id.clone()),
+            Target::Create => None,
+        };
+        let suggested = target
+            .clone()
+            .unwrap_or_else(|| created_id(&item.item, None));
+        let delivers = resolved_entries(&self.shown_delivers(
+            &item.to,
+            delivers_of(item, &item.to, &running.resolvable, &running.counterparts),
+            &running.private,
+        ));
+        let edges = resolved(&self.shown_edges(
+            &item.to,
+            mapped_edges(
+                &item.edges,
+                &item.source.source,
+                &item.to,
+                &running.resolvable,
+                &running.counterparts,
+            ),
+            &running.private,
+        ));
+        let Item::Task(task) = outgoing(
+            item,
+            suggested,
+            None,
+            &recorded(item, None),
+            &delivers,
+            None,
+        ) else {
+            return Ok(None);
+        };
+        match destination
+            .source()
+            .check_task_write(&ItemWrite {
+                target,
+                item: *task,
+                depends_on: edges,
+            })
+            .await
+        {
+            Ok(()) => Ok(None),
+            Err(error @ SourceError::Refused { .. }) => Ok(Some(refused(destination, error))),
+            Err(error) => Err(refused(destination, error)),
+        }
     }
 
     /// Read one item, place it, read its forward edges, and decide where it is going.
@@ -4878,7 +5002,7 @@ impl Engine {
                 depends_on: Vec::new(),
             })
             .await
-            .map_err(|error| refused(there, error))?;
+            .map_err(|error| create_refused(there, Creating::Project, error))?;
         journal.record(Undo::Created {
             at: to.clone(),
             kind: Level::Project,
@@ -5373,6 +5497,13 @@ impl Engine {
                 prior,
             });
         }
+        // A create whose answer is malformed may have stored what it was sent under an id this
+        // copy never learns, so it cannot be journalled; that is said rather than reported as
+        // a source to fix and copy again. An update was journalled before it was sent.
+        let failed = |operation: Creating, error| match &target {
+            None => create_refused(destination, operation, error),
+            Some(_) => refused(destination, error),
+        };
         let landed = match landing {
             Item::Task(task) if carrying => destination
                 .source()
@@ -5387,7 +5518,7 @@ impl Engine {
                 )
                 .await
                 .map(|written| written.id)
-                .map_err(|error| refused(destination, error))?,
+                .map_err(|error| failed(Creating::Task, error))?,
             Item::Document(document) if carrying => destination
                 .source()
                 .write_document_with_assets(
@@ -5401,7 +5532,7 @@ impl Engine {
                 )
                 .await
                 .map(|written| written.id)
-                .map_err(|error| refused(destination, error))?,
+                .map_err(|error| failed(Creating::Document, error))?,
             Item::Task(task) => destination
                 .source()
                 .write_task(&ItemWrite {
@@ -5410,7 +5541,7 @@ impl Engine {
                     depends_on: edges.to_vec(),
                 })
                 .await
-                .map_err(|error| refused(destination, error))?,
+                .map_err(|error| failed(Creating::Task, error))?,
             Item::Project(project) => destination
                 .source()
                 .write_project(&ItemWrite {
@@ -5419,7 +5550,7 @@ impl Engine {
                     depends_on: edges.to_vec(),
                 })
                 .await
-                .map_err(|error| refused(destination, error))?,
+                .map_err(|error| failed(Creating::Project, error))?,
             // No edges, and that is the contract: a document takes part in no dependency
             // graph, so there is nothing here for `depends_on` to carry.
             Item::Document(document) => destination
@@ -5430,12 +5561,13 @@ impl Engine {
                     depends_on: Vec::new(),
                 })
                 .await
-                .map_err(|error| refused(destination, error))?,
+                .map_err(|error| failed(Creating::Document, error))?,
         };
         // A created item can only be journalled here: its id is what the write answers
         // with. A create that fails leaves nothing behind — §4.9 makes taking the item
         // back the source's own duty, because a write that refused must not leave an item
-        // nobody asked for.
+        // nobody asked for. One that answered malformed is the exception no source can be
+        // held to, which is why `failed` reports it as a destination this copy cannot vouch for.
         if target.is_none() {
             journal.record(Undo::Created {
                 at: destination.name().clone(),
@@ -5935,6 +6067,45 @@ fn refused(source: &ResolvedSource, error: SourceError) -> EngineError {
     EngineError::SourceRefused {
         name: source.name().to_string(),
         error,
+    }
+}
+
+/// The plugin method a create is sent as — the operation an uncertain destination names.
+#[derive(Clone, Copy)]
+enum Creating {
+    Task,
+    Document,
+    Project,
+}
+
+impl Creating {
+    /// The method's name in `docs/plugin-protocol.md`, which an asset write shares with the
+    /// item it is on.
+    fn method(self) -> &'static str {
+        match self {
+            Self::Task => "write_task",
+            Self::Document => "write_document",
+            Self::Project => "write_project",
+        }
+    }
+}
+
+/// A destination's refusal of a create sent as `operation`, where a malformed answer is not a
+/// refusal at all: the plugin may have stored the item before answering in a shape the engine
+/// refuses, so the destination may hold an item this copy has no id to take back.
+fn create_refused(
+    destination: &ResolvedSource,
+    operation: Creating,
+    error: SourceError,
+) -> EngineError {
+    if matches!(error, SourceError::Malformed { .. }) {
+        EngineError::CopyDestinationUncertain {
+            error: Box::new(refused(destination, error)),
+            destination: destination.name().to_string(),
+            operation: operation.method().to_owned(),
+        }
+    } else {
+        refused(destination, error)
     }
 }
 
