@@ -1165,13 +1165,23 @@ struct MemberFiling {
     tasks: Vec<GlobalId>,
 }
 
-/// Where a routed project copy lands its home, and whether everything it carries goes there.
+/// Where a routed project copy lands its home, and how the tasks it carries follow it.
 struct Homing {
     /// The home's placement.
     home: Placement,
-    /// Whether every task goes with the home, whatever its repositories say — a plan holding
-    /// anything private that a `classification: private` route sends wholly to one source.
-    whole: bool,
+    /// How its tasks follow it.
+    following: Following,
+}
+
+/// How the tasks a routed project copy carries follow its home.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Following {
+    /// Every task goes with the home, whatever its repositories say: a plan holding anything
+    /// private that a `classification: private` route sends wholly to one source.
+    Whole,
+    /// A task naming a repository goes where its own repositories place it, and one naming
+    /// none goes with the home.
+    ByRepositories,
 }
 
 /// One home project, and the member projects it names at `onetaskgraph.members`.
@@ -2263,7 +2273,10 @@ impl Engine {
                     let (placement, classification) = match &read.item {
                         // A task naming no repository has no say in where it goes: it follows
                         // its home, wherever that went.
-                        Item::Task(task) if !homing.whole && !task.repositories.is_empty() => {
+                        Item::Task(task)
+                            if homing.following == Following::ByRepositories
+                                && !task.repositories.is_empty() =>
+                        {
                             let own = self
                                 .own_class(class, task.classification, &task.repositories)
                                 .await;
@@ -2421,7 +2434,7 @@ impl Engine {
         let Item::Project(held) = &project.item else {
             return Ok(Homing {
                 home: self.placed_at(request, &request.destination),
-                whole: false,
+                following: Following::ByRepositories,
             });
         };
         if class == Classification::Private
@@ -2431,7 +2444,7 @@ impl Engine {
                 home: self
                     .routes
                     .place_classified(&request.destination, class, &[]),
-                whole: true,
+                following: Following::Whole,
             });
         }
         let mut voters: Vec<(GlobalId, Classification, Placement)> = Vec::new();
@@ -2487,13 +2500,13 @@ impl Engine {
             if names_back || origin_of(&held.metadata).as_ref() == Some(&named) {
                 return Ok(Homing {
                     home: self.placed_at(request, &elsewhere),
-                    whole: false,
+                    following: Following::ByRepositories,
                 });
             }
         }
         Ok(Homing {
             home: rule,
-            whole: false,
+            following: Following::ByRepositories,
         })
     }
 

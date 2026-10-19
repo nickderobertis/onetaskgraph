@@ -1934,11 +1934,12 @@ fn rewrite(sandbox: &Sandbox, project: &str, front: &str) {
 /// and filing every widgetco task.
 fn assert_taken_over(sandbox: &Sandbox, member: &str, report: &Value) {
     assert_eq!(landed(report, "plan:goal"), member, "{report:#}");
-    assert_ne!(
+    assert_eq!(
         outcome(report, "plan:goal")["action"],
-        "created",
+        "updated",
         "{report:#}"
     );
+    assert_eq!(outcome(report, "plan:goal")["via"], "scan", "{report:#}");
     assert_eq!(projects_in(sandbox, TEAM), vec![member.to_owned()]);
     let held = metadata_of(sandbox, member);
     assert!(held.get("onetaskgraph.member_of").is_none(), "{held:#}");
@@ -1985,6 +1986,61 @@ fn a_copy_to_the_routed_source_takes_over_the_plan_s_member_rather_than_adding_a
         .collect();
     assert_eq!(before, after);
     assert_eq!(projects_in(&sandbox, TEAM), vec![member]);
+}
+
+/// Every file of the three folders, in order: what "as it was" is compared against.
+fn folders_held(sandbox: &Sandbox) -> Vec<std::collections::BTreeMap<String, Vec<u8>>> {
+    [PLAN, NOTES, TEAM]
+        .iter()
+        .map(|folder| tree(&sandbox.project().join(folder)))
+        .collect()
+}
+
+#[test]
+fn a_dry_run_names_the_member_a_copy_would_take_over_and_writes_nothing() {
+    let sandbox = Sandbox::new();
+    let (_, home, member) = split_plan_copied(&sandbox);
+    let before = folders_held(&sandbox);
+    let dry = answer(
+        &sandbox,
+        &["project", "copy", "plan:goal", "--to", TEAM, "--dry-run"],
+    );
+    assert_eq!(landed(&dry, "plan:goal"), member, "{dry:#}");
+    assert_eq!(outcome(&dry, "plan:goal")["action"], "updated", "{dry:#}");
+    assert_eq!(folders_held(&sandbox), before, "a dry run writes nothing");
+    assert_eq!(members_of(&sandbox, &home), vec![member]);
+}
+
+// A folder's permissions are Unix's to refuse a write with.
+#[cfg(unix)]
+#[test]
+fn a_take_over_whose_task_cannot_be_written_leaves_every_folder_as_it_was() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let sandbox = Sandbox::new();
+    let (_, home, member) = split_plan_copied(&sandbox);
+    let before = folders_held(&sandbox);
+    // The member is taken over first, and then the unrouted task, new to `team`, cannot be
+    // created there.
+    let tasks = sandbox.project().join(TEAM).join("tasks");
+    let set = |mode: u32| {
+        std::fs::set_permissions(&tasks, std::fs::Permissions::from_mode(mode))
+            .expect("the folder's permissions");
+    };
+    set(0o555);
+    let refusal = refused(&sandbox, &["project", "copy", "plan:goal", "--to", TEAM], 1);
+    set(0o755);
+    assert!(
+        refusal.contains("Permission denied") && !refusal.contains("could not be undone"),
+        "the task's write failed and the copy was undone:\n{refusal}"
+    );
+    assert_eq!(
+        folders_held(&sandbox),
+        before,
+        "the member, its home's list and the plan's links are as they were"
+    );
+    let held = metadata_of(&sandbox, &member);
+    assert_eq!(held["onetaskgraph.member_of"], json!(home), "{held:#}");
+    assert_eq!(members_of(&sandbox, &home), vec![member]);
 }
 
 #[test]

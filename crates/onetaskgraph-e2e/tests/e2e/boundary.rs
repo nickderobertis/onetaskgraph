@@ -5435,6 +5435,67 @@ fn a_routed_plan_copied_on_from_its_public_home_keeps_its_dependency_on_the_priv
     assert_eq!(edges_of(&store, consumer, "depended-on-by"), kept);
 }
 
+#[test]
+fn a_member_whose_home_withheld_its_origin_is_taken_over_by_a_copy_to_its_source() {
+    // Authored in the private `plan`, so the public home on `site` records no origin naming it
+    // and the link `plan` keeps is what ties them.
+    let store = routed_plan_in("plan");
+    let landed = landed_ids(&store.ok(&["project", "copy", "plan:goal", "--to", "site", "--json"]));
+    let home = &landed["plan:goal"];
+    assert!(home.starts_with("site:"), "{landed:?}");
+    let shown = |id: &str| -> Value {
+        let answer: Value =
+            serde_json::from_str(&store.ok(&["project", "show", id, "--json"])).expect("a project");
+        answer["items"][0]["item"]["metadata"].clone()
+    };
+    assert!(
+        shown(home).get("onetaskgraph.origin").is_none(),
+        "{:#}",
+        shown(home)
+    );
+    let members = members_of_home(&store, home);
+    assert_eq!(members.len(), 1, "{members:?}");
+    let member = &members[0];
+
+    let report: Value = serde_json::from_str(&store.ok(&[
+        "project",
+        "copy",
+        "plan:goal",
+        "--to",
+        "vault",
+        "--json",
+    ]))
+    .expect("a copy report");
+    let goal = report["items"]
+        .as_array()
+        .expect("the copied items")
+        .iter()
+        .find(|item| item["source"] == "plan:goal")
+        .expect("the project's outcome");
+    assert_eq!(goal["destination"], json!(member), "{report:#}");
+    assert_eq!(goal["via"], "scan", "{report:#}");
+    let projects: Value =
+        serde_json::from_str(&store.ok(&["project", "list", "--source", "vault", "--json"]))
+            .expect("a listing");
+    assert_eq!(
+        projects["items"].as_array().expect("projects").len(),
+        1,
+        "{projects:#}"
+    );
+    let held = shown(member);
+    assert!(held.get("onetaskgraph.member_of").is_none(), "{held:#}");
+    assert_eq!(held["onetaskgraph.origin"], "plan:goal", "{held:#}");
+    assert_eq!(
+        shown("plan:goal")["onetaskgraph.copies"]["vault"],
+        json!(member)
+    );
+    assert!(
+        shown(home).get("onetaskgraph.members").is_none(),
+        "the former home names it no longer: {:#}",
+        shown(home)
+    );
+}
+
 /// The member projects `home` records, read back through the binary.
 fn members_of_home(store: &Store, home: &str) -> Vec<String> {
     let shown: Value = serde_json::from_str(&store.ok(&["project", "show", home, "--json"]))
