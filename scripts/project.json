@@ -112,23 +112,19 @@
       "cache": false,
       "//": "Outside the `check` fan-out and invoked by name from `just distribution-check`, for the same reason `workspace:deny` is: what these read is the whole publishable surface — every manifest, the release workflows, release-targets.toml, config/registry-interfaces.toml, the crate fixtures — and several of them clone this repository and drive the real release tool over its git history. No input glob describes that, so a cache hit would be a claim about a tree that has since changed and an affected-selection miss would silently stop checking a release. It runs on every gate, exactly as it did before it was a target."
     },
-    "fixture-discrimination": {
-      "executor": "nx:run-commands",
-      "options": {
-        "command": "bash scripts/check-fixture-discrimination.sh"
-      },
-      "cache": false,
-      "//": "distribution-test's third check, a target of its own so Nx starts it beside onetaskgraph:build, which it does not need, rather than after the release build: distribution-test depends on it, so `just distribution-test` still runs it every time. Uncached and outside the `check` fan-out for distribution-test's reason: it mutates a crate in a scratch copy and re-runs its real tests, which no input glob describes."
-    },
     "distribution-test": {
       "executor": "nx:run-commands",
-      "dependsOn": ["onetaskgraph:build", "fixture-discrimination"],
+      "dependsOn": ["onetaskgraph:build"],
       "options": {
-        "commands": ["bash scripts/test-distribution.sh", "bash scripts/check-npm-publish.sh"],
+        "commands": [
+          "bash scripts/test-distribution.sh",
+          "bash scripts/check-npm-publish.sh",
+          "bash scripts/check-fixture-discrimination.sh"
+        ],
         "parallel": false
       },
       "cache": false,
-      "//": "Uncached and unconditional for the same reason as distribution-check above, and one more of its own: check-npm-publish stands a registry up and publishes into it, and check-fixture-discrimination (its fixture-discrimination dependency) mutates a crate in a scratch copy and re-runs its real tests — neither is a function of files this tree can enumerate. test-distribution packages target/debug/onetaskgraph, so it depends on onetaskgraph:build — a task dependency, not a project-graph edge, so it selects nothing the note above refuses."
+      "//": "Uncached and unconditional for the same reason as distribution-check above, and one more of its own: check-npm-publish stands a registry up and publishes into it, and check-fixture-discrimination mutates a crate in a scratch copy and re-runs its real tests — neither is a function of files this tree can enumerate. test-distribution packages target/debug/onetaskgraph, so it depends on onetaskgraph:build — a task dependency, not a project-graph edge, so it selects nothing the note above refuses."
     }
   }
 }

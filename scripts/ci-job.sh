@@ -86,11 +86,8 @@ case "$JOB" in
     ;;
   test-windows)
     # As test-macos, with a slot per core of the 4-core runner: its suites spend most of their
-    # time waiting on the loopback servers and processes they drive, not computing. And the
-    # scripts project's suite in a phase of its own, beside them from the start: queued behind
-    # four slots it began a quarter of an hour in and ended the job, with cores idle around it.
-    phases="1 affected test,budgets scripts --parallel=4
-1 affected test,budgets *,!scripts
+    # time waiting on the loopback servers and processes they drive, not computing.
+    phases="1 affected test,budgets - --parallel=4
 1 run scripts:distribution-check -
 1 run scripts:distribution-test -"
     ;;

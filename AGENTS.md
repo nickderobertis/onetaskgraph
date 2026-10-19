@@ -272,9 +272,7 @@ whole publishable surface — every manifest, both release workflows, `release-t
 `config/registry-interfaces.toml` — and several of them clone this repository and drive the
 real release tool over its git history. No input glob describes that, so affected selection
 would silently stop checking a release and a cache hit would be a claim about a tree that
-has since changed. `workspace:deny` is outside the fan-out for the same kind of reason, and
-so is `fixture-discrimination`, which `distribution-test` depends on so Nx starts it beside
-the build rather than after it.
+has since changed. `workspace:deny` is outside the fan-out for the same kind of reason.
 
 ## Tests
 
