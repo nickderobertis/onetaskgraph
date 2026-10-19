@@ -1928,16 +1928,16 @@ pub fn contract_schema_documents() -> Vec<String> {
 /// real call, and this is where `budget::recheck` reads its headers: a session the account
 /// cannot afford is declined there, on that one call, rather than reported here as a schema
 /// that drifted because GitHub refused to answer it.
-async fn verify_contract_schema(
+async fn verify_contract_schema<Recheck: std::future::Future<Output = ()>>(
     token: &str,
-    after_the_first_call: impl FnOnce(),
+    after_the_first_call: impl FnOnce() -> Recheck,
 ) -> Result<(), String> {
     let mut answered = serde_json::Map::new();
     let mut after_the_first_call = Some(after_the_first_call);
     for document in contract_schema_documents() {
         let response = graphql(token, &document, "contract schema introspection").await;
         if let Some(recheck) = after_the_first_call.take() {
-            recheck();
+            recheck().await;
         }
         let response = response?;
         let data = response
@@ -2748,6 +2748,7 @@ async fn drive_every_declared_capability(
         &SESSION,
         budget::remaining_design_points(onetaskgraph_github_live::quota::Phase::Capabilities),
     )
+    .await
     .map_err(|declined| declined.to_string())?;
 
     // `search_title` and `projects`: one title search over the whole board selects exactly
@@ -3185,6 +3186,7 @@ async fn drive_every_declared_capability(
         &SESSION,
         budget::remaining_design_points(onetaskgraph_github_live::quota::Phase::CommentActivity),
     )
+    .await
     .map_err(|declined| declined.to_string())?;
     an_edited_comment_moves_its_issue_and_is_selected_since(
         writer,
@@ -3201,6 +3203,7 @@ async fn drive_every_declared_capability(
         &SESSION,
         budget::remaining_design_points(onetaskgraph_github_live::quota::Phase::ChangeToken),
     )
+    .await
     .map_err(|declined| declined.to_string())?;
     every_change_kind_moves_a_tasks_token(
         writer,
@@ -4103,8 +4106,9 @@ pub async fn run(nomination: Nomination) {
     // on them here — after that one call, before anything is written — rather than left to
     // fail on its next one.
     quota::phase(onetaskgraph_github_live::quota::Phase::Schema).unwrap();
-    verify_contract_schema(&token, || {
+    verify_contract_schema(&token, || async {
         budget::recheck_first_session(&admitted, &SESSION)
+            .await
             .unwrap_or_else(|declined| declined.refuse());
     })
     .await
@@ -4120,6 +4124,7 @@ pub async fn run(nomination: Nomination) {
         &SESSION,
         budget::remaining_design_points(onetaskgraph_github_live::quota::Phase::Reconciliation),
     )
+    .await
     .unwrap_or_else(|declined| declined.refuse());
     reconcile_node_counts_and_point_costs(&token)
         .await
@@ -4136,6 +4141,7 @@ pub async fn run(nomination: Nomination) {
         &SESSION,
         budget::remaining_design_points(onetaskgraph_github_live::quota::Phase::Setup),
     )
+    .await
     .unwrap_or_else(|declined| declined.refuse());
     let source = onetaskgraph_github_projects::Plugin
         .build_recording_into(
@@ -4319,6 +4325,7 @@ pub async fn run(nomination: Nomination) {
                 &SESSION,
                 budget::remaining_design_points(onetaskgraph_github_live::quota::Phase::Cleanup),
             )
+            .await
             .map_err(|declined| declined.to_string());
             let mine = remove_live_state(
                 &token,
@@ -4340,6 +4347,7 @@ pub async fn run(nomination: Nomination) {
                     onetaskgraph_github_live::quota::Phase::OrphanRecovery,
                 ),
             )
+            .await
             .map_err(|declined| declined.to_string());
             let orphans = sweep_orphans(
                 &token,

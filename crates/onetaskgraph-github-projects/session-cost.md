@@ -1172,3 +1172,18 @@ requests and 21,971 nodes to **5 and 2,286**, and (i) keeps its 3 requests and g
 to **2,286**: each finds the task's project by the project's origin lookup instead of the
 search, and (h)'s one read of an issue's dependencies is no longer sent beside it. (e) to (g)
 and (j) do not move.
+
+## The live lane pauses under 40% of a budget, on the least of three readings
+
+A live session no longer decides on `GET /rate_limit` alone. Every decision — admission and
+each recheck — reads that endpoint, GraphQL's own `rateLimit` object and the object's answer's
+`x-ratelimit-*` headers, beside the headers of the session's own last real answer, and decides
+on the least of them (`onetaskgraph_live::pace`): a budget under 40% of its limit is waited for
+until its reset, unless the burn rate since its window began says it resets before the session
+would exhaust it, and is read again after the wait; only then is the retained buffer applied.
+
+**`session-cost.txt`** moves by those reads alone: the admission and the eight rechecks of the
+reduced session each read `GET /rate_limit` and `the GraphQL rateLimit object` once, so the
+endpoint's row goes 1 → 9, a row of 9 rateLimit reads is added, and the request total goes
+193 → 210. The rateLimit document has no connection, so the node count does not move; the
+session's estimate, derived from this record, grows by those rows' charge.
