@@ -2134,6 +2134,7 @@ mod tests {
                 "project graph",
                 "project copy",
                 "project metadata set",
+                "project status set",
                 "project create",
                 "project render",
                 "project answers",
