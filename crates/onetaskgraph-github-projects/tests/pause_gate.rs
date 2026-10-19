@@ -101,6 +101,9 @@ struct Standin {
     /// Whether the budget stays where it is past every reset, as one another consumer keeps
     /// drawing down would — reporting the same remainder, against the next window's reset.
     stuck: Arc<std::sync::atomic::AtomicBool>,
+    /// The whole allowance each of the three reads reports against — the endpoint's, the
+    /// object's and the headers' — the same unless a case says otherwise.
+    limits: Arc<Mutex<[u64; 3]>>,
 }
 
 impl Standin {
@@ -112,6 +115,8 @@ impl Standin {
         let stuck = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let (script, recorded) = (Arc::clone(&reported), Arc::clone(&asked));
         let held_down = Arc::clone(&stuck);
+        let limits = Arc::new(Mutex::new([LIMIT; 3]));
+        let against = Arc::clone(&limits);
         thread::spawn(move || {
             for stream in listener.incoming() {
                 let mut stream = stream.expect("a stand-in connection");
@@ -126,6 +131,7 @@ impl Standin {
                 recorded.lock().unwrap().push(called.clone());
                 let now = budget::epoch_now();
                 let held = *script.lock().unwrap();
+                let [endpoint_limit, object_limit, headers_limit] = *against.lock().unwrap();
                 // Past its reset the window has come back whole, and a new one has begun.
                 let (scripted, reset) =
                     if now >= held.reset && held_down.load(std::sync::atomic::Ordering::SeqCst) {
@@ -151,20 +157,24 @@ impl Standin {
                             "x-ratelimit-limit: {LIMIT}\r\nx-ratelimit-remaining: {LIMIT}\r\n\
                              x-ratelimit-used: 0\r\nx-ratelimit-resource: core\r\n"
                         ),
-                        budget::documented_answer(LIMIT, scripted.endpoint, LIMIT, reset)
-                            .to_string(),
+                        {
+                            let mut answer =
+                                budget::documented_answer(LIMIT, scripted.endpoint, LIMIT, reset);
+                            answer["resources"]["graphql"]["limit"] = json!(endpoint_limit);
+                            answer.to_string()
+                        },
                     ),
                     "POST /graphql" if request.contains(budget::RATE_LIMIT_OBJECT) => (
                         "200 OK",
                         format!(
-                            "x-ratelimit-limit: {LIMIT}\r\nx-ratelimit-remaining: {}\r\n\
+                            "x-ratelimit-limit: {headers_limit}\r\nx-ratelimit-remaining: {}\r\n\
                              x-ratelimit-used: {}\r\nx-ratelimit-reset: {reset}\r\n\
                              x-ratelimit-resource: graphql\r\n",
                             scripted.headers,
-                            LIMIT - scripted.headers
+                            headers_limit.saturating_sub(scripted.headers)
                         ),
                         json!({"data": {"rateLimit": {
-                            "limit": LIMIT,
+                            "limit": object_limit,
                             "remaining": scripted.object,
                             "resetAt": chrono::DateTime::from_timestamp(
                                 i64::try_from(reset).unwrap(), 0).unwrap().to_rfc3339(),
@@ -186,7 +196,13 @@ impl Standin {
             reported,
             asked,
             stuck,
+            limits,
         }
+    }
+
+    /// Report the endpoint's, the object's and the headers' readings against these limits.
+    fn against(&self, limits: [u64; 3]) {
+        *self.limits.lock().unwrap() = limits;
     }
 
     /// Keep the budget where it is past every reset from now on.
@@ -578,4 +594,48 @@ fn a_budget_that_never_comes_back_is_waited_for_a_bounded_number_of_times_then_d
         "{}",
         declined.message()
     );
+}
+
+#[test]
+fn the_least_reading_is_the_smallest_share_of_its_own_limit_and_ties_go_to_the_smaller_remainder() {
+    let _turn = take_the_turn();
+    // By share, not by remainder: the object reports the most left — 3,500 — of the largest
+    // limit, 35%, while the headers' 2,000 of 5,000 is exactly 40%. Decided on the smallest
+    // remainder this would go on; decided on the smallest share it waits, on the object.
+    let started = budget::epoch_now();
+    let standin = Standin::start(Reported {
+        endpoint: 2_500,
+        object: 3_500,
+        headers: 2_000,
+        reset: started + 1_800,
+    });
+    standin.against([LIMIT, 10_000, LIMIT]);
+    let into = Accounting::new();
+    let session = open(&standin, &into);
+    let pauses = session.pauses();
+    assert_eq!(pauses.len(), 1, "{pauses:?}");
+    assert_eq!(pauses[0].by, named("object"));
+    assert_eq!(
+        (
+            pauses[0].decided_on.remaining(),
+            pauses[0].decided_on.limit()
+        ),
+        (3_500, 10_000)
+    );
+
+    // Two readings at one share: the smaller remainder is the one decided on.
+    let started = budget::epoch_now();
+    let standin = Standin::start(Reported {
+        endpoint: 1_500,
+        object: 3_000,
+        headers: 4_000,
+        reset: started + 1_800,
+    });
+    standin.against([LIMIT, 10_000, LIMIT]);
+    let into = Accounting::new();
+    let session = open(&standin, &into);
+    let pauses = session.pauses();
+    assert_eq!(pauses.len(), 1, "{pauses:?}");
+    assert_eq!(pauses[0].by, named("endpoint"));
+    assert_eq!(pauses[0].decided_on.remaining(), 1_500);
 }

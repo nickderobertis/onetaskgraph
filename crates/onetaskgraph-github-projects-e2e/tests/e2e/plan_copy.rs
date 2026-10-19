@@ -839,7 +839,6 @@ fn a_recopy_reads_only_what_neither_token_nor_cache_answers_and_keeps_a_persons_
         named, unanswered,
         "only the project and the task edited since were read"
     );
-    // Read before it was written.
     let read_at = calls
         .iter()
         .position(|call| named_by_item_reads(std::slice::from_ref(call)).contains(edited))
@@ -859,4 +858,35 @@ fn a_recopy_reads_only_what_neither_token_nor_cache_answers_and_keeps_a_persons_
     );
     let ninth = landed(&report, "notes:T-9");
     assert_eq!(plan.github.item(&ninth).unwrap()["parent"], json!(at["P"]));
+}
+
+#[test]
+fn a_recopy_whose_pinning_listing_is_refused_reads_what_it_would_have_pinned_and_still_lands() {
+    // The listing that would pin every member's token is refused once: nothing is pinned, so
+    // every counterpart is read as if there were no cache — in one batch — and the copy lands
+    // the plan exactly as it would have. The orphan check's own read of the members is made
+    // after it, and answered.
+    let plan = Plan::configured(SMALL, Vec::new(), Some(json!({"enabled": true})));
+    let (project, document, _) = plan.copy();
+    let at = counterparts(&project, &document);
+    plan.read_back(&at);
+    plan.github.refuse_once("subIssues(first:$first");
+    let (report, calls) = plan.measured(&["project", "copy", "notes:P", "--to", "board", "--json"]);
+    assert!(
+        report["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|item| item["action"] != "failed"),
+        "{report:#}"
+    );
+    let mut expected: std::collections::BTreeSet<String> =
+        (1..=TASKS).map(|n| at[&format!("T-{n}")].clone()).collect();
+    expected.insert(at["P"].clone());
+    assert_eq!(
+        named_by_item_reads(&calls),
+        expected,
+        "every counterpart is read instead"
+    );
+    holds_the_plan(&plan, &at, None);
 }
