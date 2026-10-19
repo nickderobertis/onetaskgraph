@@ -2692,9 +2692,9 @@ impl GitHubBoard {
     /// One issue as a board-scoped search, a node read or a sub-issue read returns it:
     /// the issue's own fields with the board half riding along on `projectItems`.
     ///
-    /// The board half is `rendered`'s, read back out of it rather than spelled twice, so
-    /// an item reached through the board and the same item reached through its own id
-    /// cannot disagree about its status or its origin.
+    /// The board half is `field_values`, the one `rendered` answers with, rather than spelled
+    /// twice, so an item reached through the board and the same item reached through its own
+    /// id cannot disagree about its status or its origin.
     fn as_issue(&self, item: &Value) -> Value {
         self.as_issue_counted(item, None)
     }
@@ -2710,9 +2710,9 @@ impl GitHubBoard {
     /// Every board membership of one issue, this board's own first and then each card a
     /// journey put it on beside it, as `Issue.projectItems` answers one.
     ///
-    /// The board half is `rendered`'s, read back out of it rather than spelled twice, so an
-    /// item reached through the board and the same item reached through its own id cannot
-    /// disagree about its status or its origin.
+    /// The board half is `field_values`, the one `rendered` answers with, rather than spelled
+    /// twice, so an item reached through the board and the same item reached through its own
+    /// id cannot disagree about its status or its origin.
     fn memberships(&self, item: &Value) -> Vec<Value> {
         let mut nodes = Vec::new();
         if Self::on_board(item) {
@@ -3307,9 +3307,7 @@ fn github_projects_board_at(
     thread::spawn(move || {
         for stream in listener.incoming() {
             let mut stream = stream.expect("GitHub fixture connection");
-            let __t0 = std::time::Instant::now();
             let (line, request, token) = read_http_request(&mut stream);
-            let __tr = __t0.elapsed();
             // The one REST read a write to a source declared private sends: the visibility of
             // the repository an issue lives in. Recorded beside the GraphQL documents, so a
             // journey counting what a write spent counts it too.
@@ -3427,35 +3425,11 @@ fn github_projects_board_at(
                 // A document selecting the whole issue it writes is answered as its plain twin
                 // is, and then with that issue as a read of it by its own id shows it.
                 let plain = github_plain_of(query);
-                let __ta = std::time::Instant::now();
                 let data = github_answer(&board, plain.unwrap_or(query), &variables);
                 let data = match plain {
                     Some(_) => board.lock().unwrap().whole(query, data, &variables),
                     None => data,
                 };
-                if let Ok(path) = std::env::var("ONETASKGRAPH_PROF_LOG") {
-                    use std::io::Write as _;
-                    let key: String = query
-                        .split_whitespace()
-                        .collect::<Vec<_>>()
-                        .join("")
-                        .chars()
-                        .take(70)
-                        .collect();
-                    let mut f = std::fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(path)
-                        .unwrap();
-                    let line = format!(
-                        "{} {} {} {}\n",
-                        __ta.elapsed().as_micros(),
-                        __tr.as_micros(),
-                        query.len(),
-                        key
-                    );
-                    let _ = f.write_all(line.as_bytes());
-                }
                 {
                     let mut held = board.lock().unwrap();
                     if let Some(at) = held
@@ -4519,16 +4493,6 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         // GitHub's issue search is an index and is behind what the board really holds, the
         // same way its board read is; `lagging_reads` is how far.
         let visible = board.items.len().saturating_sub(board.lagging_reads);
-        let __cpu = || {
-            std::fs::read_to_string("/proc/thread-self/schedstat")
-                .unwrap()
-                .split_whitespace()
-                .next()
-                .unwrap()
-                .parse::<u64>()
-                .unwrap()
-        };
-        let __c0 = __cpu();
         let matched = board.items[..visible]
             .iter()
             // An issue search returns issues, and a draft is not one; a search scoped to this
@@ -4542,31 +4506,12 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
                     && wanted.state.is_none_or(|state| item["state"] == state)
             })
             .collect::<Vec<_>>();
-        let __c1 = __cpu();
         let end = (offset + first).min(matched.len());
         let tallies = board.tallies();
         let nodes = matched[offset.min(end)..end]
             .iter()
             .map(|item| board.as_issue_counted(item, Some(&tallies)))
             .collect::<Vec<_>>();
-        let __c2 = __cpu();
-        if let Ok(path) = std::env::var("ONETASKGRAPH_PROF_LOG") {
-            use std::io::Write as _;
-            let line = format!(
-                "SEARCH {} {} {} {} {}\n",
-                __c1 - __c0,
-                __c2 - __c1,
-                visible,
-                matched.len(),
-                wanted.phrases.len()
-            );
-            let mut f = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(path)
-                .unwrap();
-            let _ = f.write_all(line.as_bytes());
-        }
         return json!({"search":{"nodes":nodes,
             "pageInfo":{"hasNextPage":end < matched.len(),"endCursor":end.to_string()}}});
     }
