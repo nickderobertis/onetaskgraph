@@ -647,6 +647,15 @@ to reach it.
 a message either: for a hosted source the engine answers it exactly as `get_task_details`, so it
 crosses as the same `get_task_detail` or `get_task` and `task_comments` requests.
 
+Nor are the three a copy and `project list --origin` reach for: `TaskSource::query_projects_by_origin`
+and `TaskSource::query_documents_by_origin` — the projects, or documents, whose
+`onetaskgraph.origin` is exactly one qualified id — and `TaskSource::read_ahead_for_copy`, which
+reads a copy's destination counterparts together and holds each for its next read by id. For a
+hosted source the engine answers each by its default: the first two as `query_projects` and
+`query_documents` with no filter, every page walked and narrowed to that origin, and the third by
+reading nothing ahead, so each counterpart crosses as its own `get_task`, `get_project` or
+`get_document`. A plugin written against this document implements nothing more for either.
+
 ### 4.4a `get_task_detail`
 
 Only a plugin that declared `task_details: true` (§3.13) and `comments` `"native"` (§4.2) is

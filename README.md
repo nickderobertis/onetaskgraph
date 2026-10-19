@@ -118,6 +118,8 @@ onetaskgraph task render <ID> [--template FILE | --template-loader FILE] [--sear
 onetaskgraph task answers <ID>
 
 onetaskgraph project list / show / deps          # the same flags, minus the project filter
+onetaskgraph project list [--source S]... --origin SOURCE:ID [--json]
+                                                 # the projects copied from that item
 onetaskgraph project graph <ID> [--format mermaid|json] [--direction auto|td|lr]
                            [--group-by KEY] [--complete]
                                                  # see "Drawing a project's dependency graph"
@@ -254,6 +256,13 @@ titled `Shipment plan`, and no board draft — a draft titled as a design docume
 ever returned. A text with no letter or digit, such as `--`, is refused there before anything
 is sent. `document list --project P --search` sends no search: it reads that project's
 sub-issues and matches the text inside words too, as before.
+
+`project list --origin <SOURCE>:<ID>` lists the projects whose `onetaskgraph.origin` is exactly
+that qualified id — every copy of one plan, zero, one or several, in the rows and JSON
+`project list` prints — and none other; which of several a caller wants is the caller's
+question. A GitHub Projects board answers it with the same origin lookup `task list --origin`
+sends, so what it costs is the copies it finds and never a page of the board; a source with no
+narrower answer is listed whole and narrowed. `project list` without `--origin` is unchanged.
 
 ![A terminal showing one task from `task show`: an aligned block of id, title, status, project, labels and a path location, then the task's body, then its one comment with that comment's id, author and created and updated times](docs/screenshots/task-show.svg)
 
