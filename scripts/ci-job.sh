@@ -165,46 +165,6 @@ run_phase() {
     arguments+=("${flag_words[@]}")
   fi
   echo "nx ${arguments[*]}" >"$scratch/command.$phase"
-  # DIAGNOSTIC, reverted after one hosted run: every bash script the distribution phases start,
-  # and every one those start, prints its elapsed seconds on exit.
-  if [ "$JOB" = test-windows ] && [ "${GITHUB_ACTIONS:-}" = true ] && [[ "$targets" == scripts:distribution-* ]]; then
-    cat >"$scratch/timing.bash" <<'TIMING'
-if [ -n "${ONETASKGRAPH_TIMING_WRAPPED:-}" ]; then
-  unset ONETASKGRAPH_TIMING_WRAPPED
-  if [ -n "${ONETASKGRAPH_TIMING_TRACE:-}" ]; then
-    exec 19>>"$ONETASKGRAPH_TIMING_TRACE"
-    unset ONETASKGRAPH_TIMING_TRACE
-    BASH_XTRACEFD=19
-    PS4='+${SECONDS} '
-    set -x
-  fi
-else
-  case "$0" in
-    *.sh)
-      if [ -f "$0" ] && [ "${ONETASKGRAPH_TIMING_DEPTH:-0}" -lt 2 ]; then
-        export ONETASKGRAPH_TIMING_DEPTH=$(( ${ONETASKGRAPH_TIMING_DEPTH:-0} + 1 ))
-        onetaskgraph_timing_start=$SECONDS
-        onetaskgraph_timing_trace=""
-        onetaskgraph_timing_trace="$(mktemp)"
-        ONETASKGRAPH_TIMING_WRAPPED=1 ONETASKGRAPH_TIMING_TRACE="$onetaskgraph_timing_trace" bash "$0" "$@"
-        onetaskgraph_timing_status=$?
-        echo "[timing] depth=$ONETASKGRAPH_TIMING_DEPTH $(( SECONDS - onetaskgraph_timing_start ))s exit=$onetaskgraph_timing_status $0 $*" >>"$ONETASKGRAPH_TIMING_LOG"
-        if [ -n "$onetaskgraph_timing_trace" ]; then
-          awk -v script="$0" '
-            /^\++[0-9]+ / { match($0, /^\++/); at = substr($0, RLENGTH + 1) + 0
-              if (seen) { spent = at - last; if (spent >= 5) print spent "s " previous }
-              seen = 1; last = at; previous = substr($0, 1, 160) }
-          ' "$onetaskgraph_timing_trace" | sort -rn | head -20 | sed "s|^|[timing]   in $(basename "$0"): |" >>"$ONETASKGRAPH_TIMING_LOG"
-          rm -f "$onetaskgraph_timing_trace"
-        fi
-        exit "$onetaskgraph_timing_status"
-      fi
-      ;;
-  esac
-fi
-TIMING
-    export BASH_ENV="$scratch/timing.bash" ONETASKGRAPH_TIMING_LOG="$scratch/timing.$phase.log"
-  fi
   if ! plan="$(selected_tasks "$phase" "${arguments[@]}" | tr -d '\r')"; then
     return 1
   fi
@@ -225,9 +185,6 @@ TIMING
     } | tee "$scratch/run.$phase.log" \
       | awk -v tag="[$targets] " '/^::endgroup::/ { next } { sub(/^::group::/, ""); print tag $0; fflush() }'
     phase_status="$(cat "$scratch/status.$phase")"
-    if [ -f "$scratch/timing.$phase.log" ]; then
-      sed "s|^|[$targets] |" "$scratch/timing.$phase.log"
-    fi
   else
     FORCE_COLOR=0 NO_COLOR=1 node_modules/.bin/nx "${arguments[@]}" --outputStyle=static \
       >"$scratch/run.$phase.log" 2>&1 && phase_status=0 || phase_status=$?
