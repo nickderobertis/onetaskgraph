@@ -1758,8 +1758,8 @@ counterpart home is the project the copied project's `onetaskgraph.copies` links
 source, naming it back as its origin — or naming none, where a copy out of a private source
 withheld it. Taken
 over as the home, it drops `onetaskgraph.member_of` and records `onetaskgraph.origin` naming
-the copied project, the copied project's `onetaskgraph.copies` records the link to it, and the
-former home's `onetaskgraph.members` no longer names it; its report says `via: scan`. So
+the copied project, the copied project's `onetaskgraph.copies` records the link to it as any
+copy's link is recorded, and the former home's `onetaskgraph.members` no longer names it; its report says `via: scan`. So
 copying a plan `--to` the source its routed tasks went to, after a routed copy gave it a home
 elsewhere, leaves that source holding one project of the plan, carrying every routed task. No
 key is renamed, and none is removed from an item the copy does not write.
