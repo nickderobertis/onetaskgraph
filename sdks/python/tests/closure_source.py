@@ -82,6 +82,40 @@ class HeldTask(TypedDict):
     option: str
 
 
+class ProjectContradiction(TypedDict):
+    """A project item out of line with its closure (§4.23), under its kind's member."""
+
+    project: Project
+    option: str
+    closed_as: ClosedAs
+    to: str
+
+
+class TaskContradiction(TypedDict):
+    """A task item out of line with its closure (§4.23), under its kind's member."""
+
+    task: Task
+    option: str
+    closed_as: ClosedAs
+    to: str
+
+
+class AbsentHolding(TypedDict):
+    """An issue this source holds no item for (§4.24), echoed as it was asked."""
+
+    issue: object
+    completion: Literal["absent"]
+
+
+class DueHolding(TypedDict):
+    """An issue whose held item is owed its done option (§4.24)."""
+
+    issue: IssueRef
+    completion: Literal["due"]
+    task: HeldTask
+    to: str
+
+
 class SourceError(TypedDict):
     """The contract's `SourceError`, in its serialized shape (§5)."""
 
@@ -157,12 +191,20 @@ def _malformed(message: str) -> Refused:
     return {"error": {"kind": "malformed", "message": message}}
 
 
-def _contradiction(
-    kind: Literal["task", "project"], item: Project, closed_as: ClosedAs
-) -> dict[str, object]:
-    """One item out of line with its closure, under the member naming its kind (§4.23)."""
+def _project_contradiction(item: Project, closed_as: ClosedAs) -> ProjectContradiction:
+    """The home out of line with its closure (§4.23)."""
     return {
-        kind: item,
+        "project": item,
+        "option": item["status"]["name"],
+        "closed_as": closed_as,
+        "to": NAMES[closed_as],
+    }
+
+
+def _task_contradiction(item: Task, closed_as: ClosedAs) -> TaskContradiction:
+    """The task out of line with its closure (§4.23)."""
+    return {
+        "task": item,
         "option": item["status"]["name"],
         "closed_as": closed_as,
         "to": NAMES[closed_as],
@@ -189,13 +231,12 @@ def _status_written(
             return _malformed("a status write names its item by `id` and its `category`")
 
 
-def _holding(issue: object) -> dict[str, object]:
+def _holding(issue: object) -> AbsentHolding | DueHolding:
     """What this source holds for one issue it was asked about (§4.24)."""
-    match HOLDINGS.get(IssueRef(issue)) if isinstance(issue, str) else None:
-        case None:
-            return {"issue": issue, "completion": "absent"}
-        case held:
-            return {"issue": issue, "completion": "due", "task": held, "to": "Done"}
+    held = HOLDINGS.get(IssueRef(issue)) if isinstance(issue, str) else None
+    if not isinstance(issue, str) or held is None:
+        return {"issue": issue, "completion": "absent"}
+    return {"issue": IssueRef(issue), "completion": "due", "task": held, "to": "Done"}
 
 
 def _answer(request: Request) -> Answered | Refused:
@@ -215,8 +256,8 @@ def _answer(request: Request) -> Answered | Refused:
             return {"result": {"reachable": True, "detail": "one project and one task"}}
         case "status_contradictions", _:
             items = [
-                _contradiction("project", HOME, "done"),
-                _contradiction("task", TASK, "cancelled"),
+                _project_contradiction(HOME, "done"),
+                _task_contradiction(TASK, "cancelled"),
             ]
             return {"result": {"items": items}}
         case "issue_holdings", {"issues": list(issues)}:

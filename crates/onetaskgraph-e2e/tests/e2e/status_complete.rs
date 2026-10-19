@@ -82,6 +82,12 @@ struct Stores {
 
 impl Stores {
     fn new() -> Self {
+        Self::mapped(json!({"todo":"Todo","in-progress":"In Progress"}))
+    }
+
+    /// The same stores, board A's `status_mapping` being `first_mapping` and its board holding
+    /// a `Shipped` option besides; board B keeps the mapping [`Self::new`] gives both.
+    fn mapped(first_mapping: Value) -> Self {
         let sandbox = Sandbox::new();
         let items = vec![
             issue("N-1", "Todo"),
@@ -100,6 +106,7 @@ impl Stores {
         ];
         let (mut first, board) = github_projects_with_items(&sandbox, items);
         board.with_status_option("OPT-in-progress", "In Progress");
+        board.with_status_option("OPT-shipped", "Shipped");
         board.close("N-3", Some("COMPLETED"));
         board.close("N-4", Some("COMPLETED"));
         board.close("N-5", Some("NOT_PLANNED"));
@@ -108,10 +115,9 @@ impl Stores {
         board.put_on_second_board("N-8", Some("Todo"));
         board.put_on_second_board("F-1", Some("Todo"));
         board.put_on_second_board("F-2", Some("In Progress"));
-        let mapping = json!({"todo":"Todo","in-progress":"In Progress"});
-        first["status_mapping"] = mapping.clone();
+        first["status_mapping"] = first_mapping;
         let mut second = board.second_board();
-        second["status_mapping"] = mapping;
+        second["status_mapping"] = json!({"todo":"Todo","in-progress":"In Progress"});
         let (linear_config, linear) = linear_workspace(&sandbox, dataset());
         sandbox.secrets_file(SECRETS);
         let notes = sandbox.subdirectory("notes");
@@ -1384,5 +1390,86 @@ fn a_dry_run_names_a_plan_home_would_update_and_a_refused_home_write_fails_besid
         )),
         "{}",
         stderr(&output)
+    );
+}
+
+#[test]
+fn a_plan_home_is_judged_and_written_against_the_project_kinds_done_option_not_the_tasks() {
+    // Board A's project kind is done at `Shipped`, its task kind at `Done`.
+    let stores = Stores::mapped(json!({"todo":"Todo","in-progress":"In Progress",
+        "done":{"task":"Done","project":"Shipped"}}));
+    let complete = |extra: &[&str]| {
+        let mut arguments = vec!["--source", "board-a"];
+        arguments.extend(extra);
+        stores.complete(&[reference(HOME), reference("N-1")], &arguments, 0)
+    };
+    let owed = |home_from: &str, home_action: &str, task_from: &str, task_action: &str| {
+        json!({"items": [
+            {"issue":reference(HOME),"source":"board-a","task":format!("board-a:{HOME}"),
+             "kind":"project","from":home_from,"to":{"category":"done","name":"Shipped"},
+             "action":home_action},
+            {"issue":reference("N-1"),"source":"board-a","task":"board-a:N-1","kind":"task",
+             "from":task_from,"to":{"category":"done","name":"Done"},"action":task_action},
+        ], "unsupported": []})
+    };
+
+    let answer = complete(&["--dry-run"]);
+    assert_eq!(
+        answer,
+        owed("In Progress", "would-update", "Todo", "would-update"),
+        "{answer:#}"
+    );
+    assert_eq!(
+        mutations_to(&stores, "test-token"),
+        Vec::new(),
+        "a dry run writes nothing"
+    );
+
+    let answer = complete(&[]);
+    assert_eq!(
+        answer,
+        owed("In Progress", "updated", "Todo", "updated"),
+        "{answer:#}"
+    );
+    assert_eq!(
+        stores.board.status(HOME).as_deref(),
+        Some("Shipped"),
+        "the home's card sits at the project kind's done option"
+    );
+    assert_eq!(stores.board.status("N-1").as_deref(), Some("Done"));
+    assert_eq!(
+        stores.board.state(HOME),
+        ("CLOSED".to_owned(), Some("COMPLETED".to_owned()))
+    );
+
+    // Completed at its own kind's option, the home is unchanged; the task at its own is too.
+    let before = mutations_to(&stores, "test-token").len();
+    let answer = complete(&[]);
+    assert_eq!(
+        answer,
+        owed("Shipped", "unchanged", "Done", "unchanged"),
+        "{answer:#}"
+    );
+    assert_eq!(
+        mutations_to(&stores, "test-token").len(),
+        before,
+        "nothing is written"
+    );
+
+    // A closed home whose card reads the TASK kind's done option is not done for a project:
+    // its card is moved on, and its issue, already closed, is not written again.
+    stores.board.move_card(HOME, "Done");
+    let before = mutations_to(&stores, "test-token").len();
+    let answer = complete(&[]);
+    assert_eq!(
+        answer,
+        owed("Done", "updated", "Done", "unchanged"),
+        "{answer:#}"
+    );
+    assert_eq!(stores.board.status(HOME).as_deref(), Some("Shipped"));
+    assert_eq!(
+        mutations_to(&stores, "test-token")[before..],
+        [("option".to_owned(), json!(format!("ITEM-{HOME}")))],
+        "one option write, and no close of an issue already closed"
     );
 }

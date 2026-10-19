@@ -2361,6 +2361,7 @@ fn every_writing_verb_hands_its_term_scope_to_the_check_unchanged() {
             &body,
         ],
         vec!["project", "copy", "plan:away", "--to", "site", "--no-tasks"],
+        vec!["project", "status", "set", "site:home", "in-progress"],
         vec![
             "project",
             "metadata",

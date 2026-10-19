@@ -56,7 +56,8 @@ struct Held {
 /// The spellings of Linear's refusal of a mutation naming nothing, each recognised on its own.
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
 enum Missing {
-    /// `Entity not found: Issue`, with its user-presentable sentence, on an HTTP 200.
+    /// `Entity not found: Issue` — or `Project` — with its user-presentable sentence, on an
+    /// HTTP 200.
     #[default]
     Both,
     /// The message alone.
@@ -379,9 +380,15 @@ impl Workspace {
                 let other = std::mem::take(&mut held.other_project_next);
                 let Some(project) = held.projects.iter_mut().find(|project| project["id"] == id)
                 else {
-                    return json!({"errors":[{"message":graphql::PROJECT_NOT_FOUND_MESSAGE,
-                        "extensions":{"code":"INVALID_INPUT",
-                            "userPresentableMessage":graphql::PROJECT_NOT_FOUND_PRESENTABLE}}]});
+                    return json!({"errors":[match held.missing {
+                        Missing::MessageOnly => json!({"message":graphql::PROJECT_NOT_FOUND_MESSAGE}),
+                        Missing::SentenceOnly => json!({"message":"Argument Validation Error",
+                            "extensions":{"code":"INVALID_INPUT",
+                                "userPresentableMessage":graphql::PROJECT_NOT_FOUND_PRESENTABLE}}),
+                        Missing::Both | Missing::Http400 => json!({"message":graphql::PROJECT_NOT_FOUND_MESSAGE,
+                            "extensions":{"code":"INVALID_INPUT",
+                                "userPresentableMessage":graphql::PROJECT_NOT_FOUND_PRESENTABLE}}),
+                    }]});
                 };
                 project["status"] = status.clone();
                 let answered = if other { "P-OTHER" } else { id.as_str() };
@@ -1527,4 +1534,64 @@ async fn a_project_status_write_answers_none_refused_malformed_or_unavailable_as
         matches!(dropped, SourceError::Unavailable { .. }),
         "{dropped:?}"
     );
+}
+
+#[tokio::test]
+async fn each_spelling_of_linears_not_found_refusal_is_no_such_project() {
+    for missing in [
+        Missing::Both,
+        Missing::MessageOnly,
+        Missing::SentenceOnly,
+        Missing::Http400,
+    ] {
+        let workspace = example_workspace("ex");
+        workspace.project("P-1", "In Progress");
+        workspace.held().missing = missing;
+        let source = source(&workspace, example_mapping());
+        assert_eq!(
+            source
+                .set_project_status(&NativeId::from("P-404"), StatusCategory::Done)
+                .await
+                .unwrap(),
+            None,
+            "a missing project is no such project, however Linear spelled it"
+        );
+        assert_eq!(workspace.status_of("P-1").as_deref(), Some("In Progress"));
+    }
+}
+
+#[tokio::test]
+async fn a_source_scoped_to_one_project_refuses_another_projects_status_before_any_request() {
+    let workspace = example_workspace("ex");
+    workspace.project("P-1", "In Progress");
+    workspace.project("P-2", "In Progress");
+    let scoped = build(
+        &workspace.serve(),
+        json!({"status_mapping": example_mapping(), "project": "P-1"}),
+    )
+    .unwrap();
+    let before = workspace.count();
+    let refused = scoped
+        .set_project_status(&NativeId::from("P-2"), StatusCategory::Done)
+        .await
+        .expect_err("a project outside the scope");
+    assert!(
+        matches!(&refused, SourceError::Refused { message }
+            if message.contains("scoped to the Linear project P-1")
+                && message.contains("the project P-2")),
+        "{refused:?}"
+    );
+    assert_eq!(workspace.count(), before, "nothing was sent to Linear");
+    assert_eq!(workspace.status_of("P-2").as_deref(), Some("In Progress"));
+
+    // Its own project is written as an unscoped source writes it.
+    let written = scoped
+        .set_project_status(&NativeId::from("P-1"), StatusCategory::Done)
+        .await
+        .expect("the scoped project is written");
+    assert_eq!(
+        written.map(|status| status.category),
+        Some(StatusCategory::Done)
+    );
+    assert_eq!(workspace.status_of("P-1").as_deref(), Some("Completed"));
 }

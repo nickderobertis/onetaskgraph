@@ -426,7 +426,9 @@ pub mod graphql {
     /// Its user-facing alternative; the loopback fixture shares this contract.
     pub const ISSUE_NOT_FOUND_PRESENTABLE: &str = "Could not find referenced Issue.";
     /// The same error for a project a mutation addresses: Linear spells every missing entity
-    /// `Entity not found: <type>`, and the loopback fixture shares this contract.
+    /// `Entity not found: <type>`. Reconciled with the service by the live capability journey,
+    /// which sends a project status write to a nonexistent project and requires `None`; the
+    /// loopback fixture shares this contract.
     pub const PROJECT_NOT_FOUND_MESSAGE: &str = "Entity not found: Project";
     /// Its user-facing alternative, on the terms of [`ISSUE_NOT_FOUND_PRESENTABLE`].
     pub const PROJECT_NOT_FOUND_PRESENTABLE: &str = "Could not find referenced Project.";
