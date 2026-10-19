@@ -453,3 +453,68 @@ fn the_lanes_own_admission_pauses_under_the_same_rule() {
     );
     assert_eq!(standin.asked(), [ONE_READ, ONE_READ].concat());
 }
+
+#[test]
+fn the_lanes_own_recheck_pauses_on_a_real_answers_headers_and_decides_after_the_reset() {
+    // `journey::budget::recheck_remaining`, which every phase of the credentialed journey
+    // calls: admitted above forty per cent, then the session's own last real answer carries
+    // headers under it — the least of every reading — so the recheck waits for that answer's
+    // reset, reads the budget again, and decides on what it reads after the window came back.
+    let _turn = take_the_turn();
+    let started = budget::epoch_now();
+    let standin = Standin::start(Reported {
+        endpoint: 4_000,
+        object: 3_800,
+        headers: 3_600,
+        reset: started + 3_000,
+    });
+    let into = Accounting::new();
+    let admitted = block_on(budget::precondition("test-token", &standin.host, &into))
+        .unwrap_or_else(|declined| panic!("{}", declined.message()));
+    assert!(admitted.pauses().is_empty());
+
+    let reset = started + 1_800;
+    let low = LIMIT * 20 / 100;
+    into.record(
+        onetaskgraph_github_projects::accounting::Request::graphql(
+            "query { __typename }",
+            &json!({}),
+            Some("a real answer"),
+            None,
+        )
+        .finished(
+            onetaskgraph_github_projects::accounting::Outcome::Answered,
+            onetaskgraph_github_projects::accounting::RateLimit::read(|name| match name {
+                "x-ratelimit-limit" => Some(LIMIT.to_string()),
+                "x-ratelimit-remaining" => Some(low.to_string()),
+                "x-ratelimit-used" => Some((LIMIT - low).to_string()),
+                "x-ratelimit-reset" => Some(reset.to_string()),
+                "x-ratelimit-resource" => Some("graphql".to_owned()),
+                _ => None,
+            }),
+        ),
+    );
+    block_on(budget::recheck_remaining(&admitted, &into, ESTIMATE))
+        .unwrap_or_else(|declined| panic!("{}", declined.message()));
+
+    assert_eq!(
+        budget::epoch_now(),
+        reset,
+        "waited until the answer's reset"
+    );
+    let pauses = admitted.pauses();
+    assert_eq!(pauses.len(), 1, "{pauses:?}");
+    assert_eq!(pauses[0].decided_on.remaining(), low);
+    assert!(
+        pauses[0].by.contains("headers of a real answer"),
+        "{}",
+        pauses[0].by
+    );
+    // Admission's read, the recheck's, and the recheck's again after its wait.
+    assert_eq!(standin.asked(), [ONE_READ, ONE_READ, ONE_READ].concat());
+    assert!(
+        admitted.report().contains("paused 1800 s"),
+        "{}",
+        admitted.report()
+    );
+}

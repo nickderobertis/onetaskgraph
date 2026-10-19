@@ -1790,6 +1790,27 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
             .expect("an id this board holds");
         return json!({"node":{"__typename":item.typename}});
     }
+    if query == onetaskgraph_github_projects::graphql::ISSUE_COPY_DETAILS {
+        // A copy's batch, read as the detail batch is: each alias the one-item read of the id
+        // its own variable names, always with its first page of comments.
+        let mut answered = serde_json::Map::new();
+        for slot in 0..onetaskgraph_github_projects::COPY_DETAIL_BATCH {
+            let id = variables[format!("id{slot}")]
+                .as_str()
+                .expect("every slot of a batch names an id")
+                .to_owned();
+            let node = detail_node(
+                &mut state,
+                &id,
+                &Value::Null,
+                variables["first"].as_u64().expect("first") as usize,
+                true,
+                asked,
+            );
+            answered.insert(format!("i{slot}"), node);
+        }
+        return Value::Object(answered);
+    }
     if query == onetaskgraph_github_projects::graphql::ISSUE_DETAILS {
         // Each alias is the one-item detail read of the id its own variable names, and the
         // comments ride along only when the batch asked for them.
@@ -18594,6 +18615,41 @@ async fn a_read_ahead_answers_each_items_next_read_once_and_holds_nothing_it_can
             "nothing was held"
         );
     }
+}
+
+/// A read held ahead for a copy answers nothing once its item has been written or the command
+/// has ended: a delete of the item before its held read is taken, and a person's change after
+/// the command it was read in, are each what the next read of it observes.
+#[tokio::test]
+async fn a_read_held_ahead_is_dropped_by_a_write_naming_its_item_and_by_the_end_of_the_command() {
+    let fixture = board(vec![
+        Item::issue("I_1", "one").status("Todo"),
+        Item::issue("I_2", "two").status("Todo"),
+    ]);
+    let source = configured(&fixture.endpoint, json!({}));
+    source
+        .read_ahead_for_copy(&[native("I_1"), native("I_2")])
+        .await
+        .expect("the board answers the batch");
+    source
+        .delete_task(&native("I_1"))
+        .await
+        .expect("a task this board holds");
+    assert!(
+        source.get_task(&native("I_1")).await.unwrap().is_none(),
+        "a deleted item is not answered from what was read of it before"
+    );
+    source.end_command().await.expect("a command ends");
+    fixture.retitled_by_something_else("I_2", "Retitled by a person");
+    assert_eq!(
+        source
+            .get_task(&native("I_2"))
+            .await
+            .unwrap()
+            .map(|task| task.title),
+        Some("Retitled by a person".to_owned()),
+        "the next command reads the item as a person left it"
+    );
 }
 
 /// The origin field is the one piece of an existing item's metadata written before its body,

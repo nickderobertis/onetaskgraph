@@ -811,6 +811,9 @@ impl Gauge for GitHubGauge<'_> {
         until: u64,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
         let wait = until.saturating_sub(epoch_now());
+        // The session's own answers were read before the window this wait is for came back,
+        // so after it they say nothing about the budget: only what is read again does.
+        self.latest.clear();
         super::say(&format!(
             "the {SESSION_NAME} live session is pausing {wait} s, until {until} (UTC epoch \
              seconds), under the 40% rule"
