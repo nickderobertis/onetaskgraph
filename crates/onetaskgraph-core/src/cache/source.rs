@@ -1056,6 +1056,25 @@ impl TaskSource for CachedSource {
         .await
     }
 
+    /// Only what the cache cannot answer is read ahead: an id whose task, project or document
+    /// entry a pin in this command vouches for is served by its own read with no request, so
+    /// reading it again ahead of that would spend a request on an answer already held.
+    async fn read_ahead_for_copy(&self, ids: &[NativeId]) -> Result<(), SourceError> {
+        let unserved: Vec<NativeId> = ids
+            .iter()
+            .filter(|id| {
+                self.servable(id, false).is_err()
+                    && self.servable_project(id).is_none()
+                    && self.servable_document(id).is_none()
+            })
+            .cloned()
+            .collect();
+        if unserved.is_empty() {
+            return Ok(());
+        }
+        self.inner.read_ahead_for_copy(&unserved).await
+    }
+
     async fn get_project(&self, id: &NativeId) -> Result<Option<Project>, SourceError> {
         if let Some(project) = self.servable_project(id) {
             return Ok(Some(project));

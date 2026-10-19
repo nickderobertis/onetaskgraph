@@ -1139,6 +1139,10 @@ struct Running {
     /// asked whether it could skip it — taken by the plan that lands it, so the destination is
     /// not read for it twice.
     aimed: HashMap<String, (Target, Option<Prior>)>,
+    /// Each source project an item of this copy is filed under, read once when the copy read
+    /// the destination counterparts ahead — see [`Engine::read_ahead`] — so the filing lookup's
+    /// own read of it, [`Engine::linked_project`], is that read rather than a second one.
+    source_projects: HashMap<String, Project>,
 }
 
 /// The member project a routed write was filed under, and what finding it wrote.
@@ -1736,7 +1740,7 @@ impl Engine {
                 running.resolvable.extend(ids.iter().cloned());
                 self.prefetch(request, &ids, &mut running).await;
                 let mut placed: Vec<Option<CopyOutcome>> = Vec::new();
-                let mut planned = Vec::new();
+                let mut reads = Vec::new();
                 for slot in slots {
                     let id = match slot {
                         Slot::Done(outcome) => {
@@ -1764,8 +1768,15 @@ impl Engine {
                             continue;
                         }
                     }
-                    planned.push(self.plan_read(request, read, &mut running).await?);
+                    reads.push(read);
                     placed.push(None);
+                }
+                // Every item is read before any is aimed, so the destination is read for all of
+                // their counterparts together rather than one request per item.
+                self.read_ahead(request, &reads, &mut running).await;
+                let mut planned = Vec::new();
+                for read in reads {
+                    planned.push(self.plan_read(request, read, &mut running).await?);
                 }
                 let mut landed = self
                     .copy_items(request, planned, None, &mut running, journal)
@@ -2214,7 +2225,7 @@ impl Engine {
             if self.routes.routes(&request.destination) {
                 // Every task is read before the project is aimed, because where its home goes
                 // is decided by where they do.
-                let project = self.read(Level::Project, id).await?;
+                let mut project = self.read(Level::Project, id).await?;
                 let mut reads = Vec::new();
                 let mut changed = Vec::new();
                 self.prefetch(request, members, running).await;
@@ -2229,6 +2240,14 @@ impl Engine {
                         }
                         Err(error) => return Err(error),
                     }
+                }
+                {
+                    let mut ahead = vec![project];
+                    ahead.append(&mut reads);
+                    self.read_ahead(request, &ahead, running).await;
+                    let mut ahead = ahead.into_iter();
+                    project = ahead.next().expect("the project was read first");
+                    reads = ahead.collect();
                 }
                 let class = self.read_project_class(&project, &reads, running).await?;
                 // A project holding anything private goes, with everything it holds, wholly
@@ -2276,18 +2295,34 @@ impl Engine {
                 }
                 plans.push((project, tasks, changed));
             } else {
-                let mut project = self.plan(request, Level::Project, id, running).await?;
-                let mut tasks = Vec::new();
+                let project = self
+                    .read_for_copy(request, Level::Project, id, running)
+                    .await?;
+                let mut reads = Vec::new();
                 let mut changed = Vec::new();
                 self.prefetch(request, members, running).await;
                 for member in members {
-                    match self.plan(request, Level::Task, member, running).await {
-                        Ok(task) => tasks.push(task),
+                    match self
+                        .read_for_copy(request, Level::Task, member, running)
+                        .await
+                    {
+                        Ok(read) => reads.push(read),
                         Err(error @ EngineError::ChangedWhileCopied { .. }) => {
                             changed.push(failed(member.clone(), &error));
                         }
                         Err(error) => return Err(error),
                     }
+                }
+                // The project and every task read before any is aimed, so the destination is
+                // read for all of their counterparts together.
+                reads.insert(0, project);
+                self.read_ahead(request, &reads, running).await;
+                let mut reads = reads.into_iter();
+                let project = reads.next().expect("the project was read first");
+                let mut project = self.plan_read(request, project, running).await?;
+                let mut tasks = Vec::new();
+                for read in reads {
+                    tasks.push(self.plan_read(request, read, running).await?);
                 }
                 let mut class = tasks.iter().fold(project.classification, |class, task| {
                     class.strictest(task.classification)
@@ -3003,8 +3038,8 @@ impl Engine {
     /// rather than by walking everything the destination holds.
     ///
     /// **A link first.** A referent whose own `onetaskgraph.copies` names a record at this
-    /// destination has that record read by id — every linked task in one batched
-    /// [`TaskSource::get_task_details`] read — and when the record's own origin is one of the
+    /// destination has that record read by id — every linked record read ahead together, by
+    /// one [`TaskSource::read_ahead_for_copy`] — and when the record's own origin is one of the
     /// referent's two keys it is the counterpart, exactly as a copy takes a link it follows
     /// (rule 0). The copy that recorded the link wrote that record, so it is the one record
     /// the correspondence names, and no other record is looked for.
@@ -3030,49 +3065,33 @@ impl Engine {
         let mut found = Counterparts::default();
         let name = destination.name();
         let mut unlinked: Vec<&Referent> = Vec::new();
-        let linked_tasks: Vec<(&Referent, NativeId)> = referents
+        let linked: Vec<NativeId> = referents
             .iter()
-            .filter(|referent| referent.level == Level::Task)
-            .filter_map(|referent| referent.link(name).map(|id| (*referent, id)))
+            .filter_map(|referent| referent.link(name))
             .collect();
-        if !linked_tasks.is_empty() {
-            let ids: Vec<NativeId> = linked_tasks.iter().map(|(_, id)| id.clone()).collect();
-            let read = destination.source().get_task_details(&ids, None).await;
-            if read.len() != ids.len() {
-                return Err(refused(
-                    destination,
-                    SourceError::Malformed {
-                        message: format!(
-                            "the source answered a read of {} tasks with {} answers",
-                            ids.len(),
-                            read.len()
-                        ),
-                    },
-                ));
-            }
-            for ((referent, _), answer) in linked_tasks.iter().zip(read) {
-                match answer.map_err(|error| refused(destination, error))? {
-                    Some(detail) if confirms(referent, &detail.task.metadata) => found.note(
-                        Level::Task,
-                        &detail.task.id,
-                        detail.task.location.as_ref(),
-                        &detail.task.metadata,
-                    ),
-                    _ => unlinked.push(referent),
-                }
-            }
+        if linked.len() > 1 {
+            // Nothing is decided by it: each read below is made as before when it holds nothing.
+            let _ = destination.source().read_ahead_for_copy(&linked).await;
         }
         for referent in referents {
-            let held = match (referent.level, referent.link(name)) {
-                (Level::Task, Some(_)) => continue,
-                (_, None) => None,
-                (Level::Project, Some(id)) => destination
+            let Some(id) = referent.link(name) else {
+                unlinked.push(referent);
+                continue;
+            };
+            let held = match referent.level {
+                Level::Task => destination
+                    .source()
+                    .get_task(&id)
+                    .await
+                    .map_err(|error| refused(destination, error))?
+                    .map(|task| (task.id, task.location, task.metadata)),
+                Level::Project => destination
                     .source()
                     .get_project(&id)
                     .await
                     .map_err(|error| refused(destination, error))?
                     .map(|project| (project.id, project.location, project.metadata)),
-                (Level::Document, Some(id)) => destination
+                Level::Document => destination
                     .source()
                     .get_document(&id)
                     .await
@@ -3753,20 +3772,6 @@ impl Engine {
         }
     }
 
-    /// Read one item, place it, read its forward edges, and decide where it is going.
-    ///
-    /// A task is placed by its own repositories; a document goes with its project's home.
-    async fn plan(
-        &self,
-        request: &CopyRequest,
-        kind: Level,
-        id: &GlobalId,
-        running: &mut Running,
-    ) -> Result<Planned, EngineError> {
-        let read = self.read_for_copy(request, kind, id, running).await?;
-        self.plan_read(request, read, running).await
-    }
-
     /// Place one item already read, read its forward edges, and decide where it is going.
     async fn plan_read(
         &self,
@@ -4267,6 +4272,92 @@ impl Engine {
     ///
     /// Nothing for a copy that reads no comment, which reads each task by itself as it always
     /// did.
+    /// Read the destination counterparts of every item of `reads` ahead of aiming any of
+    /// them, in each source this copy can reach: what each item's own link names there, what
+    /// its own origin names there, and — for a document filed under a project this command
+    /// has not landed — what that project's link names, which the filing lookup reads.
+    ///
+    /// One [`TaskSource::read_ahead_for_copy`] per source, so a source that can batch its
+    /// reads answers every item's read-before-write together, and each read by id that
+    /// follows is answered from it. Nothing is decided here: a failure holds nothing, and every
+    /// read it would have answered is made as it always was and reports its own failure.
+    ///
+    /// A copy told there is nothing to find reads nothing, a copy expecting a version of its
+    /// one target leaves that read to the cache, a task read with its comments is read by the
+    /// detail read that carries them, and a source with one counterpart to read reads it by
+    /// itself — so none of those is read ahead.
+    async fn read_ahead(&self, request: &CopyRequest, reads: &[Read], running: &mut Running) {
+        if request.create || self.expects_copy() {
+            return;
+        }
+        let reachable = self.routes.reachable(&request.destination);
+        let mut wanted: Vec<(SourceName, Vec<NativeId>)> = Vec::new();
+        let mut want = |there: &SourceName, native: NativeId| match wanted
+            .iter_mut()
+            .find(|(name, _)| name == there)
+        {
+            Some((_, natives)) if natives.contains(&native) => {}
+            Some((_, natives)) => natives.push(native),
+            None => wanted.push((there.clone(), vec![native])),
+        };
+        for read in reads {
+            let metadata = described(&read.item).1;
+            if !(request.comments && read.item.level() == Level::Task) {
+                for there in &reachable {
+                    if let Some(link) = link_of(metadata, there) {
+                        want(there, link.native);
+                    }
+                    if let Some(origin) =
+                        origin_of(metadata).filter(|origin| &origin.source == there)
+                    {
+                        want(there, origin.native);
+                    }
+                }
+            }
+            // A document's own project is read at its source for its references anyway, so
+            // reading it here for the filing lookup moves that read rather than adding one. A
+            // task's is left to the lookup, in the order it always made it.
+            let Item::Document(document) = &read.item else {
+                continue;
+            };
+            let Some(project) = document.project.clone() else {
+                continue;
+            };
+            let qualified = GlobalId::new(read.source.source.clone(), project);
+            let key = qualified.to_string();
+            if running.counterparts.contains_key(&key)
+                || reads.iter().any(|other| other.source == qualified)
+            {
+                continue;
+            }
+            if !running.source_projects.contains_key(&key) {
+                let Ok(source) = self.readable(&qualified.source) else {
+                    continue;
+                };
+                if !source.source().capabilities().projects.is_native() {
+                    continue;
+                }
+                let Ok(Some(held)) = source.source().get_project(&qualified.native).await else {
+                    continue;
+                };
+                running.source_projects.insert(key.clone(), held);
+            }
+            for there in &reachable {
+                if let Some(link) = link_of(&running.source_projects[&key].metadata, there) {
+                    want(there, link.native);
+                }
+            }
+        }
+        // One counterpart is read by its own read, which costs what a batch of one does and
+        // carries what a write of it needs besides.
+        for (name, natives) in wanted.into_iter().filter(|(_, natives)| natives.len() > 1) {
+            if let Ok(there) = self.writable(&name) {
+                // Nothing is decided by it: each read it would have answered is made as before.
+                let _ = there.source().read_ahead_for_copy(&natives).await;
+            }
+        }
+    }
+
     async fn prefetch(&self, request: &CopyRequest, ids: &[GlobalId], running: &mut Running) {
         if !reads_comments(request) {
             return;
@@ -5127,7 +5218,14 @@ impl Engine {
         if let Some(landed) = running.counterparts.get(&project.to_string()) {
             return Ok(Some(landed.clone()));
         }
-        if let Some(linked) = self.linked_project(request, project).await? {
+        if let Some(linked) = self
+            .linked_project(
+                request,
+                project,
+                running.source_projects.get(&project.to_string()),
+            )
+            .await?
+        {
             return Ok(Some(linked));
         }
         for reachable in self.routes.reachable(&request.destination) {
@@ -5497,18 +5595,25 @@ impl Engine {
         &self,
         request: &CopyRequest,
         project: &GlobalId,
+        read: Option<&Project>,
     ) -> Result<Option<GlobalId>, EngineError> {
         let source = self.readable(&project.source)?;
         if !source.source().capabilities().projects.is_native() {
             return Ok(None);
         }
-        let Some(held) = source
-            .source()
-            .get_project(&project.native)
-            .await
-            .map_err(|error| refused(source, error))?
-        else {
-            return Ok(None);
+        let held = match read {
+            Some(read) => read.clone(),
+            None => {
+                let Some(held) = source
+                    .source()
+                    .get_project(&project.native)
+                    .await
+                    .map_err(|error| refused(source, error))?
+                else {
+                    return Ok(None);
+                };
+                held
+            }
         };
         for reachable in self.routes.reachable(&request.destination) {
             let Some(link) = link_of(&held.metadata, &reachable) else {

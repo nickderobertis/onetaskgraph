@@ -1151,12 +1151,24 @@ project or a document is found by `TaskSource::query_projects_by_origin` and
 referent's own `onetaskgraph.copies` link, the record it names read by id, and only a referent
 with no confirmed link is asked for by origin.
 
-**`copy-cost.txt`** moves (a), (b), (h) and (i). (a), a whole copy of 10 tasks, keeps its 55
+**A copy reads its counterparts together.** Every item of a copy is read at its source before
+any is aimed, so the destination is read for all of their counterparts at once, by
+`TaskSource::read_ahead_for_copy`: this source answers it with `ISSUE_COPY_DETAILS`,
+`COPY_DETAIL_BATCH` (21) items to a request, each held for that item's next read by id in the
+command and dropped by any mutation naming it. A destination with one counterpart to read is
+read by its own `ISSUE` as before, and so is a copy expecting a version of its one target.
+
+**`copy-cost.txt`** moves (a) to (d), (h) and (i). (a), a whole copy of 10 tasks, keeps its 55
 requests and goes from 29,600 worst-case nodes to **10,115**: the project's own origin lookup
 (915) replaces the board-scoped search (20,400). (b), the unchanged repeat, goes from 13
-requests and 35,566 nodes to **12 and 30,416**: one read of the project's sub-issues (25,400)
-replaces the board read (10,150) and the search (20,400) — its node count is the project's
-worst case, which does not grow with the board, where the two it replaces did. (h) goes from 6
+requests and 35,566 nodes to **2 and 30,734**: one read of the project's sub-issues (25,400)
+replaces the board read (10,150) and the search (20,400), and one batched read of the project
+and its ten tasks (5,334) replaces eleven reads of one issue (5,016) — its node count is the
+project's worst case and one batch's, neither of which grows with the board, where the two
+walks did. (c) and (d), a member copy naming one task, go from 4 requests and 912 nodes to
+**3 and 5,334**: the project and the member are read in one batch instead of two reads of one
+issue, one request and one point fewer, at the batch document's worst case. (h) goes from 6
 requests and 21,971 nodes to **5 and 2,286**, and (i) keeps its 3 requests and goes from 21,771
 to **2,286**: each finds the task's project by the project's origin lookup instead of the
-search, and (h)'s one read of an issue's dependencies is no longer sent beside it. (c) to (g) and (j) do not move.
+search, and (h)'s one read of an issue's dependencies is no longer sent beside it. (e) to (g)
+and (j) do not move.

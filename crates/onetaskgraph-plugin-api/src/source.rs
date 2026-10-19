@@ -1066,6 +1066,31 @@ pub trait TaskSource: Send + Sync {
         self.get_task_details(ids, Some(comments)).await
     }
 
+    /// Read the items `ids` names — tasks, projects and documents alike, whatever kind each
+    /// is — together, as a copy reads the counterparts it is about to write, and hold each for
+    /// this command so that the next [`get_task`](Self::get_task),
+    /// [`get_project`](Self::get_project) or [`get_document`](Self::get_document) of it is
+    /// answered from that read, once, instead of being sent on its own.
+    ///
+    /// What is held is exactly what that read by id would have answered — the item's fields,
+    /// its edges, its asset manifest and its change token — and only until the next read of
+    /// it, a write naming it, or [`end_command`](Self::end_command), whichever comes first, so
+    /// a read answered from it is never staler than the read-before-write it stands in for.
+    ///
+    /// Defaulted to doing nothing, so every read is sent as it always was: a source whose
+    /// reads are free has no reason to override it, and one priced per request overrides it
+    /// with a batched read. An id this source holds nothing at is simply not held, and its
+    /// own read answers as it always does.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`SourceError`] when the batched read could not be made. Nothing is then
+    /// held, and each item's own read answers as it would have.
+    async fn read_ahead_for_copy(&self, ids: &[NativeId]) -> Result<(), SourceError> {
+        let _ = ids;
+        Ok(())
+    }
+
     /// Add one comment to `task`, answering with the comment as the source now holds it, or
     /// `None` when this source holds no such task.
     ///

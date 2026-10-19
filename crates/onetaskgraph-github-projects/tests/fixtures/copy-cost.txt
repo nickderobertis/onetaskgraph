@@ -11,28 +11,28 @@ requests per call
    11       0  writing board fields together
 
 (b) a repeat whole copy of the same project, unchanged, each item recording its origin
-requests 12
-node count 30416
+requests 2
+node count 30734
 
 requests per call
+    1    5334  reading a batch of issues with their comments and dependencies for a copy
     1   25400  reading a project's tasks
-   11    5016  reading one issue
 
 (c) a member copy naming 1 of those 10 tasks, its status changed, every task recording its origin
-requests 4
-node count 912
+requests 3
+node count 5334
 
 requests per call
-    2     912  reading one issue
+    1    5334  reading a batch of issues with their comments and dependencies for a copy
     1       0  updating an issue
     1       0  writing a board field
 
 (d) the same one-member copy of a project of 3 tasks
-requests 4
-node count 912
+requests 3
+node count 5334
 
 requests per call
-    2     912  reading one issue
+    1    5334  reading a batch of issues with their comments and dependencies for a copy
     1       0  updating an issue
     1       0  writing a board field
 
