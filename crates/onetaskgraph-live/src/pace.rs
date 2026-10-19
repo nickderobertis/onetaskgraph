@@ -1,5 +1,6 @@
-//! The 40% rule: a live session that would draw a budget below [`PAUSE_BELOW`] of its whole
-//! allowance waits for that budget's window to reset rather than spending into it.
+//! The 40% rule: a live session that finds a budget it draws on already holding under
+//! [`PAUSE_BELOW`] of its whole allowance waits for that budget's window to reset rather than
+//! spending into it.
 //!
 //! Every session on a shared credential draws on one allowance, so a session that starts — or
 //! goes on — while a budget is low takes what the work outside this repository was going to

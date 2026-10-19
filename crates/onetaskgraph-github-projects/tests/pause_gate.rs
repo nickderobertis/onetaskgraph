@@ -104,6 +104,83 @@ struct Standin {
     /// The whole allowance each of the three reads reports against — the endpoint's, the
     /// object's and the headers' — the same unless a case says otherwise.
     limits: Arc<Mutex<[u64; 3]>>,
+    /// How the rateLimit object's read fails, when a case says it does.
+    broken: Arc<Mutex<Option<Broken>>>,
+    /// Whether `GET /rate_limit` answers nothing the gauge can read.
+    endpoint_down: Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// Each way the read of GraphQL's own rateLimit object can fail to report the budget.
+#[derive(Clone, Copy, Debug)]
+enum Broken {
+    /// The connection is closed with no answer at all.
+    Unreached,
+    /// An HTTP failure.
+    Failed,
+    /// A body that is not JSON.
+    NotJson,
+    /// JSON without `data.rateLimit`.
+    NoObject,
+    /// An object missing its `remaining`.
+    NoRemaining,
+    /// A `resetAt` that is not a time.
+    UnreadableReset,
+    /// More remaining than the whole allowance.
+    Contradictory,
+}
+
+impl Broken {
+    const EVERY: [Self; 7] = [
+        Self::Unreached,
+        Self::Failed,
+        Self::NotJson,
+        Self::NoObject,
+        Self::NoRemaining,
+        Self::UnreadableReset,
+        Self::Contradictory,
+    ];
+
+    /// The answer the stand-in gives, or `None` for no answer at all.
+    fn answer(self, reset: u64) -> Option<(&'static str, String)> {
+        let at = chrono::DateTime::from_timestamp(i64::try_from(reset).unwrap(), 0)
+            .unwrap()
+            .to_rfc3339();
+        match self {
+            Self::Unreached => None,
+            Self::Failed => Some(("502 Bad Gateway", "{}".to_owned())),
+            Self::NotJson => Some(("200 OK", "<html>not json</html>".to_owned())),
+            Self::NoObject => Some(("200 OK", json!({"data": {}}).to_string())),
+            Self::NoRemaining => Some((
+                "200 OK",
+                json!({"data": {"rateLimit": {"limit": LIMIT, "resetAt": at}}}).to_string(),
+            )),
+            Self::UnreadableReset => Some((
+                "200 OK",
+                json!({"data": {"rateLimit": {"limit": LIMIT, "remaining": 10,
+                    "resetAt": "soon"}}})
+                .to_string(),
+            )),
+            Self::Contradictory => Some((
+                "200 OK",
+                json!({"data": {"rateLimit": {"limit": LIMIT, "remaining": LIMIT + 1,
+                    "resetAt": at}}})
+                .to_string(),
+            )),
+        }
+    }
+
+    /// What the gauge says of the read, in the reason a refusal carries.
+    fn reason(self) -> &'static str {
+        match self {
+            Self::Unreached => "could not reach GitHub",
+            Self::Failed => "failed with HTTP 502",
+            Self::NotJson => "returned invalid JSON",
+            Self::NoObject => "answered without data.rateLimit",
+            Self::NoRemaining => "reported no remaining",
+            Self::UnreadableReset => "reported no readable resetAt",
+            Self::Contradictory => "cannot both be true",
+        }
+    }
 }
 
 impl Standin {
@@ -117,6 +194,10 @@ impl Standin {
         let held_down = Arc::clone(&stuck);
         let limits = Arc::new(Mutex::new([LIMIT; 3]));
         let against = Arc::clone(&limits);
+        let broken = Arc::new(Mutex::new(None::<Broken>));
+        let breaking = Arc::clone(&broken);
+        let endpoint_down = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let down = Arc::clone(&endpoint_down);
         thread::spawn(move || {
             for stream in listener.incoming() {
                 let mut stream = stream.expect("a stand-in connection");
@@ -150,7 +231,22 @@ impl Standin {
                     } else {
                         (held, held.reset)
                     };
+                let object_read =
+                    called == "POST /graphql" && request.contains(budget::RATE_LIMIT_OBJECT);
+                let failing = *breaking.lock().unwrap();
                 let (status, headers, body) = match called.as_str() {
+                    "GET /rate_limit" if down.load(std::sync::atomic::Ordering::SeqCst) => {
+                        ("404 Not Found", String::new(), "{}".to_owned())
+                    }
+                    _ if object_read && failing.is_some() => {
+                        // A failing read carries no rate-limit headers, so nothing of it
+                        // reports the budget.
+                        let Some((status, body)) = failing.unwrap().answer(reset) else {
+                            drop(stream);
+                            continue;
+                        };
+                        (status, String::new(), body)
+                    }
                     "GET /rate_limit" => (
                         "200 OK",
                         format!(
@@ -197,7 +293,20 @@ impl Standin {
             asked,
             stuck,
             limits,
+            broken,
+            endpoint_down,
         }
+    }
+
+    /// Fail the rateLimit object's read as `broken` from now on.
+    fn break_object(&self, broken: Broken) {
+        *self.broken.lock().unwrap() = Some(broken);
+    }
+
+    /// Answer `GET /rate_limit` with nothing the gauge can read from now on.
+    fn take_endpoint_down(&self) {
+        self.endpoint_down
+            .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// Report the endpoint's, the object's and the headers' readings against these limits.
@@ -638,4 +747,83 @@ fn the_least_reading_is_the_smallest_share_of_its_own_limit_and_ties_go_to_the_s
     assert_eq!(pauses.len(), 1, "{pauses:?}");
     assert_eq!(pauses[0].by, named("endpoint"));
     assert_eq!(pauses[0].decided_on.remaining(), 1_500);
+}
+
+#[test]
+fn a_rate_limit_object_that_reports_nothing_leaves_the_decision_to_the_readings_that_do() {
+    let _turn = take_the_turn();
+    for broken in Broken::EVERY {
+        // The endpoint alone reports the budget, at thirty per cent half an hour from its
+        // reset: the session waits on that reading, and the broken one is never decided on.
+        let started = budget::epoch_now();
+        let reset = started + 1_800;
+        let low = LIMIT * 30 / 100;
+        let standin = Standin::start(Reported {
+            endpoint: low,
+            object: low,
+            headers: low,
+            reset,
+        });
+        standin.break_object(broken);
+        let into = Accounting::new();
+        let session = open(&standin, &into);
+        assert_eq!(
+            budget::epoch_now(),
+            reset,
+            "{broken:?}: waited for the reset"
+        );
+        let pauses = session.pauses();
+        assert_eq!(pauses.len(), 1, "{broken:?}: {pauses:?}");
+        assert_eq!(pauses[0].by, named("endpoint"), "{broken:?}");
+        assert_eq!(pauses[0].decided_on.remaining(), low, "{broken:?}");
+        // Read before the wait and again after it, the failing read recorded both times.
+        assert_eq!(standin.asked(), [ONE_READ, ONE_READ].concat(), "{broken:?}");
+        let recorded = into
+            .snapshot()
+            .requests()
+            .iter()
+            .filter(|request| request.name() == budget::RATE_LIMIT_OBJECT_READ)
+            .count();
+        assert_eq!(
+            recorded, 2,
+            "{broken:?}: each failing read is accounted for"
+        );
+    }
+}
+
+#[test]
+fn with_no_reading_of_the_budget_answered_the_session_is_declined_naming_why() {
+    let _turn = take_the_turn();
+    for broken in Broken::EVERY {
+        let started = budget::epoch_now();
+        let standin = Standin::start(Reported {
+            endpoint: LIMIT,
+            object: LIMIT,
+            headers: LIMIT,
+            reset: started + 1_800,
+        });
+        standin.break_object(broken);
+        standin.take_endpoint_down();
+        let into = Accounting::new();
+        let mut gauge = budget::GitHubGauge::new("test-token", &standin.host, &into);
+        let declined = block_on(Session::open_paced(
+            "pause-gate",
+            Credential::new("test-token").unwrap(),
+            Exclusivity::Shared,
+            &mut gauge,
+            &demands(),
+        ))
+        .expect_err("a budget no read reported is not one this session can afford");
+        assert_eq!(
+            budget::epoch_now(),
+            started,
+            "{broken:?}: no reading to wait on"
+        );
+        let message = declined.message();
+        assert!(message.contains("DID NOT RUN"), "{broken:?}: {message}");
+        assert!(
+            message.contains(budget::RATE_LIMIT_OBJECT_READ) && message.contains(broken.reason()),
+            "{broken:?}: {message}"
+        );
+    }
 }
