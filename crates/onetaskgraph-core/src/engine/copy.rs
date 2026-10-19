@@ -4341,6 +4341,11 @@ impl Engine {
             {
                 continue;
             }
+            // A source whose cache stands in front of it has its projects pinned by a listing
+            // before the filing lookup reads them, which this read would come before.
+            if self.caches(&qualified.source) {
+                continue;
+            }
             if !running.source_projects.contains_key(&key) {
                 let Ok(source) = self.readable(&qualified.source) else {
                     continue;
