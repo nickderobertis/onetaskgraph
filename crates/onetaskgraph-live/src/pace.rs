@@ -16,7 +16,7 @@
 //! budget — an allowance endpoint, the API's own rate-limit object, the headers of the last
 //! real answer — and the rule decides on the one leaving the smallest share of its own limit.
 //!
-//! This sits beside, and before, [`affordable`](crate::affordable): pacing decides *when* a
+//! This sits beside, and before, [`affordable`]: pacing decides *when* a
 //! session may draw on a budget, and the retained buffer then decides *whether* it can afford
 //! to — for every budget but one the burn-rate exception let through. Under [`PAUSE_BELOW`]
 //! the rule is the one decision: a budget it waits for is read again after its reset, and one
@@ -45,7 +45,7 @@ pub const PAUSE_BELOW: Fraction = Fraction::new(40, 100);
 /// A window that resets comes back whole, so one pause per budget is what the rule needs; the
 /// bound is what stops a reading that never recovers — a clock that is wrong, an endpoint that
 /// keeps reporting the reset it has already passed — from waiting for ever. What is decided
-/// after it is [`affordable`](crate::affordable)'s, on the last reading.
+/// after it is [`affordable`]'s, on the last reading.
 pub const MOST_PAUSES: usize = 4;
 
 /// One reading of one budget, and the read that made it.
@@ -238,7 +238,7 @@ pub trait Gauge: Send {
 ///
 /// Every pause is pushed onto `pauses`, in the order taken, so the session's report says what
 /// it waited for. At most [`MOST_PAUSES`] are taken; what is answered after them is the last
-/// reading, for [`affordable`](crate::affordable) to decide.
+/// reading, for [`affordable`] to decide.
 pub async fn paced(
     gauge: &mut dyn Gauge,
     demands: &[(Metered, u64)],
