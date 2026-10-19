@@ -3,8 +3,10 @@ import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -12,7 +14,12 @@ import {
 import { tmpdir } from "node:os";
 import { delimiter, resolve } from "node:path";
 import Ajv2020 from "ajv/dist/2020.js";
-import type { CopyReport, FieldsReport, StatusNamesReport } from "../src/generated/models.ts";
+import type {
+  CopyReport,
+  FieldsReport,
+  StatusCategory,
+  StatusNamesReport,
+} from "../src/generated/models.ts";
 import { runtimeSchemas } from "../src/generated/schemas.ts";
 import {
   assertCompleteCommandSurface,
@@ -430,6 +437,78 @@ test("copy drives the real binary and reports what it did to each item", async (
     ).toThrow("create must be a boolean");
   } finally {
     rmSync(copyRoot, { recursive: true, force: true });
+  }
+});
+
+test("a copy keeps only the statuses it names, by query and beside ids, through the real binary", async () => {
+  const statusRoot = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-copy-status-"));
+  const plan: Record<string, StatusCategory> = {
+    proposal: "backlog",
+    ready: "todo",
+    shipped: "done",
+  };
+  mkdirSync(resolve(statusRoot, "plan/tasks"), { recursive: true });
+  for (const empty of ["by-query", "by-id"]) mkdirSync(resolve(statusRoot, empty));
+  for (const [name, category] of Object.entries(plan)) {
+    writeFileSync(
+      resolve(statusRoot, `plan/tasks/${name}.md`),
+      `---\ntitle: ${name}\nstatus: ${category}\n---\nThe body.\n`,
+    );
+  }
+  const folder = (name: string) => ({
+    plugin: "local-md",
+    config: { root: resolve(statusRoot, name) },
+  });
+  writeFileSync(
+    resolve(statusRoot, "onetaskgraph.yaml"),
+    JSON.stringify({
+      sources: { plan: folder("plan"), "by-query": folder("by-query"), "by-id": folder("by-id") },
+    }),
+  );
+  const held = (name: string) => {
+    const tasks = resolve(statusRoot, name, "tasks");
+    return existsSync(tasks) ? readdirSync(tasks).sort() : [];
+  };
+  try {
+    const statusClient = new OnetaskgraphClient({ binaryPath: binary, cwd: statusRoot });
+
+    // Two categories are two flags: both are kept, and the third task is neither named nor copied.
+    const byQuery = await statusClient.taskCopy([], "by-query", {
+      sources: ["plan"],
+      statuses: ["backlog", "todo"],
+    });
+    expect(byQuery.items.map((item) => [item.source, item.action])).toEqual([
+      ["plan:proposal", "created"],
+      ["plan:ready", "created"],
+    ]);
+    expect(held("by-query")).toEqual(["proposal.md", "ready.md"]);
+
+    // Beside ids, a task at another category is answered skipped with both categories named.
+    const byId = await statusClient.taskCopy(["plan:proposal", "plan:shipped"], "by-id", {
+      statuses: ["backlog"],
+    });
+    expect(byId.items).toEqual([
+      {
+        source: "plan:proposal",
+        action: "created",
+        destination: "by-id:proposal",
+        via: "created",
+        link: "recorded",
+      },
+      { source: "plan:shipped", action: "skipped", reason: "status done is not one of backlog" },
+    ]);
+    expect(held("by-id")).toEqual(["proposal.md"]);
+
+    // A board's option name where a category belongs reaches the binary and is refused by it.
+    await expect(
+      statusClient.taskCopy([], "by-id", {
+        sources: ["plan"],
+        statuses: JSON.parse('["shipped"]'),
+      }),
+    ).rejects.toThrow("--status");
+    expect(held("by-id")).toEqual(["proposal.md"]);
+  } finally {
+    rmSync(statusRoot, { recursive: true, force: true });
   }
 });
 

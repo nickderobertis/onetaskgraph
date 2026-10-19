@@ -10,13 +10,29 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from typing import Literal
 
 import pytest
 
 from onetaskgraph_sdk import Client, OnetaskgraphError
-from onetaskgraph_sdk._generated.models import CopyReport
+from onetaskgraph_sdk._generated.copy_report import (
+    CopyOutcomeCreatedOrWouldCreate,
+    CopyOutcomeSkipped,
+    CopyReport,
+    GlobalId,
+)
 
-PLAN = {"proposal": "backlog", "ready": "todo", "shipped": "done"}
+type TaskName = str
+"""A task file's stem in a folder of Markdown, which is also that task's native id there."""
+
+type Category = Literal["backlog", "todo", "done"]
+"""The status categories this store's tasks sit at, spelled as `task_copy` takes them."""
+
+PLAN: dict[TaskName, Category] = {
+    "proposal": "backlog",
+    "ready": "todo",
+    "shipped": "done",
+}
 """Each task of the `plan` folder and the category its status reads as."""
 
 
@@ -39,16 +55,29 @@ def store(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def copied(store: Path) -> list[str]:
+def copied(store: Path) -> list[TaskName]:
     """The task files the destination folder holds, by name."""
     tasks = store / "snap" / "tasks"
     return sorted(path.stem for path in tasks.glob("*.md")) if tasks.is_dir() else []
 
 
-def actions(report: CopyReport) -> list[tuple[str, str]]:
-    """Each item of `report` as its source id and its action."""
-    answered = report.model_dump(mode="json")["items"]
-    return [(item["source"], item["action"]) for item in answered]
+def created(report: CopyReport) -> list[GlobalId]:
+    """The source ids of every item `report` answers created, in the order answered."""
+    return [
+        item.root.source
+        for item in report.items
+        if isinstance(item.root, CopyOutcomeCreatedOrWouldCreate)
+    ]
+
+
+def skipped(report: CopyReport) -> list[CopyOutcomeSkipped]:
+    """Every item `report` answers skipped, in the order answered."""
+    return [item.root for item in report.items if isinstance(item.root, CopyOutcomeSkipped)]
+
+
+def plan(name: TaskName) -> GlobalId:
+    """The qualified id of the `plan` folder's task `name`, as a copy's outcome carries it."""
+    return GlobalId(f"plan:{name}")
 
 
 def test_a_copy_by_query_keeps_exactly_the_tasks_at_every_category_named(
@@ -57,9 +86,15 @@ def test_a_copy_by_query_keeps_exactly_the_tasks_at_every_category_named(
     """Two categories are two flags: both are kept, and the third is neither named nor copied."""
     client = Client(binary, cwd=store)
     report = asyncio.run(
-        client.task_copy([], source=["plan"], status=["backlog", "todo"], to="snap")
+        client.task_copy(
+            [],
+            source=["plan"],
+            status=["backlog", "todo"],
+            to="snap",
+        )
     )
-    assert actions(report) == [("plan:proposal", "created"), ("plan:ready", "created")]
+    assert created(report) == [plan("proposal"), plan("ready")]
+    assert len(report.items) == 2, report
     assert copied(store) == ["proposal", "ready"]
 
 
@@ -69,11 +104,16 @@ def test_a_copy_by_id_answers_a_task_at_another_category_skipped_and_writes_only
     """An id is read only as far as its status, and the reason names both categories."""
     client = Client(binary, cwd=store)
     report = asyncio.run(
-        client.task_copy(["plan:proposal", "plan:shipped"], status=("backlog",), to="snap")
+        client.task_copy(
+            [plan("proposal").root, plan("shipped").root],
+            status=("backlog",),
+            to="snap",
+        )
     )
-    assert actions(report) == [("plan:proposal", "created"), ("plan:shipped", "skipped")]
-    skipped = report.model_dump(mode="json")["items"][1]
-    assert skipped["reason"] == "status done is not one of backlog"
+    assert created(report) == [plan("proposal")]
+    [answered] = skipped(report)
+    assert answered.source == plan("shipped")
+    assert answered.reason == "status done is not one of backlog"
     assert copied(store) == ["proposal"]
 
 
