@@ -2269,6 +2269,36 @@ impl GitHubBoardFields {
             .map_or(Value::Null, |item| item["body"].clone())
     }
 
+    /// One item exactly as this board holds it — its title, body, state, parent, `Status`
+    /// option, origin field and the rest — or `None` when it holds no such item.
+    ///
+    /// What a journey compares a copy's destination against field by field, rather than one
+    /// accessor per field.
+    #[must_use]
+    pub fn item(&self, id: &str) -> Option<Value> {
+        self.board
+            .lock()
+            .unwrap()
+            .items
+            .iter()
+            .find(|item| item["id"] == json!(id))
+            .cloned()
+    }
+
+    /// The ids of the issues this board records as blocking `id`, in the order they were
+    /// recorded.
+    #[must_use]
+    pub fn blockers(&self, id: &str) -> Vec<String> {
+        self.board
+            .lock()
+            .unwrap()
+            .blocked_by
+            .iter()
+            .find(|(near, _)| near == id)
+            .map(|(_, blockers)| blockers.clone())
+            .unwrap_or_default()
+    }
+
     /// Which of the documents this board received selected the board's own item
     /// connection — the read whose cost is the whole board.
     #[must_use]

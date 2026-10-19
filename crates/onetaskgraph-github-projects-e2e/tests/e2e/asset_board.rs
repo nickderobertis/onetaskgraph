@@ -19,6 +19,136 @@ pub(super) enum Stage {
     Repository,
 }
 
+/// What kind of request one the board answers is, by the classes the timing spike measured
+/// GitHub's latency in (`board-copy-speed-2026-10-18-spike-copy-timing-report`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Kind {
+    /// A GraphQL read of one item, or of anything else no other class names.
+    ItemRead,
+    /// A page of the board's own items, [`onetaskgraph_github_projects::graphql::BOARD`].
+    BoardPage,
+    /// A page of the board-scoped issue search,
+    /// [`onetaskgraph_github_projects::graphql::SEARCH_ISSUES`].
+    SearchPage,
+    /// A GraphQL read whose aliases name several items by id.
+    BatchedRead,
+    /// A mutation document holding one mutation field.
+    Mutation,
+    /// A mutation document holding several aliased mutation fields.
+    AliasedMutations,
+    /// `POST /user-attachments/assets`.
+    Upload,
+    /// `GET /repos/{owner}/{repo}`, the repository id an upload names.
+    Repository,
+    /// The authenticated read of an uploaded attachment that verifies it.
+    Verification,
+}
+
+impl Kind {
+    /// The spike report's mean latency for this kind of request, in milliseconds: item read
+    /// 554, board page 6,948 and search page 6,791 (both measured on the 1,986-item `plans`
+    /// board), mutation 1,082, a request of up to eleven aliased mutations 3,700, upload 927,
+    /// its repository read 526, its verification 1,140, and — by the table's note — a read
+    /// batching several items 4,551.
+    pub const fn measured_millis(self) -> u64 {
+        match self {
+            Self::ItemRead => 554,
+            Self::BoardPage => 6_948,
+            Self::SearchPage => 6_791,
+            Self::BatchedRead => 4_551,
+            Self::Mutation => 1_082,
+            Self::AliasedMutations => 3_700,
+            Self::Upload => 927,
+            Self::Repository => 526,
+            Self::Verification => 1_140,
+        }
+    }
+
+    /// Which kind the request with request line path `path` and body `bytes` is.
+    pub fn of(path: &str, bytes: &[u8]) -> Self {
+        use onetaskgraph_github_projects::graphql;
+        if path.starts_with("/user-attachments/assets?") {
+            return Self::Upload;
+        }
+        if path.starts_with("/user-attachments/assets/") {
+            return Self::Verification;
+        }
+        if path.starts_with("/repos/") {
+            return Self::Repository;
+        }
+        let request: Value = serde_json::from_slice(bytes).unwrap_or(Value::Null);
+        let query = request["query"].as_str().unwrap_or_default();
+        if query.trim_start().starts_with("mutation") {
+            return if top_level_fields(query) > 1 {
+                Self::AliasedMutations
+            } else {
+                Self::Mutation
+            };
+        }
+        if query == graphql::BOARD {
+            return Self::BoardPage;
+        }
+        if query == graphql::SEARCH_ISSUES {
+            return Self::SearchPage;
+        }
+        let named: std::collections::BTreeSet<&str> = request["variables"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter(|(name, _)| {
+                name.strip_prefix("id").is_some_and(|slot| {
+                    !slot.is_empty() && slot.bytes().all(|b| b.is_ascii_digit())
+                })
+            })
+            .filter_map(|(_, id)| id.as_str())
+            .filter(|id| !id.is_empty())
+            .collect();
+        if named.len() > 1 {
+            Self::BatchedRead
+        } else {
+            Self::ItemRead
+        }
+    }
+}
+
+/// How many fields the operation's own selection set holds — the aliases of a batched
+/// mutation — read by brace depth, so a nested selection is never counted.
+fn top_level_fields(document: &str) -> usize {
+    let Some(open) = document.find('{') else {
+        return 0;
+    };
+    let (mut depth, mut parens, mut fields, mut in_name, mut directive) =
+        (1usize, 0usize, 0usize, false, false);
+    for character in document[open + 1..].chars() {
+        match character {
+            '(' => parens += 1,
+            ')' => parens = parens.saturating_sub(1),
+            '{' if parens == 0 => depth += 1,
+            '}' if parens == 0 => {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+            _ => {}
+        }
+        // A field starts where a name begins at the operation's own depth; an alias and its
+        // field (`a1:createIssue`) are one, because the colon never ends a name run there, and
+        // a directive's name (`@include`) is none.
+        let naming = depth == 1 && parens == 0 && (character.is_alphanumeric() || character == '_');
+        if naming && !in_name && !directive {
+            fields += 1;
+        }
+        if character == '@' {
+            directive = true;
+        } else if !naming && !(in_name && character == ':') {
+            directive = false;
+        }
+        in_name = naming || (in_name && depth == 1 && parens == 0 && character == ':');
+    }
+    fields
+}
+
 #[derive(Clone)]
 pub(super) struct Refusal {
     pub stage: Stage,
@@ -37,6 +167,9 @@ pub(super) struct Call {
     pub at: Duration,
     pub status: u16,
     pub creating: bool,
+    pub kind: Kind,
+    /// The virtual time the board released its answer, after holding it for its latency.
+    pub answered: Duration,
 }
 
 #[derive(Default)]
@@ -49,6 +182,9 @@ struct State {
     truncate: Option<Stage>,
     rolling: VecDeque<Duration>,
     enforce_limit: bool,
+    /// Whether each answer is held for the spike's measured latency of its [`Kind`] rather than
+    /// 200 ms, or 800 ms for an upload.
+    measured: bool,
 }
 
 pub(super) struct Board {
@@ -111,8 +247,11 @@ impl Board {
                 let mut truncate = false;
                 let mut status = 200;
                 let mut extra_headers = String::new();
+                let kind = Kind::of(&path, &bytes);
+                let measured;
                 {
                     let mut state = held.lock().unwrap();
+                    measured = state.measured;
                     let stage = if upload {
                         Some(Stage::Upload)
                     } else if attachment_read {
@@ -221,6 +360,8 @@ impl Board {
                             at,
                             status,
                             creating,
+                            kind,
+                            answered: at,
                         });
                     }
                 }
@@ -250,11 +391,17 @@ impl Board {
                 } else {
                     None
                 };
-                runtime.block_on(request.delay(Duration::from_millis(if upload {
+                runtime.block_on(request.delay(Duration::from_millis(if measured {
+                    kind.measured_millis()
+                } else if upload {
                     800
                 } else {
                     200
                 })));
+                let answered = clock.now();
+                if let Some(call) = held.lock().unwrap().calls.last_mut() {
+                    call.answered = answered;
+                }
                 if let Some(forwarded) = forwarded {
                     stream.write_all(&forwarded).unwrap();
                 } else {
@@ -296,6 +443,11 @@ impl Board {
     }
     pub fn enforce_limit(&self) {
         self.state.lock().unwrap().enforce_limit = true;
+    }
+    /// Hold every answer for the spike's measured latency of its kind,
+    /// [`Kind::measured_millis`], instead of 200 ms, or 800 ms for an upload.
+    pub fn measure_latency(&self) {
+        self.state.lock().unwrap().measured = true;
     }
 }
 fn transfer_repositories(value: &mut Value, transfers: &BTreeMap<String, String>) {
