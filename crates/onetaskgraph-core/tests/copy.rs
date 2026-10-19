@@ -3459,6 +3459,60 @@ async fn a_reference_whose_link_no_longer_names_its_counterpart_is_found_by_its_
 }
 
 #[tokio::test]
+async fn a_reference_whose_link_is_answered_with_another_record_is_found_by_its_origin() {
+    // Alpha's link names X, and the destination answers a read of X with A1 — a record that
+    // does record Alpha's origin, but is not the one the link names. That answer says nothing
+    // about the link, so Alpha is asked for by its origin, which two records answer: the
+    // reference is ambiguous and left as it was, rather than pointed at whichever record the
+    // destination happened to answer with.
+    let mut from = authoring_store(Some(("root:P-1", "root:A", "root:B")));
+    from["tasks"][0]["metadata"][MetadataKey::COPIES_KEY] = json!({"into": "into:X"});
+    let into = json!({
+        "capabilities": {"documents": "native"},
+        "projects": [located_project("/srv/into/board", Some("root:P-1"))],
+        "tasks": [
+            located("A1", "Alpha", "/srv/into/board/A1.md", Some("root:A")),
+            located("A2", "Alpha again", "/srv/into/board/A2.md", Some("root:A")),
+            located("B", "Beta", "/srv/into/board/B.md", Some("root:B")),
+            located("X", "Someone else's", "/srv/into/board/X.md", Some("elsewhere:X")),
+        ],
+    });
+    let built = |source: &str, config: &Value| {
+        onetaskgraph_in_memory::Plugin
+            .build(&name(source), config, &NoSecrets)
+            .expect("the in-memory plugin builds")
+    };
+    let engine = Engine::new(
+        vec![
+            ConfiguredSource::Ready(ResolvedSource::adopt(name("from"), built("from", &from))),
+            ConfiguredSource::Ready(ResolvedSource::adopt(
+                name("into"),
+                Box::new(Careless {
+                    inner: built("into", &into),
+                    malformed: &[],
+                    misread: Some(("X", "A1")),
+                }),
+            )),
+        ],
+        vec![name("from"), name("into")],
+    );
+    let report = copy_document(&engine, "from:D-1").await;
+    let landed = report.items[0]
+        .destination()
+        .expect("the document landed")
+        .to_string();
+    let content = body(&engine, &landed).await;
+    assert!(!content.contains("/srv/into/board/A1.md"), "{content}");
+    assert!(content.contains("`/srv/from/plans/P-1/A.md`"), "{content}");
+    assert!(content.contains("`/srv/into/board/B.md`"), "{content}");
+    assert!(
+        figures(&report).2 >= 1,
+        "Alpha's reference is counted ambiguous: {:?}",
+        figures(&report)
+    );
+}
+
+#[tokio::test]
 async fn a_document_arrives_naming_the_destinations_own_records_across_a_one_level_fan_out() {
     // The fan-out: `root` is where all three records were authored, `from` and `into` are
     // the two stores they were copied into, and the document travels by the `from` route
@@ -4666,10 +4720,12 @@ async fn a_destination_never_keeps_the_change_token_a_copied_task_arrives_with()
 
 /// A source that answers exactly as the `in-memory` source it wraps, except that a write of an
 /// item titled one of `malformed` is applied and then answered malformed — the plugin that
-/// stored what it was asked to and then could not say under which id.
+/// stored what it was asked to and then could not say under which id — and that a read of the
+/// task `misread` names first is answered with the task it names second.
 struct Careless {
     inner: Box<dyn TaskSource>,
     malformed: &'static [&'static str],
+    misread: Option<(&'static str, &'static str)>,
 }
 
 impl Careless {
@@ -4704,7 +4760,12 @@ impl TaskSource for Careless {
     }
 
     async fn get_task(&self, id: &NativeId) -> Result<Option<Task>, SourceError> {
-        self.inner.get_task(id).await
+        match self.misread {
+            Some((asked, answered)) if id.0 == asked => {
+                self.inner.get_task(&NativeId(answered.to_owned())).await
+            }
+            _ => self.inner.get_task(id).await,
+        }
     }
 
     async fn get_project(&self, id: &NativeId) -> Result<Option<Project>, SourceError> {
@@ -4808,6 +4869,7 @@ fn careless_engine(config: &Value, malformed: &'static [&'static str]) -> Engine
                 Box::new(Careless {
                     inner: built("into", config),
                     malformed,
+                    misread: None,
                 }),
             )),
         ],

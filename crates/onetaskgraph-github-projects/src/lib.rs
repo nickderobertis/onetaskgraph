@@ -11841,7 +11841,9 @@ impl TaskSource for GitHubProjectsSource {
                         Some("Issue") if required_str(node, "id")? != id.0 => continue,
                         _ => {}
                     }
-                    self.resolve_issue(node).await?
+                    // Remembered below with the rest, so a later batch refused leaves no
+                    // dependency read answered from this one either.
+                    self.resolve_issue_as(node, false).await?
                 };
                 read.push((id.clone(), held));
             }
@@ -11849,19 +11851,24 @@ impl TaskSource for GitHubProjectsSource {
         let mut resolved = self.resolved_cache()?;
         let mut ahead = self.read_ahead()?;
         let mut carried = self.carried()?;
+        // What the batches read is remembered as any read of it is.
+        for item in read.iter().filter_map(|(_, held)| held.as_ref()) {
+            resolved.insert(item.id.clone(), item.clone());
+        }
         // Taken only if still carried: a mutation naming it while the batches ran dropped it,
         // and its next read is then its own.
-        read.extend(
-            listed
-                .iter()
-                .filter_map(|id| carried.remove(id).map(|item| (id.clone(), Some(item)))),
-        );
-        for (id, held) in read {
+        for id in &listed {
+            let Some(item) = carried.remove(id) else {
+                continue;
+            };
             // The whole of what it is blocked by came with it, so the dependency read a copy
             // makes next is answered from this one, as a copy's detail read is.
-            if let Some(item) = held.as_ref().filter(|item| item.blocked_by.is_some()) {
+            if item.blocked_by.is_some() {
                 resolved.insert(item.id.clone(), item.clone());
             }
+            read.push((id.clone(), Some(item)));
+        }
+        for (id, held) in read {
             ahead.insert(id, held);
         }
         Ok(())

@@ -1090,8 +1090,9 @@ pub trait TaskSource: Send + Sync {
     ///
     /// Defaulted to doing nothing, so every read is sent as it always was: a source whose
     /// reads are free has no reason to override it, and one priced per request overrides it
-    /// with a batched read. An id this source holds nothing at is simply not held, and its
-    /// own read answers as it always does.
+    /// with a batched read. An id the batched read finds nothing at is either held as absent —
+    /// its next read answers `None`, exactly as that read would have — or not held, and its own
+    /// read answers as it always does.
     ///
     /// # Errors
     ///

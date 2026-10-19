@@ -3108,9 +3108,11 @@ impl Engine {
                     .map_err(|error| refused(destination, error))?
                     .map(|document| (document.id, document.location, document.metadata)),
             };
+            // A record answered for another id than the link names is no answer about the link,
+            // however its origin reads: the referent is asked for by its origin instead.
             match held {
-                Some((id, location, metadata)) if confirms(referent, &metadata) => {
-                    found.note(referent.level, &id, location.as_ref(), &metadata);
+                Some((held, location, metadata)) if held == id && confirms(referent, &metadata) => {
+                    found.note(referent.level, &held, location.as_ref(), &metadata);
                 }
                 _ => unlinked.push(referent),
             }
@@ -4376,9 +4378,13 @@ impl Engine {
                 if !source.source().capabilities().projects.is_native() {
                     continue;
                 }
+                // A record answered for another id is left to the filing lookup's own read.
                 let Ok(Some(held)) = source.source().get_project(&qualified.native).await else {
                     continue;
                 };
+                if held.id != qualified.native {
+                    continue;
+                }
                 running.source_projects.insert(qualified.clone(), held);
             }
             for there in &reachable {

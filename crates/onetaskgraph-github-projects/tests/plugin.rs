@@ -18658,6 +18658,53 @@ async fn a_read_ahead_refused_part_way_holds_nothing_a_project_listing_carried_e
     assert_eq!(fixture.requests("issue"), reads + 1, "read on its own");
 }
 
+/// A read-ahead whose second batch is refused leaves nothing of its first batch to answer a
+/// dependency read with: what an item is blocked by is asked of GitHub, as it was before there
+/// was a read-ahead.
+#[tokio::test]
+async fn a_read_ahead_refused_part_way_answers_no_dependency_read_from_its_first_batch() {
+    let batch = onetaskgraph_github_projects::COPY_DETAIL_BATCH;
+    let no_comments = json!({"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}});
+    // The first batch carries every item's whole `blockedBy`, empty; GitHub's own dependency
+    // read names one far end, so an answer from that batch would report none.
+    let node = |id: &str| {
+        let mut node = issue_with_comments(id, no_comments.clone())["data"]["node"].clone();
+        node["blockedBy"] = json!({"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}});
+        node
+    };
+    let ids: Vec<NativeId> = (0..=batch).map(|n| native(&format!("I_{n}"))).collect();
+    let first: serde_json::Map<String, Value> = ids[..batch]
+        .iter()
+        .enumerate()
+        .map(|(slot, id)| (format!("i{slot}"), node(&id.0)))
+        .collect();
+    let endpoint = sequence_server(vec![
+        json!({ "data": first }),
+        json!({"errors":[{"message":"Something went wrong while executing your query"}]}),
+        json!({"data":{"node":{"__typename":"Issue",
+            "blockedBy":{"nodes":[{"id":"I_far","title":"Far work","body":null,"parent":null,
+                                   "subIssuesSummary":{"total":0}}],
+                        "pageInfo":{"hasNextPage":false,"endCursor":null}},
+            "blocking":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}),
+        board_json(usable_fields(), complete(json!([]))),
+    ]);
+    let source = configured(&endpoint, json!({}));
+    assert!(source.read_ahead_for_copy(&ids).await.is_err());
+    let forward = source
+        .task_dependencies(&native("I_0"), Direction::DependsOn, &page(10))
+        .await
+        .expect("GitHub answers the dependency read");
+    assert_eq!(
+        forward
+            .items
+            .iter()
+            .map(|edge| edge.to.id().to_owned())
+            .collect::<Vec<_>>(),
+        ["I_far"],
+        "asked of GitHub, not answered from the refused read-ahead's first batch"
+    );
+}
+
 /// A read-ahead of more ids than one batch holds is sent as consecutive batches of at most
 /// [`COPY_DETAIL_BATCH`](onetaskgraph_github_projects::COPY_DETAIL_BATCH), and once every batch
 /// is answered each id's next read is answered from the batch that carried it — the last,
