@@ -63,10 +63,11 @@ pub use engine::{
     DocumentDetail, DocumentFilters, DocumentRequest, Engine, EngineError, Filters, GraphDirection,
     GraphEdge, GraphNode, GroupKey, IssueCompleted, IssuesCompleted, LabelRequest, LeftBehind,
     MatchBy, MetadataSet, NoCounterpart, PROJECT_GRAPH_SCHEMA_VERSION, Paging, ProjectGraph,
-    ProjectGraphRequest, ProjectRequest, ProjectSelector, Qualified, QualifiedEdge,
-    QualifiedEndpoint, ReconcileOutcome, SearchHit, SearchKind, SearchRequest, SourceListing,
-    SourceState, Spent, StatusReconciled, StatusesReconciled, TaskContentSet, TaskDetail,
-    TaskDetails, TaskPrioritySet, TaskRequest, TaskStatusSet, TaskUpdated, graph_label, settled,
+    ProjectGraphRequest, ProjectRequest, ProjectSelector, ProjectStatusSet, Qualified,
+    QualifiedEdge, QualifiedEndpoint, ReconcileOutcome, SearchHit, SearchKind, SearchRequest,
+    SourceListing, SourceState, Spent, StatusReconciled, StatusesReconciled, TaskContentSet,
+    TaskDetail, TaskDetails, TaskPrioritySet, TaskRequest, TaskStatusSet, TaskUpdated, graph_label,
+    settled,
 };
 pub use engine::{
     DocumentCreate, ProjectCreate, Regenerated, Regeneration, RenderRequest, RenderTemplate,

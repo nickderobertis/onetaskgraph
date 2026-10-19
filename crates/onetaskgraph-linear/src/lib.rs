@@ -524,6 +524,9 @@ pub mod graphql {
         "mutation($input:ProjectCreateInput!){ projectCreate(input:$input){success project{id}} }";
     /// Update a project.
     pub const PROJECT_UPDATE: &str = "mutation($id:String!,$input:ProjectUpdateInput!){ projectUpdate(id:$id,input:$input){success project{id}} }";
+    /// Set one project's status alone — its input carries `statusId` and nothing else — and
+    /// read back the status it then holds.
+    pub const PROJECT_STATUS_UPDATE: &str = "mutation($id:String!,$input:ProjectUpdateInput!){ projectUpdate(id:$id,input:$input){success project{id status{name type}}} }";
     /// Create a native issue dependency.
     pub const ISSUE_RELATION_CREATE: &str = "mutation($input:IssueRelationCreateInput!){ issueRelationCreate(input:$input){success issueRelation{id}} }";
     /// Create a native project dependency.
@@ -3617,6 +3620,48 @@ impl TaskSource for LinearSource {
         category: StatusCategory,
     ) -> Result<Option<Task>, SourceError> {
         self.status_written(id, category).await
+    }
+    /// One `projectUpdate` carrying only `statusId` — the project status this source's mapping
+    /// gives the category — and nothing before it but the vocabulary it resolves that status
+    /// against, answering the status the update's own selection reports.
+    async fn set_project_status(
+        &self,
+        id: &NativeId,
+        category: StatusCategory,
+    ) -> Result<Option<Status>, SourceError> {
+        if let Some(refused) = self.project_out_of_scope(Some(id)) {
+            return Err(refused);
+        }
+        let (status, _) = self.status_id(category, ItemKind::Project).await?;
+        let answered = self
+            .send_to_held(
+                graphql::PROJECT_STATUS_UPDATE,
+                json!({"id":id.0,"input":{"statusId":status.0}}),
+            )
+            .await;
+        let data = match answered {
+            Ok(Some(data)) => data,
+            Ok(None) => return Ok(None),
+            Err(error) => {
+                self.forget_vocabulary();
+                return Err(error);
+            }
+        };
+        let project = mutation_payload(&data, MutationRoot::ProjectUpdate)?
+            .get("project")
+            .filter(|project| !project.is_null())
+            .ok_or_else(|| SourceError::Malformed {
+                message: "missing projectUpdate.project".into(),
+            })?;
+        acknowledged(project, id, MutationRoot::ProjectUpdate)?;
+        mapped_status(
+            project.get("status").ok_or_else(|| SourceError::Malformed {
+                message: "missing projectUpdate.project.status".into(),
+            })?,
+            &self.statuses,
+            ItemKind::Project,
+        )
+        .map(Some)
     }
     async fn set_task_priority(
         &self,

@@ -331,6 +331,13 @@ pub(crate) struct InitializeResult {
     /// cannot takes the whole copy back, as before. Omitted when `false`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) write_checks: bool,
+    /// Whether this plugin answers `set_project_status` (§3.15).
+    ///
+    /// Optional, and absent means it does not: such a plugin is never sent the method, and a
+    /// project status write naming it is refused before anything is sent, in the words the
+    /// contract's default refuses it with. Omitted when `false`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) project_status: bool,
 }
 
 /// The `metering` result (§4.14).
