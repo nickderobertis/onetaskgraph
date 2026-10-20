@@ -545,14 +545,10 @@ const CLOSED_ISSUE_IDS: &str = r#"query($owner:String!,$number:Int!,$after:Strin
 /// How long the reconcile journey waits for the board's `is:closed` filter to answer the two
 /// issues it has just closed.
 ///
-/// GitHub answers `ProjectV2.items` — filtered or not — from an index that trails the board
-/// itself. Observed on the nominated board on 2026-10-20: an item added and closed at 16:17:03
-/// was missing from every listing, unfiltered and `is:closed` alike, for seventeen minutes,
-/// while the item read by its own id was there and unarchived, and this journey's next run
-/// waited twenty-one. A reconcile reads the filter alone by design, so a task closed seconds
-/// before it is not yet the reconcile's to find; the journey therefore waits for the index
-/// rather than assert against it. Forty-five minutes leaves those observations room to vary,
-/// and a run that outwaits it fails naming the lag.
+/// GitHub answers `ProjectV2.items`, filtered or not, from an index that trails the board by
+/// many minutes, while the item read by its own id is already there. A reconcile reads the
+/// filter alone by design, so the journey waits for the index to answer what it closed
+/// rather than assert against it, and a run that outwaits this fails naming the lag.
 const CLOSED_INDEX_WAIT: std::time::Duration = std::time::Duration::from_secs(45 * 60);
 
 /// How often the wait in [`wait_until_closed_filter_answers`] reads the filter again.
@@ -591,7 +587,10 @@ async fn wait_until_closed_filter_answers(
                     answered.insert(id.to_owned());
                 }
             }
-            if items["pageInfo"]["hasNextPage"] != true {
+            if !items["pageInfo"]["hasNextPage"]
+                .as_bool()
+                .ok_or("the closed filter answered no hasNextPage")?
+            {
                 break;
             }
             after = Some(
