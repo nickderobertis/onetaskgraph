@@ -1963,8 +1963,8 @@ fn an_asset_carrying_rendering_records_what_linear_stores_and_an_undeclared_rewr
 /// answer that blanked the second: (a) Linear sets the second apart with a blank line and keeps
 /// both, which the ruling declares; (b) it keeps both but its answer to the write leaves the
 /// second out, and one read of the item confirms it; (c) it drops the second, and the copy is
-/// refused naming the line. A confirming read that finds no item confirms nothing, and the
-/// answer's difference is refused as it stands.
+/// refused naming the line. A confirming read that finds no item, or fails, confirms nothing,
+/// and the answer's difference is refused as it stands.
 #[test]
 fn a_copy_never_records_a_digest_over_stored_content_missing_an_image_it_sent() {
     use onetaskgraph_linear::graphql;
@@ -2155,6 +2155,17 @@ fn a_copy_never_records_a_digest_over_stored_content_missing_an_image_it_sent() 
             move |query, _| query == read,
             1,
             move |_, data| data[member] = Value::Null,
+        );
+        refused_at_the_second_image(kind, &source, "no line 3");
+
+        // Nor does one that fails: an answer the source cannot read is no confirmation, and the
+        // write's own answer is refused as it stands.
+        let source = rendered(kind);
+        answered_short(mutation, member, field);
+        held.bend_answers(
+            move |query, _| query == read,
+            1,
+            move |_, data| data[member] = json!("not an item"),
         );
         refused_at_the_second_image(kind, &source, "no line 3");
 

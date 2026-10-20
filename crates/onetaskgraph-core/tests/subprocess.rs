@@ -16,10 +16,10 @@ use onetaskgraph_core::{
     MAX_LINE, RequestDeadline, SubprocessConfig, SubprocessSource, plugin_for, serve,
 };
 use onetaskgraph_plugin_api::{
-    Cursor, Direction, Document, DocumentQuery, ItemKind, ItemWrite, LabelFilter, Location,
-    MetadataKey, MetadataRecord, NativeId, PageRequest, Priority, ProjectFilter, ProjectQuery,
-    SecretResolver, SourceError, SourceName, Status, StatusCategory, Support, Task, TaskQuery,
-    TaskRef, TaskSource, WriteSupport,
+    AssetWrite, Cursor, Direction, Document, DocumentQuery, ItemKind, ItemWrite, LabelFilter,
+    Location, MetadataKey, MetadataRecord, NativeId, PageRequest, Priority, ProjectFilter,
+    ProjectQuery, SecretResolver, SourceError, SourceName, Status, StatusCategory, Support, Task,
+    TaskQuery, TaskRef, TaskSource, WriteSupport,
 };
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -483,6 +483,45 @@ async fn a_plugin_declaring_stored_forms_is_asked_and_what_its_write_says_it_sto
         panic!("a stored_content that is not a string is malformed");
     };
     assert!(message.contains("write_task"), "{message}");
+}
+
+#[tokio::test]
+async fn an_asset_write_keeps_what_its_answer_says_is_stored_and_refuses_one_not_a_string() {
+    // §4.9a: an asset-carrying write's answer is `{id, content}`, and §4.9 puts `stored_content`
+    // beside them for a plugin declaring `stored_forms` — taken out before the rest is read, so
+    // it is held to the same shape as an ordinary write's.
+    let mut handshake: Value = serde_json::from_str(&writable_handshake(true)).expect("JSON");
+    handshake["result"]["capabilities"]["assets"] = json!("native");
+    let declaring = scripted(vec![
+        handshake.to_string(),
+        r#"{"id":"1","result":{"id":"I-1","content":"* one","stored_content":"* one"}}"#.to_owned(),
+        r#"{"id":"2","result":{"id":"I-2","content":"* two","stored_content":["* two"]}}"#
+            .to_owned(),
+    ])
+    .expect("the handshake succeeds");
+    let assets = AssetWrite::default();
+    let written = declaring
+        .write_task_with_assets(&task_holding("* one"), None, &assets)
+        .await
+        .expect("a well-formed answer");
+    assert_eq!(
+        declaring
+            .stored_content(MetadataRecord::Task, &written.id)
+            .as_deref(),
+        Some("* one")
+    );
+    let Err(SourceError::Malformed { message }) = declaring
+        .write_task_with_assets(&task_holding("* two"), None, &assets)
+        .await
+    else {
+        panic!("a stored_content that is not a string is malformed");
+    };
+    assert!(message.contains("write_task"), "{message}");
+    assert_eq!(
+        declaring.stored_content(MetadataRecord::Task, &NativeId("I-2".into())),
+        None,
+        "nothing is kept of an answer that was refused"
+    );
 }
 
 #[test]
