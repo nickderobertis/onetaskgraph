@@ -30,6 +30,7 @@ use super::assets;
 use super::boundary::{Exposure, Held, Outbound};
 use super::copy::{Level, forward_edges};
 use super::delivery::{qualified_task, source_failed, targets};
+use super::stored;
 use super::{Delivered, Engine, EngineError, Qualified};
 use crate::GlobalId;
 use crate::resolve::ResolvedSource;
@@ -246,6 +247,17 @@ pub enum RenderedRecord {
     Document,
     /// A project.
     Project,
+}
+
+impl RenderedRecord {
+    /// The record a write of this kind's content writes.
+    fn metadata_record(self) -> MetadataRecord {
+        match self {
+            Self::Task => MetadataRecord::Task,
+            Self::Document => MetadataRecord::Document,
+            Self::Project => MetadataRecord::Project,
+        }
+    }
 }
 
 impl fmt::Display for RenderedRecord {
@@ -591,9 +603,17 @@ impl Engine {
         }
         let Parts {
             content,
-            metadata,
+            mut metadata,
             answers,
         } = request.body.parts(&request.metadata);
+        // What the source will store, so the provenance a rendering records is of that.
+        let mut content = Some(content);
+        stored::apply(source, &mut content, &mut metadata)
+            .await
+            .map_err(|error| EngineError::SourceFailed {
+                name: source.name().to_string(),
+                error,
+            })?;
         let category = request.status.unwrap_or(StatusCategory::Todo);
         let id = NativeId::from(slug(&request.title, "task").as_str());
         let depends_on = request
@@ -612,7 +632,7 @@ impl Engine {
                 id,
                 key: None,
                 title: request.title.clone(),
-                content: Some(content),
+                content,
                 status: Status {
                     category,
                     name: category_word(category),
@@ -683,12 +703,16 @@ impl Engine {
         if let Some(member) = filed.as_ref().and_then(|filed| filed.project.clone()) {
             write.item.project = Some(member);
         }
+        let mut sent = write.item.content.clone();
         let written = match match (answers, carried.is_empty()) {
             (answers, false) => source
                 .source()
                 .write_task_with_assets(&write, answers, &assets::write_of(carried, None))
                 .await
-                .map(|written| written.id),
+                .map(|written| {
+                    sent = written.content;
+                    written.id
+                }),
             (Some(answers), true) => source.source().write_task_rendered(&write, answers).await,
             (None, true) => source.source().write_task(&write).await,
         } {
@@ -701,6 +725,11 @@ impl Engine {
                 });
             }
         };
+        if let Some(error) =
+            stored::diverged(source, MetadataRecord::Task, &written, sent.as_deref()).await
+        {
+            return Err(error);
+        }
         let id = GlobalId::new(near.clone(), written);
         let task = source
             .source()
@@ -775,9 +804,16 @@ impl Engine {
         };
         let Parts {
             content,
-            metadata,
+            mut metadata,
             answers,
         } = request.body.parts(&request.metadata);
+        let mut content = Some(content);
+        stored::apply(source, &mut content, &mut metadata)
+            .await
+            .map_err(|error| EngineError::SourceFailed {
+                name: source.name().to_string(),
+                error,
+            })?;
         let declared = request.classification.strictest(
             held.as_ref()
                 .map_or(Classification::Public, |held| held.classification),
@@ -801,7 +837,7 @@ impl Engine {
                     .clone()
                     .unwrap_or_else(|| NativeId::from(slug(&request.title, "document").as_str())),
                 title: request.title.clone(),
-                content: Some(content),
+                content,
                 project: Some(request.project.clone()),
                 labels: labels(&request.labels),
                 url: None,
@@ -835,6 +871,10 @@ impl Engine {
             },
         )
         .await?;
+        if let Some(target) = &write.target {
+            stored::forget(source, MetadataRecord::Document, target);
+        }
+        let mut sent = write.item.content.clone();
         let written = match (
             answers,
             carried.is_empty() && !assets::holds_any(&held_assets, recorded.as_ref()),
@@ -843,7 +883,10 @@ impl Engine {
                 .source()
                 .write_document_with_assets(&write, answers, &assets::write_of(carried, recorded))
                 .await
-                .map(|written| written.id),
+                .map(|written| {
+                    sent = written.content;
+                    written.id
+                }),
             (Some(answers), true) => {
                 source
                     .source()
@@ -853,6 +896,11 @@ impl Engine {
             (None, true) => source.source().write_document(&write).await,
         }
         .map_err(|error| source_failed(source, error))?;
+        if let Some(error) =
+            stored::diverged(source, MetadataRecord::Document, &written, sent.as_deref()).await
+        {
+            return Err(error);
+        }
         let id = GlobalId::new(request.source.clone(), written);
         let document = source
             .source()
@@ -892,6 +940,7 @@ impl Engine {
             metadata: given,
             answers,
         } = request.body.parts(&request.metadata);
+        let mut content = Some(content);
         // A project replaced keeps what it was, and while the boundary is active that is what
         // it holds as well as its record: a member private makes it private.
         let held_classification = match &held {
@@ -935,6 +984,12 @@ impl Engine {
             }
         };
         metadata.extend(given);
+        stored::apply(source, &mut content, &mut metadata)
+            .await
+            .map_err(|error| EngineError::SourceFailed {
+                name: source.name().to_string(),
+                error,
+            })?;
         let status = request.status.map_or(status, |category| Status {
             category,
             name: category_word(category),
@@ -955,7 +1010,7 @@ impl Engine {
                 version: None,
                 id: request.id.clone(),
                 title: request.title.clone(),
-                content: Some(content),
+                content,
                 status,
                 labels: request.labels.as_deref().map_or(labels, self::labels),
                 url: None,
@@ -984,6 +1039,9 @@ impl Engine {
             },
         )
         .await?;
+        if let Some(target) = &write.target {
+            stored::forget(source, MetadataRecord::Project, target);
+        }
         let written = match answers {
             Some(answers) => {
                 source
@@ -994,6 +1052,16 @@ impl Engine {
             None => source.source().write_project(&write).await,
         }
         .map_err(|error| source_failed(source, error))?;
+        if let Some(error) = stored::diverged(
+            source,
+            MetadataRecord::Project,
+            &written,
+            write.item.content.as_deref(),
+        )
+        .await
+        {
+            return Err(error);
+        }
         let id = GlobalId::new(request.source.clone(), written);
         let project = source
             .source()
@@ -1170,9 +1238,25 @@ impl Engine {
         answers: &Answers,
         dry_run: bool,
     ) -> Result<Regenerated, EngineError> {
-        let rendered = regeneration.render(answers)?;
-        let provenance = TemplateProvenance::of(regeneration.reference.clone(), &rendered)
+        let mut rendered = regeneration.render(answers)?;
+        let mut provenance = TemplateProvenance::of(regeneration.reference.clone(), &rendered)
             .map_err(|error| EngineError::Template { error })?;
+        let id = &regeneration.id;
+        let source = self.built(&id.source)?;
+        // What the source will store, so a render it holds already reads as unchanged and the
+        // digest recorded is of what a read hands back. A fresh rendering vouches for itself.
+        let body = source
+            .source()
+            .stored_form(&rendered.body)
+            .await
+            .map_err(|error| EngineError::SourceFailed {
+                name: source.name().to_string(),
+                error,
+            })?;
+        if body != rendered.body {
+            provenance.body_digest = Sha256Digest::of(body.as_bytes());
+            rendered.body = body;
+        }
         let carried = self.carried_assets(regeneration, &rendered.body).await?;
         let with_assets = !carried.is_empty()
             || assets::holds_any(
@@ -1190,9 +1274,7 @@ impl Engine {
                 .map_or(regeneration.keeps_answers, |stored| {
                     *stored != rendered.answers
                 });
-        let id = &regeneration.id;
         if changed && !dry_run {
-            let source = self.built(&id.source)?;
             if !source.source().writes().is_supported() {
                 return Err(EngineError::RenderingNotWritable {
                     name: source.name().to_string(),
@@ -1216,7 +1298,10 @@ impl Engine {
                     .assets(&carried),
             )
             .await?;
-            match (regeneration.record, with_assets) {
+            let record = regeneration.record.metadata_record();
+            stored::forget(source, record, &id.native);
+            let body = || Some(rendered.body.clone());
+            let sent = match (regeneration.record, with_assets) {
                 (RenderedRecord::Task, true) => source
                     .source()
                     .set_task_rendering_with_assets(
@@ -1227,7 +1312,7 @@ impl Engine {
                         &assets::write_of(carried, regeneration.recorded_assets.clone()),
                     )
                     .await
-                    .map(|written| written.map(|_| ())),
+                    .map(|written| written.map(|written| written.content)),
                 (RenderedRecord::Document, true) => source
                     .source()
                     .set_document_rendering_with_assets(
@@ -1238,38 +1323,29 @@ impl Engine {
                         &assets::write_of(carried, regeneration.recorded_assets.clone()),
                     )
                     .await
-                    .map(|written| written.map(|_| ())),
-                (RenderedRecord::Task, false) => {
-                    source
-                        .source()
-                        .set_task_rendering(&id.native, &rendered.body, &value, &rendered.answers)
-                        .await
-                }
-                (RenderedRecord::Document, false) => {
-                    source
-                        .source()
-                        .set_document_rendering(
-                            &id.native,
-                            &rendered.body,
-                            &value,
-                            &rendered.answers,
-                        )
-                        .await
-                }
-                (RenderedRecord::Project, _) => {
-                    source
-                        .source()
-                        .set_project_rendering(
-                            &id.native,
-                            &rendered.body,
-                            &value,
-                            &rendered.answers,
-                        )
-                        .await
-                }
+                    .map(|written| written.map(|written| written.content)),
+                (RenderedRecord::Task, false) => source
+                    .source()
+                    .set_task_rendering(&id.native, &rendered.body, &value, &rendered.answers)
+                    .await
+                    .map(|written| written.map(|()| body())),
+                (RenderedRecord::Document, false) => source
+                    .source()
+                    .set_document_rendering(&id.native, &rendered.body, &value, &rendered.answers)
+                    .await
+                    .map(|written| written.map(|()| body())),
+                (RenderedRecord::Project, _) => source
+                    .source()
+                    .set_project_rendering(&id.native, &rendered.body, &value, &rendered.answers)
+                    .await
+                    .map(|written| written.map(|()| body())),
             }
             .map_err(|error| source_failed(source, error))?
             .ok_or_else(|| regeneration.record.no_such(id))?;
+            if let Some(error) = stored::diverged(source, record, &id.native, sent.as_deref()).await
+            {
+                return Err(error);
+            }
         }
         Ok(Regenerated {
             id: id.clone(),

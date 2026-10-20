@@ -351,8 +351,14 @@ fn a_declared_sources_verification_reaches_linear_with_its_cache_on_as_it_does_w
                 cache,
                 "cache {cache}: the entry is filled and served: {filled:#?}"
             );
+            let project = setup.ok(&["project", "copy", "plan:goal", "--to", "linear"]);
+            // Changed since, so the second copy writes — and so verifies — rather than finding
+            // the task as it already reads.
+            let task = setup.sandbox.project().join("plan/tasks/t-0.md");
+            let text = std::fs::read_to_string(&task).expect("a record");
+            std::fs::write(&task, text.replace("Step 0.", "Step 0, edited.")).expect("written");
             vec![
-                setup.ok(&["project", "copy", "plan:goal", "--to", "linear"]),
+                project,
                 setup.ok(&["task", "copy", "plan:t-0", "--to", "linear"]),
             ]
         })

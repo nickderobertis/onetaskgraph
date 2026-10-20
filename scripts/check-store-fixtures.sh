@@ -247,6 +247,16 @@ NOT_A_STORE = {
         "`real_templates_are_asked_in_the_order_their_variables_are_declared` in "
         "`tests/templates.rs` holds every template's prompt order to it by an exact equality."
     ),
+    "crates/onetaskgraph-core/tests/fixtures/stored-forms-wire.json": (
+        "Not a store: it holds no items and no query is answered from it. It is the wire golden "
+        "of the stdio protocol members version 2 gained without a bump — `stored_forms` in the "
+        "handshake, the `stored_form` and `stored_status` methods and `stored_content` in a write "
+        "result — and `the_stored_forms_wire_shapes_round_trip_byte_for_byte_and_omit_what_is_absent` "
+        "in `src/subprocess/wire.rs` holds the wire structs to it by an exact round trip, while "
+        "`the_reference_host_answers_the_stored_forms_golden_exactly` in `tests/subprocess.rs` "
+        "holds a real plugin's answers to it by equality, so a shape that changed fails there "
+        "rather than by two rows differing."
+    ),
 }
 
 root = pathlib.Path(".")
