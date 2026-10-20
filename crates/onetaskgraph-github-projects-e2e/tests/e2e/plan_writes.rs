@@ -467,6 +467,42 @@ fn a_first_copy_whose_items_github_never_files_takes_back_every_item_it_created(
 }
 
 #[test]
+fn a_batched_create_refused_part_way_whose_cleanup_github_refuses_names_what_is_still_there() {
+    // The fourth task's create fails after the three before it created their issues, and
+    // GitHub then refuses to delete those three: the copy is refused naming both failures and
+    // each issue still in the repository, which nothing else could name, and the project the
+    // copy created first, whose delete GitHub accepts, is taken back.
+    let plan = Plan::new(SMALL, Vec::new());
+    plan.github.fail_field_alias("create3");
+    for _ in 0..3 {
+        plan.github.refuse_once("deleteIssue(input:$input)");
+    }
+    let lease = plan.clock.lease(0);
+    let output = plan.run(&["project", "copy", "notes:P", "--to", "board", "--json"]);
+    lease.wait_for_detach();
+    drop(lease);
+    assert_ne!(output.status.code(), Some(0), "the copy was refused");
+    let said = onetaskgraph_e2e_support::common::stderr(&output);
+    let left = ["ISSUE-2", "ISSUE-3", "ISSUE-4"];
+    assert!(
+        said.contains("create3")
+            && said.contains("GitHub then refused to take back ISSUE-2, ISSUE-3, ISSUE-4")
+            && said.contains("delete them before writing again"),
+        "{said}"
+    );
+    for issue in left {
+        assert!(
+            plan.github.holds_issue(issue),
+            "{issue} is still there, as said"
+        );
+    }
+    assert!(
+        !plan.github.holds_issue("ISSUE-1"),
+        "the project was taken back"
+    );
+}
+
+#[test]
 fn with_its_cache_on_an_unchanged_recopy_writes_nothing_and_its_document_copy_reads_no_plan_item() {
     // A plan copy whose source has not changed since the last one: the project copy finds
     // every item as the source says it should be and writes nothing, so every token its reads

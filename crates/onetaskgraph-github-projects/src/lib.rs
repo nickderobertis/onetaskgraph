@@ -8828,42 +8828,34 @@ impl GitHubProjectsSource {
         depends_on: &[DependencyEdge],
     ) -> Result<onetaskgraph_plugin_api::AssetsWritten, SourceError> {
         let prepared = self.prepare_write(incoming, target, depends_on).await?;
-        let landed =
-            match prepared.existing.as_ref() {
-                // Its content is written last, by `complete_write`, once everything else has landed.
-                Some(item) => Landed {
-                    content_id: item.id.clone(),
-                    item_id: item.item_id.clone(),
-                    url: item.url.clone(),
-                    number: item.number,
-                },
-                None => {
-                    let target = prepared.creation_target.as_ref().ok_or_else(|| {
-                        SourceError::Malformed {
-                            message: "a new item was decided without a repository to create it \
-                                      in"
-                            .into(),
-                        }
-                    })?;
-                    if self.deferring()? {
-                        self.create_filed_issue(
-                            prepared.board.id.as_str(),
-                            target,
-                            incoming,
-                            &prepared.body,
-                        )
-                        .await?
-                    } else {
-                        self.create_and_file_issue(
-                            prepared.board.id.as_str(),
-                            target,
-                            incoming,
-                            &prepared.body,
-                        )
-                        .await?
-                    }
+        let landed = match &prepared.destination {
+            // Its content is written last, by `complete_write`, once everything else has landed.
+            WriteDestination::Existing(item) => Landed {
+                content_id: item.id.clone(),
+                item_id: item.item_id.clone(),
+                url: item.url.clone(),
+                number: item.number,
+            },
+            WriteDestination::New(target) => {
+                if self.deferring()? {
+                    self.create_filed_issue(
+                        prepared.board.id.as_str(),
+                        target,
+                        incoming,
+                        &prepared.body,
+                    )
+                    .await?
+                } else {
+                    self.create_and_file_issue(
+                        prepared.board.id.as_str(),
+                        target,
+                        incoming,
+                        &prepared.body,
+                    )
+                    .await?
                 }
-            };
+            }
+        };
         self.complete_write(incoming, prepared, landed).await
     }
 
@@ -8897,30 +8889,24 @@ impl GitHubProjectsSource {
         // The destination is read by its own id, and whether this board holds it is decided
         // by that read — its own `projectItems` — rather than by whether a listing of the
         // board happens to include it yet. See the module documentation.
-        let held = match target {
-            Some(target) => {
-                Some(
-                    self.bound_item(target)
-                        .await?
-                        .ok_or_else(|| SourceError::Refused {
-                            message: format!("GitHub destination item {} was not found", target.0),
-                        })?,
-                )
-            }
-            None => None,
-        };
-        let existing = held.as_ref();
         // An existing issue is never moved; a new one is created where the rule says — and
         // knowing where is what lets the board's fields and that repository's id be read
         // together, before anything below needs either.
-        let creation_target = match existing {
-            Some(_) => None,
+        let destination = match target {
+            Some(target) => {
+                WriteDestination::Existing(Box::new(self.bound_item(target).await?.ok_or_else(
+                    || SourceError::Refused {
+                        message: format!("GitHub destination item {} was not found", target.0),
+                    },
+                )?))
+            }
             None => {
                 let target = self.creation_target(incoming).await?;
                 self.creation_context(&target, incoming).await?;
-                Some(target)
+                WriteDestination::New(target)
             }
         };
+        let existing = destination.existing();
         let board = self
             .fields_for(
                 existing,
@@ -8988,13 +8974,12 @@ impl GitHubProjectsSource {
         // The repository the issue really lives in is what the slot below is written against,
         // so a single entry that is where the issue is created travels as no key at all, and
         // the read side derives it back from the issue.
-        let own_repository = match (existing, &creation_target) {
-            (Some(item), _) => item.own_repository.clone(),
-            (None, Some(target)) => Some(
+        let own_repository = match &destination {
+            WriteDestination::Existing(item) => item.own_repository.clone(),
+            WriteDestination::New(target) => Some(
                 Repository::try_from(target.origin())
                     .map_err(|message| SourceError::Config { message })?,
             ),
-            (None, None) => None,
         };
         let (native, fallback) = self
             .partition_edges(
@@ -9064,8 +9049,7 @@ impl GitHubProjectsSource {
 
         Ok(Prepared {
             origin: origin.to_owned(),
-            existing: held,
-            creation_target,
+            destination,
             board,
             status_target,
             column,
@@ -9096,8 +9080,7 @@ impl GitHubProjectsSource {
         landed: Landed,
     ) -> Result<onetaskgraph_plugin_api::AssetsWritten, SourceError> {
         let Prepared {
-            existing: held,
-            creation_target: _,
+            destination,
             board,
             status_target,
             column,
@@ -9113,7 +9096,7 @@ impl GitHubProjectsSource {
             origin,
             origin_field,
         } = prepared;
-        let existing = held.as_ref();
+        let existing = destination.existing();
         let origin = origin.as_str();
         let Landed {
             content_id,
@@ -9612,14 +9595,12 @@ impl GitHubProjectsSource {
         }
         let mut inputs = Vec::with_capacity(prepared.len());
         for (incoming, prepared) in incomings.iter().zip(&prepared) {
-            let target =
-                prepared
-                    .creation_target
-                    .as_ref()
-                    .ok_or_else(|| SourceError::Malformed {
-                        message: "a new item was decided without a repository to create it in"
-                            .into(),
-                    })?;
+            let WriteDestination::New(target) = &prepared.destination else {
+                return Err(SourceError::Malformed {
+                    message: "an update was decided for a write handed to a batch of creates"
+                        .into(),
+                });
+            };
             let repository_id = self.repository_id(target, incoming).await?;
             inputs.push(filed_input(
                 &repository_id,
@@ -9687,10 +9668,25 @@ impl GitHubProjectsSource {
             None
         };
         if let Some(error) = refused {
+            // None of these ids reaches the caller, so an issue GitHub will not take back is
+            // named here or by nobody.
+            let mut left: Vec<&str> = Vec::new();
             for created in &landed {
-                let _ = self.delete_issue(&created.content_id).await;
+                if self.delete_issue(&created.content_id).await.is_err() {
+                    left.push(created.content_id.0.as_str());
+                }
             }
-            return Err(error);
+            if left.is_empty() {
+                return Err(error);
+            }
+            return Err(SourceError::Refused {
+                message: format!(
+                    "{error}; GitHub then refused to take back {}, which this write created and \
+                     which are still in the repository; next: delete {} before writing again",
+                    left.join(", "),
+                    if left.len() == 1 { "it" } else { "them" }
+                ),
+            });
         }
         let mut ids = Vec::with_capacity(landed.len());
         for ((incoming, prepared), landed) in incomings.iter().zip(prepared).zip(landed) {
@@ -10755,10 +10751,8 @@ fn field_writes<'a>(
 /// Everything one write decided before sending anything: see
 /// [`GitHubProjectsSource::prepare_write`].
 struct Prepared {
-    /// The item as it stood, for an update.
-    existing: Option<Resolved>,
-    /// Where a new item is created.
-    creation_target: Option<RepositoryTarget>,
+    /// What the write lands on.
+    destination: WriteDestination,
     board: BoardFields,
     status_target: Option<StatusTarget>,
     /// The `Status` field, the option and the option's name the status lands on.
@@ -10776,6 +10770,24 @@ struct Prepared {
     /// The copy origin the item records, empty for none.
     origin: String,
     origin_field: Option<String>,
+}
+
+/// What one write lands on: the item it updates, as it stood, or where it creates a new one.
+enum WriteDestination {
+    /// The item as it stood, for an update.
+    Existing(Box<Resolved>),
+    /// Where a new item is created.
+    New(RepositoryTarget),
+}
+
+impl WriteDestination {
+    /// The item an update writes over, as it stood; `None` for a create.
+    fn existing(&self) -> Option<&Resolved> {
+        match self {
+            Self::Existing(item) => Some(item),
+            Self::New(_) => None,
+        }
+    }
 }
 
 /// What a copy has held back of the items it created; see

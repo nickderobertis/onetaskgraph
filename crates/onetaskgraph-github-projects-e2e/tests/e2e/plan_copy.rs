@@ -1188,3 +1188,51 @@ fn a_recopy_whose_pinning_listings_are_refused_reads_what_they_would_have_carrie
     );
     holds_the_plan(&plan, &at, None);
 }
+
+#[test]
+fn an_origin_its_batched_lookup_cannot_answer_in_one_page_is_looked_up_on_its_own() {
+    // Four unrelated issues mention `notes:T-1` in their bodies, more than one page of the
+    // batched lookup's issue search holds: that origin is left to its own lookup, which walks
+    // every page, finds none of them copied from it, and the copy creates T-1 once — and finds
+    // that one item, and no decoy, on the next copy.
+    let decoys: Vec<Value> = (0..4)
+        .map(|n| {
+            let mut decoy = background(9_001 + n);
+            decoy["parent"] = Value::Null;
+            decoy["body"] = json!(format!(
+                "Mentions notes:T-1 in passing.\n\n<!-- onetaskgraph.metadata\n{}\n-->",
+                json!({"onetaskgraph.origin": format!("elsewhere:decoy-{n}")})
+            ));
+            decoy
+        })
+        .collect();
+    let plan = Plan::new(SMALL, decoys);
+    let (project, document, calls) = plan.copy();
+    let at = counterparts(&project, &document);
+    holds_the_plan(&plan, &at, None);
+    assert!(
+        tally(&calls)
+            .keys()
+            .any(|operation| operation == "looking up the items copied from one origin"),
+        "{:?}",
+        tally(&calls)
+    );
+    let (project, document, _) = plan.copy();
+    assert_eq!(
+        counterparts(&project, &document),
+        at,
+        "no duplicate, no decoy"
+    );
+    for n in 0..4 {
+        let decoy = plan
+            .github
+            .item(&format!("BG-{}", 9_001 + n))
+            .expect("the decoy");
+        assert!(
+            decoy["body"]
+                .as_str()
+                .unwrap()
+                .starts_with("Mentions notes:T-1")
+        );
+    }
+}
