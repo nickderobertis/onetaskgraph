@@ -482,6 +482,14 @@ def dispatch(settings, method, params):
         documents = [d for d in read_store(store) if d["id"] != unwanted]
         write_store(store, documents)
         return {}
+    # Asked only of a source whose settings declare `stored_forms` at the handshake (§3.16),
+    # and refused: a backend that cannot say what it would keep is what a store must never
+    # write to as though it had said the identity.
+    if method in ("stored_form", "stored_status"):
+        what = "content" if method == "stored_form" else "status"
+        raise Refusal(
+            refused("this store cannot say what it would keep of that %s" % what)
+        )
     if method in ("write_task", "write_project", "delete_task", "delete_project"):
         raise Refusal(refused("the %s plugin cannot be written" % KIND))
     raise Refusal(
@@ -510,21 +518,26 @@ def initialize(params):
         or not isinstance(settings.get("store"), str)
         or settings.get("documents", "native") not in ("native", "unsupported")
         or not isinstance(settings.get("log", ""), str)
+        or settings.get("stored_forms", "undeclared") not in ("undeclared", "refused")
     ):
         raise Refusal(
             {
                 "kind": "config",
                 "message": 'this source\'s settings must be {"store": <path>, "documents": '
-                '"native"|"unsupported", "log": <path>}, the last two optional',
+                '"native"|"unsupported", "log": <path>, "stored_forms": '
+                '"undeclared"|"refused"}, the last three optional',
             }
         )
     note(settings, "initialize")
-    return settings, {
+    result = {
         "protocol_version": PROTOCOL_VERSION,
         "kind": KIND,
         "capabilities": capabilities(settings),
         "writes": "supported",
     }
+    if settings.get("stored_forms") == "refused":
+        result["stored_forms"] = True
+    return settings, result
 
 
 def main():
