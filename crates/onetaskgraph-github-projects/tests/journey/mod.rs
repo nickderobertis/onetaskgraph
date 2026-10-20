@@ -756,6 +756,23 @@ pub fn dry_run_variables(document: &str) -> Value {
         bind(&format!("name{slot}"), json!("docs"));
         bind(&format!("number{slot}"), json!(1));
     }
+    // A copy's batched read of several origins asks every one of its slots, and its read of the
+    // board items it created reads every one of its slots, so the probe prices each at the
+    // worst case the offline bound computes; so does the batch's read of a project's children.
+    for slot in 0..onetaskgraph_github_projects::ORIGIN_BATCH {
+        bind(
+            &format!("filter{slot}"),
+            json!(format!("{ORIGIN_FIELD}:\"node-count-reconciliation\"")),
+        );
+        bind(&format!("search{slot}"), json!("repo:github/docs is:issue"));
+        bind(&format!("ask{slot}"), json!(true));
+    }
+    for slot in 0..onetaskgraph_github_projects::COPY_DETAIL_BATCH {
+        bind(&format!("read{slot}"), json!(true));
+    }
+    bind("statusName", json!("Status"));
+    bind("project", json!("node-count-reconciliation"));
+    bind("children", json!(true));
     bind("statusField", json!("Status"));
     bind("comments", json!(true));
     bind("search", json!("repo:github/docs is:issue"));

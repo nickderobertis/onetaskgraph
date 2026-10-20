@@ -1592,6 +1592,100 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         }
         return Value::Object(result);
     }
+    // A copy's batched reads and writes, each slot answered as the single document it aliases.
+    {
+        use onetaskgraph_github_projects::graphql as documents;
+        if query == documents::ORIGIN_LOOKUPS {
+            let mut result = answer(state, documents::CREATION_CONTEXT, variables)
+                .as_object()
+                .cloned()
+                .unwrap_or_default();
+            if let Some(repository) = result
+                .get_mut("repository")
+                .filter(|value| value.is_object())
+            {
+                repository["databaseId"] = json!(4_242);
+            }
+            for slot in 0..onetaskgraph_github_projects::ORIGIN_BATCH {
+                if variables[format!("ask{slot}")] != true {
+                    continue;
+                }
+                let one = json!({"owner":variables["owner"],"number":variables["number"],
+                    "type":variables["type"],"filter":variables[format!("filter{slot}")],
+                    "search":variables[format!("search{slot}")],
+                    "originFirst":variables["originFirst"],"itemsAfter":null,"searchAfter":null,
+                    "nestedFirst":variables["nestedFirst"],"boardItems":variables["boardItems"],
+                    "duplicates":variables["duplicates"]});
+                let answered = answer(state, documents::ORIGIN_LOOKUP, &one);
+                result.insert(format!("o{slot}"), answered["originItems"].clone());
+                result.insert(format!("s{slot}"), answered["search"].clone());
+            }
+            return Value::Object(result);
+        }
+        if query == documents::CREATED_BOARD_ITEMS {
+            let held = state.lock().unwrap();
+            let mut result = serde_json::Map::new();
+            for slot in 0..onetaskgraph_github_projects::COPY_DETAIL_BATCH {
+                if variables[format!("read{slot}")] != true {
+                    continue;
+                }
+                let id = variables[format!("id{slot}")].as_str().expect("an id");
+                let answered = match held.items.iter().find(|item| item.content_id == id) {
+                    Some(item) => json!({"id":id,"projectItems":{"nodes":[{"id":item.item_id,
+                        "project":{"id":"PVT_board"},
+                        "status":item.status.as_ref().map(|name| json!({"name":name}))}]}}),
+                    None => json!({"id":id,"projectItems":{"nodes":[]}}),
+                };
+                result.insert(format!("i{slot}"), answered);
+            }
+            return Value::Object(result);
+        }
+        let batches = [
+            (
+                documents::CREATE_ISSUES,
+                "create",
+                documents::CREATE_ISSUE,
+                "createIssue",
+            ),
+            (
+                documents::WRITE_FIELD_VALUES,
+                "field",
+                documents::UPDATE_FIELD,
+                "updateProjectV2ItemFieldValue",
+            ),
+            (
+                documents::CLOSE_ISSUES,
+                "close",
+                documents::UPDATE_ISSUE,
+                "updateIssue",
+            ),
+            (
+                documents::ADD_BLOCKED_BYS,
+                "block",
+                documents::ADD_BLOCKED_BY,
+                "addBlockedBy",
+            ),
+        ];
+        if let Some((_, prefix, single, root)) =
+            batches.iter().find(|(batched, ..)| *batched == query)
+        {
+            let mut result = serde_json::Map::new();
+            for slot in 0..onetaskgraph_github_projects::MUTATION_BATCH {
+                if variables[format!("send{slot}")] != true {
+                    continue;
+                }
+                let alias = format!("{prefix}{slot}");
+                let mut one = json!({"input": variables[&alias]});
+                if *single == documents::UPDATE_FIELD {
+                    one["readPriority"] = json!(false);
+                    one["priorityName"] = json!("Priority");
+                }
+                let answered = answer(state, single, &one);
+                result.insert(alias, answered[*root].clone());
+            }
+            return Value::Object(result);
+        }
+    }
     let mut state = state.lock().unwrap();
     state
         .bindings
@@ -1930,6 +2024,8 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         // a number a seeded board item happened to be wearing.
         created.number = 2000 + state.next as u64;
         created.body = input["body"].as_str().map(str::to_owned);
+        // `parentIssueId` files it under its parent, as `addSubIssue` would.
+        created.parent = input["parentIssueId"].as_str().map(str::to_owned);
         // The issue is in the repository whose node id the input carried, which is how a
         // read of it derives the repository the source chose rather than the board's own.
         created.repository = Some(

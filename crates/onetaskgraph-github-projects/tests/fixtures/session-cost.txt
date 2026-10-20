@@ -1,5 +1,5 @@
-requests 213
-node count 312121
+requests 212
+node count 302921
 
 requests per call
     1       0  DELETE /repos/{owner}/{repo}/labels/{name}
@@ -29,7 +29,7 @@ requests per call
     1       0  live scratch field removal
     1       0  live scratch field value
     1     915  node-count and point-cost reconciliation while looking up the items copied from one origin
-    2   18400  node-count and point-cost reconciliation while looking up the items copied from several origins, and what creating one reads
+    1    9200  node-count and point-cost reconciliation while looking up the items copied from several origins, and what creating one reads
     1     150  node-count and point-cost reconciliation while reading a batch of issues by their references
     1    7272  node-count and point-cost reconciliation while reading a batch of issues with their comments
     1    7463  node-count and point-cost reconciliation while reading a batch of issues with their comments and dependencies for a copy
