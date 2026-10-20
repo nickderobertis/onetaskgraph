@@ -427,6 +427,22 @@ fn a_first_copy_waits_for_github_to_file_the_items_it_created_and_then_lands_the
 }
 
 #[test]
+fn a_first_copy_whose_items_github_files_by_the_last_read_lands_the_plan() {
+    // GitHub files them in time for the sixth and last read, after every wait: that read is
+    // the one that finds them, and the copy lands the plan rather than refusing.
+    let plan = Plan::new(SMALL, Vec::new());
+    plan.github.file_created_items_after(5);
+    let (project, document, _) = plan.copy();
+    let at = counterparts(&project, &document);
+    super::plan_copy::holds_the_plan(&plan, &at, None);
+    assert_eq!(
+        filing_waits(&plan),
+        [1, 2, 4, 8, 16].map(std::time::Duration::from_secs),
+        "the waits for GitHub to file what the copy created"
+    );
+}
+
+#[test]
 fn a_first_copy_whose_items_github_never_files_takes_back_every_item_it_created() {
     // Never filed: the copy waits one, two, four, eight and sixteen seconds, reading again after
     // each, then refuses naming what GitHub never added, and takes back every issue it created.

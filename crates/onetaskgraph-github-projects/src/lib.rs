@@ -9924,6 +9924,10 @@ impl GitHubProjectsSource {
             .map(|held| held.content.0.as_str())
             .filter(|id| !found.keys().any(|found| found.0 == *id))
             .collect();
+        // The last read may be the one that finds the rest.
+        if unfiled.is_empty() {
+            return Ok(found);
+        }
         Err(SourceError::Unavailable {
             message: format!(
                 "GitHub created {} filed on board {board} and has not added {} to it after 31 \
