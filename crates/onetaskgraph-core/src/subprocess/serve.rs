@@ -15,9 +15,9 @@ use std::collections::BTreeMap;
 use std::io::{BufRead, Write};
 
 use onetaskgraph_plugin_api::{
-    ContradictedItem, Document, NativeId, Page, Project, SecretResolver, SourceError, SourceName,
-    Status, StatusCategory, StatusContradiction, Task, TaskDetailRead, TaskSource,
-    TaskUpdateOutcome,
+    ContradictedItem, Document, ItemWrite, MetadataRecord, NativeId, Page, Project, SecretResolver,
+    SourceError, SourceName, Status, StatusCategory, StatusContradiction, Task, TaskDetailRead,
+    TaskSource, TaskUpdateOutcome,
 };
 use secrecy::SecretString;
 use serde::Deserialize;
@@ -30,7 +30,8 @@ use super::wire::{
     DocumentDir, DocumentQueryParams, EditCommentParams, HandshakePluginKind, HoldingsParams,
     HoldingsResult, IdParams, InitializeParams, InitializeResult, LabelParams, MetadataParams,
     PROTOCOL_VERSION, PriorityParams, ProjectQueryParams, ProjectWriteParams, Request, Response,
-    ServedWriteParams, StatusParams, TaskDetailParams, TaskQueryParams, UpdateParams,
+    ServedWriteParams, StatusParams, StoredFormParams, StoredFormResult, StoredStatusParams,
+    StoredStatusResult, TaskDetailParams, TaskQueryParams, UpdateParams,
     after_the_first_vocabulary, knows_every_category, vocabulary,
 };
 use crate::config::rebased;
@@ -283,6 +284,10 @@ async fn initialize(
                 // And a project's status set on its own, which every plugin of this build writes
                 // or refuses in the contract's own words.
                 project_status: true,
+                // And what a backend stores of what it is written, which every plugin of this
+                // build declares through its own rewrite or the contract's identity, and says
+                // after a write where its backend answered with it.
+                stored_forms: true,
             };
             *source = Some(Hosted {
                 source: built,
@@ -591,18 +596,39 @@ async fn dispatch(
         }
         "write_task" => {
             let params: ServedWriteParams<Task> = decode(method, params)?;
+            forget(source, MetadataRecord::Task, &params.write);
             match params.assets {
-                Some(assets) => encode(
-                    source
+                Some(assets) => {
+                    let written = source
                         .write_task_with_assets(&params.write, None, &assets)
-                        .await?,
-                ),
-                None => encode(json!({ "id": source.write_task(&params.write).await? })),
+                        .await?;
+                    let id = written.id.clone();
+                    stored(source, MetadataRecord::Task, &id, encode(written)?)
+                }
+                None => {
+                    let id = source.write_task(&params.write).await?;
+                    stored(source, MetadataRecord::Task, &id, json!({ "id": id }))
+                }
             }
         }
         "write_project" => {
             let params: ProjectWriteParams = decode(method, params)?;
-            encode(json!({ "id": source.write_project(&params.write).await? }))
+            forget(source, MetadataRecord::Project, &params.write);
+            let id = source.write_project(&params.write).await?;
+            stored(source, MetadataRecord::Project, &id, json!({ "id": id }))
+        }
+        "stored_form" => {
+            let params: StoredFormParams = decode(method, params)?;
+            encode(StoredFormResult {
+                content: source.stored_form(&params.content).await?,
+            })
+        }
+        "stored_status" => {
+            let params: StoredStatusParams = decode(method, params)?;
+            let status = source.stored_status(params.kind, &params.status).await?;
+            encode(StoredStatusResult {
+                status: told(status, known),
+            })
         }
         "delete_task" => {
             let params: DeleteParams = decode(method, params)?;
@@ -624,13 +650,19 @@ async fn dispatch(
         }
         "write_document" => {
             let params: ServedWriteParams<Document> = decode(method, params)?;
+            forget(source, MetadataRecord::Document, &params.write);
             match params.assets {
-                Some(assets) => encode(
-                    source
+                Some(assets) => {
+                    let written = source
                         .write_document_with_assets(&params.write, None, &assets)
-                        .await?,
-                ),
-                None => encode(json!({ "id": source.write_document(&params.write).await? })),
+                        .await?;
+                    let id = written.id.clone();
+                    stored(source, MetadataRecord::Document, &id, encode(written)?)
+                }
+                None => {
+                    let id = source.write_document(&params.write).await?;
+                    stored(source, MetadataRecord::Document, &id, json!({ "id": id }))
+                }
             }
         }
         "delete_document" => {
@@ -720,6 +752,30 @@ fn decode<T: for<'de> Deserialize<'de>>(method: &str, params: Value) -> Result<T
     serde_json::from_value(params).map_err(|error| SourceError::Malformed {
         message: format!("the parameters of {method} are not the shape it takes: {error}"),
     })
+}
+
+/// Let go of what the hosted source still holds from an earlier write of the item `write`
+/// updates, so the content a write's result carries is that write's own (§4.9).
+fn forget<T>(source: &dyn TaskSource, record: MetadataRecord, write: &ItemWrite<T>) {
+    if let Some(target) = &write.target {
+        let _ = source.stored_content(record, target);
+    }
+}
+
+/// A content write's `result`, carrying as `stored_content` what the hosted source's backend
+/// answered it stores for the item `id`, where it answered with it (§4.9).
+fn stored(
+    source: &dyn TaskSource,
+    record: MetadataRecord,
+    id: &NativeId,
+    mut result: Value,
+) -> Result<Value, SourceError> {
+    if let (Some(content), Some(members)) =
+        (source.stored_content(record, id), result.as_object_mut())
+    {
+        members.insert("stored_content".to_owned(), Value::String(content));
+    }
+    Ok(result)
 }
 
 /// One method's result as the value the envelope carries.

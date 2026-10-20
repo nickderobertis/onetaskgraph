@@ -892,6 +892,22 @@ const PROBE: &str = "P.\n\n<!-- probe {\"site\":\"example.com\",\"list\":[1]} --
 /// comment's closing line is escaped, and the code span comes back as it was written.
 const PROBE_STORED: &str = "P.\n\n<!-- probe {\"site\":\"[example.com](<http://example.com>)\",\"list\":\\[1\\]} -->\n\n<!-- probe\n{\"k\":\"v\"}\n\\-->\n\n<!-- probe `{\"site\":\"example.com\",\"list\":[1]}` -->";
 
+/// One instance of each rule the plugin's ruling on what Linear does to Markdown on write
+/// declares but the lone image, which `linear_assets`' live journey writes with real uploads: a
+/// bullet the next lines run on from, a URL, two domain-like tokens, brackets, a tilde, an
+/// underscore emphasis, an escaped quote, a backslash before a letter, a line opening `-->`, a
+/// fenced block and a line after it, each set apart, the same text inside the fence and an
+/// inline code span, where it is kept, a run of blank lines, and last a table, whose delimiter
+/// row is one only outside a list item and which ends the content with no line break after it.
+const MARKDOWN_PROBE: &str = "- bullet\n| a | b |\n| --- | --- |\nsee https://example.com/a.\nexample.com and \"caller.live\"\n[x] done ~5 _y_\nsay \\\"hi\\\" a \\d b\n-->\n```\n- [x] _y_ example.com ~\n```\nkept `- [x] _y_ example.com ~` span\n\n\n\n| a | b |\n| --- | --- |\n";
+
+/// What that ruling declares Linear stores [`MARKDOWN_PROBE`] as — the plugin's `stored_form`
+/// of it, which its unit tests hold to this — and what the live leg asserts Linear hands back.
+/// It is byte for byte what real Linear handed back from an issue's description in CI run
+/// 39375395042, of this probe as it was then: one blank line where it now holds a run of them,
+/// and no line break after the table.
+const MARKDOWN_PROBE_STORED: &str = "* bullet\n  | a | b |\n  | --- | --- |\n  see [https://example.com/a](<https://example.com/a>).\n  [example.com](<http://example.com>) and \"[caller.live](<http://caller.live>)\"\n  \\[x\\] done \\~5 *y*\n  say \"hi\" a \\\\d b\n  \\-->\n\n```\n- [x] _y_ example.com ~\n```\n\nkept `- [x] _y_ example.com ~` span\n\n| a | b |\n| -- | -- |\n";
+
 /// What the follow-up flow rests on, against Linear itself: what Linear does to an HTML comment
 /// in an issue's description, a comment's body and a document's content, recorded in the
 /// plugin's module documentation; the metadata slot, written as a code span, keeping values
@@ -1086,6 +1102,90 @@ async fn drive_follow_ups(
     ensure!(
         content == PROBE_STORED,
         "a document's HTML comments came back as {content:?}, not as recorded"
+    );
+
+    // What Linear does to Markdown on write, rule by rule, in both long-form fields.
+    linear(
+        &run.key,
+        "mutation($id:String!,$input:IssueUpdateInput!){ issueUpdate(id:$id,input:$input){success} }",
+        json!({"id":probe_id.0,"input":{"description":MARKDOWN_PROBE}}),
+        "live Markdown description probe",
+    )
+    .await?;
+    let stored = raw_description(run, &probe_id).await?;
+    ensure!(
+        stored == MARKDOWN_PROBE_STORED,
+        "an issue description's Markdown came back as {stored:?}, not as the ruling declares"
+    );
+    let read = source
+        .get_task(&probe_id)
+        .await
+        .map_err(|error| format!("the Markdown probe's issue could not be read: {error}"))?
+        .and_then(|task| task.content);
+    ensure!(
+        read.as_deref() == Some(MARKDOWN_PROBE_STORED),
+        "a read of the Markdown probe's issue handed back {read:?}, not its stored form"
+    );
+    linear(
+        &run.key,
+        "mutation($id:String!,$input:DocumentUpdateInput!){ documentUpdate(id:$id,input:$input){success} }",
+        json!({"id":document_id.0,"input":{"content":MARKDOWN_PROBE}}),
+        "live Markdown content probe",
+    )
+    .await?;
+    let content = raw_content(run, &document_id).await?;
+    ensure!(
+        content == MARKDOWN_PROBE_STORED,
+        "a document's Markdown came back as {content:?}, not as the ruling declares"
+    );
+    let read = source
+        .get_document(&document_id)
+        .await
+        .map_err(|error| format!("the Markdown probe's document could not be read: {error}"))?
+        .and_then(|document| document.content);
+    ensure!(
+        read.as_deref() == Some(MARKDOWN_PROBE_STORED),
+        "a read of the Markdown probe's document handed back {read:?}, not its stored form"
+    );
+    // And with this source's metadata slot after it: the table keeps its line break, and the
+    // slot follows one blank line later, so a read hands the content back as it was written.
+    let tabled =
+        onetaskgraph_linear::stored_form::stored_form("Owners:\n\n| a | b |\n| --- | --- |");
+    source
+        .write_document(&ItemWrite {
+            target: Some(document_id.clone()),
+            item: Document {
+                version: None,
+                id: document_id.clone(),
+                title: document_title.to_owned(),
+                content: Some(tabled.clone()),
+                project: None,
+                labels: Vec::new(),
+                url: None,
+                location: None,
+                created_at: None,
+                updated_at: None,
+                metadata: serde_json::from_value(json!({"caller.live": tag})).unwrap_or_default(),
+                repositories: Vec::new(),
+                classification: Default::default(),
+            },
+            depends_on: Vec::new(),
+        })
+        .await
+        .map_err(|error| format!("live table document write failed: {error}"))?;
+    let read = source
+        .get_document(&document_id)
+        .await
+        .map_err(|error| format!("the table document could not be read: {error}"))?;
+    ensure!(
+        read.as_ref()
+            .and_then(|document| document.content.as_deref())
+            == Some(tabled.as_str())
+            && read
+                .as_ref()
+                .and_then(|document| document.metadata.get("caller.live"))
+                == Some(&json!(tag)),
+        "a document ending in a table, written with a slot, read back as {read:?}, not as {tabled:?}"
     );
 
     // Each follow-up search, narrowed by Linear and confirmed here: the decoy's prose carries

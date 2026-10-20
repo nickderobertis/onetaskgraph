@@ -16,10 +16,10 @@ use std::path::Path;
 
 use onetaskgraph_plugin_api::{
     AssetWrite, Capabilities, Comment, CommentBody, CommentCopy, Direction, Document,
-    DocumentQuery, IssueHolding, IssueRef, ItemWrite, MetadataKey, Metering, NativeId, NewComment,
-    Page, PageRequest, Priority, Project, ProjectQuery, SourceError, Status, StatusCategory,
-    StatusContradiction, Task, TaskDetailRead, TaskQuery, TaskRef, TaskUpdate, TaskUpdateOutcome,
-    WriteSupport,
+    DocumentQuery, IssueHolding, IssueRef, ItemKind, ItemWrite, MetadataKey, Metering, NativeId,
+    NewComment, Page, PageRequest, Priority, Project, ProjectQuery, SourceError, Status,
+    StatusCategory, StatusContradiction, Task, TaskDetailRead, TaskQuery, TaskRef, TaskUpdate,
+    TaskUpdateOutcome, WriteSupport,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -355,6 +355,14 @@ pub(crate) struct InitializeResult {
     /// contract's default refuses it with. Omitted when `false`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) project_status: bool,
+    /// Whether this plugin answers `stored_form` and `stored_status`, and says in each content
+    /// write's result what its backend stores (§3.16).
+    ///
+    /// Optional, and absent means it does not: such a plugin is never sent either method, the
+    /// engine writes the content and the status it was given, and it compares nothing after
+    /// the write. Omitted when `false`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) stored_forms: bool,
 }
 
 /// The `metering` result (§4.14).
@@ -958,6 +966,40 @@ fn caller_or_copies<'de, D: serde::Deserializer<'de>>(
 pub(crate) struct WriteResult {
     /// The destination's own id for the item that was written.
     pub(crate) id: NativeId,
+    /// The content the write's own answer says the backend stores (§4.9), from a plugin that
+    /// declared `stored_forms`. Omitted when the plugin has nothing to say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) stored_content: Option<String>,
+}
+
+/// The `params` of `stored_form` (§4.25): the content a write would send.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct StoredFormParams {
+    /// The content, as the engine would send it.
+    pub(crate) content: String,
+}
+
+/// The result of `stored_form` (§4.25): the content the backend would store.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct StoredFormResult {
+    /// The content, as the backend would store it.
+    pub(crate) content: String,
+}
+
+/// The `params` of `stored_status` (§4.25): the status an item of one kind would be written at.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct StoredStatusParams {
+    /// Whether the item written is a task or a project.
+    pub(crate) kind: ItemKind,
+    /// The status it would be written at.
+    pub(crate) status: Status,
+}
+
+/// The result of `stored_status` (§4.25): the status the backend would hold.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct StoredStatusResult {
+    /// The status, as the backend would hold it.
+    pub(crate) status: Status,
 }
 
 #[cfg(test)]
@@ -1098,5 +1140,99 @@ mod tests {
             orphaned.to_string().contains("recorded_assets"),
             "{orphaned}"
         );
+    }
+
+    /// The checked-in golden of the members `docs/plugin-protocol.md` §3.16, §4.9 and §4.25
+    /// added to version 2 without a bump.
+    fn stored_forms_golden() -> Value {
+        serde_json::from_str(include_str!("../../tests/fixtures/stored-forms-wire.json"))
+            .expect("the golden is JSON")
+    }
+
+    /// `value` read as `T` and written back, without the `capabilities` a handshake carries:
+    /// §4.2 reconciles those on their own, and they are written back with every default.
+    fn round_trip<T: serde::Serialize + for<'de> serde::Deserialize<'de>>(value: &Value) -> Value {
+        let read: T = serde_json::from_value(value.clone()).expect("the golden reads");
+        uncapable(serde_json::to_value(read).expect("it writes back"))
+    }
+
+    /// `value` without its `capabilities` member.
+    fn uncapable(mut value: Value) -> Value {
+        if let Some(members) = value.as_object_mut() {
+            members.remove("capabilities");
+        }
+        value
+    }
+
+    #[test]
+    fn the_stored_forms_wire_shapes_round_trip_byte_for_byte_and_omit_what_is_absent() {
+        use super::{
+            InitializeResult, StoredFormParams, StoredFormResult, StoredStatusParams,
+            StoredStatusResult, WriteResult,
+        };
+        let golden = stored_forms_golden();
+        for plugin in ["declaring_plugin", "silent_plugin"] {
+            for (member, written) in [
+                (
+                    "initialize",
+                    round_trip::<InitializeResult>(&golden[plugin]["initialize"]),
+                ),
+                (
+                    "write_task",
+                    round_trip::<WriteResult>(&golden[plugin]["write_task"]),
+                ),
+            ] {
+                assert_eq!(
+                    written,
+                    uncapable(golden[plugin][member].clone()),
+                    "{plugin} {member}"
+                );
+            }
+        }
+        let declaring = &golden["declaring_plugin"];
+        assert_eq!(
+            round_trip::<StoredFormResult>(&declaring["stored_form"]),
+            declaring["stored_form"]
+        );
+        assert_eq!(
+            round_trip::<StoredStatusResult>(&declaring["stored_status"]),
+            declaring["stored_status"]
+        );
+        let requests = &golden["requests"];
+        assert_eq!(
+            round_trip::<StoredFormParams>(&requests["stored_form"]),
+            requests["stored_form"]
+        );
+        assert_eq!(
+            round_trip::<StoredStatusParams>(&requests["stored_status"]),
+            requests["stored_status"]
+        );
+
+        // A plugin written before the members omits them and is read as declaring nothing:
+        // `stored_forms` false, no `stored_content` — and written back without either.
+        let silent: InitializeResult =
+            serde_json::from_value(golden["silent_plugin"]["initialize"].clone()).unwrap();
+        assert!(!silent.stored_forms);
+        let quiet: WriteResult =
+            serde_json::from_value(golden["silent_plugin"]["write_task"].clone()).unwrap();
+        assert_eq!(quiet.stored_content, None);
+        // An explicit `null` reads as absent, and a `false` as not declaring; neither is
+        // written back.
+        let nulled: WriteResult =
+            serde_json::from_value(json!({"id": "I-3", "stored_content": null})).unwrap();
+        assert_eq!(serde_json::to_value(nulled).unwrap(), json!({"id": "I-3"}));
+        let mut declared_false = golden["silent_plugin"]["initialize"].clone();
+        declared_false["stored_forms"] = json!(false);
+        assert_eq!(
+            round_trip::<InitializeResult>(&declared_false),
+            uncapable(golden["silent_plugin"]["initialize"].clone())
+        );
+        // And a declaring plugin's members come back as it sent them.
+        let declaring: InitializeResult =
+            serde_json::from_value(golden["declaring_plugin"]["initialize"].clone()).unwrap();
+        assert!(declaring.stored_forms);
+        let stored: WriteResult =
+            serde_json::from_value(golden["declaring_plugin"]["write_task"].clone()).unwrap();
+        assert_eq!(stored.stored_content.as_deref(), Some("* one"));
     }
 }
