@@ -3592,6 +3592,10 @@ pub struct GitHubProjectsSource {
     /// found them — see [`TaskSource::read_ahead_for_copy`] — for the length of one command, so
     /// a listing of that project's tasks is answered without a read of its own.
     task_children: Mutex<BTreeMap<NativeId, Vec<Resolved>>>,
+    /// The web address of each issue this source created in the current command, as its
+    /// `createIssue` answered it — what [`TaskSource::written_location`] answers, without a
+    /// request.
+    written: Mutex<BTreeMap<NativeId, String>>,
     /// What a copy has held back of the items it created, between
     /// [`TaskSource::begin_deferred_writes`] and [`TaskSource::finish_writes`] — `None` while
     /// nothing is being held back, when every write lands whole as it is made.
@@ -4808,6 +4812,7 @@ impl GitHubProjectsSource {
             last_mutation: Mutex::new(None),
             windows: Mutex::new(pacing::Windows::default()),
             task_children: Mutex::new(BTreeMap::new()),
+            written: Mutex::new(BTreeMap::new()),
             deferred: Mutex::new(None),
             clock: system_clock(),
             numeric_repositories: tokio::sync::Mutex::new(BTreeMap::new()),
@@ -9463,6 +9468,17 @@ impl GitHubProjectsSource {
         self.created_landed(created).await
     }
 
+    /// Keep the address `createIssue` answered for the issue `content`, for
+    /// [`TaskSource::written_location`].
+    fn note_written(&self, content: &NativeId, url: Option<&str>) {
+        if let Some(url) = url {
+            self.written
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(content.clone(), url.to_owned());
+        }
+    }
+
     /// What one `createIssue` answered, as the item it created — or, when its number cannot be
     /// read, the refusal, after taking the issue back.
     async fn created_landed(&self, created: &Value) -> Result<Landed, SourceError> {
@@ -9475,6 +9491,7 @@ impl GitHubProjectsSource {
                 return Err(error);
             }
         };
+        self.note_written(&content_id, url.as_deref());
         Ok(Landed {
             content_id,
             item_id: String::new(),
@@ -10534,6 +10551,7 @@ impl GitHubProjectsSource {
             .ok_or_else(|| SourceError::Malformed {
                 message: "GitHub board addition returned no project item".into(),
             })?;
+        self.note_written(&content_id, url.as_deref());
         Ok(Landed {
             content_id,
             item_id: required_str(item, "id")?.to_owned(),
@@ -12591,6 +12609,21 @@ impl TaskSource for GitHubProjectsSource {
         self.origins_ahead(origins).await
     }
 
+    /// The issue's own web address, as the `createIssue` that made it in this command answered
+    /// it: a task, a project and a document are each an issue here.
+    fn written_location(
+        &self,
+        _record: onetaskgraph_plugin_api::MetadataRecord,
+        id: &NativeId,
+    ) -> Option<Location> {
+        self.written
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(id)
+            .cloned()
+            .map(Location::Url)
+    }
+
     /// [`MUTATION_BATCH`], while writes are held back: [`graphql::CREATE_ISSUES`] creates that many
     /// in one request, and a copy's tasks are created together only then, since their fields
     /// and edges are what is held back.
@@ -13349,6 +13382,7 @@ impl TaskSource for GitHubProjectsSource {
         clear(&self.held_cache);
         clear(&self.children_cache);
         clear(&self.task_children);
+        clear(&self.written);
         clear(&self.fields_cache);
         self.expected.end_command();
         Ok(())

@@ -951,19 +951,31 @@ pub(super) fn plan_ids(at: &Counterparts) -> std::collections::BTreeSet<String> 
 
 #[test]
 fn a_recopy_with_no_token_reads_every_counterpart_in_batches_and_none_on_its_own() {
-    // (b): no cache, so no item has a token the copy could vouch for: the ten are read, every
-    // one of them in an aliased batch of at most COPY_DETAIL_BATCH, and none by its own read.
+    // (b): no cache, so no item has a token the copy could vouch for: the project and its ten
+    // tasks are read in aliased batches of at most COPY_DETAIL_BATCH, none by its own read. The
+    // document copy that follows has one counterpart to read, its own, and reads it alone.
     let plan = Plan::new(SMALL, Vec::new());
     let (project, document, _) = plan.copy();
     let at = counterparts(&project, &document);
     let (_, _, calls) = plan.copy();
     let reads = item_reads(&calls);
+    let alone: Vec<&(String, std::collections::BTreeSet<String>)> = reads
+        .iter()
+        .filter(|(document, _)| document != graphql::ISSUE_COPY_DETAILS)
+        .collect();
+    assert_eq!(
+        alone,
+        vec![&(
+            graphql::ISSUE.to_owned(),
+            std::collections::BTreeSet::from([at["D"].clone()])
+        )],
+        "an item read that is not a batch, but the document's own: {reads:?}"
+    );
     assert!(
         reads
             .iter()
-            .all(|(document, ids)| document == graphql::ISSUE_COPY_DETAILS
-                && ids.len() <= onetaskgraph_github_projects::COPY_DETAIL_BATCH),
-        "an item read that is not a batch: {reads:?}"
+            .all(|(_, ids)| ids.len() <= onetaskgraph_github_projects::COPY_DETAIL_BATCH),
+        "a batch over COPY_DETAIL_BATCH: {reads:?}"
     );
     assert_eq!(
         named_by_item_reads(&calls),

@@ -11,12 +11,12 @@ use serde_json::Value;
 use crate::{
     Asset, AssetName, AssetWrite, AssetsWritten, Capabilities, Comment, CommentBody, CommentCopy,
     DependencyEdge, Direction, Document, DocumentQuery, DocumentVersionCoverage, IssueHolding,
-    IssueRef, ItemKind, ItemWrite, Label, MetadataKey, MetadataRecord, Metering, NativeId,
-    NewComment, Page, PageRequest, Priority, Project, ProjectQuery, ProjectVersionCoverage,
-    SharedClock, SourceError, SourceName, Status, StatusCategory, StatusContradiction, Task,
-    TaskDetailRead, TaskQuery, TaskRef, TaskUpdate, TaskUpdateOutcome, VersionCoverage, Visibility,
-    WriteJournal, WriteSupport, WriteTarget, assetless, commentless, documentless, unwritable,
-    unwritable_field, unwritable_metadata,
+    IssueRef, ItemKind, ItemWrite, Label, Location, MetadataKey, MetadataRecord, Metering,
+    NativeId, NewComment, Page, PageRequest, Priority, Project, ProjectQuery,
+    ProjectVersionCoverage, SharedClock, SourceError, SourceName, Status, StatusCategory,
+    StatusContradiction, Task, TaskDetailRead, TaskQuery, TaskRef, TaskUpdate, TaskUpdateOutcome,
+    VersionCoverage, Visibility, WriteJournal, WriteSupport, WriteTarget, assetless, commentless,
+    documentless, unwritable, unwritable_field, unwritable_metadata,
 };
 
 /// Whether a source is answering right now.
@@ -1227,6 +1227,17 @@ pub trait TaskSource: Send + Sync {
     /// Whatever sending what was held back was refused with.
     async fn finish_writes(&self) -> Result<(), SourceError> {
         Ok(())
+    }
+
+    /// Where an item this source wrote in the current command is, when the write's own answer
+    /// said so: `record` names which kind of item `id` is.
+    ///
+    /// Answered only from what a write already returned — never by a request — so a caller may
+    /// ask it after every write for free. A caller treats `None` as not knowing, and reads the
+    /// item when it needs its location. Defaulted to `None`.
+    fn written_location(&self, record: MetadataRecord, id: &NativeId) -> Option<Location> {
+        let _ = (record, id);
+        None
     }
 
     /// Add one comment to `task`, answering with the comment as the source now holds it, or

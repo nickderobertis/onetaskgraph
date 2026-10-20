@@ -38,11 +38,11 @@ use std::sync::Arc;
 use onetaskgraph_plugin_api::{
     Asset, AssetName, AssetWrite, AssetsWritten, Capabilities, Comment, CommentBody, CommentCopy,
     DependencyEdge, Direction, Document, DocumentQuery, DocumentVersionCoverage, Health,
-    IssueHolding, IssueRef, ItemKind, ItemWrite, Label, MetadataKey, Metering, NativeId,
-    NewComment, Page, PageRequest, PartOutcome, Priority, Project, ProjectQuery,
-    ProjectVersionCoverage, SourceError, Status, StatusCategory, StatusContradiction, Task,
-    TaskDetailRead, TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome, VersionCoverage,
-    Visibility, WriteJournal, WriteSupport, WriteTarget,
+    IssueHolding, IssueRef, ItemKind, ItemWrite, Label, Location, MetadataKey, MetadataRecord,
+    Metering, NativeId, NewComment, Page, PageRequest, PartOutcome, Priority, Project,
+    ProjectQuery, ProjectVersionCoverage, SourceError, Status, StatusCategory, StatusContradiction,
+    Task, TaskDetailRead, TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome,
+    VersionCoverage, Visibility, WriteJournal, WriteSupport, WriteTarget,
 };
 use serde_json::Value;
 
@@ -1104,6 +1104,10 @@ impl TaskSource for CachedSource {
         // edges of the tasks they name, exactly as a write landing them whole would.
         self.relating(EdgeKind::TaskReverse, self.inner.finish_writes())
             .await
+    }
+
+    fn written_location(&self, record: MetadataRecord, id: &NativeId) -> Option<Location> {
+        self.inner.written_location(record, id)
     }
 
     async fn get_project(&self, id: &NativeId) -> Result<Option<Project>, SourceError> {

@@ -27,6 +27,7 @@ mod github_status_by_kind;
 mod graph;
 mod metadata_fields;
 mod plan_copy;
+mod plan_locations;
 mod plan_pacing;
 mod plan_reads;
 mod plan_writes;

@@ -66,12 +66,12 @@ pub use closure::{
 pub use comment::{
     CommentList, CommentWritten, DeletedComment, DocumentDetail, TaskDetail, TaskDetails,
 };
-pub(crate) use copy::malformed_links;
 pub(crate) use copy::spent_between;
 pub use copy::{
     BudgetSpent, CommentCounts, CopyAction, CopyItems, CopyLink, CopyLookup, CopyOutcome,
     CopyReport, CopyRequest, CopyScope, CopyVia, MatchBy, NoCounterpart, Spent,
 };
+pub(crate) use copy::{malformed_links, malformed_locations};
 pub use delivery::{Delivered, DeliveryOutcome, ProjectStatusSet, TaskStatusSet, settled};
 pub use graph::{
     GraphDirection, GraphEdge, GraphNode, GroupKey, PROJECT_GRAPH_SCHEMA_VERSION, ProjectGraph,

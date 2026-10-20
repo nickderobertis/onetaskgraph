@@ -51,8 +51,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use onetaskgraph_plugin_api::{
     AssetPayload, AssetUploads, AssetWrite, Capabilities, Classification, Comment, CommentCopy,
     Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Document, DocumentQuery,
-    ItemKind, ItemWrite, Location, MetadataKey, MetadataMatch, Metering, NativeId, Page,
-    PageRequest, Project, ProjectFilter, ProjectQuery, Repository, SourceError, SourceName,
+    ItemKind, ItemWrite, Location, MetadataKey, MetadataMatch, MetadataRecord, Metering, NativeId,
+    Page, PageRequest, Project, ProjectFilter, ProjectQuery, Repository, SourceError, SourceName,
     StatusCategory, Task, TaskDetailRead, TaskQuery, TaskRef, TextFields, TextQuery, WriteTarget,
 };
 use schemars::JsonSchema;
@@ -1089,7 +1089,10 @@ struct Unlink {
     item: GlobalId,
     /// Which of that source's interfaces holds it.
     level: Level,
-    /// What it held at `onetaskgraph.copies` before, or `None` when it held nothing there.
+    /// Which of the two keys a copy records where an item landed under was written:
+    /// `onetaskgraph.copies` or `onetaskgraph.copy_locations`.
+    key: MetadataKey,
+    /// What it held at that key before, or `None` when it held nothing there.
     before: Option<Value>,
 }
 
@@ -1298,6 +1301,11 @@ struct Linking {
     destination: GlobalId,
     /// What it held at `onetaskgraph.copies` when it was read, if anything.
     held: Option<Value>,
+    /// What it held at `onetaskgraph.copy_locations` when it was read, if anything.
+    held_locations: Option<Value>,
+    /// Where the destination reports it landed, when the copy knows that without asking: the
+    /// counterpart's read, or what the destination's write answered.
+    location: Option<Location>,
 }
 
 /// One task a copy landed, and what the relation rule reads of it once the copy is complete.
@@ -1484,6 +1492,9 @@ struct Referent {
     /// The well-formed entries of its own `onetaskgraph.copies`: the counterpart it records
     /// at each destination it was copied into.
     links: BTreeMap<SourceName, NativeId>,
+    /// Where each of those counterparts is, by its own `onetaskgraph.copy_locations`, for the
+    /// links that entry still stands beside.
+    located: BTreeMap<SourceName, Location>,
 }
 
 impl Referent {
@@ -1592,6 +1603,17 @@ impl Counterparts {
             .entry((level, origin.to_string()))
             .or_default()
             .push((id.clone(), located(location)));
+    }
+
+    /// Record the counterpart a referent's own link names, at the location the referent recorded
+    /// for it beside that link, without the destination being asked: the copy that wrote both
+    /// wrote that record, so it is the one record the correspondence names, as a link confirmed
+    /// by a read is.
+    fn note_recorded(&mut self, referent: &Referent, id: &NativeId, location: &Location) {
+        self.by_origin
+            .entry((referent.level, referent.id.to_string()))
+            .or_default()
+            .push((id.clone(), located(Some(location))));
     }
 
     /// What one referent's occurrences become, by the two-key rule.
@@ -2182,19 +2204,36 @@ impl Engine {
         // any later copy can read, so it is replaced by what is, exactly as an entry naming
         // another item is rewritten.
         let mut links = well_formed(entry.held.as_ref());
-        if links.get(landed_in.as_str()) == Some(&wanted) {
+        let link_held = links.get(landed_in.as_str()) == Some(&wanted);
+        let mut locations = located_entries(entry.held_locations.as_ref());
+        let location = entry
+            .location
+            .as_ref()
+            .and_then(|location| serde_json::to_value(location).ok())
+            .map(|location| serde_json::json!({"id": wanted, "location": location}));
+        let location =
+            location.filter(|location| locations.get(landed_in.as_str()) != Some(location));
+        if link_held && location.is_none() {
             return Ok(CopyLink::Unchanged);
         }
         let source = self.readable(&entry.item.source)?;
         if !source.source().writes().is_supported() {
-            return Ok(CopyLink::Unrecorded);
+            return Ok(if link_held {
+                CopyLink::Unchanged
+            } else {
+                CopyLink::Unrecorded
+            });
         }
         // A link naming a private destination is not written where it would name it to
         // anybody who may read the source.
         if self.declared(&landed_in) == crate::config::SourceVisibility::Private
             && self.declared(source.name()) != crate::config::SourceVisibility::Private
         {
-            return Ok(CopyLink::Unrecorded);
+            return Ok(if link_held {
+                CopyLink::Unchanged
+            } else {
+                CopyLink::Unrecorded
+            });
         }
         self.at_write(
             source,
@@ -2202,38 +2241,74 @@ impl Engine {
             &WriteTarget::Existing(&entry.item.native),
         )
         .await?;
-        links.insert(landed_in.to_string(), wanted);
-        // Journalled before the write, for the reason a destination write is: a write that
-        // stopped part way is only put back by what this journal holds.
-        journal.links.push(Unlink {
-            item: entry.item.clone(),
-            level: entry.level,
-            before: entry.held,
-        });
-        match set_link(
-            source,
-            entry.level,
-            &entry.item.native,
-            &Value::Object(links),
-        )
-        .await
-        {
-            Ok(true) => Ok(CopyLink::Recorded),
-            // Nothing was written: the source no longer holds the item, or said it cannot
-            // hold the key.
-            Ok(false) | Err(SourceError::Refused { .. }) => {
-                journal.links.pop();
-                Ok(CopyLink::Unrecorded)
+        let recorded = if link_held {
+            CopyLink::Unchanged
+        } else {
+            links.insert(landed_in.to_string(), wanted);
+            // Journalled before the write, for the reason a destination write is: a write that
+            // stopped part way is only put back by what this journal holds.
+            journal.links.push(Unlink {
+                item: entry.item.clone(),
+                level: entry.level,
+                key: MetadataKey::copies(),
+                before: entry.held,
+            });
+            match set_link(
+                source,
+                entry.level,
+                &entry.item.native,
+                &MetadataKey::copies(),
+                &Value::Object(links),
+            )
+            .await
+            {
+                Ok(true) => CopyLink::Recorded,
+                // Nothing was written: the source no longer holds the item, or said it cannot
+                // hold the key.
+                Ok(false) | Err(SourceError::Refused { .. }) => {
+                    journal.links.pop();
+                    return Ok(CopyLink::Unrecorded);
+                }
+                // §4.18 once let a plugin refuse any key in this namespace as malformed, and one
+                // written then still may. Its answer says nothing about whether it wrote, so the
+                // journal entry stays and a later failure puts the item back regardless.
+                Err(SourceError::Malformed { .. }) => return Ok(CopyLink::Unrecorded),
+                Err(error) => return Err(refused(source, error)),
             }
-            // §4.18 once let a plugin refuse any key in this namespace as malformed, and one
-            // written then still may. Its answer says nothing about whether it wrote, so the
-            // journal entry stays and a later failure puts the item back regardless.
-            Err(SourceError::Malformed { .. }) => Ok(CopyLink::Unrecorded),
-            Err(error) => Err(refused(source, error)),
+        };
+        // Where the counterpart is, beside the link that names it, so a later document copy can
+        // point a reference at it without reading it. Nothing depends on it landing: a source
+        // that will not hold it — a plugin built before the key existed refuses it as malformed
+        // — leaves the link as it was recorded, and a reader without it reads as it always did.
+        if let Some(location) = location {
+            locations.insert(landed_in.to_string(), location);
+            journal.links.push(Unlink {
+                item: entry.item.clone(),
+                level: entry.level,
+                key: MetadataKey::copy_locations(),
+                before: entry.held_locations,
+            });
+            match set_link(
+                source,
+                entry.level,
+                &entry.item.native,
+                &MetadataKey::copy_locations(),
+                &Value::Object(locations),
+            )
+            .await
+            {
+                Ok(true) | Err(SourceError::Malformed { .. }) => {}
+                Ok(false) | Err(SourceError::Refused { .. }) => {
+                    journal.links.pop();
+                }
+                Err(error) => return Err(refused(source, error)),
+            }
         }
+        Ok(recorded)
     }
 
-    /// Put one copied item's `onetaskgraph.copies` back to what it held before this copy.
+    /// Put one copied item's `onetaskgraph.copies`, or its `onetaskgraph.copy_locations`, back
+    /// to what it held before this copy.
     ///
     /// A key it held is written back through the same narrow write. A key it did not hold
     /// cannot be removed through that write, so the item is read as it now is and written
@@ -2248,7 +2323,7 @@ impl Engine {
         };
         let source = self.readable(&entry.item.source).map_err(as_source_error)?;
         if let Some(before) = &entry.before {
-            return set_link(source, entry.level, &entry.item.native, before)
+            return set_link(source, entry.level, &entry.item.native, &entry.key, before)
                 .await
                 .map(|_| ());
         }
@@ -2259,7 +2334,7 @@ impl Engine {
         else {
             return Ok(());
         };
-        metadata_of(&mut held.item).remove(MetadataKey::COPIES_KEY);
+        metadata_of(&mut held.item).remove(entry.key.as_str());
         restore(source, &entry.item.native, &held).await
     }
 
@@ -3146,6 +3221,10 @@ impl Engine {
     /// The destination's records for `referents`, found from what each referent records
     /// rather than by walking everything the destination holds.
     ///
+    /// **A recorded location before all.** A referent whose `onetaskgraph.copy_locations` entry
+    /// names exactly what its link names here is answered from that entry, and the destination
+    /// is not asked about it at all.
+    ///
     /// **A link first.** A referent whose own `onetaskgraph.copies` names a record at this
     /// destination has that record read by id — every linked record read ahead together, by
     /// one [`TaskSource::read_ahead_for_copy`] — and when the record's own origin is one of the
@@ -3174,6 +3253,17 @@ impl Engine {
         let mut found = Counterparts::default();
         let name = destination.name();
         let mut unlinked: Vec<&Referent> = Vec::new();
+        // **A recorded location before all.** A referent that recorded where its linked
+        // counterpart is, beside the link, is answered from that and the destination is not
+        // asked about it.
+        let mut asking: Vec<&Referent> = Vec::new();
+        for referent in referents {
+            match (referent.link(name), referent.located.get(name)) {
+                (Some(id), Some(location)) => found.note_recorded(referent, &id, location),
+                _ => asking.push(referent),
+            }
+        }
+        let referents = asking;
         let linked: Vec<NativeId> = referents
             .iter()
             .filter_map(|referent| referent.link(name))
@@ -3790,15 +3880,15 @@ impl Engine {
                     running.private.push(id.clone());
                 }
                 if !request.dry_run {
+                    let metadata = described(&item.item).1;
                     running.linking.push(Linking {
                         item: item.source.clone(),
                         level: item.item.level(),
                         found: item.target.found(),
                         destination: id.clone(),
-                        held: described(&item.item)
-                            .1
-                            .get(MetadataKey::COPIES_KEY)
-                            .cloned(),
+                        held: metadata.get(MetadataKey::COPIES_KEY).cloned(),
+                        held_locations: metadata.get(MetadataKey::COPY_LOCATIONS_KEY).cloned(),
+                        location: landed_location(destination, item, &id.native),
                     });
                 }
             }
@@ -4650,6 +4740,15 @@ impl Engine {
                 running.source_projects.insert(qualified.clone(), held);
             }
             for there in &reachable {
+                // A document with its own link there has its counterpart read anyway, and is
+                // taken as filed under that project when that is where it sits — see
+                // [`Engine::filed_as_linked`] — so its project is not read with it; one a person
+                // moved has the project read by the filing lookup instead. Where a cache stands
+                // in front of the destination the project is still named, because pinning it is
+                // what answers the document's own read from that cache.
+                if link_of(&document.metadata, there).is_some() && !self.caches(there) {
+                    continue;
+                }
                 if let Some(link) = link_of(&running.source_projects[&qualified].metadata, there) {
                     want(there, link.native.clone());
                     homes.push((
@@ -5554,6 +5653,10 @@ impl Engine {
         if let Some(looked) = running.filings.get(&key) {
             return Ok(looked.clone());
         }
+        if let Some(filed) = self.filed_as_linked(item, &qualified, running).await {
+            running.filings.insert(key, Some(filed.clone()));
+            return Ok(Some(filed));
+        }
         let filed = match self.find_home(request, &qualified, running).await? {
             Some(home) if home.source == item.to => Some(home.native),
             Some(home) => {
@@ -5564,6 +5667,44 @@ impl Engine {
         };
         running.filings.insert(key, filed.clone());
         Ok(filed)
+    }
+
+    /// The project a document's counterpart already sits under, when that is exactly the project
+    /// its own project's `onetaskgraph.copies` link names where it lands — so it is taken as
+    /// filed there without the linked project being read to confirm the link.
+    ///
+    /// Only ever the item the link names: a document a person moved under another project sits
+    /// under that one, which is not what the link names, so the lookup below answers it and the
+    /// copy puts it back. Its one blind spot is stated rather than covered: a person re-pointing
+    /// that project's own origin while leaving the document under it keeps the document there
+    /// until the project itself is next copied. Not for a source whose provenance is withheld,
+    /// whose link a withheld origin is confirmed by differently.
+    async fn filed_as_linked(
+        &self,
+        item: &Planned,
+        project: &GlobalId,
+        running: &mut Running,
+    ) -> Option<NativeId> {
+        if item.withheld {
+            return None;
+        }
+        let Some(Item::Document(held)) = item.held.as_ref().map(|held| &held.item) else {
+            return None;
+        };
+        let under = held.project.as_ref()?;
+        if !running.source_projects.contains_key(project) {
+            let source = self.readable(&project.source).ok()?;
+            if !source.source().capabilities().projects.is_native() {
+                return None;
+            }
+            let read = source.source().get_project(&project.native).await.ok()??;
+            if read.id != project.native {
+                return None;
+            }
+            running.source_projects.insert(project.clone(), read);
+        }
+        let link = link_of(&running.source_projects[project].metadata, &item.to)?;
+        (&link.native == under).then_some(link.native)
     }
 
     /// Pin the projects the items of `planned` are filed under, so the filing lookup's read of
@@ -6785,29 +6926,30 @@ async fn restore(
     }
 }
 
-/// Hold `value` at `onetaskgraph.copies` on one item, through its source's narrow metadata
-/// write — `false` when the source holds no such item.
+/// Hold `value` at `key` — `onetaskgraph.copies` or `onetaskgraph.copy_locations` — on one
+/// item, through its source's narrow metadata write: `false` when the source holds no such
+/// item.
 async fn set_link(
     source: &ResolvedSource,
     level: Level,
     id: &NativeId,
+    key: &MetadataKey,
     value: &Value,
 ) -> Result<bool, SourceError> {
-    let key = MetadataKey::copies();
     Ok(match level {
         Level::Task => source
             .source()
-            .set_task_metadata(id, &key, value)
+            .set_task_metadata(id, key, value)
             .await?
             .is_some(),
         Level::Project => source
             .source()
-            .set_project_metadata(id, &key, value)
+            .set_project_metadata(id, key, value)
             .await?
             .is_some(),
         Level::Document => source
             .source()
-            .set_document_metadata(id, &key, value)
+            .set_document_metadata(id, key, value)
             .await?
             .is_some(),
     })
@@ -6962,12 +7104,14 @@ fn note(
     metadata: &BTreeMap<String, Value>,
 ) {
     if let Some(location) = located(location) {
+        let links = counterparts_linked(metadata.get(MetadataKey::COPIES_KEY));
         into.push(Referent {
             id,
             origin: origin_of(metadata),
             level,
             location,
-            links: counterparts_linked(metadata.get(MetadataKey::COPIES_KEY)),
+            located: locations_linked(metadata, &links),
+            links,
         });
     }
 }
@@ -7163,6 +7307,66 @@ fn well_formed(value: Option<&Value>) -> serde_json::Map<String, Value> {
         .collect()
 }
 
+/// The entries of a `onetaskgraph.copy_locations` value that say something: a source name, and
+/// an object of the qualified id of that source it is about and a [`Location`].
+fn located_entries(value: Option<&Value>) -> serde_json::Map<String, Value> {
+    let Some(Value::Object(held)) = value else {
+        return serde_json::Map::new();
+    };
+    held.iter()
+        .filter(|(destination, entry)| location_entry(destination, entry).is_some())
+        .map(|(destination, entry)| (destination.clone(), entry.clone()))
+        .collect()
+}
+
+/// The id and the location one `onetaskgraph.copy_locations` entry filed under `destination`
+/// records, when it is one: `{"id": <a qualified id of that source>, "location": <Location>}`.
+fn location_entry(destination: &str, entry: &Value) -> Option<(GlobalId, Location)> {
+    let id = entry.get("id")?.as_str()?.parse::<GlobalId>().ok()?;
+    if id.source.as_str() != destination {
+        return None;
+    }
+    let location = serde_json::from_value::<Location>(entry.get("location")?.clone()).ok()?;
+    Some((id, location))
+}
+
+/// The location each `onetaskgraph.copy_locations` entry records for the counterpart its
+/// `onetaskgraph.copies` link still names, by the destination: an entry whose id is not what
+/// the link names there — the link moved since, or there is none — says nothing.
+fn locations_linked(
+    metadata: &BTreeMap<String, Value>,
+    links: &BTreeMap<SourceName, NativeId>,
+) -> BTreeMap<SourceName, Location> {
+    located_entries(metadata.get(MetadataKey::COPY_LOCATIONS_KEY))
+        .iter()
+        .filter_map(|(destination, entry)| location_entry(destination, entry))
+        .filter(|(id, _)| links.get(&id.source) == Some(&id.native))
+        .map(|(id, location)| (id.source, location))
+        .collect()
+}
+
+/// Why a value is not one `onetaskgraph.copy_locations` may hold, or nothing when it is: a
+/// JSON object mapping each destination source name to the id of that source it is about and
+/// a location.
+///
+/// What the stdio boundary holds an incoming value of that key to, as it holds a link.
+pub(crate) fn malformed_locations(value: &Value) -> Option<String> {
+    let Value::Object(held) = value else {
+        return Some(format!(
+            "{} holds an object of destination source names to an id and a location, not {value}",
+            MetadataKey::COPY_LOCATIONS_KEY
+        ));
+    };
+    let wrong = held.len() - located_entries(Some(value)).len();
+    (wrong > 0).then(|| {
+        format!(
+            "{} holds an object of destination source names to {{\"id\": <a qualified id of that \
+             source>, \"location\": <a location>}}, and {wrong} of its entries is not one: {value}",
+            MetadataKey::COPY_LOCATIONS_KEY
+        )
+    })
+}
+
 /// The counterpart each well-formed entry of a `onetaskgraph.copies` value names, by the
 /// destination it names it at.
 fn counterparts_linked(value: Option<&Value>) -> BTreeMap<SourceName, NativeId> {
@@ -7193,6 +7397,32 @@ pub(crate) fn malformed_links(value: &Value) -> Option<String> {
             MetadataKey::COPIES_KEY
         )
     })
+}
+
+/// Where `item` landed at `id` in `destination`, when the copy knows it without asking: the
+/// location its counterpart was read with, when that read was of the item at `id`, or else
+/// what the destination's own write answered.
+fn landed_location(
+    destination: &ResolvedSource,
+    item: &Planned,
+    id: &NativeId,
+) -> Option<Location> {
+    if let Some(held) = &item.held {
+        let (held_id, location) = match &held.item {
+            Item::Task(task) => (&task.id, &task.location),
+            Item::Project(project) => (&project.id, &project.location),
+            Item::Document(document) => (&document.id, &document.location),
+        };
+        if held_id == id {
+            return location.clone();
+        }
+    }
+    let record = match item.item {
+        Item::Task(_) => MetadataRecord::Task,
+        Item::Project(_) => MetadataRecord::Project,
+        Item::Document(_) => MetadataRecord::Document,
+    };
+    destination.source().written_location(record, id)
 }
 
 /// The title and metadata of either kind of item.
@@ -7399,6 +7629,7 @@ fn carried(
     carried.remove(GlobalId::ORIGIN_KEY);
     for kept in [
         MetadataKey::COPIES_KEY,
+        MetadataKey::COPY_LOCATIONS_KEY,
         MetadataKey::MEMBERS_KEY,
         MetadataKey::MEMBER_OF_KEY,
         MetadataKey::ASSETS_KEY,

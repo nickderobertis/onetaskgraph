@@ -122,6 +122,53 @@ fn source_file(sandbox: &Sandbox, verb: &str, id: &str) -> std::path::PathBuf {
 }
 
 #[test]
+fn a_copy_records_where_its_counterpart_is_beside_the_link_once_it_knows() {
+    // In process the folder says where it wrote the copy, so the first copy records it; over
+    // the stdio protocol nothing says so, so the first copy records the link alone and the
+    // next, which reads the counterpart it follows, records where that is. After that a copy
+    // writes nothing on the source.
+    for boundary in SOURCE_BOUNDARIES {
+        let sandbox = Sandbox::new();
+        markdown_pair(&sandbox, boundary);
+        let from = qualified(SOURCE, "T-1");
+        let into = qualified(NOTES, "T-1");
+
+        copy(&sandbox, "task", &from, &[]);
+        let landed = std::fs::canonicalize(sandbox.subdirectory(NOTES).join("tasks/T-1.md"));
+        let located = json!({NOTES: {"id": into, "location": {"path": landed.expect("the copy")}}});
+        let recorded = metadata(&sandbox, "task", &from);
+        // The link is what it always was, whatever stands beside it.
+        assert_eq!(
+            recorded["onetaskgraph.copies"],
+            json!({NOTES: into}),
+            "{boundary:?}"
+        );
+        let first = match boundary {
+            SourceBoundary::Direct => located.clone(),
+            SourceBoundary::Subprocess => Value::Null,
+        };
+        assert_eq!(
+            recorded["onetaskgraph.copy_locations"], first,
+            "{boundary:?}"
+        );
+
+        copy(&sandbox, "task", &from, &[]);
+        assert_eq!(
+            metadata(&sandbox, "task", &from)["onetaskgraph.copy_locations"],
+            located,
+            "{boundary:?}"
+        );
+        let settled = std::fs::read_to_string(source_file(&sandbox, "task", "T-1"));
+        copy(&sandbox, "task", &from, &[]);
+        assert_eq!(
+            std::fs::read_to_string(source_file(&sandbox, "task", "T-1")).ok(),
+            settled.ok(),
+            "{boundary:?}: a copy that changes nothing writes nothing on its source"
+        );
+    }
+}
+
+#[test]
 fn every_kind_copied_out_of_a_folder_records_its_link_and_the_next_copy_follows_it() {
     for boundary in SOURCE_BOUNDARIES {
         let sandbox = Sandbox::new();

@@ -1974,7 +1974,7 @@ ever sent any of these, and `set_document_metadata` only to one that also declar
 `id` is the `NativeId` of a task, a project or a document at **this** source. `key` is a
 `MetadataKey`: a string of two or more non-empty dot-separated segments whose first segment is
 not `onetaskgraph`, `value` is any JSON value, `null` included, and the engine sends no other
-key in that namespace but one — a plugin may refuse any other with `{"kind": "malformed"}`
+key in that namespace but two — a plugin may refuse any other with `{"kind": "malformed"}`
 if it is ever handed one.
 <!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by behaviour rather
      than by words: the served side refuses every other shape of this one key's value before
@@ -1982,11 +1982,13 @@ if it is ever handed one.
      `a_served_plugin_takes_the_copy_link_key_only_with_a_value_that_is_links` in
      `crates/onetaskgraph-core/tests/subprocess.rs` drives each refused shape and the accepted
      one across the wire; the value's own shape is stated once, in `docs/metadata.md`. -->
-The one is `onetaskgraph.copies`, which a copy writes on an item it read from this plugin to
-record where that item landed; its value is the object `docs/metadata.md` describes, and the
-plugin holds it wherever it holds the item's metadata. A plugin that cannot hold it refuses
-with `{"kind": "refused"}`, and the copy goes on without the link and says so rather than
-failing.
+The two are `onetaskgraph.copies`, which a copy writes on an item it read from this plugin to
+record where that item landed, and `onetaskgraph.copy_locations`, which it writes after it to
+record where each counterpart that link names is; each value is the object `docs/metadata.md`
+describes, and the plugin holds it wherever it holds the item's metadata. A plugin that cannot
+hold the link refuses with `{"kind": "refused"}`, and the copy goes on without the link and
+says so rather than failing; one that cannot hold the locations refuses them the same way, or
+as malformed, and the copy goes on with the link alone.
 <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
 The plugin holds `value` under `key` — adding the key when the record does not hold it and
@@ -2329,6 +2331,10 @@ is refused by name before anything is sent.
 that answered `metadata_updates: true`, and one written when §4.18 let a plugin refuse every
 key in that namespace as malformed may go on doing so — the engine reads either refusal of
 that one key as the plugin not holding the link, and the copy completes without it.
+
+`onetaskgraph.copy_locations` as a §4.18 key was added **without** a bump on the same terms: a
+plugin written before it refuses it as malformed, which the engine reads as the plugin not
+holding the locations, and the copy completes with the link alone.
 
 The `assets` member of §4.2 and the `assets` and `recorded_assets` members of §4.9a were added
 **without** a bump, for the reason the documents were: the engine sends a write carrying them

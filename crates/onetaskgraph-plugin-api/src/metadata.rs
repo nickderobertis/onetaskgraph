@@ -30,6 +30,7 @@ impl MetadataKey {
     /// `onetaskgraph.repositories`, `onetaskgraph.depends_on`, `onetaskgraph.delivers`,
     /// `onetaskgraph.delivered_by`, `onetaskgraph.item_kind`, `onetaskgraph.template`
     /// ([`Self::TEMPLATE_KEY`]), `onetaskgraph.copies` ([`Self::COPIES_KEY`]),
+    /// `onetaskgraph.copy_locations` ([`Self::COPY_LOCATIONS_KEY`]),
     /// `onetaskgraph.members` ([`Self::MEMBERS_KEY`]), `onetaskgraph.member_of`
     /// ([`Self::MEMBER_OF_KEY`]) and `onetaskgraph.assets` ([`Self::ASSETS_KEY`]) — and so
     /// does any key it reserves later, which is why the whole namespace is refused rather than
@@ -56,6 +57,17 @@ impl MetadataKey {
     /// [`Self::copies`] is how it names the key there. A plugin only puts it where its
     /// metadata lives.
     pub const COPIES_KEY: &'static str = "onetaskgraph.copies";
+
+    /// The reserved key a copied item records, beside [`Self::COPIES_KEY`], where each
+    /// counterpart it links to is: a JSON object mapping a destination source name to
+    /// `{"id": <the qualified id the link names>, "location": <that counterpart's Location>}`.
+    ///
+    /// An entry says something only while its `id` is what [`Self::COPIES_KEY`] names for the
+    /// same destination: a location whose link moved, or that no link stands beside, is
+    /// ignored. So [`Self::COPIES_KEY`] is unchanged by it, and a reader that knows only that
+    /// key reads exactly what it did. Written like that key, through the narrow metadata write,
+    /// and [`Self::copy_locations`] is how it names the key there.
+    pub const COPY_LOCATIONS_KEY: &'static str = "onetaskgraph.copy_locations";
 
     /// The reserved key a **home** project records its member projects under: a JSON list of
     /// qualified project ids, each in a different source from the home and from the others,
@@ -130,6 +142,22 @@ impl MetadataKey {
     #[must_use]
     pub fn is_copies(&self) -> bool {
         self.0 == Self::COPIES_KEY
+    }
+
+    /// [`Self::COPY_LOCATIONS_KEY`], as the other reserved key a narrow metadata write may
+    /// carry: the copy writes it beside [`Self::copies`], and nothing a person types reaches it.
+    #[must_use]
+    // llmlint: ignore[invalid_states_unrepresentable] The same seam as `copies` above, for the
+    // same reason: a key type of its own would change the three narrow metadata writes every
+    // plugin implements, and `new`, deserialization, the command line and both SDKs refuse it.
+    pub fn copy_locations() -> Self {
+        Self(Self::COPY_LOCATIONS_KEY.to_owned())
+    }
+
+    /// Whether this is [`Self::COPY_LOCATIONS_KEY`].
+    #[must_use]
+    pub fn is_copy_locations(&self) -> bool {
+        self.0 == Self::COPY_LOCATIONS_KEY
     }
 
     /// One key, once it is established it is a caller's own dotted key.

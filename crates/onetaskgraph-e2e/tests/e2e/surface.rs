@@ -952,6 +952,7 @@ fn the_reserved_key_inventory_names_exactly_the_keys_the_code_spells() {
         ItemKind::METADATA_KEY,
         MetadataKey::TEMPLATE_KEY,
         MetadataKey::COPIES_KEY,
+        MetadataKey::COPY_LOCATIONS_KEY,
         MetadataKey::MEMBERS_KEY,
         MetadataKey::MEMBER_OF_KEY,
         MetadataKey::COPIED_VERSION_KEY,
@@ -981,7 +982,7 @@ fn the_reserved_key_inventory_names_exactly_the_keys_the_code_spells() {
     assert_eq!(listed, spelled, "the keys docs/metadata.md lists");
     let words = [
         "", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
-        "eleven", "twelve", "thirteen",
+        "eleven", "twelve", "thirteen", "fourteen",
     ];
     assert!(
         bullet.contains(&format!("defines exactly {} keys", words[spelled.len()])),
