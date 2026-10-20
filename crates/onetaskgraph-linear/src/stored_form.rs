@@ -31,6 +31,8 @@ pub fn stored_form(content: &str) -> String {
     // is not blank is set apart from by a blank line.
     let mut apart = false;
     let mut after_blank = true;
+    // Whether the line before was blank, which a blank line after it joins rather than adds to.
+    let mut blank_run = false;
     for line in content.split_inclusive('\n') {
         let body = line.trim_end_matches(['\n', '\r']);
         let end = &line[body.len()..];
@@ -42,14 +44,17 @@ pub fn stored_form(content: &str) -> String {
                 apart = true;
             }
             stored.push_str(line);
-            after_blank = false;
+            (after_blank, blank_run) = (false, false);
             continue;
         }
         if body.trim().is_empty() {
-            stored.push_str(line);
-            (item, apart, after_blank) = (None, false, true);
+            if !blank_run {
+                stored.push_str(line);
+            }
+            (item, apart, after_blank, blank_run) = (None, false, true, true);
             continue;
         }
+        blank_run = false;
         let opens = fence_mark(body);
         let image = lone_image(body);
         if !after_blank && (apart || opens.is_some() || image) {
@@ -95,6 +100,23 @@ pub fn stored_form(content: &str) -> String {
         }
         stored.push_str(&inline(rest));
         stored.push_str(end);
+    }
+    if fence.is_none() {
+        // The content ends at its last line holding anything: every line break and blank line
+        // after it goes.
+        loop {
+            let last = stored.rfind('\n').map_or(0, |at| at + 1);
+            if stored.ends_with('\n') {
+                stored.pop();
+                if stored.ends_with('\r') {
+                    stored.pop();
+                }
+            } else if last > 0 && stored[last..].trim().is_empty() {
+                stored.truncate(last);
+            } else {
+                break;
+            }
+        }
     }
     stored
 }
@@ -414,8 +436,10 @@ mod tests {
 
     #[test]
     fn a_fence_and_a_code_span_keep_what_the_prose_rules_rewrite() {
-        let held = "```\n- a [x] _y_ example.com ~\n| --- |\n```\n";
+        let held = "```\n- a [x] _y_ example.com ~\n| --- |\n\n\n```";
         assert_eq!(stored_form(held), held);
+        let open = "```\n- a\n\n\n";
+        assert_eq!(stored_form(open), open);
         let span = "`- [x] _y_ example.com ~`";
         assert_eq!(stored_form(span), span);
         let tilde = "~~~ text\n- kept\n~~~\n- moved";

@@ -4971,8 +4971,24 @@ pub enum LinearMarkdown {
 pub const LINEAR_UNDECLARED_REWRITE: (&str, &str) = ("1) ", "1. ");
 
 /// `written` as the workspace `data` stores a long form, by what it was told with
-/// [`LinearWorkspace::rewrite_markdown_on_write`].
+/// [`LinearWorkspace::rewrite_markdown_on_write`]: under every rewrite but the verbatim one, a
+/// field ending in a table ends in its last row's line break, as real Linear's does.
 fn linear_stored(data: &Value, written: Option<&Value>) -> Value {
+    let stored = linear_rewritten(data, written);
+    let rewrites = matches!(data["_linear_markdown"].as_str(), Some(mode) if mode != "verbatim");
+    let Some(text) = stored.as_str().filter(|_| rewrites) else {
+        return stored;
+    };
+    let last = text.rsplit('\n').next().unwrap_or_default().trim();
+    if last.len() > 1 && last.starts_with('|') && last.ends_with('|') {
+        json!(format!("{text}\n"))
+    } else {
+        stored
+    }
+}
+
+/// `written` as the rewrite [`linear_stored`] applies leaves it.
+fn linear_rewritten(data: &Value, written: Option<&Value>) -> Value {
     let Some(text) = written.and_then(Value::as_str) else {
         return written.cloned().unwrap_or(Value::Null);
     };

@@ -397,16 +397,18 @@ example.com and \"caller.live\"\n[x] done ~5 _y_\nsay \\\"hi\\\" a \\d b\n-->\n`
 - [x] _y_ example.com ~\n```\nkept `- [x] _y_ example.com ~` span\n\n\
 ![alt 0](https://uploads.linear.app/a)\n![alt 1](https://uploads.linear.app/b)\n";
 
-/// What real Linear stored of [`OBSERVED_SENT`] in that run, quoted from its log: every line
-/// after the bullet run on under it, a blank line either side of the fence — and of the second
-/// image, the empty line the asset journey's refusal quoted at line 2.
+/// What real Linear stored of [`OBSERVED_SENT`], quoted from the logs of that run and of CI run
+/// 39375395042: every line after the bullet run on under it, a blank line either side of the
+/// fence — and of the second image, the empty line the asset journey's refusal quoted at line 2
+/// — and nothing after the second image, where the later run's refusal quoted the content as
+/// ending at that line.
 const OBSERVED_STORED: &str = concat!(
     "* bullet\n  | a | b |\n  | --- | --- |\n",
     "  see [https://example.com/a](<https://example.com/a>).\n",
     "  [example.com](<http://example.com>) and \"[caller.live](<http://caller.live>)\"\n",
     "  \\[x\\] done \\~5 *y*\n  say \"hi\" a \\\\d b\n  \\-->\n\n```\n- [x] _y_ example.com ~\n```\n\n",
     "kept `- [x] _y_ example.com ~` span\n\n",
-    "![alt 0](https://uploads.linear.app/a)\n\n![alt 1](https://uploads.linear.app/b)\n",
+    "![alt 0](https://uploads.linear.app/a)\n\n![alt 1](https://uploads.linear.app/b)",
 );
 
 #[test]
@@ -983,4 +985,44 @@ fn a_copy_into_a_folder_of_markdown_writes_the_rendering_and_its_provenance_as_i
             "{written}"
         );
     }
+}
+
+/// A field ending in a table, with no metadata slot after it: Linear keeps the table's last line
+/// break there, as CI run 39375395042 observed, and a read through the source takes it off, so
+/// the content a plain create sends is the content it reads back, and the create is not refused.
+#[test]
+fn a_plain_create_ending_in_a_table_reads_back_as_it_was_sent() {
+    let plan = Plan::new();
+    let inputs = plan.sandbox.subdirectory("table-end");
+    let body = inputs.join("body.md");
+    std::fs::write(&body, "Owners:\n\n\n| Step | Owner |\n| --- | --- |\n").expect("a body");
+    let (created, _) = plan.exits(
+        &[
+            "task",
+            "create",
+            "linear",
+            "--project",
+            "P-1",
+            "--title",
+            "Ends in a table",
+            "--body-file",
+            &body.display().to_string(),
+        ],
+        0,
+    );
+    let id = stdout(&created).trim().to_owned();
+    let held = plan
+        .workspace
+        .issue_titled("Ends in a table")
+        .expect("the issue");
+    assert_eq!(
+        plan.workspace.long_form("tasks", &held).as_deref(),
+        Some("Owners:\n\n| Step | Owner |\n| -- | -- |\n"),
+        "the loopback keeps the table's line break, as Linear does"
+    );
+    assert_eq!(
+        plan.show("task", &id)["content"],
+        "Owners:\n\n| Step | Owner |\n| -- | -- |",
+        "a read takes the table's line break off"
+    );
 }

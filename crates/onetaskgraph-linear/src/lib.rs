@@ -151,6 +151,8 @@
 //! | A fenced block is kept byte for byte, and set apart by a blank line from the line before it and the line after it | `` see\n```\n- [x] _y_ example.com ~\n```\n- z `` | `` see\n\n```\n- [x] _y_ example.com ~\n```\n\n* z `` |
 //! | An image alone on a line is a block of its own, set apart by a blank line from the lines beside it | ``![a](https://uploads.linear.app/a)\n![b](https://uploads.linear.app/b)`` | ``![a](https://uploads.linear.app/a)\n\n![b](https://uploads.linear.app/b)`` |
 //! | An inline code span is kept byte for byte | ``a `- [x] _y_ example.com ~` b`` | ``a `- [x] _y_ example.com ~` b`` |
+//! | A run of blank lines is one blank line | ``a\n\n\n\nb`` | ``a\n\nb`` |
+//! | The content ends at its last line holding anything: the line breaks and blank lines after it are not kept | ``![a](https://uploads.linear.app/a)\n\n`` | ``![a](https://uploads.linear.app/a)`` |
 //!
 //! The three block rules — a list item's lines running on under it, a fence set apart, a lone
 //! image set apart — are what real Linear did in CI run 39361674659, and Linear's own answer is
@@ -170,6 +172,18 @@
 //! itself is what settles which one Linear takes. The escapes, the
 //! angle-bracketed link targets, the autolinked domains and `*y*` came back in that run exactly
 //! as the rows above declare them.
+//!
+//! The last two rows are what real Linear did in CI run 39375395042. The asset journey wrote its
+//! two images with a line break after the second, and this source sets its metadata slot one
+//! blank line after the content, so the description held two blank lines before the slot; Linear
+//! handed back one, and the content above it ended at the second image. And the live probe, which
+//! ends in a table and carries no slot, came back with one line break after the table's last row,
+//! where every other block Linear ends a field on — a paragraph, an image, a fence — it ends with
+//! none. That line break is the table's own, not the content's: a slot written after a table is
+//! set apart by the one blank line it is set apart by after anything else. So it is a rule of the
+//! read rather than of the write — a read of a field holding no slot whose last line is a table
+//! row takes that one line break off — and the content a read hands back ends in no line break,
+//! as the rewrite declares.
 //!
 //! Each example is the rule's input and the stored form it produces, and
 //! `every_example_the_ruling_states_is_what_the_rewrite_stores` reads this table and fails when
@@ -5564,7 +5578,7 @@ fn metadata_description(
         return Ok((None, Default::default()));
     };
     let Some((start, encoded_start, encoded_end)) = slot_bounds(&description)? else {
-        return Ok((Some(description), Default::default()));
+        return Ok((Some(table_end_taken_off(description)), Default::default()));
     };
     let metadata =
         serde_json::from_str(&description[encoded_start..encoded_end]).map_err(|error| {
@@ -5583,6 +5597,20 @@ fn metadata_description(
         .or_else(|| above.strip_suffix('\n'))
         .unwrap_or(above);
     Ok(((!visible.is_empty()).then(|| visible.to_owned()), metadata))
+}
+
+/// `description` less the one line break Linear stores after a table that ends a field: see the
+/// ruling on what Linear does to Markdown on write. Anything else is handed back as it is.
+fn table_end_taken_off(mut description: String) -> String {
+    let row = description
+        .strip_suffix('\n')
+        .and_then(|text| text.rsplit('\n').next())
+        .map(str::trim)
+        .is_some_and(|line| line.len() > 1 && line.starts_with('|') && line.ends_with('|'));
+    if row {
+        description.pop();
+    }
+    description
 }
 
 /// The narrowing that asks Linear for the issues whose description holds `"<value>"` — a

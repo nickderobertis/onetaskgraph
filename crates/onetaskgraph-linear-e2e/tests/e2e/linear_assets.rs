@@ -2156,12 +2156,12 @@ fn a_copy_never_records_a_digest_over_stored_content_missing_an_image_it_sent() 
             1,
             move |_, data| data[member] = Value::Null,
         );
-        refused_at_the_second_image(kind, &source, "\"\"");
+        refused_at_the_second_image(kind, &source, "no line 3");
 
         // (c) Linear drops the second image: no declared rule explains that, so the copy is
         // refused naming the item and the image line the stored item does not have.
         held.rewrite_markdown_on_write(LinearMarkdown::DropsAdjacentImage);
         let source = rendered(kind);
-        refused_at_the_second_image(kind, &source, "\"\"");
+        refused_at_the_second_image(kind, &source, "no line 3");
     }
 }
