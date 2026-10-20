@@ -1825,16 +1825,23 @@ impl Engine {
                 before: task.before.clone(),
             })
             .collect();
+        let mut diverged = std::mem::take(&mut running.diverged);
+        let linking = std::mem::take(&mut running.linking);
+        let homes = std::mem::take(&mut running.homes);
+        let recordings = self.recordings(&running);
+        // The repair writes an item's content again, so what the destination stores after it is
+        // compared exactly as the first write's was.
+        for (source, error) in self.repair(request, running, journal).await? {
+            if diverged.iter().all(|(refused, _)| refused != &source) {
+                diverged.push((source, error));
+            }
+        }
         // An item whose destination stores other than it was sent is refused: no link records it
         // as this copy's counterpart, and it is reported `failed` with why.
-        let diverged = std::mem::take(&mut running.diverged);
-        let linking: Vec<Linking> = std::mem::take(&mut running.linking)
+        let linking: Vec<Linking> = linking
             .into_iter()
             .filter(|entry| diverged.iter().all(|(source, _)| source != &entry.item))
             .collect();
-        let homes = std::mem::take(&mut running.homes);
-        let recordings = self.recordings(&running);
-        self.repair(request, running, journal).await?;
         if !request.dry_run {
             self.record_dependents(recordings, journal).await?;
             self.record_members(homes, journal).await?;
@@ -1871,15 +1878,17 @@ impl Engine {
     /// needs: the far end's destination id does not exist until it has been created, so
     /// the item that points at it lands first without that edge and is completed here.
     /// It runs once for the whole request rather than once per project, because a far end
-    /// may be in a project this copy has not reached yet.
+    /// may be in a project this copy has not reached yet. It answers, by source id, each item
+    /// whose destination stores other than this second write sent.
     async fn repair(
         &self,
         request: &CopyRequest,
         running: Running,
         journal: &mut Journal,
-    ) -> Result<(), EngineError> {
+    ) -> Result<Vec<(GlobalId, EngineError)>, EngineError> {
+        let mut diverged = Vec::new();
         if request.dry_run {
-            return Ok(());
+            return Ok(diverged);
         }
         let Running {
             resolvable,
@@ -1906,19 +1915,28 @@ impl Engine {
                 delivers_of(&entry.item, &entry.item.to, &resolvable, &counterparts),
                 &private,
             );
-            self.write(
+            let (written, sent) = self
+                .write(
+                    destination,
+                    &entry.item,
+                    Some(entry.destination),
+                    entry.filed,
+                    &resolved(&edges),
+                    &resolved_entries(&delivers),
+                    entry.prior,
+                    journal,
+                )
+                .await?;
+            if let Some(error) = stored::diverged(
                 destination,
-                &entry.item,
-                Some(entry.destination),
-                entry.filed,
-                &resolved(&edges),
-                &resolved_entries(&delivers),
-                entry.prior,
-                journal,
-            )
-            .await?;
+                entry.item.item.level().record(),
+                &written,
+                sent.as_deref(),
+            ) {
+                diverged.push((entry.item.source.clone(), error));
+            }
         }
-        Ok(())
+        Ok(diverged)
     }
 
     /// Put the destination back the way this copy found it, then report why it failed.

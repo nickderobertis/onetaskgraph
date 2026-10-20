@@ -603,6 +603,78 @@ fn over_the_stdio_protocol_linear_stores_what_the_copy_records_and_refuses_what_
     refused_as_diverged(Hosting::Stdio);
 }
 
+/// An item that depends on another of the same copy lands first without that edge and is
+/// written again once its far end exists; that second write's answer is compared exactly as the
+/// first's was, so a rewrite the ruling does not declare, applied only to it, is still refused.
+#[test]
+fn a_repair_write_linear_stores_otherwise_is_refused_as_stored_content_diverged() {
+    let plan = Plan::new();
+    let (written, stored) = LINEAR_UNDECLARED_REWRITE;
+    let tasks = plan.plan.join("tasks");
+    std::fs::write(
+        tasks.join("A.md"),
+        format!(
+            "---\ntitle: Waits on its upstream\nstatus: todo\ndepends_on: [B]\n---\n\
+             Step one.\n{written}Then review it.\n"
+        ),
+    )
+    .expect("a task file");
+    std::fs::write(
+        tasks.join("B.md"),
+        "---\ntitle: Upstream\nstatus: todo\n---\nDone first.\n",
+    )
+    .expect("a task file");
+    // Linear applies the undeclared rewrite from the moment it has created the second issue —
+    // after every first write of this copy and before the repair of the first.
+    plan.workspace.after_request(
+        |query, _| query.contains("issueCreate("),
+        1,
+        |workspace| workspace.rewrite_markdown_on_write(LinearMarkdown::Undeclared),
+    );
+    let (copied, errors, served) =
+        plan.copy(&["task", "copy", "plan:A", "plan:B", "--to", "linear"], 4);
+    let items = copied["items"].as_array().expect("items");
+    assert_eq!(
+        mutations(&served)
+            .iter()
+            .filter(|name| name.as_str() == "issueUpdate")
+            .count(),
+        1,
+        "the first task is repaired once, after both were created: {served:#?}"
+    );
+    let landed = outcome(items, "plan:B");
+    assert_eq!(landed["action"], "created", "{landed}");
+    let failed = outcome(items, "plan:A");
+    assert_eq!(failed["action"], "failed", "{failed}");
+    assert_eq!(
+        failed["error"]["kind"], "stored-content-diverged",
+        "{failed}"
+    );
+    let message = failed["error"]["message"].as_str().expect("a message");
+    let destination = message
+        .split_whitespace()
+        .next()
+        .expect("the message opens with the item's id");
+    assert!(destination.starts_with("linear:"), "{message}");
+    for named in [
+        "first at line 2".to_owned(),
+        format!("sent:   \"{written}Then review it.\""),
+        format!("stored: \"{stored}Then review it.\""),
+    ] {
+        assert!(message.contains(&named), "names {named:?}: {message}");
+    }
+    assert!(errors.contains(destination), "{errors}");
+    // Refused, so no link names it as this copy's counterpart, while its upstream's does.
+    assert!(
+        plan.show("task", "plan:A")["metadata"]["onetaskgraph.copies"]["linear"].is_null(),
+        "the refused task records no counterpart"
+    );
+    assert!(
+        !plan.show("task", "plan:B")["metadata"]["onetaskgraph.copies"]["linear"].is_null(),
+        "the task that landed records its counterpart"
+    );
+}
+
 #[test]
 fn a_rendering_edited_by_hand_keeps_its_provenance_unrestamped_on_the_way_to_linear() {
     let plan = Plan::new();
