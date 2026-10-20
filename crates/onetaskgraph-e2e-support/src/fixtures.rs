@@ -1174,6 +1174,10 @@ struct GitHubBoard {
     drift_after_status_update: bool,
     remint_after_status_update: bool,
     omit_added_status_option: bool,
+    /// Whether an issue created here is filed with no `Status`, as on a board left with
+    /// GitHub's default workflows, none of which sets one on an item added to it; `false`
+    /// files it at `Todo`, as a board with that workflow turned on does.
+    files_without_status: bool,
     status_snapshot_page_size: Option<usize>,
     status_field_present: bool,
     status_board_accessible: bool,
@@ -1717,6 +1721,13 @@ impl GitHubBoardFields {
     /// Make the fixture omit the newly requested option from the post-write state.
     pub fn omit_added_status_option(&self) {
         self.board.lock().unwrap().omit_added_status_option = true;
+    }
+
+    /// File every issue created from here on with no `Status`, as a board left with GitHub's
+    /// default workflows does — those set `Done` on a closed or merged item and nothing on an
+    /// added one — or, with `false`, at `Todo`, as a board with that workflow turned on does.
+    pub fn file_new_items_without_status(&self, without: bool) {
+        self.board.lock().unwrap().files_without_status = without;
     }
 
     /// Force Status snapshots to span pages even though the client requests 100 items.
@@ -3219,6 +3230,7 @@ fn github_projects_board_at(
         drift_after_status_update: false,
         remint_after_status_update: false,
         omit_added_status_option: false,
+        files_without_status: false,
         status_snapshot_page_size: None,
         status_field_present: true,
         status_board_accessible: true,
@@ -4308,6 +4320,9 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
             "title":input["title"],"body":input["body"],"state":"OPEN","reason":null,
             "parent":Value::Null,"repo":"nickderobertis/onetaskgraph","status":"Todo",
             "origin":"","labels":[],"updatedAt":at});
+        if board.files_without_status {
+            created["status"] = Value::Null;
+        }
         // `parentIssueId` files the new issue under its parent, as `addSubIssue` would.
         if let Some(parent) = input.get("parentIssueId").and_then(Value::as_str) {
             created["parent"] = json!(parent);
@@ -4318,7 +4333,7 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         }
         // `projectV2Ids` naming this board files the issue on it: GitHub adds the board item
         // after answering the create, so the answer names none, and a later read finds it —
-        // filed with the `Status` the board's workflow gives a new item.
+        // filed with the `Status` this board gives a new item, if any.
         match input.get("projectV2Ids") {
             Some(boards) => {
                 assert_eq!(
@@ -4929,15 +4944,36 @@ impl IssueSearch {
     }
 
     /// Whether an issue holding this title and body is in the answer.
+    ///
+    /// A field is split into words only when it could hold every phrase at all, so a search of
+    /// a board of thousands of items costs this loopback what it costs GitHub — nothing a copy's
+    /// simulated time does not already charge — rather than a word list of every item's body.
     fn admits(&self, title: &str, body: &str) -> bool {
-        let (title, body) = (search_words(title), search_words(body));
-        let holds = |field: &[String], phrase: &[String]| {
-            phrase.is_empty() || field.windows(phrase.len()).any(|window| window == phrase)
+        let words = |field: &str, searched: bool| {
+            (searched && self.phrases.iter().all(|phrase| may_hold(field, phrase)))
+                .then(|| search_words(field))
         };
-        self.phrases.iter().all(|phrase| {
-            (self.in_title && holds(&title, phrase)) || (self.in_body && holds(&body, phrase))
-        })
+        let (title, body) = (words(title, self.in_title), words(body, self.in_body));
+        let holds = |field: &Option<Vec<String>>, phrase: &[String]| {
+            field.as_ref().is_some_and(|field| {
+                phrase.is_empty() || field.windows(phrase.len()).any(|window| window == phrase)
+            })
+        };
+        self.phrases
+            .iter()
+            .all(|phrase| holds(&title, phrase) || holds(&body, phrase))
     }
+}
+
+/// Whether `text` could hold every word of `phrase` as [`search_words`] splits it: always for
+/// text that is not ASCII, whose lower-casing can turn another character into an ASCII one, and
+/// otherwise only when each word occurs in it, any case.
+fn may_hold(text: &str, phrase: &[String]) -> bool {
+    if !text.is_ascii() {
+        return true;
+    }
+    let lowered = text.to_ascii_lowercase();
+    phrase.iter().all(|word| lowered.contains(word.as_str()))
 }
 
 /// The words GitHub's index holds of `text`: every run of letters and digits, lower-cased.

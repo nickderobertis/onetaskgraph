@@ -212,6 +212,9 @@ impl Plan {
         let mut held: Vec<Value> = (0..items).map(background).collect();
         held.extend(extra);
         let (mut config, github) = github_projects_with_items(&sandbox, held);
+        // GitHub's default workflows set no `Status` on an item added to a board, so the copy
+        // writes every one it carries — the workload's nine.
+        github.file_new_items_without_status(true);
         let board = Board::new(config["endpoint"].as_str().unwrap(), &clock, 0, None);
         board.measure_latency();
         config["endpoint"] = json!(board.endpoint);
@@ -432,6 +435,30 @@ fn record(name: &str, scenario: &Scenario, board: usize) {
     }
     let points: u64 = points_by.values().sum();
     let created: u64 = creations_by.values().sum();
+    // Every board field value the aliased field writes carried, by the field it set: each is
+    // one write above, and the workload names how many of each there are.
+    let mut values_by_field: BTreeMap<String, u64> = BTreeMap::new();
+    for call in &scenario.calls {
+        let Ok(request) = serde_json::from_slice::<Value>(&call.bytes) else {
+            continue;
+        };
+        if !request["query"]
+            .as_str()
+            .is_some_and(|query| query == graphql::WRITE_FIELD_VALUES)
+        {
+            continue;
+        }
+        let variables = &request["variables"];
+        for slot in 0..onetaskgraph_github_projects::MUTATION_BATCH {
+            if variables[format!("send{slot}")] == true {
+                let field = variables[format!("field{slot}")]["fieldId"]
+                    .as_str()
+                    .unwrap_or("a field this write did not name")
+                    .to_owned();
+                *values_by_field.entry(field).or_default() += 1;
+            }
+        }
+    }
     let latencies: BTreeMap<String, u64> = [
         Kind::ItemRead,
         Kind::BoardPage,
@@ -471,6 +498,7 @@ fn record(name: &str, scenario: &Scenario, board: usize) {
             "github-plan-copy-content-creations".to_owned(),
             created as f64,
             json!({"writes by mutation": creations_by,
+                   "field values by field": values_by_field,
                    "requests": scenario.calls.iter().filter(|call| creations(&call.path, &call.bytes) > 0).count()}),
         ));
     }

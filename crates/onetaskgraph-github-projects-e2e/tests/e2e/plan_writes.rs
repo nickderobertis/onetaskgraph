@@ -251,7 +251,8 @@ fn a_first_copy_files_each_item_by_its_create_and_sends_its_other_writes_togethe
     // Every item is created filed on the board and under its project by its own `createIssue`
     // — the project's alone, the eight tasks' in one aliased request — and the rest of what
     // each needs lands once all of them exist: their board items read in one request, their
-    // origins in one aliased field write, and the ten edges in one more. The document is the
+    // `Status` and origin values in aliased field writes of at most eleven, and the ten edges
+    // in one more. The document is the
     // same in its own process. Nothing is added to the board or filed under a project after its
     // create, and the board holds the plan exactly as a copy always left it.
     let plan = Plan::new(SMALL, Vec::new());
@@ -265,6 +266,7 @@ fn a_first_copy_files_each_item_by_its_create_and_sends_its_other_writes_togethe
         [
             "creating an issue",
             "creating several issues together",
+            "writing board fields of the items a copy created",
             "writing board fields of the items a copy created",
             "recording several dependencies together",
             "creating an issue",
@@ -282,20 +284,27 @@ fn a_first_copy_files_each_item_by_its_create_and_sends_its_other_writes_togethe
         assert_eq!(input["projectV2Ids"], board);
         assert_eq!(input["parentIssueId"], json!(at["P"]));
     }
-    // The project's and every task's origin, and no `Status`: the board files a new item at
-    // `Todo`, which is where the plan puts every one of them.
-    let origins = sent(&written[2].1, "field");
-    assert_eq!(origins.len(), 9);
-    assert!(
-        origins
+    // The project's and every task's `Status` and origin, each value its own aliased mutation:
+    // a board left with GitHub's default workflows files a new item with no `Status`.
+    let mut values = sent(&written[2].1, "field");
+    assert_eq!(values.len(), 11);
+    values.extend(sent(&written[3].1, "field"));
+    let count = |field: &str| {
+        values
             .iter()
-            .all(|value| value["fieldId"] == "FIELD-origin")
+            .filter(|value| value["fieldId"] == field)
+            .count()
+    };
+    assert_eq!(
+        (count("FIELD-status"), count("FIELD-origin"), values.len()),
+        (9, 9, 18),
+        "{values:#?}"
     );
-    assert_eq!(sent(&written[3].1, "block").len(), 10);
-    let document_create = &written[4].1["input"];
+    assert_eq!(sent(&written[4].1, "block").len(), 10);
+    let document_create = &written[5].1["input"];
     assert_eq!(document_create["projectV2Ids"], board);
     assert_eq!(document_create["parentIssueId"], json!(at["P"]));
-    let document_fields = sent(&written[5].1, "field");
+    let document_fields = sent(&written[6].1, "field");
     assert_eq!(document_fields.len(), 1);
     assert_eq!(document_fields[0]["value"], json!({"text": "notes:D"}));
     // The board items GitHub adds after each create, read once per process, after every create
@@ -323,6 +332,29 @@ fn a_first_copy_files_each_item_by_its_create_and_sends_its_other_writes_togethe
             == 2
     );
     assert!(calls[..reads[0]].iter().all(|call| !fields(call)));
+}
+
+#[test]
+fn a_status_a_board_already_files_a_new_item_at_is_not_written_again() {
+    // A board whose own workflow files every new item at `Todo`: the copy reads the board item
+    // each create made, finds the plan's `Todo` already there, and writes the origin alone.
+    let plan = Plan::new(SMALL, Vec::new());
+    plan.github.file_new_items_without_status(false);
+    let (project, document, calls) = plan.copy();
+    let at = counterparts(&project, &document);
+    super::plan_copy::holds_the_plan(&plan, &at, None);
+    let values: Vec<Value> = mutations(&calls)
+        .iter()
+        .filter(|(name, _)| name == "writing board fields of the items a copy created")
+        .flat_map(|(_, variables)| sent(variables, "field"))
+        .collect();
+    assert_eq!(values.len(), 10, "{values:#?}");
+    assert!(
+        values
+            .iter()
+            .all(|value| value["fieldId"] == "FIELD-origin"),
+        "{values:#?}"
+    );
 }
 
 /// Hold the board to holding nothing of a plan copy that failed: no issue it created, and no
