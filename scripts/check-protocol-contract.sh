@@ -121,6 +121,35 @@ NOT_METHODS = {
         "not a message: §4.4 says the engine reads nothing ahead for a hosted source, so "
         "each counterpart crosses as its own `get_task`, `get_project` or `get_document`"
     ),
+    "read_ahead_origins_for_copy": (
+        "not a message: §4.4 says the engine reads nothing ahead for a hosted source, so "
+        "each origin query crosses as its own `query_tasks`, `query_projects` or "
+        "`query_documents`"
+    ),
+    "create_batch_limit": (
+        "not a message: §4.9 says the engine answers it for a hosted source as the trait's "
+        "default does, one, so every task crosses as its own `write_task`"
+    ),
+    "write_tasks": (
+        "not a message: §4.9 says the engine never asks it of a hosted source, whose "
+        "`create_batch_limit` is one, so every task crosses as its own `write_task`"
+    ),
+    "begin_deferred_writes": (
+        "not a message: §4.9 says a hosted source holds nothing back, so every `write_task` "
+        "and `write_project` lands whole before it answers"
+    ),
+    "finish_writes": (
+        "not a message: §4.9 says a hosted source holds nothing back, so there is nothing "
+        "for it to send"
+    ),
+    "status_as_written": (
+        "not a message: §4.9 says the engine answers it for a hosted source as the trait's "
+        "default does, with the status it would write"
+    ),
+    "written_location": (
+        "not a message: §4.9 says the engine answers it for a hosted source as the trait's "
+        "default does, knowing no location, and reads the item where it needs one"
+    ),
     "check_status_write": (
         "not a message: §4.9 says the engine answers it for a hosted source as the trait's "
         "default does, and the plugin's own write refuses a status it has no name for"

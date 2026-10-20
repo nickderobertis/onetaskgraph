@@ -685,6 +685,11 @@ hosted source the engine answers each by its default: the first two as `query_pr
 reading nothing ahead, so each counterpart crosses as its own `get_task`, `get_project` or
 `get_document`. A plugin written against this document implements nothing more for either.
 
+Nor is `TaskSource::read_ahead_origins_for_copy`, which asks together which items were copied
+from each of a copy's source ids and holds each answer for that origin's next query. For a hosted
+source the engine answers it by its default, reading nothing ahead, so each origin query crosses
+as its own `query_tasks`, `query_projects` or `query_documents`, as above.
+
 ### 4.4a `get_task_detail`
 
 Only a plugin that declared `task_details: true` (§3.13) and `comments` `"native"` (§4.2) is
@@ -943,6 +948,16 @@ and overwrites it — is not a message of this protocol. For a hosted source the
 it the way the trait's default does, admitting every status, so a status this plugin has no
 name for is refused by `write_task` or `write_project` itself, as above, and a plugin written
 against this document implements nothing more.
+
+Nor are the ways an in-process source lets a copy write in fewer requests, and for a hosted
+source the engine answers each by the trait's default: `TaskSource::create_batch_limit` is one,
+so `TaskSource::write_tasks` is never asked of it and every task crosses as its own `write_task`;
+`TaskSource::begin_deferred_writes` and `TaskSource::finish_writes` hold nothing back, so every
+`write_task` and `write_project` lands whole before it answers; `TaskSource::status_as_written`
+answers the status the engine would write, so a status compares as the plugin's `get_task` or
+`get_project` reads it; and `TaskSource::written_location` knows no location, so where the
+engine needs one it reads the item with `get_task`, `get_project` or `get_document`. A plugin
+written against this document implements nothing more.
 
 ### 4.9a Image assets on `write_task` and `write_document`
 
