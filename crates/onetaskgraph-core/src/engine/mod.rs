@@ -1336,9 +1336,6 @@ pub enum EngineError {
     },
 }
 
-/// Why a wrapped failure happened, without the next action it would give on its own: a
-/// wrapper names the next action for the whole failure, and an inner one telling the user to
-/// copy again is exactly what [`EngineError::CopyDestinationUncertain`] exists to replace.
 /// One side's `line` of a [`EngineError::StoredContentDiverged`] as its message shows it: the
 /// line quoted, or that side's content having ended before it.
 fn diverged_line(text: Option<&str>, line: usize) -> String {
@@ -1348,6 +1345,9 @@ fn diverged_line(text: Option<&str>, line: usize) -> String {
     }
 }
 
+/// Why a wrapped failure happened, without the next action it would give on its own: a
+/// wrapper names the next action for the whole failure, and an inner one telling the user to
+/// copy again is exactly what [`EngineError::CopyDestinationUncertain`] exists to replace.
 fn reason(error: &EngineError) -> String {
     match error {
         EngineError::SourceRefused { name, error } => {
