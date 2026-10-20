@@ -19,21 +19,19 @@ requests per call
     1   25653  reading a project's tasks
 
 (c) a member copy naming 1 of those 10 tasks, its status changed, every task recording its origin
-requests 3
+requests 2
 node count 5334
 
 requests per call
     1    5334  reading a batch of issues with their comments and dependencies for a copy
-    1       0  updating an issue
     1       0  writing a board field
 
 (d) the same one-member copy of a project of 3 tasks
-requests 3
+requests 2
 node count 5334
 
 requests per call
     1    5334  reading a batch of issues with their comments and dependencies for a copy
-    1       0  updating an issue
     1       0  writing a board field
 
 (e) a targeted update of 1 of those 10 tasks, naming its status, three metadata keys set and one removed
@@ -53,22 +51,20 @@ requests per call
     1     456  reading one issue
 
 (g) a task copy of 1 of those 10 tasks, its status changed, found by the link the whole copy recorded
-requests 4
+requests 3
 node count 912
 
 requests per call
     2     912  reading one issue
-    1       0  updating an issue
     1       0  writing a board field
 
 (h) the same task copy with every link removed, found by asking the board for its origin
-requests 5
+requests 4
 node count 2286
 
 requests per call
     2    1830  looking up the items copied from one origin
     1     456  reading one issue
-    1       0  updating an issue
     1       0  writing a board field
 
 (i) a task copy into a board holding its counterpart, its origin in the board field alone

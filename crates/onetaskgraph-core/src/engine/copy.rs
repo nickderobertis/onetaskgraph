@@ -905,6 +905,50 @@ struct Deferred {
     prior: Option<Prior>,
 }
 
+/// Whether one write of a task stamps the record of the copy that lands it (see [`record`]),
+/// or leaves the record the destination holds — none, for a task it creates — where it is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Stamping {
+    /// Stamp it: a copy that can skip — `--comments`, or by query — always records itself, and
+    /// so does one bringing a stale record up to date.
+    Always,
+    /// Stamp it only where the write carries what the record lives beside anyway: the task's
+    /// content or a metadata key. A change of its title, status, priority or edges alone is
+    /// then written as that member and nothing else, rather than as a rewrite of the body that
+    /// would carry the record and nothing more. A record left as it was is only ever older
+    /// than the task it is on, which a later copy reads as a reason to compare, never to skip,
+    /// so the task is never served from a skip it should not have been.
+    WithCarrier,
+}
+
+impl Stamping {
+    /// How a write made by `request` records itself, `rerecord` when it is made only to bring
+    /// a stale record up to date.
+    fn of(request: &CopyRequest, rerecord: bool) -> Self {
+        if rerecord || request.comments || request.items.query().is_some() {
+            Self::Always
+        } else {
+            Self::WithCarrier
+        }
+    }
+
+    /// Whether a write landing `task` over what the destination held as `prior` stamps this
+    /// copy's record on it.
+    fn stamps(self, task: &Task, prior: Option<&Prior>) -> bool {
+        match self {
+            Self::Always => true,
+            Self::WithCarrier => match prior.map(|prior| &prior.item) {
+                Some(Item::Task(held)) => {
+                    held.content != task.content
+                        || record::without_record(&held.metadata)
+                            != record::without_record(&task.metadata)
+                }
+                _ => true,
+            },
+        }
+    }
+}
+
 /// What one item's undo has to do to put the destination back.
 ///
 /// Each entry names the source it was written to, because a routed copy writes into more
@@ -1916,6 +1960,7 @@ impl Engine {
                 &resolved(&edges),
                 &resolved_entries(&delivers),
                 entry.prior,
+                Stamping::of(request, false),
                 journal,
             )
             .await?;
@@ -2511,6 +2556,7 @@ impl Engine {
             }
         }
         let home_source = project.to.clone();
+        let home = self.writable(&home_source)?;
         let unchanged = match &project.target {
             Target::Update { id: target, .. } => {
                 let settled = self.shown_edges(
@@ -2537,15 +2583,7 @@ impl Engine {
                 );
                 let held = project.held.as_ref();
                 let unchanged_with = |edges: &[Option<DependencyEdge>]| {
-                    !changes(
-                        held,
-                        &project,
-                        target,
-                        &None,
-                        &resolved(edges),
-                        &[],
-                        &home_source,
-                    )
+                    !changes(held, &project, target, &None, &resolved(edges), &[], home)
                 };
                 Some(
                     (!settled.iter().any(Option::is_none) && unchanged_with(&settled))
@@ -5078,22 +5116,16 @@ impl Engine {
                     &project,
                     &edges,
                     delivers,
-                    destination.name(),
+                    destination,
                 )
             });
         // An item that already reads as the source does may still hold a stale record of the
         // copy that left it so, which this copy brings up to date without calling it changed.
         let rerecord = !changed
             && match (&target, prior.as_ref()) {
-                (Some(id), Some(held)) => stale_record(
-                    item,
-                    held,
-                    id,
-                    &project,
-                    &edges,
-                    delivers,
-                    destination.name(),
-                ),
+                (Some(id), Some(held)) => {
+                    stale_record(item, held, id, &project, &edges, delivers, destination)
+                }
                 _ => false,
             };
         if let Some(id) = &target
@@ -5115,6 +5147,7 @@ impl Engine {
                 &edges,
                 delivers,
                 prior.clone(),
+                Stamping::of(request, rerecord),
                 journal,
             )
             .await?,
@@ -5895,6 +5928,7 @@ impl Engine {
         edges: &[DependencyEdge],
         delivers: &[TaskRef],
         prior: Option<Prior>,
+        stamping: Stamping,
         journal: &mut Journal,
     ) -> Result<NativeId, EngineError> {
         let created_kind = item.item.level();
@@ -5905,17 +5939,24 @@ impl Engine {
         // destination holds at the origin key is what a copy-back leaves there, and what it
         // holds as `delivered_by` is what the item keeps.
         let origin = recorded(item, prior.as_ref());
-        let mut landing = outgoing(
-            item,
-            suggested,
-            project.clone(),
-            &origin,
-            delivers,
-            prior.as_ref(),
+        let mut landing = as_written(
+            destination,
+            outgoing(
+                item,
+                suggested,
+                project.clone(),
+                &origin,
+                delivers,
+                prior.as_ref(),
+            ),
         );
-        // A task lands with the record of this copy: the source's token it read, whether it
-        // carried the comments, and the digest of what it leaves here.
-        if let Item::Task(task) = &mut landing {
+        // A task lands with the record of this copy — the source's token it read, whether it
+        // carried the comments, and the digest of what it leaves here — when `stamping` says
+        // this write records it; otherwise with whatever record the destination already holds,
+        // which `outgoing` carried.
+        if let Item::Task(task) = &mut landing
+            && stamping.stamps(task, prior.as_ref())
+        {
             let record = record_of(item, task, edges, destination.name());
             record.stamp(&mut task.metadata);
         }
@@ -6200,25 +6241,47 @@ fn changes(
     project: &Option<NativeId>,
     edges: &[DependencyEdge],
     delivers: &[TaskRef],
-    destination: &SourceName,
+    destination: &ResolvedSource,
 ) -> bool {
     let Some(held) = held else {
         return true;
     };
-    let mut outgoing = outgoing(
-        item,
-        target.clone(),
-        project.clone(),
-        &recorded(item, Some(held)),
-        delivers,
-        Some(held),
+    let mut outgoing = as_written(
+        destination,
+        outgoing(
+            item,
+            target.clone(),
+            project.clone(),
+            &recorded(item, Some(held)),
+            delivers,
+            Some(held),
+        ),
     );
     if (!item.assets.is_empty() || held.assets.is_some())
         && !lands_as_held(item, held, &mut outgoing)
     {
         return true;
     }
-    !same(&held.item, &outgoing, destination) || !same_edges(&held.edges, edges)
+    !same(&held.item, &outgoing, destination.name()) || !same_edges(&held.edges, edges)
+}
+
+/// `item` with its status as `destination` reads it back once written — see
+/// [`TaskSource::status_as_written`](onetaskgraph_plugin_api::TaskSource::status_as_written).
+///
+/// What a copy compares with the destination, and what the record it leaves there digests, is
+/// what the destination will hold: a board that writes a category to an option of its own
+/// reads `todo` back as `Todo`, and comparing the spelling the source gave would call every
+/// such item changed on every copy, and record a digest no later read of it could match.
+fn as_written(destination: &ResolvedSource, mut item: Item) -> Item {
+    let source = destination.source();
+    match &mut item {
+        Item::Task(task) => task.status = source.status_as_written(ItemKind::Task, &task.status),
+        Item::Project(project) => {
+            project.status = source.status_as_written(ItemKind::Project, &project.status);
+        }
+        Item::Document(_) => {}
+    }
+    item
 }
 
 /// Whether `held` already holds exactly the assets `item` carries, by name and digest — and,
@@ -7284,20 +7347,23 @@ fn stale_record(
     project: &Option<NativeId>,
     edges: &[DependencyEdge],
     delivers: &[TaskRef],
-    destination: &SourceName,
+    destination: &ResolvedSource,
 ) -> bool {
-    let landing = outgoing(
-        item,
-        target.clone(),
-        project.clone(),
-        &recorded(item, Some(held)),
-        delivers,
-        Some(held),
+    let landing = as_written(
+        destination,
+        outgoing(
+            item,
+            target.clone(),
+            project.clone(),
+            &recorded(item, Some(held)),
+            delivers,
+            Some(held),
+        ),
     );
     let (Item::Task(task), Item::Task(held_task)) = (&landing, &held.item) else {
         return false;
     };
-    let record = record_of(item, task, edges, destination);
+    let record = record_of(item, task, edges, destination.name());
     !record.held_by(&held_task.metadata)
         && (item.carried.is_some() || record::carried_comments(&held_task.metadata))
 }

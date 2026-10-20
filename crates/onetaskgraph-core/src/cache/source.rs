@@ -1240,6 +1240,10 @@ impl TaskSource for CachedSource {
         self.inner.check_status_write(kind, category, target).await
     }
 
+    fn status_as_written(&self, kind: ItemKind, status: &Status) -> Status {
+        self.inner.status_as_written(kind, status)
+    }
+
     async fn set_task_status(
         &self,
         id: &NativeId,

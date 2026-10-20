@@ -140,12 +140,6 @@ impl Held {
         held(&self.learnt).insert(issue.clone(), comments);
     }
 
-    /// Whether a write of `id` was primed from the store's cache: a write expecting a version,
-    /// which sends only what differs from it.
-    pub(super) fn is_primed(&self, id: &NativeId) -> bool {
-        held(&self.primed).contains_key(id) || held(&self.narrowed).contains(id)
-    }
-
     /// Forget every issue an expected write let go of: a new command writes as it always did.
     pub(super) fn end_command(&self) {
         held(&self.narrowed).clear();

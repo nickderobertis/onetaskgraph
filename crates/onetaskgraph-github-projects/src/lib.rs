@@ -8666,13 +8666,12 @@ impl GitHubProjectsSource {
             }
         };
 
-        // A write the store's cache expects sends only what differs from the version it expects:
-        // a priority the item already holds there is not sent, so a person's edit of it since is
-        // left alone. Every other write sends it, as its pinned cost says.
+        // Only what differs from the item as this write read it is sent: a priority the item
+        // already holds is not, so an unchanged re-copy writes no field and a person's edit of
+        // it since that read is left alone.
         let priority_write = priority_write.filter(|_| {
             !existing.is_some_and(|item| {
-                self.expected.is_primed(&item.id)
-                    && incoming.priority.map(HeldPriority::Read) == Some(item.priority.clone())
+                incoming.priority.map(HeldPriority::Read) == Some(item.priority.clone())
             })
         });
         let written_option = column.as_ref().map(|(_, _, name)| name.clone());
@@ -9378,21 +9377,36 @@ impl GitHubProjectsSource {
             ContentKind::Issue => json!({"title":title,"body":body,
                                          "stateInput":state_input(status_target)}),
         };
-        // A write the store's cache expects sends only the members whose value differs from the
-        // version it expects, and nothing at all when none does.
-        if self.expected.is_primed(&item.id)
-            && let Some(members) = fields.as_object_mut()
-        {
+        // Only the members whose value differs from the item as this write read it are sent,
+        // and nothing at all when none does — whether or not the store's cache expects a
+        // version of it. A member left out is one GitHub leaves as it is, so a person's edit
+        // of it since that read is kept rather than overwritten with what it already held,
+        // and a re-copy of an unchanged item costs no mutation.
+        if let Some(members) = fields.as_object_mut() {
             if members.get("title").and_then(Value::as_str) == Some(item.title.as_str()) {
                 members.remove("title");
             }
-            if members.get("body").and_then(Value::as_str)
-                == Some(item.raw_body.as_deref().unwrap_or_default())
-            {
+            let body_unchanged = match (members.get("body"), item.raw_body.as_deref()) {
+                (Some(Value::String(sent)), Some(held)) => sent == held,
+                (Some(Value::Null), held) => held.is_none_or(str::is_empty),
+                _ => false,
+            };
+            if body_unchanged {
                 members.remove("body");
             }
-            let terminal = matches!(status_target, Some(StatusTarget::Terminal(_, _)));
-            if members.contains_key("stateInput") && terminal == item.closed {
+            // An issue already in the state the target asks for keeps it: an open one stays
+            // open, and a closed one whose closure reads as the target's category keeps its
+            // reason — a duplicate's says more than this write would.
+            let unchanged_state = match status_target {
+                Some(StatusTarget::Terminal(_, reason)) => {
+                    item.closed
+                        && closed_category(item.reason.as_deref())
+                            == closed_category(Some(reason.reason()))
+                }
+                Some(StatusTarget::Column(_) | StatusTarget::Disabled(_)) => !item.closed,
+                None => true,
+            };
+            if unchanged_state {
                 members.remove("stateInput");
             }
             if members.is_empty() {
@@ -11514,6 +11528,23 @@ impl TaskSource for GitHubProjectsSource {
         };
         self.column_for(&fields, kind, category, &status)
             .map(|_| ())
+    }
+
+    /// What a write of `status` reads back as: the `Status` option its category maps to for
+    /// `kind`, and for a closing category the closure that option and its fixed reason read
+    /// as — exactly what [`BoardStatuses::status`] reports of the item once written. A category
+    /// this instance has no option for is answered as given, since writing it is refused.
+    fn status_as_written(&self, kind: ItemKind, status: &Status) -> Status {
+        match self.statuses.target(kind, status.category) {
+            StatusTarget::Column(name) => {
+                self.statuses.status(kind, Some(name.as_str()), false, None)
+            }
+            StatusTarget::Terminal(name, reason) => {
+                self.statuses
+                    .status(kind, Some(name.as_str()), true, Some(reason.reason()))
+            }
+            StatusTarget::Disabled(_) => status.clone(),
+        }
     }
 
     /// Set one task's status alone.

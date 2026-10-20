@@ -591,6 +591,22 @@ pub trait TaskSource: Send + Sync {
         Ok(())
     }
 
+    /// The status an item of `kind` reads back as once this source has written `status` for
+    /// it, asked without writing or reading anything.
+    ///
+    /// A source that keeps a status's name as it was given answers `status` itself. One that
+    /// writes a category to a name of its own — a board's `Status` option the category maps
+    /// to — answers that name, so a caller comparing what it would write with what the source
+    /// holds does not read a difference of spelling alone as a change: a copy then leaves an
+    /// item that already reads as the source does unwritten.
+    ///
+    /// Defaulted to `status` itself, which is what every source keeping names verbatim reads
+    /// back, and what a caller compared against before this was asked.
+    fn status_as_written(&self, kind: ItemKind, status: &Status) -> Status {
+        let _ = kind;
+        status.clone()
+    }
+
     /// Set the status of one task this source holds, and change nothing else about it,
     /// answering with the status as this source now reads it — or `None` when this source
     /// holds no such task.

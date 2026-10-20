@@ -523,17 +523,18 @@ fn a_project_copy_into_a_board_costs_what_the_record_beside_the_session_record_s
 
     // (e) and (f): the targeted update of one existing task of the same ten, as a settlement
     // writes it — its status, three keys set and one removed — and the same update when the
-    // task already holds every value it names. (e) sends no more requests than the member copy
-    // (c) of one changed task, which reads the project and the member in one batch, and no
-    // more mutations; (f) sends no mutation at all. Neither
-    // reads anything but the one issue, and neither writes its origin.
+    // task already holds every value it names. (e) sends no more than the member copy (c) of
+    // one changed task, which reads the project and the member in one batch, plus the one
+    // content write its metadata keys need and (c)'s change of status alone does not; (f)
+    // sends no mutation at all. Neither reads anything but the one issue, and neither writes
+    // its origin.
     let [
         (settled, settled_served, settled_report),
         (repeat_update, repeat_update_served, again),
     ] = one_targeted_update(10, 3);
     assert!(
-        settled.total_requests() <= of_ten.total_requests()
-            && mutations(&settled_served) <= mutations(&of_ten_served),
+        settled.total_requests() <= of_ten.total_requests() + 1
+            && mutations(&settled_served) <= mutations(&of_ten_served) + 1,
         "the targeted update sent {} requests and {} mutations; the one-member copy (c) sent {} \
          and {}",
         settled.total_requests(),
@@ -1277,9 +1278,14 @@ fn a_bound_recopy_adds_one_project_read_and_batches_the_dependencies_it_newly_na
         } else {
             format!("\ndepends_on: [{names}]")
         };
+        // The body moves with the status, so each re-copy writes every part the cost table
+        // counts — its board field and its content — rather than its field alone.
         std::fs::write(
             &path,
-            linked.replace("status: Todo", &format!("status: {status}{dependencies}")),
+            format!(
+                "{}\n{status}\n",
+                linked.replace("status: Todo", &format!("status: {status}{dependencies}"))
+            ),
         )
         .unwrap();
     };
