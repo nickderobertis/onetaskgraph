@@ -1217,3 +1217,34 @@ takes the records that listing carried; the plan-copy journey proves that reuse.
 project's tasks` grows by the same 253 nodes (30,734 → **30,987**) and whose two requests do
 not move: with no cache there is no listing before the read-ahead, so the batch still reads the
 project and its tasks.
+
+## A copy writes only what changed, creates its items together, and paces by GitHub's windows
+
+`updateIssue` is sent only with the title, body and state that differ from what the board
+holds, and not at all when none does; a priority the board already holds is not written. A
+copy's items with no counterpart are created together: one `ORIGIN_LOOKUPS` asks for up to
+`ORIGIN_BATCH` (10) origins with the board's fields and the destination repository, a
+`CREATE_ISSUES` request creates up to `MUTATION_BATCH` (11) issues already filed under their
+parent and on the board (`parentIssueId`, `projectV2Ids`), one `CREATED_BOARD_ITEMS` reads
+their board item ids, and their field values, closures and blockers follow in aliased requests
+of at most 11 mutations. Mutations are no longer spaced by a fixed interval: they are held
+only when GitHub's documented secondary windows — 80 content creations a minute, 500 an hour
+and 2,000 points a minute, a mutation request costing 5 and a query 1 — would otherwise be
+crossed. `pacing.min_mutation_interval_ms`, when set, still spaces them.
+
+**`copy-cost.txt`** moves (a) to (d) and (g) to (j). (a), a whole copy of 10 tasks, goes from
+55 requests to **7**: two origin lookups (18,400 worst-case nodes, 2 points each) replace eleven
+of one origin and the fields read, one `CREATE_ISSUES` and one `CREATE_ISSUE` replace eleven
+creations, eleven board adds and ten filings, and one `CREATED_BOARD_ITEMS` and two aliased
+field writes replace eleven field writes; its node count goes 10,115 → **18,463**. (b), the
+unchanged repeat, goes from 2 requests to **1**: the orphan check is answered from the batched
+read, whose document grows by the project's sub-issue page (5,334 → **5,384**), so the 25,653
+nodes of `reading a project's tasks` are no longer sent. (c), (d) and (g) each lose their
+`updateIssue`, which only re-sent what the issue held. (h) and (i) ask for the task's origin by
+the batched `ORIGIN_LOOKUPS` (9,200 nodes, 2 points) rather than a second single lookup (915),
+so their node counts grow to **10,571** and (h) loses its `updateIssue`; (j) goes from 5
+requests to **4**, its creation filed on the board in the same request.
+
+**`session-cost.txt`** gains the reconciliation of the two documents the live journey now
+prices — `ORIGIN_LOOKUPS` (9,200 nodes) and `CREATED_BOARD_ITEMS` (63) — and the copy batch's
+sub-issue page (7,413 → **7,463**): requests go 210 → **212** and nodes 293,608 → **302,921**.
