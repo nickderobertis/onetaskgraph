@@ -685,6 +685,11 @@ hosted source the engine answers each by its default: the first two as `query_pr
 reading nothing ahead, so each counterpart crosses as its own `get_task`, `get_project` or
 `get_document`. A plugin written against this document implements nothing more for either.
 
+Nor is `TaskSource::read_ahead_origins_for_copy`, which asks together which items were copied
+from each of a copy's source ids and holds each answer for that origin's next query. For a hosted
+source the engine answers it by its default, reading nothing ahead, so each origin query crosses
+as its own `query_tasks`, `query_projects` or `query_documents`, as above.
+
 ### 4.4a `get_task_detail`
 
 Only a plugin that declared `task_details: true` (§3.13) and `comments` `"native"` (§4.2) is
@@ -943,6 +948,16 @@ and overwrites it — is not a message of this protocol. For a hosted source the
 it the way the trait's default does, admitting every status, so a status this plugin has no
 name for is refused by `write_task` or `write_project` itself, as above, and a plugin written
 against this document implements nothing more.
+
+Nor are the ways an in-process source lets a copy write in fewer requests, and for a hosted
+source the engine answers each by the trait's default: `TaskSource::create_batch_limit` is one,
+so `TaskSource::write_tasks` is never asked of it and every task crosses as its own `write_task`;
+`TaskSource::begin_deferred_writes` and `TaskSource::finish_writes` hold nothing back, so every
+`write_task` and `write_project` lands whole before it answers; `TaskSource::status_as_written`
+answers the status the engine would write, so a status compares as the plugin's `get_task` or
+`get_project` reads it; and `TaskSource::written_location` knows no location, so where the
+engine needs one it reads the item with `get_task`, `get_project` or `get_document`. A plugin
+written against this document implements nothing more.
 
 ### 4.9a Image assets on `write_task` and `write_document`
 
@@ -2000,7 +2015,7 @@ ever sent any of these, and `set_document_metadata` only to one that also declar
 `id` is the `NativeId` of a task, a project or a document at **this** source. `key` is a
 `MetadataKey`: a string of two or more non-empty dot-separated segments whose first segment is
 not `onetaskgraph`, `value` is any JSON value, `null` included, and the engine sends no other
-key in that namespace but one — a plugin may refuse any other with `{"kind": "malformed"}`
+key in that namespace but two — a plugin may refuse any other with `{"kind": "malformed"}`
 if it is ever handed one.
 <!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by behaviour rather
      than by words: the served side refuses every other shape of this one key's value before
@@ -2008,11 +2023,13 @@ if it is ever handed one.
      `a_served_plugin_takes_the_copy_link_key_only_with_a_value_that_is_links` in
      `crates/onetaskgraph-core/tests/subprocess.rs` drives each refused shape and the accepted
      one across the wire; the value's own shape is stated once, in `docs/metadata.md`. -->
-The one is `onetaskgraph.copies`, which a copy writes on an item it read from this plugin to
-record where that item landed; its value is the object `docs/metadata.md` describes, and the
-plugin holds it wherever it holds the item's metadata. A plugin that cannot hold it refuses
-with `{"kind": "refused"}`, and the copy goes on without the link and says so rather than
-failing.
+The two are `onetaskgraph.copies`, which a copy writes on an item it read from this plugin to
+record where that item landed, and `onetaskgraph.copy_locations`, which it writes after it to
+record where each counterpart that link names is; each value is the object `docs/metadata.md`
+describes, and the plugin holds it wherever it holds the item's metadata. A plugin that cannot
+hold the link refuses with `{"kind": "refused"}`, and the copy goes on without the link and
+says so rather than failing; one that cannot hold the locations refuses them the same way, or
+as malformed, and the copy goes on with the link alone.
 <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
 The plugin holds `value` under `key` — adding the key when the record does not hold it and
@@ -2392,6 +2409,10 @@ that answered `metadata_updates: true`, and one written when §4.18 let a plugin
 key in that namespace as malformed may go on doing so — the engine reads either refusal of
 that one key as the plugin not holding the link, and the copy completes without it.
 
+`onetaskgraph.copy_locations` as a §4.18 key was added **without** a bump on the same terms: a
+plugin written before it refuses it as malformed, which the engine reads as the plugin not
+holding the locations, and the copy completes with the link alone.
+
 The `assets` member of §4.2 and the `assets` and `recorded_assets` members of §4.9a were added
 **without** a bump, for the reason the documents were: the engine sends a write carrying them
 only to a plugin that declared `assets` `"native"`, which a plugin written before assets cannot
@@ -2580,15 +2601,16 @@ later reads exactly as any created item does.
 ### GitHub Projects request costs
 
 Every request below is one GraphQL document priced at one point by the node-count model, so a
-row's requests are its points. `crates/onetaskgraph-github-projects-e2e/tests/e2e/copy_cost.rs` pins each row
+row's requests are its points — except where a row gives both, as `requests / points`: a new
+copy's ORIGIN_LOOKUPS asks about up to ten origins with the board's fields and costs two. `crates/onetaskgraph-github-projects-e2e/tests/e2e/copy_cost.rs` pins each row
 against the requests the loopback board served, and holds this table and the one in the
 plugin's crate documentation to the same figures.
 
 | Verb | Requests / points | Documents |
 | --- | --- | --- |
-| new copy | 5 | ORIGIN_LOOKUP, CREATION_CONTEXT (the board's fields and the repository's id together), CREATE_ISSUE, ADD_TO_BOARD, UPDATE_FIELDS |
-| copy --create | 4 | CREATION_CONTEXT, CREATE_ISSUE, ADD_TO_BOARD, UPDATE_FIELDS: the new copy without its ORIGIN_LOOKUP |
-| bound copy | 3 | ISSUE (with the board's fields and the issue's `blockedBy`), UPDATE_FIELDS, then UPDATE_ISSUE last |
+| new copy | 4 / 5 | ORIGIN_LOOKUPS (the origin, the board's fields and the repository's node and numeric ids together; two points), CREATE_ISSUE filing the issue on the board and under its project, CREATED_BOARD_ITEMS once GitHub has added it, WRITE_FIELD_VALUES |
+| copy --create | 4 | CREATION_CONTEXT, CREATE_ISSUE, CREATED_BOARD_ITEMS, WRITE_FIELD_VALUES: the new copy with no origin to ask about |
+| bound copy | 3 | ISSUE (with the board's fields and the issue's `blockedBy`), UPDATE_FIELDS when a board field differs, then UPDATE_ISSUE last carrying only the title, body or state that differs — none, when nothing does |
 | bound copy, filed under a project | 4 | the bound copy's three, and one ISSUE of the destination project its link names, read once per command |
 | bound copy, newly naming n dependencies | + ceil(n / DETAIL_BATCH) + n | ISSUE_DETAILS for the far ends that do not already block the item, DETAIL_BATCH (24) to a request (one alone is ISSUE), then one ADD_BLOCKED_BY each; a far end already blocking it costs nothing |
 | comment | 2 | ISSUE, ADD_COMMENT: the target is read first, because GitHub accepts a comment on any issue or pull request |

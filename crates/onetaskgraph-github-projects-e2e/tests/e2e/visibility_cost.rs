@@ -244,8 +244,18 @@ fn copy(sandbox: &Sandbox, clock: &SimulatedClock, kind: &str, id: &str) -> Outp
 }
 
 /// Which write each visibility read was spent on, in the order the board served them: every
-/// read before a write's first mutation is that write's.
+/// read before a write's first mutation is that write's — and the reads before a request
+/// creating several issues together are theirs, two to each, in the order it creates them.
 fn attributed(served: &[(String, Value)]) -> Vec<(&'static str, &'static str)> {
+    let kind_of = |title: &str| {
+        if title == "Plan" {
+            "project"
+        } else if title.starts_with("Task ") {
+            "task"
+        } else {
+            "document"
+        }
+    };
     let mut reads = Vec::new();
     let mut pending = Vec::new();
     for (document, variables) in served {
@@ -253,16 +263,26 @@ fn attributed(served: &[(String, Value)]) -> Vec<(&'static str, &'static str)> {
             pending.push("project");
         } else if document.starts_with("GET /repos/") {
             pending.push("repository");
+        } else if document == onetaskgraph_github_projects::graphql::CREATE_ISSUES {
+            let created: Vec<&str> = (0..onetaskgraph_github_projects::MUTATION_BATCH)
+                .filter(|slot| variables[format!("send{slot}")] == true)
+                .map(|slot| {
+                    variables[format!("create{slot}")]["title"]
+                        .as_str()
+                        .unwrap_or_default()
+                })
+                .collect();
+            let each = pending.len() / created.len().max(1);
+            for title in created {
+                reads.extend(
+                    pending
+                        .drain(..each.min(pending.len()))
+                        .map(|read| (kind_of(title), read)),
+                );
+            }
         } else if document.contains("createIssue(input:$input)") {
             let title = variables["input"]["title"].as_str().unwrap_or_default();
-            let kind = if title == "Plan" {
-                "project"
-            } else if title.starts_with("Task ") {
-                "task"
-            } else {
-                "document"
-            };
-            reads.extend(pending.drain(..).map(|read| (kind, read)));
+            reads.extend(pending.drain(..).map(|read| (kind_of(title), read)));
         }
     }
     assert!(
@@ -293,10 +313,18 @@ fn a_whole_plan_copy_spends_two_visibility_reads_per_write() {
     lease.wait_for_detach();
     drop(lease);
     let served = board.served()[before..].to_vec();
-    let creates = served
+    let creates: usize = served
         .iter()
-        .filter(|(document, _)| document.contains("createIssue(input:$input)"))
-        .count();
+        .map(|(document, variables)| {
+            if document == onetaskgraph_github_projects::graphql::CREATE_ISSUES {
+                (0..onetaskgraph_github_projects::MUTATION_BATCH)
+                    .filter(|slot| variables[format!("send{slot}")] == true)
+                    .count()
+            } else {
+                usize::from(document.contains("createIssue(input:$input)"))
+            }
+        })
+        .sum();
     assert_eq!(
         creates as u64, WRITES,
         "the workload is the 102 writes it names"

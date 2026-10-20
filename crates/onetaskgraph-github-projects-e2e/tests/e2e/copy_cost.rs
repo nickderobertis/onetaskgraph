@@ -414,10 +414,21 @@ fn asks_for_the_origin_and_never_walks_the_board(
     items: &[&str],
     served: &[(String, Value)],
 ) {
+    // Asked on its own, or among the origins a copy asks about together before it aims anything.
     let lookups = served
         .iter()
-        .filter(|(document, _)| document == onetaskgraph_github_projects::graphql::ORIGIN_LOOKUP)
-        .map(|(_, variables)| variables["filter"].clone())
+        .flat_map(|(document, variables)| {
+            if document == onetaskgraph_github_projects::graphql::ORIGIN_LOOKUP {
+                vec![variables["filter"].clone()]
+            } else if document == onetaskgraph_github_projects::graphql::ORIGIN_LOOKUPS {
+                (0..onetaskgraph_github_projects::ORIGIN_BATCH)
+                    .filter(|slot| variables[format!("ask{slot}")] == true)
+                    .map(|slot| variables[format!("filter{slot}")].clone())
+                    .collect()
+            } else {
+                Vec::new()
+            }
+        })
         .collect::<Vec<_>>();
     assert_eq!(
         lookups,
@@ -523,17 +534,19 @@ fn a_project_copy_into_a_board_costs_what_the_record_beside_the_session_record_s
 
     // (e) and (f): the targeted update of one existing task of the same ten, as a settlement
     // writes it — its status, three keys set and one removed — and the same update when the
-    // task already holds every value it names. (e) sends no more requests than the member copy
-    // (c) of one changed task, which reads the project and the member in one batch, and no
-    // more mutations; (f) sends no mutation at all. Neither
-    // reads anything but the one issue, and neither writes its origin.
+    // task already holds every value it names. (e) sends no more than the member copy (c) of
+    // one changed task, which reads the project and the member in one batch, plus the one
+    // content write its metadata keys need and (c)'s change of status alone does not; (f)
+    // sends no mutation at all. Neither reads anything but the one issue, and neither writes
+    // its origin.
     let [
         (settled, settled_served, settled_report),
         (repeat_update, repeat_update_served, again),
     ] = one_targeted_update(10, 3);
+    // llmlint: ignore[tests_hold_no_nonfunctional_thresholds] Not a ceiling of its own but a comparison between two workloads of this one journey, held since the targeted update landed: the update owes no request the member copy beside it does not, but for the content write its metadata keys need. The member copy no longer sends its no-op `updateIssue`, which is the `+ 1`.
     assert!(
-        settled.total_requests() <= of_ten.total_requests()
-            && mutations(&settled_served) <= mutations(&of_ten_served),
+        settled.total_requests() <= of_ten.total_requests() + 1
+            && mutations(&settled_served) <= mutations(&of_ten_served) + 1,
         "the targeted update sent {} requests and {} mutations; the one-member copy (c) sent {} \
          and {}",
         settled.total_requests(),
@@ -987,18 +1000,20 @@ fn follow_up_writes_resolve_each_item_once_and_batch_the_copy_fields() {
         "\"grace\"",
         "--json",
     ]);
-    for (verb, sent, expected) in [
-        ("new copy", &new_calls, 5),
-        ("copy --create", &create_calls, 4),
-        ("bound copy", &bound_calls, 3),
-        ("comment", &comment_calls, 2),
-        ("recount", &recount_calls, 1),
-        ("detail", &detail_calls, 1),
-        ("status", &status_calls, 2),
-        ("priority", &priority_calls, 2),
-        ("content", &content_calls, 2),
-        ("metadata", &metadata_calls, 2),
-        ("update", &update_calls, 3),
+    // Requests, then points where the two differ: a new copy's one read of its origin and of
+    // what creating reads costs two points, where each of the two reads it replaced cost one.
+    for (verb, sent, expected, priced) in [
+        ("new copy", &new_calls, 4, 5),
+        ("copy --create", &create_calls, 4, 4),
+        ("bound copy", &bound_calls, 3, 3),
+        ("comment", &comment_calls, 2, 2),
+        ("recount", &recount_calls, 1, 1),
+        ("detail", &detail_calls, 1, 1),
+        ("status", &status_calls, 2, 2),
+        ("priority", &priority_calls, 2, 2),
+        ("content", &content_calls, 2, 2),
+        ("metadata", &metadata_calls, 2, 2),
+        ("update", &update_calls, 3, 3),
     ] {
         let mut reads = std::collections::BTreeMap::<String, usize>::new();
         for (_, variables) in sent
@@ -1016,36 +1031,42 @@ fn follow_up_writes_resolve_each_item_once_and_batch_the_copy_fields() {
                 onetaskgraph_github_projects::worst_case_point_cost(document).unwrap()
             })
             .sum();
+        // llmlint: ignore-block[tests_hold_no_nonfunctional_thresholds] The drift gate between the cost table in the plugin's module documentation and `docs/plugin-protocol.md` and what each verb really sends, requests and points alike, as it was before this change: the figures are the documented ones, asserted below to be the table's own cells, so a verb that moves fails until its row is restated.
         assert_eq!(sent.len(), expected, "{verb}: {sent:#?}");
-        assert_eq!(points, expected as u64, "{verb}");
+        assert_eq!(points, priced, "{verb}");
+        // llmlint: ignore-end[tests_hold_no_nonfunctional_thresholds]
+        let cell = if priced == expected as u64 {
+            expected.to_string()
+        } else {
+            format!("{expected} / {priced}")
+        };
         assert!(
             include_str!("../../../onetaskgraph-github-projects/src/lib.rs")
-                .contains(&format!("//! | {verb} | {expected} |")),
+                .contains(&format!("//! | {verb} | {cell} |")),
             "cost table: {verb}"
         );
         if PROTOCOL_ROWS.contains(&verb) {
             assert!(
-                PROTOCOL.contains(&format!("\n| {verb} | {expected} |")),
+                PROTOCOL.contains(&format!("\n| {verb} | {cell} |")),
                 "docs/plugin-protocol.md cost table: {verb}"
             );
         }
         println!("{verb}: {} requests, {points} declared points", sent.len());
     }
-    // The board's fields and the repository's id in one read — so no BOARD_FIELDS or
-    // REPOSITORY — then the issue created on no board and filed with ADD_TO_BOARD, because
-    // GitHub answers a create naming the board in `projectV2Ids` with no item and refuses the
-    // filing that then follows; `--create` is the same without the origin lookup.
+    // The origin, the board's fields and the repository's id in one read — so no
+    // BOARD_FIELDS or REPOSITORY — then the issue created filed on the board, its board item
+    // read once GitHub has added it, and its fields written; `--create` reads the board's fields
+    // and the repository without the origin.
     fn documents(sent: &[(String, Value)]) -> Vec<&str> {
         sent.iter().map(|(query, _)| query.as_str()).collect()
     }
     assert_eq!(
         documents(&new_calls),
         [
-            graphql::ORIGIN_LOOKUP,
-            graphql::CREATION_CONTEXT,
+            graphql::ORIGIN_LOOKUPS,
             graphql::CREATE_ISSUE,
-            graphql::ADD_TO_BOARD,
-            graphql::UPDATE_FIELDS
+            graphql::CREATED_BOARD_ITEMS,
+            graphql::WRITE_FIELD_VALUES
         ]
     );
     assert_eq!(
@@ -1053,8 +1074,8 @@ fn follow_up_writes_resolve_each_item_once_and_batch_the_copy_fields() {
         [
             graphql::CREATION_CONTEXT,
             graphql::CREATE_ISSUE,
-            graphql::ADD_TO_BOARD,
-            graphql::UPDATE_FIELDS
+            graphql::CREATED_BOARD_ITEMS,
+            graphql::WRITE_FIELD_VALUES
         ]
     );
     for sent in [&new_calls, &create_calls] {
@@ -1062,7 +1083,10 @@ fn follow_up_writes_resolve_each_item_once_and_batch_the_copy_fields() {
             .iter()
             .find(|(query, _)| query == graphql::CREATE_ISSUE)
             .unwrap();
-        assert_eq!(created["input"].get("projectV2Ids"), None);
+        // Filed on the board by its create, which GitHub adds after answering: the board item
+        // is read afterwards, and never added a second time.
+        assert_eq!(created["input"]["projectV2Ids"], json!(["PVT-board"]));
+        assert!(!sent.iter().any(|(query, _)| query == graphql::ADD_TO_BOARD));
     }
     assert_eq!(
         bound_calls
@@ -1180,6 +1204,7 @@ fn a_create_copy_sends_no_origin_lookup_and_refuses_what_it_cannot_assert() {
     assert!(
         !sent.iter().any(|(document, _)| [
             graphql::ORIGIN_LOOKUP,
+            graphql::ORIGIN_LOOKUPS,
             graphql::SEARCH_ISSUES,
             graphql::BOARD
         ]
@@ -1187,12 +1212,20 @@ fn a_create_copy_sends_no_origin_lookup_and_refuses_what_it_cannot_assert() {
         "--create looks for nothing: {sent:#?}"
     );
     // The second task's dependency names the first by the id this same command created it
-    // under, read from this process's own record of what it wrote.
+    // under, read from this process's own record of what it wrote — the two created together,
+    // and the edge sent once both exist.
     let first = native(&landed[0].1);
     assert!(
-        sent.iter()
-            .any(|(document, variables)| document == graphql::ADD_BLOCKED_BY
-                && variables["input"]["blockingIssueId"] == first.as_str()),
+        sent.iter().any(|(document, variables)| {
+            (document == graphql::ADD_BLOCKED_BY
+                && variables["input"]["blockingIssueId"] == first.as_str())
+                || (document == graphql::ADD_BLOCKED_BYS
+                    && (0..onetaskgraph_github_projects::MUTATION_BATCH).any(|slot| {
+                        variables[format!("send{slot}")] == true
+                            && variables[format!("block{slot}")]["blockingIssueId"]
+                                == first.as_str()
+                    }))
+        }),
         "{sent:#?}"
     );
     assert!(
@@ -1277,9 +1310,14 @@ fn a_bound_recopy_adds_one_project_read_and_batches_the_dependencies_it_newly_na
         } else {
             format!("\ndepends_on: [{names}]")
         };
+        // The body moves with the status, so each re-copy writes every part the cost table
+        // counts — its board field and its content — rather than its field alone.
         std::fs::write(
             &path,
-            linked.replace("status: Todo", &format!("status: {status}{dependencies}")),
+            format!(
+                "{}\n{status}\n",
+                linked.replace("status: Todo", &format!("status: {status}{dependencies}"))
+            ),
         )
         .unwrap();
     };

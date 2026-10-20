@@ -83,7 +83,7 @@ silence. See the note on `Health` below for the one difference it carries delibe
   metering types `Metering` and `Metered`; the `status_mapping` types `StatusMapping`,
   `StatusNames`, `StatusName` and `UnmappedStatus`; the image-asset types `Asset`,
   `AssetName`, `AssetContentType`, `AssetPayload`, `AssetUpload`, `AssetUploads`, `AssetWrite`
-  and `AssetsWritten`; the clock types `Clock` and `SharedClock`; the closure types `IssueRef`,
+  and `AssetsWritten`; the clock types `Clock`, `SharedClock` and `WaitCause`; the closure types `IssueRef`,
   `IssueHolding`, `HeldTask`, `Completion`, `ClosedAs`, `StatusContradiction` and
   `ContradictedItem`; the local-cache types
   `Coverage`, `VersionCoverage`, `ProjectVersionCoverage`, `DocumentVersionCoverage`,
@@ -1242,6 +1242,15 @@ two or more hops does not, permanently**, because only one origin is ever record
 every hop overwrites it. Chasing the chain further would need the intermediate stores
 configured and reachable, which would put a third party's availability inside a copy; a
 durable lineage id would identify only records written after it landed.
+
+**A recorded location answers before either key, and only beside its link.** A referent whose
+`onetaskgraph.copy_locations` entry names exactly the record its `onetaskgraph.copies` link names
+at the destination is pointed at that entry's location and the destination is not read for it;
+any other referent is resolved as below. The entry is written by a copy that knows the location
+without asking (the counterpart's read, or `TaskSource::written_location` after a create), so a
+plan copy's document copy reads none of the plan's tasks. A document whose counterpart already
+sits under the project its project's link names is taken as filed there without that project
+being read; a document a person moved elsewhere fails that test and is put back as before.
 
 **Where the correspondence is not confident, no record is chosen and the text is left
 byte-for-byte.** Two triggers: more than one destination record matching a referent's two

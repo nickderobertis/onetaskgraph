@@ -1056,6 +1056,28 @@ impl TimelineEvent {
     }
 }
 
+/// Where a page of the comments on issue `issue` ended: after `offset` of them, the last being
+/// comment `last`, at `position - 1` of the board's comments.
+// llmlint: ignore[code_lands_in_the_domain_that_owns_it] Private state of `GitHubBoard` below, which no suite can reach but through that board's handle; it lives beside the board for the reason the board's own directive gives.
+#[derive(Debug)]
+struct CommentResume {
+    issue: String,
+    offset: usize,
+    position: usize,
+    last: String,
+}
+
+/// How many comments issue `issue` held, counted when the board held `comments` of them all,
+/// the last of those being comment `last` — `None` when it held none.
+// llmlint: ignore[code_lands_in_the_domain_that_owns_it] Private state of `GitHubBoard` below, which no suite can reach but through that board's handle; it lives beside the board for the reason the board's own directive gives.
+#[derive(Debug)]
+struct CommentCount {
+    issue: String,
+    comments: usize,
+    last: Option<String>,
+    count: usize,
+}
+
 /// The board this fixture keeps, and everything a request may change on it.
 // llmlint: ignore[code_lands_in_the_domain_that_owns_it] The shared e2e harness is where the agreed e2e layout puts every loopback server, so no suite copies one: the journey-matrix table in this file builds each of its rows through both hosted plugins' loopbacks, and the engine's own suite drives both, so neither can live in one plugin's suite. Editing it re-selects every suite, as editing any shared harness does.
 struct GitHubBoard {
@@ -1065,6 +1087,12 @@ struct GitHubBoard {
     /// Held here rather than per request because the server outlives one invocation of the
     /// binary, so a comment one command adds is what the next command lists, edits or removes.
     comments: Vec<Value>,
+    /// Where the last page of comments ended — see [`CommentResume`] — so the next page of the
+    /// same walk starts there rather than counting the issue's comments again from the first.
+    comment_resume: std::sync::Mutex<Option<CommentResume>>,
+    /// The last count [`Self::comment_count`] made, which answers `totalCount` on every page of
+    /// a walk without counting the issue's comments again while none was added or removed.
+    comment_counted: std::sync::Mutex<Option<CommentCount>>,
     /// How many comment timestamps this board has handed out, which makes each one later than
     /// the last and gives every comment an id no other comment has had.
     comment_ticks: u64,
@@ -1082,6 +1110,10 @@ struct GitHubBoard {
     /// alias before it — the way GitHub runs a document's mutation fields in order and answers
     /// one that failed with `null` and an error, without undoing the ones before it.
     failing_alias: Option<&'static str>,
+    /// An alias of one batched write this board performs and then answers malformed, once.
+    bent_alias: Option<(&'static str, AliasAnswer)>,
+    /// Whether the batched origin lookups answer the repository with a blank node id.
+    blank_repository_id: bool,
     /// The id of a board field whose write, in whichever alias of a batched field write carries
     /// it, this board fails once in the same way.
     failing_field: Option<String>,
@@ -1174,6 +1206,16 @@ struct GitHubBoard {
     drift_after_status_update: bool,
     remint_after_status_update: bool,
     omit_added_status_option: bool,
+    /// Whether an issue created here is filed with no `Status`, as on a board left with
+    /// GitHub's default workflows, none of which sets one on an item added to it; `false`
+    /// files it at `Todo`, as a board with that workflow turned on does.
+    files_without_status: bool,
+    /// How many more reads of created issues' board items answer that GitHub has not filed
+    /// them yet, as it may not have in the moments after a create naming the board.
+    unfiled_board_item_reads: usize,
+    /// Whether the next read of a project's sub-issues beside a copy's batch answers them with
+    /// no list at all.
+    omits_sub_issue_list: bool,
     status_snapshot_page_size: Option<usize>,
     status_field_present: bool,
     status_board_accessible: bool,
@@ -1593,6 +1635,17 @@ impl GitHubBoardFields {
         );
     }
 
+    /// Perform the batched write aliased `alias` in the next document carrying it, and answer
+    /// it as `answer` says, once.
+    pub fn bend_batch_alias(&self, alias: &'static str, answer: AliasAnswer) {
+        self.board.lock().unwrap().bent_alias = Some((alias, answer));
+    }
+
+    /// Answer every batched origin lookup with the repository's node id blank.
+    pub fn blank_repository_id(&self) {
+        self.board.lock().unwrap().blank_repository_id = true;
+    }
+
     /// Fail the field write aliased `alias` in the next batched field write, once, after
     /// every alias before it in that document has landed.
     pub fn fail_field_alias(&self, alias: &'static str) {
@@ -1717,6 +1770,25 @@ impl GitHubBoardFields {
     /// Make the fixture omit the newly requested option from the post-write state.
     pub fn omit_added_status_option(&self) {
         self.board.lock().unwrap().omit_added_status_option = true;
+    }
+
+    /// File every issue created from here on with no `Status`, as a board left with GitHub's
+    /// default workflows does — those set `Done` on a closed or merged item and nothing on an
+    /// added one — or, with `false`, at `Todo`, as a board with that workflow turned on does.
+    pub fn file_new_items_without_status(&self, without: bool) {
+        self.board.lock().unwrap().files_without_status = without;
+    }
+
+    /// Answer the next `reads` reads of created issues' board items as GitHub answers before it
+    /// has filed them: each issue on no board yet.
+    pub fn file_created_items_after(&self, reads: usize) {
+        self.board.lock().unwrap().unfiled_board_item_reads = reads;
+    }
+
+    /// Answer the next read of a project's sub-issues beside a copy's batch with no list of
+    /// them, once.
+    pub fn omit_sub_issue_list_once(&self) {
+        self.board.lock().unwrap().omits_sub_issue_list = true;
     }
 
     /// Force Status snapshots to span pages even though the client requests 100 items.
@@ -2519,11 +2591,36 @@ impl GitHubBoard {
     }
 
     /// How many comments the issue `id` holds, as `comments { totalCount }` answers.
+    ///
+    /// Counted again only when the board's comments may have changed since the last count of
+    /// that issue: comments are only ever added at the end, under an id no comment has had, so
+    /// none was added or removed while their number and the last one's id stand.
     fn comment_count(&self, id: &Value) -> usize {
-        self.comments
+        let last = self
+            .comments
+            .last()
+            .and_then(|held| held["id"].as_str())
+            .map(str::to_owned);
+        let mut counted = self.comment_counted.lock().unwrap();
+        if let Some(held) = counted.as_ref()
+            && id.as_str() == Some(held.issue.as_str())
+            && held.comments == self.comments.len()
+            && held.last == last
+        {
+            return held.count;
+        }
+        let count = self
+            .comments
             .iter()
             .filter(|held| held["issue"] == *id)
-            .count()
+            .count();
+        *counted = id.as_str().map(|issue| CommentCount {
+            issue: issue.to_owned(),
+            comments: self.comments.len(),
+            last,
+            count,
+        });
+        count
     }
 
     /// Put a comment on `issue`, signed as [`GITHUB_COMMENTER`] — the account this board's
@@ -2538,6 +2635,12 @@ impl GitHubBoard {
     }
 
     /// One page of an issue's comments, oldest first, resumed from `after`.
+    ///
+    /// `after` counts the issue's comments already listed. The page starts where the page that
+    /// answered that cursor ended when nothing at or before its last comment has gone since —
+    /// comments are only ever added at the end — and otherwise counts them again from the first,
+    /// so either way the answer is the same: a walk of many pages costs each page its own length
+    /// rather than every comment the board holds.
     fn comment_connection(&self, id: &Value, after: &Value, first: &Value) -> Value {
         let offset = match after {
             Value::Null => 0,
@@ -2551,19 +2654,44 @@ impl GitHubBoard {
         )
         .expect("GraphQL first fits usize");
         assert!((1..=100).contains(&first), "comments first is out of range");
-        let on = self
+        let mut resume = self.comment_resume.lock().unwrap();
+        let start = resume
+            .as_ref()
+            .filter(|held| {
+                id.as_str() == Some(held.issue.as_str())
+                    && held.offset == offset
+                    && held.position > 0
+                    && self
+                        .comments
+                        .get(held.position - 1)
+                        .is_some_and(|last| last["id"].as_str() == Some(held.last.as_str()))
+            })
+            .map(|held| held.position);
+        let (from, skip) = start.map_or((0, offset), |position| (position, 0));
+        let mut remaining = self
             .comments
             .iter()
-            .filter(|held| held["issue"] == *id)
-            .collect::<Vec<_>>();
-        let end = (offset + first).min(on.len());
-        let nodes = on[offset.min(end)..end]
+            .enumerate()
+            .skip(from)
+            .filter(|(_, held)| held["issue"] == *id)
+            .skip(skip);
+        let page: Vec<(usize, &Value)> = remaining.by_ref().take(first).collect();
+        let more = remaining.next().is_some();
+        let end = offset + page.len();
+        *resume = page.last().and_then(|(position, last)| {
+            Some(CommentResume {
+                issue: id.as_str()?.to_owned(),
+                offset: end,
+                position: position + 1,
+                last: last["id"].as_str()?.to_owned(),
+            })
+        });
+        let nodes = page
             .iter()
-            .copied()
-            .map(GitHubBoard::comment_node)
+            .map(|(_, held)| GitHubBoard::comment_node(held))
             .collect::<Vec<_>>();
-        json!({"nodes":nodes,"pageInfo":{"hasNextPage":end < on.len(),
-                                          "endCursor":(end > offset).then(|| end.to_string())}})
+        json!({"nodes":nodes,"pageInfo":{"hasNextPage":more,
+                                          "endCursor":(!page.is_empty()).then(|| end.to_string())}})
     }
 
     /// One node a detail read reaches: the issue as a node read answers it, with a page of
@@ -3017,15 +3145,20 @@ pub fn github_projects_with_board(sandbox: &Sandbox) -> (Value, GitHubBoardField
     github_projects_board(sandbox, None, &[])
 }
 
-/// The same board again, failing the first attempt to file a created issue on it.
+/// The read of where a created issue was filed — the board item GitHub adds once a copy's
+/// `createIssue` names the board in `projectV2Ids` — as the failures below name it.
+const READ_OF_FILED_ITEMS: &str = "status:fieldValueByName(name:$statusName)";
+
+/// The same board again, failing the first read of the board item a created issue was filed
+/// as.
 ///
-/// Creating an item there is several calls — `createIssue`, then
-/// `addProjectV2ItemById`, then the board's own fields — so GitHub can fail part way
-/// through, and what the product does with an issue that exists but is on no board is a
-/// journey rather than a reading of the code. The failure is spent once, so the same
-/// board answers the retry.
-pub fn github_projects_failing_to_file_once(sandbox: &Sandbox) -> Value {
-    github_projects_board(sandbox, None, &["addProjectV2ItemById(input:$input)"]).0
+/// Creating an item there is several calls — `createIssue` filing it on the board, then a
+/// read of the board item GitHub adds after answering, then the board's own fields — so
+/// GitHub can fail part way through, and what the product does with an issue that exists but
+/// has no board item it can write is a journey rather than a reading of the code. The failure
+/// is spent once, so the same board answers the retry.
+pub fn github_projects_failing_to_read_a_filing_once(sandbox: &Sandbox) -> Value {
+    github_projects_board(sandbox, None, &[READ_OF_FILED_ITEMS]).0
 }
 
 /// The same board, failing the first field write onto an item it has already filed.
@@ -3033,27 +3166,21 @@ pub fn github_projects_failing_to_file_once(sandbox: &Sandbox) -> Value {
 /// The later half of that sequence: the issue exists and is on the board, and the copy
 /// origin and status that make it findable and readable are what did not land.
 pub fn github_projects_failing_a_field_write_once(sandbox: &Sandbox) -> Value {
-    github_projects_board(
-        sandbox,
-        None,
-        &["updateProjectV2ItemFieldValue(input:$input)"],
-    )
-    .0
+    // Whichever document carries the write: one item's own, or a copy's aliased batch.
+    github_projects_board(sandbox, None, &["updateProjectV2ItemFieldValue(input:$"]).0
 }
 
-/// The same board, failing to file a created issue *and* the tidy-up that would remove it.
+/// The same board, failing the read of where a created issue was filed *and* the tidy-up that
+/// would remove it.
 ///
-/// The earlier half of the same sequence: the issue exists in the repository and is on no
-/// board, so the source deletes it — and this board refuses that too. The caller is owed
-/// the failure that stopped the copy, for the reason the sibling below gives.
-pub fn github_projects_failing_to_file_and_its_cleanup(sandbox: &Sandbox) -> Value {
+/// The earlier half of the same sequence: the issue exists in the repository and nothing of it
+/// past its create landed, so the source deletes it — and this board refuses that too. The
+/// caller is owed the failure that stopped the copy, for the reason the sibling below gives.
+pub fn github_projects_failing_to_read_a_filing_and_its_cleanup(sandbox: &Sandbox) -> Value {
     github_projects_board(
         sandbox,
         None,
-        &[
-            "addProjectV2ItemById(input:$input)",
-            "deleteIssue(input:$input)",
-        ],
+        &[READ_OF_FILED_ITEMS, "deleteIssue(input:$input)"],
     )
     .0
 }
@@ -3070,7 +3197,7 @@ pub fn github_projects_failing_a_field_write_and_its_cleanup(sandbox: &Sandbox) 
         sandbox,
         None,
         &[
-            "updateProjectV2ItemFieldValue(input:$input)",
+            "updateProjectV2ItemFieldValue(input:$",
             "deleteIssue(input:$input)",
         ],
     )
@@ -3103,6 +3230,17 @@ fn github_projects_board_lagging(sandbox: &Sandbox, lagging_reads: usize) -> Val
 /// against it, so which source sent a request is read off the token it carried.
 const GITHUB_FIXTURE_SECRETS: &str =
     "GITHUB_PROJECTS_FIXTURE_TOKEN=test-token\nGITHUB_PROJECTS_FIXTURE_TOKEN_B=test-token-b\n";
+
+/// How one alias of a batched write that landed is answered malformed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AliasAnswer {
+    /// With no member for the alias at all, and no error beside it.
+    Missing,
+    /// With another item's id than the one its input named.
+    NamingAnother,
+    /// With another issue than the one its input named as blocking, the blocked one right.
+    NamingAnotherBlocker,
+}
 
 /// How a read by issue reference can come back malformed in its first slot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3163,6 +3301,8 @@ fn github_projects_board_at(
         read_lag: Some(3600),
         pending: Vec::new(),
         failing_alias: None,
+        bent_alias: None,
+        blank_repository_id: false,
         failing_field: None,
         owed_errors: Vec::new(),
         refusing: Vec::new(),
@@ -3206,6 +3346,8 @@ fn github_projects_board_at(
             .unwrap()
             .clone(),
         ),
+        comment_resume: std::sync::Mutex::new(None),
+        comment_counted: std::sync::Mutex::new(None),
         drift_after_priority_update: false,
         drops_priority_writes: false,
         priority_response: None,
@@ -3220,6 +3362,9 @@ fn github_projects_board_at(
         drift_after_status_update: false,
         remint_after_status_update: false,
         omit_added_status_option: false,
+        files_without_status: false,
+        unfiled_board_item_reads: 0,
+        omits_sub_issue_list: false,
         status_snapshot_page_size: None,
         status_field_present: true,
         status_board_accessible: true,
@@ -3743,6 +3888,166 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
                 .is_some_and(|reads| held.project_visibility_reads > reads);
         return json!({"visibility": {"projectV2": {"public": public}}});
     }
+    // A copy's batched reads and writes: each slot answered exactly as the single document it
+    // aliases, so the board ends exactly as it would after those sent one at a time.
+    {
+        use onetaskgraph_github_projects::graphql as documents;
+        if query == documents::ORIGIN_LOOKUPS {
+            let mut result = serde_json::Map::new();
+            {
+                let held = board.lock().unwrap();
+                assert_eq!(variables["owner"], "fixture-owner");
+                assert_eq!(variables["number"], 7);
+                assert_eq!(variables["repositoryOwner"], "nickderobertis");
+                result.insert(
+                    "boardFields".into(),
+                    json!({"projectV2":{"id":"PVT-board","fields":held.fields()}}),
+                );
+                let id = if held.blank_repository_id {
+                    ""
+                } else {
+                    "REPO-1"
+                };
+                result.insert(
+                    "repository".into(),
+                    json!({"id":id,"databaseId":123_456,
+                           "nameWithOwner":"nickderobertis/onetaskgraph"}),
+                );
+            }
+            for slot in 0..onetaskgraph_github_projects::ORIGIN_BATCH {
+                if variables[format!("ask{slot}")] != true {
+                    continue;
+                }
+                let one = json!({"type": variables["type"],
+                    "filter": variables[format!("filter{slot}")],
+                    "search": variables[format!("search{slot}")],
+                    "originFirst": variables["originFirst"],
+                    "itemsAfter": null, "searchAfter": null});
+                let answer = board.lock().unwrap().origin_lookup(&one);
+                result.insert(format!("o{slot}"), answer["originItems"].clone());
+                result.insert(format!("s{slot}"), answer["search"].clone());
+            }
+            return Value::Object(result);
+        }
+        if query == documents::CREATED_BOARD_ITEMS {
+            let mut held = board.lock().unwrap();
+            let unfiled = held.unfiled_board_item_reads > 0;
+            held.unfiled_board_item_reads = held.unfiled_board_item_reads.saturating_sub(1);
+            let mut result = serde_json::Map::new();
+            for slot in 0..onetaskgraph_github_projects::COPY_DETAIL_BATCH {
+                if variables[format!("read{slot}")] != true {
+                    continue;
+                }
+                let id = &variables[format!("id{slot}")];
+                let answer = match held.items.iter().find(|item| item["id"] == *id) {
+                    Some(_) if unfiled => json!({"id":id,"projectItems":{"nodes":[]}}),
+                    Some(item) => json!({"id":id,"projectItems":{"nodes":[{
+                        "id":item["item"],"project":{"id":"PVT-board"},
+                        "status": item["status"].as_str().map(|name| json!({"name":name}))}]}}),
+                    None if held.pending.iter().any(|item| item["id"] == *id) => {
+                        json!({"id":id,"projectItems":{"nodes":[]}})
+                    }
+                    None => Value::Null,
+                };
+                result.insert(format!("i{slot}"), answer);
+            }
+            return Value::Object(result);
+        }
+        let batches = [
+            (
+                documents::CREATE_ISSUES,
+                "create",
+                documents::CREATE_ISSUE,
+                "createIssue",
+            ),
+            (
+                documents::WRITE_FIELD_VALUES,
+                "field",
+                documents::UPDATE_FIELD,
+                "updateProjectV2ItemFieldValue",
+            ),
+            (
+                documents::CLOSE_ISSUES,
+                "close",
+                documents::UPDATE_ISSUE,
+                "updateIssue",
+            ),
+            (
+                documents::ADD_BLOCKED_BYS,
+                "block",
+                documents::ADD_BLOCKED_BY,
+                "addBlockedBy",
+            ),
+        ];
+        if let Some((_, prefix, single, root)) =
+            batches.iter().find(|(batched, ..)| *batched == query)
+        {
+            let mut result = serde_json::Map::new();
+            for slot in 0..onetaskgraph_github_projects::MUTATION_BATCH {
+                if variables[format!("send{slot}")] != true {
+                    continue;
+                }
+                let alias = format!("{prefix}{slot}");
+                let failing = {
+                    let mut held = board.lock().unwrap();
+                    let field = variables[&alias]["fieldId"].as_str();
+                    let by_field = field.is_some() && held.failing_field.as_deref() == field;
+                    let failing = held.failing_alias == Some(alias.as_str()) || by_field;
+                    if by_field {
+                        held.failing_field = None;
+                    }
+                    if failing {
+                        held.failing_alias = None;
+                        held.owed_errors.push(format!(
+                            "Something went wrong while executing your query: {alias} failed"
+                        ));
+                    }
+                    failing
+                };
+                if failing {
+                    result.insert(alias, Value::Null);
+                    continue;
+                }
+                let mut one = json!({"input": variables[&alias]});
+                if *single == documents::UPDATE_FIELD {
+                    one["readPriority"] = json!(false);
+                    one["priorityName"] = json!("Priority");
+                }
+                let answer = github_answer(board, single, &one);
+                let bent = {
+                    let mut held = board.lock().unwrap();
+                    match held.bent_alias {
+                        Some((bent, answer)) if bent == alias => {
+                            held.bent_alias = None;
+                            Some(answer)
+                        }
+                        _ => None,
+                    }
+                };
+                let mut answered = answer[*root].clone();
+                match bent {
+                    Some(AliasAnswer::Missing) => continue,
+                    Some(AliasAnswer::NamingAnotherBlocker) => {
+                        answered["blockingIssue"]["id"] = json!("ANOTHER-ITEM");
+                    }
+                    Some(AliasAnswer::NamingAnother) => {
+                        for member in answered
+                            .as_object_mut()
+                            .into_iter()
+                            .flat_map(|m| m.values_mut())
+                        {
+                            if let Some(id) = member.get_mut("id") {
+                                *id = json!("ANOTHER-ITEM");
+                            }
+                        }
+                    }
+                    None => {}
+                }
+                result.insert(alias, answered);
+            }
+            return Value::Object(result);
+        }
+    }
     if query == onetaskgraph_github_projects::graphql::UPDATE_FIELDS {
         let mut result = serde_json::Map::new();
         let writes = onetaskgraph_github_projects::FIELD_WRITE_SLOTS.map(|slot| {
@@ -4133,6 +4438,32 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
             }
             answered.insert(format!("i{slot}"), node);
         }
+        // The sub-issues of the issue `$project` names, each its id and title, when asked.
+        if variables["children"] == true {
+            let project = variables["project"].clone();
+            let visible = board.items.len().saturating_sub(board.lagging_reads);
+            let children: Vec<Value> = board.items[..visible]
+                .iter()
+                .filter(|item| item["parent"] == project && !GitHubBoard::is_draft(item))
+                .map(|item| json!({"id": item["id"], "title": item["title"]}))
+                .collect();
+            let held = board.items.iter().any(|item| item["id"] == project);
+            let mut sub_issues = json!({"nodes": children, "pageInfo": {"hasNextPage": false}});
+            if std::mem::take(&mut board.omits_sub_issue_list) {
+                sub_issues
+                    .as_object_mut()
+                    .expect("an object")
+                    .remove("nodes");
+            }
+            answered.insert(
+                "children".into(),
+                if held {
+                    json!({"id": project, "subIssues": sub_issues})
+                } else {
+                    Value::Null
+                },
+            );
+        }
         return Value::Object(answered);
     }
     // One item by its own id with a page of its comments, in one request.
@@ -4162,17 +4493,36 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         board.created += 1;
         let id = format!("ISSUE-{}", board.created);
         let at = board.tick();
-        let created = json!({"item":format!("ITEM-{id}"),"id":id,"type":"Issue",
+        let mut created = json!({"item":format!("ITEM-{id}"),"id":id,"type":"Issue",
             "title":input["title"],"body":input["body"],"state":"OPEN","reason":null,
             "parent":Value::Null,"repo":"nickderobertis/onetaskgraph","status":"Todo",
             "origin":"","labels":[],"updatedAt":at});
-        // A real board answered a create naming it in `projectV2Ids` with no item, filed the
-        // issue after, and refused the filing that then had to follow — so no create names it.
-        assert!(
-            input.get("projectV2Ids").is_none(),
-            "a create named the board in projectV2Ids: {input}"
-        );
-        board.pending.push(created);
+        if board.files_without_status {
+            created["status"] = Value::Null;
+        }
+        // `parentIssueId` files the new issue under its parent, as `addSubIssue` would.
+        if let Some(parent) = input.get("parentIssueId").and_then(Value::as_str) {
+            created["parent"] = json!(parent);
+            board.record_relationship_event(
+                (id.as_str(), parent),
+                TimelineEvent::membership(RelationshipChange::made_by(true)),
+            );
+        }
+        // `projectV2Ids` naming this board files the issue on it: GitHub adds the board item
+        // after answering the create, so the answer names none, and a later read finds it —
+        // filed with the `Status` this board gives a new item, if any.
+        match input.get("projectV2Ids") {
+            Some(boards) => {
+                assert_eq!(
+                    boards,
+                    &json!(["PVT-board"]),
+                    "a create naming another board"
+                );
+                created["itemUpdatedAt"] = json!(at);
+                board.items.push(created);
+            }
+            None => board.pending.push(created),
+        }
         // GitHub answers the creating mutation with the issue's own web address and its
         // number, which is the only place a run learns where an item it just created is,
         // and what that item's short handle is, before this board's read catches up.
@@ -4771,15 +5121,39 @@ impl IssueSearch {
     }
 
     /// Whether an issue holding this title and body is in the answer.
+    ///
+    /// A field is split into words only when it could hold one of the phrases at all — each
+    /// phrase may be held by either field — so a search of a board of thousands of items costs
+    /// this loopback what it costs GitHub, nothing a copy's simulated time does not already
+    /// charge, rather than a word list of every item's body.
     fn admits(&self, title: &str, body: &str) -> bool {
-        let (title, body) = (search_words(title), search_words(body));
-        let holds = |field: &[String], phrase: &[String]| {
-            phrase.is_empty() || field.windows(phrase.len()).any(|window| window == phrase)
+        let words = |field: &str, searched: bool| {
+            (searched
+                && (self.phrases.is_empty()
+                    || self.phrases.iter().any(|phrase| may_hold(field, phrase))))
+            .then(|| search_words(field))
         };
-        self.phrases.iter().all(|phrase| {
-            (self.in_title && holds(&title, phrase)) || (self.in_body && holds(&body, phrase))
-        })
+        let (title, body) = (words(title, self.in_title), words(body, self.in_body));
+        let holds = |field: &Option<Vec<String>>, phrase: &[String]| {
+            field.as_ref().is_some_and(|field| {
+                phrase.is_empty() || field.windows(phrase.len()).any(|window| window == phrase)
+            })
+        };
+        self.phrases
+            .iter()
+            .all(|phrase| holds(&title, phrase) || holds(&body, phrase))
     }
+}
+
+/// Whether `text` could hold every word of `phrase` as [`search_words`] splits it: always for
+/// text that is not ASCII, whose lower-casing can turn another character into an ASCII one, and
+/// otherwise only when each word occurs in it, any case.
+fn may_hold(text: &str, phrase: &[String]) -> bool {
+    if !text.is_ascii() {
+        return true;
+    }
+    let lowered = text.to_ascii_lowercase();
+    phrase.iter().all(|word| lowered.contains(word.as_str()))
 }
 
 /// The words GitHub's index holds of `text`: every run of letters and digits, lower-cased.
@@ -8181,4 +8555,23 @@ pub fn dataset() -> Value {
              "to": {"id": "elsewhere:T-9", "kind": "task"}, "kind": "blocks"}
         ]
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::IssueSearch;
+
+    #[test]
+    fn each_phrase_of_a_search_may_be_held_by_either_field() {
+        // GitHub admits an issue when every phrase is in a field searched, whichever field
+        // holds it; one phrase in the title and another in the body is such an issue.
+        let search = IssueSearch::parse(r#"in:title,body "alpha plan" beta"#);
+        assert!(search.admits("The alpha plan", "beta, in the body"));
+        assert!(search.admits("Nothing", "Beta follows the ALPHA PLAN."));
+        assert!(!search.admits("The alpha plan", "nothing else"));
+        assert!(!search.admits("alpha and plan apart", "beta"));
+        let titles = IssueSearch::parse(r#"in:title "alpha plan""#);
+        assert!(!titles.admits("Nothing", "the alpha plan"));
+        assert!(titles.admits("The Ålpha plan or the alpha plan", ""));
+    }
 }

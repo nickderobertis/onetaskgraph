@@ -1277,6 +1277,21 @@ impl TaskSource for LocalMdSource {
     async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
         self.write_task_with(write, None)
     }
+    /// The file the record is, as a read reports it: its canonical absolute path, found without
+    /// reading it.
+    fn written_location(
+        &self,
+        record: onetaskgraph_plugin_api::MetadataRecord,
+        id: &NativeId,
+    ) -> Option<Location> {
+        let kind = match record {
+            onetaskgraph_plugin_api::MetadataRecord::Task => Kind::Task,
+            onetaskgraph_plugin_api::MetadataRecord::Project => Kind::Project,
+            onetaskgraph_plugin_api::MetadataRecord::Document => Kind::Document,
+        };
+        let path = self.locate(kind, id).ok()??;
+        Some(Location::Path(path.to_str()?.to_owned()))
+    }
     /// Every refusal [`write_task`](TaskSource::write_task) makes of what a task carries — its
     /// two task lists, its status against this folder's mapping, its content against the
     /// sections this folder reads out of a file — made without touching a file.

@@ -2911,6 +2911,50 @@ fn a_served_plugin_takes_the_copy_link_key_only_with_a_value_that_is_links() {
 }
 
 #[test]
+fn a_served_plugin_takes_the_copy_location_key_only_with_a_value_that_is_locations() {
+    // `onetaskgraph.copy_locations` is the other reserved key §4.18 admits, and only as an
+    // object of destination source names to an id of that source and a location: anything else
+    // is refused at the boundary, before the hosted source is asked.
+    let write = |value: Value| {
+        json!({"id": "1", "method": "set_task_metadata",
+               "params": {"id": "T-1", "key": "onetaskgraph.copy_locations", "value": value}})
+    };
+    for value in [
+        json!("notes:T-1"),
+        json!({"notes": "notes:T-1"}),
+        json!({"notes": {"id": "elsewhere:T-1", "location": {"path": "/tmp/T-1.md"}}}),
+        json!({"notes": {"id": "notes:T-1"}}),
+        json!({"notes": {"id": "notes:T-1", "location": "/tmp/T-1.md"}}),
+    ] {
+        let answers = served(&[handshake(2, hosted_settings()), write(value.clone())]);
+        assert_eq!(
+            refusal(&answers[1]),
+            "malformed",
+            "{value}: {:#}",
+            answers[1]
+        );
+    }
+
+    // The documented example, taken from `docs/metadata.md` rather than restated.
+    let page = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/metadata.md"),
+    )
+    .expect("docs/metadata.md is readable");
+    let section = &page[page
+        .find("### `onetaskgraph.copy_locations`")
+        .expect("the section on the locations")..];
+    let example = &section[section.find("```json\n").expect("its example") + "```json\n".len()..];
+    let documented: Value = serde_json::from_str(&example[..example.find("```").unwrap()])
+        .expect("the documented example is JSON");
+    let answers = served(&[handshake(2, hosted_settings()), write(documented.clone())]);
+    assert_eq!(
+        answers[1]["result"]["task"]["metadata"]["onetaskgraph.copy_locations"], documented,
+        "the documented example is refused: {:#}",
+        answers[1]
+    );
+}
+
+#[test]
 fn the_reference_host_declares_end_command_and_answers_it() {
     let answers = served(&[
         handshake(2, hosted_settings()),

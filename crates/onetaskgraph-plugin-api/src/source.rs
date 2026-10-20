@@ -11,12 +11,12 @@ use serde_json::Value;
 use crate::{
     Asset, AssetName, AssetWrite, AssetsWritten, Capabilities, Comment, CommentBody, CommentCopy,
     DependencyEdge, Direction, Document, DocumentQuery, DocumentVersionCoverage, IssueHolding,
-    IssueRef, ItemKind, ItemWrite, Label, MetadataKey, MetadataRecord, Metering, NativeId,
-    NewComment, Page, PageRequest, Priority, Project, ProjectQuery, ProjectVersionCoverage,
-    SharedClock, SourceError, SourceName, Status, StatusCategory, StatusContradiction, Task,
-    TaskDetailRead, TaskQuery, TaskRef, TaskUpdate, TaskUpdateOutcome, VersionCoverage, Visibility,
-    WriteJournal, WriteSupport, WriteTarget, assetless, commentless, documentless, unwritable,
-    unwritable_field, unwritable_metadata,
+    IssueRef, ItemKind, ItemWrite, Label, Location, MetadataKey, MetadataRecord, Metering,
+    NativeId, NewComment, Page, PageRequest, Priority, Project, ProjectQuery,
+    ProjectVersionCoverage, SharedClock, SourceError, SourceName, Status, StatusCategory,
+    StatusContradiction, Task, TaskDetailRead, TaskQuery, TaskRef, TaskUpdate, TaskUpdateOutcome,
+    VersionCoverage, Visibility, WriteJournal, WriteSupport, WriteTarget, assetless, commentless,
+    documentless, unwritable, unwritable_field, unwritable_metadata,
 };
 
 /// Whether a source is answering right now.
@@ -643,6 +643,22 @@ pub trait TaskSource: Send + Sync {
         Ok(())
     }
 
+    /// The status an item of `kind` reads back as once this source has written `status` for
+    /// it, asked without writing or reading anything.
+    ///
+    /// A source that keeps a status's name as it was given answers `status` itself. One that
+    /// writes a category to a name of its own — a board's `Status` option the category maps
+    /// to — answers that name, so a caller comparing what it would write with what the source
+    /// holds does not read a difference of spelling alone as a change: a copy then leaves an
+    /// item that already reads as the source does unwritten.
+    ///
+    /// Defaulted to `status` itself, which is what every source keeping names verbatim reads
+    /// back, and what a caller compared against before this was asked.
+    fn status_as_written(&self, kind: ItemKind, status: &Status) -> Status {
+        let _ = kind;
+        status.clone()
+    }
+
     /// Set the status of one task this source holds, and change nothing else about it,
     /// answering with the status as this source now reads it — or `None` when this source
     /// holds no such task.
@@ -1181,6 +1197,126 @@ pub trait TaskSource: Send + Sync {
     async fn read_ahead_for_copy(&self, ids: &[NativeId]) -> Result<(), SourceError> {
         let _ = ids;
         Ok(())
+    }
+
+    /// Ask, together, which items were copied from each of `origins` — the qualified ids a copy
+    /// is about to look for at this destination by the `onetaskgraph.origin` each item records
+    /// — and hold each answer
+    /// for this command, so that the next query for the items copied from one of them (a
+    /// [`TaskQuery::origin`] task query, [`query_projects_by_origin`](Self::query_projects_by_origin)
+    /// or [`query_documents_by_origin`](Self::query_documents_by_origin)) is answered from it,
+    /// once, instead of being sent on its own. A source may carry in the same read whatever its
+    /// creating an item would read first, since a copy finding nothing creates.
+    ///
+    /// What is held is exactly what those queries would have answered, and only until the next
+    /// write or [`end_command`](Self::end_command). Defaulted to doing nothing, so each query is
+    /// sent as it always was.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`SourceError`] when the read could not be made. Nothing is then held, and each
+    /// query answers as it would have.
+    async fn read_ahead_origins_for_copy(&self, origins: &[String]) -> Result<(), SourceError> {
+        let _ = origins;
+        Ok(())
+    }
+
+    /// How many tasks this source creates in one [`write_tasks`](Self::write_tasks): more than
+    /// one only for a source that creates several in one request.
+    ///
+    /// A copy hands such a source the tasks it creates together, and names each one's edges to
+    /// the others in a write after they all exist. Defaulted to one, which has a copy write every
+    /// task on its own, exactly as before.
+    fn create_batch_limit(&self) -> usize {
+        1
+    }
+
+    /// Create every task of `writes` — each [`ItemWrite::target`] `None` — answering with the
+    /// native ids they were created under, in order.
+    ///
+    /// All of them or none: a source that cannot create every one takes back each it did create
+    /// before refusing, on the terms §4.9 of the protocol puts on [`write_task`](Self::write_task).
+    /// Defaulted to creating them one at a time through [`write_task`](Self::write_task), taking
+    /// back those created when a later one is refused.
+    ///
+    /// # Errors
+    ///
+    /// Refused, before anything is written, when a write names an existing target; otherwise
+    /// whatever [`write_task`](Self::write_task) of one of them refuses with.
+    // llmlint: ignore[invalid_states_unrepresentable] Approved by the contract's owner as an additive method taking `ItemWrite<Task>` exactly as `write_task` does; a create-only input type would be a new contract type. A write naming an existing target is refused below before anything is written, so rollback only ever takes back what this call created.
+    async fn write_tasks(&self, writes: &[ItemWrite<Task>]) -> Result<Vec<NativeId>, SourceError> {
+        if let Some(write) = writes.iter().find(|write| write.target.is_some()) {
+            return Err(SourceError::Refused {
+                message: format!(
+                    "write_tasks creates tasks, and the write of {} names an existing target; \
+                     next: update it with write_task",
+                    write.item.id
+                ),
+            });
+        }
+        let mut created = Vec::with_capacity(writes.len());
+        for write in writes {
+            match self.write_task(write).await {
+                Ok(id) => created.push(id),
+                Err(error) => {
+                    // The caller is never handed these ids, so one this source will not take
+                    // back is named here or by nobody.
+                    let mut left: Vec<&str> = Vec::new();
+                    for id in &created {
+                        if self.delete_task(id).await.is_err() {
+                            left.push(id.0.as_str());
+                        }
+                    }
+                    if left.is_empty() {
+                        return Err(error);
+                    }
+                    return Err(SourceError::Refused {
+                        message: format!(
+                            "{error}; this source then refused to take back {}, which this \
+                             write created and which it still holds; next: delete {} before \
+                             writing again",
+                            left.join(", "),
+                            if left.len() == 1 { "it" } else { "them" }
+                        ),
+                    });
+                }
+            }
+        }
+        Ok(created)
+    }
+
+    /// From here until [`finish_writes`](Self::finish_writes), a source may hold back the part of
+    /// each write that can land later — a created item's fields and edges — and send it together
+    /// with the others' when that is called.
+    ///
+    /// A caller asks for this only when it will call `finish_writes` before it reads what it
+    /// wrote from anywhere but this source, or reports it written. Defaulted to holding nothing
+    /// back, so every write lands whole as it is made.
+    fn begin_deferred_writes(&self) {}
+
+    /// Send whatever this source has held back since [`begin_deferred_writes`](Self::begin_deferred_writes),
+    /// and hold nothing back after it.
+    ///
+    /// All or nothing for the items it created: a source that cannot finish them takes them back
+    /// before refusing, so a caller undoing its writes finds them gone. Defaulted to doing
+    /// nothing, since nothing was held.
+    ///
+    /// # Errors
+    ///
+    /// Whatever sending what was held back was refused with.
+    async fn finish_writes(&self) -> Result<(), SourceError> {
+        Ok(())
+    }
+
+    /// Where an item this source wrote in the current command is, when the write's own answer
+    /// said so: `record` names which kind of item `id` is.
+    ///
+    /// Answered only from what a write already returned — never by a request — so a caller may
+    /// ask it after every write for free. A caller treats `None` as not knowing, and reads the
+    /// item when it needs its location. Defaulted to `None`.
+    fn written_location(&self, record: MetadataRecord, id: &NativeId) -> Option<Location> {
+        let _ = (record, id);
+        None
     }
 
     /// Add one comment to `task`, answering with the comment as the source now holds it, or

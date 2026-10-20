@@ -19,8 +19,9 @@ use crate::common::{SOURCE_BOUNDARIES, Sandbox, SourceBoundary, stderr, stdout};
 use crate::fixtures::{
     LINEAR_REFUSED_WRITE, ROWS, SOURCE, document, empty_folder,
     github_projects_failing_a_field_write_and_its_cleanup,
-    github_projects_failing_a_field_write_once, github_projects_failing_to_file_and_its_cleanup,
-    github_projects_failing_to_file_once, github_projects_reading_one_item_behind,
+    github_projects_failing_a_field_write_once,
+    github_projects_failing_to_read_a_filing_and_its_cleanup,
+    github_projects_failing_to_read_a_filing_once, github_projects_reading_one_item_behind,
     github_projects_with_board, linear_block, linear_empty_workspace,
     linear_failing_a_relation_write_once, qualified,
 };
@@ -1369,12 +1370,12 @@ fn a_copy_says_in_words_what_it_spent_and_nothing_where_nothing_meters() {
 }
 
 #[test]
-fn a_board_that_fails_between_creating_an_issue_and_filing_it_says_so_and_recovers() {
-    // Landing an item on a board is two calls — `createIssue`, then
-    // `addProjectV2ItemById` — so GitHub can fail between them, and what happens then is
-    // a journey rather than a reading of the code: the copy exits non-zero saying what
-    // GitHub said, the board holds nothing it was not already holding, and the retry
-    // lands exactly one item rather than two.
+fn a_board_that_fails_to_read_where_it_filed_a_created_issue_says_so_and_recovers() {
+    // Landing an item on a board is more than one call — `createIssue` filing it, then a
+    // read of the board item GitHub adds after answering — so GitHub can fail between them,
+    // and what happens then is a journey rather than a reading of the code: the copy exits
+    // non-zero saying what GitHub said, the board holds nothing it was not already holding,
+    // and the retry lands exactly one item rather than two.
     let sandbox = Sandbox::new();
     let root = sandbox.subdirectory("plans");
     std::fs::create_dir_all(root.join("tasks")).unwrap();
@@ -1387,7 +1388,7 @@ fn a_board_that_fails_between_creating_an_issue_and_filing_it_says_so_and_recove
         "plans": {"plugin":"local-md","config":{
             "root": root, "status_mapping": {"Todo":"todo"}}},
         "board": {"plugin":"github-projects",
-                  "config": github_projects_failing_to_file_once(&sandbox)}
+                  "config": github_projects_failing_to_read_a_filing_once(&sandbox)}
     })));
 
     let said = refused(&sandbox, &["task", "copy", "plans:A", "--to", "board"], 1);
@@ -2437,12 +2438,19 @@ fn a_project_copied_beside_itself_files_its_tasks_under_the_copy_and_links_them_
         }]),
         "{dependencies:#}"
     );
-    // The original is as it was, but for the one entry that records where it was copied to.
+    // The original is as it was, but for the two entries that record where it was copied to
+    // and where that copy is.
+    let copied = std::fs::canonicalize(root.join("tasks/rule-scope-2/alpha.md")).expect("the copy");
     assert_eq!(
         std::fs::read_to_string(root.join("tasks/rule-scope/alpha.md")).expect("the original"),
-        "---\ntitle: Alpha\nstatus: todo\nproject: rule-scope\n\
-         depends_on: [rule-scope/beta]\nmetadata:\n  \
-         \"onetaskgraph.copies\": {\"authoring\":\"authoring:rule-scope-2/alpha\"}\n---\nbody\n"
+        format!(
+            "---\ntitle: Alpha\nstatus: todo\nproject: rule-scope\n\
+             depends_on: [rule-scope/beta]\nmetadata:\n  \
+             \"onetaskgraph.copies\": {{\"authoring\":\"authoring:rule-scope-2/alpha\"}}\n  \
+             \"onetaskgraph.copy_locations\": {{\"authoring\":{{\"id\":\"authoring:rule-scope-2/alpha\",\
+             \"location\":{{\"path\":{}}}}}}}\n---\nbody\n",
+            json!(copied)
+        )
     );
 
     // Copied again onto the copy it made, each task is found where the first copy put it and
@@ -3163,8 +3171,8 @@ fn a_cleanup_that_also_fails_reports_the_write_that_failed_rather_than_the_tidy_
     // The tidy-up's own failure is about an item they never asked to exist; reporting it
     // instead would leave them reading a deletion error for a copy they made.
     //
-    // This board refuses the field write and then refuses the removal, so both failures are
-    // real and the copy has to choose which one to say.
+    // This board refuses the field write and then refuses the source's removal, so both
+    // failures are real and the copy has to choose which one to say.
     let sandbox = Sandbox::new();
     let root = sandbox.subdirectory("plans");
     std::fs::create_dir_all(root.join("tasks")).unwrap();
@@ -3190,33 +3198,20 @@ fn a_cleanup_that_also_fails_reports_the_write_that_failed_rather_than_the_tidy_
         "and not the failure of the tidy-up that followed it: {said}"
     );
 
-    // The item the removal could not take back really is still there — the refusal above is
-    // the whole of what the caller gets, so this is the state they are left in.
+    // The source's own removal was refused, and the copy's undo — which journalled the issue
+    // when it was created — took it back on its own attempt, so the board holds nothing of the
+    // failed copy, and the plain retry files exactly one.
     let listed = ok(&sandbox, &["task", "list", "--source", "board"]);
     assert_eq!(
         listed.matches("First step").count(),
-        1,
-        "the removal failed, so the item it could not take back is on the board: {listed}"
+        0,
+        "the copy's undo took back the item the source's removal could not: {listed}"
     );
-
-    // Both failures are spent, so the copy the caller runs next matches that item by title
-    // rather than filing a second one for the same plan.
     let again = ok(
         &sandbox,
-        &[
-            "task",
-            "copy",
-            "plans:A",
-            "--to",
-            "board",
-            "--match-by",
-            "title",
-            "--json",
-        ],
+        &["task", "copy", "plans:A", "--to", "board", "--json"],
     );
-    let landed = reported(&again);
-    assert_eq!(landed.len(), 1, "{again}");
-    assert_eq!(landed[0].2, "updated", "{again}");
+    assert_eq!(reported(&again)[0].2, "created", "{again}");
     let listed = ok(&sandbox, &["task", "list", "--source", "board"]);
     assert_eq!(
         listed.matches("First step").count(),
@@ -3226,9 +3221,10 @@ fn a_cleanup_that_also_fails_reports_the_write_that_failed_rather_than_the_tidy_
 }
 
 #[test]
-fn a_creation_whose_filing_and_cleanup_both_fail_still_reports_the_filing() {
-    // The earlier half of the same sequence: `createIssue` lands, filing it on the board
-    // does not, and the removal that would take the created issue back is refused as well.
+fn a_creation_whose_filing_read_and_cleanup_both_fail_still_reports_the_read() {
+    // The earlier half of the same sequence: `createIssue` lands, the read of the board item
+    // it filed does not, and the removal that would take the created issue back is refused as
+    // well.
     // The caller is told why the copy stopped — an issue they never asked to exist failing
     // to be removed is not something they can act on, and reporting it would replace the
     // reason with a consequence.
@@ -3244,12 +3240,12 @@ fn a_creation_whose_filing_and_cleanup_both_fail_still_reports_the_filing() {
         "plans": {"plugin":"local-md","config":{
             "root": root, "status_mapping": {"Doing":"in-progress"}}},
         "board": {"plugin":"github-projects",
-                  "config": github_projects_failing_to_file_and_its_cleanup(&sandbox)}
+                  "config": github_projects_failing_to_read_a_filing_and_its_cleanup(&sandbox)}
     })));
 
     let said = refused(&sandbox, &["task", "copy", "plans:A", "--to", "board"], 1);
     assert!(
-        said.contains("addProjectV2ItemById"),
+        said.contains("status:fieldValueByName(name:$statusName)"),
         "the failure that stopped the copy is what the caller is told: {said}"
     );
     assert!(

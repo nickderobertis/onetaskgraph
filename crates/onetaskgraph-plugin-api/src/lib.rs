@@ -42,7 +42,7 @@ pub use cache::{
     RequestKind, Shown, VersionCoverage, WholeTask, WriteJournal,
 };
 pub use capability::{Capabilities, DependencySupport, Support};
-pub use clock::{Clock, SIMULATED_CLOCK_VARIABLE, SharedClock, system_clock};
+pub use clock::{Clock, SIMULATED_CLOCK_VARIABLE, SharedClock, WaitCause, system_clock};
 pub use comment::{
     Comment, CommentBody, CommentCopy, CommentOrigin, NewComment, TaskDetailRead, commentless,
 };

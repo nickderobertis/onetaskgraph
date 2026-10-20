@@ -1,5 +1,5 @@
-requests 210
-node count 293608
+requests 212
+node count 302921
 
 requests per call
     1       0  DELETE /repos/{owner}/{repo}/labels/{name}
@@ -29,9 +29,10 @@ requests per call
     1       0  live scratch field removal
     1       0  live scratch field value
     1     915  node-count and point-cost reconciliation while looking up the items copied from one origin
+    1    9200  node-count and point-cost reconciliation while looking up the items copied from several origins, and what creating one reads
     1     150  node-count and point-cost reconciliation while reading a batch of issues by their references
     1    7272  node-count and point-cost reconciliation while reading a batch of issues with their comments
-    1    7413  node-count and point-cost reconciliation while reading a batch of issues with their comments and dependencies for a copy
+    1    7463  node-count and point-cost reconciliation while reading a batch of issues with their comments and dependencies for a copy
     1   25653  node-count and point-cost reconciliation while reading a project's tasks
     1     100  node-count and point-cost reconciliation while reading a task's comments
     1     200  node-count and point-cost reconciliation while reading an issue's dependencies
@@ -40,6 +41,7 @@ requests per call
     1     303  node-count and point-cost reconciliation while reading one issue with its comments
     1    5100  node-count and point-cost reconciliation while reading one issue's board memberships past the page it came with
     1   10150  node-count and point-cost reconciliation while reading the board
+    1      63  node-count and point-cost reconciliation while reading the board items of the issues a copy created
     1   10150  node-count and point-cost reconciliation while reading the board's closed items
     1      50  node-count and point-cost reconciliation while reading the board's fields
     1      50  node-count and point-cost reconciliation while reading the board's fields and the destination repository

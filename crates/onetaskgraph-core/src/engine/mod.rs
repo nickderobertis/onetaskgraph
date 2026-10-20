@@ -67,12 +67,12 @@ pub use closure::{
 pub use comment::{
     CommentList, CommentWritten, DeletedComment, DocumentDetail, TaskDetail, TaskDetails,
 };
-pub(crate) use copy::malformed_links;
 pub(crate) use copy::spent_between;
 pub use copy::{
     BudgetSpent, CommentCounts, CopyAction, CopyItems, CopyLink, CopyLookup, CopyOutcome,
     CopyReport, CopyRequest, CopyScope, CopyVia, MatchBy, NoCounterpart, Spent,
 };
+pub(crate) use copy::{malformed_links, malformed_locations};
 pub use delivery::{Delivered, DeliveryOutcome, ProjectStatusSet, TaskStatusSet, settled};
 pub use graph::{
     GraphDirection, GraphEdge, GraphNode, GroupKey, PROJECT_GRAPH_SCHEMA_VERSION, ProjectGraph,
@@ -1326,11 +1326,11 @@ pub enum EngineError {
     CopyDestinationUncertain {
         /// The malformed answer, as the destination's refusal of the write.
         error: Box<EngineError>,
-        // llmlint: ignore-block[invalid_states_unrepresentable] Both fields are `String` because this variant's shape is a stated contract other work builds against, and it matches its neighbours: `SourceRefused`, `NotWritable` and the rest name a source as a `String`. Both are only ever built in `engine/copy.rs`, from a configured source's own name and from one of three method literals.
+        // llmlint: ignore-block[invalid_states_unrepresentable] Both fields are `String` because this variant's shape is a stated contract other work builds against, and it matches its neighbours: `SourceRefused`, `NotWritable` and the rest name a source as a `String`. Both are only ever built in `engine/copy.rs`, from a configured source's own name and from one of four method literals.
         /// The destination source the create was sent to.
         destination: String,
-        /// The plugin method whose answer was malformed: `write_task`, `write_document` or
-        /// `write_project`.
+        /// The plugin method whose answer was malformed: `write_task`, `write_tasks`,
+        /// `write_document` or `write_project`.
         operation: String,
         // llmlint: ignore-end[invalid_states_unrepresentable]
     },

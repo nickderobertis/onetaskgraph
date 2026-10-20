@@ -171,7 +171,127 @@ fn report_metadata_fields() {
     let (value, detail) = metadata_field_share(&budget).unwrap_or_else(|error| refuse(&error));
     hand_over(value, &detail);
 }
+// llmlint: ignore-block[budget_commands_measure_directly] Every budget of this crate selects its own report-only entry here, the harness-runner convention it landed with (report_visibility_reads, report_metadata_fields), and the task registering the plan-copy budgets names this one entry for all seven of them. It reads only the telemetry `plan_copy.rs` recorded during the crate's ordinary test run, refuses a recording of another plan, board size or scenario, and hands the figure to onebudgetspec, which alone judges it.
+#[test]
+fn report_plan_copy() {
+    let Some(budget) = selected() else {
+        return;
+    };
+    let (value, detail) = plan_copy_figure(&budget).unwrap_or_else(|error| refuse(&error));
+    hand_over(value, &detail);
+}
+// llmlint: ignore-end[budget_commands_measure_directly]
 // llmlint: ignore-end[tests_assert_real_behavior]
+
+/// The scenario a plan-copy budget measures, read off its own id: the scenario its id ends
+/// with, or the first copy for one naming none — the writes a first copy makes.
+fn plan_copy_scenario(budget: &str) -> &'static str {
+    super::plan_copy::SCENARIOS
+        .iter()
+        .find(|scenario| budget.ends_with(&format!("-{scenario}")))
+        .copied()
+        .unwrap_or(super::plan_copy::SCENARIOS[0])
+}
+
+/// What `plan_copy.rs` recorded for `budget`, refused unless the recording states the plan, the
+/// board size and the scenario the budget's workload names: its figure, and its detail.
+fn plan_copy_figure(budget: &str) -> Result<(f64, String), String> {
+    let value = recorded(budget)?;
+    if value["plan"].as_str() != Some(super::plan_copy::WORKLOAD) {
+        return Err("the recording is not of the generated 10-item plan".into());
+    }
+    if value["board"].as_u64() != Some(super::plan_copy::SMALL as u64) {
+        return Err("the recording is not of a board of 2000 items".into());
+    }
+    if value["scenario"].as_str() != Some(plan_copy_scenario(budget)) {
+        return Err(format!(
+            "the recording is not of the {} scenario",
+            plan_copy_scenario(budget)
+        ));
+    }
+    let figure = value["value"]
+        .as_f64()
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .ok_or("missing nonnegative figure")?;
+    let detail = value["detail"].as_str().ok_or("missing detail")?.to_owned();
+    Ok((figure, detail))
+}
+
+#[test]
+fn the_plan_copy_report_hands_over_the_recorded_figure_and_refuses_another_workload() {
+    use onetaskgraph_e2e_support::common::Sandbox;
+    use serde_json::json;
+    let sandbox = Sandbox::new();
+    let directory = sandbox.subdirectory("plan-copy");
+    let run = |budget: &str, recorded: Option<Value>| {
+        let path = onetaskgraph_e2e_support::telemetry::file_in(&directory, budget);
+        let _ = std::fs::remove_file(&path);
+        if let Some(recorded) = recorded {
+            std::fs::write(&path, recorded.to_string()).unwrap();
+        }
+        let result = directory.join("result.json");
+        let _ = std::fs::remove_file(&result);
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["budget_runner::report_plan_copy", "--exact", "--nocapture"])
+            .env("GITHUB_ASSET_TELEMETRY_DIR", &directory)
+            .env("ONEBUDGETSPEC_BUDGET_ID", budget)
+            .env("ONEBUDGETSPEC_RESULT", &result)
+            .output()
+            .unwrap();
+        (output, std::fs::read_to_string(&result).ok())
+    };
+    for (budget, scenario) in [
+        ("github-plan-copy-seconds-unchanged", "unchanged"),
+        ("github-plan-copy-points-changed", "changed"),
+        ("github-plan-copy-content-creations", "first"),
+    ] {
+        let valid = json!({"budget": budget, "value": 5.25, "detail": "recorded",
+            "plan": super::plan_copy::WORKLOAD, "board": super::plan_copy::SMALL,
+            "scenario": scenario});
+        let with = |field: &str, value: Value| {
+            let mut changed = valid.clone();
+            changed[field] = value;
+            Some(changed)
+        };
+        let other = if scenario == "first" {
+            "unchanged"
+        } else {
+            "first"
+        };
+        for (recorded, message) in [
+            (None, "no telemetry"),
+            (
+                with("plan", json!("a 24-image bundle")),
+                "not of the generated 10-item plan",
+            ),
+            (
+                with("board", json!(super::plan_copy::LARGE)),
+                "not of a board of 2000 items",
+            ),
+            (with("scenario", json!(other)), "scenario"),
+            (with("budget", json!("another-budget")), "different budget"),
+            (with("value", json!(-1.0)), "missing nonnegative figure"),
+            (with("detail", json!(null)), "missing detail"),
+        ] {
+            let (output, written) = run(budget, recorded);
+            assert!(!output.status.success(), "{budget}: accepted {message}");
+            assert!(
+                String::from_utf8_lossy(&output.stderr).contains(message),
+                "{budget}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(written, None, "{budget}: reported a figure over {message}");
+        }
+        let (output, written) = run(budget, Some(valid));
+        assert!(
+            output.status.success(),
+            "{budget}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let written: Value = serde_json::from_str(&written.expect("a figure")).unwrap();
+        assert_eq!(written["value"], json!(5.25), "{budget}: {written}");
+    }
+}
 
 /// The workload `metadata_fields.rs` records: one follow-up copied once and re-copied twice
 /// unchanged, with a projected host and without one.

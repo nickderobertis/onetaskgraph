@@ -7,13 +7,16 @@
 //! and that the board ends holding exactly the plan. Neither may depend on how many items the
 //! board has accumulated, so every scenario is driven on a board of 2,000 items and again on
 //! one of 20,000, and the two request tallies are held equal. It asserts no time and no point
-//! total against a bound: that is the copy budgets' job, recorded on top of this journey.
+//! total against a bound: that is the copy budgets' job. What each scenario on the board of
+//! 2,000 cost is recorded here as their telemetry — `github-plan-copy-seconds-*`,
+//! `github-plan-copy-points-*` and `github-plan-copy-content-creations` — which
+//! `budget_runner::report_plan_copy` hands to onebudgetspec.
 
-use super::asset_board::{Board, Call, Kind};
+use super::asset_board::{Board, Call, Kind, creations};
 use onetaskgraph_e2e_support::{
     binary,
     clock::SimulatedClock,
-    common::{Sandbox, stderr, stdout},
+    common::{Sandbox, assert_spawnable_on_windows, stderr, stdout},
     fixtures::{GitHubBoardFields, document, github_projects_with_items},
     images,
 };
@@ -27,6 +30,13 @@ use std::{
 
 /// The seed every plan below is generated from.
 const SEED: u64 = 20_261_018;
+
+/// What a recording of the copy budgets names the plan it measured: the generated plan the
+/// budgets' workload states.
+pub(super) const WORKLOAD: &str = "generated 10-item plan";
+
+/// The three scenarios the copy budgets measure, by the name a recording gives each.
+pub(super) const SCENARIOS: [&str; 3] = ["first", "changed", "unchanged"];
 
 /// The board size the spike's `plans` board stood at, rounded, and ten times it.
 pub(super) const SMALL: usize = 2_000;
@@ -49,10 +59,15 @@ const EDGES: [(usize, usize); 10] = [
     (8, 2),
 ];
 
-/// The board text fields the plan's records carry values of, each projected from the caller
-/// metadata key beside it: two on the project and on every task, the first alone on the
-/// document, as the workload states.
-const FIELDS: [(&str, &str); 2] = [("Area", "plan.area"), ("Owner", "plan.owner")];
+/// The caller metadata keys the plan's records carry, two on the project and on every task and
+/// the first alone on the document, each in its record's metadata slot.
+///
+/// The board projects none of them onto a text field. The workload's 19 field values are what
+/// the timing spike's copy wrote, on a board configured with no `metadata_fields`: the `Status`
+/// of the project and its eight tasks and the origin field of all ten records. A projection
+/// would add a write per value on top of those, which is a cost of configuring one rather than
+/// of copying a plan, and `metadata_fields.rs` is where projecting a key onto a field is proven.
+const FIELDS: [&str; 2] = ["plan.area", "plan.owner"];
 
 /// The PNG the document references, the spike's 104,072 bytes.
 const PNG_BYTES: usize = 104_072;
@@ -197,19 +212,13 @@ impl Plan {
         let mut held: Vec<Value> = (0..items).map(background).collect();
         held.extend(extra);
         let (mut config, github) = github_projects_with_items(&sandbox, held);
+        // GitHub's default workflows set no `Status` on an item added to a board, so the copy
+        // writes every one it carries — the workload's nine.
+        github.file_new_items_without_status(true);
         let board = Board::new(config["endpoint"].as_str().unwrap(), &clock, 0, None);
         board.measure_latency();
         config["endpoint"] = json!(board.endpoint);
         config["pacing"] = json!({});
-        config["metadata_fields"] = json!(
-            FIELDS
-                .iter()
-                .map(|(field, key)| json!({"field": field, "key": key}))
-                .collect::<Vec<_>>()
-        );
-        for (field, _) in FIELDS {
-            github.with_text_field(field);
-        }
         let root = sandbox.subdirectory("notes");
         for directory in ["projects", "tasks", "documents/D.assets"] {
             std::fs::create_dir_all(root.join(directory)).unwrap();
@@ -246,10 +255,10 @@ impl Plan {
             .to_owned()
     }
 
-    /// The front matter giving record `id` its generated board field values.
+    /// The front matter giving record `id` its generated metadata values.
     fn field_values(&self, id: &str) -> String {
         let mut metadata = String::from("metadata:\n");
-        for ((_, key), value) in FIELDS.iter().zip(&self.generated.fields[id]) {
+        for (key, value) in FIELDS.iter().zip(&self.generated.fields[id]) {
             metadata.push_str(&format!("  {key}: {value}\n"));
         }
         metadata
@@ -330,31 +339,231 @@ impl Plan {
 
     /// One command through the binary, attached to the clock.
     pub fn run(&self, arguments: &[&str]) -> Output {
-        self.sandbox
-            .subprocess(binary())
+        let mut command = self.sandbox.subprocess(binary());
+        command
             .args(arguments)
             .envs(self.clock.client_env(0))
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap()
-            .wait_with_output()
-            .unwrap()
+            .stderr(Stdio::piped());
+        assert_spawnable_on_windows(&command);
+        command.spawn().unwrap().wait_with_output().unwrap()
     }
 
     /// One scenario as `just copy-plan` sends it — `project copy` then `document copy` — with
     /// both reports and every request the board answered for the two.
     pub fn copy(&self) -> (Value, Value, Vec<Call>) {
+        let scenario = self.copy_timed();
+        (scenario.project, scenario.document, scenario.calls)
+    }
+
+    /// [`Self::copy`], with how long each of its two commands took: in the board's simulated
+    /// time, and in the real time its process ran.
+    pub fn copy_timed(&self) -> Scenario {
         let before = self.board.calls().len();
         let lease = self.clock.lease(0);
-        let project =
-            success(&self.run(&["project", "copy", "notes:P", "--to", "board", "--json"]));
-        lease.wait_for_detach();
-        let document =
-            success(&self.run(&["document", "copy", "notes:D", "--to", "board", "--json"]));
-        lease.wait_for_detach();
+        let mut phases = Vec::new();
+        let mut reports = Vec::new();
+        for (kind, id) in [("project", "notes:P"), ("document", "notes:D")] {
+            let simulated = self.clock.now();
+            let started = std::time::Instant::now();
+            let output = self.run(&[kind, "copy", id, "--to", "board", "--json"]);
+            let real = started.elapsed();
+            lease.wait_for_detach();
+            phases.push((kind, self.clock.now() - simulated, real));
+            reports.push(success(&output));
+        }
         drop(lease);
-        (project, document, self.board.calls()[before..].to_vec())
+        let document = reports.pop().expect("the document copy's report");
+        let project = reports.pop().expect("the project copy's report");
+        Scenario {
+            project,
+            document,
+            calls: self.board.calls()[before..].to_vec(),
+            phases,
+        }
+    }
+}
+
+/// One scenario of the copy budgets, as [`Plan::copy_timed`] measured it.
+pub(super) struct Scenario {
+    pub project: Value,
+    pub document: Value,
+    /// Every request the board answered for it.
+    pub calls: Vec<Call>,
+    /// Each command, its simulated time and its process's real time.
+    pub phases: Vec<(&'static str, std::time::Duration, std::time::Duration)>,
+}
+
+/// The points one request of each kind costs against the primary GraphQL allowance, as the
+/// timing spike's `pricing.json` priced it, each beside how the points budgets' descriptions
+/// in `budgets.yaml` name it — the one spelling of that price list here, which
+/// [`the_points_budgets_state_the_prices_they_are_measured_at`] holds those descriptions to.
+const SPIKE_PRICES: [(&str, u64, &[Kind]); 5] = [
+    ("a board page", 2, &[Kind::BoardPage]),
+    ("an issue-search page", 5, &[Kind::SearchPage]),
+    ("any other read", 1, &[Kind::ItemRead, Kind::BatchedRead]),
+    (
+        "each mutation request",
+        1,
+        &[Kind::Mutation, Kind::AliasedMutations],
+    ),
+    (
+        "REST",
+        0,
+        &[Kind::Upload, Kind::Repository, Kind::Verification],
+    ),
+];
+
+/// What one request costs against the primary GraphQL allowance, by [`SPIKE_PRICES`].
+fn spike_points(call: &Call) -> u64 {
+    SPIKE_PRICES
+        .iter()
+        .find(|(_, _, kinds)| kinds.contains(&call.kind))
+        .map(|(_, points, _)| *points)
+        .expect("every kind of request is priced")
+}
+
+#[test]
+fn the_points_budgets_state_the_prices_they_are_measured_at() {
+    // Each points budget's description says what a request costs; the figure it holds is
+    // measured by `SPIKE_PRICES`, so the two are one statement, read here from the file.
+    let stated = SPIKE_PRICES
+        .iter()
+        .map(|(named, points, _)| format!("{named} {points}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let budgets = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("budgets.yaml"),
+    )
+    .unwrap();
+    let mut described = 0;
+    // Each entry of the file's `budgets` list, from its `- id:` line to the next one's.
+    for entry in budgets.split("\n  - id: ").skip(1) {
+        if entry.starts_with("github-plan-copy-points-") {
+            described += 1;
+            assert!(
+                entry.contains(&format!("pricing.json — {stated}.")),
+                "a points budget does not state the prices it is measured at ({stated}): {entry}"
+            );
+        }
+    }
+    assert_eq!(described, SCENARIOS.len(), "a points budget per scenario");
+}
+
+/// Record what `scenario` cost as the copy budgets' telemetry, for
+/// `budget_runner::report_plan_copy`: its seconds — the simulated seconds of both commands —
+/// and, apart, the real seconds their processes ran; its points; and for a first copy the
+/// writes GitHub's secondary limit may count.
+fn record(name: &str, scenario: &Scenario, board: usize) {
+    let simulated: f64 = scenario
+        .phases
+        .iter()
+        .map(|(_, simulated, _)| simulated.as_secs_f64())
+        .sum();
+    let real: f64 = scenario
+        .phases
+        .iter()
+        .map(|(_, _, real)| real.as_secs_f64())
+        .sum();
+    let requests = tally(&scenario.calls);
+    let mut points_by: BTreeMap<String, u64> = BTreeMap::new();
+    let mut creations_by: BTreeMap<String, u64> = BTreeMap::new();
+    for call in &scenario.calls {
+        *points_by.entry(operation(call)).or_default() += spike_points(call);
+        let created = creations(&call.path, &call.bytes);
+        if created > 0 {
+            *creations_by.entry(operation(call)).or_default() += created;
+        }
+    }
+    let points: u64 = points_by.values().sum();
+    let created: u64 = creations_by.values().sum();
+    // Every board field value the aliased field writes carried, by the field it set: each is
+    // one write above, and the workload names how many of each there are.
+    let mut values_by_field: BTreeMap<String, u64> = BTreeMap::new();
+    for call in &scenario.calls {
+        let Ok(request) = serde_json::from_slice::<Value>(&call.bytes) else {
+            continue;
+        };
+        if !request["query"]
+            .as_str()
+            .is_some_and(|query| query == graphql::WRITE_FIELD_VALUES)
+        {
+            continue;
+        }
+        let variables = &request["variables"];
+        for slot in 0..onetaskgraph_github_projects::MUTATION_BATCH {
+            if variables[format!("send{slot}")] == true {
+                let field = variables[format!("field{slot}")]["fieldId"]
+                    .as_str()
+                    .unwrap_or("a field this write did not name")
+                    .to_owned();
+                *values_by_field.entry(field).or_default() += 1;
+            }
+        }
+    }
+    let latencies: BTreeMap<String, u64> = [
+        Kind::ItemRead,
+        Kind::BoardPage,
+        Kind::SearchPage,
+        Kind::BatchedRead,
+        Kind::Mutation,
+        Kind::AliasedMutations,
+        Kind::Upload,
+        Kind::Repository,
+        Kind::Verification,
+    ]
+    .iter()
+    .map(|kind| (format!("{kind:?}"), kind.measured_millis()))
+    .collect();
+    let phases: BTreeMap<&str, f64> = scenario
+        .phases
+        .iter()
+        .map(|(kind, simulated, _)| (*kind, simulated.as_secs_f64()))
+        .collect();
+    let directory = super::budget_runner::directory();
+    std::fs::create_dir_all(&directory).unwrap();
+    let mut recordings = vec![
+        (
+            format!("github-plan-copy-seconds-{name}"),
+            simulated,
+            json!({"simulated seconds by phase": phases,
+                   "requests by operation": requests, "milliseconds charged by kind": latencies}),
+        ),
+        // The processes' own real time, which the host's load moves: reported beside the
+        // simulated figure, never added to it.
+        (
+            format!("github-plan-copy-real-seconds-{name}"),
+            real,
+            json!({"real seconds by phase": scenario
+                .phases
+                .iter()
+                .map(|(kind, _, real)| (*kind, real.as_secs_f64()))
+                .collect::<BTreeMap<&str, f64>>()}),
+        ),
+        (
+            format!("github-plan-copy-points-{name}"),
+            points as f64,
+            json!({"points by operation": points_by, "requests by operation": requests}),
+        ),
+    ];
+    if name == SCENARIOS[0] {
+        recordings.push((
+            "github-plan-copy-content-creations".to_owned(),
+            created as f64,
+            json!({"writes by mutation": creations_by,
+                   "field values by field": values_by_field,
+                   "requests": scenario.calls.iter().filter(|call| creations(&call.path, &call.bytes) > 0).count()}),
+        ));
+    }
+    for (budget, value, detail) in recordings {
+        std::fs::write(
+            onetaskgraph_e2e_support::telemetry::file_in(&directory, &budget),
+            serde_json::to_vec(&json!({"budget": budget, "value": value,
+                "detail": detail.to_string(), "plan": WORKLOAD, "board": board,
+                "scenario": name}))
+            .unwrap(),
+        )
+        .unwrap();
     }
 }
 
@@ -439,15 +648,16 @@ fn split_slot(body: &str) -> (&str, Value) {
 /// Every id the board holds a counterpart of the plan under, by the plan's own ids.
 pub(super) type Counterparts = BTreeMap<String, String>;
 
-/// Hold the board item `native` to carrying the board field values generated for `source` in
-/// its text fields, and nothing in a field the source gives it no value of.
+/// Hold the board item `native` to carrying the metadata values generated for `source` in its
+/// metadata slot, and no key the source gives it no value of.
 fn carries_fields(plan: &Plan, native: &str, source: &str) {
     let values = &plan.generated.fields[source];
-    for (index, (field, _)) in FIELDS.iter().enumerate() {
+    let (_, slot) = split_slot(plan.github.body(native).as_str().unwrap());
+    for (index, key) in FIELDS.iter().enumerate() {
         assert_eq!(
-            plan.github.text_of(native, field),
+            slot.get(*key).and_then(Value::as_str).map(str::to_owned),
             values.get(index).cloned(),
-            "{source}'s {field} field on the board"
+            "{source}'s {key} in its metadata slot"
         );
     }
 }
@@ -457,7 +667,7 @@ fn carries_fields(plan: &Plan, native: &str, source: &str) {
 /// source's title, content, state, status and generated board field values, every task a sub-issue of the project,
 /// the ten blocked-by edges and no others, and the document referencing each task's
 /// counterpart and its PNG as an uploaded asset whose bytes are the source's.
-fn holds_the_plan(plan: &Plan, at: &Counterparts, changed: Option<(usize, &str)>) {
+pub(super) fn holds_the_plan(plan: &Plan, at: &Counterparts, changed: Option<(usize, &str)>) {
     let github = &plan.github;
     let project = &at["P"];
     let item = |id: &str| github.item(id).unwrap_or_else(|| panic!("no item {id}"));
@@ -557,35 +767,48 @@ pub(super) fn counterparts(project: &Value, document: &Value) -> Counterparts {
     at
 }
 
-/// The three scenarios on a board of `items` other items: what each sent, by operation.
+/// The three scenarios on a board of `items` other items: what each sent, by operation. On the
+/// board the copy budgets' workload states, what each cost is recorded as their telemetry.
 fn three_scenarios(items: usize) -> [BTreeMap<String, usize>; 3] {
     let plan = Plan::new(items, Vec::new());
+    let recorded = |name: &str, scenario: &Scenario| {
+        if items == SMALL {
+            record(name, scenario, items);
+        }
+    };
 
-    let (project, document, first) = plan.copy();
-    never_walks("the first copy", &first);
-    let at = counterparts(&project, &document);
+    let first = plan.copy_timed();
+    never_walks("the first copy", &first.calls);
+    let at = counterparts(&first.project, &first.document);
     holds_the_plan(&plan, &at, None);
+    recorded(SCENARIOS[0], &first);
 
     let edited = format!(
         "{}An edit made since the last copy.\n",
         plan.generated.tasks[3]
     );
     plan.write_task(4, &edited, true);
-    let (project, document, changed) = plan.copy();
-    never_walks("the re-copy after one task changed", &changed);
+    let changed = plan.copy_timed();
+    never_walks("the re-copy after one task changed", &changed.calls);
     assert_eq!(
-        counterparts(&project, &document),
+        counterparts(&changed.project, &changed.document),
         at,
         "the re-copy found every item"
     );
     holds_the_plan(&plan, &at, Some((4, &edited)));
+    recorded(SCENARIOS[1], &changed);
 
-    let (project, document, unchanged) = plan.copy();
-    never_walks("the unchanged re-copy", &unchanged);
-    assert_eq!(counterparts(&project, &document), at);
+    let unchanged = plan.copy_timed();
+    never_walks("the unchanged re-copy", &unchanged.calls);
+    assert_eq!(counterparts(&unchanged.project, &unchanged.document), at);
     holds_the_plan(&plan, &at, Some((4, &edited)));
+    recorded(SCENARIOS[2], &unchanged);
 
-    [tally(&first), tally(&changed), tally(&unchanged)]
+    [
+        tally(&first.calls),
+        tally(&changed.calls),
+        tally(&unchanged.calls),
+    ]
 }
 
 #[test]
@@ -651,13 +874,20 @@ fn a_task_taken_out_of_the_plan_is_reported_orphaned_and_left_as_it_was() {
 
 #[test]
 fn the_board_holds_each_request_for_the_spikes_mean_latency_of_its_kind() {
-    // A first copy of the plan sends item reads, single and aliased mutations, an upload, its
-    // repository read and its verification; a board listing sends board and search pages; and
-    // a detail read of several tasks batches them. Every request of the three is held for
+    // A first copy of the plan sends item reads, batched reads, single and aliased mutations,
+    // an upload and its verification; a re-copy of the document after its image changed sends
+    // the repository read an update's upload needs; a board listing sends board and search
+    // pages; and a detail read of several tasks batches them. Every request of them is held for
     // exactly its kind's mean, on the virtual clock.
     let plan = Plan::new(30, Vec::new());
     let before = plan.board.calls().len();
     let (project, _, _) = plan.copy();
+    std::fs::write(
+        plan.root.join("documents/D.assets/diagram.png"),
+        images::png(SEED + 1, PNG_BYTES),
+    )
+    .unwrap();
+    plan.measured(&["document", "copy", "notes:D", "--to", "board", "--json"]);
     let tasks: Vec<String> = (1..=3)
         .map(|n| format!("board:{}", landed(&project, &format!("notes:T-{n}"))))
         .collect();
@@ -726,7 +956,7 @@ const ITEM_READS: [&str; 4] = [
 ];
 
 /// Every item read among `calls`, as its document and the ids its variables name.
-fn item_reads(calls: &[Call]) -> Vec<(String, std::collections::BTreeSet<String>)> {
+pub(super) fn item_reads(calls: &[Call]) -> Vec<(String, std::collections::BTreeSet<String>)> {
     calls
         .iter()
         .filter_map(|call| {
@@ -796,25 +1026,37 @@ impl Plan {
     }
 }
 
-fn plan_ids(at: &Counterparts) -> std::collections::BTreeSet<String> {
+pub(super) fn plan_ids(at: &Counterparts) -> std::collections::BTreeSet<String> {
     at.values().cloned().collect()
 }
 
 #[test]
 fn a_recopy_with_no_token_reads_every_counterpart_in_batches_and_none_on_its_own() {
-    // (b): no cache, so no item has a token the copy could vouch for: the ten are read, every
-    // one of them in an aliased batch of at most COPY_DETAIL_BATCH, and none by its own read.
+    // (b): no cache, so no item has a token the copy could vouch for: the project and its ten
+    // tasks are read in aliased batches of at most COPY_DETAIL_BATCH, none by its own read. The
+    // document copy that follows has one counterpart to read, its own, and reads it alone.
     let plan = Plan::new(SMALL, Vec::new());
     let (project, document, _) = plan.copy();
     let at = counterparts(&project, &document);
     let (_, _, calls) = plan.copy();
     let reads = item_reads(&calls);
+    let alone: Vec<&(String, std::collections::BTreeSet<String>)> = reads
+        .iter()
+        .filter(|(document, _)| document != graphql::ISSUE_COPY_DETAILS)
+        .collect();
+    assert_eq!(
+        alone,
+        vec![&(
+            graphql::ISSUE.to_owned(),
+            std::collections::BTreeSet::from([at["D"].clone()])
+        )],
+        "an item read that is not a batch, but the document's own: {reads:?}"
+    );
     assert!(
         reads
             .iter()
-            .all(|(document, ids)| document == graphql::ISSUE_COPY_DETAILS
-                && ids.len() <= onetaskgraph_github_projects::COPY_DETAIL_BATCH),
-        "an item read that is not a batch: {reads:?}"
+            .all(|(_, ids)| ids.len() <= onetaskgraph_github_projects::COPY_DETAIL_BATCH),
+        "a batch over COPY_DETAIL_BATCH: {reads:?}"
     );
     assert_eq!(
         named_by_item_reads(&calls),
@@ -954,8 +1196,8 @@ fn a_recopy_whose_pinning_listings_are_refused_reads_what_they_would_have_carrie
     // Both listings that would pin every member's token and carry the plan — the project's
     // tasks, then its documents, which are sub-issues of it too — are refused once each:
     // nothing is pinned or carried, so every counterpart is read as if there were no cache —
-    // in one batch — and the copy lands the plan exactly as it would have. The orphan check's
-    // own read of the members is made after it, and answered.
+    // in one batch — and the copy lands the plan exactly as it would have. That batch names the
+    // project's own sub-issues too, so the orphan check is answered by it and lists nothing.
     let plan = Plan::configured(SMALL, Vec::new(), Some(json!({"enabled": true})));
     let (project, document, _) = plan.copy();
     let at = counterparts(&project, &document);
@@ -981,9 +1223,84 @@ fn a_recopy_whose_pinning_listings_are_refused_reads_what_they_would_have_carrie
     );
     assert_eq!(
         tally(&calls)["reading a project's tasks"],
-        3,
-        "the two refused pinning listings, then the orphan check's own: {:?}",
+        2,
+        "the two refused pinning listings — the orphan check is answered by the batched read, \
+         which named the project's sub-issues: {:?}",
         tally(&calls)
     );
     holds_the_plan(&plan, &at, None);
+}
+
+#[test]
+fn an_origin_its_batched_lookup_cannot_answer_in_one_page_is_looked_up_on_its_own() {
+    // Four unrelated issues mention `notes:T-1` in their bodies, more than one page of the
+    // batched lookup's issue search holds: that origin is left to its own lookup, which walks
+    // every page, finds none of them copied from it, and the copy creates T-1 once — and finds
+    // that one item, and no decoy, on the next copy.
+    let decoys: Vec<Value> = (0..4)
+        .map(|n| {
+            let mut decoy = background(9_001 + n);
+            decoy["parent"] = Value::Null;
+            decoy["body"] = json!(format!(
+                "Mentions notes:T-1 in passing.\n\n<!-- onetaskgraph.metadata\n{}\n-->",
+                json!({"onetaskgraph.origin": format!("elsewhere:decoy-{n}")})
+            ));
+            decoy
+        })
+        .collect();
+    let plan = Plan::new(SMALL, decoys);
+    let (project, document, calls) = plan.copy();
+    let at = counterparts(&project, &document);
+    holds_the_plan(&plan, &at, None);
+    assert!(
+        tally(&calls)
+            .keys()
+            .any(|operation| operation == "looking up the items copied from one origin"),
+        "{:?}",
+        tally(&calls)
+    );
+    let (project, document, _) = plan.copy();
+    assert_eq!(
+        counterparts(&project, &document),
+        at,
+        "no duplicate, no decoy"
+    );
+    for n in 0..4 {
+        let decoy = plan
+            .github
+            .item(&format!("BG-{}", 9_001 + n))
+            .expect("the decoy");
+        assert!(
+            decoy["body"]
+                .as_str()
+                .unwrap()
+                .starts_with("Mentions notes:T-1")
+        );
+    }
+}
+
+#[test]
+fn a_project_whose_sub_issues_come_back_unlisted_still_finds_the_task_taken_out_of_it() {
+    // The project's sub-issues ride along with the copy's batched read, and that answer leaves
+    // their list out: it is no answer, not an empty project, so the orphan check reads the
+    // project's own sub-issues and still finds the task taken out of it.
+    let plan = Plan::new(SMALL, Vec::new());
+    let (project, document, _) = plan.copy();
+    let at = counterparts(&project, &document);
+    plan.write_task(8, &plan.generated.tasks[7], false);
+    plan.github.omit_sub_issue_list_once();
+    let (project, _, calls) = plan.copy();
+    let orphaned: Vec<&Value> = project["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| item["action"] == "orphaned")
+        .collect();
+    assert_eq!(orphaned.len(), 1, "{project:#}");
+    assert_eq!(orphaned[0]["destination"], format!("board:{}", at["T-8"]));
+    assert!(
+        tally(&calls).contains_key("reading a project's tasks"),
+        "{:?}",
+        tally(&calls)
+    );
 }

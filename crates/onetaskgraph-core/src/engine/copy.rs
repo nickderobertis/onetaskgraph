@@ -906,6 +906,56 @@ struct Deferred {
     prior: Option<Prior>,
 }
 
+/// Whether one write of a task stamps the record of the copy that lands it (see [`record`]),
+/// or leaves the record the destination holds — none, for a task it creates — where it is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Stamping {
+    /// Stamp it: a copy that can skip — `--comments`, or by query — always records itself, and
+    /// so does one bringing a stale record up to date.
+    Always,
+    /// Stamp it only where the write carries what the record lives beside anyway: the task's
+    /// content or a metadata key. A change of its title, status, priority or edges alone is
+    /// then written as that member and nothing else, rather than as a rewrite of the body that
+    /// would carry the record and nothing more. A record left as it was is only ever older
+    /// than the task it is on, which a later copy reads as a reason to compare, never to skip,
+    /// so the task is never served from a skip it should not have been.
+    WithCarrier,
+    /// Never: a task created together with others, whose edges to them could not be named when
+    /// its content was sent, so no digest of what it holds could be true. It lands with no
+    /// record, which a later copy reads as a reason to compare rather than to skip, and the next
+    /// copy that writes its content records it.
+    Never,
+}
+
+impl Stamping {
+    /// How a write made by `request` records itself, `rerecord` when it is made only to bring
+    /// a stale record up to date.
+    fn of(request: &CopyRequest, rerecord: bool) -> Self {
+        if rerecord || request.comments || request.items.query().is_some() {
+            Self::Always
+        } else {
+            Self::WithCarrier
+        }
+    }
+
+    /// Whether a write landing `task` over what the destination held as `prior` stamps this
+    /// copy's record on it.
+    fn stamps(self, task: &Task, prior: Option<&Prior>) -> bool {
+        match self {
+            Self::Always => true,
+            Self::Never => false,
+            Self::WithCarrier => match prior.map(|prior| &prior.item) {
+                Some(Item::Task(held)) => {
+                    held.content != task.content
+                        || record::without_record(&held.metadata)
+                            != record::without_record(&task.metadata)
+                }
+                _ => true,
+            },
+        }
+    }
+}
+
 /// What one item's undo has to do to put the destination back.
 ///
 /// Each entry names the source it was written to, because a routed copy writes into more
@@ -1040,7 +1090,10 @@ struct Unlink {
     item: GlobalId,
     /// Which of that source's interfaces holds it.
     level: Level,
-    /// What it held at `onetaskgraph.copies` before, or `None` when it held nothing there.
+    /// Which of the two keys a copy records where an item landed under was written:
+    /// `onetaskgraph.copies` or `onetaskgraph.copy_locations`.
+    key: MetadataKey,
+    /// What it held at that key before, or `None` when it held nothing there.
     before: Option<Value>,
 }
 
@@ -1252,6 +1305,11 @@ struct Linking {
     destination: GlobalId,
     /// What it held at `onetaskgraph.copies` when it was read, if anything.
     held: Option<Value>,
+    /// What it held at `onetaskgraph.copy_locations` when it was read, if anything.
+    held_locations: Option<Value>,
+    /// Where the destination reports it landed, when the copy knows that without asking: the
+    /// counterpart's read, or what the destination's write answered.
+    location: Option<Location>,
 }
 
 /// One task a copy landed, and what the relation rule reads of it once the copy is complete.
@@ -1449,6 +1507,9 @@ struct Referent {
     /// The well-formed entries of its own `onetaskgraph.copies`: the counterpart it records
     /// at each destination it was copied into.
     links: BTreeMap<SourceName, NativeId>,
+    /// Where each of those counterparts is, by its own `onetaskgraph.copy_locations`, for the
+    /// links that entry still stands beside.
+    located: BTreeMap<SourceName, Location>,
 }
 
 impl Referent {
@@ -1557,6 +1618,17 @@ impl Counterparts {
             .entry((level, origin.to_string()))
             .or_default()
             .push((id.clone(), located(location)));
+    }
+
+    /// Record the counterpart a referent's own link names, at the location the referent recorded
+    /// for it beside that link, without the destination being asked: the copy that wrote both
+    /// wrote that record, so it is the one record the correspondence names, as a link confirmed
+    /// by a read is.
+    fn note_recorded(&mut self, referent: &Referent, id: &NativeId, location: &Location) {
+        self.by_origin
+            .entry((referent.level, referent.id.to_string()))
+            .or_default()
+            .push((id.clone(), located(Some(location))));
     }
 
     /// What one referent's occurrences become, by the two-key rule.
@@ -1677,6 +1749,7 @@ impl Engine {
         }
         let before = readings(&metered).await;
         let mut journal = Journal::default();
+        let holding = self.hold_back(request);
         match self.copy_all(request, &mut journal).await {
             Ok((mut report, deliverers)) => {
                 // After the whole copy is complete and outside the journal: what the relation
@@ -1697,8 +1770,65 @@ impl Engine {
                 report.spent = spent_between(&before, &readings(&metered).await);
                 Ok(report)
             }
-            Err(error) => Err(self.undo(journal, error).await),
+            Err(error) => {
+                let error = self.undo(journal, error).await;
+                // Nothing a copy that failed created is left to send — its undo took each one
+                // back — so this ends the holding back without writing anything.
+                for destination in &holding {
+                    let _ = destination.source().finish_writes().await;
+                }
+                Err(error)
+            }
         }
+    }
+
+    /// Every destination `request` can write, each told it may hold back the parts of the
+    /// items it creates until [`Self::finished_writes`] — so a plan copy's field values and
+    /// edges go to a board together rather than one item at a time.
+    ///
+    /// A dry run writes nothing, and a copy expecting a version of its target records each write
+    /// whole for the store's cache, so neither holds anything back.
+    fn hold_back(&self, request: &CopyRequest) -> Vec<&ResolvedSource> {
+        if request.dry_run || self.expects_copy() {
+            return Vec::new();
+        }
+        let mut holding: Vec<&ResolvedSource> = Vec::new();
+        for name in std::iter::once(request.destination.clone())
+            .chain(self.routes.reachable(&request.destination))
+        {
+            if let Ok(destination) = self.writable(&name)
+                && !holding.iter().any(|held| held.name() == destination.name())
+            {
+                destination.source().begin_deferred_writes();
+                holding.push(destination);
+            }
+        }
+        holding
+    }
+
+    /// Have every destination `request` can write send what it held back, before anything is
+    /// linked to or reported as landing there.
+    async fn finished_writes(&self, request: &CopyRequest) -> Result<(), EngineError> {
+        if request.dry_run || self.expects_copy() {
+            return Ok(());
+        }
+        let mut finished: Vec<SourceName> = Vec::new();
+        for name in std::iter::once(request.destination.clone())
+            .chain(self.routes.reachable(&request.destination))
+        {
+            if finished.contains(&name) {
+                continue;
+            }
+            if let Ok(destination) = self.writable(&name) {
+                destination
+                    .source()
+                    .finish_writes()
+                    .await
+                    .map_err(|error| refused(destination, error))?;
+            }
+            finished.push(name);
+        }
+        Ok(())
     }
 
     /// The copy itself, with everything it writes recorded so a failure can be undone.
@@ -1876,6 +2006,9 @@ impl Engine {
             self.record_dependents(recordings, journal).await?;
             self.record_members(homes, journal).await?;
         }
+        // Everything held back lands before anything is linked to it: a copy that cannot finish
+        // is undone with nothing recorded at its sources.
+        self.finished_writes(request).await?;
         let mut items = items;
         self.link(linking, &mut items, request.no_link, journal)
             .await?;
@@ -1954,6 +2087,7 @@ impl Engine {
                     &resolved(&edges),
                     &resolved_entries(&delivers),
                     entry.prior,
+                    Stamping::of(request, false),
                     journal,
                 )
                 .await?;
@@ -2118,19 +2252,36 @@ impl Engine {
         // any later copy can read, so it is replaced by what is, exactly as an entry naming
         // another item is rewritten.
         let mut links = well_formed(entry.held.as_ref());
-        if links.get(landed_in.as_str()) == Some(&wanted) {
+        let link_held = links.get(landed_in.as_str()) == Some(&wanted);
+        let mut locations = located_entries(entry.held_locations.as_ref());
+        let location = entry
+            .location
+            .as_ref()
+            .and_then(|location| serde_json::to_value(location).ok())
+            .map(|location| serde_json::json!({"id": wanted, "location": location}));
+        let location =
+            location.filter(|location| locations.get(landed_in.as_str()) != Some(location));
+        if link_held && location.is_none() {
             return Ok(CopyLink::Unchanged);
         }
         let source = self.readable(&entry.item.source)?;
         if !source.source().writes().is_supported() {
-            return Ok(CopyLink::Unrecorded);
+            return Ok(if link_held {
+                CopyLink::Unchanged
+            } else {
+                CopyLink::Unrecorded
+            });
         }
         // A link naming a private destination is not written where it would name it to
         // anybody who may read the source.
         if self.declared(&landed_in) == crate::config::SourceVisibility::Private
             && self.declared(source.name()) != crate::config::SourceVisibility::Private
         {
-            return Ok(CopyLink::Unrecorded);
+            return Ok(if link_held {
+                CopyLink::Unchanged
+            } else {
+                CopyLink::Unrecorded
+            });
         }
         self.at_write(
             source,
@@ -2138,38 +2289,74 @@ impl Engine {
             &WriteTarget::Existing(&entry.item.native),
         )
         .await?;
-        links.insert(landed_in.to_string(), wanted);
-        // Journalled before the write, for the reason a destination write is: a write that
-        // stopped part way is only put back by what this journal holds.
-        journal.links.push(Unlink {
-            item: entry.item.clone(),
-            level: entry.level,
-            before: entry.held,
-        });
-        match set_link(
-            source,
-            entry.level,
-            &entry.item.native,
-            &Value::Object(links),
-        )
-        .await
-        {
-            Ok(true) => Ok(CopyLink::Recorded),
-            // Nothing was written: the source no longer holds the item, or said it cannot
-            // hold the key.
-            Ok(false) | Err(SourceError::Refused { .. }) => {
-                journal.links.pop();
-                Ok(CopyLink::Unrecorded)
+        let recorded = if link_held {
+            CopyLink::Unchanged
+        } else {
+            links.insert(landed_in.to_string(), wanted);
+            // Journalled before the write, for the reason a destination write is: a write that
+            // stopped part way is only put back by what this journal holds.
+            journal.links.push(Unlink {
+                item: entry.item.clone(),
+                level: entry.level,
+                key: MetadataKey::copies(),
+                before: entry.held,
+            });
+            match set_link(
+                source,
+                entry.level,
+                &entry.item.native,
+                &MetadataKey::copies(),
+                &Value::Object(links),
+            )
+            .await
+            {
+                Ok(true) => CopyLink::Recorded,
+                // Nothing was written: the source no longer holds the item, or said it cannot
+                // hold the key.
+                Ok(false) | Err(SourceError::Refused { .. }) => {
+                    journal.links.pop();
+                    return Ok(CopyLink::Unrecorded);
+                }
+                // §4.18 once let a plugin refuse any key in this namespace as malformed, and one
+                // written then still may. Its answer says nothing about whether it wrote, so the
+                // journal entry stays and a later failure puts the item back regardless.
+                Err(SourceError::Malformed { .. }) => return Ok(CopyLink::Unrecorded),
+                Err(error) => return Err(refused(source, error)),
             }
-            // §4.18 once let a plugin refuse any key in this namespace as malformed, and one
-            // written then still may. Its answer says nothing about whether it wrote, so the
-            // journal entry stays and a later failure puts the item back regardless.
-            Err(SourceError::Malformed { .. }) => Ok(CopyLink::Unrecorded),
-            Err(error) => Err(refused(source, error)),
+        };
+        // Where the counterpart is, beside the link that names it, so a later document copy can
+        // point a reference at it without reading it. Nothing depends on it landing: a source
+        // that will not hold it — a plugin built before the key existed refuses it as malformed
+        // — leaves the link as it was recorded, and a reader without it reads as it always did.
+        if let Some(location) = location {
+            locations.insert(landed_in.to_string(), location);
+            journal.links.push(Unlink {
+                item: entry.item.clone(),
+                level: entry.level,
+                key: MetadataKey::copy_locations(),
+                before: entry.held_locations,
+            });
+            match set_link(
+                source,
+                entry.level,
+                &entry.item.native,
+                &MetadataKey::copy_locations(),
+                &Value::Object(locations),
+            )
+            .await
+            {
+                Ok(true) | Err(SourceError::Malformed { .. }) => {}
+                Ok(false) | Err(SourceError::Refused { .. }) => {
+                    journal.links.pop();
+                }
+                Err(error) => return Err(refused(source, error)),
+            }
         }
+        Ok(recorded)
     }
 
-    /// Put one copied item's `onetaskgraph.copies` back to what it held before this copy.
+    /// Put one copied item's `onetaskgraph.copies`, or its `onetaskgraph.copy_locations`, back
+    /// to what it held before this copy.
     ///
     /// A key it held is written back through the same narrow write. A key it did not hold
     /// cannot be removed through that write, so the item is read as it now is and written
@@ -2184,7 +2371,7 @@ impl Engine {
         };
         let source = self.readable(&entry.item.source).map_err(as_source_error)?;
         if let Some(before) = &entry.before {
-            return set_link(source, entry.level, &entry.item.native, before)
+            return set_link(source, entry.level, &entry.item.native, &entry.key, before)
                 .await
                 .map(|_| ());
         }
@@ -2195,7 +2382,7 @@ impl Engine {
         else {
             return Ok(());
         };
-        metadata_of(&mut held.item).remove(MetadataKey::COPIES_KEY);
+        metadata_of(&mut held.item).remove(entry.key.as_str());
         restore(source, &entry.item.native, &held).await
     }
 
@@ -2559,6 +2746,7 @@ impl Engine {
             }
         }
         let home_source = project.to.clone();
+        let home = self.writable(&home_source)?;
         let mut project = project;
         self.store_forms(std::slice::from_mut(&mut project)).await?;
         let unchanged = match &project.target {
@@ -2587,15 +2775,7 @@ impl Engine {
                 );
                 let held = project.held.as_ref();
                 let unchanged_with = |edges: &[Option<DependencyEdge>]| {
-                    !changes(
-                        held,
-                        &project,
-                        target,
-                        &None,
-                        &resolved(edges),
-                        &[],
-                        &home_source,
-                    )
+                    !changes(held, &project, target, &None, &resolved(edges), &[], home)
                 };
                 Some(
                     (!settled.iter().any(Option::is_none) && unchanged_with(&settled))
@@ -3091,6 +3271,10 @@ impl Engine {
     /// The destination's records for `referents`, found from what each referent records
     /// rather than by walking everything the destination holds.
     ///
+    /// **A recorded location before all.** A referent whose `onetaskgraph.copy_locations` entry
+    /// names exactly what its link names here is answered from that entry, and the destination
+    /// is not asked about it at all.
+    ///
     /// **A link first.** A referent whose own `onetaskgraph.copies` names a record at this
     /// destination has that record read by id — every linked record read ahead together, by
     /// one [`TaskSource::read_ahead_for_copy`] — and when the record's own origin is one of the
@@ -3119,6 +3303,17 @@ impl Engine {
         let mut found = Counterparts::default();
         let name = destination.name();
         let mut unlinked: Vec<&Referent> = Vec::new();
+        // **A recorded location before all.** A referent that recorded where its linked
+        // counterpart is, beside the link, is answered from that and the destination is not
+        // asked about it.
+        let mut asking: Vec<&Referent> = Vec::new();
+        for referent in referents {
+            match (referent.link(name), referent.located.get(name)) {
+                (Some(id), Some(location)) => found.note_recorded(referent, &id, location),
+                _ => asking.push(referent),
+            }
+        }
+        let referents = asking;
         let linked: Vec<NativeId> = referents
             .iter()
             .filter_map(|referent| referent.link(name))
@@ -3681,6 +3876,20 @@ impl Engine {
             note_private(running, item);
         }
 
+        // Tasks this call creates at a destination that creates several in one request are
+        // created there together, before anything of this call lands — by a copy that cannot
+        // skip a task, since a task created together with others lands without the record a
+        // copy that can skip — `--comments`, or by query — leaves for the next one.
+        let created = if request.dry_run
+            || self.expects_copy()
+            || Stamping::of(request, false) == Stamping::Always
+        {
+            BTreeMap::new()
+        } else {
+            self.create_together(&planned, &filed, running, journal)
+                .await?
+        };
+
         let mut outcomes = Vec::new();
         let mut unresolved = Vec::new();
         let mut priors = Vec::new();
@@ -3718,6 +3927,7 @@ impl Engine {
                         edges: &edges,
                         delivers: &resolvable_delivers,
                     },
+                    created.get(&index).cloned(),
                     journal,
                 )
                 .await?;
@@ -3759,15 +3969,15 @@ impl Engine {
                     running.private.push(id.clone());
                 }
                 if !request.dry_run {
+                    let metadata = described(&item.item).1;
                     running.linking.push(Linking {
                         item: item.source.clone(),
                         level: item.item.level(),
                         found: item.target.found(),
                         destination: id.clone(),
-                        held: described(&item.item)
-                            .1
-                            .get(MetadataKey::COPIES_KEY)
-                            .cloned(),
+                        held: metadata.get(MetadataKey::COPIES_KEY).cloned(),
+                        held_locations: metadata.get(MetadataKey::COPY_LOCATIONS_KEY).cloned(),
+                        location: landed_location(destination, item, &id.native),
                     });
                 }
             }
@@ -3816,6 +4026,132 @@ impl Engine {
             outcomes.insert(index.min(outcomes.len()), outcome);
         }
         Ok(outcomes)
+    }
+
+    /// Create, together, the tasks of `planned` that land as new items at a destination creating
+    /// several in one request — its [`create_batch_limit`](onetaskgraph_plugin_api::TaskSource::create_batch_limit)
+    /// over one — answering each one's index in `planned` with the id it was created under.
+    ///
+    /// Each lands as `write` would land it, with the edges and the tasks it delivers already
+    /// nameable and without a record of the copy, since its edges to the others cannot be named
+    /// until they exist; every one is journalled as created, and every id is a counterpart from
+    /// here on, so the write each one is landed with next names those edges. A task carrying
+    /// assets, or skipped, is landed on its own as before.
+    async fn create_together(
+        &self,
+        planned: &[Planned],
+        filed: &[Option<NativeId>],
+        running: &mut Running,
+        journal: &mut Journal,
+    ) -> Result<BTreeMap<usize, NativeId>, EngineError> {
+        let mut together: Vec<(SourceName, Vec<usize>)> = Vec::new();
+        for (index, item) in planned.iter().enumerate() {
+            if !(matches!(item.item, Item::Task(_))
+                && matches!(item.target, Target::Create)
+                && !item.skipped
+                && item.assets.is_empty())
+            {
+                continue;
+            }
+            match together.iter_mut().find(|(name, _)| name == &item.to) {
+                Some((_, indices)) => indices.push(index),
+                None => together.push((item.to.clone(), vec![index])),
+            }
+        }
+        let mut created = BTreeMap::new();
+        for (name, indices) in together {
+            let destination = self.writable(&name)?;
+            let limit = destination.source().create_batch_limit();
+            if limit < 2 || indices.len() < 2 {
+                continue;
+            }
+            for chunk in indices.chunks(limit) {
+                let mut writes = Vec::with_capacity(chunk.len());
+                for index in chunk {
+                    let item = &planned[*index];
+                    let edges = resolved(&self.shown_edges(
+                        &item.to,
+                        mapped_edges(
+                            &item.edges,
+                            &item.source.source,
+                            &item.to,
+                            &running.resolvable,
+                            &running.counterparts,
+                        ),
+                        &running.private,
+                    ));
+                    let delivers = resolved_entries(&self.shown_delivers(
+                        &item.to,
+                        delivers_of(item, &item.to, &running.resolvable, &running.counterparts),
+                        &running.private,
+                    ));
+                    let project = filed[*index].clone();
+                    let landing = as_written(
+                        destination,
+                        outgoing(
+                            item,
+                            created_id(&item.item, project.as_ref()),
+                            project.clone(),
+                            &recorded(item, None),
+                            &delivers,
+                            None,
+                        ),
+                    );
+                    self.at_write(
+                        destination,
+                        &item.source.to_string(),
+                        &WriteTarget::New {
+                            repositories: repositories_of(&item.item),
+                            project: project.as_ref(),
+                        },
+                    )
+                    .await?;
+                    check_status(destination, &landing, None).await?;
+                    let Item::Task(task) = landing else {
+                        unreachable!("only tasks are created together");
+                    };
+                    writes.push(ItemWrite {
+                        target: None,
+                        item: *task,
+                        depends_on: edges,
+                    });
+                }
+                let ids = destination
+                    .source()
+                    .write_tasks(&writes)
+                    .await
+                    .map_err(|error| create_refused(destination, Creating::Tasks, error))?;
+                let distinct: BTreeSet<&NativeId> = ids.iter().collect();
+                if ids.len() != chunk.len() || distinct.len() != ids.len() {
+                    return Err(create_refused(
+                        destination,
+                        Creating::Tasks,
+                        SourceError::Malformed {
+                            message: format!(
+                                "the source answered {} ids, {} of them distinct, for the {} \
+                                 tasks it was asked to create together",
+                                ids.len(),
+                                distinct.len(),
+                                chunk.len()
+                            ),
+                        },
+                    ));
+                }
+                for (index, id) in chunk.iter().zip(ids) {
+                    journal.record(Undo::Created {
+                        at: destination.name().clone(),
+                        kind: Level::Task,
+                        id: id.clone(),
+                    });
+                    running.counterparts.insert(
+                        planned[*index].source.to_string(),
+                        GlobalId::new(destination.name().clone(), id.clone()),
+                    );
+                    created.insert(*index, id);
+                }
+            }
+        }
+        Ok(created)
     }
 
     /// Why the destination cannot represent `item` — a task whose write it refuses at
@@ -4396,6 +4732,7 @@ impl Engine {
         }
         let reachable = self.routes.reachable(&request.destination);
         let mut wanted: Vec<(SourceName, Vec<NativeId>)> = Vec::new();
+        let mut origins: Vec<(SourceName, Vec<String>)> = Vec::new();
         let mut want = |there: &SourceName, native: NativeId| match wanted
             .iter_mut()
             .find(|(name, _)| name == there)
@@ -4431,6 +4768,29 @@ impl Engine {
                         origin_of(metadata).filter(|origin| &origin.source == there)
                     {
                         want(there, origin.native);
+                    }
+                }
+            }
+            // An item naming nothing at a destination is looked for there by its own origin, so
+            // every such question is asked together, before the first of them would be — but for
+            // a task whose priority that destination cannot hold, which is refused before the
+            // destination is asked anything.
+            for there in &reachable {
+                let refused = match (&read.item, self.writable(there)) {
+                    (Item::Task(task), Ok(destination)) => {
+                        holds_priority(destination, &read.source.to_string(), task.priority)
+                            .is_err()
+                    }
+                    _ => false,
+                };
+                if !refused
+                    && link_of(metadata, there).is_none()
+                    && origin_of(metadata).is_none_or(|origin| &origin.source != there)
+                {
+                    let asked = read.source.to_string();
+                    match origins.iter_mut().find(|(name, _)| name == there) {
+                        Some((_, asked_there)) => asked_there.push(asked),
+                        None => origins.push((there.clone(), vec![asked])),
                     }
                 }
             }
@@ -4471,6 +4831,15 @@ impl Engine {
                 running.source_projects.insert(qualified.clone(), held);
             }
             for there in &reachable {
+                // A document with its own link there has its counterpart read anyway, and is
+                // taken as filed under that project when that is where it sits — see
+                // [`Engine::filed_as_linked`] — so its project is not read with it; one a person
+                // moved has the project read by the filing lookup instead. Where a cache stands
+                // in front of the destination the project is still named, because pinning it is
+                // what answers the document's own read from that cache.
+                if link_of(&document.metadata, there).is_some() && !self.caches(there) {
+                    continue;
+                }
                 if let Some(link) = link_of(&running.source_projects[&qualified].metadata, there) {
                     want(there, link.native.clone());
                     homes.push((
@@ -4498,6 +4867,12 @@ impl Engine {
                 let pinned = named == ProjectNamed::FiledUnder || covered;
                 self.pin_members(destination, &project, pinned.then_some(&origin))
                     .await;
+            }
+        }
+        for (name, asked) in origins {
+            if let Ok(there) = self.writable(&name) {
+                // Nothing is decided by it: each lookup it would have answered is made as before.
+                let _ = there.source().read_ahead_origins_for_copy(&asked).await;
             }
         }
         // One counterpart of a task or a document copied on its own is read by its own read,
@@ -5089,6 +5464,8 @@ impl Engine {
     /// Answers with what the destination held there beforehand as well, which is what
     /// makes an item written twice restorable to what it was rather than to what this
     /// copy's first pass left.
+    // llmlint: ignore[suppressions_justified] `created` is the one argument this change adds: the id a task created together with others was created under, which only `copy_items` holds and which decides how this one write records itself. The rest are what `land` always took, each a distinct decision of the copy; grouping them would only move the list to a constructor, as at `write`.
+    #[allow(clippy::too_many_arguments)]
     async fn land(
         &self,
         destination: &ResolvedSource,
@@ -5096,6 +5473,7 @@ impl Engine {
         item: &Planned,
         project: Option<NativeId>,
         pointing: Pointing<'_>,
+        created: Option<NativeId>,
         journal: &mut Journal,
     ) -> Result<(CopyOutcome, Option<Prior>, Option<EngineError>), EngineError> {
         let Pointing { edges, delivers } = pointing;
@@ -5171,22 +5549,16 @@ impl Engine {
                     &project,
                     &edges,
                     delivers,
-                    destination.name(),
+                    destination,
                 )
             });
         // An item that already reads as the source does may still hold a stale record of the
         // copy that left it so, which this copy brings up to date without calling it changed.
         let rerecord = !changed
             && match (&target, prior.as_ref()) {
-                (Some(id), Some(held)) => stale_record(
-                    item,
-                    held,
-                    id,
-                    &project,
-                    &edges,
-                    delivers,
-                    destination.name(),
-                ),
+                (Some(id), Some(held)) => {
+                    stale_record(item, held, id, &project, &edges, delivers, destination)
+                }
                 _ => false,
             };
         if let Some(id) = &target
@@ -5207,15 +5579,22 @@ impl Engine {
                 None,
             ));
         }
+        // A task created together with others is written once more, as the item its create
+        // made, now that it can name its edges to them: it was journalled when it was created.
+        let stamping = match created {
+            Some(_) => Stamping::Never,
+            None => Stamping::of(request, rerecord),
+        };
         let (written, sent) = self
             .write(
                 destination,
                 item,
-                target,
+                created.or(target),
                 project,
                 &edges,
                 delivers,
                 prior.clone(),
+                stamping,
                 journal,
             )
             .await?;
@@ -5384,6 +5763,10 @@ impl Engine {
         if let Some(looked) = running.filings.get(&key) {
             return Ok(looked.clone());
         }
+        if let Some(filed) = self.filed_as_linked(item, &qualified, running).await {
+            running.filings.insert(key, Some(filed.clone()));
+            return Ok(Some(filed));
+        }
         let filed = match self.find_home(request, &qualified, running).await? {
             Some(home) if home.source == item.to => Some(home.native),
             Some(home) => {
@@ -5394,6 +5777,44 @@ impl Engine {
         };
         running.filings.insert(key, filed.clone());
         Ok(filed)
+    }
+
+    /// The project a document's counterpart already sits under, when that is exactly the project
+    /// its own project's `onetaskgraph.copies` link names where it lands — so it is taken as
+    /// filed there without the linked project being read to confirm the link.
+    ///
+    /// Only ever the item the link names: a document a person moved under another project sits
+    /// under that one, which is not what the link names, so the lookup below answers it and the
+    /// copy puts it back. Its one blind spot is stated rather than covered: a person re-pointing
+    /// that project's own origin while leaving the document under it keeps the document there
+    /// until the project itself is next copied. Not for a source whose provenance is withheld,
+    /// whose link a withheld origin is confirmed by differently.
+    async fn filed_as_linked(
+        &self,
+        item: &Planned,
+        project: &GlobalId,
+        running: &mut Running,
+    ) -> Option<NativeId> {
+        if item.withheld {
+            return None;
+        }
+        let Some(Item::Document(held)) = item.held.as_ref().map(|held| &held.item) else {
+            return None;
+        };
+        let under = held.project.as_ref()?;
+        if !running.source_projects.contains_key(project) {
+            let source = self.readable(&project.source).ok()?;
+            if !source.source().capabilities().projects.is_native() {
+                return None;
+            }
+            let read = source.source().get_project(&project.native).await.ok()??;
+            if read.id != project.native {
+                return None;
+            }
+            running.source_projects.insert(project.clone(), read);
+        }
+        let link = link_of(&running.source_projects[project].metadata, &item.to)?;
+        (&link.native == under).then_some(link.native)
     }
 
     /// Pin the projects the items of `planned` are filed under, so the filing lookup's read of
@@ -6003,6 +6424,7 @@ impl Engine {
         edges: &[DependencyEdge],
         delivers: &[TaskRef],
         prior: Option<Prior>,
+        stamping: Stamping,
         journal: &mut Journal,
     ) -> Result<(NativeId, Option<String>), EngineError> {
         let created_kind = item.item.level();
@@ -6013,34 +6435,45 @@ impl Engine {
         // destination holds at the origin key is what a copy-back leaves there, and what it
         // holds as `delivered_by` is what the item keeps.
         let origin = recorded(item, prior.as_ref());
-        let mut landing = outgoing(
-            item,
-            suggested,
-            project.clone(),
-            &origin,
-            delivers,
-            prior.as_ref(),
+        let mut landing = as_written(
+            destination,
+            outgoing(
+                item,
+                suggested,
+                project.clone(),
+                &origin,
+                delivers,
+                prior.as_ref(),
+            ),
         );
-        // A task lands with the record of this copy: the source's token it read, whether it
-        // carried the comments, and the digest of what it leaves here.
-        if let Item::Task(task) = &mut landing {
+        // A task lands with the record of this copy — the source's token it read, whether it
+        // carried the comments, and the digest of what it leaves here — when `stamping` says
+        // this write records it; otherwise with whatever record the destination already holds,
+        // which `outgoing` carried.
+        if let Item::Task(task) = &mut landing
+            && stamping.stamps(task, prior.as_ref())
+        {
             let record = record_of(item, task, edges, destination.name());
             record.stamp(&mut task.metadata);
         }
         // Immediately before anything is sent: a destination declared private is read again
-        // for this write, whatever an earlier write read.
-        self.at_write(
-            destination,
-            &item.source.to_string(),
-            &match &target {
-                Some(id) => WriteTarget::Existing(id),
-                None => WriteTarget::New {
-                    repositories: repositories_of(&item.item),
-                    project: project.as_ref(),
+        // for this write, whatever an earlier write read — except the write that completes a
+        // task created together with others, which is the same write its create was checked
+        // for a moment before, finished once the others it names exist.
+        if stamping != Stamping::Never {
+            self.at_write(
+                destination,
+                &item.source.to_string(),
+                &match &target {
+                    Some(id) => WriteTarget::Existing(id),
+                    None => WriteTarget::New {
+                        repositories: repositories_of(&item.item),
+                        project: project.as_ref(),
+                    },
                 },
-            },
-        )
-        .await?;
+            )
+            .await?;
+        }
         // Asked before the journal records anything or the destination is sent anything: a
         // status the destination has no name for refuses this write while there is nothing to
         // put back, where refused inside the write it would leave the journal restoring an
@@ -6324,25 +6757,47 @@ fn changes(
     project: &Option<NativeId>,
     edges: &[DependencyEdge],
     delivers: &[TaskRef],
-    destination: &SourceName,
+    destination: &ResolvedSource,
 ) -> bool {
     let Some(held) = held else {
         return true;
     };
-    let mut outgoing = outgoing(
-        item,
-        target.clone(),
-        project.clone(),
-        &recorded(item, Some(held)),
-        delivers,
-        Some(held),
+    let mut outgoing = as_written(
+        destination,
+        outgoing(
+            item,
+            target.clone(),
+            project.clone(),
+            &recorded(item, Some(held)),
+            delivers,
+            Some(held),
+        ),
     );
     if (!item.assets.is_empty() || held.assets.is_some())
         && !lands_as_held(item, held, &mut outgoing)
     {
         return true;
     }
-    !same(&held.item, &outgoing, destination) || !same_edges(&held.edges, edges)
+    !same(&held.item, &outgoing, destination.name()) || !same_edges(&held.edges, edges)
+}
+
+/// `item` with its status as `destination` reads it back once written — see
+/// [`TaskSource::status_as_written`](onetaskgraph_plugin_api::TaskSource::status_as_written).
+///
+/// What a copy compares with the destination, and what the record it leaves there digests, is
+/// what the destination will hold: a board that writes a category to an option of its own
+/// reads `todo` back as `Todo`, and comparing the spelling the source gave would call every
+/// such item changed on every copy, and record a digest no later read of it could match.
+fn as_written(destination: &ResolvedSource, mut item: Item) -> Item {
+    let source = destination.source();
+    match &mut item {
+        Item::Task(task) => task.status = source.status_as_written(ItemKind::Task, &task.status),
+        Item::Project(project) => {
+            project.status = source.status_as_written(ItemKind::Project, &project.status);
+        }
+        Item::Document(_) => {}
+    }
+    item
 }
 
 /// Whether `held` already holds exactly the assets `item` carries, by name and digest — and,
@@ -6597,29 +7052,30 @@ async fn restore(
     }
 }
 
-/// Hold `value` at `onetaskgraph.copies` on one item, through its source's narrow metadata
-/// write — `false` when the source holds no such item.
+/// Hold `value` at `key` — `onetaskgraph.copies` or `onetaskgraph.copy_locations` — on one
+/// item, through its source's narrow metadata write: `false` when the source holds no such
+/// item.
 async fn set_link(
     source: &ResolvedSource,
     level: Level,
     id: &NativeId,
+    key: &MetadataKey,
     value: &Value,
 ) -> Result<bool, SourceError> {
-    let key = MetadataKey::copies();
     Ok(match level {
         Level::Task => source
             .source()
-            .set_task_metadata(id, &key, value)
+            .set_task_metadata(id, key, value)
             .await?
             .is_some(),
         Level::Project => source
             .source()
-            .set_project_metadata(id, &key, value)
+            .set_project_metadata(id, key, value)
             .await?
             .is_some(),
         Level::Document => source
             .source()
-            .set_document_metadata(id, &key, value)
+            .set_document_metadata(id, key, value)
             .await?
             .is_some(),
     })
@@ -6663,6 +7119,8 @@ fn refused(source: &ResolvedSource, error: SourceError) -> EngineError {
 #[derive(Clone, Copy)]
 enum Creating {
     Task,
+    /// Several tasks created together, by one `write_tasks`.
+    Tasks,
     Document,
     Project,
 }
@@ -6673,6 +7131,7 @@ impl Creating {
     fn method(self) -> &'static str {
         match self {
             Self::Task => "write_task",
+            Self::Tasks => "write_tasks",
             Self::Document => "write_document",
             Self::Project => "write_project",
         }
@@ -6774,12 +7233,14 @@ fn note(
     metadata: &BTreeMap<String, Value>,
 ) {
     if let Some(location) = located(location) {
+        let links = counterparts_linked(metadata.get(MetadataKey::COPIES_KEY));
         into.push(Referent {
             id,
             origin: origin_of(metadata),
             level,
             location,
-            links: counterparts_linked(metadata.get(MetadataKey::COPIES_KEY)),
+            located: locations_linked(metadata, &links),
+            links,
         });
     }
 }
@@ -6975,6 +7436,66 @@ fn well_formed(value: Option<&Value>) -> serde_json::Map<String, Value> {
         .collect()
 }
 
+/// The entries of a `onetaskgraph.copy_locations` value that say something: a source name, and
+/// an object of the qualified id of that source it is about and a [`Location`].
+fn located_entries(value: Option<&Value>) -> serde_json::Map<String, Value> {
+    let Some(Value::Object(held)) = value else {
+        return serde_json::Map::new();
+    };
+    held.iter()
+        .filter(|(destination, entry)| location_entry(destination, entry).is_some())
+        .map(|(destination, entry)| (destination.clone(), entry.clone()))
+        .collect()
+}
+
+/// The id and the location one `onetaskgraph.copy_locations` entry filed under `destination`
+/// records, when it is one: `{"id": <a qualified id of that source>, "location": <Location>}`.
+fn location_entry(destination: &str, entry: &Value) -> Option<(GlobalId, Location)> {
+    let id = entry.get("id")?.as_str()?.parse::<GlobalId>().ok()?;
+    if id.source.as_str() != destination {
+        return None;
+    }
+    let location = serde_json::from_value::<Location>(entry.get("location")?.clone()).ok()?;
+    Some((id, location))
+}
+
+/// The location each `onetaskgraph.copy_locations` entry records for the counterpart its
+/// `onetaskgraph.copies` link still names, by the destination: an entry whose id is not what
+/// the link names there — the link moved since, or there is none — says nothing.
+fn locations_linked(
+    metadata: &BTreeMap<String, Value>,
+    links: &BTreeMap<SourceName, NativeId>,
+) -> BTreeMap<SourceName, Location> {
+    located_entries(metadata.get(MetadataKey::COPY_LOCATIONS_KEY))
+        .iter()
+        .filter_map(|(destination, entry)| location_entry(destination, entry))
+        .filter(|(id, _)| links.get(&id.source) == Some(&id.native))
+        .map(|(id, location)| (id.source, location))
+        .collect()
+}
+
+/// Why a value is not one `onetaskgraph.copy_locations` may hold, or nothing when it is: a
+/// JSON object mapping each destination source name to the id of that source it is about and
+/// a location.
+///
+/// What the stdio boundary holds an incoming value of that key to, as it holds a link.
+pub(crate) fn malformed_locations(value: &Value) -> Option<String> {
+    let Value::Object(held) = value else {
+        return Some(format!(
+            "{} holds an object of destination source names to an id and a location, not {value}",
+            MetadataKey::COPY_LOCATIONS_KEY
+        ));
+    };
+    let wrong = held.len() - located_entries(Some(value)).len();
+    (wrong > 0).then(|| {
+        format!(
+            "{} holds an object of destination source names to {{\"id\": <a qualified id of that \
+             source>, \"location\": <a location>}}, and {wrong} of its entries is not one: {value}",
+            MetadataKey::COPY_LOCATIONS_KEY
+        )
+    })
+}
+
 /// The counterpart each well-formed entry of a `onetaskgraph.copies` value names, by the
 /// destination it names it at.
 fn counterparts_linked(value: Option<&Value>) -> BTreeMap<SourceName, NativeId> {
@@ -7005,6 +7526,32 @@ pub(crate) fn malformed_links(value: &Value) -> Option<String> {
             MetadataKey::COPIES_KEY
         )
     })
+}
+
+/// Where `item` landed at `id` in `destination`, when the copy knows it without asking: the
+/// location its counterpart was read with, when that read was of the item at `id`, or else
+/// what the destination's own write answered.
+fn landed_location(
+    destination: &ResolvedSource,
+    item: &Planned,
+    id: &NativeId,
+) -> Option<Location> {
+    if let Some(held) = &item.held {
+        let (held_id, location) = match &held.item {
+            Item::Task(task) => (&task.id, &task.location),
+            Item::Project(project) => (&project.id, &project.location),
+            Item::Document(document) => (&document.id, &document.location),
+        };
+        if held_id == id {
+            return location.clone();
+        }
+    }
+    let record = match item.item {
+        Item::Task(_) => MetadataRecord::Task,
+        Item::Project(_) => MetadataRecord::Project,
+        Item::Document(_) => MetadataRecord::Document,
+    };
+    destination.source().written_location(record, id)
 }
 
 /// The title and metadata of either kind of item.
@@ -7211,6 +7758,7 @@ fn carried(
     carried.remove(GlobalId::ORIGIN_KEY);
     for kept in [
         MetadataKey::COPIES_KEY,
+        MetadataKey::COPY_LOCATIONS_KEY,
         MetadataKey::MEMBERS_KEY,
         MetadataKey::MEMBER_OF_KEY,
         MetadataKey::ASSETS_KEY,
@@ -7408,20 +7956,23 @@ fn stale_record(
     project: &Option<NativeId>,
     edges: &[DependencyEdge],
     delivers: &[TaskRef],
-    destination: &SourceName,
+    destination: &ResolvedSource,
 ) -> bool {
-    let landing = outgoing(
-        item,
-        target.clone(),
-        project.clone(),
-        &recorded(item, Some(held)),
-        delivers,
-        Some(held),
+    let landing = as_written(
+        destination,
+        outgoing(
+            item,
+            target.clone(),
+            project.clone(),
+            &recorded(item, Some(held)),
+            delivers,
+            Some(held),
+        ),
     );
     let (Item::Task(task), Item::Task(held_task)) = (&landing, &held.item) else {
         return false;
     };
-    let record = record_of(item, task, edges, destination);
+    let record = record_of(item, task, edges, destination.name());
     !record.held_by(&held_task.metadata)
         && (item.carried.is_some() || record::carried_comments(&held_task.metadata))
 }

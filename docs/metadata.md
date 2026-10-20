@@ -19,13 +19,14 @@ Keys are free-form, with two prefixes reserved:
      in `crates/onetaskgraph-e2e/tests/e2e/surface.rs` reads this bullet, and fails when the keys it
      lists or the count it states in words differ from the constants each key is spelled once
      as — `MetadataKey::COPIES_KEY` among them. -->
-- `onetaskgraph.` belongs to this product. It defines exactly thirteen keys, each spelled
+- `onetaskgraph.` belongs to this product. It defines exactly fourteen keys, each spelled
   once so no source can invent its own: `onetaskgraph.repositories`
   (`Repository::METADATA_KEY`), `onetaskgraph.depends_on`
   (`DependencyEdge::RECORDED_KEY`), `onetaskgraph.delivers` (`TaskRef::DELIVERS_KEY`),
   `onetaskgraph.delivered_by` (`TaskRef::DELIVERED_BY_KEY`), `onetaskgraph.item_kind`
   (`ItemKind::METADATA_KEY`), `onetaskgraph.template` (`MetadataKey::TEMPLATE_KEY`),
-  `onetaskgraph.copies` (`MetadataKey::COPIES_KEY`), `onetaskgraph.members`
+  `onetaskgraph.copies` (`MetadataKey::COPIES_KEY`), `onetaskgraph.copy_locations`
+  (`MetadataKey::COPY_LOCATIONS_KEY`), `onetaskgraph.members`
   (`MetadataKey::MEMBERS_KEY`), `onetaskgraph.member_of` (`MetadataKey::MEMBER_OF_KEY`),
   `onetaskgraph.copied_version` (`MetadataKey::COPIED_VERSION_KEY`),
   `onetaskgraph.copied_with_comments` (`MetadataKey::COPIED_WITH_COMMENTS_KEY`) and
@@ -558,6 +559,46 @@ before, and the copy reports the link `unrecorded` rather than failing.
 | `github-projects` | the trailing metadata slot of the issue body, beside the caller's keys — the value is small |
 | `linear` | the trailing metadata slot of the issue's `description`, or the project's or the document's `content`, beside the caller's keys |
 | a stdio plugin | wherever it keeps metadata, when its handshake declares `metadata_updates` (`docs/plugin-protocol.md` §4.18); otherwise nowhere, and unrecorded |
+<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
+
+### `onetaskgraph.copy_locations`: where each counterpart a link names is
+
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by a drift gate:
+     `a_served_plugin_takes_the_copy_location_key_only_with_a_value_that_is_locations` in
+     `crates/onetaskgraph-core/tests/subprocess.rs` reads the example below out of this page and
+     fails unless the one validator of this value, at the stdio boundary, accepts it — beside
+     the shapes that validator refuses. -->
+Beside `onetaskgraph.copies`, on the same item, a copy records where each counterpart that link
+names is, as its destination reports it. The value is a JSON object mapping a destination
+**source name** to the qualified `id` the link names there and that record's `location`:
+
+```json
+{"followups": {"id": "followups:I_kwDOAbc123", "location": {"url": "https://github.com/acme/plans/issues/7"}}}
+```
+<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
+
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by behaviour:
+     `crates/onetaskgraph-github-projects-e2e/tests/e2e/plan_locations.rs` drives a document copy
+     answered from these entries, a link with none beside it, and an entry its link does not
+     name; `a_copy_records_where_its_counterpart_is_beside_the_link_once_it_knows` in
+     `crates/onetaskgraph-e2e/tests/e2e/copy_link.rs` drives when a copy records one, over both
+     boundaries. -->
+An entry is read only while its `id` is exactly what `onetaskgraph.copies` names for the same
+destination: one whose link moved since, or that no link stands beside, says nothing. It exists
+so a document copy can point a reference at a related record's counterpart without reading that
+counterpart — see "What a copied document's references are pointed at" — and every reference
+whose record has no such entry is resolved by reading, exactly as before the key existed.
+`onetaskgraph.copies` itself is unchanged by it, so a release that knows only the link reads
+every item exactly as it did.
+
+A copy records the entry when it knows the location without asking: the counterpart's read, or
+what the destination's write answered — a `github-projects` create answers with the issue's
+address, and a `local-md` write's location is its file. Otherwise, as over the stdio plugin
+protocol, which carries no location with a write, the next copy that reads the counterpart
+records it. It is written like the link, after it, through the same narrow metadata write, and
+undone with it; a source that will not hold it leaves the link as recorded, and the copy reports
+only the link. Like every key in the namespace, `metadata set` refuses it and a copy never carries
+it onto a destination.
 <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
 ### `onetaskgraph.members` and `onetaskgraph.member_of`: a plan that spans sources

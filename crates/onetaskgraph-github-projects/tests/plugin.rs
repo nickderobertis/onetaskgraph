@@ -598,6 +598,8 @@ struct State {
     /// response this source cannot read at all. Only a fixture reaches it, because GitHub
     /// answers with an `Int!`.
     creation_number_is_unreadable: bool,
+    /// How a read of created issues' board items answers each slot malformed, if it does.
+    board_items_fault: Option<BoardItemsFault>,
     /// Whether `createIssue` answers with the new issue's `number`.
     ///
     /// GitHub declares `Issue.number` non-null and always answers with one, which is the
@@ -1238,6 +1240,11 @@ impl Fixture {
         self.state.lock().unwrap().creation_reports_number = false;
     }
 
+    /// Answer every read of created issues' board items malformed, as `fault` says.
+    fn answer_board_items_malformed(&self, fault: BoardItemsFault) {
+        self.state.lock().unwrap().board_items_fault = Some(fault);
+    }
+
     /// Answer every `createIssue` from here on with a `number` that is not an integer.
     fn creation_reports_an_unreadable_number(&self) {
         self.state.lock().unwrap().creation_number_is_unreadable = true;
@@ -1283,6 +1290,7 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
         guarded_status_options: None,
         drift_guarded_status_description: false,
         creation_number_is_unreadable: false,
+        board_items_fault: None,
         creation_reports_number: true,
         blank_status_snapshot_id: None,
         origin_field,
@@ -1591,6 +1599,114 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
             result.insert(alias.to_owned(), value);
         }
         return Value::Object(result);
+    }
+    // A copy's batched reads and writes, each slot answered as the single document it aliases.
+    {
+        use onetaskgraph_github_projects::graphql as documents;
+        if query == documents::ORIGIN_LOOKUPS {
+            let mut result = answer(state, documents::CREATION_CONTEXT, variables)
+                .as_object()
+                .cloned()
+                .unwrap_or_default();
+            if let Some(repository) = result
+                .get_mut("repository")
+                .filter(|value| value.is_object())
+            {
+                repository["databaseId"] = json!(4_242);
+            }
+            for slot in 0..onetaskgraph_github_projects::ORIGIN_BATCH {
+                if variables[format!("ask{slot}")] != true {
+                    continue;
+                }
+                let one = json!({"owner":variables["owner"],"number":variables["number"],
+                    "type":variables["type"],"filter":variables[format!("filter{slot}")],
+                    "search":variables[format!("search{slot}")],
+                    "originFirst":variables["originFirst"],"itemsAfter":null,"searchAfter":null,
+                    "nestedFirst":variables["nestedFirst"],"boardItems":variables["boardItems"],
+                    "duplicates":variables["duplicates"]});
+                let answered = answer(state, documents::ORIGIN_LOOKUP, &one);
+                result.insert(format!("o{slot}"), answered["originItems"].clone());
+                result.insert(format!("s{slot}"), answered["search"].clone());
+            }
+            return Value::Object(result);
+        }
+        if query == documents::CREATED_BOARD_ITEMS {
+            let held = state.lock().unwrap();
+            let mut result = serde_json::Map::new();
+            for slot in 0..onetaskgraph_github_projects::COPY_DETAIL_BATCH {
+                if variables[format!("read{slot}")] != true {
+                    continue;
+                }
+                let id = variables[format!("id{slot}")].as_str().expect("an id");
+                let mut answered = match held.items.iter().find(|item| item.content_id == id) {
+                    Some(item) => json!({"id":id,"projectItems":{"nodes":[{"id":item.item_id,
+                        "project":{"id":"PVT_board"},
+                        "status":item.status.as_ref().map(|name| json!({"name":name}))}]}}),
+                    None => json!({"id":id,"projectItems":{"nodes":[]}}),
+                };
+                match held.board_items_fault {
+                    Some(BoardItemsFault::AnotherIssue) => answered["id"] = json!("I_another"),
+                    Some(BoardItemsFault::NoConnection) => answered["projectItems"] = json!(7),
+                    Some(BoardItemsFault::ItemNamingNoBoard) => {
+                        answered["projectItems"]["nodes"][0]["project"] = Value::Null;
+                    }
+                    Some(BoardItemsFault::StatusNamingNoOption) => {
+                        answered["projectItems"]["nodes"][0]["status"] = json!({"name": 7});
+                    }
+                    Some(BoardItemsFault::BlankItemId) => {
+                        answered["projectItems"]["nodes"][0]["id"] = json!(" ");
+                    }
+                    None => {}
+                }
+                result.insert(format!("i{slot}"), answered);
+            }
+            return Value::Object(result);
+        }
+        let batches = [
+            (
+                documents::CREATE_ISSUES,
+                "create",
+                documents::CREATE_ISSUE,
+                "createIssue",
+            ),
+            (
+                documents::WRITE_FIELD_VALUES,
+                "field",
+                documents::UPDATE_FIELD,
+                "updateProjectV2ItemFieldValue",
+            ),
+            (
+                documents::CLOSE_ISSUES,
+                "close",
+                documents::UPDATE_ISSUE,
+                "updateIssue",
+            ),
+            (
+                documents::ADD_BLOCKED_BYS,
+                "block",
+                documents::ADD_BLOCKED_BY,
+                "addBlockedBy",
+            ),
+        ];
+        if let Some((_, prefix, single, root)) =
+            batches.iter().find(|(batched, ..)| *batched == query)
+        {
+            let mut result = serde_json::Map::new();
+            for slot in 0..onetaskgraph_github_projects::MUTATION_BATCH {
+                if variables[format!("send{slot}")] != true {
+                    continue;
+                }
+                let alias = format!("{prefix}{slot}");
+                let mut one = json!({"input": variables[&alias]});
+                if *single == documents::UPDATE_FIELD {
+                    one["readPriority"] = json!(false);
+                    one["priorityName"] = json!("Priority");
+                }
+                let answered = answer(state, single, &one);
+                result.insert(alias, answered[*root].clone());
+            }
+            return Value::Object(result);
+        }
     }
     let mut state = state.lock().unwrap();
     state
@@ -1930,6 +2046,8 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         // a number a seeded board item happened to be wearing.
         created.number = 2000 + state.next as u64;
         created.body = input["body"].as_str().map(str::to_owned);
+        // `parentIssueId` files it under its parent, as `addSubIssue` would.
+        created.parent = input["parentIssueId"].as_str().map(str::to_owned);
         // The issue is in the repository whose node id the input carried, which is how a
         // read of it derives the repository the source chose rather than the board's own.
         created.repository = Some(
@@ -10911,55 +11029,167 @@ async fn the_shipped_budget_bounds_a_wait_no_configuration_asked_for() {
 }
 
 #[tokio::test]
-async fn content_creating_mutations_leave_this_source_no_faster_than_the_shipped_rate() {
-    // Driven at the *shipped* default rather than a configured one, because the shipped
-    // default is what a board on github.com meets. A source with no pacing at all sends
-    // these three mutations inside a millisecond of each other, so every gap below fails.
+async fn write_tasks_refuses_a_write_naming_an_existing_task_before_sending_anything() {
+    // `write_tasks` creates; a write naming a task the board holds would be taken back as one
+    // it created if a later one failed, so it is refused before any request, held back or not.
+    for deferring in [false, true] {
+        let fixture = board(vec![]);
+        let source = source(&fixture);
+        if deferring {
+            source.begin_deferred_writes();
+        }
+        let existing = ItemWrite {
+            target: Some(NativeId("I_held".to_owned())),
+            ..write(task("T-2", "Held", status(StatusCategory::Todo, "Todo")))
+        };
+        let refused = source
+            .write_tasks(&[
+                write(task("T-1", "New", status(StatusCategory::Todo, "Todo"))),
+                existing,
+            ])
+            .await
+            .expect_err("a write naming an existing task");
+        assert!(
+            matches!(refused, SourceError::Refused { .. })
+                && refused.to_string().contains("T-2")
+                && refused.to_string().contains("write_task"),
+            "deferring {deferring}: {refused}"
+        );
+        assert_eq!(
+            fixture.operations(),
+            Vec::<String>::new(),
+            "deferring {deferring}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn write_tasks_outside_a_copy_creates_each_whole_and_takes_them_back_when_one_is_refused() {
+    // Not holding writes back, each task is created whole in turn; one this board refuses —
+    // a priority on a board with no `Priority` mapping — takes back each created before it.
     let fixture = board(vec![]);
-    let source = configured(&fixture.endpoint, json!({"pacing": null}));
-    source
-        .write_task(&write(task(
-            "T-1",
-            "Publish",
-            status(StatusCategory::Todo, "Todo"),
-        )))
+    let creating = source(&fixture);
+    let created = creating
+        .write_tasks(&[
+            write(task("T-1", "One", status(StatusCategory::Todo, "Todo"))),
+            write(task("T-2", "Two", status(StatusCategory::Todo, "Todo"))),
+        ])
         .await
-        .expect("one task");
-    let gaps = fixture.mutation_gaps();
-    // `createIssue`, `addProjectV2ItemById` and its board fields.
-    assert!(
-        gaps.len() == 2,
-        "a created task is three mutations, and this saw {}",
-        gaps.len() + 1
-    );
-    let floor = Duration::from_millis(onetaskgraph_github_projects::MIN_MUTATION_INTERVAL_MS);
-    // Transit no longer eats into the gap a board sees — the interval is counted from the
-    // last mutation's completion, which is after its arrival, so an arrival gap is at least
-    // the interval by construction and
-    // `the_interval_a_board_sees_is_the_full_one_however_long_a_request_is_in_transit`
-    // asserts exactly that. What is left to allow for is the timer: a sleep is scheduled in
-    // whole milliseconds and may fire a shade under its deadline, so the floor keeps a
-    // millisecond-scale tolerance, which is still two orders of magnitude above the arrival
-    // gap of a source that paces nothing.
-    let tolerance = Duration::from_millis(10);
-    assert!(
-        gaps.iter().all(|gap| *gap >= floor - tolerance),
-        "a mutation left this source faster than the shipped rate: {gaps:?}"
-    );
-    assert!(
-        gaps.iter().sum::<Duration>() >= floor * u32::try_from(gaps.len()).unwrap() - tolerance,
-        "the mutations of one write did not cost the shipped rate between them: {gaps:?}"
-    );
-    // And reads are not paced: pacing what the secondary limiter does not count would
-    // charge every listing for a limit it cannot trip.
-    let started = Instant::now();
-    source
-        .query_tasks(&TaskQuery::default(), &page(10))
+        .expect("both created");
+    assert_eq!(created.len(), 2);
+    for id in &created {
+        assert!(!fixture.item(&id.0).title.is_empty());
+    }
+
+    let fixture = board(vec![]);
+    let refusing = source(&fixture);
+    let refused = refusing
+        .write_tasks(&[
+            write(task("T-1", "One", status(StatusCategory::Todo, "Todo"))),
+            write(Task {
+                priority: Priority::High,
+                ..task("T-2", "Two", status(StatusCategory::Todo, "Todo"))
+            }),
+        ])
         .await
-        .expect("a read");
+        .expect_err("a priority this board cannot hold");
+    assert!(refused.to_string().contains("priority"), "{refused}");
+    assert_eq!(fixture.requests("createIssue"), 1, "the first was created");
     assert!(
-        started.elapsed() < floor,
-        "a read was paced as though it created content"
+        fixture.state.lock().unwrap().items.is_empty(),
+        "and taken back"
+    );
+    // A delete GitHub refuses leaves that issue there, and the refusal names it.
+    let fixture = board(vec![]);
+    fixture.refuse("deleteIssue");
+    let keeping = source(&fixture);
+    let refused = keeping
+        .write_tasks(&[
+            write(task("T-1", "One", status(StatusCategory::Todo, "Todo"))),
+            write(Task {
+                priority: Priority::High,
+                ..task("T-2", "Two", status(StatusCategory::Todo, "Todo"))
+            }),
+        ])
+        .await
+        .expect_err("a priority this board cannot hold");
+    let left = fixture.state.lock().unwrap().items[0].content_id.clone();
+    assert!(
+        refused.to_string().contains("priority")
+            && refused
+                .to_string()
+                .contains(&format!("GitHub then refused to take back {left}")),
+        "{refused}"
+    );
+}
+
+/// How an answer to the read of created issues' board items comes back malformed.
+#[derive(Debug, Clone, Copy)]
+enum BoardItemsFault {
+    /// About another issue than the slot asked.
+    AnotherIssue,
+    /// With no list of board items.
+    NoConnection,
+    /// With a board item naming no board.
+    ItemNamingNoBoard,
+    /// With a status that names no option.
+    StatusNamingNoOption,
+    /// With a blank board item id.
+    BlankItemId,
+}
+
+#[tokio::test]
+async fn a_malformed_board_items_answer_is_refused_and_takes_back_what_was_created() {
+    // The board item a created issue's fields are written onto is the one the answer names for
+    // that issue, read whole; an answer that does not say so readably is no answer, so nothing
+    // is written onto it and the issues created are taken back.
+    for (fault, said) in [
+        (BoardItemsFault::AnotherIssue, "I_another"),
+        (BoardItemsFault::NoConnection, "no list of board items"),
+        (
+            BoardItemsFault::ItemNamingNoBoard,
+            "a board item naming no board",
+        ),
+        (
+            BoardItemsFault::StatusNamingNoOption,
+            "a status that names no option",
+        ),
+        (BoardItemsFault::BlankItemId, "blank"),
+    ] {
+        refused_on_board_items(fault, said).await;
+    }
+}
+
+/// A batch of two created, its board items read back as `fault` says: refused saying `said`,
+/// no field written, and both issues taken back.
+async fn refused_on_board_items(fault: BoardItemsFault, said: &str) {
+    let fixture = board(vec![]);
+    fixture.answer_board_items_malformed(fault);
+    let source = source(&fixture);
+    source.begin_deferred_writes();
+    source
+        .write_tasks(&[
+            write(task("T-1", "One", status(StatusCategory::Todo, "Todo"))),
+            write(task("T-2", "Two", status(StatusCategory::Todo, "Todo"))),
+        ])
+        .await
+        .expect("both created");
+    let refused = source
+        .finish_writes()
+        .await
+        .expect_err("an answer about another issue");
+    assert!(
+        matches!(refused, SourceError::Malformed { .. }) && refused.to_string().contains(said),
+        "{fault:?}: {refused}"
+    );
+    assert_eq!(
+        fixture.requests("updateProjectV2ItemFieldValue"),
+        0,
+        "{fault:?}"
+    );
+    assert!(
+        fixture.state.lock().unwrap().items.is_empty(),
+        "{fault:?}: the created issues remain"
     );
 }
 
@@ -19034,12 +19264,37 @@ impl onetaskgraph_plugin_api::Clock for AdvancingClock {
 
 #[tokio::test]
 async fn the_supplied_clock_spaces_writes_and_bounds_rate_limit_recovery() {
+    // At the shipped defaults a write's few mutations leave every secondary window room, so
+    // nothing waits; a configured `min_mutation_interval_ms` still spaces them on the clock
+    // the source was given.
     let fixture = board(vec![]);
     let clock = Arc::new(AdvancingClock::default());
     let source = Plugin
         .build_with_clock(
             &SourceName::new("work").unwrap(),
             &fixture_config(&fixture.endpoint, &json!({"pacing": null})),
+            &Secrets,
+            clock.clone(),
+        )
+        .unwrap();
+    source
+        .write_task(&write(task(
+            "T-unspaced",
+            "Unspaced",
+            status(StatusCategory::Todo, "Todo"),
+        )))
+        .await
+        .unwrap();
+    assert_eq!(*clock.waits.lock().unwrap(), Vec::<Duration>::new());
+    let fixture = board(vec![]);
+    let clock = Arc::new(AdvancingClock::default());
+    let source = Plugin
+        .build_with_clock(
+            &SourceName::new("work").unwrap(),
+            &fixture_config(
+                &fixture.endpoint,
+                &json!({"pacing": {"min_mutation_interval_ms": 750}}),
+            ),
             &Secrets,
             clock.clone(),
         )

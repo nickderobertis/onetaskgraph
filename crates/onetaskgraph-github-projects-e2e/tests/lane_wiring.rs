@@ -217,6 +217,12 @@ fn budget_adapter_uses_the_real_checker_and_never_substitutes_missing_live_evide
             received.contains("budget github-asset-requests-per-new-asset:"),
             "{received}"
         );
+        // The real time the host's load moves is `budgets-host`'s alone, never the gate's.
+        assert!(
+            received.contains("budget github-plan-copy-seconds-first:")
+                && !received.contains("github-plan-copy-real-seconds"),
+            "{received}"
+        );
         assert_eq!(
             received.contains("budget github-live-session-points:"),
             !unavailable,

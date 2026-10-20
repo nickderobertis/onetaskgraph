@@ -12,6 +12,7 @@ import sys
 import uuid
 
 LIVE_LABEL = "live-session"
+HOST_LABEL = "host"
 # Every text this step decodes, in the encoding its producer is made to write on every
 # platform. Left to the default, Windows pipes carry the ANSI code page, where the selection
 # helper's em dash is byte 0x97 and refuses to decode as UTF-8.
@@ -141,8 +142,10 @@ async def budgets(root: Path) -> int:
         selected = Selection(os.environ.get("GITHUB_LIVE_SELECTION", Selection.RUN.value))
     except ValueError as error:
         raise ValueError("invalid propagated GitHub live selection") from error
+    # Wall-clock figures the host's load moves are the uncached `budgets-host` target's alone.
     arguments = ["bun", "run", "onebudgetspec", "check",
-                 "crates/onetaskgraph-github-projects-e2e/budgets.yaml"]
+                 "crates/onetaskgraph-github-projects-e2e/budgets.yaml",
+                 "--exclude-label", HOST_LABEL]
     if selected is Selection.NOT_SELECTED or not os.environ.get("GH_PROJECTS_TOKEN"):
         reason = "existing selection policy did not select the lane" if selected is Selection.NOT_SELECTED else "no GitHub credential was supplied"
         print(f"github-live-session-points unavailable: {reason}", flush=True)

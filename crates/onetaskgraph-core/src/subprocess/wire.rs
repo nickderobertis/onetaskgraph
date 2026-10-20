@@ -880,12 +880,14 @@ pub(crate) struct DeliveredByResult {
 pub(crate) struct MetadataParams {
     /// The record whose metadata key is set.
     id: NativeId,
-    /// The key: a caller's own dotted key outside the `onetaskgraph.` namespace, or the one
-    /// reserved key a copy records where an item landed under, [`MetadataKey::COPIES_KEY`].
+    /// The key: a caller's own dotted key outside the `onetaskgraph.` namespace, or one of the
+    /// two reserved keys a copy records where an item landed under, [`MetadataKey::COPIES_KEY`]
+    /// and [`MetadataKey::COPY_LOCATIONS_KEY`].
     key: MetadataKey,
     /// The value to hold under it: any JSON, `null` included — and for
     /// [`MetadataKey::COPIES_KEY`], only an object of destination source names to qualified
-    /// ids of that source.
+    /// ids of that source, and for [`MetadataKey::COPY_LOCATIONS_KEY`] only one of destination
+    /// source names to an id and a location.
     value: Value,
 }
 
@@ -898,6 +900,11 @@ impl MetadataParams {
     pub(crate) fn new(id: NativeId, key: MetadataKey, value: Value) -> Result<Self, String> {
         if key.is_copies()
             && let Some(malformed) = crate::engine::malformed_links(&value)
+        {
+            return Err(malformed);
+        }
+        if key.is_copy_locations()
+            && let Some(malformed) = crate::engine::malformed_locations(&value)
         {
             return Err(malformed);
         }
@@ -938,14 +945,17 @@ impl TryFrom<UncheckedMetadataParams> for MetadataParams {
 }
 
 /// A narrow metadata write's key as §4.18 admits it: any key [`MetadataKey::new`] accepts,
-/// and [`MetadataKey::COPIES_KEY`], which the engine alone sends and nothing a caller types
-/// can name.
+/// and [`MetadataKey::COPIES_KEY`] and [`MetadataKey::COPY_LOCATIONS_KEY`], which the engine
+/// alone sends and nothing a caller types can name.
 fn caller_or_copies<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<MetadataKey, D::Error> {
     let key = String::deserialize(deserializer)?;
     if key == MetadataKey::COPIES_KEY {
         return Ok(MetadataKey::copies());
+    }
+    if key == MetadataKey::COPY_LOCATIONS_KEY {
+        return Ok(MetadataKey::copy_locations());
     }
     MetadataKey::new(key).map_err(serde::de::Error::custom)
 }

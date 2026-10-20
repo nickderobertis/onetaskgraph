@@ -244,6 +244,77 @@ pub fn one_source(boundary: SourceBoundary) -> String {
     .expect("a one-source document")
 }
 
+/// Windows' bound, in UTF-16 units and counting the terminating null, on the command line
+/// `CreateProcessW` takes and on any one variable of a child's environment, as Microsoft
+/// documents both — `CreateProcessW`'s `lpCommandLine` and "Environment Variables" — so what a
+/// spawn may hand either is one unit less; the block holding them all has no bound of its own.
+/// `tests/spawn_lengths.rs` holds the command line's to the operating system on the Windows
+/// lane: one measured a unit inside it spawns, and one past it fails with `os error 206`.
+pub const WINDOWS_SPAWN_LIMIT: usize = 32_767;
+
+/// What spawning `command` hands a Windows child, in UTF-16 units: the command line at its
+/// longest quoting, its longest environment variable as `NAME=value`, and the whole block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpawnLengths {
+    pub command_line: usize,
+    pub longest_variable: usize,
+    pub environment_block: usize,
+}
+
+/// Measure what `command` would hand its child: its program and arguments, each quoted with
+/// every quote and backslash escaped as the most a Windows command line can spell them, and
+/// the environment this process passes on with the command's own settings and removals laid
+/// over it. `Command` does not say whether `env_clear` was called on it, so a command that
+/// clears its environment is measured with this process's still in it: the figure is then an
+/// over-count, never an under-count, and every command this harness spawns inherits it.
+#[must_use]
+pub fn spawn_lengths(command: &std::process::Command) -> SpawnLengths {
+    let units = |text: &std::ffi::OsStr| text.to_string_lossy().encode_utf16().count();
+    let quoted = |text: &std::ffi::OsStr| {
+        let escapes = text
+            .to_string_lossy()
+            .chars()
+            .filter(|c| matches!(c, '"' | '\\'))
+            .count();
+        units(text) + escapes + 2
+    };
+    let command_line = std::iter::once(command.get_program())
+        .chain(command.get_args())
+        .map(|piece| quoted(piece) + 1)
+        .sum::<usize>()
+        .saturating_sub(1);
+    let mut environment: std::collections::BTreeMap<std::ffi::OsString, std::ffi::OsString> =
+        std::env::vars_os().collect();
+    for (name, value) in command.get_envs() {
+        match value {
+            Some(value) => environment.insert(name.to_owned(), value.to_owned()),
+            None => environment.remove(name),
+        };
+    }
+    let variables: Vec<usize> = environment
+        .iter()
+        .map(|(name, value)| units(name) + 1 + units(value))
+        .collect();
+    SpawnLengths {
+        command_line,
+        longest_variable: variables.iter().copied().max().unwrap_or(0),
+        environment_block: variables.iter().map(|variable| variable + 1).sum::<usize>() + 1,
+    }
+}
+
+/// Refuse a spawn Windows would refuse with `os error 206`, naming what is too long — so a
+/// journey that outgrows the bound fails on every platform rather than on Windows alone.
+pub fn assert_spawnable_on_windows(command: &std::process::Command) {
+    let lengths = spawn_lengths(command);
+    assert!(
+        lengths.command_line < WINDOWS_SPAWN_LIMIT
+            && lengths.longest_variable < WINDOWS_SPAWN_LIMIT,
+        "this spawn hands its child {lengths:?}, past the {WINDOWS_SPAWN_LIMIT} UTF-16 units \
+         Windows allows a command line or one environment variable, so `spawn` fails there with \
+         os error 206; next: reach the same work through fewer or shorter arguments"
+    );
+}
+
 /// Standard output as text, failing the test rather than the assertion when it is not
 /// UTF-8 — a binary that emitted bytes here would be a different bug entirely.
 pub fn stdout(output: &std::process::Output) -> String {
