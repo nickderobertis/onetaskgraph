@@ -19,8 +19,9 @@ use crate::common::{SOURCE_BOUNDARIES, Sandbox, SourceBoundary, stderr, stdout};
 use crate::fixtures::{
     LINEAR_REFUSED_WRITE, ROWS, SOURCE, document, empty_folder,
     github_projects_failing_a_field_write_and_its_cleanup,
-    github_projects_failing_a_field_write_once, github_projects_failing_to_file_and_its_cleanup,
-    github_projects_failing_to_file_once, github_projects_reading_one_item_behind,
+    github_projects_failing_a_field_write_once,
+    github_projects_failing_to_read_a_filing_and_its_cleanup,
+    github_projects_failing_to_read_a_filing_once, github_projects_reading_one_item_behind,
     github_projects_with_board, linear_block, linear_empty_workspace,
     linear_failing_a_relation_write_once, qualified,
 };
@@ -1387,7 +1388,7 @@ fn a_board_that_fails_between_creating_an_issue_and_filing_it_says_so_and_recove
         "plans": {"plugin":"local-md","config":{
             "root": root, "status_mapping": {"Todo":"todo"}}},
         "board": {"plugin":"github-projects",
-                  "config": github_projects_failing_to_file_once(&sandbox)}
+                  "config": github_projects_failing_to_read_a_filing_once(&sandbox)}
     })));
 
     let said = refused(&sandbox, &["task", "copy", "plans:A", "--to", "board"], 1);
@@ -3239,7 +3240,7 @@ fn a_creation_whose_filing_and_cleanup_both_fail_still_reports_the_filing() {
         "plans": {"plugin":"local-md","config":{
             "root": root, "status_mapping": {"Doing":"in-progress"}}},
         "board": {"plugin":"github-projects",
-                  "config": github_projects_failing_to_file_and_its_cleanup(&sandbox)}
+                  "config": github_projects_failing_to_read_a_filing_and_its_cleanup(&sandbox)}
     })));
 
     let said = refused(&sandbox, &["task", "copy", "plans:A", "--to", "board"], 1);

@@ -4031,16 +4031,18 @@ impl Engine {
                     .source()
                     .write_tasks(&writes)
                     .await
-                    .map_err(|error| create_refused(destination, Creating::Task, error))?;
-                if ids.len() != chunk.len() {
+                    .map_err(|error| create_refused(destination, Creating::Tasks, error))?;
+                let distinct: BTreeSet<&NativeId> = ids.iter().collect();
+                if ids.len() != chunk.len() || distinct.len() != ids.len() {
                     return Err(create_refused(
                         destination,
-                        Creating::Task,
+                        Creating::Tasks,
                         SourceError::Malformed {
                             message: format!(
-                                "the source answered {} ids for the {} tasks it was asked to \
-                                 create together",
+                                "the source answered {} ids, {} of them distinct, for the {} \
+                                 tasks it was asked to create together",
                                 ids.len(),
+                                distinct.len(),
                                 chunk.len()
                             ),
                         },
@@ -6993,6 +6995,8 @@ fn refused(source: &ResolvedSource, error: SourceError) -> EngineError {
 #[derive(Clone, Copy)]
 enum Creating {
     Task,
+    /// Several tasks created together, by one `write_tasks`.
+    Tasks,
     Document,
     Project,
 }
@@ -7003,6 +7007,7 @@ impl Creating {
     fn method(self) -> &'static str {
         match self {
             Self::Task => "write_task",
+            Self::Tasks => "write_tasks",
             Self::Document => "write_document",
             Self::Project => "write_project",
         }

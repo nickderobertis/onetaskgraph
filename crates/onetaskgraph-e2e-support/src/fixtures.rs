@@ -3049,7 +3049,7 @@ const READ_OF_FILED_ITEMS: &str = "status:fieldValueByName(name:$statusName)";
 /// GitHub can fail part way through, and what the product does with an issue that exists but
 /// has no board item it can write is a journey rather than a reading of the code. The failure
 /// is spent once, so the same board answers the retry.
-pub fn github_projects_failing_to_file_once(sandbox: &Sandbox) -> Value {
+pub fn github_projects_failing_to_read_a_filing_once(sandbox: &Sandbox) -> Value {
     github_projects_board(sandbox, None, &[READ_OF_FILED_ITEMS]).0
 }
 
@@ -3068,7 +3068,7 @@ pub fn github_projects_failing_a_field_write_once(sandbox: &Sandbox) -> Value {
 /// The earlier half of the same sequence: the issue exists in the repository and nothing of it
 /// past its create landed, so the source deletes it — and this board refuses that too. The
 /// caller is owed the failure that stopped the copy, for the reason the sibling below gives.
-pub fn github_projects_failing_to_file_and_its_cleanup(sandbox: &Sandbox) -> Value {
+pub fn github_projects_failing_to_read_a_filing_and_its_cleanup(sandbox: &Sandbox) -> Value {
     github_projects_board(
         sandbox,
         None,

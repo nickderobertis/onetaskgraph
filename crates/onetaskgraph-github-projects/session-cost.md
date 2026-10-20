@@ -1220,17 +1220,18 @@ project and its tasks.
 
 ## A copy writes only what changed, creates its items together, and paces by GitHub's windows
 
+<!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] As the sections above: the request and node figures are differences between two committed states of `tests/fixtures/copy-cost.txt` and `tests/fixtures/session-cost.txt`, each held by its own test, which fails on any change to that record and names this file as the place to say what moved; the batch sizes and limits are named here by the constants and the `tests/fixtures/rate-limits.json` entries that hold them, not restated. -->
 `updateIssue` is sent only with the title, body and state that differ from what the board
 holds, and not at all when none does; a priority the board already holds is not written. A
 copy's items with no counterpart are created together: one `ORIGIN_LOOKUPS` asks for up to
-`ORIGIN_BATCH` (10) origins with the board's fields and the destination repository, a
-`CREATE_ISSUES` request creates up to `MUTATION_BATCH` (11) issues already filed under their
-parent and on the board (`parentIssueId`, `projectV2Ids`), one `CREATED_BOARD_ITEMS` reads
-their board item ids, and their field values, closures and blockers follow in aliased requests
-of at most 11 mutations. Mutations are no longer spaced by a fixed interval: they are held
-only when GitHub's documented secondary windows — 80 content creations a minute, 500 an hour
-and 2,000 points a minute, a mutation request costing 5 and a query 1 — would otherwise be
-crossed. `pacing.min_mutation_interval_ms`, when set, still spaces them.
+`ORIGIN_BATCH` origins with the board's fields and the destination repository, a
+`CREATE_ISSUES` request creates up to `MUTATION_BATCH` issues already filed under their parent
+and on the board (`parentIssueId`, `projectV2Ids`), one `CREATED_BOARD_ITEMS` reads their board
+item ids, and their field values, closures and blockers follow in aliased requests of at most
+`MUTATION_BATCH` mutations. Mutations are no longer spaced by a fixed interval: they are held
+only when GitHub's documented secondary windows — the content-creation and point limits
+`tests/fixtures/rate-limits.json` pins — would otherwise be crossed.
+`pacing.min_mutation_interval_ms`, when set, still spaces them.
 
 **`copy-cost.txt`** moves (a) to (d) and (g) to (j). (a), a whole copy of 10 tasks, goes from
 55 requests to **7**: two origin lookups (18,400 worst-case nodes, 2 points each) replace eleven

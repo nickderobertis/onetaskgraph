@@ -377,8 +377,12 @@ fn a_configured_interval_still_spaces_mutations_on_top_of_the_windows() {
     );
 }
 
-/// A board refusing the copy's first `createIssue` as `refusal` says, `times` times.
-fn refused_once(headers: &str, body: &str, times: usize) -> (Paced, Output, Vec<Call>, Vec<Slept>) {
+/// A board refusing the copy's `createIssue` with `headers` and `body`, `times` times in a row.
+fn refused_repeatedly(
+    headers: &str,
+    body: &str,
+    times: usize,
+) -> (Paced, Output, Vec<Call>, Vec<Slept>) {
     let paced = Paced::new(1, json!({}));
     paced.board.refuse_graphql(GraphqlRefusal {
         matching: "createIssue(input:$input)",
@@ -401,7 +405,7 @@ fn creates_of(calls: &[Call]) -> Vec<&Call> {
 
 #[test]
 fn a_secondary_refusal_naming_a_retry_after_is_waited_out_for_that_long_then_resent() {
-    let (paced, output, calls, slept) = refused_once(
+    let (paced, output, calls, slept) = refused_repeatedly(
         "Retry-After: 7\r\n",
         r#"{"message":"You have exceeded a secondary rate limit"}"#,
         1,
@@ -420,7 +424,7 @@ fn a_secondary_refusal_naming_a_retry_after_is_waited_out_for_that_long_then_res
 
 #[test]
 fn a_secondary_refusal_naming_no_wait_is_retried_on_a_backoff_doubling_from_a_second() {
-    let (_, output, calls, slept) = refused_once(
+    let (_, output, calls, slept) = refused_repeatedly(
         "",
         r#"{"message":"You have exceeded a secondary rate limit"}"#,
         3,
@@ -444,7 +448,7 @@ fn a_secondary_refusal_naming_no_wait_is_retried_on_a_backoff_doubling_from_a_se
 #[test]
 fn an_empty_primary_bucket_is_waited_out_until_its_reset() {
     let reset = chrono::Utc::now().timestamp() + 30;
-    let (_, output, _, slept) = refused_once(
+    let (_, output, _, slept) = refused_repeatedly(
         &format!("x-ratelimit-remaining: 0\r\nx-ratelimit-reset: {reset}\r\n"),
         r#"{"message":"API rate limit exceeded for user ID 1."}"#,
         1,

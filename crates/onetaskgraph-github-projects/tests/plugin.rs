@@ -11055,6 +11055,44 @@ async fn write_tasks_refuses_a_write_naming_an_existing_task_before_sending_anyt
 }
 
 #[tokio::test]
+async fn write_tasks_outside_a_copy_creates_each_whole_and_takes_them_back_when_one_is_refused() {
+    // Not holding writes back, each task is created whole in turn; one this board refuses —
+    // a priority on a board with no `Priority` mapping — takes back each created before it.
+    let fixture = board(vec![]);
+    let creating = source(&fixture);
+    let created = creating
+        .write_tasks(&[
+            write(task("T-1", "One", status(StatusCategory::Todo, "Todo"))),
+            write(task("T-2", "Two", status(StatusCategory::Todo, "Todo"))),
+        ])
+        .await
+        .expect("both created");
+    assert_eq!(created.len(), 2);
+    for id in &created {
+        assert!(!fixture.item(&id.0).title.is_empty());
+    }
+
+    let fixture = board(vec![]);
+    let refusing = source(&fixture);
+    let refused = refusing
+        .write_tasks(&[
+            write(task("T-1", "One", status(StatusCategory::Todo, "Todo"))),
+            write(Task {
+                priority: Priority::High,
+                ..task("T-2", "Two", status(StatusCategory::Todo, "Todo"))
+            }),
+        ])
+        .await
+        .expect_err("a priority this board cannot hold");
+    assert!(refused.to_string().contains("priority"), "{refused}");
+    assert_eq!(fixture.requests("createIssue"), 1, "the first was created");
+    assert!(
+        fixture.state.lock().unwrap().items.is_empty(),
+        "and taken back"
+    );
+}
+
+#[tokio::test]
 async fn a_board_items_answer_about_another_issue_is_refused_and_takes_back_what_was_created() {
     // The board item a created issue's fields are written onto is the one the answer names for
     // that issue; an answer about another issue is no answer, so nothing is written onto it

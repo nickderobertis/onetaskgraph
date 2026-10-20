@@ -1288,11 +1288,11 @@ pub enum EngineError {
     CopyDestinationUncertain {
         /// The malformed answer, as the destination's refusal of the write.
         error: Box<EngineError>,
-        // llmlint: ignore-block[invalid_states_unrepresentable] Both fields are `String` because this variant's shape is a stated contract other work builds against, and it matches its neighbours: `SourceRefused`, `NotWritable` and the rest name a source as a `String`. Both are only ever built in `engine/copy.rs`, from a configured source's own name and from one of three method literals.
+        // llmlint: ignore-block[invalid_states_unrepresentable] Both fields are `String` because this variant's shape is a stated contract other work builds against, and it matches its neighbours: `SourceRefused`, `NotWritable` and the rest name a source as a `String`. Both are only ever built in `engine/copy.rs`, from a configured source's own name and from one of four method literals.
         /// The destination source the create was sent to.
         destination: String,
-        /// The plugin method whose answer was malformed: `write_task`, `write_document` or
-        /// `write_project`.
+        /// The plugin method whose answer was malformed: `write_task`, `write_tasks`,
+        /// `write_document` or `write_project`.
         operation: String,
         // llmlint: ignore-end[invalid_states_unrepresentable]
     },

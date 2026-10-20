@@ -9754,15 +9754,24 @@ impl GitHubProjectsSource {
                 self.set_item_fields(board, item, &[], &clears).await?;
             }
         }
-        for (document, prefix, inputs, root) in [
+        // Each alias answers with the item it wrote, which is the one its input named: the
+        // board item a field value is set on, the issue closed, the issue blocked.
+        for (document, prefix, inputs, root, named) in [
             (
                 graphql::WRITE_FIELD_VALUES,
                 "field",
                 &fields,
                 "projectV2Item",
+                "itemId",
             ),
-            (graphql::CLOSE_ISSUES, "close", &closes, "issue"),
-            (graphql::ADD_BLOCKED_BYS, "block", &edges, "issue"),
+            (graphql::CLOSE_ISSUES, "close", &closes, "issue", "id"),
+            (
+                graphql::ADD_BLOCKED_BYS,
+                "block",
+                &edges,
+                "issue",
+                "issueId",
+            ),
         ] {
             for chunk in inputs.chunks(MUTATION_BATCH) {
                 let mut variables = serde_json::Map::new();
@@ -9774,8 +9783,9 @@ impl GitHubProjectsSource {
                     variables.insert(format!("send{slot}"), json!(slot < chunk.len()));
                 }
                 let data = self.graphql(document, Value::Object(variables)).await?;
-                for slot in 0..chunk.len() {
-                    data.pointer(&format!("/{prefix}{slot}/{root}/id"))
+                for (slot, input) in chunk.iter().enumerate() {
+                    let answered = data
+                        .pointer(&format!("/{prefix}{slot}/{root}/id"))
                         .and_then(Value::as_str)
                         .ok_or_else(|| SourceError::Malformed {
                             message: format!(
@@ -9783,6 +9793,16 @@ impl GitHubProjectsSource {
                                 operation_description(document)
                             ),
                         })?;
+                    let asked = input.get(named).and_then(Value::as_str).unwrap_or_default();
+                    if answered != asked {
+                        return Err(SourceError::Malformed {
+                            message: format!(
+                                "GitHub answered {} at {prefix}{slot} with {answered}, which is \
+                                 not {asked}, the item it was asked to write",
+                                operation_description(document)
+                            ),
+                        });
+                    }
                 }
             }
         }

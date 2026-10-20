@@ -543,6 +543,7 @@ fn a_project_copy_into_a_board_costs_what_the_record_beside_the_session_record_s
         (settled, settled_served, settled_report),
         (repeat_update, repeat_update_served, again),
     ] = one_targeted_update(10, 3);
+    // llmlint: ignore[tests_hold_no_nonfunctional_thresholds] Not a ceiling of its own but a comparison between two workloads of this one journey, held since the targeted update landed: the update owes no request the member copy beside it does not, but for the content write its metadata keys need. The member copy no longer sends its no-op `updateIssue`, which is the `+ 1`.
     assert!(
         settled.total_requests() <= of_ten.total_requests() + 1
             && mutations(&settled_served) <= mutations(&of_ten_served) + 1,
@@ -1030,6 +1031,7 @@ fn follow_up_writes_resolve_each_item_once_and_batch_the_copy_fields() {
                 onetaskgraph_github_projects::worst_case_point_cost(document).unwrap()
             })
             .sum();
+        // llmlint: ignore[tests_hold_no_nonfunctional_thresholds] The drift gate between the cost table in the plugin's module documentation and `docs/plugin-protocol.md` and what each verb really sends, as it was before this change: the figures are the documented ones, asserted below to be the table's own cells, so a verb that moves fails until its row is restated.
         assert_eq!(sent.len(), expected, "{verb}: {sent:#?}");
         assert_eq!(points, priced, "{verb}");
         let cell = if priced == expected as u64 {

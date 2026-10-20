@@ -1956,3 +1956,79 @@ fn documents_configured_under_a_source_that_declares_it_has_none_are_refused() {
         "{message}"
     );
 }
+
+#[tokio::test]
+async fn the_default_batch_create_creates_each_in_turn_and_takes_them_back_when_one_is_refused() {
+    // This source creates one task per request, so it answers `write_tasks` by the contract's
+    // default: each in turn, every one taken back when a later one is refused, and a write
+    // naming a task already here refused before anything is written.
+    let source: Box<dyn TaskSource> = Box::new(
+        onetaskgraph_in_memory::InMemorySource::new(with_capabilities(json!({
+            "uncreatable_titles": ["Refused"]
+        })))
+        .expect("the fixture graph is coherent"),
+    );
+    let create = |id: &str, title: &str| ItemWrite {
+        target: None,
+        item: outgoing(id, title),
+        depends_on: Vec::new(),
+    };
+    let created = source
+        .write_tasks(&[create("T-7", "Seven"), create("T-8", "Eight")])
+        .await
+        .expect("both created");
+    assert_eq!(created.len(), 2);
+    for id in &created {
+        assert!(
+            source.get_task(id).await.unwrap().is_some(),
+            "{id:?} landed"
+        );
+    }
+
+    let Err(SourceError::Refused { message }) = source
+        .write_tasks(&[create("T-9", "Nine"), create("T-10", "Refused")])
+        .await
+    else {
+        panic!("the second create is refused");
+    };
+    assert!(message.contains("Refused"), "{message}");
+    assert!(
+        source
+            .get_task(&NativeId("T-9".into()))
+            .await
+            .unwrap()
+            .is_none(),
+        "the first one is taken back"
+    );
+
+    let Err(SourceError::Refused { message }) = source
+        .write_tasks(&[
+            create("T-11", "Eleven"),
+            ItemWrite {
+                target: Some(NativeId("T-1".into())),
+                ..create("T-1", "Overwritten")
+            },
+        ])
+        .await
+    else {
+        panic!("a write naming a task already here is refused");
+    };
+    assert!(message.contains("write_task"), "{message}");
+    assert!(
+        source
+            .get_task(&NativeId("T-11".into()))
+            .await
+            .unwrap()
+            .is_none(),
+        "nothing was written before the refusal"
+    );
+    assert_ne!(
+        source
+            .get_task(&NativeId("T-1".into()))
+            .await
+            .unwrap()
+            .expect("T-1 is still there")
+            .title,
+        "Overwritten"
+    );
+}

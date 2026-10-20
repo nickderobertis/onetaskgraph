@@ -391,6 +391,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_cause_that_is_not_one_word_is_sent_as_a_plain_sleep() {
+        // A stand-in coordinator over a real socket, waking each wait as it arrives and keeping
+        // every line the client sent: a cause is one word on the wire, so an empty one or one
+        // holding a space goes as a plain sleep rather than as a line the coordinator would
+        // misread, and a word goes as itself.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+        let address = listener.local_addr().expect("its address");
+        let coordinator = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("the client connects");
+            let mut writer = stream.try_clone().expect("a second handle");
+            let mut sent = Vec::new();
+            for line in BufReader::new(stream).lines() {
+                let line = line.expect("a line");
+                let mut words = line.split_whitespace();
+                match words.next() {
+                    Some("attach") => writeln!(writer, "attached").expect("answered"),
+                    Some("sleep") => {
+                        let seq = words.next().expect("a sequence number");
+                        writeln!(writer, "wake {seq}").expect("woken");
+                        sent.push(line.clone());
+                        if sent.len() == 3 {
+                            return sent;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            sent
+        });
+        let clock = attach(address, 0).expect("attached");
+        let second = Duration::from_secs(1);
+        clock.sleep_because(second, "").await;
+        clock.sleep_because(second, "two words").await;
+        clock.sleep_because(second, "board-filing").await;
+        let nanos = second.as_nanos();
+        assert_eq!(
+            coordinator.join().expect("the coordinator"),
+            [
+                format!("sleep 0 {nanos}"),
+                format!("sleep 1 {nanos}"),
+                format!("sleep 2 {nanos} board-filing"),
+            ]
+        );
+    }
+
+    #[tokio::test]
     async fn an_unset_variable_builds_the_real_clock_which_sleeps_for_real() {
         let clock = process_clock(&Environment::from_pairs(
             std::iter::empty::<(String, String)>(),

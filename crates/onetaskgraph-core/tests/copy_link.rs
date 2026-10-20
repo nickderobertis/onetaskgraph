@@ -54,9 +54,22 @@ struct Watched {
     location_faults: Vec<(NativeId, Fault)>,
     /// Whether this source says where it wrote each item, as a hosted one's create answers.
     locates: bool,
+    /// How this source answers a batch of creates, when it creates several in one request.
+    batches: Option<Batched>,
     /// Every item and key whose metadata write has reached the source, for
     /// [`Fault::Unrestorable`].
     written: std::sync::Mutex<Vec<(NativeId, MetadataKey)>>,
+}
+
+/// How a source creating several tasks in one request answers what it created.
+#[derive(Clone, Copy)]
+enum Batched {
+    /// With every id, as a source does.
+    Whole,
+    /// With one id fewer than it was asked to create.
+    Short,
+    /// With the first id answered twice in place of the second.
+    Repeated,
 }
 
 /// How one item's metadata write goes wrong.
@@ -259,6 +272,22 @@ impl TaskSource for Watched {
         self.inner.delete_task(id).await
     }
 
+    fn create_batch_limit(&self) -> usize {
+        if self.batches.is_some() { 11 } else { 1 }
+    }
+
+    async fn write_tasks(&self, writes: &[ItemWrite<Task>]) -> Result<Vec<NativeId>, SourceError> {
+        let mut ids = self.inner.write_tasks(writes).await?;
+        match self.batches {
+            Some(Batched::Short) => {
+                ids.pop();
+            }
+            Some(Batched::Repeated) if ids.len() > 1 => ids[1] = ids[0].clone(),
+            Some(Batched::Whole | Batched::Repeated) | None => {}
+        }
+        Ok(ids)
+    }
+
     fn written_location(&self, _record: MetadataRecord, id: &NativeId) -> Option<Location> {
         self.locates
             .then(|| Location::Url(format!("https://into.example/{}", id.0)))
@@ -280,6 +309,27 @@ fn watched(
     faults: &[(&str, Fault)],
 ) -> (ConfiguredSource, Arc<AtomicU32>) {
     watched_locating(source, config, faults, &[], false)
+}
+
+/// An engine copying out of `from` into `into`, which creates several tasks in one request and
+/// answers each batch as `batches` says.
+fn engine_batching(from: &Value, into: &Value, batches: Batched) -> Engine {
+    let (from, _) = watched("from", from, &[]);
+    let pages = Arc::new(AtomicU32::new(0));
+    let inner = onetaskgraph_in_memory::Plugin
+        .build(&name("into"), into, &NoSecrets)
+        .expect("the in-memory plugin builds");
+    let into = Watched {
+        inner,
+        pages,
+        faults: Vec::new(),
+        location_faults: Vec::new(),
+        locates: false,
+        batches: Some(batches),
+        written: std::sync::Mutex::new(Vec::new()),
+    };
+    let into = ConfiguredSource::Ready(ResolvedSource::adopt(name("into"), Box::new(into)));
+    Engine::new(vec![from, into], vec![name("from"), name("into")])
 }
 
 /// [`watched`], answering each `onetaskgraph.copy_locations` write named in `location_faults`
@@ -307,6 +357,7 @@ fn watched_locating(
             .map(|(id, fault)| (NativeId((*id).to_owned()), *fault))
             .collect(),
         locates,
+        batches: None,
         written: std::sync::Mutex::new(Vec::new()),
     };
     (
@@ -1217,4 +1268,47 @@ async fn a_location_write_that_fails_undoes_every_location_link_and_item_the_cop
         task_metadata(&engine, "from:T-3").await["caller.kept"],
         json!([1, "two"])
     );
+}
+
+#[tokio::test]
+async fn a_batch_of_creates_answered_with_the_wrong_ids_leaves_the_destination_uncertain() {
+    // Created together, the tasks are only as known as the ids their batch answers with: an
+    // answer one short, or naming one id twice, cannot say which item is which, so the copy
+    // records no link and refuses naming the destination and the method, rather than
+    // journalling items it cannot name.
+    let from = json!({"tasks": [
+        task("T-1", "Alpha", &json!({})),
+        task("T-2", "Beta", &json!({})),
+    ]});
+    let whole = engine_batching(&from, &json!({}), Batched::Whole);
+    let report = copied(
+        &whole,
+        &copy_of(&["from:T-1", "from:T-2"], CopyScope::Tasks),
+    )
+    .await;
+    assert_eq!(report.items.len(), 2);
+    assert_eq!(held(&whole, "into").await.len(), 2, "both created together");
+
+    for batched in [Batched::Short, Batched::Repeated] {
+        let engine = engine_batching(&from, &json!({}), batched);
+        let refused = engine
+            .copy(&copy_of(&["from:T-1", "from:T-2"], CopyScope::Tasks))
+            .await
+            .expect_err("an answer that cannot name each task created");
+        let EngineError::CopyDestinationUncertain {
+            destination,
+            operation,
+            ..
+        } = &refused
+        else {
+            panic!("not an uncertain destination: {refused}");
+        };
+        assert_eq!(
+            (destination.as_str(), operation.as_str()),
+            ("into", "write_tasks")
+        );
+        for item in ["from:T-1", "from:T-2"] {
+            assert_eq!(links_of(&engine, item).await, Value::Null, "{item}");
+        }
+    }
 }
