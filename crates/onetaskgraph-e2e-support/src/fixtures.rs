@@ -4964,6 +4964,9 @@ pub enum LinearMarkdown {
     /// one setting it apart is an image alone on a line too — the reading of an answer that
     /// blanked the second of two adjacent images in which Linear really dropped it.
     DropsAdjacentImage,
+    /// Applies those, and ends a field with a line break wherever they leave it without one —
+    /// a rewrite the ruling declares only after a table.
+    TrailingLineBreak,
 }
 
 /// The line the [`LinearMarkdown::Undeclared`] rewrite moves, as it is written and as it is
@@ -4971,24 +4974,8 @@ pub enum LinearMarkdown {
 pub const LINEAR_UNDECLARED_REWRITE: (&str, &str) = ("1) ", "1. ");
 
 /// `written` as the workspace `data` stores a long form, by what it was told with
-/// [`LinearWorkspace::rewrite_markdown_on_write`]: under every rewrite but the verbatim one, a
-/// field ending in a table ends in its last row's line break, as real Linear's does.
+/// [`LinearWorkspace::rewrite_markdown_on_write`].
 fn linear_stored(data: &Value, written: Option<&Value>) -> Value {
-    let stored = linear_rewritten(data, written);
-    let rewrites = matches!(data["_linear_markdown"].as_str(), Some(mode) if mode != "verbatim");
-    let Some(text) = stored.as_str().filter(|_| rewrites) else {
-        return stored;
-    };
-    let last = text.rsplit('\n').next().unwrap_or_default().trim();
-    if last.len() > 1 && last.starts_with('|') && last.ends_with('|') {
-        json!(format!("{text}\n"))
-    } else {
-        stored
-    }
-}
-
-/// `written` as the rewrite [`linear_stored`] applies leaves it.
-fn linear_rewritten(data: &Value, written: Option<&Value>) -> Value {
     let Some(text) = written.and_then(Value::as_str) else {
         return written.cloned().unwrap_or(Value::Null);
     };
@@ -5005,6 +4992,14 @@ fn linear_rewritten(data: &Value, written: Option<&Value>) -> Value {
                 .collect::<Vec<_>>()
                 .join("\n");
             json!(stored)
+        }
+        Some("trailing-line-break") => {
+            let stored = onetaskgraph_linear::stored_form::stored_form(text);
+            json!(if stored.ends_with('\n') {
+                stored
+            } else {
+                format!("{stored}\n")
+            })
         }
         Some("drops-adjacent-image") => {
             let lone_image = |line: &str| line.starts_with("![") && line.ends_with(')');
@@ -5428,6 +5423,7 @@ impl LinearWorkspace {
             LinearMarkdown::Declared => "declared",
             LinearMarkdown::Undeclared => "undeclared",
             LinearMarkdown::DropsAdjacentImage => "drops-adjacent-image",
+            LinearMarkdown::TrailingLineBreak => "trailing-line-break",
         });
     }
 

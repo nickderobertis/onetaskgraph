@@ -904,16 +904,9 @@ const MARKDOWN_PROBE: &str = "- bullet\n| a | b |\n| --- | --- |\nsee https://ex
 /// What that ruling declares Linear stores [`MARKDOWN_PROBE`] as — the plugin's `stored_form`
 /// of it, which its unit tests hold to this — and what the live leg asserts Linear hands back.
 /// It is byte for byte what real Linear handed back from an issue's description in CI run
-/// 39375395042, of this probe as it was then — one blank line where it now holds a run of them,
-/// and no line break after the table — but for the one line break Linear kept after that table,
-/// which a read through the source takes off; see [`markdown_probe_raw`].
-const MARKDOWN_PROBE_STORED: &str = "* bullet\n  | a | b |\n  | --- | --- |\n  see [https://example.com/a](<https://example.com/a>).\n  [example.com](<http://example.com>) and \"[caller.live](<http://caller.live>)\"\n  \\[x\\] done \\~5 *y*\n  say \"hi\" a \\\\d b\n  \\-->\n\n```\n- [x] _y_ example.com ~\n```\n\nkept `- [x] _y_ example.com ~` span\n\n| a | b |\n| -- | -- |";
-
-/// What Linear's own field holds after [`MARKDOWN_PROBE`] is written, read with no source between:
-/// [`MARKDOWN_PROBE_STORED`] and the line break Linear ends a field closing on a table with.
-fn markdown_probe_raw() -> String {
-    format!("{MARKDOWN_PROBE_STORED}\n")
-}
+/// 39375395042, of this probe as it was then: one blank line where it now holds a run of them,
+/// and no line break after the table.
+const MARKDOWN_PROBE_STORED: &str = "* bullet\n  | a | b |\n  | --- | --- |\n  see [https://example.com/a](<https://example.com/a>).\n  [example.com](<http://example.com>) and \"[caller.live](<http://caller.live>)\"\n  \\[x\\] done \\~5 *y*\n  say \"hi\" a \\\\d b\n  \\-->\n\n```\n- [x] _y_ example.com ~\n```\n\nkept `- [x] _y_ example.com ~` span\n\n| a | b |\n| -- | -- |\n";
 
 /// What the follow-up flow rests on, against Linear itself: what Linear does to an HTML comment
 /// in an issue's description, a comment's body and a document's content, recorded in the
@@ -1121,7 +1114,7 @@ async fn drive_follow_ups(
     .await?;
     let stored = raw_description(run, &probe_id).await?;
     ensure!(
-        stored == markdown_probe_raw(),
+        stored == MARKDOWN_PROBE_STORED,
         "an issue description's Markdown came back as {stored:?}, not as the ruling declares"
     );
     let read = source
@@ -1142,7 +1135,7 @@ async fn drive_follow_ups(
     .await?;
     let content = raw_content(run, &document_id).await?;
     ensure!(
-        content == markdown_probe_raw(),
+        content == MARKDOWN_PROBE_STORED,
         "a document's Markdown came back as {content:?}, not as the ruling declares"
     );
     let read = source
@@ -1153,6 +1146,46 @@ async fn drive_follow_ups(
     ensure!(
         read.as_deref() == Some(MARKDOWN_PROBE_STORED),
         "a read of the Markdown probe's document handed back {read:?}, not its stored form"
+    );
+    // And with this source's metadata slot after it: the table keeps its line break, and the
+    // slot follows one blank line later, so a read hands the content back as it was written.
+    let tabled =
+        onetaskgraph_linear::stored_form::stored_form("Owners:\n\n| a | b |\n| --- | --- |");
+    source
+        .write_document(&ItemWrite {
+            target: Some(document_id.clone()),
+            item: Document {
+                version: None,
+                id: document_id.clone(),
+                title: document_title.to_owned(),
+                content: Some(tabled.clone()),
+                project: None,
+                labels: Vec::new(),
+                url: None,
+                location: None,
+                created_at: None,
+                updated_at: None,
+                metadata: serde_json::from_value(json!({"caller.live": tag})).unwrap_or_default(),
+                repositories: Vec::new(),
+                classification: Default::default(),
+            },
+            depends_on: Vec::new(),
+        })
+        .await
+        .map_err(|error| format!("live table document write failed: {error}"))?;
+    let read = source
+        .get_document(&document_id)
+        .await
+        .map_err(|error| format!("the table document could not be read: {error}"))?;
+    ensure!(
+        read.as_ref()
+            .and_then(|document| document.content.as_deref())
+            == Some(tabled.as_str())
+            && read
+                .as_ref()
+                .and_then(|document| document.metadata.get("caller.live"))
+                == Some(&json!(tag)),
+        "a document ending in a table, written with a slot, read back as {read:?}, not as {tabled:?}"
     );
 
     // Each follow-up search, narrowed by Linear and confirmed here: the decoy's prose carries

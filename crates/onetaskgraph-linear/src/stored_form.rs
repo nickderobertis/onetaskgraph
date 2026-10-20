@@ -117,8 +117,19 @@ pub fn stored_form(content: &str) -> String {
                 break;
             }
         }
+        // But for a table's last row, which Linear ends with its line break.
+        if item.is_none() && ends_in_table_row(&stored) {
+            stored.push('\n');
+        }
     }
     stored
+}
+
+/// Whether the last line of `text` is a table row: opening and closing with a pipe.
+#[must_use]
+pub fn ends_in_table_row(text: &str) -> bool {
+    let last = text.rsplit('\n').next().unwrap_or_default().trim();
+    last.len() > 1 && last.starts_with('|') && last.ends_with('|')
 }
 
 /// Whether `line`, its indentation taken off, holds one image and nothing else:
@@ -454,7 +465,6 @@ mod tests {
             "a@example.com",
             "<!-- onetaskgraph.metadata `{\"k\":\"[x] ~ _y_\"}` -->",
             "**bold**, 1. one, # heading, > quoted - dash",
-            "| a | b |",
             "\\[already\\] \\~ escaped",
         ] {
             assert_eq!(stored_form(kept), kept, "{kept:?}");

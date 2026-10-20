@@ -942,16 +942,15 @@ fn items_created_and_rendered_in_linear_record_the_digest_of_what_linear_stores(
     }
 }
 
-/// A field ending in a table, with no metadata slot after it: Linear keeps the table's last line
-/// break there, as CI run 39375395042 observed, and a read through the source takes it off, so
-/// the content a plain create sends is the content it reads back, and the create is not refused.
-#[test]
-fn a_plain_create_ending_in_a_table_reads_back_as_it_was_sent() {
-    let plan = Plan::new();
-    let inputs = plan.sandbox.subdirectory("table-end");
-    let body = inputs.join("body.md");
-    std::fs::write(&body, "Owners:\n\n\n| Step | Owner |\n| --- | --- |\n").expect("a body");
-    let (created, _) = plan.exits(
+/// A create of `body` on the Linear source, with no template and no metadata, so no slot
+/// follows the content: the command's output and the issue the workspace holds under `title`.
+fn plain_create(plan: &Plan, title: &str, body: &str, code: i32) -> (Output, String) {
+    let path = plan
+        .sandbox
+        .subdirectory("plain")
+        .join(format!("{title}.md"));
+    std::fs::write(&path, body).expect("a body");
+    let (output, _) = plan.exits(
         &[
             "task",
             "create",
@@ -959,25 +958,136 @@ fn a_plain_create_ending_in_a_table_reads_back_as_it_was_sent() {
             "--project",
             "P-1",
             "--title",
-            "Ends in a table",
+            title,
             "--body-file",
-            &body.display().to_string(),
+            &path.display().to_string(),
+            "--json",
         ],
-        0,
+        code,
     );
-    let id = stdout(&created).trim().to_owned();
-    let held = plan
-        .workspace
-        .issue_titled("Ends in a table")
-        .expect("the issue");
+    let held = plan.workspace.issue_titled(title).expect("the issue");
+    (output, held)
+}
+
+/// A field ending in a table keeps the table's last line break, as CI run 39375395042 observed
+/// of real Linear, and the ruling declares it: the create sends it, the workspace holds it, and a
+/// read hands it back, so nothing is removed between what Linear stores and what is compared.
+#[test]
+fn a_plain_create_ending_in_a_table_sends_and_reads_back_its_line_break() {
+    let plan = Plan::new();
+    let stored = "Owners:\n\n| Step | Owner |\n| -- | -- |\n";
+    let (created, held) = plan_create_table(&plan);
+    let id = serde_json::from_str::<Value>(&stdout(&created)).expect("JSON")["items"][0]["id"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
     assert_eq!(
         plan.workspace.long_form("tasks", &held).as_deref(),
-        Some("Owners:\n\n| Step | Owner |\n| -- | -- |\n"),
-        "the loopback keeps the table's line break, as Linear does"
+        Some(stored)
+    );
+    assert_eq!(plan.show("task", &id)["content"], stored);
+}
+
+fn plan_create_table(plan: &Plan) -> (Output, String) {
+    plain_create(
+        plan,
+        "Ends in a table",
+        "Owners:\n\n\n| Step | Owner |\n| --- | --- |",
+        0,
+    )
+}
+
+/// A line break Linear stores that no declared rule explains is refused, never taken off: the
+/// workspace holds it, the create exits naming the line, and a read hands the byte back.
+#[test]
+fn a_trailing_line_break_no_rule_declares_is_refused_rather_than_removed() {
+    let plan = Plan::new();
+    plan.workspace
+        .rewrite_markdown_on_write(LinearMarkdown::TrailingLineBreak);
+    let (refused, held) = plain_create(&plan, "Ends in prose", "Owners: done", 1);
+    let failure: Value = serde_json::from_str(&stdout(&refused)).expect("a failure document");
+    assert_eq!(
+        failure["failure"]["kind"], "stored-content-diverged",
+        "{failure}"
+    );
+    let message = stderr(&refused);
+    assert!(
+        message.contains("first at line 2")
+            && message.contains("sent:   no line 2")
+            && message.contains("stored: \"\""),
+        "{message}"
     );
     assert_eq!(
-        plan.show("task", &id)["content"],
-        "Owners:\n\n| Step | Owner |\n| -- | -- |",
-        "a read takes the table's line break off"
+        plan.workspace.long_form("tasks", &held).as_deref(),
+        Some("Owners: done\n")
+    );
+    assert_eq!(
+        plan.show("task", &format!("linear:{held}"))["content"],
+        "Owners: done\n",
+        "a read hands back what Linear stores"
+    );
+}
+
+/// A rendering ending in a table, copied to Linear with its slot after it: the table keeps its
+/// line break, the read content hashes to the digest the provenance records, and a second copy
+/// of the unchanged rendering writes nothing.
+#[test]
+fn a_rendering_ending_in_a_table_copies_to_linear_verifiably_and_recopies_as_nothing() {
+    let plan = Plan::new();
+    let path = plan.sandbox.subdirectory("table").join("table.json");
+    let source = "---\nonetaskgraph_template: 1\nvariables:\n  goal:\n    description: What it \
+                  is for\n---\nGoal: {{ goal }}\n\n| Step | Owner |\n| --- | --- |\n| build | \
+                  ops |\n";
+    std::fs::write(
+        &path,
+        json!({
+            "reference": "host:table",
+            "entry": "entry.md",
+            "templates": [{"name": "entry.md", "source": source}],
+        })
+        .to_string(),
+    )
+    .expect("a loader document");
+    plan.rendered_plan();
+    let task = plan.printed(&[
+        "task",
+        "create",
+        "plan",
+        "--project",
+        "goal",
+        "--title",
+        "Tabled",
+        "--template-loader",
+        &path.display().to_string(),
+        "--var",
+        "goal=End in a table",
+        "--no-interactive",
+    ]);
+    let (report, errors, _) = plan.copy(&["task", "copy", &task, "--to", "linear"], 0);
+    assert!(errors.is_empty(), "{errors}");
+    let landed = outcome(report["items"].as_array().expect("items"), &task);
+    assert_eq!(landed["action"], "created", "{landed}");
+    let destination = landed["destination"].as_str().expect("an id").to_owned();
+    let item = plan.show("task", &destination);
+    let content = item["content"].as_str().expect("content");
+    assert!(
+        content.ends_with("| Step | Owner |\n| -- | -- |\n| build | ops |\n"),
+        "{content:?}"
+    );
+    assert_eq!(
+        item["metadata"]["onetaskgraph.template"]["body_digest"],
+        sha256(content),
+        "{item}"
+    );
+    let (again, _, served) = plan.copy(&["task", "copy", &task, "--to", "linear"], 0);
+    assert_eq!(
+        outcome(again["items"].as_array().expect("items"), &task)["action"],
+        "unchanged",
+        "{again}"
+    );
+    assert!(
+        !mutations(&served).iter().any(|root| root == "issueUpdate"),
+        "an unchanged table writes nothing: {:?}",
+        mutations(&served)
     );
 }
