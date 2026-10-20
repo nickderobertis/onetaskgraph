@@ -69,15 +69,7 @@
       },
       "writes": "supported",
       "meters": false,
-      "statuses": [
-        "draft",
-        "backlog",
-        "todo",
-        "in-progress",
-        "done",
-        "cancelled",
-        "unknown"
-      ],
+      "statuses": ["draft", "backlog", "todo", "in-progress", "done", "cancelled", "unknown"],
       "task_updates": false,
       "metadata_updates": false,
       "content_updates": false,
@@ -115,15 +107,7 @@
       },
       "writes": "supported",
       "meters": false,
-      "statuses": [
-        "draft",
-        "backlog",
-        "todo",
-        "in-progress",
-        "done",
-        "cancelled",
-        "unknown"
-      ],
+      "statuses": ["draft", "backlog", "todo", "in-progress", "done", "cancelled", "unknown"],
       "task_updates": false,
       "metadata_updates": false,
       "content_updates": false,
