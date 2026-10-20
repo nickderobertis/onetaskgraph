@@ -486,6 +486,36 @@ async fn a_plugin_declaring_stored_forms_is_asked_and_what_its_write_says_it_sto
 }
 
 #[test]
+fn the_reference_host_answers_the_stored_forms_golden_exactly() {
+    // The checked-in golden of the members added to version 2 without a bump (§6): this
+    // build's own host speaks exactly those shapes, its handshake still version 2 — so a
+    // version-2 engine and plugin keep shaking hands — and a write it has nothing to say about
+    // carries no `stored_content` at all.
+    let golden: Value = serde_json::from_str(include_str!("fixtures/stored-forms-wire.json"))
+        .expect("the golden is JSON");
+    let expected = &golden["reference_host"];
+    let requests = &golden["requests"];
+    let answers = served(&[
+        handshake(2, hosted_settings()),
+        json!({"id":"1","method":"stored_form","params":requests["stored_form"]}),
+        json!({"id":"2","method":"stored_status","params":{
+            "kind":"task","status":{"category":"done","name":"Finished"}}}),
+        json!({"id":"3","method":"write_task","params":{"write":{"target":null,"item":{
+            "id":"T-9","title":"Golden","content":"- one",
+            "status":{"category":"todo","name":"Todo"},"labels":[]}}}}),
+    ]);
+    let mut initialize = answers[0]["result"].clone();
+    initialize
+        .as_object_mut()
+        .expect("a handshake result")
+        .remove("capabilities");
+    assert_eq!(initialize, expected["initialize"]);
+    assert_eq!(answers[1]["result"], expected["stored_form"]);
+    assert_eq!(answers[2]["result"], expected["stored_status"]);
+    assert_eq!(answers[3]["result"], expected["write_task"]);
+}
+
+#[test]
 fn the_reference_host_declares_stored_forms_and_answers_both_methods_as_its_plugin_does() {
     let answers = served(&[
         handshake(2, hosted_settings()),

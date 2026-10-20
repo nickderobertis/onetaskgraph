@@ -2338,6 +2338,14 @@ were added **without** a bump: a plugin written before them names only task item
 a bump on the terms of §3.14: the method reaches only a plugin that declared the member, and one
 that did not is refused before anything is sent, in the trait's default words.
 
+`stored_form` and `stored_status` (§4.25), the `stored_forms` member of §3.16 and the
+`stored_content` member of a content write's result (§4.9) were added **without** a bump, on
+the terms of §3.14: both methods reach only a plugin that answered `stored_forms: true`, which a
+plugin written before them cannot have done, and the engine reads `stored_content` only from such
+a plugin. A plugin that declares none of them is written the content and the status it is given,
+and nothing is compared after the write — exactly as before they existed. The wire shapes are
+held by `crates/onetaskgraph-core/tests/fixtures/stored-forms-wire.json`.
+
 `set_task_priority` (§4.19), `set_task_content` (§4.20) and the `content_updates` member of
 §3.9 were added **without** a bump, as the methods of §4.18 were: the first reaches only a
 plugin that declared `priority` `"native"`, and the second only one that answered

@@ -1131,4 +1131,98 @@ mod tests {
             "{orphaned}"
         );
     }
+
+    /// The checked-in golden of the members `docs/plugin-protocol.md` §3.16, §4.9 and §4.25
+    /// added to version 2 without a bump.
+    fn stored_forms_golden() -> Value {
+        serde_json::from_str(include_str!("../../tests/fixtures/stored-forms-wire.json"))
+            .expect("the golden is JSON")
+    }
+
+    /// `value` read as `T` and written back, without the `capabilities` a handshake carries:
+    /// §4.2 reconciles those on their own, and they are written back with every default.
+    fn round_trip<T: serde::Serialize + for<'de> serde::Deserialize<'de>>(value: &Value) -> Value {
+        let read: T = serde_json::from_value(value.clone()).expect("the golden reads");
+        uncapable(serde_json::to_value(read).expect("it writes back"))
+    }
+
+    /// `value` without its `capabilities` member.
+    fn uncapable(mut value: Value) -> Value {
+        if let Some(members) = value.as_object_mut() {
+            members.remove("capabilities");
+        }
+        value
+    }
+
+    #[test]
+    fn the_stored_forms_wire_shapes_round_trip_byte_for_byte_and_omit_what_is_absent() {
+        use super::{
+            InitializeResult, StoredFormParams, StoredFormResult, StoredStatusParams,
+            StoredStatusResult, WriteResult,
+        };
+        let golden = stored_forms_golden();
+        for plugin in ["declaring_plugin", "silent_plugin"] {
+            for (member, written) in [
+                (
+                    "initialize",
+                    round_trip::<InitializeResult>(&golden[plugin]["initialize"]),
+                ),
+                (
+                    "write_task",
+                    round_trip::<WriteResult>(&golden[plugin]["write_task"]),
+                ),
+            ] {
+                assert_eq!(
+                    written,
+                    uncapable(golden[plugin][member].clone()),
+                    "{plugin} {member}"
+                );
+            }
+        }
+        let declaring = &golden["declaring_plugin"];
+        assert_eq!(
+            round_trip::<StoredFormResult>(&declaring["stored_form"]),
+            declaring["stored_form"]
+        );
+        assert_eq!(
+            round_trip::<StoredStatusResult>(&declaring["stored_status"]),
+            declaring["stored_status"]
+        );
+        let requests = &golden["requests"];
+        assert_eq!(
+            round_trip::<StoredFormParams>(&requests["stored_form"]),
+            requests["stored_form"]
+        );
+        assert_eq!(
+            round_trip::<StoredStatusParams>(&requests["stored_status"]),
+            requests["stored_status"]
+        );
+
+        // A plugin written before the members omits them and is read as declaring nothing:
+        // `stored_forms` false, no `stored_content` — and written back without either.
+        let silent: InitializeResult =
+            serde_json::from_value(golden["silent_plugin"]["initialize"].clone()).unwrap();
+        assert!(!silent.stored_forms);
+        let quiet: WriteResult =
+            serde_json::from_value(golden["silent_plugin"]["write_task"].clone()).unwrap();
+        assert_eq!(quiet.stored_content, None);
+        // An explicit `null` reads as absent, and a `false` as not declaring; neither is
+        // written back.
+        let nulled: WriteResult =
+            serde_json::from_value(json!({"id": "I-3", "stored_content": null})).unwrap();
+        assert_eq!(serde_json::to_value(nulled).unwrap(), json!({"id": "I-3"}));
+        let mut declared_false = golden["silent_plugin"]["initialize"].clone();
+        declared_false["stored_forms"] = json!(false);
+        assert_eq!(
+            round_trip::<InitializeResult>(&declared_false),
+            uncapable(golden["silent_plugin"]["initialize"].clone())
+        );
+        // And a declaring plugin's members come back as it sent them.
+        let declaring: InitializeResult =
+            serde_json::from_value(golden["declaring_plugin"]["initialize"].clone()).unwrap();
+        assert!(declaring.stored_forms);
+        let stored: WriteResult =
+            serde_json::from_value(golden["declaring_plugin"]["write_task"].clone()).unwrap();
+        assert_eq!(stored.stored_content.as_deref(), Some("* one"));
+    }
 }
