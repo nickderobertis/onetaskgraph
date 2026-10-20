@@ -49,7 +49,7 @@ fn refuse(reason: &str) -> ! {
 }
 
 /// The argv that runs [`report`] alone, as each budget's command does.
-fn runner() -> Vec<String> {
+pub(crate) fn runner() -> Vec<String> {
     let executable = std::env::current_exe().expect("this test executable has a path");
     vec![
         executable.to_string_lossy().into_owned(),

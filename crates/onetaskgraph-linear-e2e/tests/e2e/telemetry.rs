@@ -47,10 +47,21 @@ pub fn record(budget: &str, value: usize, detail: &str) {
 /// Record an asset workload beside its observed figure and how it was reached; the analyser
 /// validates its weight.
 pub fn record_assets(budget: &str, value: f64, detail: &str, sizes: &[usize], copies: usize) {
-    let directory = directory();
-    std::fs::create_dir_all(&directory).expect("the telemetry directory is writable");
+    record_assets_in(&directory(), budget, value, detail, sizes, copies);
+}
+
+/// [`record_assets`], into `directory` rather than the build's.
+pub fn record_assets_in(
+    directory: &Path,
+    budget: &str,
+    value: f64,
+    detail: &str,
+    sizes: &[usize],
+    copies: usize,
+) {
+    std::fs::create_dir_all(directory).expect("the telemetry directory is writable");
     std::fs::write(
-        file_in(&directory, budget),
+        file_in(directory, budget),
         json!({
             "value": value, "detail": detail,
             "workload": {"sizes": sizes, "copies": copies}
