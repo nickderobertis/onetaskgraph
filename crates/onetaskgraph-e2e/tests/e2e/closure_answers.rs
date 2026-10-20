@@ -5,7 +5,9 @@
 //! input: a contradiction list naming one task twice, a holdings list that does not answer each
 //! reference once and in order, a status write that reads back another category, and a write
 //! check answered with something other than an object. Each journey hands the engine one of
-//! those and holds it to refusing before it writes what the answer would have it write.
+//! those and holds it to refusing before it writes what the answer would have it write. The same
+//! store, answering as a plugin built to 0.8.0 does, is held to being read unchanged: its items
+//! as task items, and a project status write it never declared refused before it is sent.
 
 use std::path::PathBuf;
 use std::process::Output;
@@ -288,5 +290,69 @@ fn a_write_check_answered_with_something_other_than_an_object_refuses_the_copy_w
         std::fs::read_to_string(&stored.at).expect("the store"),
         before,
         "the store holds exactly what it held"
+    );
+}
+
+#[test]
+fn a_plugin_built_to_the_earlier_shape_reads_as_task_items_and_refuses_a_project_status_set() {
+    // The Python store answers exactly as a plugin built against 0.8.0 does: holdings and
+    // contradictions naming task items with no `kind` member, and no `set_project_status`, which
+    // its handshake therefore does not declare.
+    let stored = Stored::new();
+    let (alpha, beta) = (stored.id_of("Alpha"), stored.id_of("Beta"));
+    let done = json!({"category": "done", "name": "done"});
+
+    stored.configure(json!({"closure": {"contradictions": [alpha]}}));
+    let (answer, _) = stored.json(&["task", "status", "reconcile", "--source", "store"], 0);
+    assert_eq!(
+        answer,
+        json!({"items": [{"source": format!("store:{alpha}"), "kind": "task", "from": "Todo",
+                          "to": done, "action": "updated"}]}),
+        "{answer:#}"
+    );
+
+    stored.configure(json!({"closure": {"holdings": "due"}}));
+    let (answer, _) = stored.json(
+        &["task", "status", "complete", "--source", "store"]
+            .iter()
+            .copied()
+            .chain(ISSUES)
+            .collect::<Vec<_>>(),
+        0,
+    );
+    let item = |issue: &str, id: &str| {
+        json!({"issue": issue, "source": "store", "task": format!("store:{id}"), "kind": "task",
+               "from": "Todo", "to": done, "action": "updated"})
+    };
+    assert_eq!(
+        answer,
+        json!({"items": [item("acme/work#1", &alpha), item("acme/work#2", &beta)],
+               "unsupported": []}),
+        "{answer:#}"
+    );
+    let before = std::fs::read_to_string(&stored.at).expect("the store");
+
+    let (failure, said) = stored.json(&["project", "status", "set", "store:P-1", "done"], 1);
+    // A plugin sent the method would have answered that it has none; the engine refuses first,
+    // in the contract's default words.
+    assert_eq!(
+        failure["failure"]["message"]
+            .as_str()
+            .and_then(|message| message.lines().next()),
+        Some(
+            "source store could not do it: the source refused the request: the asset-store plugin \
+             cannot write a task's status on its own"
+        ),
+        "{failure:#}"
+    );
+    assert_eq!(failure["failure"]["class"], "refused", "{failure:#}");
+    assert!(
+        said.contains("cannot write a task's status on its own"),
+        "{said}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&stored.at).expect("the store"),
+        before,
+        "nothing was written"
     );
 }

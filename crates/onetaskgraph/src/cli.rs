@@ -1019,6 +1019,41 @@ pub struct StatusSetArgs {
     pub term_scope: TermScopeArgs,
 }
 
+/// What `onetaskgraph project status` can do.
+#[derive(Debug, Subcommand)]
+pub enum ProjectStatusCommand {
+    /// Set one project's status to a category, and nothing else about it — its title, content,
+    /// labels, metadata, repositories, dependencies and tasks stay as they are.
+    ///
+    /// The category lands where the source's own mapping sends it for a project. On a GitHub
+    /// board a terminal category selects the project kind's option and then closes the
+    /// project's issue — as completed for `done`, as not planned for `cancelled` — leaving an
+    /// issue already closed with a reason that reads that category as it is, and an open
+    /// category reopens a closed issue and then selects its option. A project delivers no task,
+    /// so nothing is kept in step after it.
+    ///
+    /// Exits 0 when the status was written, and 1 when the write was refused.
+    Set(ProjectStatusSetArgs),
+}
+
+/// `onetaskgraph project status set`.
+#[derive(Debug, Args)]
+pub struct ProjectStatusSetArgs {
+    /// The project's qualified id, `<source>:<native-id>`.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `StatusSetArgs::id`: `qualified` in
+    /// `main` converts it immediately, with the next action a user needs.
+    #[arg(value_name = "ID")]
+    pub id: String,
+
+    /// The status category to set — the categories `task status set` takes.
+    #[arg(value_name = "CATEGORY")]
+    pub category: StatusArg,
+
+    #[command(flatten)]
+    pub term_scope: TermScopeArgs,
+}
+
 /// What `onetaskgraph task comment` can do.
 ///
 /// A body is read from `--body-file`, or from standard input when that flag is absent, and
@@ -1152,6 +1187,11 @@ pub enum ProjectCommand {
     Metadata {
         #[command(subcommand)]
         command: MetadataCommand,
+    },
+    /// Set one project's status, and nothing else about it.
+    Status {
+        #[command(subcommand)]
+        command: ProjectStatusCommand,
     },
     /// Create — or, with --id naming one it holds, replace — a project, its description
     /// rendered from a template or given as it is.

@@ -214,6 +214,7 @@ METHOD_SECTIONS = {
     "write_comment_copy": "### 4.16a `write_comment_copy`",
     "set_task_status": "### 4.17 `set_task_status` and `set_delivered_by`",
     "set_delivered_by": "### 4.17 `set_task_status` and `set_delivered_by`",
+    "set_project_status": "### 4.17a `set_project_status`",
     "set_task_metadata": (
         "### 4.18 `set_task_metadata`, `set_project_metadata` and `set_document_metadata`"
     ),
@@ -245,6 +246,7 @@ ENUM_SECTIONS = {
     "Priority": "### 4.13b A task's `priority`",
     "Classification": "### 4.13c A record's `classification`",
     "ClosedAs": "### 4.23 `status_contradictions`",
+    "ContradictedItem": "### 4.23 `status_contradictions`",
 }
 
 # Values a section spells although the enum declaring them is specified elsewhere, each with
@@ -1040,7 +1042,28 @@ def struct_fields(struct, text, visibility):
             f"could not read the `{struct}` struct whose payload docs/plugin-protocol.md shows.",
             "restore it, or teach PAYLOAD_EXAMPLES in this script where it lives now.",
         )
-    fields = set(re.findall(r"^    %s (\w+):" % visibility, declaration.group(1), re.MULTILINE))
+    fields = set()
+    # A `#[serde(flatten)]` field is not a member of the wire object: what crosses is the
+    # member its externally tagged enum names, one per variant (`task` or `project` for a
+    # contradiction's `item`). So the field stands for those variant names, read from the
+    # enum's own declaration — never for its Rust name, which no peer ever sends.
+    for attributes, name, kind in re.findall(
+        r"((?:^    #\[[^\n]*\n)*)^    %s (\w+): ([^\n]*?),?$" % visibility,
+        declaration.group(1),
+        re.MULTILINE,
+    ):
+        if "#[serde(flatten)]" not in attributes:
+            fields.add(name)
+            continue
+        enum = re.search(r"pub enum %s \{(.*?)\n\}" % re.escape(kind), text, re.DOTALL)
+        variants = re.findall(r"^    ([A-Z]\w*)\(", enum.group(1), re.MULTILINE) if enum else []
+        if not variants:
+            refuse(
+                f"could not read the variants of `{kind}`, which `{struct}::{name}` flattens "
+                f"into its wire object.",
+                "declare the enum beside the struct, or teach this script the shape it has.",
+            )
+        fields.update(re.sub(r"(?<!^)(?=[A-Z])", "-", variant).lower() for variant in variants)
     if not fields:
         refuse(
             f"read no fields from `{struct}`.",

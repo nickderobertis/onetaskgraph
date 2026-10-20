@@ -195,14 +195,14 @@ fn a_landing_closing_issues_on_one_of_two_boards_writes_only_those_issues_cards(
         for (at, id) in ids.iter().enumerate() {
             assert_eq!(
                 items[at],
-                json!({"issue":reference(id),"source":"followups","task":null,"from":null,
-                       "to":null,"action":"absent"}),
+                json!({"issue":reference(id),"source":"followups","task":null,"kind":"task",
+                       "from":null,"to":null,"action":"absent"}),
                 "{scale}"
             );
             assert_eq!(
                 items[closed + at],
                 json!({"issue":reference(id),"source":"plans","task":format!("plans:{id}"),
-                       "from":"Todo","to":{"category":"done","name":"Done"},
+                       "kind":"task","from":"Todo","to":{"category":"done","name":"Done"},
                        "action":"updated"}),
                 "{scale}"
             );

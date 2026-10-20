@@ -49,6 +49,8 @@ RESPONSE_ROOTS = {
     "project_graph": "ProjectGraph",
     "project_copy": "CopyReport",
     "project_metadata_set": "MetadataSet",
+    # One project's status set on its own, as its source reads it back.
+    "project_status_set": "ProjectStatusSet",
     "document_list": "QueryResponseOfQualifiedDocument",
     # The document response with the image assets it holds beside it.
     "document_show": "DocumentDetail",
@@ -750,7 +752,7 @@ def operands(command: tuple[str, ...]) -> tuple[str, ...]:
             return ("id",)
         case ("task", "comment", "edit" | "delete"):
             return ("id", "comment_id")
-        case ("task", "status", "set"):
+        case ("task" | "project", "status", "set"):
             return ("id", "category")
         case ("task", "priority", "set"):
             return ("id", "priority")
