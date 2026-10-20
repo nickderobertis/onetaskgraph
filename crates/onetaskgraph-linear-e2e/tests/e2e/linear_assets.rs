@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -678,8 +679,20 @@ fn asset_stage_failures_and_bounded_virtual_rate_limit_recovery() {
     }
 }
 
+const COUNTED: &str = "counted at the Linear loopback in simulated time";
+
 fn record_workload(budget: &str, value: f64, sizes: &[usize], copies: usize) {
-    crate::telemetry::record_assets(budget, value, sizes, copies);
+    crate::telemetry::record_assets(budget, value, COUNTED, sizes, copies);
+}
+
+/// The concurrent copies' figure, with what each refused copy said. A passing journey's output
+/// is captured and never shown, while `onebudgetspec check` prints the detail beside the
+/// figure, so this is where a refusal on a runner nobody can reproduce on names its cause.
+fn concurrent_refusals_detail(refusals: &[String]) -> String {
+    if refusals.is_empty() {
+        return COUNTED.to_owned();
+    }
+    format!("{COUNTED}; refused: {}", refusals.join("; "))
 }
 
 fn project_workload(journey: &Journey) -> (Vec<usize>, Vec<String>) {
@@ -724,29 +737,35 @@ fn measure_project_asset_copy_simulated_seconds() {
     );
 }
 
-#[test]
-fn measure_three_concurrent_project_asset_copies() {
-    let journey = Journey::with_clients(3);
-    let (sizes, documents) = project_workload(&journey);
+/// What three copies of the project workload made at once said: how many clients had a copy
+/// refused, the figure's detail naming each refusal, the workload's image sizes, and the real
+/// time it took.
+struct ConcurrentCopies {
+    refused: f64,
+    detail: String,
+    sizes: Vec<usize>,
+    elapsed: Duration,
+}
+
+/// Copy the project workload — the project, then each document — to each of `destinations` at
+/// once, the binary at index `n` running as clock client `n`.
+fn copy_plan_concurrently(journey: &Journey, destinations: [&str; 3]) -> ConcurrentCopies {
+    let (sizes, documents) = project_workload(journey);
     let real_start = std::time::Instant::now();
     let mut refused_clients = [false; 3];
+    let mut refusals = Vec::new();
     for (kind, id) in std::iter::once(("project", "notes:launch"))
         .chain(documents.iter().map(|id| ("document", id.as_str())))
     {
         let mut children = Vec::new();
-        for client in 0..3 {
-            let destination = if client == 0 {
-                "dest".to_owned()
-            } else {
-                format!("dest{client}")
-            };
+        for (client, destination) in destinations.iter().enumerate() {
             children.push(
                 journey
                     .sandbox
                     .subprocess(onetaskgraph_e2e_support::binary())
                     .current_dir(journey.sandbox.project())
                     .envs(journey.workspace.clock.client_env(client))
-                    .args(["--json", kind, "copy", id, "--to", &destination])
+                    .args(["--json", kind, "copy", id, "--to", destination])
                     .stdout(std::process::Stdio::piped())
                     .stderr(std::process::Stdio::piped())
                     .spawn()
@@ -757,23 +776,106 @@ fn measure_three_concurrent_project_asset_copies() {
             let output = child.wait_with_output().unwrap();
             if !output.status.success() {
                 refused_clients[client] = true;
-                eprintln!("{}", stderr(&output));
+                let said = stderr(&output);
+                eprintln!("{said}");
+                refusals.push(format!(
+                    "client {client}'s {kind} copy of {id} failed ({}): {}",
+                    output.status,
+                    said.trim()
+                ));
             }
         }
     }
-    let elapsed = real_start.elapsed();
+    ConcurrentCopies {
+        refused: refused_clients.iter().filter(|refused| **refused).count() as f64,
+        detail: concurrent_refusals_detail(&refusals),
+        sizes: sizes.iter().copied().cycle().take(72).collect(),
+        elapsed: real_start.elapsed(),
+    }
+}
+
+#[test]
+fn measure_three_concurrent_project_asset_copies() {
+    let journey = Journey::with_clients(3);
+    let copies = copy_plan_concurrently(&journey, ["dest", "dest1", "dest2"]);
+    let elapsed = copies.elapsed;
     eprintln!(
         "three concurrent copies real duration: {:.3}s",
         elapsed.as_secs_f64()
     );
     assert!(elapsed < Duration::from_secs(60));
-    assert_eq!(journey.workspace.counts(), (72, 72, 72));
-    let sizes: Vec<_> = sizes.iter().copied().cycle().take(72).collect();
-    record_workload(
+    // Recorded before the copies' items are counted, so a refusal that also loses one still
+    // leaves what it said where the budget check prints it.
+    crate::telemetry::record_assets(
         "linear-concurrent-copies-refused",
-        refused_clients.iter().filter(|refused| **refused).count() as f64,
-        &sizes,
+        copies.refused,
+        &copies.detail,
+        &copies.sizes,
         3,
+    );
+    assert_eq!(journey.workspace.counts(), (72, 72, 72));
+}
+
+/// A refused copy's own words reach what `onebudgetspec check` reports for the figure: the
+/// workload copied to a destination nothing configures, recorded as the measuring journey
+/// records it and read back through the budget's own entry.
+#[test]
+fn a_refused_concurrent_copy_is_named_in_what_the_budget_check_reports() {
+    let journey = Journey::with_clients(3);
+    let copies = copy_plan_concurrently(&journey, ["dest", "dest1", "unconfigured"]);
+    let budget = "linear-concurrent-copies-refused";
+    let telemetry = journey.sandbox.subdirectory("telemetry");
+    crate::telemetry::record_assets_in(
+        &telemetry,
+        budget,
+        copies.refused,
+        &copies.detail,
+        &copies.sizes,
+        3,
+    );
+    let budgets: Value = serde_saphyr::from_str(include_str!("../../budgets.yaml")).unwrap();
+    let mut entry = budgets["budgets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["id"] == budget)
+        .unwrap()
+        .clone();
+    entry["command"] = json!(crate::budget_runner::runner());
+    let file = journey.sandbox.subdirectory("budgets").join("budgets.yaml");
+    std::fs::write(
+        &file,
+        json!({"schema_version": 1, "budgets": [entry]}).to_string(),
+    )
+    .unwrap();
+    let output = std::process::Command::new("bun")
+        .args(["run", "onebudgetspec", "check", "--json"])
+        .arg(&file)
+        .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
+        .env(crate::telemetry::DIRECTORY, &telemetry)
+        .output()
+        .expect(
+            "bun runs the workspace's pinned onebudgetspec; run `just bootstrap` to install it",
+        );
+    let report: Value = serde_json::from_slice(&output.stdout)
+        .unwrap_or_else(|_| panic!("a JSON report: {}", stderr(&output)));
+    let result = &report["results"][0];
+    assert_eq!(result["verdict"], "over", "{result:#}");
+    assert_eq!(result["actual"], 1.0, "{result:#}");
+    let detail = result["detail"].as_str().expect("a detail");
+    assert!(
+        detail.starts_with(&format!(
+            "{COUNTED}; refused: client 2's project copy of notes:launch failed ("
+        )),
+        "{detail}"
+    );
+    assert!(
+        detail.contains(r#"no source named "unconfigured" is configured"#),
+        "{detail}"
+    );
+    assert!(
+        !detail.contains("client 0") && !detail.contains("client 1"),
+        "{detail}"
     );
 }
 

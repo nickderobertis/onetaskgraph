@@ -31,6 +31,8 @@ const B: &str = "github.com/lanternco/brightwater";
 const B_TEXT: &str = "Mirror the retry loop lanternco/brightwater uses.";
 /// A public repository.
 const OPEN: &str = "github.com/openco/openwidget";
+/// A second public repository, under an owner no route names.
+const SHOP: &str = "github.com/shopco/storefront";
 /// Text naming nothing private.
 const PLAIN: &str = "Retry with a capped exponential backoff.";
 
@@ -229,7 +231,8 @@ fn tree(root: &Path) -> BTreeMap<String, Vec<u8>> {
 fn registered(home: &mut OnevcsHome) {
     home.private("hiddenco", "quietharbor")
         .private("lanternco", "brightwater")
-        .public("openco", "openwidget");
+        .public("openco", "openwidget")
+        .public("shopco", "storefront");
 }
 
 fn files_under(store: &Store, folder: &str) -> Vec<String> {
@@ -999,6 +1002,396 @@ fn a_mixed_project_is_refused_whole_where_no_private_source_is_reachable() {
     let (kind, _) = store.refused(&["task", "copy", "plan:open", "--to", "site"]);
     assert_eq!(kind, "not-private-destination");
     assert!(files_under(&store, "site").is_empty());
+}
+
+/// A plan authored in the public `draft` folder, titled `title`, copied to `site` with
+/// `routes`: `open` of the public `openco` repository, `quiet` of the private `hiddenco` one,
+/// `review` naming no repository and depending on both, and the plan's design document.
+fn private_plan(store: &Store, title: &str) {
+    std::fs::create_dir_all(store.folder("draft")).expect("the draft folder");
+    store.record(
+        "draft",
+        "projects",
+        "goal",
+        &format!("title: {title}\nstatus: todo"),
+        PLAIN,
+    );
+    store.record(
+        "draft",
+        "tasks",
+        "open",
+        &format!("title: Open work\nstatus: todo\nproject: goal\nrepositories: [{OPEN}]"),
+        PLAIN,
+    );
+    store.record(
+        "draft",
+        "tasks",
+        "quiet",
+        &format!("title: Quiet work\nstatus: todo\nproject: goal\nrepositories: [{A}]"),
+        A_TEXT,
+    );
+    store.record(
+        "draft",
+        "tasks",
+        "review",
+        "title: Review it\nstatus: todo\nproject: goal\ndepends_on: [open, quiet]",
+        PLAIN,
+    );
+    store.record(
+        "draft",
+        "documents",
+        "design",
+        "title: Design\nproject: goal",
+        PLAIN,
+    );
+}
+
+/// The store [`private_plan`] is copied in: `site` routing `hiddenco` work to `vault`, and
+/// `extra` laid over it.
+fn routing_store(extra: impl FnOnce(&Sandbox) -> Value) -> Store {
+    Store::laid(Some(registered), |sandbox| {
+        merged(
+            json!({
+                "draft": folder(sandbox, "draft", "public"),
+                "site": {"routes": [{"repositories": ["github.com/hiddenco/*"], "to": "vault"}]},
+            }),
+            extra(sandbox),
+        )
+    })
+}
+
+#[test]
+fn a_mixed_plan_homes_in_the_private_source_and_its_public_work_lands_in_a_public_member() {
+    let store = routing_store(|_| json!({}));
+    private_plan(&store, "One goal");
+    let report: Value = serde_json::from_str(&store.ok(&[
+        "project",
+        "copy",
+        "draft:goal",
+        "--to",
+        "site",
+        "--json",
+    ]))
+    .expect("a copy report");
+    let landed = landed_ids(&report.to_string());
+    for item in ["draft:goal", "draft:quiet", "draft:review"] {
+        assert!(landed[item].starts_with("vault:"), "{item}: {report:#}");
+    }
+    let open = &landed["draft:open"];
+    assert!(open.starts_with("site:"), "{report:#}");
+    // The document goes with its home.
+    let document =
+        landed_ids(&store.ok(&["document", "copy", "draft:design", "--to", "site", "--json"]));
+    assert!(
+        document["draft:design"].starts_with("vault:"),
+        "{document:?}"
+    );
+
+    // `site` holds the public task and the member project it is filed under, and nothing else.
+    let home = &landed["draft:goal"];
+    let members = members_of_home(&store, home);
+    assert_eq!(members.len(), 1, "{members:?}");
+    let member = &members[0];
+    assert!(member.starts_with("site:"), "{members:?}");
+    let shown: Value = serde_json::from_str(&store.ok(&["task", "show", open, "--json"]))
+        .expect("the public task");
+    assert_eq!(
+        format!(
+            "site:{}",
+            shown["items"][0]["item"]["project"]
+                .as_str()
+                .expect("filed")
+        ),
+        *member
+    );
+    let mut on_site = files_under(&store, "site");
+    on_site.sort();
+    assert_eq!(
+        on_site.len(),
+        2,
+        "the member and the public task: {on_site:?}"
+    );
+    // Nothing there names the private source, its work or where its home is.
+    for (path, bytes) in tree(&store.folder("site")) {
+        let text = String::from_utf8(bytes).expect("a text record");
+        for named in [
+            "vault",
+            "Quiet work",
+            "hiddenco",
+            "draft:quiet",
+            "classification: private",
+        ] {
+            assert!(!text.contains(named), "{path} names {named}:\n{text}");
+        }
+    }
+
+    // A second copy writes nothing anywhere.
+    let before = store.tree();
+    let again = landed_ids(&store.ok(&["project", "copy", "draft:goal", "--to", "site", "--json"]));
+    assert_eq!(again, landed);
+    assert_eq!(
+        store.tree(),
+        before,
+        "a repeat leaves every folder as it was"
+    );
+}
+
+#[test]
+fn a_plan_whose_private_work_routes_to_two_private_sources_is_refused_naming_both() {
+    let store = routing_store(|_| {
+        json!({"site": {"routes": [
+            {"repositories": ["github.com/hiddenco/*"], "to": "vault"},
+            {"repositories": ["github.com/lanternco/*"], "to": "plan"},
+        ]}})
+    });
+    private_plan(&store, "One goal");
+    store.record(
+        "draft",
+        "tasks",
+        "bright",
+        &format!("title: Bright work\nstatus: todo\nproject: goal\nrepositories: [{B}]"),
+        B_TEXT,
+    );
+    // A second `hiddenco` task, and the project's own `hiddenco` repository, vote beside the
+    // first.
+    store.record(
+        "draft",
+        "tasks",
+        "hush",
+        &format!("title: Hushed work\nstatus: todo\nproject: goal\nrepositories: [{A}]"),
+        A_TEXT,
+    );
+    store.record(
+        "draft",
+        "projects",
+        "goal",
+        &format!("title: One goal\nstatus: todo\nrepositories: [{A}]"),
+        PLAIN,
+    );
+    let before = store.tree();
+    let (kind, said) = store.refused(&["project", "copy", "draft:goal", "--to", "site"]);
+    assert_eq!(kind, "split-private-home", "{said}");
+    // One `<source> for <ids>` entry per destination, each naming every voter placing there.
+    let entries: BTreeMap<&str, Vec<&str>> = said
+        .lines()
+        .next()
+        .and_then(|first| first.split_once("no one home: "))
+        .map(|(_, split)| split)
+        .unwrap_or_default()
+        .split("; ")
+        .filter_map(|entry| entry.split_once(" for "))
+        .map(|(source, ids)| {
+            let mut ids: Vec<&str> = ids.split(", ").collect();
+            ids.sort_unstable();
+            (source, ids)
+        })
+        .collect();
+    assert_eq!(
+        entries,
+        BTreeMap::from([
+            ("plan", vec!["draft:bright"]),
+            ("vault", vec!["draft:goal", "draft:hush", "draft:quiet"]),
+        ]),
+        "{said}"
+    );
+    assert_eq!(store.tree(), before, "nothing was written anywhere");
+}
+
+/// [`routing_store`] with `site` routing `hiddenco` work to `vault` and `lanternco` work to the
+/// private `archive`, and `draft` declared `draft_visibility`.
+fn two_private_routes(draft_visibility: &'static str) -> Store {
+    routing_store(move |sandbox| {
+        json!({
+            "draft": {"visibility": draft_visibility},
+            "archive": folder(sandbox, "archive", "private"),
+            "site": {"routes": [
+                {"repositories": ["github.com/hiddenco/*"], "to": "vault"},
+                {"repositories": ["github.com/lanternco/*"], "to": "archive"},
+            ]},
+        })
+    })
+}
+
+/// Add to [`private_plan`] the task `bright`, of the private `lanternco` repository, whose
+/// route sends it to `archive` — a second private source beside the `vault` `quiet` routes to.
+fn add_bright(store: &Store) {
+    store.record(
+        "draft",
+        "tasks",
+        "bright",
+        &format!("title: Bright work\nstatus: todo\nproject: goal\nrepositories: [{B}]"),
+        B_TEXT,
+    );
+}
+
+#[test]
+fn an_existing_private_home_stays_the_home_when_its_private_work_later_routes_two_ways() {
+    // Authored in a private folder, so the link to its private home is recorded on it.
+    let store = two_private_routes("private");
+    std::fs::create_dir_all(store.folder("archive")).expect("the archive folder");
+    private_plan(&store, "One goal");
+    let first = landed_ids(&store.ok(&["project", "copy", "draft:goal", "--to", "site", "--json"]));
+    let home = first["draft:goal"].clone();
+    assert!(home.starts_with("vault:"), "{first:?}");
+    let site = tree(&store.folder("site"));
+
+    // A second private repository's work now routes to `archive`: a new home would have no one
+    // private source, but this plan has a home, and it stays where it is.
+    add_bright(&store);
+    let again = landed_ids(&store.ok(&["project", "copy", "draft:goal", "--to", "site", "--json"]));
+    assert_eq!(again["draft:goal"], home, "{again:?}");
+    assert!(again["draft:bright"].starts_with("archive:"), "{again:?}");
+    let projects: Value =
+        serde_json::from_str(&store.ok(&["project", "list", "--source", "vault", "--json"]))
+            .expect("a listing");
+    assert_eq!(
+        projects["items"].as_array().expect("projects").len(),
+        1,
+        "no second home: {projects:#}"
+    );
+    assert_eq!(tree(&store.folder("site")), site, "site is as it was");
+}
+
+#[test]
+fn an_existing_public_home_of_a_plan_whose_private_work_routes_two_ways_is_refused_unmoved() {
+    let store = two_private_routes("public");
+    private_plan(&store, "One goal");
+    // Copied while it was public: its home is on `site`.
+    let set_aside: Vec<(PathBuf, Vec<u8>)> = ["quiet", "review"]
+        .iter()
+        .map(|task| {
+            let path = store.folder("draft").join(format!("tasks/{task}.md"));
+            let held = std::fs::read(&path).expect("the task");
+            std::fs::remove_file(&path).expect("the task set aside");
+            (path, held)
+        })
+        .collect();
+    let landed =
+        landed_ids(&store.ok(&["project", "copy", "draft:goal", "--to", "site", "--json"]));
+    assert!(landed["draft:goal"].starts_with("site:"), "{landed:?}");
+    for (path, held) in set_aside {
+        std::fs::write(path, held).expect("the task restored");
+    }
+    add_bright(&store);
+    let before = store.tree();
+    let (kind, said) = store.refused(&["project", "copy", "draft:goal", "--to", "site"]);
+    assert_eq!(kind, "not-private-destination", "{said}");
+    assert!(said.contains("draft:goal"), "{said}");
+    assert_eq!(
+        store.tree(),
+        before,
+        "the existing home and everything else are unchanged"
+    );
+}
+
+#[test]
+fn a_project_s_own_private_repository_votes_its_home_into_the_private_source() {
+    let store = routing_store(|_| json!({}));
+    private_plan(&store, "One goal");
+    // The project names the private repository, and no task does any more.
+    std::fs::remove_file(store.folder("draft").join("tasks/quiet.md")).expect("the task removed");
+    store.record(
+        "draft",
+        "tasks",
+        "review",
+        "title: Review it\nstatus: todo\nproject: goal\ndepends_on: [open]",
+        PLAIN,
+    );
+    store.record(
+        "draft",
+        "projects",
+        "goal",
+        &format!("title: One goal\nstatus: todo\nrepositories: [{A}]"),
+        PLAIN,
+    );
+    let landed =
+        landed_ids(&store.ok(&["project", "copy", "draft:goal", "--to", "site", "--json"]));
+    assert!(landed["draft:goal"].starts_with("vault:"), "{landed:?}");
+    assert!(landed["draft:review"].starts_with("vault:"), "{landed:?}");
+    assert!(landed["draft:open"].starts_with("site:"), "{landed:?}");
+    assert_eq!(
+        members_of_home(&store, &landed["draft:goal"]).len(),
+        1,
+        "the public task is filed under a member on site"
+    );
+}
+
+#[test]
+fn a_private_plan_whose_home_already_sits_in_a_public_source_is_refused_and_left_there() {
+    let store = routing_store(|_| json!({}));
+    private_plan(&store, "One goal");
+    // Copied while it was public: its home is on `site`.
+    let quiet = store.folder("draft").join("tasks/quiet.md");
+    let held = std::fs::read(&quiet).expect("the private task");
+    std::fs::remove_file(&quiet).expect("the private task set aside");
+    let review = store.folder("draft").join("tasks/review.md");
+    let reviewed = std::fs::read(&review).expect("the review");
+    std::fs::remove_file(&review).expect("its dependent set aside with it");
+    let landed =
+        landed_ids(&store.ok(&["project", "copy", "draft:goal", "--to", "site", "--json"]));
+    assert!(landed["draft:goal"].starts_with("site:"), "{landed:?}");
+    // Its private work is back, so its voters would send a new home to `vault`; the one it has
+    // stays where it is, and holds no private work.
+    std::fs::write(&quiet, held).expect("the private task restored");
+    std::fs::write(&review, reviewed).expect("its dependent restored");
+    let before = store.tree();
+    let (kind, said) = store.refused(&["project", "copy", "draft:goal", "--to", "site"]);
+    assert_eq!(kind, "not-private-destination", "{said}");
+    assert!(said.contains("draft:goal"), "{said}");
+    assert_eq!(
+        store.tree(),
+        before,
+        "the existing home and everything else are unchanged"
+    );
+}
+
+/// A visibility command answering `public` for an `openco` repository and `private` for any
+/// other.
+const OPENCO_PUBLIC: &str = "import json, sys\n\
+    asked = sys.stdin.read()\n\
+    print(json.dumps({'visibility': 'public' if 'openco' in asked else 'private'}))\n";
+
+/// A check command refusing a write whose payload names `Plan marker` by its title, and
+/// passing any other.
+const MARKER_REFUSED: &str = "import json, sys\n\
+    if 'Plan marker' in sys.stdin.read():\n\
+    \x20   print(json.dumps({'verdict': 'refuse', 'surface': 'title'}))\n\
+    \x20   sys.exit(1)\n\
+    print(json.dumps({'verdict': 'pass'}))\n";
+
+#[test]
+fn a_public_member_its_check_refuses_takes_the_whole_copy_back() {
+    let sandbox = Sandbox::new();
+    let extra = json!({
+        "draft": folder(&sandbox, "draft", "public"),
+        "site": {"routes": [{"repositories": ["github.com/hiddenco/*"], "to": "vault"}]},
+    });
+    let store = Store::configured(
+        sandbox,
+        None,
+        Some(json!({
+            "visibility_command": ["python3", "-c", OPENCO_PUBLIC],
+            "check_command": ["python3", "-c", MARKER_REFUSED],
+        })),
+        extra,
+    );
+    // The home carries the marker in its title, so the member made for it on `site` does too;
+    // the public task the member files does not.
+    private_plan(&store, "Plan marker");
+    let (kind, said) = store.refused(&["project", "copy", "draft:goal", "--to", "site"]);
+    assert_eq!(kind, "boundary-refused", "{said}");
+    assert!(
+        said.contains("member project") && said.contains("in site, for draft:open"),
+        "the refusal names the member and the task it files: {said}"
+    );
+    assert!(
+        files_under(&store, "site").is_empty(),
+        "site holds nothing of the plan"
+    );
+    assert!(
+        files_under(&store, "vault").is_empty(),
+        "and the home landed first is taken back"
+    );
 }
 
 #[test]
@@ -3931,7 +4324,9 @@ fn merged(mut base: Value, extra: Value) -> Value {
 }
 
 /// A plan authored in the public `draft` folder whose `openco` task `site` routes to `vault`:
-/// a home on `site` with a member on `vault`, and an edge each way across the two.
+/// a home on `site` with a member on `vault`, and an edge each way across the two. Its
+/// `shopco` task is what keeps the home on `site`: a task naming no repository has no say in
+/// where the home goes, so with the `openco` task alone voting it would follow it to `vault`.
 fn routed_plan() -> Store {
     routed_plan_in("draft")
 }
@@ -3979,7 +4374,10 @@ fn routed_plan_in(author: &str) -> Store {
         author,
         "tasks",
         "rollout",
-        "title: Rollout\nstatus: todo\nproject: goal\ndepends_on: [consumer]",
+        &format!(
+            "title: Rollout\nstatus: todo\nproject: goal\nrepositories: [{SHOP}]\n\
+             depends_on: [consumer]"
+        ),
         PLAIN,
     );
     store
@@ -5237,6 +5635,67 @@ fn a_routed_plan_copied_on_from_its_public_home_keeps_its_dependency_on_the_priv
     assert_eq!(store.tree(), before, "nothing is written a second time");
     assert_eq!(edges_of(&store, rollout, "depends-on"), kept);
     assert_eq!(edges_of(&store, consumer, "depended-on-by"), kept);
+}
+
+#[test]
+fn a_member_whose_home_withheld_its_origin_is_taken_over_by_a_copy_to_its_source() {
+    // Authored in the private `plan`, so the public home on `site` records no origin naming it
+    // and the link `plan` keeps is what ties them.
+    let store = routed_plan_in("plan");
+    let landed = landed_ids(&store.ok(&["project", "copy", "plan:goal", "--to", "site", "--json"]));
+    let home = &landed["plan:goal"];
+    assert!(home.starts_with("site:"), "{landed:?}");
+    let shown = |id: &str| -> Value {
+        let answer: Value =
+            serde_json::from_str(&store.ok(&["project", "show", id, "--json"])).expect("a project");
+        answer["items"][0]["item"]["metadata"].clone()
+    };
+    assert!(
+        shown(home).get("onetaskgraph.origin").is_none(),
+        "{:#}",
+        shown(home)
+    );
+    let members = members_of_home(&store, home);
+    assert_eq!(members.len(), 1, "{members:?}");
+    let member = &members[0];
+
+    let report: Value = serde_json::from_str(&store.ok(&[
+        "project",
+        "copy",
+        "plan:goal",
+        "--to",
+        "vault",
+        "--json",
+    ]))
+    .expect("a copy report");
+    let goal = report["items"]
+        .as_array()
+        .expect("the copied items")
+        .iter()
+        .find(|item| item["source"] == "plan:goal")
+        .expect("the project's outcome");
+    assert_eq!(goal["destination"], json!(member), "{report:#}");
+    assert_eq!(goal["via"], "scan", "{report:#}");
+    let projects: Value =
+        serde_json::from_str(&store.ok(&["project", "list", "--source", "vault", "--json"]))
+            .expect("a listing");
+    assert_eq!(
+        projects["items"].as_array().expect("projects").len(),
+        1,
+        "{projects:#}"
+    );
+    let held = shown(member);
+    assert!(held.get("onetaskgraph.member_of").is_none(), "{held:#}");
+    assert_eq!(held["onetaskgraph.origin"], "plan:goal", "{held:#}");
+    assert_eq!(
+        shown("plan:goal")["onetaskgraph.copies"]["vault"],
+        json!(member)
+    );
+    assert!(
+        shown(home).get("onetaskgraph.members").is_none(),
+        "the former home names it no longer: {:#}",
+        shown(home)
+    );
 }
 
 /// The member projects `home` records, read back through the binary.

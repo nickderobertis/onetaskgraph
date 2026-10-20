@@ -1084,6 +1084,113 @@ async fn a_task_copied_on_its_own_is_filed_under_the_destinations_own_counterpar
     );
 }
 
+/// `from:P-1`, whose copy in `home` is the plan's home, and `into:M`, the member that home
+/// names in `into`.
+fn plan_with_a_member() -> Engine {
+    plan_with_a_linked(
+        json!({GlobalId::ORIGIN_KEY: "from:P-1", "onetaskgraph.members": ["into:M"]}),
+    )
+}
+
+/// `from:P-1`, linked to `home:H` holding `home`, and `into:M` naming `home:H` as its home.
+fn plan_with_a_linked(home: Value) -> Engine {
+    let todo = json!({"category": "todo", "name": "Todo"});
+    engine_over(json!({
+        "from": {"plugin": "in-memory", "config": {"projects": [{
+            "id": "P-1", "title": "Goal", "status": todo, "labels": [],
+            "metadata": {"onetaskgraph.copies": {"home": "home:H"}},
+        }]}},
+        "home": {"plugin": "in-memory", "config": {"projects": [{
+            "id": "H", "title": "Goal", "status": todo, "labels": [],
+            "metadata": home,
+        }]}},
+        "into": {"plugin": "in-memory", "config": {"projects": [{
+            "id": "M", "title": "Goal", "status": todo, "labels": [],
+            "metadata": {"onetaskgraph.member_of": "home:H"},
+        }]}},
+    }))
+}
+
+/// A Rust caller's project copy takes over the member of the plan its destination already
+/// holds, as the command line's does — unless the caller sets `create`, which says there is
+/// nothing at the destination to look for and is believed.
+#[tokio::test]
+async fn a_rust_caller_s_project_copy_takes_over_the_plan_s_member_unless_it_asks_to_create() {
+    let request = many(&["from:P-1"], CopyScope::Projects { tasks: false });
+    let engine = plan_with_a_member();
+    let copied = engine.copy(&request).await.expect("the copy runs");
+    assert_eq!(
+        landed(&copied.items[0]),
+        (Some("into:M".to_owned()), "updated".to_owned())
+    );
+    let held = &engine
+        .project(&id("into:M"))
+        .await
+        .expect("the show verb answers")
+        .items[0]
+        .item;
+    assert!(
+        !held.metadata.contains_key("onetaskgraph.member_of"),
+        "{held:?}"
+    );
+    assert_eq!(held.metadata[GlobalId::ORIGIN_KEY], json!("from:P-1"));
+
+    let engine = plan_with_a_member();
+    let created = engine
+        .copy(&CopyRequest {
+            create: true,
+            ..request
+        })
+        .await
+        .expect("the copy runs");
+    let (destination, action) = landed(&created.items[0]);
+    assert_eq!(action, "created");
+    assert_ne!(destination.as_deref(), Some("into:M"));
+    let member = &engine
+        .project(&id("into:M"))
+        .await
+        .expect("the show verb answers")
+        .items[0]
+        .item;
+    assert_eq!(member.metadata["onetaskgraph.member_of"], json!("home:H"));
+}
+
+/// A project the copied one links to is the plan's home only when it names that project back
+/// and is no member itself; otherwise the member it lists is somebody else's, and a project is
+/// created beside it rather than taking it over.
+#[tokio::test]
+async fn a_linked_project_that_is_not_the_plan_s_home_lends_no_member_to_take_over() {
+    for home in [
+        json!({GlobalId::ORIGIN_KEY: "from:OTHER", "onetaskgraph.members": ["into:M"]}),
+        json!({"onetaskgraph.members": ["into:M"]}),
+        json!({
+            GlobalId::ORIGIN_KEY: "from:P-1",
+            "onetaskgraph.members": ["into:M"],
+            "onetaskgraph.member_of": "elsewhere:X",
+        }),
+    ] {
+        let engine = plan_with_a_linked(home.clone());
+        let copied = engine
+            .copy(&many(&["from:P-1"], CopyScope::Projects { tasks: false }))
+            .await
+            .expect("the copy runs");
+        let (destination, action) = landed(&copied.items[0]);
+        assert_eq!(action, "created", "{home}");
+        assert_ne!(destination.as_deref(), Some("into:M"), "{home}");
+        let member = &engine
+            .project(&id("into:M"))
+            .await
+            .expect("the show verb answers")
+            .items[0]
+            .item;
+        assert_eq!(
+            member.metadata["onetaskgraph.member_of"],
+            json!("home:H"),
+            "{home}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn a_project_origin_that_still_names_something_updates_that_project_directly() {
     let engine = engine_over(json!({

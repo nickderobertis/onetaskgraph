@@ -590,8 +590,10 @@ pub async fn precondition_session(
 /// spend: reading the board's fields, creating and filing two tasks with their fields, one
 /// card write and one close each way, the closed-items reads the reconcile and its own check
 /// make, and taking both tasks back — rounded up generously, because it is what refuses a run
-/// rather than what a run spends.
-pub const RECONCILE_DESIGN_POINTS: u64 = 40;
+/// rather than what a run spends. Forty-five of them are the wait for the board's `is:closed`
+/// index to answer the two closed tasks: one one-point read a minute for at most forty-five
+/// minutes.
+pub const RECONCILE_DESIGN_POINTS: u64 = 85;
 
 /// [`precondition_session`] for the reconcile journey, which records into no entry point's
 /// session: the same one allowance read, deciding on [`RECONCILE_DESIGN_POINTS`].

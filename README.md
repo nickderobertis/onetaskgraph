@@ -1775,17 +1775,53 @@ by the named source's routes. So does the engine's own member copy, which is wha
 engine's write-back uses.
 
 - **A task** goes where its own repositories route it.
-- **A project's home** goes to a routed source only when every task the copy carries routes
-  there, and so do the project's own repositories when it names any. Any other project's home
-  is the named destination. With `--no-tasks`, the project's own repositories alone decide.
-  **A home that already exists stays where it is**: a task added later that routes back to
-  the named destination goes into a member project there.
+- **A project's home** is placed by its **voters**: every task the copy carries that names at
+  least one repository, and the project's own `repositories` when it names any. A task naming
+  no repository, and every document, never votes.
+  - When every voter places at one source, the home goes there — so a plan of tasks routed
+    to one source, plus a person's step naming no repository, lands wholly in that source.
+  - When the voters disagree, the home is the named destination, with a member project for
+    each routed task — unless the [public boundary](#the-public-boundary) is active and any
+    item of the plan classifies private. Then the home goes to the source declared private
+    that the plan's private voters place at, by their own repositories and the placement a
+    private item takes. When those voters place at two different private sources and the
+    plan has no home yet, the copy is refused before anything is written, naming each source
+    and the qualified ids of the items placing there. The public voters stay where their own repositories place them —
+    under the home's member project in each other source, whose write is screened like any
+    other.
+  - With no voter at all, the home is the named destination. With `--no-tasks` only the
+    project's own repositories can vote.
+  - A `{classification: private, to: <source>}` entry keeps its precedence: a project holding
+    anything private goes there whole, with every task and document in it.
+  - **A home that already exists stays where it is**, found by the project's link or origin
+    and naming it back: a task added later that routes elsewhere goes into a member project
+    there. A private plan whose existing home sits in a source not declared private is refused
+    before anything is written, while the boundary is active; the home is never moved.
+- **A task naming no repository**, carried by a project copy, goes with its home, wherever the
+  home went; its own placement is never consulted.
 - **A task routed away from its home's source** goes into the home's **member project** in
-  that source, found through the home's `onetaskgraph.members` — or created, with the home's
-  title and status and `onetaskgraph.member_of` naming the home, and recorded on the home in
-  the same copy. A home has at most one member per source. `task create` files a routed task
-  the same way, under the member of the project it names.
+  that source, found through the home's `onetaskgraph.members`, or else as the project there
+  whose `onetaskgraph.member_of` names the home — or created, with the home's title and status
+  and `onetaskgraph.member_of` naming the home, and recorded on the home in the same copy. A
+  member in a source not declared private, of a home in one that is, records no
+  `onetaskgraph.member_of`: the home's own list is what ties them. A home has at most one
+  member per source. `task create` files a routed task the same way, under the member of the
+  project it names.
 - **A document** goes with its project's home.
+
+**A copy never creates a second project of one plan in a source.** When a copy would create
+a home or a member project in a source that already holds this plan's project there — the
+member the plan's counterpart home names in its `onetaskgraph.members` for that source, or a
+project whose `onetaskgraph.member_of` names that home — it uses that project instead. The
+counterpart home is the project the copied project's `onetaskgraph.copies` links to in another
+source, naming it back as its origin — or naming none, where a copy out of a private source
+withheld it. Taken
+over as the home, it drops `onetaskgraph.member_of` and records `onetaskgraph.origin` naming
+the copied project, the copied project's `onetaskgraph.copies` records the link to it as any
+copy's link is recorded, and the former home's `onetaskgraph.members` no longer names it; its report says `via: scan`. So
+copying a plan `--to` the source its routed tasks went to, after a routed copy gave it a home
+elsewhere, leaves that source holding one project of the plan, carrying every routed task. No
+key is renamed, and none is removed from an item the copy does not write.
 
 A task's project is still a native id of its own source: a plan spanning two sources is a
 home plus a member project in the other, never a project holding another source's tasks. An
@@ -1913,7 +1949,10 @@ visibility.** Active:
 Safety is decided before matching — a private item is only ever placed in a source declared
 private, classification entries are tried before repository entries, and otherwise the order
 is the one written. A project holding anything private goes, with every task and document in
-it, wholly to one private source, whatever its tasks' repositories would say; with none
+it, wholly to the private source a classification entry names, whatever its tasks'
+repositories would say. Without one, its home goes where its private tasks' repositories route
+it, and its public tasks into a member project where theirs do — see [Which writes route, and
+where each item lands](#which-writes-route-and-where-each-item-lands); with no private source
 reachable, the whole copy is refused before anything is written. `sources route <SOURCE>
 --classification private` answers where such an item would go.
 

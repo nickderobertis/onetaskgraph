@@ -220,6 +220,16 @@ impl Routes {
         )
     }
 
+    /// Whether `source` holds a classification entry a private item may take: one that sends
+    /// every private item it is written to somewhere declared private, whatever its
+    /// repositories.
+    #[must_use]
+    pub fn classifies_private(&self, source: &SourceName) -> bool {
+        self.place_classified(source, Classification::Private, &[])
+            .route
+            .is_some()
+    }
+
     /// Whether `source` is declared private.
     #[must_use]
     pub fn is_private(&self, source: &SourceName) -> bool {
@@ -744,6 +754,23 @@ mod tests {
                 .destination,
             name("team")
         );
+    }
+
+    #[test]
+    fn only_a_classification_entry_places_every_private_item_whatever_its_repositories() {
+        let configured = [name("plans"), name("vault")];
+        let by_repository = Routes::new(
+            BTreeMap::from([(
+                name("plans"),
+                vec![(vec!["github.com/hiddenco/*".to_owned()], name("vault"))],
+            )]),
+            &configured,
+        )
+        .expect("repository routes")
+        .with_visibility(BTreeMap::from([(name("vault"), SourceVisibility::Private)]));
+        assert!(!by_repository.classifies_private(&name("plans")));
+        assert!(classified().classifies_private(&name("plans")));
+        assert!(!classified().classifies_private(&name("team")));
     }
 
     #[test]
