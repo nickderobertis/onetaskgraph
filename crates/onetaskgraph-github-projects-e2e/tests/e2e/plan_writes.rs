@@ -535,6 +535,7 @@ fn a_held_back_write_answered_malformed_takes_back_every_item_it_created() {
         ("field4", AliasAnswer::Missing),
         ("field4", AliasAnswer::NamingAnother),
         ("block2", AliasAnswer::NamingAnother),
+        ("block2", AliasAnswer::NamingAnotherBlocker),
     ] {
         let plan = Plan::new(SMALL, Vec::new());
         plan.github.bend_batch_alias(alias, answer);
@@ -546,7 +547,9 @@ fn a_held_back_write_answered_malformed_takes_back_every_item_it_created() {
         let said = onetaskgraph_e2e_support::common::stderr(&output);
         let expected = match answer {
             AliasAnswer::Missing => format!("with nothing at {alias}"),
-            AliasAnswer::NamingAnother => format!("at {alias} with ANOTHER-ITEM"),
+            AliasAnswer::NamingAnother | AliasAnswer::NamingAnotherBlocker => {
+                format!("at {alias} with ANOTHER-ITEM")
+            }
         };
         assert!(said.contains(&expected), "{alias} {answer:?}: {said}");
         left_nothing(&plan, TASKS + 1);

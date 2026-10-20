@@ -3147,6 +3147,8 @@ pub enum AliasAnswer {
     Missing,
     /// With another item's id than the one its input named.
     NamingAnother,
+    /// With another issue than the one its input named as blocking, the blocked one right.
+    NamingAnotherBlocker,
 }
 
 /// How a read by issue reference can come back malformed in its first slot.
@@ -3926,6 +3928,9 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
                 let mut answered = answer[*root].clone();
                 match bent {
                     Some(AliasAnswer::Missing) => continue,
+                    Some(AliasAnswer::NamingAnotherBlocker) => {
+                        answered["blockingIssue"]["id"] = json!("ANOTHER-ITEM");
+                    }
                     Some(AliasAnswer::NamingAnother) => {
                         for member in answered
                             .as_object_mut()

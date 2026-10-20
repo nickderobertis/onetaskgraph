@@ -9773,22 +9773,16 @@ impl GitHubProjectsSource {
         }
         // Each alias answers with the item it wrote, which is the one its input named: the
         // board item a field value is set on, the issue closed, the issue blocked.
-        for (document, prefix, inputs, root, named) in [
-            (
-                graphql::WRITE_FIELD_VALUES,
-                "field",
-                &fields,
-                "projectV2Item",
-                "itemId",
-            ),
-            (graphql::CLOSE_ISSUES, "close", &closes, "issue", "id"),
-            (
-                graphql::ADD_BLOCKED_BYS,
-                "block",
-                &edges,
-                "issue",
-                "issueId",
-            ),
+        // Each alias answers with what it wrote, which is what its input named: the board item a
+        // field value is set on, the issue closed, the issue blocked and the one blocking it.
+        let field_answer: &[(&str, &str)] = &[("projectV2Item", "itemId")];
+        let close_answer: &[(&str, &str)] = &[("issue", "id")];
+        let block_answer: &[(&str, &str)] =
+            &[("issue", "issueId"), ("blockingIssue", "blockingIssueId")];
+        for (document, prefix, inputs, answers) in [
+            (graphql::WRITE_FIELD_VALUES, "field", &fields, field_answer),
+            (graphql::CLOSE_ISSUES, "close", &closes, close_answer),
+            (graphql::ADD_BLOCKED_BYS, "block", &edges, block_answer),
         ] {
             for chunk in inputs.chunks(MUTATION_BATCH) {
                 let mut variables = serde_json::Map::new();
@@ -9801,24 +9795,26 @@ impl GitHubProjectsSource {
                 }
                 let data = self.graphql(document, Value::Object(variables)).await?;
                 for (slot, input) in chunk.iter().enumerate() {
-                    let answered = data
-                        .pointer(&format!("/{prefix}{slot}/{root}/id"))
-                        .and_then(Value::as_str)
-                        .ok_or_else(|| SourceError::Malformed {
-                            message: format!(
-                                "GitHub answered {} with nothing at {prefix}{slot}",
-                                operation_description(document)
-                            ),
-                        })?;
-                    let asked = input.get(named).and_then(Value::as_str).unwrap_or_default();
-                    if answered != asked {
-                        return Err(SourceError::Malformed {
-                            message: format!(
-                                "GitHub answered {} at {prefix}{slot} with {answered}, which is \
-                                 not {asked}, the item it was asked to write",
-                                operation_description(document)
-                            ),
-                        });
+                    for (root, named) in answers {
+                        let answered = data
+                            .pointer(&format!("/{prefix}{slot}/{root}/id"))
+                            .and_then(Value::as_str)
+                            .ok_or_else(|| SourceError::Malformed {
+                                message: format!(
+                                    "GitHub answered {} with nothing at {prefix}{slot}",
+                                    operation_description(document)
+                                ),
+                            })?;
+                        let asked = input.get(named).and_then(Value::as_str).unwrap_or_default();
+                        if answered != asked {
+                            return Err(SourceError::Malformed {
+                                message: format!(
+                                    "GitHub answered {} at {prefix}{slot} with {answered}, which \
+                                     is not {asked}, the item it was asked to write",
+                                    operation_description(document)
+                                ),
+                            });
+                        }
                     }
                 }
             }
@@ -10795,6 +10791,7 @@ struct Prepared {
     board: BoardFields,
     status_target: Option<StatusTarget>,
     /// The `Status` field, the option and the option's name the status lands on.
+    // llmlint: ignore[invalid_states_unrepresentable] Exactly what `column_for` returns, which predates this change and four callers share; this record only carries it from `prepare_write` to `complete_write`, which a retyping of that return would reach and this change does not need.
     column: Option<(String, String, String)>,
     priority_write: Option<PriorityWrite>,
     projections: Vec<ProjectionWrite>,
@@ -10802,11 +10799,13 @@ struct Prepared {
     content_kind: ContentKind,
     own_repository: Option<Repository>,
     /// The far ends of the item's native blocked-by relationships.
+    // llmlint: ignore[invalid_states_unrepresentable] What `partition_edges` answers and `finish_write` takes as `&[String]`, both of which predate this change; this record only carries the value between them.
     native: Vec<String>,
     slot: BTreeMap<String, Value>,
     content: Option<String>,
     body: Option<String>,
     /// The copy origin the item records, empty for none.
+    // llmlint: ignore[invalid_states_unrepresentable] `finish_write` and `field_writes` take the origin as `&str`, empty for none, as they did before this change; this record only carries it to them.
     origin: String,
     origin_field: Option<String>,
 }
@@ -10880,6 +10879,7 @@ struct HeldBack {
     /// Its board field values other than its `Status`, in the order they are written.
     fields: Vec<(String, Value)>,
     /// The `Status` field, and the option and its name that the item's status lands on.
+    // llmlint: ignore[invalid_states_unrepresentable] The same triple `column_for` returns and `Prepared::column` carries, held back unchanged until it is sent.
     status: Option<(String, String, String)>,
     /// The fields it clears after those are written.
     clears: Vec<String>,

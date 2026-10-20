@@ -389,7 +389,18 @@ fn engine_failing(
 /// An engine copying out of `from`, whose `onetaskgraph.copy_locations` writes go as
 /// `location_faults` says, into `into`, which says where it wrote each item.
 fn engine_locating(from: &Value, into: &Value, location_faults: &[(&str, Fault)]) -> Engine {
-    let (from, _) = watched_locating("from", from, &[], location_faults, false);
+    engine_locating_failing(from, into, &[], location_faults)
+}
+
+/// [`engine_locating`], with `from` also answering each link write named in `faults` as it
+/// says.
+fn engine_locating_failing(
+    from: &Value,
+    into: &Value,
+    faults: &[(&str, Fault)],
+    location_faults: &[(&str, Fault)],
+) -> Engine {
+    let (from, _) = watched_locating("from", from, faults, location_faults, false);
     let (into, _) = watched_locating("into", into, &[], &[], true);
     Engine::new(vec![from, into], vec![name("from"), name("into")])
 }
@@ -1311,4 +1322,53 @@ async fn a_batch_of_creates_answered_with_the_wrong_ids_leaves_the_destination_u
             assert_eq!(links_of(&engine, item).await, Value::Null, "{item}");
         }
     }
+}
+
+#[tokio::test]
+async fn a_location_the_source_will_not_take_back_is_named_as_left_behind() {
+    // T-1's link and location land beside the ones it held for another destination, T-2's
+    // link write fails, and T-1's source then refuses to put its location back: the copy says
+    // it could not be undone, names T-1 as holding what it wrote, and still takes back the
+    // items it created.
+    let elsewhere =
+        json!({"id": "elsewhere:E", "location": {"url": "https://elsewhere.example/E"}});
+    let from = json!({"tasks": [
+        task("T-1", "Alpha", &json!({
+            MetadataKey::COPIES_KEY: {"elsewhere": "elsewhere:E"},
+            MetadataKey::COPY_LOCATIONS_KEY: {"elsewhere": elsewhere},
+        })),
+        task("T-2", "Beta", &json!({})),
+    ]});
+    let engine = engine_locating_failing(
+        &from,
+        &json!({}),
+        &[("T-2", Fault::Unavailable)],
+        &[("T-1", Fault::Unrestorable)],
+    );
+    let refused = engine
+        .copy(&copy_of(&["from:T-1", "from:T-2"], CopyScope::Tasks))
+        .await
+        .expect_err("the second link write fails");
+    let EngineError::CopyNotUndone { left_behind, .. } = &refused else {
+        panic!("the copy could not be undone, and says so: {refused:?}");
+    };
+    assert_eq!(
+        left_behind
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        ["from:T-1"]
+    );
+    assert!(held(&engine, "into").await.is_empty(), "{refused}");
+    assert_eq!(
+        locations_of(&engine, "from:T-1").await,
+        json!({"elsewhere": elsewhere,
+               "into": {"id": "into:T-1", "location": {"url": "https://into.example/T-1"}}}),
+        "T-1 holds the location the copy wrote, as the refusal says"
+    );
+    assert_eq!(
+        links_of(&engine, "from:T-1").await,
+        json!({"elsewhere": "elsewhere:E"}),
+        "and its link, which it would take back, is put back"
+    );
 }
