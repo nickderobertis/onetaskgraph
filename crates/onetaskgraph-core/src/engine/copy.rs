@@ -1433,7 +1433,7 @@ struct Referent {
     location: String,
     /// The well-formed entries of its own `onetaskgraph.copies`: the counterpart it records
     /// at each destination it was copied into.
-    links: serde_json::Map<String, Value>,
+    links: BTreeMap<SourceName, NativeId>,
 }
 
 impl Referent {
@@ -1477,13 +1477,7 @@ impl Referent {
     /// The counterpart its own `onetaskgraph.copies` link names at `destination`, when it
     /// records one there.
     fn link(&self, destination: &SourceName) -> Option<NativeId> {
-        let linked = self
-            .links
-            .get(destination.as_str())?
-            .as_str()?
-            .parse::<GlobalId>()
-            .ok()?;
-        (&linked.source == destination).then_some(linked.native)
+        self.links.get(destination).cloned()
     }
 }
 
@@ -6661,7 +6655,7 @@ fn note(
             origin: origin_of(metadata),
             level,
             location,
-            links: well_formed(metadata.get(MetadataKey::COPIES_KEY)),
+            links: counterparts_linked(metadata.get(MetadataKey::COPIES_KEY)),
         });
     }
 }
@@ -6854,6 +6848,16 @@ fn well_formed(value: Option<&Value>) -> serde_json::Map<String, Value> {
                 .is_some_and(|linked| linked.source.as_str() == destination.as_str())
         })
         .map(|(destination, linked)| (destination.clone(), linked.clone()))
+        .collect()
+}
+
+/// The counterpart each well-formed entry of a `onetaskgraph.copies` value names, by the
+/// destination it names it at.
+fn counterparts_linked(value: Option<&Value>) -> BTreeMap<SourceName, NativeId> {
+    well_formed(value)
+        .values()
+        .filter_map(|linked| linked.as_str()?.parse::<GlobalId>().ok())
+        .map(|linked| (linked.source, linked.native))
         .collect()
 }
 
