@@ -15,6 +15,7 @@ use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
+use onetaskgraph_plugin_api::WaitCause;
 use tokio::sync::oneshot;
 
 /// A coordinator of virtual time for a fixed number of binary processes.
@@ -115,7 +116,29 @@ pub struct Slept {
     /// How long it asked to wait.
     pub length: Duration,
     /// The cause it named for the wait — `Clock::sleep_because` — or `None` for a plain sleep.
-    pub cause: Option<String>,
+    pub cause: Option<SleptCause>,
+}
+
+/// The cause a client named for one wait: one word, as [`WaitCause::is_word`] states it.
+///
+/// Read off the wire, so it owns its word; it reads as that word (`slept.cause.as_deref()`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SleptCause(String);
+
+impl SleptCause {
+    /// The cause `word` names, or `None` when it is not one word.
+    #[must_use]
+    pub fn new(word: &str) -> Option<Self> {
+        WaitCause::is_word(word).then(|| Self(word.to_owned()))
+    }
+}
+
+impl std::ops::Deref for SleptCause {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.0
+    }
 }
 
 /// One attached client.
@@ -420,14 +443,18 @@ fn serve(state: &Arc<Mutex<State>>, stream: TcpStream) {
                     held.send(&format!("now {seq} {}", now.as_nanos()));
                 }
             }
-            ["sleep", seq, nanos, cause @ ..] if cause.len() <= 1 => {
+            // A line naming a cause the protocol does not allow is no wait it asked for.
+            ["sleep", seq, nanos, cause @ ..]
+                if cause.len() <= 1 && cause.iter().all(|word| WaitCause::is_word(word)) =>
+            {
+                let cause = cause.first().and_then(|word| SleptCause::new(word));
                 if let (Ok(seq), Ok(nanos)) = (seq.parse(), nanos.parse::<u64>()) {
                     held.sleeps.insert(seq, now + Duration::from_nanos(nanos));
                     state.slept.push(Slept {
                         client,
                         at: now,
                         length: Duration::from_nanos(nanos),
-                        cause: cause.first().map(|cause| (*cause).to_owned()),
+                        cause,
                     });
                 }
             }

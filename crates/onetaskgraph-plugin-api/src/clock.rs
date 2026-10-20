@@ -24,8 +24,8 @@ pub trait Clock: Send + Sync {
         &self,
         duration: std::time::Duration,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>>;
-    /// [`sleep`](Self::sleep), for a wait whose reason is `cause` — a short, fixed word a
-    /// plugin names its waits by, such as the limit it is pacing under.
+    /// [`sleep`](Self::sleep), for a wait whose reason is `cause` — the fixed word a plugin
+    /// names its waits by, such as the limit it is pacing under.
     ///
     /// A clock that keeps a record of what waited and why — a test's simulated one — keeps the
     /// cause beside the wait; every other clock waits exactly as `sleep` does, which is what
@@ -33,10 +33,66 @@ pub trait Clock: Send + Sync {
     fn sleep_because(
         &self,
         duration: std::time::Duration,
-        cause: &'static str,
+        cause: WaitCause,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
         let _ = cause;
         self.sleep(duration)
+    }
+}
+
+/// The word a plugin names one kind of wait by — see [`Clock::sleep_because`].
+///
+/// One word: a nonempty run of printable ASCII with no whitespace, because a simulated clock
+/// carries it as one word of a line. [`WaitCause::new`] refuses anything else, and it is a
+/// `const fn`, so a cause declared as a constant that is not a word fails the build rather
+/// than reaching a clock.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct WaitCause(&'static str);
+
+impl WaitCause {
+    /// The cause named `word`.
+    ///
+    /// # Panics
+    ///
+    /// When `word` is not [one word](Self::is_word) — at compile time, for a constant.
+    #[must_use]
+    pub const fn new(word: &'static str) -> Self {
+        assert!(
+            Self::is_word(word),
+            "a wait cause is one word of printable ASCII"
+        );
+        Self(word)
+    }
+
+    /// Whether `text` is a word a cause may be: nonempty printable ASCII, no whitespace.
+    ///
+    /// The one statement of the rule, for whatever reads a cause back off a clock's wire.
+    #[must_use]
+    pub const fn is_word(text: &str) -> bool {
+        let bytes = text.as_bytes();
+        if bytes.is_empty() {
+            return false;
+        }
+        let mut index = 0;
+        while index < bytes.len() {
+            if !bytes[index].is_ascii_graphic() {
+                return false;
+            }
+            index += 1;
+        }
+        true
+    }
+
+    /// The word itself.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        self.0
+    }
+}
+
+impl std::fmt::Display for WaitCause {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.0)
     }
 }
 
@@ -72,5 +128,35 @@ impl Clock for SystemClock {
 
     fn sleep(&self, duration: Duration) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
         Box::pin(tokio::time::sleep(duration))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::WaitCause;
+
+    #[test]
+    fn a_word_of_printable_ascii_is_a_cause_and_nothing_else_is() {
+        const FILING: WaitCause = WaitCause::new("board-filing");
+        assert_eq!(FILING.as_str(), "board-filing");
+        assert_eq!(FILING.to_string(), "board-filing");
+        for refused in [
+            "",
+            " ",
+            "two words",
+            "tab\there",
+            "line\n",
+            "café",
+            "\u{a0}nbsp",
+        ] {
+            assert!(!WaitCause::is_word(refused), "{refused:?} is not one word");
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "a wait cause is one word of printable ASCII")]
+    fn a_cause_that_is_not_one_word_is_refused_where_it_is_made() {
+        let words = String::from("two words");
+        let _ = WaitCause::new(Box::leak(words.into_boxed_str()));
     }
 }

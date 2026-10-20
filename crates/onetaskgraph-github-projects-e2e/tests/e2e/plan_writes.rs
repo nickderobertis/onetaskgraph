@@ -602,6 +602,33 @@ fn a_batched_create_answered_without_one_of_its_issues_leaves_the_board_uncertai
     );
 }
 
+#[test]
+fn an_origin_lookup_answering_a_blank_repository_id_is_not_what_a_create_is_sent_under() {
+    // The batched read ahead of a plan copy carries the repository each issue is created in.
+    // Answered with that id blank, it is refused as malformed rather than kept, so the copy
+    // reads the repository on its own and every create names the real one — the board refuses
+    // any other — and the whole plan lands.
+    let plan = Plan::new(SMALL, Vec::new());
+    plan.github.blank_repository_id();
+    let lease = plan.clock.lease(0);
+    let output = plan.run(&["project", "copy", "notes:P", "--to", "board", "--json"]);
+    lease.wait_for_detach();
+    drop(lease);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        onetaskgraph_e2e_support::common::stderr(&output)
+    );
+    for n in 1..=TASKS + 1 {
+        let issue = format!("ISSUE-{n}");
+        assert!(
+            plan.github.item(&issue).is_some(),
+            "the board holds {issue}"
+        );
+    }
+}
+
 /// A project copy of `plan` with `alias` of its held-back writes refused: refused itself, naming
 /// GitHub's own failure, and leaving nothing behind.
 fn refused_after_landing(plan: &Plan, alias: &'static str) {

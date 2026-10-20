@@ -1084,6 +1084,8 @@ struct GitHubBoard {
     failing_alias: Option<&'static str>,
     /// An alias of one batched write this board performs and then answers malformed, once.
     bent_alias: Option<(&'static str, AliasAnswer)>,
+    /// Whether the batched origin lookups answer the repository with a blank node id.
+    blank_repository_id: bool,
     /// The id of a board field whose write, in whichever alias of a batched field write carries
     /// it, this board fails once in the same way.
     failing_field: Option<String>,
@@ -1609,6 +1611,11 @@ impl GitHubBoardFields {
     /// it as `answer` says, once.
     pub fn bend_batch_alias(&self, alias: &'static str, answer: AliasAnswer) {
         self.board.lock().unwrap().bent_alias = Some((alias, answer));
+    }
+
+    /// Answer every batched origin lookup with the repository's node id blank.
+    pub fn blank_repository_id(&self) {
+        self.board.lock().unwrap().blank_repository_id = true;
     }
 
     /// Fail the field write aliased `alias` in the next batched field write, once, after
@@ -3211,6 +3218,7 @@ fn github_projects_board_at(
         pending: Vec::new(),
         failing_alias: None,
         bent_alias: None,
+        blank_repository_id: false,
         failing_field: None,
         owed_errors: Vec::new(),
         refusing: Vec::new(),
@@ -3809,9 +3817,14 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
                     "boardFields".into(),
                     json!({"projectV2":{"id":"PVT-board","fields":held.fields()}}),
                 );
+                let id = if held.blank_repository_id {
+                    ""
+                } else {
+                    "REPO-1"
+                };
                 result.insert(
                     "repository".into(),
-                    json!({"id":"REPO-1","databaseId":123_456,
+                    json!({"id":id,"databaseId":123_456,
                            "nameWithOwner":"nickderobertis/onetaskgraph"}),
                 );
             }

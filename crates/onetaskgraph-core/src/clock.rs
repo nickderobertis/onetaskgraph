@@ -20,7 +20,7 @@
 //! | client | `now <seq>` | What is virtual time now? |
 //! | coordinator | `now <seq> <nanos>` | It is `<nanos>` nanoseconds past the origin. |
 //! | client | `sleep <seq> <nanos>` | Wake this client's wait `<seq>` once `<nanos>` have passed. |
-//! | client | `sleep <seq> <nanos> <cause>` | The same, for a wait the plugin names a cause of — one word, no whitespace, see [`Clock::sleep_because`]. A coordinator keeps it beside the wait. |
+//! | client | `sleep <seq> <nanos> <cause>` | The same, for a wait the plugin names a cause of — one word, a `WaitCause`, see [`Clock::sleep_because`]. A coordinator keeps it beside the wait. |
 //! | coordinator | `wake <seq>` | That wait is over. |
 //! | client | `cancel <seq>` | The wait `<seq>` was dropped before it was woken. |
 //!
@@ -38,7 +38,7 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use onetaskgraph_plugin_api::{Clock, SharedClock, system_clock};
+use onetaskgraph_plugin_api::{Clock, SharedClock, WaitCause, system_clock};
 use tokio::sync::oneshot;
 
 use crate::Environment;
@@ -276,7 +276,7 @@ impl Clock for SimulatedClient {
     fn sleep_because(
         &self,
         duration: Duration,
-        cause: &'static str,
+        cause: WaitCause,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
         self.wait(duration, Some(cause))
     }
@@ -287,7 +287,7 @@ impl SimulatedClient {
     fn wait(
         &self,
         duration: Duration,
-        cause: Option<&'static str>,
+        cause: Option<WaitCause>,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
         let seq = self.shared.next();
         let (sender, receiver) = oneshot::channel();
@@ -302,11 +302,8 @@ impl SimulatedClient {
             }
             pending.wakes.insert(seq, sender);
         }
-        // A cause is one word on the wire, so one that is not is sent without it rather than
-        // as a line the coordinator would misread.
-        let line = match cause
-            .filter(|cause| !cause.is_empty() && !cause.chars().any(char::is_whitespace))
-        {
+        // A cause is one word on the wire, which `WaitCause` holds it to.
+        let line = match cause {
             Some(cause) => format!("sleep {seq} {} {cause}", duration.as_nanos()),
             None => format!("sleep {seq} {}", duration.as_nanos()),
         };
@@ -391,11 +388,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_cause_that_is_not_one_word_is_sent_as_a_plain_sleep() {
+    async fn a_named_cause_is_sent_as_its_word_beside_a_plain_sleep() {
         // A stand-in coordinator over a real socket, waking each wait as it arrives and keeping
-        // every line the client sent: a cause is one word on the wire, so an empty one or one
-        // holding a space goes as a plain sleep rather than as a line the coordinator would
-        // misread, and a word goes as itself.
+        // every line the client sent: a wait with a cause carries its word as the line's last,
+        // and a plain sleep carries none.
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port");
         let address = listener.local_addr().expect("its address");
         let coordinator = std::thread::spawn(move || {
@@ -422,15 +418,19 @@ mod tests {
         });
         let clock = attach(address, 0).expect("attached");
         let second = Duration::from_secs(1);
-        clock.sleep_because(second, "").await;
-        clock.sleep_because(second, "two words").await;
-        clock.sleep_because(second, "board-filing").await;
+        clock.sleep(second).await;
+        clock
+            .sleep_because(second, WaitCause::new("retry-after"))
+            .await;
+        clock
+            .sleep_because(second, WaitCause::new("board-filing"))
+            .await;
         let nanos = second.as_nanos();
         assert_eq!(
             coordinator.join().expect("the coordinator"),
             [
                 format!("sleep 0 {nanos}"),
-                format!("sleep 1 {nanos}"),
+                format!("sleep 1 {nanos} retry-after"),
                 format!("sleep 2 {nanos} board-filing"),
             ]
         );

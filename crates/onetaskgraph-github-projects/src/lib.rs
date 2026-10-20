@@ -639,7 +639,7 @@ use onetaskgraph_plugin_api::{
     SourceError, SourceName, SourcePlugin, Status, StatusCategory, StatusContradiction,
     StatusMapping, Support, Task, TaskDetailRead, TaskQuery, TaskRef, TaskSource, TaskUpdate,
     TaskUpdateOutcome, TextFields, TextQuery, UnmappedStatus, UpdatedField, VersionCoverage,
-    WriteJournal, WriteSupport, system_clock,
+    WaitCause, WriteJournal, WriteSupport, system_clock,
 };
 use reqwest::{Client, StatusCode, Url};
 use schemars::{Schema, schema_for};
@@ -2297,7 +2297,7 @@ impl Limited {
     /// and the cause it is named by: the hint, raised to the schedule's own next wait —
     /// GitHub really does send `retry-after: 0`, and retrying at once is the one move that
     /// extends a secondary limit — or the schedule alone when there is none.
-    fn wait(self, backoff: Duration) -> (Duration, &'static str) {
+    fn wait(self, backoff: Duration) -> (Duration, WaitCause) {
         match (self.hint, self.hinted_by) {
             (Some(hint), Hint::RetryAfter) => (
                 Duration::from_secs(hint).max(backoff),
@@ -9994,7 +9994,7 @@ impl GitHubProjectsSource {
             let data = self.graphql(graphql::ORIGIN_LOOKUPS, variables).await?;
             self.fields_read(&data)?;
             if let Some(node) = data.get("repository").filter(|value| !value.is_null()) {
-                let id = required_str(node, "id")?.to_owned();
+                let id = required_nonblank_str(node, "id")?.to_owned();
                 self.repository_cache()?.insert(repository.clone(), id);
                 if let Some(numeric) = node
                     .get("databaseId")

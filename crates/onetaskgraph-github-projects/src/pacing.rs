@@ -30,6 +30,7 @@
 
 use std::time::Duration;
 
+use onetaskgraph_plugin_api::WaitCause;
 use serde_json::Value;
 
 use crate::{
@@ -45,22 +46,24 @@ const HOUR: Duration = Duration::from_secs(3_600);
 /// Why one wait this source made was made — the word it names the wait by on its clock, so a
 /// journey reading a simulated clock's record can tell a pacing wait from a backing off.
 pub(crate) mod cause {
+    use super::WaitCause;
+
     /// Held until the minute's content creations had room.
-    pub(crate) const CREATION_MINUTE: &str = "content-creation-minute";
+    pub(crate) const CREATION_MINUTE: WaitCause = WaitCause::new("content-creation-minute");
     /// Held until the hour's content creations had room.
-    pub(crate) const CREATION_HOUR: &str = "content-creation-hour";
+    pub(crate) const CREATION_HOUR: WaitCause = WaitCause::new("content-creation-hour");
     /// Held until the minute's secondary points had room.
-    pub(crate) const POINTS_MINUTE: &str = "secondary-points-minute";
+    pub(crate) const POINTS_MINUTE: WaitCause = WaitCause::new("secondary-points-minute");
     /// Held for the configured `pacing.min_mutation_interval_ms`.
-    pub(crate) const MIN_INTERVAL: &str = "min-mutation-interval";
+    pub(crate) const MIN_INTERVAL: WaitCause = WaitCause::new("min-mutation-interval");
     /// A refusal's `retry-after`, waited out as asked.
-    pub(crate) const RETRY_AFTER: &str = "retry-after";
+    pub(crate) const RETRY_AFTER: WaitCause = WaitCause::new("retry-after");
     /// An exhausted primary budget, waited out until the reset it named.
-    pub(crate) const PRIMARY_RESET: &str = "primary-reset";
+    pub(crate) const PRIMARY_RESET: WaitCause = WaitCause::new("primary-reset");
     /// A refusal naming no wait, answered by the doubling schedule.
-    pub(crate) const BACKOFF: &str = "backoff";
+    pub(crate) const BACKOFF: WaitCause = WaitCause::new("backoff");
     /// A board that had not yet filed an issue created onto it, read again after a wait.
-    pub(crate) const BOARD_FILING: &str = "board-filing";
+    pub(crate) const BOARD_FILING: WaitCause = WaitCause::new("board-filing");
 }
 
 /// What one request costs against the secondary windows.
@@ -278,7 +281,7 @@ impl Windows {
     /// The earliest moment at or after `now` at which every window `charge` touches has room
     /// for the whole of it, and the cause of any wait until then — the window that holds it
     /// longest.
-    pub(crate) fn room(&self, now: Duration, charge: Charge) -> (Duration, Option<&'static str>) {
+    pub(crate) fn room(&self, now: Duration, charge: Charge) -> (Duration, Option<WaitCause>) {
         let creations: Vec<(Duration, u64)> =
             self.creations.iter().map(|(at, _)| (*at, 1)).collect();
         let points: Vec<(Duration, u64)> = self
