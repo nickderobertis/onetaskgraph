@@ -678,7 +678,6 @@ fn asset_stage_failures_and_bounded_virtual_rate_limit_recovery() {
     }
 }
 
-/// How every asset figure is counted.
 const COUNTED: &str = "counted at the Linear loopback in simulated time";
 
 fn record_workload(budget: &str, value: f64, sizes: &[usize], copies: usize) {
@@ -737,6 +736,49 @@ fn measure_project_asset_copy_simulated_seconds() {
     );
 }
 
+/// Copy `id` to each of `destinations` at once, the binary at index `n` running as clock
+/// client `n`, and answer what each copy that failed said, beside its client.
+fn copy_concurrently(
+    journey: &Journey,
+    kind: &str,
+    id: &str,
+    destinations: &[&str],
+) -> Vec<(usize, String)> {
+    let children: Vec<_> = destinations
+        .iter()
+        .enumerate()
+        .map(|(client, destination)| {
+            journey
+                .sandbox
+                .subprocess(onetaskgraph_e2e_support::binary())
+                .current_dir(journey.sandbox.project())
+                .envs(journey.workspace.clock.client_env(client))
+                .args(["--json", kind, "copy", id, "--to", destination])
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .unwrap()
+        })
+        .collect();
+    let mut refusals = Vec::new();
+    for (client, child) in children.into_iter().enumerate() {
+        let output = child.wait_with_output().unwrap();
+        if !output.status.success() {
+            let said = stderr(&output);
+            eprintln!("{said}");
+            refusals.push((
+                client,
+                format!(
+                    "client {client}'s {kind} copy of {id} failed ({}): {}",
+                    output.status,
+                    said.trim()
+                ),
+            ));
+        }
+    }
+    refusals
+}
+
 #[test]
 fn measure_three_concurrent_project_asset_copies() {
     let journey = Journey::with_clients(3);
@@ -747,38 +789,9 @@ fn measure_three_concurrent_project_asset_copies() {
     for (kind, id) in std::iter::once(("project", "notes:launch"))
         .chain(documents.iter().map(|id| ("document", id.as_str())))
     {
-        let mut children = Vec::new();
-        for client in 0..3 {
-            let destination = if client == 0 {
-                "dest".to_owned()
-            } else {
-                format!("dest{client}")
-            };
-            children.push(
-                journey
-                    .sandbox
-                    .subprocess(onetaskgraph_e2e_support::binary())
-                    .current_dir(journey.sandbox.project())
-                    .envs(journey.workspace.clock.client_env(client))
-                    .args(["--json", kind, "copy", id, "--to", &destination])
-                    .stdout(std::process::Stdio::piped())
-                    .stderr(std::process::Stdio::piped())
-                    .spawn()
-                    .unwrap(),
-            );
-        }
-        for (client, child) in children.into_iter().enumerate() {
-            let output = child.wait_with_output().unwrap();
-            if !output.status.success() {
-                refused_clients[client] = true;
-                let said = stderr(&output);
-                eprintln!("{said}");
-                refusals.push(format!(
-                    "client {client}'s {kind} copy of {id} failed ({}): {}",
-                    output.status,
-                    said.trim()
-                ));
-            }
+        for (client, said) in copy_concurrently(&journey, kind, id, &["dest", "dest1", "dest2"]) {
+            refused_clients[client] = true;
+            refusals.push(said);
         }
     }
     let elapsed = real_start.elapsed();
@@ -786,7 +799,8 @@ fn measure_three_concurrent_project_asset_copies() {
         "three concurrent copies real duration: {:.3}s",
         elapsed.as_secs_f64()
     );
-    // Recorded before anything is asserted, so a refusal that also fails the journey still
+    assert!(elapsed < Duration::from_secs(60));
+    // Recorded before the copies' items are counted, so a refusal that also loses one still
     // leaves what it said where the budget check prints it.
     let sizes: Vec<_> = sizes.iter().copied().cycle().take(72).collect();
     crate::telemetry::record_assets(
@@ -796,8 +810,43 @@ fn measure_three_concurrent_project_asset_copies() {
         &sizes,
         3,
     );
-    assert!(elapsed < Duration::from_secs(60));
     assert_eq!(journey.workspace.counts(), (72, 72, 72));
+}
+
+#[test]
+fn a_refused_concurrent_copy_is_named_in_the_figure_s_detail() {
+    let journey = Journey::with_clients(3);
+    let refusals = copy_concurrently(
+        &journey,
+        "project",
+        "notes:launch",
+        &["dest", "dest1", "unconfigured"],
+    );
+    assert_eq!(
+        refusals
+            .iter()
+            .map(|(client, _)| *client)
+            .collect::<Vec<_>>(),
+        [2],
+        "{refusals:?}"
+    );
+    let detail = concurrent_refusals_detail(
+        &refusals
+            .into_iter()
+            .map(|(_, said)| said)
+            .collect::<Vec<_>>(),
+    );
+    assert!(
+        detail.starts_with(&format!(
+            "{COUNTED}; refused: client 2's project copy of notes:launch failed ("
+        )),
+        "{detail}"
+    );
+    assert!(
+        detail.contains(r#"no source named "unconfigured" is configured"#),
+        "{detail}"
+    );
+    assert_eq!(concurrent_refusals_detail(&[]), COUNTED);
 }
 
 #[test]
