@@ -304,9 +304,9 @@
 //!
 //! | Verb | Requests / points | Documents |
 //! | --- | --- | --- |
-//! | new copy | 5 | ORIGIN_LOOKUP, CREATION_CONTEXT (the board's fields and the repository's id together), CREATE_ISSUE, ADD_TO_BOARD, UPDATE_FIELDS |
-//! | copy --create | 4 | CREATION_CONTEXT, CREATE_ISSUE, ADD_TO_BOARD, UPDATE_FIELDS: the new copy without its ORIGIN_LOOKUP |
-//! | bound copy | 3 | ISSUE (with the board's fields and the issue's `blockedBy`, so no BOARD_FIELDS or ISSUE_DEPENDENCIES), UPDATE_FIELDS, then UPDATE_ISSUE last |
+//! | new copy | 4 / 5 | ORIGIN_LOOKUPS (the origin, the board's fields and the repository's node and numeric ids together; two points), CREATE_ISSUE filing the issue on the board and under its project, CREATED_BOARD_ITEMS once GitHub has added it, WRITE_FIELD_VALUES |
+//! | copy --create | 4 | CREATION_CONTEXT, CREATE_ISSUE, CREATED_BOARD_ITEMS, WRITE_FIELD_VALUES: the new copy with no origin to ask about |
+//! | bound copy | 3 | ISSUE (with the board's fields and the issue's `blockedBy`, so no BOARD_FIELDS or ISSUE_DEPENDENCIES), UPDATE_FIELDS when a board field differs, then UPDATE_ISSUE last carrying only the title, body or state that differs — none, when nothing does |
 //! | bound copy, filed under a project | 4 | the bound copy's three, and one ISSUE of the destination project its link names, read once per command |
 //! | bound copy, newly naming n dependencies | + ceil(n / DETAIL_BATCH) + n | ISSUE_DETAILS for the far ends that do not already block the item, DETAIL_BATCH (24) to a request (one alone is ISSUE), then one ADD_BLOCKED_BY each; a far end already blocking it is answered by its own read and costs nothing |
 //! | comment | 2 | ISSUE, ADD_COMMENT: the target is read first, because GitHub accepts a comment on any issue or pull request (see below) |
@@ -692,6 +692,18 @@ pub const REFERENCE_BATCH: usize = 50;
 /// 154, which rounds to two. `tests/point_cost.rs` prices the document at one point and fails
 /// if one item more would still be priced at one.
 pub const COPY_DETAIL_BATCH: usize = 21;
+/// How many mutations one aliased request of a copy's writes carries: [`graphql::CREATE_ISSUES`],
+/// [`graphql::WRITE_FIELD_VALUES`], [`graphql::CLOSE_ISSUES`] and [`graphql::ADD_BLOCKED_BYS`].
+///
+/// Eleven is what GitHub was seen to accept in one request — the timing spike
+/// (`board-copy-speed-2026-10-18-spike-copy-timing-report`) sent eleven aliased mutations of four
+/// kinds, three `createIssue`, three `addProjectV2ItemById`, three field updates, an
+/// `addSubIssue` and an `addBlockedBy`, and every one ran — and no more was established.
+pub const MUTATION_BATCH: usize = 11;
+/// How many origins one [`graphql::ORIGIN_LOOKUPS`] request asks about: the nine records of a
+/// plan and the project's document, and no more, since each carries a page of the board's field
+/// filter and one of the issue search.
+pub const ORIGIN_BATCH: usize = 10;
 
 /// The most nodes any one document this source sends may be asked to return.
 ///
@@ -1347,9 +1359,10 @@ pub mod graphql {
       }}}"#,
         related_issue!()
     );
-    /// Creates one issue in the configured repository, on no board: [`ADD_TO_BOARD`] files
-    /// it. `CreateIssueInput.projectV2Ids` is not sent — see the crate's notes on what GitHub
-    /// answered when it was.
+    /// Creates one issue. Outside a copy it is created on no board, and [`ADD_TO_BOARD`] files
+    /// it; inside one, its input names the board in `projectV2Ids` and its project in
+    /// `parentIssueId`, so this one request files it under both — see
+    /// [`GitHubProjectsSource::create_filed_issue`](super::GitHubProjectsSource).
     pub const CREATE_ISSUE: &str =
         r#"mutation($input:CreateIssueInput!){createIssue(input:$input){issue{id number url}}}"#;
     /// Puts an existing issue on the configured board.
@@ -1384,6 +1397,248 @@ pub mod graphql {
     pub const REMOVE_SUB_ISSUE: &str = r#"mutation($input:RemoveSubIssueInput!){removeSubIssue(input:$input){issue{id} subIssue{id}}}"#;
     /// Adds GitHub's native issue blocked-by relationship.
     pub const ADD_BLOCKED_BY: &str = r#"mutation($input:AddBlockedByInput!){addBlockedBy(input:$input){issue{id} blockingIssue{id}}}"#;
+    /// One origin of [`ORIGIN_LOOKUPS`]: [`ORIGIN_LOOKUP`]'s two connections for the origin the
+    /// `$filter<n>` and `$search<n>` of slot `<n>` name, sent only while `$ask<n>` holds.
+    macro_rules! origin_lookup_alias {
+        ($n:literal) => {
+            concat!(
+                "\n      o",
+                stringify!($n),
+                ":repositoryOwner(login:$owner) @include(if:$ask",
+                stringify!($n),
+                "){... on ProjectV2Owner{projectV2(number:$number){items(first:$originFirst,query:$filter",
+                stringify!($n),
+                "){nodes{id updatedAt ",
+                board_item_values!(),
+                board_item_content!(),
+                "} pageInfo{hasNextPage endCursor}}}}}\n      s",
+                stringify!($n),
+                ":search(query:$search",
+                stringify!($n),
+                ",type:$type,first:$originFirst) @include(if:$ask",
+                stringify!($n),
+                "){pageInfo{hasNextPage endCursor} nodes{__typename ...BoardIssue}}"
+            )
+        };
+    }
+
+    /// The first page of [`ORIGIN_LOOKUP`] for up to [`ORIGIN_BATCH`](super::ORIGIN_BATCH)
+    /// origins a copy is about to look for, and everything creating an item then reads —
+    /// the board's own id and field definitions, as [`CREATION_CONTEXT`] reads them, and the node
+    /// id and the numeric id of the repository an issue is created in — in one request.
+    ///
+    /// What a copy reads before it writes anything, so that finding none of its records on the
+    /// board and creating every one costs this read and the writes. An origin whose page says
+    /// there is more is left to its own [`ORIGIN_LOOKUP`]. The repository's numeric id is what an
+    /// image upload names, so a copy carrying assets needs no `GET /repos/{owner}/{repo}` either.
+    pub const ORIGIN_LOOKUPS: &str = concat!(
+        r#"query($owner:String!,$number:Int!,$type:SearchType!,$originFirst:Int!,$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!,$repositoryOwner:String!,$repositoryName:String!,$filter0:String!,$filter1:String!,$filter2:String!,$filter3:String!,$filter4:String!,$filter5:String!,$filter6:String!,$filter7:String!,$filter8:String!,$filter9:String!,$search0:String!,$search1:String!,$search2:String!,$search3:String!,$search4:String!,$search5:String!,$search6:String!,$search7:String!,$search8:String!,$search9:String!,$ask0:Boolean!,$ask1:Boolean!,$ask2:Boolean!,$ask3:Boolean!,$ask4:Boolean!,$ask5:Boolean!,$ask6:Boolean!,$ask7:Boolean!,$ask8:Boolean!,$ask9:Boolean!"#,
+        relationship_events_variable!(),
+        r#"){
+      boardFields:repositoryOwner(login:$owner){
+        ... on ProjectV2Owner{projectV2(number:$number){id
+          fields(first:$nestedFirst){nodes{
+            ... on ProjectV2SingleSelectField{__typename id name options{id name}}
+            ... on ProjectV2Field{__typename id name dataType}
+          }pageInfo{hasNextPage}}
+        }}
+      }
+      repository(owner:$repositoryOwner,name:$repositoryName){id databaseId nameWithOwner}"#,
+        origin_lookup_alias!(0),
+        origin_lookup_alias!(1),
+        origin_lookup_alias!(2),
+        origin_lookup_alias!(3),
+        origin_lookup_alias!(4),
+        origin_lookup_alias!(5),
+        origin_lookup_alias!(6),
+        origin_lookup_alias!(7),
+        origin_lookup_alias!(8),
+        origin_lookup_alias!(9),
+        "\n    }",
+        board_issue!()
+    );
+
+    /// One slot `<n>` of a copy's aliased writes: `$<prefix><n>` is its input and `$send<n>`
+    /// whether it is sent.
+    macro_rules! write_slot {
+        ($prefix:literal, $field:literal, $selection:literal, $n:literal) => {
+            concat!(
+                " ",
+                $prefix,
+                stringify!($n),
+                ":",
+                $field,
+                "(input:$",
+                $prefix,
+                stringify!($n),
+                ") @include(if:$send",
+                stringify!($n),
+                "){",
+                $selection,
+                "}"
+            )
+        };
+    }
+
+    /// The variables of a copy's aliased writes: eleven inputs of `$type` named `$<prefix><n>`,
+    /// and eleven `$send<n>`.
+    macro_rules! write_variables {
+        ($prefix:literal, $type:literal) => {
+            concat!(
+                "mutation(",
+                "$",
+                $prefix,
+                "0:",
+                $type,
+                "!,$",
+                $prefix,
+                "1:",
+                $type,
+                "!,$",
+                $prefix,
+                "2:",
+                $type,
+                "!,$",
+                $prefix,
+                "3:",
+                $type,
+                "!,$",
+                $prefix,
+                "4:",
+                $type,
+                "!,$",
+                $prefix,
+                "5:",
+                $type,
+                "!,$",
+                $prefix,
+                "6:",
+                $type,
+                "!,$",
+                $prefix,
+                "7:",
+                $type,
+                "!,$",
+                $prefix,
+                "8:",
+                $type,
+                "!,$",
+                $prefix,
+                "9:",
+                $type,
+                "!,$",
+                $prefix,
+                "10:",
+                $type,
+                "!,",
+                "$send0:Boolean!,$send1:Boolean!,$send2:Boolean!,$send3:Boolean!,$send4:Boolean!,",
+                "$send5:Boolean!,$send6:Boolean!,$send7:Boolean!,$send8:Boolean!,$send9:Boolean!,",
+                "$send10:Boolean!){"
+            )
+        };
+    }
+
+    /// A copy's aliased writes of one kind: [`MUTATION_BATCH`](super::MUTATION_BATCH) slots of
+    /// `$field`, each sent only while its `$send<n>` holds.
+    macro_rules! write_batch {
+        ($prefix:literal, $type:literal, $field:literal, $selection:literal) => {
+            concat!(
+                write_variables!($prefix, $type),
+                write_slot!($prefix, $field, $selection, 0),
+                write_slot!($prefix, $field, $selection, 1),
+                write_slot!($prefix, $field, $selection, 2),
+                write_slot!($prefix, $field, $selection, 3),
+                write_slot!($prefix, $field, $selection, 4),
+                write_slot!($prefix, $field, $selection, 5),
+                write_slot!($prefix, $field, $selection, 6),
+                write_slot!($prefix, $field, $selection, 7),
+                write_slot!($prefix, $field, $selection, 8),
+                write_slot!($prefix, $field, $selection, 9),
+                write_slot!($prefix, $field, $selection, 10),
+                "}"
+            )
+        };
+    }
+
+    /// Creates up to [`MUTATION_BATCH`](super::MUTATION_BATCH) issues in one request, each filed on
+    /// the board and under its project by the same `createIssue` — its `projectV2Ids` and
+    /// `parentIssueId` — as [`CREATE_ISSUE`] creates one.
+    pub const CREATE_ISSUES: &str = write_batch!(
+        "create",
+        "CreateIssueInput",
+        "createIssue",
+        "issue{id number url}"
+    );
+
+    /// One issue of [`CREATED_BOARD_ITEMS`]: the board items the issue `$id<n>` names is on, with
+    /// the `Status` value of each, read only while `$read<n>` holds.
+    macro_rules! created_item_alias {
+        ($n:literal) => {
+            concat!(
+                "\n      i",
+                stringify!($n),
+                ":node(id:$id",
+                stringify!($n),
+                ") @include(if:$read",
+                stringify!($n),
+                "){... on Issue{id projectItems(first:$boardItems){nodes{id project{id} status:fieldValueByName(name:$statusName){... on ProjectV2ItemFieldSingleSelectValue{name}}}}}}"
+            )
+        };
+    }
+
+    /// The board item of each issue a copy created, up to
+    /// [`COPY_DETAIL_BATCH`](super::COPY_DETAIL_BATCH) at a time, with its `Status` as the board
+    /// set it: what `createIssue`'s `projectV2Ids` files the issue as, which GitHub adds after
+    /// answering the create, so its id comes from a read made once every create has been sent.
+    pub const CREATED_BOARD_ITEMS: &str = concat!(
+        r#"query($id0:ID!,$id1:ID!,$id2:ID!,$id3:ID!,$id4:ID!,$id5:ID!,$id6:ID!,$id7:ID!,$id8:ID!,$id9:ID!,$id10:ID!,$id11:ID!,$id12:ID!,$id13:ID!,$id14:ID!,$id15:ID!,$id16:ID!,$id17:ID!,$id18:ID!,$id19:ID!,$id20:ID!,$read0:Boolean!,$read1:Boolean!,$read2:Boolean!,$read3:Boolean!,$read4:Boolean!,$read5:Boolean!,$read6:Boolean!,$read7:Boolean!,$read8:Boolean!,$read9:Boolean!,$read10:Boolean!,$read11:Boolean!,$read12:Boolean!,$read13:Boolean!,$read14:Boolean!,$read15:Boolean!,$read16:Boolean!,$read17:Boolean!,$read18:Boolean!,$read19:Boolean!,$read20:Boolean!,$boardItems:Int!,$statusName:String!){"#,
+        created_item_alias!(0),
+        created_item_alias!(1),
+        created_item_alias!(2),
+        created_item_alias!(3),
+        created_item_alias!(4),
+        created_item_alias!(5),
+        created_item_alias!(6),
+        created_item_alias!(7),
+        created_item_alias!(8),
+        created_item_alias!(9),
+        created_item_alias!(10),
+        created_item_alias!(11),
+        created_item_alias!(12),
+        created_item_alias!(13),
+        created_item_alias!(14),
+        created_item_alias!(15),
+        created_item_alias!(16),
+        created_item_alias!(17),
+        created_item_alias!(18),
+        created_item_alias!(19),
+        created_item_alias!(20),
+        "\n    }"
+    );
+
+    /// Up to [`MUTATION_BATCH`](super::MUTATION_BATCH) board field values a copy writes on the
+    /// items it created, each on its own item, in one ordered request.
+    pub const WRITE_FIELD_VALUES: &str = write_batch!(
+        "field",
+        "UpdateProjectV2ItemFieldValueInput",
+        "updateProjectV2ItemFieldValue",
+        "projectV2Item{id}"
+    );
+
+    /// Closes up to [`MUTATION_BATCH`](super::MUTATION_BATCH) issues a copy created at a closing
+    /// status, each with its own `stateInput` and nothing else, once its option is selected.
+    pub const CLOSE_ISSUES: &str =
+        write_batch!("close", "UpdateIssueInput", "updateIssue", "issue{id}");
+
+    /// Up to [`MUTATION_BATCH`](super::MUTATION_BATCH) native blocked-by relationships a copy adds
+    /// to the issues it created, in one request.
+    pub const ADD_BLOCKED_BYS: &str = write_batch!(
+        "block",
+        "AddBlockedByInput",
+        "addBlockedBy",
+        "issue{id} blockingIssue{id}"
+    );
+
     /// Removes one native issue blocked-by relationship.
     pub const REMOVE_BLOCKED_BY: &str = r#"mutation($input:RemoveBlockedByInput!){removeBlockedBy(input:$input){issue{id} blockingIssue{id}}}"#;
     /// Deletes one issue, which takes its board item with it.
@@ -1523,8 +1778,14 @@ pub mod graphql {
     ///
     /// A document of its own rather than a widening of [`ISSUE_DETAILS`], whose batch size is
     /// what `task show-many` is priced by and which reads no edge.
+    ///
+    /// `children`, read only while `$children` holds, is which issues the issue `$project` has
+    /// as sub-issues — each one's id and title, the page `$nestedFirst` allows — so that a
+    /// project copy, which reads its project and every task at once, knows from this same read
+    /// which tasks the project holds at the destination, and its orphan check is answered by it
+    /// rather than by a listing of the project.
     pub const ISSUE_COPY_DETAILS: &str = concat!(
-        r#"query($id0:ID!,$id1:ID!,$id2:ID!,$id3:ID!,$id4:ID!,$id5:ID!,$id6:ID!,$id7:ID!,$id8:ID!,$id9:ID!,$id10:ID!,$id11:ID!,$id12:ID!,$id13:ID!,$id14:ID!,$id15:ID!,$id16:ID!,$id17:ID!,$id18:ID!,$id19:ID!,$id20:ID!,$first:Int!,$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!"#,
+        r#"query($id0:ID!,$id1:ID!,$id2:ID!,$id3:ID!,$id4:ID!,$id5:ID!,$id6:ID!,$id7:ID!,$id8:ID!,$id9:ID!,$id10:ID!,$id11:ID!,$id12:ID!,$id13:ID!,$id14:ID!,$id15:ID!,$id16:ID!,$id17:ID!,$id18:ID!,$id19:ID!,$id20:ID!,$project:ID!,$children:Boolean!,$first:Int!,$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!"#,
         relationship_events_variable!(),
         r#"){"#,
         issue_copy_details_alias!(0),
@@ -1548,6 +1809,7 @@ pub mod graphql {
         issue_copy_details_alias!(18),
         issue_copy_details_alias!(19),
         issue_copy_details_alias!(20),
+        "\n      children:node(id:$project) @include(if:$children){... on Issue{id subIssues(first:$nestedFirst){nodes{id title} pageInfo{hasNextPage}}}}",
         "\n    }",
         board_issue!(),
         related_issue!()
@@ -1679,7 +1941,7 @@ pub mod graphql {
     /// `documents_are_all_inventoried` reads this file back and fails naming any `pub
     /// const` here that this list omits, so the two cannot part — which is the same guard
     /// `CATEGORIES` carries, in the one shape available to a set of `&str` constants.
-    pub const DOCUMENTS: [(&str, &str); 42] = [
+    pub const DOCUMENTS: [(&str, &str); 48] = [
         (SEARCH_ISSUES, "searching this board's issues"),
         (ISSUE, "reading one issue"),
         (
@@ -1707,6 +1969,21 @@ pub mod graphql {
         ),
         (ISSUE_DEPENDENCIES, "reading an issue's dependencies"),
         (CREATE_ISSUE, "creating an issue"),
+        (
+            ORIGIN_LOOKUPS,
+            "looking up the items copied from several origins, and what creating one reads",
+        ),
+        (CREATE_ISSUES, "creating several issues together"),
+        (
+            CREATED_BOARD_ITEMS,
+            "reading the board items of the issues a copy created",
+        ),
+        (
+            WRITE_FIELD_VALUES,
+            "writing board fields of the items a copy created",
+        ),
+        (CLOSE_ISSUES, "closing the issues a copy created"),
+        (ADD_BLOCKED_BYS, "recording several dependencies together"),
         (ADD_TO_BOARD, "adding an issue to the board"),
         (UPDATE_ISSUE, "updating an issue"),
         (UPDATE_DRAFT, "updating a draft item"),
@@ -2666,14 +2943,10 @@ enum HeldPriority {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct PacingConfig {
-    /// Shortest interval between two content-creating mutations, in milliseconds, on top of
-    /// GitHub's windows, which this source always paces under.
+    /// Shortest interval between two content-creating mutations, in milliseconds.
     ///
-    /// Unset, mutations are not spaced: each goes out as soon as every secondary window it
-    /// charges has room. Zero sends every request as fast as it is asked for, windows
-    /// included, which is what a fixture server on loopback wants and what no board on
-    /// github.com does. [`MIN_MUTATION_INTERVAL_MS`] is the spacing that holds a sustained
-    /// burst under the per-minute bound by spacing alone. At most [`MAX_PACING_MS`].
+    /// Zero sends them as fast as they are asked for, which is what a fixture server on
+    /// loopback wants and what no board on github.com does. At most [`MAX_PACING_MS`].
     pub min_mutation_interval_ms: Option<u64>, // llmlint: ignore[invalid_states_unrepresentable] Schema DTO; `Pacing::resolve` bounds it to `MAX_PACING_MS` before the private validated `Pacing` is built.
     /// First wait when a rate-limit refusal carries no hint, in milliseconds. Each
     /// further wait of the same call doubles it. At most [`MAX_PACING_MS`], and never
@@ -2700,6 +2973,12 @@ pub const MAX_PACING_MS: u64 = 3_600_000;
 
 /// [`PacingConfig`] with every default resolved and every value checked, which is what the
 /// source holds.
+///
+/// Unset, `min_mutation_interval_ms` spaces nothing, and every request is paced by GitHub's
+/// secondary windows alone — see the `pacing` module; set, it spaces content-creating mutations
+/// on top of those windows, [`MIN_MUTATION_INTERVAL_MS`] being the spacing that holds a sustained
+/// burst under the per-minute bound by spacing alone; and zero sends every request as fast as it
+/// is asked for, windows included.
 #[derive(Debug, Clone, Copy)]
 struct Pacing {
     /// Whether requests are held for GitHub's secondary windows: always, unless
@@ -3309,6 +3588,14 @@ pub struct GitHubProjectsSource {
     last_mutation: Mutex<Option<Duration>>,
     /// GitHub's secondary windows as this source has charged them; see the `pacing` module.
     windows: Mutex<pacing::Windows>,
+    /// The tasks a project holds, as a copy's batched read of the project and every one of them
+    /// found them — see [`TaskSource::read_ahead_for_copy`] — for the length of one command, so
+    /// a listing of that project's tasks is answered without a read of its own.
+    task_children: Mutex<BTreeMap<NativeId, Vec<Resolved>>>,
+    /// What a copy has held back of the items it created, between
+    /// [`TaskSource::begin_deferred_writes`] and [`TaskSource::finish_writes`] — `None` while
+    /// nothing is being held back, when every write lands whole as it is made.
+    deferred: Mutex<Option<Deferred>>,
     clock: SharedClock,
     numeric_repositories: tokio::sync::Mutex<BTreeMap<RepositoryTarget, std::num::NonZeroU64>>,
     /// The board as this process last read it, for the length of one command — dropped by
@@ -4520,6 +4807,8 @@ impl GitHubProjectsSource {
             pacing: Pacing::resolve(config.pacing, name)?,
             last_mutation: Mutex::new(None),
             windows: Mutex::new(pacing::Windows::default()),
+            task_children: Mutex::new(BTreeMap::new()),
+            deferred: Mutex::new(None),
             clock: system_clock(),
             numeric_repositories: tokio::sync::Mutex::new(BTreeMap::new()),
             board_cache: Mutex::new(None),
@@ -6497,6 +6786,9 @@ impl GitHubProjectsSource {
 
     /// Forget one item this process has just deleted, from every half of its own view.
     fn forget(&self, id: &NativeId) -> Result<(), SourceError> {
+        if let Some(deferred) = self.deferred()?.as_mut() {
+            deferred.created.retain(|held| held.content != *id);
+        }
         self.resolved_cache()?.remove(id);
         self.read_ahead()?.remove(id);
         self.carried()?.remove(id);
@@ -6533,6 +6825,23 @@ impl GitHubProjectsSource {
 
     /// This process's own record of each project's sub-issues, or the refusal a poisoned lock
     /// is.
+    /// The tasks `project` holds, as a copy's batched read found them this command, when it did.
+    fn held_task_children(&self, project: &NativeId) -> Result<Option<Vec<Resolved>>, SourceError> {
+        Ok(self.task_children()?.get(project).cloned())
+    }
+
+    fn task_children(
+        &self,
+    ) -> Result<std::sync::MutexGuard<'_, BTreeMap<NativeId, Vec<Resolved>>>, SourceError> {
+        self.task_children
+            .lock()
+            .map_err(|_| SourceError::Unavailable {
+                message: "this source's record of a project's tasks was left inconsistent by an \
+                          earlier failure; next: run the command again"
+                    .into(),
+            })
+    }
+
     fn children_cache(&self) -> Result<std::sync::MutexGuard<'_, ProjectChildren>, SourceError> {
         self.children_cache
             .lock()
@@ -8511,6 +8820,55 @@ impl GitHubProjectsSource {
         target: Option<&NativeId>,
         depends_on: &[DependencyEdge],
     ) -> Result<onetaskgraph_plugin_api::AssetsWritten, SourceError> {
+        let prepared = self.prepare_write(incoming, target, depends_on).await?;
+        let landed =
+            match prepared.existing.as_ref() {
+                // Its content is written last, by `complete_write`, once everything else has landed.
+                Some(item) => Landed {
+                    content_id: item.id.clone(),
+                    item_id: item.item_id.clone(),
+                    url: item.url.clone(),
+                    number: item.number,
+                },
+                None => {
+                    let target = prepared.creation_target.as_ref().ok_or_else(|| {
+                        SourceError::Malformed {
+                            message: "a new item was decided without a repository to create it \
+                                      in"
+                            .into(),
+                        }
+                    })?;
+                    if self.deferring()? {
+                        self.create_filed_issue(
+                            prepared.board.id.as_str(),
+                            target,
+                            incoming,
+                            &prepared.body,
+                        )
+                        .await?
+                    } else {
+                        self.create_and_file_issue(
+                            prepared.board.id.as_str(),
+                            target,
+                            incoming,
+                            &prepared.body,
+                        )
+                        .await?
+                    }
+                }
+            };
+        self.complete_write(incoming, prepared, landed).await
+    }
+
+    /// Everything one write of `incoming` reads and decides before it sends anything: what is
+    /// there now, where a new item is created, the board's fields, and every value refused while
+    /// nothing has been written — the item's body included.
+    async fn prepare_write(
+        &self,
+        incoming: &Incoming<'_>,
+        target: Option<&NativeId>,
+        depends_on: &[DependencyEdge],
+    ) -> Result<Prepared, SourceError> {
         // Refused before anything is read or written: a task or a project titled the way
         // this board spells a document would land as an issue this same source reads back
         // as a document, so the field this destination cannot carry is named rather than
@@ -8532,7 +8890,7 @@ impl GitHubProjectsSource {
         // The destination is read by its own id, and whether this board holds it is decided
         // by that read — its own `projectItems` — rather than by whether a listing of the
         // board happens to include it yet. See the module documentation.
-        let existing = match target {
+        let held = match target {
             Some(target) => {
                 Some(
                     self.bound_item(target)
@@ -8544,7 +8902,7 @@ impl GitHubProjectsSource {
             }
             None => None,
         };
-        let existing = existing.as_ref();
+        let existing = held.as_ref();
         // An existing issue is never moved; a new one is created where the rule says — and
         // knowing where is what lets the board's fields and that repository's id be read
         // together, before anything below needs either.
@@ -8697,30 +9055,65 @@ impl GitHubProjectsSource {
             None => None,
         };
 
+        Ok(Prepared {
+            origin: origin.to_owned(),
+            existing: held,
+            creation_target,
+            board,
+            status_target,
+            column,
+            priority_write,
+            projections,
+            projected,
+            content_kind,
+            own_repository,
+            native,
+            slot,
+            content,
+            body,
+            origin_field,
+        })
+    }
+
+    /// Everything one write does once the item it writes exists: its board fields, its
+    /// relationships and — for an item that was already there — its content last, then what this
+    /// process remembers of it.
+    ///
+    /// While this source is holding writes back — see [`TaskSource::begin_deferred_writes`] — an
+    /// item this command created has its fields, its closing and its edges held for
+    /// [`TaskSource::finish_writes`] rather than sent here.
+    async fn complete_write(
+        &self,
+        incoming: &Incoming<'_>,
+        prepared: Prepared,
+        landed: Landed,
+    ) -> Result<onetaskgraph_plugin_api::AssetsWritten, SourceError> {
+        let Prepared {
+            existing: held,
+            creation_target: _,
+            board,
+            status_target,
+            column,
+            priority_write,
+            projections,
+            projected,
+            content_kind,
+            own_repository,
+            native,
+            slot,
+            content,
+            body,
+            origin,
+            origin_field,
+        } = prepared;
+        let existing = held.as_ref();
+        let origin = origin.as_str();
         let Landed {
             content_id,
             item_id,
             url,
             number,
-        } = match existing {
-            // Its content is written last, below, once everything else has landed.
-            Some(item) => Landed {
-                content_id: item.id.clone(),
-                item_id: item.item_id.clone(),
-                url: item.url.clone(),
-                number: item.number,
-            },
-            None => {
-                let target = creation_target
-                    .as_ref()
-                    .ok_or_else(|| SourceError::Malformed {
-                        message: "a new item was decided without a repository to create it in"
-                            .into(),
-                    })?;
-                self.create_and_file_issue(board.id.as_str(), target, incoming, &body)
-                    .await?
-            }
-        };
+        } = landed;
 
         // Only what differs from the item as this write read it is sent: a priority the item
         // already holds is not, so an unchanged re-copy writes no field and a person's edit of
@@ -8745,8 +9138,25 @@ impl GitHubProjectsSource {
         // When it was refused, GitHub does not say which of its fields ran before the one that
         // failed, so the origin may or may not have moved.
         let mut origin_landed = false;
-        let landed = self
-            .finish_write(
+        // An item this command created while writes are held back has every part that can land
+        // later held for `finish_writes` — its own create filed it on the board and under its
+        // project already — and so does a later write of it in the same command.
+        let holding = (existing.is_none() && self.deferring()?) || self.holds_back(&content_id)?;
+        let landed = if holding {
+            self.hold_back(
+                board.id.as_str(),
+                &content_id,
+                existing,
+                origin_field.as_deref(),
+                origin,
+                column,
+                status_target.as_ref(),
+                priority_write.as_ref(),
+                &projections,
+                &native,
+            )
+        } else {
+            self.finish_write(
                 board.id.as_str(),
                 incoming,
                 &content_id,
@@ -8762,7 +9172,8 @@ impl GitHubProjectsSource {
                 &native,
                 &mut origin_landed,
             )
-            .await;
+            .await
+        };
         // An existing item's title, body and state go last, in one `updateIssue`, once its board
         // fields and its relationships have landed: a refusal of any of those then leaves its
         // body — and the metadata slot inside it — exactly as it stood.
@@ -8952,28 +9363,14 @@ impl GitHubProjectsSource {
         native: &[String],
         origin_landed: &mut bool,
     ) -> Result<(), SourceError> {
-        let mut fields = Vec::new();
-        if let Some(field_id) = origin_field
-            && existing.map_or(!origin.is_empty(), |item| {
-                item.origin.as_deref().unwrap_or("") != origin
-            })
-        {
-            fields.push((field_id.to_owned(), json!({"text":origin})));
-        }
-        if let Some((field_id, option_id)) = column {
-            fields.push((field_id, json!({"singleSelectOptionId":option_id})));
-        }
-        let mut clears = Vec::new();
-        match priority {
-            Some(PriorityWrite::Select { field, option }) => {
-                fields.push((field.clone(), json!({"singleSelectOptionId":option})));
-            }
-            Some(PriorityWrite::Clear { field }) => clears.push(field.as_str()),
-            None => {}
-        }
-        for projection in projections {
-            projection.join(&mut fields, &mut clears);
-        }
+        let (fields, clears) = field_writes(
+            existing,
+            origin_field,
+            origin,
+            column,
+            priority,
+            projections,
+        );
         self.set_item_fields(board_id, item_id, &fields, &clears)
             .await?;
         *origin_landed = true;
@@ -9010,6 +9407,551 @@ impl GitHubProjectsSource {
                     None => Issue::Created,
                 };
                 self.reconcile_blocked_by(content_id, native, issue).await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether this source is holding writes back — see [`TaskSource::begin_deferred_writes`].
+    fn deferring(&self) -> Result<bool, SourceError> {
+        Ok(self.deferred()?.is_some())
+    }
+
+    /// Whether `content` is an item this command created whose parts are held back.
+    fn holds_back(&self, content: &NativeId) -> Result<bool, SourceError> {
+        Ok(self
+            .deferred()?
+            .as_ref()
+            .is_some_and(|deferred| deferred.created.iter().any(|held| held.content == *content)))
+    }
+
+    fn deferred(&self) -> Result<std::sync::MutexGuard<'_, Option<Deferred>>, SourceError> {
+        self.deferred.lock().map_err(|_| SourceError::Unavailable {
+            message: "this source's record of the writes it is holding back was left \
+                      inconsistent by an earlier failure; next: run the command again"
+                .into(),
+        })
+    }
+
+    /// Creates one issue filed on the board and under its project by the `createIssue` itself —
+    /// `projectV2Ids` naming the board and `parentIssueId` the project — which is what a copy
+    /// creates with: one request where adding it to the board and filing it under its project
+    /// were two more. GitHub adds the board item after answering, so its id is not known here;
+    /// [`TaskSource::finish_writes`] reads it.
+    async fn create_filed_issue(
+        &self,
+        board_id: &str,
+        repository: &RepositoryTarget,
+        incoming: &Incoming<'_>,
+        body: &Option<String>,
+    ) -> Result<Landed, SourceError> {
+        let repository_id = self.repository_id(repository, incoming).await?;
+        let data = self
+            .graphql(
+                graphql::CREATE_ISSUE,
+                json!({"input": filed_input(&repository_id, board_id, incoming, body)}),
+            )
+            .await?;
+        let created = data
+            .pointer("/createIssue/issue")
+            .filter(|value| !value.is_null())
+            .ok_or_else(|| SourceError::Malformed {
+                message: "GitHub issue creation returned no issue".into(),
+            })?;
+        self.created_landed(created).await
+    }
+
+    /// What one `createIssue` answered, as the item it created — or, when its number cannot be
+    /// read, the refusal, after taking the issue back.
+    async fn created_landed(&self, created: &Value) -> Result<Landed, SourceError> {
+        let content_id = NativeId(required_str(created, "id")?.to_owned());
+        let url = optional_str(created, "url")?.map(str::to_owned);
+        let number = match created_issue_number(created) {
+            Ok(number) => number,
+            Err(error) => {
+                let _ = self.delete_issue(&content_id).await;
+                return Err(error);
+            }
+        };
+        Ok(Landed {
+            content_id,
+            item_id: String::new(),
+            url,
+            number,
+        })
+    }
+
+    /// Hold back everything a write of the created item `content` would send after creating it,
+    /// for [`TaskSource::finish_writes`]: the same field values, closing and edges
+    /// `finish_write` sends, the parent excepted, which its create already named. A later write
+    /// of the same item replaces what it changes.
+    // llmlint: ignore[suppressions_justified] The arguments are `finish_write`'s, which this holds back instead of sending, and they are exactly the values `complete_write` has in scope; bundling them would describe no concept.
+    #[allow(clippy::too_many_arguments)]
+    fn hold_back(
+        &self,
+        board_id: &str,
+        content: &NativeId,
+        existing: Option<&Resolved>,
+        origin_field: Option<&str>,
+        origin: &str,
+        column: Option<(String, String)>,
+        status_target: Option<&StatusTarget>,
+        priority: Option<&PriorityWrite>,
+        projections: &[ProjectionWrite],
+        native: &[String],
+    ) -> Result<(), SourceError> {
+        let status = column.map(|(field, option)| {
+            let name = self
+                .fields_cache()
+                .ok()
+                .and_then(|fields| {
+                    fields.as_ref().and_then(|board| {
+                        option_name(&board.fields, &field, &option).map(str::to_owned)
+                    })
+                })
+                .unwrap_or_default();
+            (field, option, name)
+        });
+        let (fields, clears) =
+            field_writes(existing, origin_field, origin, None, priority, projections);
+        let close = matches!(status_target, Some(StatusTarget::Terminal(_, _)))
+            .then(|| state_input(status_target));
+        let mut deferred = self.deferred()?;
+        let deferred = deferred.get_or_insert_with(Deferred::default);
+        deferred.board.get_or_insert_with(|| board_id.to_owned());
+        let held = match deferred
+            .created
+            .iter_mut()
+            .position(|held| held.content == *content)
+        {
+            Some(at) => &mut deferred.created[at],
+            None => {
+                deferred.created.push(HeldBack {
+                    content: content.clone(),
+                    fields: Vec::new(),
+                    status: None,
+                    clears: Vec::new(),
+                    close: None,
+                    edges: Vec::new(),
+                });
+                deferred.created.last_mut().expect("just held")
+            }
+        };
+        for (field, value) in fields {
+            held.fields.retain(|(held, _)| *held != field);
+            held.clears.retain(|held| *held != field);
+            held.fields.push((field, value));
+        }
+        for field in clears {
+            held.fields.retain(|(held, _)| held != field);
+            if !held.clears.iter().any(|held| held == field) {
+                held.clears.push(field.to_owned());
+            }
+        }
+        if status.is_some() {
+            held.status = status;
+        }
+        if close.is_some() {
+            held.close = close;
+        }
+        // Nothing of an item created in this command has been sent but its create, so the edges
+        // it is to have are exactly the ones its latest write names.
+        held.edges = native.to_vec();
+        Ok(())
+    }
+
+    /// Create every task of `writes`, together, filed on the board and under each one's
+    /// project: [`graphql::CREATE_ISSUES`], [`MUTATION_BATCH`] to a request.
+    ///
+    /// Each is prepared as [`Self::write_item`] prepares one — every refusal a write owes made
+    /// before the first request — then created, then completed with its parts held back. A
+    /// request refused part way leaves the issues it did create, which are taken back, with the
+    /// rest of this call's, before the refusal is answered.
+    async fn create_together(
+        &self,
+        writes: &[ItemWrite<Task>],
+    ) -> Result<Vec<NativeId>, SourceError> {
+        let incomings: Vec<Incoming<'_>> = writes
+            .iter()
+            .map(|write| self.task_incoming(write, None))
+            .collect::<Result<_, _>>()?;
+        let mut prepared = Vec::with_capacity(writes.len());
+        for (incoming, write) in incomings.iter().zip(writes) {
+            if write.target.is_some() {
+                return Err(SourceError::Malformed {
+                    message: "a write naming its target was handed to a batch of creates".into(),
+                });
+            }
+            prepared.push(
+                self.prepare_write(incoming, None, &write.depends_on)
+                    .await?,
+            );
+        }
+        let mut inputs = Vec::with_capacity(prepared.len());
+        for (incoming, prepared) in incomings.iter().zip(&prepared) {
+            let target =
+                prepared
+                    .creation_target
+                    .as_ref()
+                    .ok_or_else(|| SourceError::Malformed {
+                        message: "a new item was decided without a repository to create it in"
+                            .into(),
+                    })?;
+            let repository_id = self.repository_id(target, incoming).await?;
+            inputs.push(filed_input(
+                &repository_id,
+                prepared.board.id.as_str(),
+                incoming,
+                &prepared.body,
+            ));
+        }
+        let mut landed: Vec<Landed> = Vec::with_capacity(inputs.len());
+        let refused = 'create: {
+            for chunk in inputs.chunks(MUTATION_BATCH) {
+                let mut variables = serde_json::Map::new();
+                for slot in 0..MUTATION_BATCH {
+                    variables.insert(
+                        format!("create{slot}"),
+                        chunk.get(slot).cloned().unwrap_or_else(|| chunk[0].clone()),
+                    );
+                    variables.insert(format!("send{slot}"), json!(slot < chunk.len()));
+                }
+                let data = match self
+                    .graphql(graphql::CREATE_ISSUES, Value::Object(variables))
+                    .await
+                {
+                    Ok(data) => data,
+                    Err(error) => break 'create Some(error),
+                };
+                let mut refusal = None;
+                for slot in 0..chunk.len() {
+                    match data
+                        .pointer(&format!("/create{slot}/issue"))
+                        .filter(|value| !value.is_null())
+                    {
+                        Some(created) => match self.created_landed(created).await {
+                            Ok(created) => landed.push(created),
+                            Err(error) => {
+                                refusal.get_or_insert(error);
+                            }
+                        },
+                        None => {
+                            refusal.get_or_insert(SourceError::Malformed {
+                                message: "GitHub issue creation returned no issue".into(),
+                            });
+                        }
+                    }
+                }
+                if let Some(error) = refusal {
+                    break 'create Some(error);
+                }
+            }
+            None
+        };
+        if let Some(error) = refused {
+            for created in &landed {
+                let _ = self.delete_issue(&created.content_id).await;
+            }
+            return Err(error);
+        }
+        let mut ids = Vec::with_capacity(landed.len());
+        for ((incoming, prepared), landed) in incomings.iter().zip(prepared).zip(landed) {
+            ids.push(self.complete_write(incoming, prepared, landed).await?.id);
+        }
+        Ok(ids)
+    }
+
+    /// Send everything held back since [`TaskSource::begin_deferred_writes`]: one read of the
+    /// created items' board items, then their field values, closes and edges, each kind in
+    /// requests of [`MUTATION_BATCH`]. Anything refused takes back every issue held, and
+    /// answers the refusal.
+    async fn send_held_back(&self) -> Result<(), SourceError> {
+        let Some(deferred) = self.deferred()?.take() else {
+            return Ok(());
+        };
+        let (Some(board), false) = (deferred.board.clone(), deferred.created.is_empty()) else {
+            return Ok(());
+        };
+        let sent = self.send_deferred(&board, &deferred).await;
+        if let Err(error) = sent {
+            let mut left = Vec::new();
+            for held in &deferred.created {
+                if let Err(refused) = self.delete_issue(&held.content).await {
+                    left.push(format!("{} ({refused})", held.content.0));
+                }
+            }
+            if left.is_empty() {
+                return Err(error);
+            }
+            return Err(noting(
+                error,
+                &format!(
+                    "; the issues this write created were to be taken back, and {} could not \
+                     be: {}; next: delete them on the board",
+                    plural(u32::try_from(left.len()).unwrap_or(u32::MAX), "issue"),
+                    left.join(", ")
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    /// The requests [`Self::send_held_back`] makes.
+    async fn send_deferred(&self, board: &str, deferred: &Deferred) -> Result<(), SourceError> {
+        let items = self.created_board_items(board, &deferred.created).await?;
+        let mut fields: Vec<Value> = Vec::new();
+        let mut closes: Vec<Value> = Vec::new();
+        let mut edges: Vec<Value> = Vec::new();
+        for held in &deferred.created {
+            let (item, status) = &items[&held.content];
+            let mut values = held.fields.clone();
+            // A status the board already shows — set by a workflow filing new items at it, as
+            // GitHub's own default one does — is not written again.
+            if let Some((field, option, name)) = &held.status
+                && status.as_deref() != Some(name.as_str())
+            {
+                values.insert(0, (field.clone(), json!({"singleSelectOptionId": option})));
+            }
+            for (field, value) in values {
+                fields.push(json!({"projectId":board,"itemId":item,"fieldId":field,"value":value}));
+            }
+            if let Some(close) = &held.close {
+                closes.push(json!({"id": held.content.0, "stateInput": close}));
+            }
+            for far in &held.edges {
+                edges.push(json!({"issueId": held.content.0, "blockingIssueId": far}));
+            }
+            if !held.clears.is_empty() {
+                let clears: Vec<&str> = held.clears.iter().map(String::as_str).collect();
+                self.set_item_fields(board, item, &[], &clears).await?;
+            }
+        }
+        for (document, prefix, inputs, root) in [
+            (
+                graphql::WRITE_FIELD_VALUES,
+                "field",
+                &fields,
+                "projectV2Item",
+            ),
+            (graphql::CLOSE_ISSUES, "close", &closes, "issue"),
+            (graphql::ADD_BLOCKED_BYS, "block", &edges, "issue"),
+        ] {
+            for chunk in inputs.chunks(MUTATION_BATCH) {
+                let mut variables = serde_json::Map::new();
+                for slot in 0..MUTATION_BATCH {
+                    variables.insert(
+                        format!("{prefix}{slot}"),
+                        chunk.get(slot).cloned().unwrap_or_else(|| chunk[0].clone()),
+                    );
+                    variables.insert(format!("send{slot}"), json!(slot < chunk.len()));
+                }
+                let data = self.graphql(document, Value::Object(variables)).await?;
+                for slot in 0..chunk.len() {
+                    data.pointer(&format!("/{prefix}{slot}/{root}/id"))
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| SourceError::Malformed {
+                            message: format!(
+                                "GitHub answered {} with nothing at {prefix}{slot}",
+                                operation_description(document)
+                            ),
+                        })?;
+                }
+            }
+        }
+        for held in &deferred.created {
+            self.learn_item(&held.content, &items[&held.content].0)?;
+        }
+        Ok(())
+    }
+
+    /// The board item each of `created` is on this board, with its `Status` as the board set it:
+    /// [`graphql::CREATED_BOARD_ITEMS`], read again — after a wait of a second, then two, four,
+    /// eight and sixteen — while GitHub has not filed one yet.
+    async fn created_board_items(
+        &self,
+        board: &str,
+        created: &[HeldBack],
+    ) -> Result<BTreeMap<NativeId, (String, Option<String>)>, SourceError> {
+        let mut found: BTreeMap<NativeId, (String, Option<String>)> = BTreeMap::new();
+        let mut wait = Duration::from_secs(1);
+        for attempt in 0..6 {
+            let unfiled: Vec<&NativeId> = created
+                .iter()
+                .map(|held| &held.content)
+                .filter(|id| !found.contains_key(*id))
+                .collect();
+            if unfiled.is_empty() {
+                return Ok(found);
+            }
+            if attempt > 0 {
+                self.clock
+                    .sleep_because(wait, pacing::cause::BOARD_FILING)
+                    .await;
+                wait = wait.saturating_mul(2);
+            }
+            for chunk in unfiled.chunks(COPY_DETAIL_BATCH) {
+                let mut variables = serde_json::Map::new();
+                for slot in 0..COPY_DETAIL_BATCH {
+                    variables.insert(
+                        format!("id{slot}"),
+                        json!(chunk.get(slot).unwrap_or(&chunk[0]).0),
+                    );
+                    variables.insert(format!("read{slot}"), json!(slot < chunk.len()));
+                }
+                variables.insert("boardItems".into(), json!(BOARD_ITEMS_PAGE_SIZE));
+                variables.insert("statusName".into(), json!(STATUS_FIELD));
+                let data = self
+                    .graphql(graphql::CREATED_BOARD_ITEMS, Value::Object(variables))
+                    .await?;
+                for (slot, id) in chunk.iter().enumerate() {
+                    let item = data
+                        .pointer(&format!("/i{slot}/projectItems/nodes"))
+                        .and_then(Value::as_array)
+                        .and_then(|nodes| {
+                            nodes.iter().find(|node| {
+                                node.pointer("/project/id").and_then(Value::as_str) == Some(board)
+                            })
+                        });
+                    if let Some(item) = item {
+                        found.insert(
+                            (*id).clone(),
+                            (
+                                required_str(item, "id")?.to_owned(),
+                                item.pointer("/status/name")
+                                    .and_then(Value::as_str)
+                                    .map(str::to_owned),
+                            ),
+                        );
+                    }
+                }
+            }
+        }
+        let unfiled: Vec<&str> = created
+            .iter()
+            .map(|held| held.content.0.as_str())
+            .filter(|id| !found.keys().any(|found| found.0 == *id))
+            .collect();
+        Err(SourceError::Unavailable {
+            message: format!(
+                "GitHub created {} filed on board {board} and has not added {} to it after 31 \
+                 seconds: {}; next: run the copy again once GitHub has caught up",
+                if unfiled.len() == 1 {
+                    "an issue"
+                } else {
+                    "issues"
+                },
+                if unfiled.len() == 1 { "it" } else { "them" },
+                unfiled.join(", ")
+            ),
+        })
+    }
+
+    /// The board item id of `content`, which this process created and remembered without one,
+    /// in every half of its own view.
+    fn learn_item(&self, content: &NativeId, item: &str) -> Result<(), SourceError> {
+        if let Some(held) = self.resolved_cache()?.get_mut(content) {
+            held.item_id = item.to_owned();
+        }
+        if let Some(held) = self.created()?.iter_mut().find(|held| held.id == *content) {
+            held.item_id = item.to_owned();
+        }
+        Ok(())
+    }
+
+    /// Ask together which items each of `origins` names, and what creating an item reads; see
+    /// [`TaskSource::read_ahead_origins_for_copy`]. An origin whose answer runs past its first
+    /// page is left to its own lookup.
+    async fn origins_ahead(&self, origins: &[String]) -> Result<(), SourceError> {
+        let Some(repository) = self.repository.clone() else {
+            return Ok(());
+        };
+        let unasked: Vec<&String> = {
+            let held = self.narrowed_cache()?;
+            let mut unasked: Vec<&String> = Vec::new();
+            for origin in origins {
+                if !held.contains_key(&Narrowing::Origin(origin.clone()).key())
+                    && !unasked.contains(&origin)
+                {
+                    unasked.push(origin);
+                }
+            }
+            unasked
+        };
+        if unasked.is_empty() {
+            return Ok(());
+        }
+        for chunk in unasked.chunks(ORIGIN_BATCH) {
+            let mut variables = json!({"owner":self.owner,"number":self.project_number,
+                "type":"ISSUE","originFirst":ORIGIN_PAGE_SIZE,"nestedFirst":NESTED_PAGE_SIZE,
+                "boardItems":BOARD_ITEMS_PAGE_SIZE,"duplicates":true,
+                "repositoryOwner":repository.owner,"repositoryName":repository.name});
+            for slot in 0..ORIGIN_BATCH {
+                let origin = chunk.get(slot).unwrap_or(&chunk[0]);
+                variables[format!("filter{slot}")] =
+                    json!(format!("{ORIGIN_FIELD}:{}", quoted(origin)));
+                variables[format!("search{slot}")] = json!(
+                    self.board_search(Some(&format!("in:body {}", quoted(&as_stored(origin)))))
+                );
+                variables[format!("ask{slot}")] = json!(slot < chunk.len());
+            }
+            let data = self.graphql(graphql::ORIGIN_LOOKUPS, variables).await?;
+            self.fields_read(&data)?;
+            if let Some(node) = data.get("repository").filter(|value| !value.is_null()) {
+                let id = required_str(node, "id")?.to_owned();
+                self.repository_cache()?.insert(repository.clone(), id);
+                if let Some(numeric) = node
+                    .get("databaseId")
+                    .and_then(Value::as_u64)
+                    .and_then(std::num::NonZeroU64::new)
+                {
+                    self.numeric_repositories
+                        .lock()
+                        .await
+                        .insert(repository.clone(), numeric);
+                }
+            }
+            for (slot, origin) in chunk.iter().enumerate() {
+                let items = data
+                    .pointer(&format!("/o{slot}/projectV2/items"))
+                    .filter(|value| !value.is_null())
+                    .ok_or_else(|| SourceError::Refused {
+                        message: format!(
+                            "GitHub project {}/{} was not found or is not visible to the token",
+                            self.owner, self.project_number
+                        ),
+                    })?;
+                let searched =
+                    data.get(format!("s{slot}"))
+                        .ok_or_else(|| SourceError::Malformed {
+                            message: "GitHub search response has no search connection".into(),
+                        })?;
+                if resumed(items, None)?.has_more() || resumed(searched, None)?.has_more() {
+                    continue;
+                }
+                let mut found: Vec<Resolved> = Vec::new();
+                for item in optional_nodes(Some(items), "project items")?
+                    .into_iter()
+                    .flatten()
+                {
+                    if let Some(resolved) = self.resolve(item)?
+                        && resolved.content_kind == ContentKind::Issue
+                        && !found.iter().any(|held| held.id == resolved.id)
+                    {
+                        found.push(resolved);
+                    }
+                }
+                for node in optional_nodes(Some(searched), "search")?
+                    .into_iter()
+                    .flatten()
+                {
+                    if let Some(resolved) = self.resolve_issue(node).await?
+                        && !found.iter().any(|held| held.id == resolved.id)
+                    {
+                        found.push(resolved);
+                    }
+                }
+                self.narrowed_cache()?
+                    .insert(Narrowing::Origin((*origin).clone()).key(), found);
             }
         }
         Ok(())
@@ -9709,6 +10651,126 @@ impl GitHubProjectsSource {
     }
 }
 
+/// The board field values one write sends, in the order GitHub runs them, and the fields it
+/// clears after them: the origin field when it moves, the `Status` option `column` names, the
+/// priority, then each projected field.
+fn field_writes<'a>(
+    existing: Option<&Resolved>,
+    origin_field: Option<&str>,
+    origin: &str,
+    column: Option<(String, String)>,
+    priority: Option<&'a PriorityWrite>,
+    projections: &'a [ProjectionWrite],
+) -> (Vec<(String, Value)>, Vec<&'a str>) {
+    let mut fields = Vec::new();
+    if let Some(field_id) = origin_field
+        && existing.map_or(!origin.is_empty(), |item| {
+            item.origin.as_deref().unwrap_or("") != origin
+        })
+    {
+        fields.push((field_id.to_owned(), json!({"text":origin})));
+    }
+    if let Some((field_id, option_id)) = column {
+        fields.push((field_id, json!({"singleSelectOptionId":option_id})));
+    }
+    let mut clears = Vec::new();
+    match priority {
+        Some(PriorityWrite::Select { field, option }) => {
+            fields.push((field.clone(), json!({"singleSelectOptionId":option})));
+        }
+        Some(PriorityWrite::Clear { field }) => clears.push(field.as_str()),
+        None => {}
+    }
+    for projection in projections {
+        projection.join(&mut fields, &mut clears);
+    }
+    (fields, clears)
+}
+
+/// Everything one write decided before sending anything: see
+/// [`GitHubProjectsSource::prepare_write`].
+struct Prepared {
+    /// The item as it stood, for an update.
+    existing: Option<Resolved>,
+    /// Where a new item is created.
+    creation_target: Option<RepositoryTarget>,
+    board: BoardFields,
+    status_target: Option<StatusTarget>,
+    /// The `Status` field, the option and the option's name the status lands on.
+    column: Option<(String, String, String)>,
+    priority_write: Option<PriorityWrite>,
+    projections: Vec<ProjectionWrite>,
+    projected: BTreeMap<String, String>,
+    content_kind: ContentKind,
+    own_repository: Option<Repository>,
+    /// The far ends of the item's native blocked-by relationships.
+    native: Vec<String>,
+    slot: BTreeMap<String, Value>,
+    content: Option<String>,
+    body: Option<String>,
+    /// The copy origin the item records, empty for none.
+    origin: String,
+    origin_field: Option<String>,
+}
+
+/// What a copy has held back of the items it created; see
+/// [`GitHubProjectsSource::hold_back`].
+#[derive(Debug, Default)]
+struct Deferred {
+    /// The board every one of them is on.
+    board: Option<String>,
+    /// Each created item, in the order it was created.
+    created: Vec<HeldBack>,
+}
+
+/// One created item's parts that land once [`TaskSource::finish_writes`] is called.
+#[derive(Debug)]
+struct HeldBack {
+    /// The issue.
+    content: NativeId,
+    /// Its board field values other than its `Status`, in the order they are written.
+    fields: Vec<(String, Value)>,
+    /// The `Status` field, and the option and its name that the item's status lands on.
+    status: Option<(String, String, String)>,
+    /// The fields it clears after those are written.
+    clears: Vec<String>,
+    /// The `stateInput` that closes it, once its option is selected.
+    close: Option<Value>,
+    /// The issues it is blocked by.
+    edges: Vec<String>,
+}
+
+/// The `createIssue` input that files the new issue on `board` and, when `incoming` names one,
+/// under its project — see [`GitHubProjectsSource::create_filed_issue`].
+fn filed_input(
+    repository: &str,
+    board: &str,
+    incoming: &Incoming<'_>,
+    body: &Option<String>,
+) -> Value {
+    let mut input = json!({"repositoryId":repository,"title":incoming.written_title(),
+                           "body":body,"projectV2Ids":[board]});
+    if let Some(parent) = incoming.parent {
+        input["parentIssueId"] = json!(parent.0);
+    }
+    input
+}
+
+/// The name of option `option` of field `field` among a board's `fields`.
+fn option_name<'a>(fields: &'a Value, field: &str, option: &str) -> Option<&'a str> {
+    fields
+        .get("nodes")?
+        .as_array()?
+        .iter()
+        .find(|node| node.get("id").and_then(Value::as_str) == Some(field))?
+        .get("options")?
+        .as_array()?
+        .iter()
+        .find(|candidate| candidate.get("id").and_then(Value::as_str) == Some(option))?
+        .get("name")?
+        .as_str()
+}
+
 /// What a write needs to know of one far end it names: which kind of item it is, and whether
 /// it is an issue a native relationship can name.
 struct FarEnd {
@@ -9777,12 +10839,14 @@ fn noting(error: SourceError, note: &str) -> SourceError {
 
 /// The variables of one [`graphql::ISSUE_COPY_DETAILS`] request, as [`detail_batch`] binds its
 /// own: a slot `batch` has no id for is bound to its last id, read again at no added price.
-fn copy_detail_batch(batch: &[NativeId], comments: &PageRequest) -> Value {
+fn copy_detail_batch(batch: &[NativeId], comments: &PageRequest, children: bool) -> Value {
     let mut variables = serde_json::Map::new();
     for slot in 0..COPY_DETAIL_BATCH {
         let id = batch.get(slot).or(batch.last()).map(|id| id.0.clone());
         variables.insert(format!("id{slot}"), json!(id));
     }
+    variables.insert("project".to_owned(), json!(batch.first().map(|id| &id.0)));
+    variables.insert("children".to_owned(), json!(children));
     variables.insert("first".to_owned(), json!(comments.limit.min(MAX_PAGE_SIZE)));
     variables.insert("nestedFirst".to_owned(), json!(NESTED_PAGE_SIZE));
     variables.insert("boardItems".to_owned(), json!(BOARD_ITEMS_PAGE_SIZE));
@@ -11280,7 +12344,17 @@ impl TaskSource for GitHubProjectsSource {
         // answered by reading it.
         let (held, membership) = match (&query.project, query.commented_since) {
             (ProjectFilter::Is(project), _) => (
-                self.project_children(project).await?,
+                match self.held_task_children(project)? {
+                    // Taken as `project_children` takes the project's own sub-issue read: with
+                    // every item this process wrote under it since, and none it moved away.
+                    Some(held) => self.completed_with_written(
+                        held.into_iter()
+                            .filter(|child| child.parent.as_ref() == Some(project))
+                            .collect(),
+                        |own| own.parent.as_ref() == Some(project),
+                    )?,
+                    None => self.project_children(project).await?,
+                },
                 // Answered by where these items came from; see `task_matches`.
                 &ProjectFilter::Any,
             ),
@@ -11483,6 +12557,50 @@ impl TaskSource for GitHubProjectsSource {
         self.write_task_assets(write, None)
             .await
             .map(|written| written.id)
+    }
+
+    async fn read_ahead_origins_for_copy(&self, origins: &[String]) -> Result<(), SourceError> {
+        self.origins_ahead(origins).await
+    }
+
+    /// [`MUTATION_BATCH`], while writes are held back: [`graphql::CREATE_ISSUES`] creates that many
+    /// in one request, and a copy's tasks are created together only then, since their fields
+    /// and edges are what is held back.
+    fn create_batch_limit(&self) -> usize {
+        if self.deferring().unwrap_or(false) {
+            MUTATION_BATCH
+        } else {
+            1
+        }
+    }
+
+    async fn write_tasks(&self, writes: &[ItemWrite<Task>]) -> Result<Vec<NativeId>, SourceError> {
+        if !self.deferring()? {
+            let mut created = Vec::with_capacity(writes.len());
+            for write in writes {
+                match self.write_task(write).await {
+                    Ok(id) => created.push(id),
+                    Err(error) => {
+                        for id in &created {
+                            let _ = self.delete_issue(id).await;
+                        }
+                        return Err(error);
+                    }
+                }
+            }
+            return Ok(created);
+        }
+        self.create_together(writes).await
+    }
+
+    fn begin_deferred_writes(&self) {
+        if let Ok(mut deferred) = self.deferred.lock() {
+            deferred.get_or_insert_with(Deferred::default);
+        }
+    }
+
+    async fn finish_writes(&self) -> Result<(), SourceError> {
+        self.send_held_back().await
     }
 
     async fn write_task_with_assets(
@@ -11870,7 +12988,7 @@ impl TaskSource for GitHubProjectsSource {
             match self
                 .graphql(
                     graphql::ISSUE_COPY_DETAILS,
-                    copy_detail_batch(batch, comments),
+                    copy_detail_batch(batch, comments, false),
                 )
                 .await
             {
@@ -11943,11 +13061,15 @@ impl TaskSource for GitHubProjectsSource {
         // holds nothing — what a listing carried included, which stays carried — and every
         // item is read on its own, as the method promises.
         let mut read: Vec<(NativeId, Option<Resolved>)> = Vec::new();
-        for batch in unread.chunks(COPY_DETAIL_BATCH) {
+        // The issues the first id names as sub-issues, as `ISSUE_COPY_DETAILS`'s `children`
+        // answered them: what a project copy's orphan check asks, when that first id is its
+        // project.
+        let mut children: Option<(NativeId, Vec<(String, String)>)> = None;
+        for (index, batch) in unread.chunks(COPY_DETAIL_BATCH).enumerate() {
             let data = match self
                 .graphql(
                     graphql::ISSUE_COPY_DETAILS,
-                    copy_detail_batch(batch, &comments),
+                    copy_detail_batch(batch, &comments, index == 0),
                 )
                 .await
             {
@@ -11972,6 +13094,53 @@ impl TaskSource for GitHubProjectsSource {
                     self.resolve_issue_as(node, false).await?
                 };
                 read.push((id.clone(), held));
+            }
+            if index == 0
+                && let Some(node) = data.get("children").filter(|node| !node.is_null())
+                && node.get("id").and_then(Value::as_str) == batch.first().map(|id| id.0.as_str())
+                && node.pointer("/subIssues/pageInfo/hasNextPage") == Some(&Value::Bool(false))
+            {
+                let listed = node
+                    .pointer("/subIssues/nodes")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .map(|child| {
+                        Ok((
+                            required_str(child, "id")?.to_owned(),
+                            required_str(child, "title")?.to_owned(),
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, SourceError>>()?;
+                children = Some((batch[0].clone(), listed));
+            }
+        }
+        // The project's tasks are known from this read alone when every child it named is held
+        // from it, but for a document, which its title says is one and which a task listing
+        // never answers: then a listing of the project's tasks is answered from them.
+        if let Some((project, listed)) = children
+            && read.iter().any(|(id, held)| {
+                *id == project
+                    && held
+                        .as_ref()
+                        .is_some_and(|held| held.kind == BoardKind::Work(ItemKind::Project))
+            })
+        {
+            let mut tasks = Vec::new();
+            let mut whole = true;
+            for (child, title) in &listed {
+                match read.iter().find(|(id, _)| id.0 == *child) {
+                    Some((_, Some(held))) if held.parent.as_ref() == Some(&project) => {
+                        if held.kind == BoardKind::Work(ItemKind::Task) {
+                            tasks.push(held.clone());
+                        }
+                    }
+                    _ if title.starts_with(DESIGN_TITLE_PREFIX) => {}
+                    _ => whole = false,
+                }
+            }
+            if whole {
+                self.task_children()?.insert(project, tasks);
             }
         }
         let mut resolved = self.resolved_cache()?;
@@ -12151,6 +13320,7 @@ impl TaskSource for GitHubProjectsSource {
         clear(&self.carried);
         clear(&self.held_cache);
         clear(&self.children_cache);
+        clear(&self.task_children);
         clear(&self.fields_cache);
         self.expected.end_command();
         Ok(())
@@ -12998,6 +14168,21 @@ impl GitHubProjectsSource {
         write: &ItemWrite<Task>,
         assets: Option<&onetaskgraph_plugin_api::AssetWrite>,
     ) -> Result<onetaskgraph_plugin_api::AssetsWritten, SourceError> {
+        self.write_item(
+            &self.task_incoming(write, assets)?,
+            write.target.as_ref(),
+            &write.depends_on,
+        )
+        .await
+    }
+
+    /// One task write as [`Self::write_item`] takes it, once what it delivers and its priority
+    /// are known to be ones this source can write.
+    fn task_incoming<'a>(
+        &self,
+        write: &'a ItemWrite<Task>,
+        assets: Option<&'a onetaskgraph_plugin_api::AssetWrite>,
+    ) -> Result<Incoming<'a>, SourceError> {
         let near = write.target.as_ref().unwrap_or(&write.item.id);
         for (key, entries) in [
             (TaskRef::DELIVERS_KEY, &write.item.delivers),
@@ -13009,25 +14194,20 @@ impl GitHubProjectsSource {
         if self.priorities.is_none() && write.item.priority != Priority::None {
             return Err(self.holds_no_priority());
         }
-        self.write_item(
-            &Incoming {
-                written: Written::Work(ItemKind::Task, &write.item.status),
-                title: &write.item.title,
-                content: write.item.content.as_deref(),
-                assets,
-                labels: &write.item.labels,
-                metadata: &write.item.metadata,
-                repositories: &write.item.repositories,
-                classification: write.item.classification,
-                parent: write.item.project.as_ref(),
-                delivers: &write.item.delivers,
-                delivered_by: &write.item.delivered_by,
-                priority: self.priorities.as_ref().map(|_| write.item.priority),
-            },
-            write.target.as_ref(),
-            &write.depends_on,
-        )
-        .await
+        Ok(Incoming {
+            written: Written::Work(ItemKind::Task, &write.item.status),
+            title: &write.item.title,
+            content: write.item.content.as_deref(),
+            assets,
+            labels: &write.item.labels,
+            metadata: &write.item.metadata,
+            repositories: &write.item.repositories,
+            classification: write.item.classification,
+            parent: write.item.project.as_ref(),
+            delivers: &write.item.delivers,
+            delivered_by: &write.item.delivered_by,
+            priority: self.priorities.as_ref().map(|_| write.item.priority),
+        })
     }
     async fn write_document_assets(
         &self,

@@ -30,11 +30,11 @@ pub(super) enum Kind {
     /// A page of the board-scoped issue search,
     /// [`onetaskgraph_github_projects::graphql::SEARCH_ISSUES`].
     SearchPage,
-    /// A GraphQL read whose aliases name several items by id.
+    /// A GraphQL read whose aliases name several items by id, or ask about several origins.
     BatchedRead,
-    /// A mutation document holding one mutation field.
+    /// A mutation document sending one mutation field.
     Mutation,
-    /// A mutation document holding several aliased mutation fields.
+    /// A mutation document sending several aliased mutation fields.
     AliasedMutations,
     /// `POST /user-attachments/assets`.
     Upload,
@@ -77,7 +77,7 @@ impl Kind {
         let request: Value = serde_json::from_slice(bytes).unwrap_or(Value::Null);
         let query = request["query"].as_str().unwrap_or_default();
         if query.trim_start().starts_with("mutation") {
-            return if top_level_fields(query) > 1 {
+            return if top_level_fields(query, &request["variables"]) > 1 {
                 Self::AliasedMutations
             } else {
                 Self::Mutation
@@ -101,7 +101,19 @@ impl Kind {
             .filter_map(|(_, id)| id.as_str())
             .filter(|id| !id.is_empty())
             .collect();
-        if named.len() > 1 {
+        // A read asking about several origins at once is a batch as much as one naming several
+        // ids is: it is priced as the spike's batched read.
+        let origins = request["variables"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter(|(name, asked)| {
+                name.strip_prefix("ask").is_some_and(|slot| {
+                    !slot.is_empty() && slot.bytes().all(|b| b.is_ascii_digit())
+                }) && **asked == Value::Bool(true)
+            })
+            .count();
+        if named.len() > 1 || origins > 1 {
             Self::BatchedRead
         } else {
             Self::ItemRead
@@ -109,9 +121,32 @@ impl Kind {
     }
 }
 
-/// How many fields the operation's own selection set holds — the aliases of a batched
-/// mutation — read by brace depth, so a nested selection is never counted.
-fn top_level_fields(document: &str) -> usize {
+/// How many fields the operation's own selection set sends — the aliases of a batched
+/// mutation — read by brace depth, so a nested selection is never counted, and leaving out each
+/// field an `@include(if:$name)` whose variable is false, or a `@skip(if:$name)` whose variable
+/// is true, keeps from being sent.
+fn top_level_fields(document: &str, variables: &Value) -> usize {
+    let sent = |name: &str| variables.get(name).and_then(Value::as_bool);
+    let mut excluded = 0;
+    for (directive, keeps) in [("@include(if:$", true), ("@skip(if:$", false)] {
+        for (at, _) in document.match_indices(directive) {
+            let rest = &document[at + directive.len()..];
+            let name: String = rest
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            // Only a directive on a field of the operation's own selection set leaves one out.
+            let depth = document[..at].matches('{').count() - document[..at].matches('}').count();
+            if depth == 1 && sent(&name).is_some_and(|value| value != keeps) {
+                excluded += 1;
+            }
+        }
+    }
+    selected_fields(document).saturating_sub(excluded)
+}
+
+/// Every field of the operation's own selection set, sent or not.
+fn selected_fields(document: &str) -> usize {
     let Some(open) = document.find('{') else {
         return 0;
     };

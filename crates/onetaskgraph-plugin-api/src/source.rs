@@ -1147,6 +1147,88 @@ pub trait TaskSource: Send + Sync {
         Ok(())
     }
 
+    /// Ask, together, which items were copied from each of `origins` — the qualified ids a copy
+    /// is about to look for at this destination by the `onetaskgraph.origin` each item records
+    /// — and hold each answer
+    /// for this command, so that the next query for the items copied from one of them (a
+    /// [`TaskQuery::origin`] task query, [`query_projects_by_origin`](Self::query_projects_by_origin)
+    /// or [`query_documents_by_origin`](Self::query_documents_by_origin)) is answered from it,
+    /// once, instead of being sent on its own. A source may carry in the same read whatever its
+    /// creating an item would read first, since a copy finding nothing creates.
+    ///
+    /// What is held is exactly what those queries would have answered, and only until the next
+    /// write or [`end_command`](Self::end_command). Defaulted to doing nothing, so each query is
+    /// sent as it always was.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`SourceError`] when the read could not be made. Nothing is then held, and each
+    /// query answers as it would have.
+    async fn read_ahead_origins_for_copy(&self, origins: &[String]) -> Result<(), SourceError> {
+        let _ = origins;
+        Ok(())
+    }
+
+    /// How many tasks this source creates in one [`write_tasks`](Self::write_tasks): more than
+    /// one only for a source that creates several in one request.
+    ///
+    /// A copy hands such a source the tasks it creates together, and names each one's edges to
+    /// the others in a write after they all exist. Defaulted to one, which has a copy write every
+    /// task on its own, exactly as before.
+    fn create_batch_limit(&self) -> usize {
+        1
+    }
+
+    /// Create every task of `writes` — each [`ItemWrite::target`] `None` — answering with the
+    /// native ids they were created under, in order.
+    ///
+    /// All of them or none: a source that cannot create every one takes back each it did create
+    /// before refusing, on the terms §4.9 of the protocol puts on [`write_task`](Self::write_task).
+    /// Defaulted to creating them one at a time through [`write_task`](Self::write_task), taking
+    /// back those created when a later one is refused.
+    ///
+    /// # Errors
+    ///
+    /// Whatever [`write_task`](Self::write_task) of one of them refuses with.
+    async fn write_tasks(&self, writes: &[ItemWrite<Task>]) -> Result<Vec<NativeId>, SourceError> {
+        let mut created = Vec::with_capacity(writes.len());
+        for write in writes {
+            match self.write_task(write).await {
+                Ok(id) => created.push(id),
+                Err(error) => {
+                    for id in &created {
+                        let _ = self.delete_task(id).await;
+                    }
+                    return Err(error);
+                }
+            }
+        }
+        Ok(created)
+    }
+
+    /// From here until [`finish_writes`](Self::finish_writes), a source may hold back the part of
+    /// each write that can land later — a created item's fields and edges — and send it together
+    /// with the others' when that is called.
+    ///
+    /// A caller asks for this only when it will call `finish_writes` before it reads what it
+    /// wrote from anywhere but this source, or reports it written. Defaulted to holding nothing
+    /// back, so every write lands whole as it is made.
+    fn begin_deferred_writes(&self) {}
+
+    /// Send whatever this source has held back since [`begin_deferred_writes`](Self::begin_deferred_writes),
+    /// and hold nothing back after it.
+    ///
+    /// All or nothing for the items it created: a source that cannot finish them takes them back
+    /// before refusing, so a caller undoing its writes finds them gone. Defaulted to doing
+    /// nothing, since nothing was held.
+    ///
+    /// # Errors
+    ///
+    /// Whatever sending what was held back was refused with.
+    async fn finish_writes(&self) -> Result<(), SourceError> {
+        Ok(())
+    }
+
     /// Add one comment to `task`, answering with the comment as the source now holds it, or
     /// `None` when this source holds no such task.
     ///

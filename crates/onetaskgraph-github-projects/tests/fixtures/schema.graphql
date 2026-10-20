@@ -51,10 +51,18 @@
 # `CreateIssueInput.projectV2Ids: [ID!]` — "An array of Node IDs for Projects V2 associated with
 # this issue", `@possibleTypes(concreteTypes: ["ProjectV2"])` — was read from GitHub.com's own
 # published schema artifact <https://docs.github.com/public/fpt/schema.docs.graphql> on
-# 2026-10-01, and is not carried below because this plugin does not send it: put to a real
-# board the same day, a create naming the board there was answered with no item in
-# `Issue.projectItems`, and the `addProjectV2ItemById` that then had to follow was refused
-# "Content already exists in this project". A create files its issue with that mutation alone.
+# 2026-10-01 and again on 2026-10-20. Put to a real board on 2026-10-01, a create naming the
+# board was answered with no item in `Issue.projectItems`, and the `addProjectV2ItemById` that
+# then had to follow was refused "Content already exists in this project". The timing spike of
+# `board-copy-speed-2026-10-18` (report `board-copy-speed-2026-10-18-spike-copy-timing-report`,
+# its `probes` scenario) found why: GitHub files the issue on the board *after* answering the
+# create, and a read of the issue's `projectItems` three seconds later found it there. A copy
+# therefore files a created issue by this input and reads its board item afterwards, and never
+# adds it again. `parentIssueId` below was put to the same probe and answered with the parent.
+#
+# `Repository.databaseId: Int` — "Identifies the primary key from the database." — was read from
+# the same artifact on 2026-10-20: the numeric id an image upload names, read beside the node id
+# a create needs so a copy carrying an image sends no `GET /repos/{owner}/{repo}`.
 #
 # `AddCommentInput.subjectId` is declared there as `ID!` with
 # `@possibleTypes(concreteTypes: ["Issue", "PullRequest"], abstractType: "IssueOrPullRequest")`
@@ -154,6 +162,7 @@ input CreateIssueInput {
   body: String
   labelIds: [ID!]
   parentIssueId: ID
+  projectV2Ids: [ID!]
 }
 input AddProjectV2ItemByIdInput {
   projectId: ID!
@@ -464,6 +473,7 @@ type PullRequest implements Node {
 }
 type Repository implements Node {
   id: ID!
+  databaseId: Int
   nameWithOwner: String!
   "Returns a single issue from the current repository by number."
   issue(number: Int!): Issue

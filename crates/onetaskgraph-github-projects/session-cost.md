@@ -676,7 +676,7 @@ node count, **not points**:
 |                    | (h) found by searching | (g) found by the link |
 | ------------------ | ---------------------: | --------------------: |
 | **requests**       |                      4 |                     3 |
-| **node count**     |                   2286 |                   912 |
+| **node count**     |                  10571 |                   912 |
 
 (h) asks the board once for the item whose origin is the task and once for the item whose
 origin is the project the task is filed under (`looking up the items copied from one origin`,

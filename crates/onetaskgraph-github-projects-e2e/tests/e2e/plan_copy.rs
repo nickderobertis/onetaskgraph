@@ -49,10 +49,15 @@ const EDGES: [(usize, usize); 10] = [
     (8, 2),
 ];
 
-/// The board text fields the plan's records carry values of, each projected from the caller
-/// metadata key beside it: two on the project and on every task, the first alone on the
-/// document, as the workload states.
-const FIELDS: [(&str, &str); 2] = [("Area", "plan.area"), ("Owner", "plan.owner")];
+/// The caller metadata keys the plan's records carry, two on the project and on every task and
+/// the first alone on the document, each in its record's metadata slot.
+///
+/// The board projects none of them onto a text field. The workload's 19 field values are what
+/// the timing spike's copy wrote, on a board configured with no `metadata_fields`: the `Status`
+/// of the project and its eight tasks and the origin field of all ten records. A projection
+/// would add a write per value on top of those, which is a cost of configuring one rather than
+/// of copying a plan, and `metadata_fields.rs` is where projecting a key onto a field is proven.
+const FIELDS: [&str; 2] = ["plan.area", "plan.owner"];
 
 /// The PNG the document references, the spike's 104,072 bytes.
 const PNG_BYTES: usize = 104_072;
@@ -201,15 +206,6 @@ impl Plan {
         board.measure_latency();
         config["endpoint"] = json!(board.endpoint);
         config["pacing"] = json!({});
-        config["metadata_fields"] = json!(
-            FIELDS
-                .iter()
-                .map(|(field, key)| json!({"field": field, "key": key}))
-                .collect::<Vec<_>>()
-        );
-        for (field, _) in FIELDS {
-            github.with_text_field(field);
-        }
         let root = sandbox.subdirectory("notes");
         for directory in ["projects", "tasks", "documents/D.assets"] {
             std::fs::create_dir_all(root.join(directory)).unwrap();
@@ -246,10 +242,10 @@ impl Plan {
             .to_owned()
     }
 
-    /// The front matter giving record `id` its generated board field values.
+    /// The front matter giving record `id` its generated metadata values.
     fn field_values(&self, id: &str) -> String {
         let mut metadata = String::from("metadata:\n");
-        for ((_, key), value) in FIELDS.iter().zip(&self.generated.fields[id]) {
+        for (key, value) in FIELDS.iter().zip(&self.generated.fields[id]) {
             metadata.push_str(&format!("  {key}: {value}\n"));
         }
         metadata
@@ -439,15 +435,16 @@ fn split_slot(body: &str) -> (&str, Value) {
 /// Every id the board holds a counterpart of the plan under, by the plan's own ids.
 pub(super) type Counterparts = BTreeMap<String, String>;
 
-/// Hold the board item `native` to carrying the board field values generated for `source` in
-/// its text fields, and nothing in a field the source gives it no value of.
+/// Hold the board item `native` to carrying the metadata values generated for `source` in its
+/// metadata slot, and no key the source gives it no value of.
 fn carries_fields(plan: &Plan, native: &str, source: &str) {
     let values = &plan.generated.fields[source];
-    for (index, (field, _)) in FIELDS.iter().enumerate() {
+    let (_, slot) = split_slot(plan.github.body(native).as_str().unwrap());
+    for (index, key) in FIELDS.iter().enumerate() {
         assert_eq!(
-            plan.github.text_of(native, field),
+            slot.get(*key).and_then(Value::as_str).map(str::to_owned),
             values.get(index).cloned(),
-            "{source}'s {field} field on the board"
+            "{source}'s {key} in its metadata slot"
         );
     }
 }
@@ -651,13 +648,20 @@ fn a_task_taken_out_of_the_plan_is_reported_orphaned_and_left_as_it_was() {
 
 #[test]
 fn the_board_holds_each_request_for_the_spikes_mean_latency_of_its_kind() {
-    // A first copy of the plan sends item reads, single and aliased mutations, an upload, its
-    // repository read and its verification; a board listing sends board and search pages; and
-    // a detail read of several tasks batches them. Every request of the three is held for
+    // A first copy of the plan sends item reads, batched reads, single and aliased mutations,
+    // an upload and its verification; a re-copy of the document after its image changed sends
+    // the repository read an update's upload needs; a board listing sends board and search
+    // pages; and a detail read of several tasks batches them. Every request of them is held for
     // exactly its kind's mean, on the virtual clock.
     let plan = Plan::new(30, Vec::new());
     let before = plan.board.calls().len();
     let (project, _, _) = plan.copy();
+    std::fs::write(
+        plan.root.join("documents/D.assets/diagram.png"),
+        images::png(SEED + 1, PNG_BYTES),
+    )
+    .unwrap();
+    plan.measured(&["document", "copy", "notes:D", "--to", "board", "--json"]);
     let tasks: Vec<String> = (1..=3)
         .map(|n| format!("board:{}", landed(&project, &format!("notes:T-{n}"))))
         .collect();
@@ -954,8 +958,8 @@ fn a_recopy_whose_pinning_listings_are_refused_reads_what_they_would_have_carrie
     // Both listings that would pin every member's token and carry the plan — the project's
     // tasks, then its documents, which are sub-issues of it too — are refused once each:
     // nothing is pinned or carried, so every counterpart is read as if there were no cache —
-    // in one batch — and the copy lands the plan exactly as it would have. The orphan check's
-    // own read of the members is made after it, and answered.
+    // in one batch — and the copy lands the plan exactly as it would have. That batch names the
+    // project's own sub-issues too, so the orphan check is answered by it and lists nothing.
     let plan = Plan::configured(SMALL, Vec::new(), Some(json!({"enabled": true})));
     let (project, document, _) = plan.copy();
     let at = counterparts(&project, &document);
@@ -981,8 +985,9 @@ fn a_recopy_whose_pinning_listings_are_refused_reads_what_they_would_have_carrie
     );
     assert_eq!(
         tally(&calls)["reading a project's tasks"],
-        3,
-        "the two refused pinning listings, then the orphan check's own: {:?}",
+        2,
+        "the two refused pinning listings — the orphan check is answered by the batched read, \
+         which named the project's sub-issues: {:?}",
         tally(&calls)
     );
     holds_the_plan(&plan, &at, None);

@@ -414,10 +414,21 @@ fn asks_for_the_origin_and_never_walks_the_board(
     items: &[&str],
     served: &[(String, Value)],
 ) {
+    // Asked on its own, or among the origins a copy asks about together before it aims anything.
     let lookups = served
         .iter()
-        .filter(|(document, _)| document == onetaskgraph_github_projects::graphql::ORIGIN_LOOKUP)
-        .map(|(_, variables)| variables["filter"].clone())
+        .flat_map(|(document, variables)| {
+            if document == onetaskgraph_github_projects::graphql::ORIGIN_LOOKUP {
+                vec![variables["filter"].clone()]
+            } else if document == onetaskgraph_github_projects::graphql::ORIGIN_LOOKUPS {
+                (0..onetaskgraph_github_projects::ORIGIN_BATCH)
+                    .filter(|slot| variables[format!("ask{slot}")] == true)
+                    .map(|slot| variables[format!("filter{slot}")].clone())
+                    .collect()
+            } else {
+                Vec::new()
+            }
+        })
         .collect::<Vec<_>>();
     assert_eq!(
         lookups,
@@ -988,18 +999,20 @@ fn follow_up_writes_resolve_each_item_once_and_batch_the_copy_fields() {
         "\"grace\"",
         "--json",
     ]);
-    for (verb, sent, expected) in [
-        ("new copy", &new_calls, 5),
-        ("copy --create", &create_calls, 4),
-        ("bound copy", &bound_calls, 3),
-        ("comment", &comment_calls, 2),
-        ("recount", &recount_calls, 1),
-        ("detail", &detail_calls, 1),
-        ("status", &status_calls, 2),
-        ("priority", &priority_calls, 2),
-        ("content", &content_calls, 2),
-        ("metadata", &metadata_calls, 2),
-        ("update", &update_calls, 3),
+    // Requests, then points where the two differ: a new copy's one read of its origin and of
+    // what creating reads costs two points, where each of the two reads it replaced cost one.
+    for (verb, sent, expected, priced) in [
+        ("new copy", &new_calls, 4, 5),
+        ("copy --create", &create_calls, 4, 4),
+        ("bound copy", &bound_calls, 3, 3),
+        ("comment", &comment_calls, 2, 2),
+        ("recount", &recount_calls, 1, 1),
+        ("detail", &detail_calls, 1, 1),
+        ("status", &status_calls, 2, 2),
+        ("priority", &priority_calls, 2, 2),
+        ("content", &content_calls, 2, 2),
+        ("metadata", &metadata_calls, 2, 2),
+        ("update", &update_calls, 3, 3),
     ] {
         let mut reads = std::collections::BTreeMap::<String, usize>::new();
         for (_, variables) in sent
@@ -1018,35 +1031,39 @@ fn follow_up_writes_resolve_each_item_once_and_batch_the_copy_fields() {
             })
             .sum();
         assert_eq!(sent.len(), expected, "{verb}: {sent:#?}");
-        assert_eq!(points, expected as u64, "{verb}");
+        assert_eq!(points, priced, "{verb}");
+        let cell = if priced == expected as u64 {
+            expected.to_string()
+        } else {
+            format!("{expected} / {priced}")
+        };
         assert!(
             include_str!("../../../onetaskgraph-github-projects/src/lib.rs")
-                .contains(&format!("//! | {verb} | {expected} |")),
+                .contains(&format!("//! | {verb} | {cell} |")),
             "cost table: {verb}"
         );
         if PROTOCOL_ROWS.contains(&verb) {
             assert!(
-                PROTOCOL.contains(&format!("\n| {verb} | {expected} |")),
+                PROTOCOL.contains(&format!("\n| {verb} | {cell} |")),
                 "docs/plugin-protocol.md cost table: {verb}"
             );
         }
         println!("{verb}: {} requests, {points} declared points", sent.len());
     }
-    // The board's fields and the repository's id in one read — so no BOARD_FIELDS or
-    // REPOSITORY — then the issue created on no board and filed with ADD_TO_BOARD, because
-    // GitHub answers a create naming the board in `projectV2Ids` with no item and refuses the
-    // filing that then follows; `--create` is the same without the origin lookup.
+    // The origin, the board's fields and the repository's id in one read — so no
+    // BOARD_FIELDS or REPOSITORY — then the issue created filed on the board, its board item
+    // read once GitHub has added it, and its fields written; `--create` reads the board's fields
+    // and the repository without the origin.
     fn documents(sent: &[(String, Value)]) -> Vec<&str> {
         sent.iter().map(|(query, _)| query.as_str()).collect()
     }
     assert_eq!(
         documents(&new_calls),
         [
-            graphql::ORIGIN_LOOKUP,
-            graphql::CREATION_CONTEXT,
+            graphql::ORIGIN_LOOKUPS,
             graphql::CREATE_ISSUE,
-            graphql::ADD_TO_BOARD,
-            graphql::UPDATE_FIELDS
+            graphql::CREATED_BOARD_ITEMS,
+            graphql::WRITE_FIELD_VALUES
         ]
     );
     assert_eq!(
@@ -1054,8 +1071,8 @@ fn follow_up_writes_resolve_each_item_once_and_batch_the_copy_fields() {
         [
             graphql::CREATION_CONTEXT,
             graphql::CREATE_ISSUE,
-            graphql::ADD_TO_BOARD,
-            graphql::UPDATE_FIELDS
+            graphql::CREATED_BOARD_ITEMS,
+            graphql::WRITE_FIELD_VALUES
         ]
     );
     for sent in [&new_calls, &create_calls] {
@@ -1063,7 +1080,10 @@ fn follow_up_writes_resolve_each_item_once_and_batch_the_copy_fields() {
             .iter()
             .find(|(query, _)| query == graphql::CREATE_ISSUE)
             .unwrap();
-        assert_eq!(created["input"].get("projectV2Ids"), None);
+        // Filed on the board by its create, which GitHub adds after answering: the board item
+        // is read afterwards, and never added a second time.
+        assert_eq!(created["input"]["projectV2Ids"], json!(["PVT-board"]));
+        assert!(!sent.iter().any(|(query, _)| query == graphql::ADD_TO_BOARD));
     }
     assert_eq!(
         bound_calls
@@ -1181,6 +1201,7 @@ fn a_create_copy_sends_no_origin_lookup_and_refuses_what_it_cannot_assert() {
     assert!(
         !sent.iter().any(|(document, _)| [
             graphql::ORIGIN_LOOKUP,
+            graphql::ORIGIN_LOOKUPS,
             graphql::SEARCH_ISSUES,
             graphql::BOARD
         ]
@@ -1188,12 +1209,20 @@ fn a_create_copy_sends_no_origin_lookup_and_refuses_what_it_cannot_assert() {
         "--create looks for nothing: {sent:#?}"
     );
     // The second task's dependency names the first by the id this same command created it
-    // under, read from this process's own record of what it wrote.
+    // under, read from this process's own record of what it wrote — the two created together,
+    // and the edge sent once both exist.
     let first = native(&landed[0].1);
     assert!(
-        sent.iter()
-            .any(|(document, variables)| document == graphql::ADD_BLOCKED_BY
-                && variables["input"]["blockingIssueId"] == first.as_str()),
+        sent.iter().any(|(document, variables)| {
+            (document == graphql::ADD_BLOCKED_BY
+                && variables["input"]["blockingIssueId"] == first.as_str())
+                || (document == graphql::ADD_BLOCKED_BYS
+                    && (0..onetaskgraph_github_projects::MUTATION_BATCH).any(|slot| {
+                        variables[format!("send{slot}")] == true
+                            && variables[format!("block{slot}")]["blockingIssueId"]
+                                == first.as_str()
+                    }))
+        }),
         "{sent:#?}"
     );
     assert!(

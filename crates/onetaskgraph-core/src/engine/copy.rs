@@ -919,6 +919,11 @@ enum Stamping {
     /// than the task it is on, which a later copy reads as a reason to compare, never to skip,
     /// so the task is never served from a skip it should not have been.
     WithCarrier,
+    /// Never: a task created together with others, whose edges to them could not be named when
+    /// its content was sent, so no digest of what it holds could be true. It lands with no
+    /// record, which a later copy reads as a reason to compare rather than to skip, and the next
+    /// copy that writes its content records it.
+    Never,
 }
 
 impl Stamping {
@@ -937,6 +942,7 @@ impl Stamping {
     fn stamps(self, task: &Task, prior: Option<&Prior>) -> bool {
         match self {
             Self::Always => true,
+            Self::Never => false,
             Self::WithCarrier => match prior.map(|prior| &prior.item) {
                 Some(Item::Task(held)) => {
                     held.content != task.content
@@ -1706,6 +1712,7 @@ impl Engine {
         }
         let before = readings(&metered).await;
         let mut journal = Journal::default();
+        let holding = self.hold_back(request);
         match self.copy_all(request, &mut journal).await {
             Ok((mut report, deliverers)) => {
                 // After the whole copy is complete and outside the journal: what the relation
@@ -1726,8 +1733,65 @@ impl Engine {
                 report.spent = spent_between(&before, &readings(&metered).await);
                 Ok(report)
             }
-            Err(error) => Err(self.undo(journal, error).await),
+            Err(error) => {
+                let error = self.undo(journal, error).await;
+                // Nothing a copy that failed created is left to send — its undo took each one
+                // back — so this ends the holding back without writing anything.
+                for destination in &holding {
+                    let _ = destination.source().finish_writes().await;
+                }
+                Err(error)
+            }
         }
+    }
+
+    /// Every destination `request` can write, each told it may hold back the parts of the
+    /// items it creates until [`Self::finished_writes`] — so a plan copy's field values and
+    /// edges go to a board together rather than one item at a time.
+    ///
+    /// A dry run writes nothing, and a copy expecting a version of its target records each write
+    /// whole for the store's cache, so neither holds anything back.
+    fn hold_back(&self, request: &CopyRequest) -> Vec<&ResolvedSource> {
+        if request.dry_run || self.expects_copy() {
+            return Vec::new();
+        }
+        let mut holding: Vec<&ResolvedSource> = Vec::new();
+        for name in std::iter::once(request.destination.clone())
+            .chain(self.routes.reachable(&request.destination))
+        {
+            if let Ok(destination) = self.writable(&name)
+                && !holding.iter().any(|held| held.name() == destination.name())
+            {
+                destination.source().begin_deferred_writes();
+                holding.push(destination);
+            }
+        }
+        holding
+    }
+
+    /// Have every destination `request` can write send what it held back, before anything is
+    /// linked to or reported as landing there.
+    async fn finished_writes(&self, request: &CopyRequest) -> Result<(), EngineError> {
+        if request.dry_run || self.expects_copy() {
+            return Ok(());
+        }
+        let mut finished: Vec<SourceName> = Vec::new();
+        for name in std::iter::once(request.destination.clone())
+            .chain(self.routes.reachable(&request.destination))
+        {
+            if finished.contains(&name) {
+                continue;
+            }
+            if let Ok(destination) = self.writable(&name) {
+                destination
+                    .source()
+                    .finish_writes()
+                    .await
+                    .map_err(|error| refused(destination, error))?;
+            }
+            finished.push(name);
+        }
+        Ok(())
     }
 
     /// The copy itself, with everything it writes recorded so a failure can be undone.
@@ -1892,6 +1956,9 @@ impl Engine {
             self.record_dependents(recordings, journal).await?;
             self.record_members(homes, journal).await?;
         }
+        // Everything held back lands before anything is linked to it: a copy that cannot finish
+        // is undone with nothing recorded at its sources.
+        self.finished_writes(request).await?;
         let mut items = items;
         self.link(linking, &mut items, request.no_link, journal)
             .await?;
@@ -3633,6 +3700,15 @@ impl Engine {
             note_private(running, item);
         }
 
+        // Tasks this call creates at a destination that creates several in one request are
+        // created there together, before anything of this call lands.
+        let created = if request.dry_run || self.expects_copy() {
+            BTreeMap::new()
+        } else {
+            self.create_together(&planned, &filed, running, journal)
+                .await?
+        };
+
         let mut outcomes = Vec::new();
         let mut unresolved = Vec::new();
         let mut priors = Vec::new();
@@ -3670,6 +3746,7 @@ impl Engine {
                         edges: &edges,
                         delivers: &resolvable_delivers,
                     },
+                    created.get(&index).cloned(),
                     journal,
                 )
                 .await?;
@@ -3765,6 +3842,130 @@ impl Engine {
             outcomes.insert(index.min(outcomes.len()), outcome);
         }
         Ok(outcomes)
+    }
+
+    /// Create, together, the tasks of `planned` that land as new items at a destination creating
+    /// several in one request — its [`create_batch_limit`](onetaskgraph_plugin_api::TaskSource::create_batch_limit)
+    /// over one — answering each one's index in `planned` with the id it was created under.
+    ///
+    /// Each lands as `write` would land it, with the edges and the tasks it delivers already
+    /// nameable and without a record of the copy, since its edges to the others cannot be named
+    /// until they exist; every one is journalled as created, and every id is a counterpart from
+    /// here on, so the write each one is landed with next names those edges. A task carrying
+    /// assets, or skipped, is landed on its own as before.
+    async fn create_together(
+        &self,
+        planned: &[Planned],
+        filed: &[Option<NativeId>],
+        running: &mut Running,
+        journal: &mut Journal,
+    ) -> Result<BTreeMap<usize, NativeId>, EngineError> {
+        let mut together: Vec<(SourceName, Vec<usize>)> = Vec::new();
+        for (index, item) in planned.iter().enumerate() {
+            if !(matches!(item.item, Item::Task(_))
+                && matches!(item.target, Target::Create)
+                && !item.skipped
+                && item.assets.is_empty())
+            {
+                continue;
+            }
+            match together.iter_mut().find(|(name, _)| name == &item.to) {
+                Some((_, indices)) => indices.push(index),
+                None => together.push((item.to.clone(), vec![index])),
+            }
+        }
+        let mut created = BTreeMap::new();
+        for (name, indices) in together {
+            let destination = self.writable(&name)?;
+            let limit = destination.source().create_batch_limit();
+            if limit < 2 || indices.len() < 2 {
+                continue;
+            }
+            for chunk in indices.chunks(limit) {
+                let mut writes = Vec::with_capacity(chunk.len());
+                for index in chunk {
+                    let item = &planned[*index];
+                    let edges = resolved(&self.shown_edges(
+                        &item.to,
+                        mapped_edges(
+                            &item.edges,
+                            &item.source.source,
+                            &item.to,
+                            &running.resolvable,
+                            &running.counterparts,
+                        ),
+                        &running.private,
+                    ));
+                    let delivers = resolved_entries(&self.shown_delivers(
+                        &item.to,
+                        delivers_of(item, &item.to, &running.resolvable, &running.counterparts),
+                        &running.private,
+                    ));
+                    let project = filed[*index].clone();
+                    let landing = as_written(
+                        destination,
+                        outgoing(
+                            item,
+                            created_id(&item.item, project.as_ref()),
+                            project.clone(),
+                            &recorded(item, None),
+                            &delivers,
+                            None,
+                        ),
+                    );
+                    self.at_write(
+                        destination,
+                        &item.source.to_string(),
+                        &WriteTarget::New {
+                            repositories: repositories_of(&item.item),
+                            project: project.as_ref(),
+                        },
+                    )
+                    .await?;
+                    check_status(destination, &landing, None).await?;
+                    let Item::Task(task) = landing else {
+                        unreachable!("only tasks are created together");
+                    };
+                    writes.push(ItemWrite {
+                        target: None,
+                        item: *task,
+                        depends_on: edges,
+                    });
+                }
+                let ids = destination
+                    .source()
+                    .write_tasks(&writes)
+                    .await
+                    .map_err(|error| create_refused(destination, Creating::Task, error))?;
+                if ids.len() != chunk.len() {
+                    return Err(create_refused(
+                        destination,
+                        Creating::Task,
+                        SourceError::Malformed {
+                            message: format!(
+                                "the source answered {} ids for the {} tasks it was asked to \
+                                 create together",
+                                ids.len(),
+                                chunk.len()
+                            ),
+                        },
+                    ));
+                }
+                for (index, id) in chunk.iter().zip(ids) {
+                    journal.record(Undo::Created {
+                        at: destination.name().clone(),
+                        kind: Level::Task,
+                        id: id.clone(),
+                    });
+                    running.counterparts.insert(
+                        planned[*index].source.to_string(),
+                        GlobalId::new(destination.name().clone(), id.clone()),
+                    );
+                    created.insert(*index, id);
+                }
+            }
+        }
+        Ok(created)
     }
 
     /// Why the destination cannot represent `item` — a task whose write it refuses at
@@ -4345,6 +4546,7 @@ impl Engine {
         }
         let reachable = self.routes.reachable(&request.destination);
         let mut wanted: Vec<(SourceName, Vec<NativeId>)> = Vec::new();
+        let mut origins: Vec<(SourceName, Vec<String>)> = Vec::new();
         let mut want = |there: &SourceName, native: NativeId| match wanted
             .iter_mut()
             .find(|(name, _)| name == there)
@@ -4380,6 +4582,19 @@ impl Engine {
                         origin_of(metadata).filter(|origin| &origin.source == there)
                     {
                         want(there, origin.native);
+                    }
+                }
+            }
+            // An item naming nothing at a destination is looked for there by its own origin, so
+            // every such question is asked together, before the first of them would be.
+            for there in &reachable {
+                if link_of(metadata, there).is_none()
+                    && origin_of(metadata).is_none_or(|origin| &origin.source != there)
+                {
+                    let asked = read.source.to_string();
+                    match origins.iter_mut().find(|(name, _)| name == there) {
+                        Some((_, asked_there)) => asked_there.push(asked),
+                        None => origins.push((there.clone(), vec![asked])),
                     }
                 }
             }
@@ -4447,6 +4662,12 @@ impl Engine {
                 let pinned = named == ProjectNamed::FiledUnder || covered;
                 self.pin_members(destination, &project, pinned.then_some(&origin))
                     .await;
+            }
+        }
+        for (name, asked) in origins {
+            if let Ok(there) = self.writable(&name) {
+                // Nothing is decided by it: each lookup it would have answered is made as before.
+                let _ = there.source().read_ahead_origins_for_copy(&asked).await;
             }
         }
         // One counterpart of a task or a document copied on its own is read by its own read,
@@ -5038,6 +5259,8 @@ impl Engine {
     /// Answers with what the destination held there beforehand as well, which is what
     /// makes an item written twice restorable to what it was rather than to what this
     /// copy's first pass left.
+    // llmlint: ignore[suppressions_justified] `created` is the one argument this change adds: the id a task created together with others was created under, which only `copy_items` holds and which decides how this one write records itself. The rest are what `land` always took, each a distinct decision of the copy; grouping them would only move the list to a constructor, as at `write`.
+    #[allow(clippy::too_many_arguments)]
     async fn land(
         &self,
         destination: &ResolvedSource,
@@ -5045,6 +5268,7 @@ impl Engine {
         item: &Planned,
         project: Option<NativeId>,
         pointing: Pointing<'_>,
+        created: Option<NativeId>,
         journal: &mut Journal,
     ) -> Result<(CopyOutcome, Option<Prior>), EngineError> {
         let Pointing { edges, delivers } = pointing;
@@ -5138,16 +5362,22 @@ impl Engine {
             // Null only for a create here: nothing was created, so there is no id to report.
             return Ok((outcome(reached(target.map(qualified), changed)), prior));
         }
+        // A task created together with others is written once more, as the item its create
+        // made, now that it can name its edges to them: it was journalled when it was created.
+        let stamping = match created {
+            Some(_) => Stamping::Never,
+            None => Stamping::of(request, rerecord),
+        };
         let written = qualified(
             self.write(
                 destination,
                 item,
-                target,
+                created.or(target),
                 project,
                 &edges,
                 delivers,
                 prior.clone(),
-                Stamping::of(request, rerecord),
+                stamping,
                 journal,
             )
             .await?,
@@ -5961,19 +6191,23 @@ impl Engine {
             record.stamp(&mut task.metadata);
         }
         // Immediately before anything is sent: a destination declared private is read again
-        // for this write, whatever an earlier write read.
-        self.at_write(
-            destination,
-            &item.source.to_string(),
-            &match &target {
-                Some(id) => WriteTarget::Existing(id),
-                None => WriteTarget::New {
-                    repositories: repositories_of(&item.item),
-                    project: project.as_ref(),
+        // for this write, whatever an earlier write read — except the write that completes a
+        // task created together with others, which is the same write its create was checked
+        // for a moment before, finished once the others it names exist.
+        if stamping != Stamping::Never {
+            self.at_write(
+                destination,
+                &item.source.to_string(),
+                &match &target {
+                    Some(id) => WriteTarget::Existing(id),
+                    None => WriteTarget::New {
+                        repositories: repositories_of(&item.item),
+                        project: project.as_ref(),
+                    },
                 },
-            },
-        )
-        .await?;
+            )
+            .await?;
+        }
         // Asked before the journal records anything or the destination is sent anything: a
         // status the destination has no name for refuses this write while there is nothing to
         // put back, where refused inside the write it would leave the journal restoring an

@@ -1080,6 +1080,32 @@ impl TaskSource for CachedSource {
         self.inner.read_ahead_for_copy(&unserved).await
     }
 
+    async fn read_ahead_origins_for_copy(&self, origins: &[String]) -> Result<(), SourceError> {
+        self.inner.read_ahead_origins_for_copy(origins).await
+    }
+
+    fn create_batch_limit(&self) -> usize {
+        self.inner.create_batch_limit()
+    }
+
+    async fn write_tasks(&self, writes: &[ItemWrite<Task>]) -> Result<Vec<NativeId>, SourceError> {
+        // Every one a create, so nothing of this cache names an item they land on; what they can
+        // change of it is the reverse edges of the tasks they name, as one create's can.
+        self.relating(EdgeKind::TaskReverse, self.inner.write_tasks(writes))
+            .await
+    }
+
+    fn begin_deferred_writes(&self) {
+        self.inner.begin_deferred_writes();
+    }
+
+    async fn finish_writes(&self) -> Result<(), SourceError> {
+        // What was held back includes the edges of the tasks it created, which move the reverse
+        // edges of the tasks they name, exactly as a write landing them whole would.
+        self.relating(EdgeKind::TaskReverse, self.inner.finish_writes())
+            .await
+    }
+
     async fn get_project(&self, id: &NativeId) -> Result<Option<Project>, SourceError> {
         if let Some(project) = self.servable_project(id) {
             return Ok(Some(project));

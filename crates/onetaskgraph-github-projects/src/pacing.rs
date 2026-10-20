@@ -59,6 +59,8 @@ pub(crate) mod cause {
     pub(crate) const PRIMARY_RESET: &str = "primary-reset";
     /// A refusal naming no wait, answered by the doubling schedule.
     pub(crate) const BACKOFF: &str = "backoff";
+    /// A board that had not yet filed an issue created onto it, read again after a wait.
+    pub(crate) const BOARD_FILING: &str = "board-filing";
 }
 
 /// What one request costs against the secondary windows.

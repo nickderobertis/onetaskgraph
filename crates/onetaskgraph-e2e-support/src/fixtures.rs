@@ -3743,6 +3743,129 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
                 .is_some_and(|reads| held.project_visibility_reads > reads);
         return json!({"visibility": {"projectV2": {"public": public}}});
     }
+    // A copy's batched reads and writes: each slot answered exactly as the single document it
+    // aliases, so the board ends exactly as it would after those sent one at a time.
+    {
+        use onetaskgraph_github_projects::graphql as documents;
+        if query == documents::ORIGIN_LOOKUPS {
+            let mut result = serde_json::Map::new();
+            {
+                let held = board.lock().unwrap();
+                assert_eq!(variables["owner"], "fixture-owner");
+                assert_eq!(variables["number"], 7);
+                assert_eq!(variables["repositoryOwner"], "nickderobertis");
+                result.insert(
+                    "boardFields".into(),
+                    json!({"projectV2":{"id":"PVT-board","fields":held.fields()}}),
+                );
+                result.insert(
+                    "repository".into(),
+                    json!({"id":"REPO-1","databaseId":123_456,
+                           "nameWithOwner":"nickderobertis/onetaskgraph"}),
+                );
+            }
+            for slot in 0..onetaskgraph_github_projects::ORIGIN_BATCH {
+                if variables[format!("ask{slot}")] != true {
+                    continue;
+                }
+                let one = json!({"type": variables["type"],
+                    "filter": variables[format!("filter{slot}")],
+                    "search": variables[format!("search{slot}")],
+                    "originFirst": variables["originFirst"],
+                    "itemsAfter": null, "searchAfter": null});
+                let answer = board.lock().unwrap().origin_lookup(&one);
+                result.insert(format!("o{slot}"), answer["originItems"].clone());
+                result.insert(format!("s{slot}"), answer["search"].clone());
+            }
+            return Value::Object(result);
+        }
+        if query == documents::CREATED_BOARD_ITEMS {
+            let held = board.lock().unwrap();
+            let mut result = serde_json::Map::new();
+            for slot in 0..onetaskgraph_github_projects::COPY_DETAIL_BATCH {
+                if variables[format!("read{slot}")] != true {
+                    continue;
+                }
+                let id = &variables[format!("id{slot}")];
+                let answer = match held.items.iter().find(|item| item["id"] == *id) {
+                    Some(item) => json!({"id":id,"projectItems":{"nodes":[{
+                        "id":item["item"],"project":{"id":"PVT-board"},
+                        "status": item["status"].as_str().map(|name| json!({"name":name}))}]}}),
+                    None if held.pending.iter().any(|item| item["id"] == *id) => {
+                        json!({"id":id,"projectItems":{"nodes":[]}})
+                    }
+                    None => Value::Null,
+                };
+                result.insert(format!("i{slot}"), answer);
+            }
+            return Value::Object(result);
+        }
+        let batches = [
+            (
+                documents::CREATE_ISSUES,
+                "create",
+                documents::CREATE_ISSUE,
+                "createIssue",
+            ),
+            (
+                documents::WRITE_FIELD_VALUES,
+                "field",
+                documents::UPDATE_FIELD,
+                "updateProjectV2ItemFieldValue",
+            ),
+            (
+                documents::CLOSE_ISSUES,
+                "close",
+                documents::UPDATE_ISSUE,
+                "updateIssue",
+            ),
+            (
+                documents::ADD_BLOCKED_BYS,
+                "block",
+                documents::ADD_BLOCKED_BY,
+                "addBlockedBy",
+            ),
+        ];
+        if let Some((_, prefix, single, root)) =
+            batches.iter().find(|(batched, ..)| *batched == query)
+        {
+            let mut result = serde_json::Map::new();
+            for slot in 0..onetaskgraph_github_projects::MUTATION_BATCH {
+                if variables[format!("send{slot}")] != true {
+                    continue;
+                }
+                let alias = format!("{prefix}{slot}");
+                let failing = {
+                    let mut held = board.lock().unwrap();
+                    let field = variables[&alias]["fieldId"].as_str();
+                    let by_field = field.is_some() && held.failing_field.as_deref() == field;
+                    let failing = held.failing_alias == Some(alias.as_str()) || by_field;
+                    if by_field {
+                        held.failing_field = None;
+                    }
+                    if failing {
+                        held.failing_alias = None;
+                        held.owed_errors.push(format!(
+                            "Something went wrong while executing your query: {alias} failed"
+                        ));
+                    }
+                    failing
+                };
+                if failing {
+                    result.insert(alias, Value::Null);
+                    continue;
+                }
+                let mut one = json!({"input": variables[&alias]});
+                if *single == documents::UPDATE_FIELD {
+                    one["readPriority"] = json!(false);
+                    one["priorityName"] = json!("Priority");
+                }
+                let answer = github_answer(board, single, &one);
+                result.insert(alias, answer[*root].clone());
+            }
+            return Value::Object(result);
+        }
+    }
     if query == onetaskgraph_github_projects::graphql::UPDATE_FIELDS {
         let mut result = serde_json::Map::new();
         let writes = onetaskgraph_github_projects::FIELD_WRITE_SLOTS.map(|slot| {
@@ -4133,6 +4256,26 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
             }
             answered.insert(format!("i{slot}"), node);
         }
+        // The sub-issues of the issue `$project` names, each its id and title, when asked.
+        if variables["children"] == true {
+            let project = variables["project"].clone();
+            let visible = board.items.len().saturating_sub(board.lagging_reads);
+            let children: Vec<Value> = board.items[..visible]
+                .iter()
+                .filter(|item| item["parent"] == project && !GitHubBoard::is_draft(item))
+                .map(|item| json!({"id": item["id"], "title": item["title"]}))
+                .collect();
+            let held = board.items.iter().any(|item| item["id"] == project);
+            answered.insert(
+                "children".into(),
+                if held {
+                    json!({"id": project, "subIssues": {"nodes": children,
+                        "pageInfo": {"hasNextPage": false}}})
+                } else {
+                    Value::Null
+                },
+            );
+        }
         return Value::Object(answered);
     }
     // One item by its own id with a page of its comments, in one request.
@@ -4162,17 +4305,33 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         board.created += 1;
         let id = format!("ISSUE-{}", board.created);
         let at = board.tick();
-        let created = json!({"item":format!("ITEM-{id}"),"id":id,"type":"Issue",
+        let mut created = json!({"item":format!("ITEM-{id}"),"id":id,"type":"Issue",
             "title":input["title"],"body":input["body"],"state":"OPEN","reason":null,
             "parent":Value::Null,"repo":"nickderobertis/onetaskgraph","status":"Todo",
             "origin":"","labels":[],"updatedAt":at});
-        // A real board answered a create naming it in `projectV2Ids` with no item, filed the
-        // issue after, and refused the filing that then had to follow — so no create names it.
-        assert!(
-            input.get("projectV2Ids").is_none(),
-            "a create named the board in projectV2Ids: {input}"
-        );
-        board.pending.push(created);
+        // `parentIssueId` files the new issue under its parent, as `addSubIssue` would.
+        if let Some(parent) = input.get("parentIssueId").and_then(Value::as_str) {
+            created["parent"] = json!(parent);
+            board.record_relationship_event(
+                (id.as_str(), parent),
+                TimelineEvent::membership(RelationshipChange::made_by(true)),
+            );
+        }
+        // `projectV2Ids` naming this board files the issue on it: GitHub adds the board item
+        // after answering the create, so the answer names none, and a later read finds it —
+        // filed with the `Status` the board's workflow gives a new item.
+        match input.get("projectV2Ids") {
+            Some(boards) => {
+                assert_eq!(
+                    boards,
+                    &json!(["PVT-board"]),
+                    "a create naming another board"
+                );
+                created["itemUpdatedAt"] = json!(at);
+                board.items.push(created);
+            }
+            None => board.pending.push(created),
+        }
         // GitHub answers the creating mutation with the issue's own web address and its
         // number, which is the only place a run learns where an item it just created is,
         // and what that item's short handle is, before this board's read catches up.

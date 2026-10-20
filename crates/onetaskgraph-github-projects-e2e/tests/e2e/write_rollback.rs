@@ -5,7 +5,9 @@
 //! the loopback board refuse one write of a create or a copy after the item is placed — the
 //! batched field write whole, its `Status` alias, or the projected `Host` alias after `Status`
 //! landed — and holds the board to holding no trace of the attempt: no item for it, no issue it
-//! opened left open, and the failure reported. And a `done` or `cancelled` write whose option
+//! opened left open, and the failure reported. A copy sends those writes once every item it
+//! creates exists, in the aliased requests it gathers them into, and a refusal there takes back
+//! every issue it created, as one inside a single item's own writes always has. And a `done` or `cancelled` write whose option
 //! selection is refused leaves the issue open, because the option is written before the close.
 
 use std::path::PathBuf;
@@ -30,7 +32,8 @@ enum Fault {
 impl Fault {
     fn arm(self, board: &GitHubBoardFields) {
         match self {
-            Self::FieldsWhole => board.refuse_once("updateProjectV2ItemFieldValue(input:$input)"),
+            // Whichever document carries them: a create's own field write, or a copy's batch.
+            Self::FieldsWhole => board.refuse_once("updateProjectV2ItemFieldValue(input:$"),
             Self::Status => board.fail_field_write("FIELD-status"),
             Self::Host => board.fail_field_write("FIELD-text-Host"),
         }
@@ -50,9 +53,11 @@ impl Setup {
         let sandbox = Sandbox::new();
         let root = sandbox.subdirectory("notes");
         std::fs::create_dir_all(root.join("tasks")).expect("the task folder");
+        // In progress rather than to do: the board files a new item at `Todo` itself, so a copy
+        // of one at to do has no `Status` to write, and this one's is a write to refuse.
         std::fs::write(
             root.join("tasks/T-1.md"),
-            "---\ntitle: Disk filling on the build host\nstatus: todo\nmetadata: \
+            "---\ntitle: Disk filling on the build host\nstatus: in-progress\nmetadata: \
              {orchestrator.follow-up: {run: r-1, host: build-7}}\n---\nSeen twice tonight.\n",
         )
         .expect("the follow-up");
