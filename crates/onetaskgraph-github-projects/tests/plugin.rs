@@ -10911,10 +10911,12 @@ async fn the_shipped_budget_bounds_a_wait_no_configuration_asked_for() {
 }
 
 #[tokio::test]
-async fn content_creating_mutations_leave_this_source_no_faster_than_the_shipped_rate() {
-    // Driven at the *shipped* default rather than a configured one, because the shipped
-    // default is what a board on github.com meets. A source with no pacing at all sends
-    // these three mutations inside a millisecond of each other, so every gap below fails.
+async fn at_the_shipped_defaults_a_writes_mutations_go_out_as_fast_as_they_are_answered() {
+    // The shipped default paces by GitHub's windows rather than by a fixed spacing: a write's
+    // few mutations are nowhere near the minute's 80 creations, so each goes out the moment
+    // the one before it is answered. Spacing them `MIN_MUTATION_INTERVAL_MS` apart — the
+    // default this replaced — was most of a plan copy's wall time, and every gap below would
+    // be at least that.
     let fixture = board(vec![]);
     let source = configured(&fixture.endpoint, json!({"pacing": null}));
     source
@@ -10926,40 +10928,11 @@ async fn content_creating_mutations_leave_this_source_no_faster_than_the_shipped
         .await
         .expect("one task");
     let gaps = fixture.mutation_gaps();
-    // `createIssue`, `addProjectV2ItemById` and its board fields.
+    assert!(!gaps.is_empty(), "a created task is more than one mutation");
+    let spacing = Duration::from_millis(onetaskgraph_github_projects::MIN_MUTATION_INTERVAL_MS);
     assert!(
-        gaps.len() == 2,
-        "a created task is three mutations, and this saw {}",
-        gaps.len() + 1
-    );
-    let floor = Duration::from_millis(onetaskgraph_github_projects::MIN_MUTATION_INTERVAL_MS);
-    // Transit no longer eats into the gap a board sees — the interval is counted from the
-    // last mutation's completion, which is after its arrival, so an arrival gap is at least
-    // the interval by construction and
-    // `the_interval_a_board_sees_is_the_full_one_however_long_a_request_is_in_transit`
-    // asserts exactly that. What is left to allow for is the timer: a sleep is scheduled in
-    // whole milliseconds and may fire a shade under its deadline, so the floor keeps a
-    // millisecond-scale tolerance, which is still two orders of magnitude above the arrival
-    // gap of a source that paces nothing.
-    let tolerance = Duration::from_millis(10);
-    assert!(
-        gaps.iter().all(|gap| *gap >= floor - tolerance),
-        "a mutation left this source faster than the shipped rate: {gaps:?}"
-    );
-    assert!(
-        gaps.iter().sum::<Duration>() >= floor * u32::try_from(gaps.len()).unwrap() - tolerance,
-        "the mutations of one write did not cost the shipped rate between them: {gaps:?}"
-    );
-    // And reads are not paced: pacing what the secondary limiter does not count would
-    // charge every listing for a limit it cannot trip.
-    let started = Instant::now();
-    source
-        .query_tasks(&TaskQuery::default(), &page(10))
-        .await
-        .expect("a read");
-    assert!(
-        started.elapsed() < floor,
-        "a read was paced as though it created content"
+        gaps.iter().all(|gap| *gap < spacing / 2),
+        "a mutation was held although every window had room: {gaps:?}"
     );
 }
 
@@ -19034,12 +19007,37 @@ impl onetaskgraph_plugin_api::Clock for AdvancingClock {
 
 #[tokio::test]
 async fn the_supplied_clock_spaces_writes_and_bounds_rate_limit_recovery() {
+    // At the shipped defaults a write's few mutations leave every secondary window room, so
+    // nothing waits; a configured `min_mutation_interval_ms` still spaces them on the clock
+    // the source was given.
     let fixture = board(vec![]);
     let clock = Arc::new(AdvancingClock::default());
     let source = Plugin
         .build_with_clock(
             &SourceName::new("work").unwrap(),
             &fixture_config(&fixture.endpoint, &json!({"pacing": null})),
+            &Secrets,
+            clock.clone(),
+        )
+        .unwrap();
+    source
+        .write_task(&write(task(
+            "T-unspaced",
+            "Unspaced",
+            status(StatusCategory::Todo, "Todo"),
+        )))
+        .await
+        .unwrap();
+    assert_eq!(*clock.waits.lock().unwrap(), Vec::<Duration>::new());
+    let fixture = board(vec![]);
+    let clock = Arc::new(AdvancingClock::default());
+    let source = Plugin
+        .build_with_clock(
+            &SourceName::new("work").unwrap(),
+            &fixture_config(
+                &fixture.endpoint,
+                &json!({"pacing": {"min_mutation_interval_ms": 750}}),
+            ),
             &Secrets,
             clock.clone(),
         )

@@ -24,6 +24,20 @@ pub trait Clock: Send + Sync {
         &self,
         duration: std::time::Duration,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>>;
+    /// [`sleep`](Self::sleep), for a wait whose reason is `cause` — a short, fixed word a
+    /// plugin names its waits by, such as the limit it is pacing under.
+    ///
+    /// A clock that keeps a record of what waited and why — a test's simulated one — keeps the
+    /// cause beside the wait; every other clock waits exactly as `sleep` does, which is what
+    /// this is defaulted to.
+    fn sleep_because(
+        &self,
+        duration: std::time::Duration,
+        cause: &'static str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
+        let _ = cause;
+        self.sleep(duration)
+    }
 }
 
 /// The variable that puts a process of this build on a simulated clock.

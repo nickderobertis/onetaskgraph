@@ -20,6 +20,7 @@
 //! | client | `now <seq>` | What is virtual time now? |
 //! | coordinator | `now <seq> <nanos>` | It is `<nanos>` nanoseconds past the origin. |
 //! | client | `sleep <seq> <nanos>` | Wake this client's wait `<seq>` once `<nanos>` have passed. |
+//! | client | `sleep <seq> <nanos> <cause>` | The same, for a wait the plugin names a cause of — one word, no whitespace, see [`Clock::sleep_because`]. A coordinator keeps it beside the wait. |
 //! | coordinator | `wake <seq>` | That wait is over. |
 //! | client | `cancel <seq>` | The wait `<seq>` was dropped before it was woken. |
 //!
@@ -269,6 +270,25 @@ impl Clock for SimulatedClient {
     }
 
     fn sleep(&self, duration: Duration) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
+        self.wait(duration, None)
+    }
+
+    fn sleep_because(
+        &self,
+        duration: Duration,
+        cause: &'static str,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
+        self.wait(duration, Some(cause))
+    }
+}
+
+impl SimulatedClient {
+    /// One wait on the coordinator, naming its cause when it has one.
+    fn wait(
+        &self,
+        duration: Duration,
+        cause: Option<&'static str>,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
         let seq = self.shared.next();
         let (sender, receiver) = oneshot::channel();
         {
@@ -282,8 +302,15 @@ impl Clock for SimulatedClient {
             }
             pending.wakes.insert(seq, sender);
         }
-        self.shared
-            .send(&format!("sleep {seq} {}", duration.as_nanos()));
+        // A cause is one word on the wire, so one that is not is sent without it rather than
+        // as a line the coordinator would misread.
+        let line = match cause
+            .filter(|cause| !cause.is_empty() && !cause.chars().any(char::is_whitespace))
+        {
+            Some(cause) => format!("sleep {seq} {} {cause}", duration.as_nanos()),
+            None => format!("sleep {seq} {}", duration.as_nanos()),
+        };
+        self.shared.send(&line);
         Box::pin(Wait {
             shared: Arc::clone(&self.shared),
             seq,

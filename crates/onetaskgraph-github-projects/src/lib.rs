@@ -652,6 +652,7 @@ mod assets;
 pub mod change_token;
 mod expected;
 pub use expected::{CONTEXT_VERSION, WHOLE_MEMBERS, context_shapes};
+mod pacing;
 mod visibility;
 
 use accounting::Accounting;
@@ -2000,9 +2001,39 @@ impl Limiter {
 struct Limited {
     limiter: Limiter,
     hint: Option<u64>,
+    /// Which header the hint came from: `retry-after`, or an exhausted primary budget's
+    /// `x-ratelimit-reset`.
+    hinted_by: Hint,
+}
+
+/// Where a refusal's hint came from, which is what its wait is named after.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Hint {
+    /// `retry-after`, or no hint at all.
+    RetryAfter,
+    /// An exhausted primary budget's `x-ratelimit-reset`.
+    PrimaryReset,
 }
 
 impl Limited {
+    /// The wait this refusal is answered with, when the backing-off schedule is at `backoff`,
+    /// and the cause it is named by: the hint, raised to the schedule's own next wait —
+    /// GitHub really does send `retry-after: 0`, and retrying at once is the one move that
+    /// extends a secondary limit — or the schedule alone when there is none.
+    fn wait(self, backoff: Duration) -> (Duration, &'static str) {
+        match (self.hint, self.hinted_by) {
+            (Some(hint), Hint::RetryAfter) => (
+                Duration::from_secs(hint).max(backoff),
+                pacing::cause::RETRY_AFTER,
+            ),
+            (Some(hint), Hint::PrimaryReset) => (
+                Duration::from_secs(hint).max(backoff),
+                pacing::cause::PRIMARY_RESET,
+            ),
+            (None, _) => (backoff, pacing::cause::BACKOFF),
+        }
+    }
+
     /// What the caller is told once this source has waited as long as it may.
     ///
     /// Both limiters report as [`SourceError::RateLimited`], because that is what
@@ -2112,9 +2143,9 @@ fn whole_seconds(value: Option<&reqwest::header::HeaderValue>) -> Option<u64> {
 /// one, a sub-issue link, a dependency, a comment — or edits or removes content of that
 /// kind, and no query in [`graphql::DOCUMENTS`] does, so what the secondary limiter counts
 /// and what the keyword says are the same set. That is what makes the keyword a sound test
-/// rather than a convenient one: pacing an edit or a removal the limiter might not have
-/// counted costs a wait, and not pacing one it did count costs the next fifty minutes.
-fn is_mutation(query: &str) -> bool {
+/// rather than a convenient one: counting an edit or a removal the limiter might not have
+/// counted costs a wait, and not counting one it did count costs the next fifty minutes.
+pub(crate) fn is_mutation(query: &str) -> bool {
     query.trim_start().starts_with("mutation")
 }
 
@@ -2130,28 +2161,32 @@ fn operation_description(query: &str) -> &'static str {
         .map_or("talking to GitHub", |(_, doing)| *doing)
 }
 
-/// GitHub's published ceiling on content-generating requests, per minute.
+/// GitHub's published ceiling on content-generating requests in any one minute.
 ///
 /// Pinned in `tests/fixtures/rate-limits.json` and gated against it, because it is
-/// GitHub's number rather than this source's: [`MIN_MUTATION_INTERVAL_MS`] is *derived*
-/// from it, so a pacing value checked only against itself cannot go stale here.
+/// GitHub's number rather than this source's. This source paces at it over its window: a
+/// content-creating request goes out at once while the minute's creations leave room for it,
+/// and waits until they do otherwise — see the `pacing` module.
 pub const CONTENT_CREATION_PER_MINUTE: u64 = 80;
-/// The same ceiling as GitHub publishes it per hour, which this source does **not** pace
-/// at. See [`MIN_MUTATION_INTERVAL_MS`] for why the per-minute bound is the one that
-/// governs; it is pinned beside its sibling so the gate would notice either one moving.
+/// The same ceiling as GitHub publishes it for any one hour, paced over its window as the
+/// per-minute one is. Pinned beside its sibling so the gate would notice either one moving.
 pub const CONTENT_CREATION_PER_HOUR: u64 = 500;
-/// Shortest interval between two content-creating mutations, in milliseconds.
+/// GitHub's published ceiling on secondary points in any one minute: what every GraphQL
+/// request is charged against, a mutation [`SECONDARY_POINTS_PER_MUTATION`] and a query
+/// [`SECONDARY_POINTS_PER_QUERY`]. Pinned and paced as [`CONTENT_CREATION_PER_MINUTE`] is.
+pub const SECONDARY_POINTS_PER_MINUTE: u64 = 2_000;
+/// The secondary points one GraphQL request carrying a mutation is charged.
+pub const SECONDARY_POINTS_PER_MUTATION: u64 = 5;
+/// The secondary points one GraphQL request carrying no mutation is charged.
+pub const SECONDARY_POINTS_PER_QUERY: u64 = 1;
+/// The fastest *steady* spacing of content-creating mutations that cannot exceed
+/// [`CONTENT_CREATION_PER_MINUTE`], in milliseconds: 60000/80 is 750.
 ///
-/// GitHub documents two secondary limits on content-generating requests:
-/// [`CONTENT_CREATION_PER_MINUTE`] and [`CONTENT_CREATION_PER_HOUR`]. 60000/80 is 750, so
-/// a mutation every 750 ms is the fastest rate that cannot exceed the per-minute bound,
-/// and that is the bound a copy actually trips: a copy of one plan-sized project is a
-/// burst of a few dozen mutations inside a few seconds. The hourly bound works out at one
-/// every 7.2 seconds sustained, which no single copy reaches and which, used as the
-/// spacing here, would turn an ordinary copy into an hour of waiting — so it is
-/// deliberately *not* what this paces at. An installation that wants the hourly bound
-/// honoured for a long sequence of copies says so through
-/// `pacing.min_mutation_interval_ms`.
+/// It is no longer the default. This source paces by GitHub's windows instead, so a copy's
+/// few dozen writes go out as fast as GitHub answers them while the minute has room, rather
+/// than 750 ms apart — which was most of a plan copy's wall time. An installation that wants
+/// mutations spaced as well says so through `pacing.min_mutation_interval_ms`, and this is the
+/// value that holds a long sustained burst under the per-minute bound by spacing alone.
 pub const MIN_MUTATION_INTERVAL_MS: u64 = 60_000 / CONTENT_CREATION_PER_MINUTE;
 /// First wait when a rate-limit refusal carries no hint; each further wait doubles it.
 ///
@@ -2631,10 +2666,14 @@ enum HeldPriority {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct PacingConfig {
-    /// Shortest interval between two content-creating mutations, in milliseconds.
+    /// Shortest interval between two content-creating mutations, in milliseconds, on top of
+    /// GitHub's windows, which this source always paces under.
     ///
-    /// Zero sends them as fast as they are asked for, which is what a fixture server on
-    /// loopback wants and what no board on github.com does. At most [`MAX_PACING_MS`].
+    /// Unset, mutations are not spaced: each goes out as soon as every secondary window it
+    /// charges has room. Zero sends every request as fast as it is asked for, windows
+    /// included, which is what a fixture server on loopback wants and what no board on
+    /// github.com does. [`MIN_MUTATION_INTERVAL_MS`] is the spacing that holds a sustained
+    /// burst under the per-minute bound by spacing alone. At most [`MAX_PACING_MS`].
     pub min_mutation_interval_ms: Option<u64>, // llmlint: ignore[invalid_states_unrepresentable] Schema DTO; `Pacing::resolve` bounds it to `MAX_PACING_MS` before the private validated `Pacing` is built.
     /// First wait when a rate-limit refusal carries no hint, in milliseconds. Each
     /// further wait of the same call doubles it. At most [`MAX_PACING_MS`], and never
@@ -2663,6 +2702,10 @@ pub const MAX_PACING_MS: u64 = 3_600_000;
 /// source holds.
 #[derive(Debug, Clone, Copy)]
 struct Pacing {
+    /// Whether requests are held for GitHub's secondary windows: always, unless
+    /// `min_mutation_interval_ms` is set to exactly zero, which has always asked for no
+    /// pacing at all — what a fixture server on loopback wants and no board on github.com does.
+    windows: bool,
     min_mutation_interval: Duration,
     retry_backoff: Duration,
     retry_budget: Duration,
@@ -2701,9 +2744,10 @@ impl Pacing {
             });
         }
         Ok(Self {
+            windows: config.min_mutation_interval_ms != Some(0),
             min_mutation_interval: bounded(
                 config.min_mutation_interval_ms,
-                MIN_MUTATION_INTERVAL_MS,
+                0,
                 "min_mutation_interval_ms",
             )?,
             retry_backoff,
@@ -3259,10 +3303,12 @@ pub struct GitHubProjectsSource {
     pacing: Pacing,
     /// When the last content-creating mutation finished, or the moment the furthest-out
     /// reserved slot releases the next one, whichever is later — so the one after it can be
-    /// spaced from that. See [`MIN_MUTATION_INTERVAL_MS`] for the interval and
-    /// [`GitHubProjectsSource::finish_mutation`] for why completion rather than release is
-    /// what it is measured from.
+    /// spaced from that, when `pacing.min_mutation_interval_ms` asks for a spacing. See
+    /// [`GitHubProjectsSource::paced`] for why completion rather than release is what it is
+    /// measured from.
     last_mutation: Mutex<Option<Duration>>,
+    /// GitHub's secondary windows as this source has charged them; see the `pacing` module.
+    windows: Mutex<pacing::Windows>,
     clock: SharedClock,
     numeric_repositories: tokio::sync::Mutex<BTreeMap<RepositoryTarget, std::num::NonZeroU64>>,
     /// The board as this process last read it, for the length of one command — dropped by
@@ -4473,6 +4519,7 @@ impl GitHubProjectsSource {
             commented: Mutex::new(Vec::new()),
             pacing: Pacing::resolve(config.pacing, name)?,
             last_mutation: Mutex::new(None),
+            windows: Mutex::new(pacing::Windows::default()),
             clock: system_clock(),
             numeric_repositories: tokio::sync::Mutex::new(BTreeMap::new()),
             board_cache: Mutex::new(None),
@@ -4563,32 +4610,21 @@ impl GitHubProjectsSource {
             }
         }
         let doing = operation_description(query);
+        let mutation = is_mutation(query);
+        let charge = pacing::Charge::graphql(query, &variables);
         let mut waited = Duration::ZERO;
         let mut waits = 0_u32;
         let mut backoff = self.pacing.retry_backoff;
         loop {
-            if is_mutation(query) {
-                let spacing = self.reserve_mutation_slot();
-                if !spacing.is_zero() {
-                    self.clock.sleep(spacing).await;
-                }
-            }
+            let ticket = self.pace(charge, mutation).await;
             let attempt = self.send_once(query, &variables, waits + 1).await;
-            if is_mutation(query) {
-                self.finish_mutation();
-            }
+            self.paced(ticket, mutation);
             let limited = match attempt {
                 Ok(data) => return Ok(data),
                 Err(Attempt::Failed(error)) => return Err(error),
                 Err(Attempt::Limited(limited)) => limited,
             };
-            // GitHub really does send `retry-after: 0`, and retrying at once is the one
-            // move that extends a secondary limit, so a hint below the schedule's own next
-            // wait is raised to it.
-            let wait = match limited.hint {
-                Some(hint) => Duration::from_secs(hint).max(backoff),
-                None => backoff,
-            };
+            let (wait, cause) = limited.wait(backoff);
             let remaining = self.pacing.retry_budget.saturating_sub(waited);
             // A wait of nothing spends none of the budget, so it is exhaustion rather
             // than a retry. `Pacing::resolve` rules out every way of configuring one
@@ -4602,80 +4638,90 @@ impl GitHubProjectsSource {
                     self.pacing.retry_budget,
                 ));
             }
-            self.clock.sleep(wait).await;
+            self.clock.sleep_because(wait, cause).await;
             waited += wait;
             waits += 1;
             backoff = backoff.saturating_mul(2);
         }
     }
 
-    /// The next moment a content-creating mutation may leave this source, as a wait from
-    /// now.
+    /// Hold one request charging `charge` until every secondary window it charges has room for
+    /// the whole of it — and, for a mutation of an instance configured with
+    /// `pacing.min_mutation_interval_ms`, until that interval has passed since the last one
+    /// finished — then count it, answering the ticket [`Self::paced`] finishes it with.
     ///
-    /// The slot is reserved under the lock and the waiting happens outside it, so two
-    /// callers take two slots rather than the same one — and no lock is held across an
-    /// await.
-    ///
-    /// The moment it is spaced from is the previous mutation's *completion*, which
-    /// [`Self::finish_mutation`] records. See that method for why the release moment on its
-    /// own is the wrong thing to measure from.
-    fn reserve_mutation_slot(&self) -> Duration {
-        if self.pacing.min_mutation_interval.is_zero() {
-            return Duration::ZERO;
+    /// The moment is decided and counted under the lock and waited out outside it, so two
+    /// callers take two places rather than the same one, and no lock is held across an await.
+    /// A request with room goes out at once: nothing here waits that a window does not ask for.
+    async fn pace(&self, charge: pacing::Charge, mutation: bool) -> pacing::Ticket {
+        let (wait, cause, ticket) = {
+            // A poisoned lock here costs pacing, not correctness, and refusing the write over
+            // it would turn an earlier failure into a second one for no gain.
+            let mut windows = self
+                .windows
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let now = self.clock.now();
+            let (mut at, mut cause) = if self.pacing.windows {
+                windows.room(now, charge)
+            } else {
+                (now, None)
+            };
+            if mutation && !self.pacing.min_mutation_interval.is_zero() {
+                let mut last = self
+                    .last_mutation
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                // `checked_add` rather than `+`: adding durations can panic on overflow, and
+                // pacing is not worth a panic even at a bound `MAX_PACING_MS` already rules out.
+                if let Some(earliest) = last
+                    .and_then(|previous| previous.checked_add(self.pacing.min_mutation_interval))
+                    && earliest > at
+                {
+                    at = earliest;
+                    cause = Some(pacing::cause::MIN_INTERVAL);
+                }
+                *last = Some(at);
+            }
+            let ticket = windows.charge(at, charge);
+            (at.saturating_sub(now), cause, ticket)
+        };
+        if let (false, Some(cause)) = (wait.is_zero(), cause) {
+            self.clock.sleep_because(wait, cause).await;
         }
-        // A poisoned lock here costs pacing, not correctness, and refusing the write over
-        // it would turn an earlier failure into a second one for no gain.
-        let mut last = self
-            .last_mutation
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let now = self.clock.now();
-        // `checked_add` rather than `+`: adding durations can panic on overflow, and
-        // pacing is not worth a panic even at a bound `MAX_PACING_MS` already rules out.
-        let at = last.map_or(now, |previous| {
-            previous
-                .checked_add(self.pacing.min_mutation_interval)
-                .map_or(now, |earliest| earliest.max(now))
-        });
-        *last = Some(at);
-        at.saturating_sub(now)
+        ticket
     }
 
-    /// Record that a content-creating mutation has finished, so the next one is spaced
-    /// from here rather than from the moment this one was released.
+    /// Record that the request `ticket` was charged for has finished, so each window — and
+    /// the configured spacing — counts it from here rather than from the moment it left.
     ///
-    /// This source can only choose when a request *departs*; the limiter counts when it
-    /// *arrives*, and the two differ by whatever the request spent in transit. Spacing one
-    /// departure from the last therefore hands the limiter a gap of the interval less that
-    /// transit, so a source pacing at 750 ms can still be seen arriving faster — which is
-    /// exactly how a copy paced well inside a board's threshold was refused by it on a
-    /// slower machine while passing on a quick one.
+    /// This source can only choose when a request *departs*; GitHub's limiter counts when it
+    /// *arrives*, and the two differ by whatever the request spent in transit. Counting from
+    /// departure would hand the limiter a window that looked roomier than it is, so a source
+    /// pacing exactly at a limit could still be seen arriving over it — which is how a copy
+    /// paced well inside a board's threshold was once refused by it on a slower machine while
+    /// passing on a quick one. The previous request had arrived before its response came back,
+    /// so counting from here is never earlier than the limiter does, whatever transit costs
+    /// and on whatever platform: the safe side of a limit that punishes being wrong by refusing
+    /// reads for the next fifty minutes.
     ///
-    /// Spacing from completion removes the subtraction rather than budgeting for it. The
-    /// previous request had already arrived before its response came back, so its arrival
-    /// is no later than this moment, and the next mutation is released at least the
-    /// interval after this moment and arrives no earlier than it is released: the gap the
-    /// limiter measures is therefore at least the interval, whatever transit costs and on
-    /// whatever platform. The price is that a mutation's own round trip no longer counts
-    /// towards its spacing, which makes this source slightly slower than the configured
-    /// rate rather than slightly faster — the safe side of a limit that punishes being
-    /// wrong by refusing reads for the next fifty minutes.
-    ///
-    /// A failed attempt is recorded too: a request refused by the limiter still arrived,
-    /// and one that never left costs only a wait nobody needed.
-    fn finish_mutation(&self) {
-        if self.pacing.min_mutation_interval.is_zero() {
-            return;
-        }
-        // A poisoned lock here costs pacing, not correctness, exactly as in the reservation.
-        let mut last = self
-            .last_mutation
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+    /// A failed attempt is finished too: a request refused by the limiter still arrived, and
+    /// one that never left costs only room nobody needed.
+    fn paced(&self, ticket: pacing::Ticket, mutation: bool) {
         let now = self.clock.now();
-        // `max` rather than an assignment: a concurrent caller may already have reserved a
-        // slot further out, and completing this request must never pull that slot back in.
-        *last = Some(last.map_or(now, |reserved| reserved.max(now)));
+        self.windows
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .finish(ticket, now);
+        if mutation && !self.pacing.min_mutation_interval.is_zero() {
+            let mut last = self
+                .last_mutation
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            // `max` rather than an assignment: a concurrent caller may already have reserved a
+            // slot further out, and completing this request must never pull that slot back in.
+            *last = Some(last.map_or(now, |reserved| reserved.max(now)));
+        }
     }
 
     /// One HTTP attempt, classified into an answer, a rate limit to wait out, or a
@@ -4795,7 +4841,13 @@ impl GitHubProjectsSource {
         // primary budget is spent, `x-ratelimit-reset` says when that budget comes back,
         // which is the same question answered as an absolute time. Nothing else here is a
         // hint, and a schedule is what answers a refusal that carries none.
-        let hint = header("retry-after").or_else(|| {
+        let retry_after = header("retry-after");
+        let hinted_by = if retry_after.is_some() || !exhausted {
+            Hint::RetryAfter
+        } else {
+            Hint::PrimaryReset
+        };
+        let hint = retry_after.or_else(|| {
             exhausted
                 .then(|| header("x-ratelimit-reset"))
                 .flatten()
@@ -4817,7 +4869,11 @@ impl GitHubProjectsSource {
         let parsed = serde_json::from_str::<Value>(&body).ok();
         *response_outcome = accounting::ResponseOutcome::of_graphql_reply(status, parsed.as_ref());
         if let Some(limiter) = Limiter::classify(status, exhausted, &body) {
-            return Err(Attempt::Limited(Limited { limiter, hint }));
+            return Err(Attempt::Limited(Limited {
+                limiter,
+                hint,
+                hinted_by,
+            }));
         }
         if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
             return Err(Attempt::Failed(SourceError::Auth {

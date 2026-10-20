@@ -494,12 +494,17 @@ fn asset_requests_take_mutation_slots_and_each_limiter_recovers_or_exhausts_its_
                             "notes:D",
                             &[images::png(1, 480_000), images::png(2, 480_000)],
                         );
-                        let creating: Vec<_> = calls.iter().filter(|call| call.creating).collect();
-                        for pair in creating.windows(2) {
-                            assert!(
-                                pair[1].at.saturating_sub(pair[0].at) >= Duration::from_millis(750)
-                            );
-                        }
+                        // Pacing is by GitHub's windows, and a copy of one document is nowhere
+                        // near filling one: every wait the binary made was answering the
+                        // refusal, none was pacing.
+                        assert!(
+                            clock.slept().iter().all(|slept| matches!(
+                                slept.cause.as_deref(),
+                                Some("retry-after" | "primary-reset" | "backoff")
+                            )),
+                            "{:?}",
+                            clock.slept()
+                        );
                         let last_upload = uploads(&calls).last().unwrap().at;
                         let read = calls
                             .iter()

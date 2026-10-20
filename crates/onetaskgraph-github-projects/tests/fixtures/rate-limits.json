@@ -8,7 +8,8 @@
     "primary.observed. See README.md for the pages each value came off and why this",
     "artifact exists.",
     "the_rate_limit_vocabulary_and_published_limits_match_their_pinned_artifact in",
-    "tests/schema.rs reconciles the first two against the production constants both ways,",
+    "tests/schema.rs reconciles the first two, and the secondary_points block read from",
+    "GitHub's documentation on 2026-10-19, against the production constants both ways,",
     "and the_allowance_read_matches_its_pinned_artifact in tests/budget_gate.rs does the",
     "same for the allowance block — so neither side may move without the other."
   ],
@@ -46,5 +47,11 @@
   "content_creation": {
     "per_minute": 80,
     "per_hour": 500
+  },
+  "secondary_points": {
+    "read": "2026-10-19",
+    "per_minute": 2000,
+    "per_mutation_request": 5,
+    "per_query_request": 1
   }
 }

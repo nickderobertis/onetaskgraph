@@ -101,6 +101,21 @@ struct State {
     delay_sequence: u64,
     /// How long an attach as a client still attached waits for that client to detach.
     reattach_grace: Duration,
+    /// Every wait a client asked for, in the order the coordinator read them.
+    slept: Vec<Slept>,
+}
+
+/// One wait a client asked the coordinator for: what [`SimulatedClock::slept`] answers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Slept {
+    /// The client that waited.
+    pub client: usize,
+    /// The virtual time it asked at.
+    pub at: Duration,
+    /// How long it asked to wait.
+    pub length: Duration,
+    /// The cause it named for the wait — `Clock::sleep_because` — or `None` for a plain sleep.
+    pub cause: Option<String>,
 }
 
 /// One attached client.
@@ -260,6 +275,16 @@ impl SimulatedClock {
         }
     }
 
+    /// Every wait every client has asked for so far, in the order they were asked: who asked,
+    /// at what virtual time, for how long, and the cause it named.
+    ///
+    /// The record a journey reads a plugin's pacing and backing off from — each wait by its
+    /// cause and its length — since the waits happen inside a spawned binary it cannot see
+    /// into otherwise.
+    pub fn slept(&self) -> Vec<Slept> {
+        self.lock().slept.clone()
+    }
+
     /// Every client that has attached so far, whether or not it is still attached.
     pub fn attached(&self) -> Vec<usize> {
         self.lock().attached.iter().copied().collect()
@@ -395,9 +420,15 @@ fn serve(state: &Arc<Mutex<State>>, stream: TcpStream) {
                     held.send(&format!("now {seq} {}", now.as_nanos()));
                 }
             }
-            ["sleep", seq, nanos] => {
+            ["sleep", seq, nanos, cause @ ..] if cause.len() <= 1 => {
                 if let (Ok(seq), Ok(nanos)) = (seq.parse(), nanos.parse::<u64>()) {
                     held.sleeps.insert(seq, now + Duration::from_nanos(nanos));
+                    state.slept.push(Slept {
+                        client,
+                        at: now,
+                        length: Duration::from_nanos(nanos),
+                        cause: cause.first().map(|cause| (*cause).to_owned()),
+                    });
                 }
             }
             ["cancel", seq] => {
