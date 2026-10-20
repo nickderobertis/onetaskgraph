@@ -13301,11 +13301,18 @@ impl TaskSource for GitHubProjectsSource {
                 && node.get("id").and_then(Value::as_str) == batch.first().map(|id| id.0.as_str())
                 && node.pointer("/subIssues/pageInfo/hasNextPage") == Some(&Value::Bool(false))
             {
+                // A list GitHub did not answer is not an empty one: it would answer the project's
+                // task listing with nothing, and the orphan check with no orphans.
                 let listed = node
                     .pointer("/subIssues/nodes")
                     .and_then(Value::as_array)
-                    .into_iter()
-                    .flatten()
+                    .ok_or_else(|| SourceError::Malformed {
+                        message: format!(
+                            "GitHub answered the sub-issues of project {} with no list of them",
+                            batch[0].0
+                        ),
+                    })?
+                    .iter()
                     .map(|child| {
                         Ok((
                             required_str(child, "id")?.to_owned(),

@@ -1183,6 +1183,9 @@ struct GitHubBoard {
     /// How many more reads of created issues' board items answer that GitHub has not filed
     /// them yet, as it may not have in the moments after a create naming the board.
     unfiled_board_item_reads: usize,
+    /// Whether the next read of a project's sub-issues beside a copy's batch answers them with
+    /// no list at all.
+    omits_sub_issue_list: bool,
     status_snapshot_page_size: Option<usize>,
     status_field_present: bool,
     status_board_accessible: bool,
@@ -1745,6 +1748,12 @@ impl GitHubBoardFields {
     /// has filed them: each issue on no board yet.
     pub fn file_created_items_after(&self, reads: usize) {
         self.board.lock().unwrap().unfiled_board_item_reads = reads;
+    }
+
+    /// Answer the next read of a project's sub-issues beside a copy's batch with no list of
+    /// them, once.
+    pub fn omit_sub_issue_list_once(&self) {
+        self.board.lock().unwrap().omits_sub_issue_list = true;
     }
 
     /// Force Status snapshots to span pages even though the client requests 100 items.
@@ -3259,6 +3268,7 @@ fn github_projects_board_at(
         omit_added_status_option: false,
         files_without_status: false,
         unfiled_board_item_reads: 0,
+        omits_sub_issue_list: false,
         status_snapshot_page_size: None,
         status_field_present: true,
         status_board_accessible: true,
@@ -4334,11 +4344,17 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
                 .map(|item| json!({"id": item["id"], "title": item["title"]}))
                 .collect();
             let held = board.items.iter().any(|item| item["id"] == project);
+            let mut sub_issues = json!({"nodes": children, "pageInfo": {"hasNextPage": false}});
+            if std::mem::take(&mut board.omits_sub_issue_list) {
+                sub_issues
+                    .as_object_mut()
+                    .expect("an object")
+                    .remove("nodes");
+            }
             answered.insert(
                 "children".into(),
                 if held {
-                    json!({"id": project, "subIssues": {"nodes": children,
-                        "pageInfo": {"hasNextPage": false}}})
+                    json!({"id": project, "subIssues": sub_issues})
                 } else {
                     Value::Null
                 },

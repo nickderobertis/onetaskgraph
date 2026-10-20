@@ -396,16 +396,60 @@ pub(super) struct Scenario {
     pub phases: Vec<(&'static str, std::time::Duration, std::time::Duration)>,
 }
 
-/// What one request costs against the primary GraphQL allowance, priced as the timing spike's
-/// `pricing.json` priced it: a page of the board two points, a page of its issue search five,
-/// any other read one, each mutation request one, and a REST request none.
+/// The points one request of each kind costs against the primary GraphQL allowance, as the
+/// timing spike's `pricing.json` priced it, each beside how the points budgets' descriptions
+/// in `budgets.yaml` name it — the one spelling of that price list here, which
+/// [`the_points_budgets_state_the_prices_they_are_measured_at`] holds those descriptions to.
+const SPIKE_PRICES: [(&str, u64, &[Kind]); 5] = [
+    ("a board page", 2, &[Kind::BoardPage]),
+    ("an issue-search page", 5, &[Kind::SearchPage]),
+    ("any other read", 1, &[Kind::ItemRead, Kind::BatchedRead]),
+    (
+        "each mutation request",
+        1,
+        &[Kind::Mutation, Kind::AliasedMutations],
+    ),
+    (
+        "REST",
+        0,
+        &[Kind::Upload, Kind::Repository, Kind::Verification],
+    ),
+];
+
+/// What one request costs against the primary GraphQL allowance, by [`SPIKE_PRICES`].
 fn spike_points(call: &Call) -> u64 {
-    match call.kind {
-        Kind::BoardPage => 2,
-        Kind::SearchPage => 5,
-        Kind::ItemRead | Kind::BatchedRead | Kind::Mutation | Kind::AliasedMutations => 1,
-        Kind::Upload | Kind::Repository | Kind::Verification => 0,
+    SPIKE_PRICES
+        .iter()
+        .find(|(_, _, kinds)| kinds.contains(&call.kind))
+        .map(|(_, points, _)| *points)
+        .expect("every kind of request is priced")
+}
+
+#[test]
+fn the_points_budgets_state_the_prices_they_are_measured_at() {
+    // Each points budget's description says what a request costs; the figure it holds is
+    // measured by `SPIKE_PRICES`, so the two are one statement, read here from the file.
+    let stated = SPIKE_PRICES
+        .iter()
+        .map(|(named, points, _)| format!("{named} {points}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let budgets = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("budgets.yaml"),
+    )
+    .unwrap();
+    let mut described = 0;
+    // Each entry of the file's `budgets` list, from its `- id:` line to the next one's.
+    for entry in budgets.split("\n  - id: ").skip(1) {
+        if entry.starts_with("github-plan-copy-points-") {
+            described += 1;
+            assert!(
+                entry.contains(&format!("pricing.json — {stated}.")),
+                "a points budget does not state the prices it is measured at ({stated}): {entry}"
+            );
+        }
     }
+    assert_eq!(described, SCENARIOS.len(), "a points budget per scenario");
 }
 
 /// Record what `scenario` cost as the copy budgets' telemetry, for
@@ -1235,4 +1279,30 @@ fn an_origin_its_batched_lookup_cannot_answer_in_one_page_is_looked_up_on_its_ow
                 .starts_with("Mentions notes:T-1")
         );
     }
+}
+
+#[test]
+fn a_project_whose_sub_issues_come_back_unlisted_still_finds_the_task_taken_out_of_it() {
+    // The project's sub-issues ride along with the copy's batched read, and that answer leaves
+    // their list out: it is no answer, not an empty project, so the orphan check reads the
+    // project's own sub-issues and still finds the task taken out of it.
+    let plan = Plan::new(SMALL, Vec::new());
+    let (project, document, _) = plan.copy();
+    let at = counterparts(&project, &document);
+    plan.write_task(8, &plan.generated.tasks[7], false);
+    plan.github.omit_sub_issue_list_once();
+    let (project, _, calls) = plan.copy();
+    let orphaned: Vec<&Value> = project["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| item["action"] == "orphaned")
+        .collect();
+    assert_eq!(orphaned.len(), 1, "{project:#}");
+    assert_eq!(orphaned[0]["destination"], format!("board:{}", at["T-8"]));
+    assert!(
+        tally(&calls).contains_key("reading a project's tasks"),
+        "{:?}",
+        tally(&calls)
+    );
 }
