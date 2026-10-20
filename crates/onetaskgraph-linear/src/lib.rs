@@ -159,10 +159,15 @@
 //! before its fence and another after it. The asset journey wrote two images on adjacent lines,
 //! `![alt 0](…)` then `![alt 1](…)`, and Linear's answer kept the first and held an empty line
 //! second. That is declared as the blank line setting the second image apart, the reading the
-//! fence's blank lines in the same run make of a block Linear holds on its own; an answer that
-//! left the second image out and kept a trailing line break would read the same at that line, so
-//! the asset journey is what settles it, and its refusal now tells a line the answer does not
-//! have from an empty one, naming whichever it sees. The escapes, the
+//! fence's blank lines in the same run make of a block Linear holds on its own. Two other
+//! readings answer the same at that line — Linear keeping both images but its answer to the write
+//! leaving the second out, and Linear dropping it — so the engine never takes an answer lacking,
+//! or blanking, a line it sent as an image at its word: it reads the item once and compares that
+//! read instead, accepting the first and refusing the second as `stored-content-diverged` naming
+//! the image line, because no rule here explains an image's removal.
+//! `a_copy_never_records_a_digest_over_stored_content_missing_an_image_it_sent` in the
+//! `onetaskgraph-linear-e2e` suite drives all three offline; the asset journey against Linear
+//! itself is what settles which one Linear takes. The escapes, the
 //! angle-bracketed link targets, the autolinked domains and `*y*` came back in that run exactly
 //! as the rows above declare them.
 //!

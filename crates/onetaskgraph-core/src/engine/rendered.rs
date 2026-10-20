@@ -726,7 +726,7 @@ impl Engine {
             }
         };
         if let Some(error) =
-            stored::diverged(source, MetadataRecord::Task, &written, sent.as_deref())
+            stored::diverged(source, MetadataRecord::Task, &written, sent.as_deref()).await
         {
             return Err(error);
         }
@@ -897,7 +897,7 @@ impl Engine {
         }
         .map_err(|error| source_failed(source, error))?;
         if let Some(error) =
-            stored::diverged(source, MetadataRecord::Document, &written, sent.as_deref())
+            stored::diverged(source, MetadataRecord::Document, &written, sent.as_deref()).await
         {
             return Err(error);
         }
@@ -1057,7 +1057,9 @@ impl Engine {
             MetadataRecord::Project,
             &written,
             write.item.content.as_deref(),
-        ) {
+        )
+        .await
+        {
             return Err(error);
         }
         let id = GlobalId::new(request.source.clone(), written);
@@ -1340,7 +1342,8 @@ impl Engine {
             }
             .map_err(|error| source_failed(source, error))?
             .ok_or_else(|| regeneration.record.no_such(id))?;
-            if let Some(error) = stored::diverged(source, record, &id.native, sent.as_deref()) {
+            if let Some(error) = stored::diverged(source, record, &id.native, sent.as_deref()).await
+            {
                 return Err(error);
             }
         }

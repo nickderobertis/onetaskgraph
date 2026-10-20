@@ -4960,6 +4960,10 @@ pub enum LinearMarkdown {
     /// Applies those, and one rewrite the ruling does not declare: a line opening `1) ` comes
     /// back opening `1. `.
     Undeclared,
+    /// Applies those, and leaves out every image alone on a line whose line before the blank
+    /// one setting it apart is an image alone on a line too — the reading of an answer that
+    /// blanked the second of two adjacent images in which Linear really dropped it.
+    DropsAdjacentImage,
 }
 
 /// The line the [`LinearMarkdown::Undeclared`] rewrite moves, as it is written and as it is
@@ -4985,6 +4989,23 @@ fn linear_stored(data: &Value, written: Option<&Value>) -> Value {
                 .collect::<Vec<_>>()
                 .join("\n");
             json!(stored)
+        }
+        Some("drops-adjacent-image") => {
+            let lone_image = |line: &str| line.starts_with("![") && line.ends_with(')');
+            let stored = onetaskgraph_linear::stored_form::stored_form(text);
+            let lines: Vec<&str> = stored.split('\n').collect();
+            let kept: Vec<&str> = lines
+                .iter()
+                .enumerate()
+                .filter(|&(index, line)| {
+                    !(lone_image(line)
+                        && index >= 2
+                        && lines[index - 1].is_empty()
+                        && lone_image(lines[index - 2]))
+                })
+                .map(|(_, line)| *line)
+                .collect();
+            json!(kept.join("\n"))
         }
         _ => json!(text),
     }
@@ -5390,6 +5411,7 @@ impl LinearWorkspace {
             LinearMarkdown::Verbatim => "verbatim",
             LinearMarkdown::Declared => "declared",
             LinearMarkdown::Undeclared => "undeclared",
+            LinearMarkdown::DropsAdjacentImage => "drops-adjacent-image",
         });
     }
 

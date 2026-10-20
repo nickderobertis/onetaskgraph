@@ -1962,7 +1962,9 @@ impl Engine {
                 entry.item.item.level().record(),
                 &written,
                 sent.as_deref(),
-            ) {
+            )
+            .await
+            {
                 diverged.push((entry.item.source.clone(), error));
             }
         }
@@ -5222,7 +5224,8 @@ impl Engine {
             item.item.level().record(),
             &written,
             sent.as_deref(),
-        );
+        )
+        .await;
         let written = qualified(written);
         let expected = self.take_expected(&written).unwrap_or_default();
         if let Some(plan) = &item.comment_plan {

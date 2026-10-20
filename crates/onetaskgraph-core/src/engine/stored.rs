@@ -56,7 +56,14 @@ pub(super) fn forget(destination: &ResolvedSource, record: MetadataRecord, id: &
 /// The refusal owed when the write of the `record` `id` just sent `sent` and its answer says
 /// `destination` stores something else; `None` when they agree, or when the destination said
 /// nothing about what it stores.
-pub(super) fn diverged(
+///
+/// An answer that lacks, or blanks, a line that was sent as an image is not taken at its word:
+/// one read of the stored item confirms it, and that read is compared instead. So a digest is
+/// never recorded over content missing an image the write sent — the read either holds it, and
+/// the item agrees, or does not, and the refusal names the line — while a write whose answer
+/// merely left the image out of what it echoed is accepted. A read that fails or finds no item
+/// confirms nothing, and the answer's difference is refused as it stands.
+pub(super) async fn diverged(
     destination: &ResolvedSource,
     record: MetadataRecord,
     id: &NativeId,
@@ -64,7 +71,44 @@ pub(super) fn diverged(
 ) -> Option<EngineError> {
     let stored = destination.source().stored_content(record, id)?;
     let sent = sent.unwrap_or_default();
-    if stored == sent {
+    let answered = first_difference(sent, &stored)?;
+    let differs = if answered.lacks_an_image() {
+        match confirmed(destination, record, id).await {
+            Some(read) => first_difference(sent, &read)?,
+            None => answered,
+        }
+    } else {
+        answered
+    };
+    Some(EngineError::StoredContentDiverged {
+        item: GlobalId::new(destination.name().clone(), id.clone()),
+        line: differs.line,
+        sent: differs.sent,
+        stored: differs.stored,
+    })
+}
+
+/// The first line, counted from 1, at which `sent` and `stored` differ, with each side's text of
+/// it — `None` for a side that ended before it.
+struct Difference {
+    line: usize,
+    sent: Option<String>,
+    stored: Option<String>,
+}
+
+impl Difference {
+    /// Whether the stored side lacks, or holds blank, a line that was sent holding an image.
+    fn lacks_an_image(&self) -> bool {
+        self.sent.as_deref().is_some_and(|line| line.contains("!["))
+            && self
+                .stored
+                .as_deref()
+                .is_none_or(|line| line.trim().is_empty())
+    }
+}
+
+fn first_difference(sent: &str, stored: &str) -> Option<Difference> {
+    if sent == stored {
         return None;
     }
     let mut sent_lines = sent.split('\n');
@@ -74,14 +118,29 @@ pub(super) fn diverged(
         line += 1;
         let (sent_line, stored_line) = (sent_lines.next(), stored_lines.next());
         if sent_line != stored_line {
-            return Some(EngineError::StoredContentDiverged {
-                item: GlobalId::new(destination.name().clone(), id.clone()),
+            return Some(Difference {
                 line,
                 sent: sent_line.map(str::to_owned),
                 stored: stored_line.map(str::to_owned),
             });
         }
     }
+}
+
+/// The content `destination` holds for the `record` `id`, read again; `None` when the read
+/// fails or finds no such item.
+async fn confirmed(
+    destination: &ResolvedSource,
+    record: MetadataRecord,
+    id: &NativeId,
+) -> Option<String> {
+    let source = destination.source();
+    let content = match record {
+        MetadataRecord::Task => source.get_task(id).await.ok()??.content,
+        MetadataRecord::Project => source.get_project(id).await.ok()??.content,
+        MetadataRecord::Document => source.get_document(id).await.ok()??.content,
+    };
+    Some(content.unwrap_or_default())
 }
 
 #[cfg(test)]
@@ -167,10 +226,15 @@ mod tests {
     }
 
     fn shouting(stored: Option<&str>) -> ResolvedSource {
+        holding(InMemoryConfig::default(), stored)
+    }
+
+    /// A source over `held` whose last write's answer says it stores `stored`.
+    fn holding(held: InMemoryConfig, stored: Option<&str>) -> ResolvedSource {
         ResolvedSource::adopt(
             SourceName::new("loud".to_owned()).expect("a name"),
             Box::new(Shouting {
-                inner: InMemorySource::new(InMemoryConfig::default()).expect("an empty source"),
+                inner: InMemorySource::new(held).expect("a source"),
                 stored: Mutex::new(stored.map(str::to_owned)),
             }),
         )
@@ -215,8 +279,8 @@ mod tests {
         assert_eq!((nothing, none), (None, BTreeMap::new()));
     }
 
-    #[test]
-    fn the_first_differing_line_is_named_with_both_texts_and_an_agreeing_answer_is_none() {
+    #[tokio::test]
+    async fn the_first_differing_line_is_named_with_both_texts_and_an_agreeing_answer_is_none() {
         let id = NativeId("T-1".to_owned());
         assert!(
             diverged(
@@ -225,10 +289,19 @@ mod tests {
                 &id,
                 Some("A\nB")
             )
+            .await
             .is_none()
         );
-        assert!(diverged(&shouting(None), MetadataRecord::Task, &id, Some("A")).is_none());
-        assert!(diverged(&shouting(Some("")), MetadataRecord::Task, &id, None).is_none());
+        assert!(
+            diverged(&shouting(None), MetadataRecord::Task, &id, Some("A"))
+                .await
+                .is_none()
+        );
+        assert!(
+            diverged(&shouting(Some("")), MetadataRecord::Task, &id, None)
+                .await
+                .is_none()
+        );
         let Some(EngineError::StoredContentDiverged {
             item,
             line,
@@ -240,6 +313,7 @@ mod tests {
             &id,
             Some("A\nB\nC"),
         )
+        .await
         else {
             panic!("a difference is refused");
         };
@@ -254,6 +328,7 @@ mod tests {
             &id,
             Some("A"),
         )
+        .await
         else {
             panic!("a difference is refused");
         };
@@ -263,6 +338,7 @@ mod tests {
         );
         // A line one side does not have is told apart from an empty one.
         let shown = diverged(&shouting(Some("A\n")), MetadataRecord::Task, &id, Some("A"))
+            .await
             .expect("a difference is refused")
             .to_string();
         assert!(
@@ -272,6 +348,82 @@ mod tests {
         // What an earlier write left is let go of before the one compared.
         let earlier = shouting(Some("stale"));
         forget(&earlier, MetadataRecord::Task, &id);
-        assert!(diverged(&earlier, MetadataRecord::Task, &id, Some("A")).is_none());
+        assert!(
+            diverged(&earlier, MetadataRecord::Task, &id, Some("A"))
+                .await
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn an_answer_lacking_an_image_it_was_sent_is_confirmed_by_one_read_of_the_item() {
+        let id = NativeId("T-1".to_owned());
+        let sent = "![a](https://x/a)\n\n![b](https://x/b)";
+        let held = |content: &str| -> InMemoryConfig {
+            serde_json::from_value(json!({
+                "tasks": [{"id": "T-1", "title": "t", "content": content, "url": "https://x/T-1",
+                           "status": {"category": "todo", "name": "Todo"}, "labels": [],
+                           "project": null, "created_at": null, "updated_at": null,
+                           "metadata": {}}]
+            }))
+            .expect("an in-memory configuration")
+        };
+        // The answer left the second image out, the item holds it: accepted on the read.
+        for answered in ["![a](https://x/a)\n", "![a](https://x/a)\n\n"] {
+            assert!(
+                diverged(
+                    &holding(held(sent), Some(answered)),
+                    MetadataRecord::Task,
+                    &id,
+                    Some(sent)
+                )
+                .await
+                .is_none(),
+                "{answered:?}"
+            );
+        }
+        // The item really lacks it: refused naming the image line the read does not have.
+        let Some(EngineError::StoredContentDiverged {
+            line,
+            sent: line_sent,
+            stored,
+            ..
+        }) = diverged(
+            &holding(held("![a](https://x/a)\n"), Some("![a](https://x/a)\n")),
+            MetadataRecord::Task,
+            &id,
+            Some(sent),
+        )
+        .await
+        else {
+            panic!("a missing image is refused");
+        };
+        assert_eq!(
+            (line, line_sent.as_deref(), stored.as_deref()),
+            (3, Some("![b](https://x/b)"), None)
+        );
+        // An item the read cannot find confirms nothing: the answer's difference is refused.
+        assert!(
+            diverged(
+                &shouting(Some("![a](https://x/a)\n")),
+                MetadataRecord::Task,
+                &id,
+                Some(sent)
+            )
+            .await
+            .is_some()
+        );
+        // A difference at a line that was not sent as an image is refused without a read, even
+        // when the item holds what was sent.
+        assert!(
+            diverged(
+                &holding(held("A\nB"), Some("A\nb")),
+                MetadataRecord::Task,
+                &id,
+                Some("A\nB")
+            )
+            .await
+            .is_some()
+        );
     }
 }
