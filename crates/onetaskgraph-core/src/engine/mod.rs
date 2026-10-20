@@ -1836,8 +1836,46 @@ impl Engine {
         &self,
         request: &ProjectRequest,
     ) -> Result<QueryResponse<Qualified<Project>>, EngineError> {
+        self.projects_copied_from(request, None).await
+    }
+
+    /// One page of the projects copied from `origin` — those whose recorded copy origin is
+    /// exactly that qualified id — in the shape [`projects`](Self::projects) answers, with
+    /// every other filter of `request` applied as it applies them.
+    ///
+    /// Each selected source is asked [`TaskSource::query_projects_by_origin`], so a source
+    /// that can find one origin's copies answers without listing every project it holds, and
+    /// the plan reports the origin pushed down to it. Zero, one or several projects may come
+    /// back: which of several a caller wants is the caller's question.
+    ///
+    /// # Errors
+    ///
+    /// As [`tasks`](Self::tasks).
+    pub async fn projects_by_origin(
+        &self,
+        request: &ProjectRequest,
+        origin: &GlobalId,
+    ) -> Result<QueryResponse<Qualified<Project>>, EngineError> {
+        self.projects_copied_from(request, Some(origin)).await
+    }
+
+    /// [`projects`](Self::projects), narrowed to one copy origin when `origin` names one.
+    async fn projects_copied_from(
+        &self,
+        request: &ProjectRequest,
+        origin: Option<&GlobalId>,
+    ) -> Result<QueryResponse<Qualified<Project>>, EngineError> {
         let names = self.resolve_selection(&request.sources)?;
-        let query = shape("project-list", &names, &request.filters);
+        // An origin is part of what a page token resumes, so a token one origin's listing
+        // handed out is refused by another's, as a token of other filters is.
+        let query = match origin {
+            None => shape("project-list", &names, &request.filters),
+            Some(origin) => shape(
+                "project-list",
+                &names,
+                &(&request.filters, origin.to_string()),
+            ),
+        };
         let states = resumption(
             self,
             request.paging.token.as_ref(),
@@ -1864,7 +1902,7 @@ impl Engine {
 
         let shapes: Vec<ProjectShape> = ready
             .iter()
-            .map(|source| shape_projects(&source.source().capabilities(), &request.filters))
+            .map(|source| shape_projects(&source.source().capabilities(), &request.filters, origin))
             .collect();
         let counters: Vec<AtomicU32> = ready.iter().map(|_| AtomicU32::new(0)).collect();
         let outcomes: Vec<Outcomes> = shapes.iter().map(|shape| shape.outcomes.clone()).collect();
@@ -2504,11 +2542,20 @@ struct TaskShape {
 /// As [`TaskShape`], for projects.
 struct ProjectShape {
     /// What the source is asked.
-    pushed: ProjectQuery,
+    pushed: ProjectAsk,
     /// What the engine narrows afterwards.
     local: LocalProjects,
     /// What to report.
     outcomes: Outcomes,
+}
+
+/// Which of its two project listings a source is asked: one query, or every project copied
+/// from one origin — never both, because the second carries nothing of the first.
+enum ProjectAsk {
+    /// [`TaskSource::query_projects`] with this query.
+    Query(ProjectQuery),
+    /// [`TaskSource::query_projects_by_origin`] for this origin.
+    Origin(GlobalId),
 }
 
 /// As [`TaskShape`], for documents.
@@ -3101,11 +3148,55 @@ fn shape_tasks(
 }
 
 /// Split a project query between the source and the engine.
-fn shape_projects(capabilities: &Capabilities, filters: &Filters) -> ProjectShape {
+///
+/// A listing by copy origin asks the source [`TaskSource::query_projects_by_origin`], which
+/// carries the origin and nothing else, so every other predicate of it is the engine's to
+/// apply — and the origin itself is checked again here, so a source answering wider than
+/// the method states cannot widen the answer.
+fn shape_projects(
+    capabilities: &Capabilities,
+    filters: &Filters,
+    origin: Option<&GlobalId>,
+) -> ProjectShape {
+    if let Some(origin) = origin {
+        let mut local = LocalProjects::default();
+        let mut outcomes = Outcomes::default();
+        local.labels = (!filters.labels.is_empty()).then(|| filters.labels.clone());
+        local.statuses.clone_from(&filters.statuses);
+        local.text.clone_from(&filters.text);
+        local.origin = Some(origin.clone());
+        if !filters.labels.is_empty() {
+            outcomes.record(Predicate::Label, Outcome::AppliedLocally);
+        }
+        if !filters.statuses.is_empty() {
+            outcomes.record(Predicate::Status, Outcome::AppliedLocally);
+        }
+        if let Some(text) = &filters.text {
+            outcomes.record_all(text_predicates(text.fields), Outcome::AppliedLocally);
+        }
+        outcomes.record(Predicate::Origin, Outcome::PushedDown);
+        return ProjectShape {
+            pushed: ProjectAsk::Origin(origin.clone()),
+            local,
+            outcomes,
+        };
+    }
+    let (pushed, local, outcomes) = shape_project_query(capabilities, filters);
+    ProjectShape {
+        pushed: ProjectAsk::Query(pushed),
+        local,
+        outcomes,
+    }
+}
+
+/// Split a project query that names no origin between the source and the engine.
+fn shape_project_query(
+    capabilities: &Capabilities,
+    filters: &Filters,
+) -> (ProjectQuery, LocalProjects, Outcomes) {
     let mut pushed = ProjectQuery::default();
     let mut local = LocalProjects::default();
     let mut outcomes = Outcomes::default();
-
     if !filters.labels.is_empty() {
         if capabilities.filter_by_label.is_native() {
             pushed.labels = filters.labels.clone();
@@ -3134,12 +3225,7 @@ fn shape_projects(capabilities: &Capabilities, filters: &Filters) -> ProjectShap
             outcomes.record_all(predicates, Outcome::AppliedLocally);
         }
     }
-
-    ProjectShape {
-        pushed,
-        local,
-        outcomes,
-    }
+    (pushed, local, outcomes)
 }
 
 /// Split a document query between the source and the engine.
@@ -3207,14 +3293,14 @@ fn shape_documents(
 fn shape_hits(capabilities: &Capabilities, filters: &Filters, stream: StreamKind) -> HitShape {
     match stream {
         StreamKind::Projects => {
-            let shaped = shape_projects(capabilities, filters);
+            let (projects, local_projects, outcomes) = shape_project_query(capabilities, filters);
             HitShape {
                 stream,
                 tasks: TaskQuery::default(),
-                projects: shaped.pushed,
+                projects,
                 local_tasks: LocalTasks::default(),
-                local_projects: shaped.local,
-                outcomes: shaped.outcomes,
+                local_projects,
+                outcomes,
             }
         }
         StreamKind::Items | StreamKind::Tasks | StreamKind::Recorded => {
@@ -3302,10 +3388,15 @@ async fn fetch_projects(
         |cursor, limit| async move {
             calls.fetch_add(1, Ordering::Relaxed);
             let request = PageRequest { cursor, limit };
-            source
-                .source()
-                .query_projects(&shape.pushed, &request)
-                .await
+            match &shape.pushed {
+                ProjectAsk::Origin(origin) => {
+                    source
+                        .source()
+                        .query_projects_by_origin(&origin.to_string(), &request)
+                        .await
+                }
+                ProjectAsk::Query(query) => source.source().query_projects(query, &request).await,
+            }
         },
     )
     .await

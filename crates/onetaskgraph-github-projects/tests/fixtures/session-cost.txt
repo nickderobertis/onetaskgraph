@@ -1,9 +1,9 @@
-requests 193
-node count 292849
+requests 210
+node count 293608
 
 requests per call
     1       0  DELETE /repos/{owner}/{repo}/labels/{name}
-    1       0  GET /rate_limit
+    9       0  GET /rate_limit
     2       0  GET /repos/{owner}/{repo}/labels
     2       0  PATCH /repos/{owner}/{repo}/labels/{name}
     1       0  POST /repos/{owner}/{repo}/labels
@@ -32,7 +32,7 @@ requests per call
     1     150  node-count and point-cost reconciliation while reading a batch of issues by their references
     1    7272  node-count and point-cost reconciliation while reading a batch of issues with their comments
     1    7413  node-count and point-cost reconciliation while reading a batch of issues with their comments and dependencies for a copy
-    1   25400  node-count and point-cost reconciliation while reading a project's tasks
+    1   25653  node-count and point-cost reconciliation while reading a project's tasks
     1     100  node-count and point-cost reconciliation while reading a task's comments
     1     200  node-count and point-cost reconciliation while reading an issue's dependencies
     1     153  node-count and point-cost reconciliation while reading one draft
@@ -50,7 +50,7 @@ requests per call
     1    5150  node-count and point-cost reconciliation while snapshotting board Status options and assignments
     1       2  nominated board lookup
     1    7272  reading a batch of issues with their comments
-    2   50800  reading a project's tasks
+    2   51306  reading a project's tasks
     3     300  reading a task's comments
     7    1000  reading an issue's dependencies
    37   16872  reading one issue
@@ -63,6 +63,7 @@ requests per call
    12   81600  searching this board's issues
     1       0  taking an issue out of its project
     2   20200  terminal status read-back
+    9       0  the GraphQL rateLimit object
     6       0  updating an issue
     4     400  writable field discovery
     8       0  writing a board field

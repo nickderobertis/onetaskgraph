@@ -1056,6 +1056,30 @@ impl TaskSource for CachedSource {
         .await
     }
 
+    /// Only what the cache cannot answer is read ahead: an id whose task or document entry a
+    /// pin in this command vouches for is served by its own read with no request, so reading
+    /// it again ahead of that would spend a request on an answer already held. A project is
+    /// served only when the cache holds its forward edges too, which a copy reads of it next:
+    /// where the token does not cover them, its edge reads would each be a request of their
+    /// own, and reading it ahead carries them in the one request instead.
+    async fn read_ahead_for_copy(&self, ids: &[NativeId]) -> Result<(), SourceError> {
+        let unserved: Vec<NativeId> = ids
+            .iter()
+            .filter(|id| {
+                let task = self.servable(id, false).is_ok();
+                let project = self.servable_project(id).is_some()
+                    && self.cache.project_coverage.forward_edges.reason().is_none()
+                    && self.held_project_edges(id).is_some();
+                !(task || project || self.servable_document(id).is_some())
+            })
+            .cloned()
+            .collect();
+        if unserved.is_empty() {
+            return Ok(());
+        }
+        self.inner.read_ahead_for_copy(&unserved).await
+    }
+
     async fn get_project(&self, id: &NativeId) -> Result<Option<Project>, SourceError> {
         if let Some(project) = self.servable_project(id) {
             return Ok(Some(project));
@@ -1093,6 +1117,24 @@ impl TaskSource for CachedSource {
         page: &PageRequest,
     ) -> Result<Page<Project>, SourceError> {
         let listed = self.inner.query_projects(query, page).await?;
+        let mut command = self.cache.command();
+        for project in &listed.items {
+            if let Some(version) = &project.version {
+                command
+                    .project_listed
+                    .insert(project.id.clone(), version.clone());
+            }
+        }
+        drop(command);
+        Ok(listed)
+    }
+
+    async fn query_projects_by_origin(
+        &self,
+        origin: &str,
+        page: &PageRequest,
+    ) -> Result<Page<Project>, SourceError> {
+        let listed = self.inner.query_projects_by_origin(origin, page).await?;
         let mut command = self.cache.command();
         for project in &listed.items {
             if let Some(version) = &project.version {
@@ -1421,6 +1463,24 @@ impl TaskSource for CachedSource {
         page: &PageRequest,
     ) -> Result<Page<Document>, SourceError> {
         let listed = self.inner.query_documents(query, page).await?;
+        let mut command = self.cache.command();
+        for document in &listed.items {
+            if let Some(version) = &document.version {
+                command
+                    .document_listed
+                    .insert(document.id.clone(), version.clone());
+            }
+        }
+        drop(command);
+        Ok(listed)
+    }
+
+    async fn query_documents_by_origin(
+        &self,
+        origin: &str,
+        page: &PageRequest,
+    ) -> Result<Page<Document>, SourceError> {
+        let listed = self.inner.query_documents_by_origin(origin, page).await?;
         let mut command = self.cache.command();
         for document in &listed.items {
             if let Some(version) = &document.version {

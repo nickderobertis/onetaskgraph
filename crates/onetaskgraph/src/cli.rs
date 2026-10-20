@@ -1454,6 +1454,14 @@ pub struct ProjectListArgs {
     #[command(flatten)]
     pub filters: FilterArgs,
 
+    /// Keep projects copied from this item: those whose recorded copy origin is exactly this
+    /// qualified id, `<source>:<native-id>`. Zero, one or several may match.
+    ///
+    /// Each source is asked for that origin's copies rather than listing every project it
+    /// holds, where it can be.
+    #[arg(long = "origin", value_name = "SOURCE:ID", value_parser = origin)]
+    pub origin: Option<GlobalId>,
+
     #[command(flatten)]
     pub paging: PageArgs,
 }

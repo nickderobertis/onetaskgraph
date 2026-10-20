@@ -66,12 +66,13 @@ use cleanup::{
 };
 
 // `settle` is shared with `tests/settle_gate.rs`, which drives these reads against a loopback
-// workspace whose index lags.
+// workspace whose index lags, and the read after a change against a replica that lags.
 mod settle;
 
 use settle::{
-    LINEAR_DOCUMENT_LISTING, LINEAR_INDEX, settled, settled_document_absent, settled_documents,
-    settled_label, settled_tasks, settled_walk, task_titles, walked_task_titles,
+    LINEAR_DOCUMENT_LISTING, LINEAR_INDEX, LINEAR_REPLICA, settled, settled_document_absent,
+    settled_documents, settled_label, settled_tasks, settled_walk, task_titles, token_moved,
+    walked_task_titles,
 };
 
 /// The two workflow states this fixture files its issues under.
@@ -675,37 +676,6 @@ async fn every_field_change_moves_a_linear_tasks_token(
         );
         Ok::<Task, String>(held)
     };
-    // Whether a change to a member the token covers moved it: never to an equal or an earlier
-    // token, which would let a cache serve the task as it was.
-    let moved = |kind: &str, before: &Task, after: &Task| {
-        let (Some(was), Some(now)) = (before.version.as_deref(), after.version.as_deref()) else {
-            return Ok(());
-        };
-        let order = source.order_versions(was, now);
-        ensure!(
-            !matches!(
-                order,
-                Some(std::cmp::Ordering::Equal | std::cmp::Ordering::Greater)
-            ),
-            "{kind} left the task's token at or before {was}: it read {now} ({order:?}); \
-             updatedAt {:?} → {:?}, content {}, metadata {} — a read whose members are all \
-             unchanged is older than the write, and one whose content or metadata changed is \
-             Linear not moving updatedAt for it",
-            before.updated_at,
-            after.updated_at,
-            if before.content == after.content {
-                "unchanged"
-            } else {
-                "changed"
-            },
-            if before.metadata == after.metadata {
-                "unchanged"
-            } else {
-                "changed"
-            },
-        );
-        Ok::<(), String>(())
-    };
     let pause = || tokio::time::sleep(std::time::Duration::from_millis(1_100));
     let mut evidence = Vec::new();
     let mut before = read().await?;
@@ -775,8 +745,7 @@ async fn every_field_change_moves_a_linear_tasks_token(
         .await
         .map_err(|error| format!("live content write failed: {error}"))?
         .ok_or_else(|| "the task to edit was not there".to_owned())?;
-    let after = read().await?;
-    moved("a body edit", &before, &after)?;
+    let after = token_moved(source, LINEAR_REPLICA, "a body edit", &before, &read).await?;
     note("a body edit", &before, &after);
     before = after;
 
@@ -792,8 +761,7 @@ async fn every_field_change_moves_a_linear_tasks_token(
         .await
         .map_err(|error| format!("live title write failed: {error}"))?
         .ok_or_else(|| "the task to rename was not there".to_owned())?;
-    let after = read().await?;
-    moved("a title edit", &before, &after)?;
+    let after = token_moved(source, LINEAR_REPLICA, "a title edit", &before, &read).await?;
     note("a title edit", &before, &after);
     before = after;
 
@@ -813,8 +781,7 @@ async fn every_field_change_moves_a_linear_tasks_token(
         })
         .await
         .map_err(|error| format!("live label write failed: {error}"))?;
-    let after = read().await?;
-    moved("a label change", &before, &after)?;
+    let after = token_moved(source, LINEAR_REPLICA, "a label change", &before, &read).await?;
     note("a label change", &before, &after);
     before = after;
 
@@ -828,8 +795,7 @@ async fn every_field_change_moves_a_linear_tasks_token(
         .await
         .map_err(|error| format!("live metadata write failed: {error}"))?
         .ok_or_else(|| "the task to annotate was not there".to_owned())?;
-    let after = read().await?;
-    moved("a metadata change", &before, &after)?;
+    let after = token_moved(source, LINEAR_REPLICA, "a metadata change", &before, &read).await?;
     note("a metadata change", &before, &after);
     before = after;
 
@@ -839,8 +805,7 @@ async fn every_field_change_moves_a_linear_tasks_token(
         .await
         .map_err(|error| format!("live priority write failed: {error}"))?
         .ok_or_else(|| "the task to prioritise was not there".to_owned())?;
-    let after = read().await?;
-    moved("a priority change", &before, &after)?;
+    let after = token_moved(source, LINEAR_REPLICA, "a priority change", &before, &read).await?;
     note("a priority change", &before, &after);
     before = after;
 
@@ -875,8 +840,7 @@ async fn every_field_change_moves_a_linear_tasks_token(
         .await
         .map_err(|error| format!("live status write failed: {error}"))?
         .ok_or_else(|| "the task to finish was not there".to_owned())?;
-    let after = read().await?;
-    moved("a status change", &before, &after)?;
+    let after = token_moved(source, LINEAR_REPLICA, "a status change", &before, &read).await?;
     note("a status change", &before, &after);
 
     eprintln!(

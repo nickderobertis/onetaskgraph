@@ -109,6 +109,18 @@ NOT_METHODS = {
         "`get_task_details`, which crosses as `get_task_detail` or `get_task` and "
         "`task_comments`"
     ),
+    "query_projects_by_origin": (
+        "not a message: §4.4 says the engine answers it for a hosted source as "
+        "`query_projects` with no filter, every page walked and narrowed to that origin"
+    ),
+    "query_documents_by_origin": (
+        "not a message: §4.4 says the engine answers it for a hosted source as "
+        "`query_documents` with no filter, every page walked and narrowed to that origin"
+    ),
+    "read_ahead_for_copy": (
+        "not a message: §4.4 says the engine reads nothing ahead for a hosted source, so "
+        "each counterpart crosses as its own `get_task`, `get_project` or `get_document`"
+    ),
     "check_status_write": (
         "not a message: §4.9 says the engine answers it for a hosted source as the trait's "
         "default does, and the plugin's own write refuses a status it has no name for"

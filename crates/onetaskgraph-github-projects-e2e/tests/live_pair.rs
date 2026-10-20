@@ -323,11 +323,24 @@ fn run_pair(scenario: &str) {
         );
         let main: SessionRecord =
             serde_json::from_slice(&std::fs::read(records.join("main.json")).unwrap()).unwrap();
-        let probes: Vec<_> = main
+        // The phase opens with its recheck, which reads the budgets again under the 40% rule
+        // with the two reads the session's admission made first; what is counted here is what
+        // follows, the reconciliation's own.
+        let budget_reads: Vec<&str> = main.calls[..2]
+            .iter()
+            .map(|call| call.operation_sha256.as_str())
+            .collect();
+        let phase: Vec<_> = main
             .calls
             .iter()
             .filter(|call| call.phase == Phase::Reconciliation)
             .collect();
+        let rechecked = phase
+            .iter()
+            .take(budget_reads.len())
+            .take_while(|call| budget_reads.contains(&call.operation_sha256.as_str()))
+            .count();
+        let probes: Vec<_> = phase[rechecked..].to_vec();
         assert_eq!(probes.len(), 23);
         assert_eq!(
             probes[1].outcome,

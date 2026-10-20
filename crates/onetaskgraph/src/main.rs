@@ -726,10 +726,12 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
                 filters: filters(&args.filters)?,
                 paging: paging(loaded, &args.paging)?,
             };
-            let response = engine(loaded)
-                .projects(&request)
-                .await
-                .map_err(|error| Failure::from(&error))?;
+            let engine = engine(loaded);
+            let response = match &args.origin {
+                Some(origin) => engine.projects_by_origin(&request, origin).await,
+                None => engine.projects(&request).await,
+            }
+            .map_err(|error| Failure::from(&error))?;
             respond(
                 out,
                 loaded,
