@@ -3017,15 +3017,20 @@ pub fn github_projects_with_board(sandbox: &Sandbox) -> (Value, GitHubBoardField
     github_projects_board(sandbox, None, &[])
 }
 
-/// The same board again, failing the first attempt to file a created issue on it.
+/// The read of where a created issue was filed — the board item GitHub adds once a copy's
+/// `createIssue` names the board in `projectV2Ids` — as the failures below name it.
+const READ_OF_FILED_ITEMS: &str = "status:fieldValueByName(name:$statusName)";
+
+/// The same board again, failing the first read of the board item a created issue was filed
+/// as.
 ///
-/// Creating an item there is several calls — `createIssue`, then
-/// `addProjectV2ItemById`, then the board's own fields — so GitHub can fail part way
-/// through, and what the product does with an issue that exists but is on no board is a
-/// journey rather than a reading of the code. The failure is spent once, so the same
-/// board answers the retry.
+/// Creating an item there is several calls — `createIssue` filing it on the board, then a
+/// read of the board item GitHub adds after answering, then the board's own fields — so
+/// GitHub can fail part way through, and what the product does with an issue that exists but
+/// has no board item it can write is a journey rather than a reading of the code. The failure
+/// is spent once, so the same board answers the retry.
 pub fn github_projects_failing_to_file_once(sandbox: &Sandbox) -> Value {
-    github_projects_board(sandbox, None, &["addProjectV2ItemById(input:$input)"]).0
+    github_projects_board(sandbox, None, &[READ_OF_FILED_ITEMS]).0
 }
 
 /// The same board, failing the first field write onto an item it has already filed.
@@ -3033,27 +3038,21 @@ pub fn github_projects_failing_to_file_once(sandbox: &Sandbox) -> Value {
 /// The later half of that sequence: the issue exists and is on the board, and the copy
 /// origin and status that make it findable and readable are what did not land.
 pub fn github_projects_failing_a_field_write_once(sandbox: &Sandbox) -> Value {
-    github_projects_board(
-        sandbox,
-        None,
-        &["updateProjectV2ItemFieldValue(input:$input)"],
-    )
-    .0
+    // Whichever document carries the write: one item's own, or a copy's aliased batch.
+    github_projects_board(sandbox, None, &["updateProjectV2ItemFieldValue(input:$"]).0
 }
 
-/// The same board, failing to file a created issue *and* the tidy-up that would remove it.
+/// The same board, failing the read of where a created issue was filed *and* the tidy-up that
+/// would remove it.
 ///
-/// The earlier half of the same sequence: the issue exists in the repository and is on no
-/// board, so the source deletes it — and this board refuses that too. The caller is owed
-/// the failure that stopped the copy, for the reason the sibling below gives.
+/// The earlier half of the same sequence: the issue exists in the repository and nothing of it
+/// past its create landed, so the source deletes it — and this board refuses that too. The
+/// caller is owed the failure that stopped the copy, for the reason the sibling below gives.
 pub fn github_projects_failing_to_file_and_its_cleanup(sandbox: &Sandbox) -> Value {
     github_projects_board(
         sandbox,
         None,
-        &[
-            "addProjectV2ItemById(input:$input)",
-            "deleteIssue(input:$input)",
-        ],
+        &[READ_OF_FILED_ITEMS, "deleteIssue(input:$input)"],
     )
     .0
 }
@@ -3070,7 +3069,7 @@ pub fn github_projects_failing_a_field_write_and_its_cleanup(sandbox: &Sandbox) 
         sandbox,
         None,
         &[
-            "updateProjectV2ItemFieldValue(input:$input)",
+            "updateProjectV2ItemFieldValue(input:$",
             "deleteIssue(input:$input)",
         ],
     )

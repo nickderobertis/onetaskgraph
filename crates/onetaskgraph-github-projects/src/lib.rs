@@ -5178,6 +5178,8 @@ impl GitHubProjectsSource {
         }
         let answered = if query == graphql::ISSUES_BY_REFERENCE {
             self.answer_unresolved(&body)
+        } else if query == graphql::CREATE_ISSUES {
+            answer_with_errors(&body).map_or_else(|| self.answer(&body), Ok)
         } else {
             self.answer(&body)
         };
@@ -9623,7 +9625,21 @@ impl GitHubProjectsSource {
                     Ok(data) => data,
                     Err(error) => break 'create Some(error),
                 };
-                let mut refusal = None;
+                let mut refusal = data.get(ANSWER_ERRORS).map(|errors| {
+                    let said: Vec<&str> = errors
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|error| error.get("message").and_then(Value::as_str))
+                        .collect();
+                    SourceError::Refused {
+                        message: if said.is_empty() {
+                            "GitHub returned GraphQL errors".to_owned()
+                        } else {
+                            said.join("; ")
+                        },
+                    }
+                });
                 for slot in 0..chunk.len() {
                     match data
                         .pointer(&format!("/create{slot}/issue"))
@@ -9635,6 +9651,7 @@ impl GitHubProjectsSource {
                                 refusal.get_or_insert(error);
                             }
                         },
+                        // An alias GitHub refused answers nothing, and the refusal says why.
                         None => {
                             refusal.get_or_insert(SourceError::Malformed {
                                 message: "GitHub issue creation returned no issue".into(),
@@ -9674,24 +9691,14 @@ impl GitHubProjectsSource {
         };
         let sent = self.send_deferred(&board, &deferred).await;
         if let Err(error) = sent {
-            let mut left = Vec::new();
+            // Best effort, and the failure is what the caller is told, as a write of one item
+            // that fails part way takes back what it created: the copy that held these back
+            // journalled every one, so one this cannot take back its undo tries again, and says
+            // so when it cannot either.
             for held in &deferred.created {
-                if let Err(refused) = self.delete_issue(&held.content).await {
-                    left.push(format!("{} ({refused})", held.content.0));
-                }
+                let _ = self.delete_issue(&held.content).await;
             }
-            if left.is_empty() {
-                return Err(error);
-            }
-            return Err(noting(
-                error,
-                &format!(
-                    "; the issues this write created were to be taken back, and {} could not \
-                     be: {}; next: delete them on the board",
-                    plural(u32::try_from(left.len()).unwrap_or(u32::MAX), "issue"),
-                    left.join(", ")
-                ),
-            ));
+            return Err(error);
         }
         Ok(())
     }
@@ -10738,6 +10745,27 @@ struct HeldBack {
     close: Option<Value>,
     /// The issues it is blocked by.
     edges: Vec<String>,
+}
+
+/// The member [`answer_with_errors`] carries a response's GraphQL errors under, beside its data:
+/// no GitHub type has a field of this name.
+const ANSWER_ERRORS: &str = "onetaskgraphErrors";
+
+/// A response's `data` with its GraphQL errors beside it under [`ANSWER_ERRORS`], when it has
+/// both — or `None`, for an answer [`GitHubProjectsSource::answer`] reads as it always has.
+///
+/// What [`graphql::CREATE_ISSUES`] is answered with: GitHub runs a document's mutation fields in
+/// order and answers each one that ran, so a refusal of one alias leaves the issues the others
+/// created named in the data beside it — the ids a copy needs to take them back.
+fn answer_with_errors(body: &str) -> Option<Value> {
+    let parsed: Value = serde_json::from_str(body).ok()?;
+    let errors = parsed
+        .get("errors")?
+        .as_array()
+        .filter(|errors| !errors.is_empty())?;
+    let mut data = parsed.get("data").filter(|data| data.is_object())?.clone();
+    data[ANSWER_ERRORS] = Value::Array(errors.clone());
+    Some(data)
 }
 
 /// The `createIssue` input that files the new issue on `board` and, when `incoming` names one,

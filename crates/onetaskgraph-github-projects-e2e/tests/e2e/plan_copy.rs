@@ -7,9 +7,12 @@
 //! and that the board ends holding exactly the plan. Neither may depend on how many items the
 //! board has accumulated, so every scenario is driven on a board of 2,000 items and again on
 //! one of 20,000, and the two request tallies are held equal. It asserts no time and no point
-//! total against a bound: that is the copy budgets' job, recorded on top of this journey.
+//! total against a bound: that is the copy budgets' job. What each scenario on the board of
+//! 2,000 cost is recorded here as their telemetry — `github-plan-copy-seconds-*`,
+//! `github-plan-copy-points-*` and `github-plan-copy-content-creations` — which
+//! `budget_runner::report_plan_copy` hands to onebudgetspec.
 
-use super::asset_board::{Board, Call, Kind};
+use super::asset_board::{Board, Call, Kind, creations};
 use onetaskgraph_e2e_support::{
     binary,
     clock::SimulatedClock,
@@ -27,6 +30,13 @@ use std::{
 
 /// The seed every plan below is generated from.
 const SEED: u64 = 20_261_018;
+
+/// What a recording of the copy budgets names the plan it measured: the generated plan the
+/// budgets' workload states.
+pub(super) const WORKLOAD: &str = "generated 10-item plan";
+
+/// The three scenarios the copy budgets measure, by the name a recording gives each.
+pub(super) const SCENARIOS: [&str; 3] = ["first", "changed", "unchanged"];
 
 /// The board size the spike's `plans` board stood at, rounded, and ten times it.
 pub(super) const SMALL: usize = 2_000;
@@ -341,16 +351,138 @@ impl Plan {
     /// One scenario as `just copy-plan` sends it — `project copy` then `document copy` — with
     /// both reports and every request the board answered for the two.
     pub fn copy(&self) -> (Value, Value, Vec<Call>) {
+        let scenario = self.copy_timed();
+        (scenario.project, scenario.document, scenario.calls)
+    }
+
+    /// [`Self::copy`], with how long each of its two commands took: in the board's simulated
+    /// time, and in the real time its process ran.
+    pub fn copy_timed(&self) -> Scenario {
         let before = self.board.calls().len();
         let lease = self.clock.lease(0);
-        let project =
-            success(&self.run(&["project", "copy", "notes:P", "--to", "board", "--json"]));
-        lease.wait_for_detach();
-        let document =
-            success(&self.run(&["document", "copy", "notes:D", "--to", "board", "--json"]));
-        lease.wait_for_detach();
+        let mut phases = Vec::new();
+        let mut reports = Vec::new();
+        for (kind, id) in [("project", "notes:P"), ("document", "notes:D")] {
+            let simulated = self.clock.now();
+            let started = std::time::Instant::now();
+            let output = self.run(&[kind, "copy", id, "--to", "board", "--json"]);
+            let real = started.elapsed();
+            lease.wait_for_detach();
+            phases.push((kind, self.clock.now() - simulated, real));
+            reports.push(success(&output));
+        }
         drop(lease);
-        (project, document, self.board.calls()[before..].to_vec())
+        let document = reports.pop().expect("the document copy's report");
+        let project = reports.pop().expect("the project copy's report");
+        Scenario {
+            project,
+            document,
+            calls: self.board.calls()[before..].to_vec(),
+            phases,
+        }
+    }
+}
+
+/// One scenario of the copy budgets, as [`Plan::copy_timed`] measured it.
+pub(super) struct Scenario {
+    pub project: Value,
+    pub document: Value,
+    /// Every request the board answered for it.
+    pub calls: Vec<Call>,
+    /// Each command, its simulated time and its process's real time.
+    pub phases: Vec<(&'static str, std::time::Duration, std::time::Duration)>,
+}
+
+/// What one request costs against the primary GraphQL allowance, priced as the timing spike's
+/// `pricing.json` priced it: a page of the board two points, a page of its issue search five,
+/// any other read one, each mutation request one, and a REST request none.
+fn spike_points(call: &Call) -> u64 {
+    match call.kind {
+        Kind::BoardPage => 2,
+        Kind::SearchPage => 5,
+        Kind::ItemRead | Kind::BatchedRead | Kind::Mutation | Kind::AliasedMutations => 1,
+        Kind::Upload | Kind::Repository | Kind::Verification => 0,
+    }
+}
+
+/// Record what `scenario` cost as the copy budgets' telemetry, for
+/// `budget_runner::report_plan_copy`: its seconds — the simulated seconds of both commands and
+/// the real seconds their processes ran — and its points, and for a first copy the writes
+/// GitHub's secondary limit may count.
+fn record(name: &str, scenario: &Scenario, board: usize) {
+    let simulated: f64 = scenario
+        .phases
+        .iter()
+        .map(|(_, simulated, _)| simulated.as_secs_f64())
+        .sum();
+    let real: f64 = scenario
+        .phases
+        .iter()
+        .map(|(_, _, real)| real.as_secs_f64())
+        .sum();
+    let requests = tally(&scenario.calls);
+    let mut points_by: BTreeMap<String, u64> = BTreeMap::new();
+    let mut creations_by: BTreeMap<String, u64> = BTreeMap::new();
+    for call in &scenario.calls {
+        *points_by.entry(operation(call)).or_default() += spike_points(call);
+        let created = creations(&call.path, &call.bytes);
+        if created > 0 {
+            *creations_by.entry(operation(call)).or_default() += created;
+        }
+    }
+    let points: u64 = points_by.values().sum();
+    let created: u64 = creations_by.values().sum();
+    let latencies: BTreeMap<String, u64> = [
+        Kind::ItemRead,
+        Kind::BoardPage,
+        Kind::SearchPage,
+        Kind::BatchedRead,
+        Kind::Mutation,
+        Kind::AliasedMutations,
+        Kind::Upload,
+        Kind::Repository,
+        Kind::Verification,
+    ]
+    .iter()
+    .map(|kind| (format!("{kind:?}"), kind.measured_millis()))
+    .collect();
+    let phases: BTreeMap<&str, f64> = scenario
+        .phases
+        .iter()
+        .map(|(kind, simulated, _)| (*kind, simulated.as_secs_f64()))
+        .collect();
+    let directory = super::budget_runner::directory();
+    std::fs::create_dir_all(&directory).unwrap();
+    let mut recordings = vec![
+        (
+            format!("github-plan-copy-seconds-{name}"),
+            simulated + real,
+            json!({"simulated seconds by phase": phases, "real seconds": real,
+                   "requests by operation": requests, "milliseconds charged by kind": latencies}),
+        ),
+        (
+            format!("github-plan-copy-points-{name}"),
+            points as f64,
+            json!({"points by operation": points_by, "requests by operation": requests}),
+        ),
+    ];
+    if name == SCENARIOS[0] {
+        recordings.push((
+            "github-plan-copy-content-creations".to_owned(),
+            created as f64,
+            json!({"writes by mutation": creations_by,
+                   "requests": scenario.calls.iter().filter(|call| creations(&call.path, &call.bytes) > 0).count()}),
+        ));
+    }
+    for (budget, value, detail) in recordings {
+        std::fs::write(
+            onetaskgraph_e2e_support::telemetry::file_in(&directory, &budget),
+            serde_json::to_vec(&json!({"budget": budget, "value": value,
+                "detail": detail.to_string(), "plan": WORKLOAD, "board": board,
+                "scenario": name}))
+            .unwrap(),
+        )
+        .unwrap();
     }
 }
 
@@ -454,7 +586,7 @@ fn carries_fields(plan: &Plan, native: &str, source: &str) {
 /// source's title, content, state, status and generated board field values, every task a sub-issue of the project,
 /// the ten blocked-by edges and no others, and the document referencing each task's
 /// counterpart and its PNG as an uploaded asset whose bytes are the source's.
-fn holds_the_plan(plan: &Plan, at: &Counterparts, changed: Option<(usize, &str)>) {
+pub(super) fn holds_the_plan(plan: &Plan, at: &Counterparts, changed: Option<(usize, &str)>) {
     let github = &plan.github;
     let project = &at["P"];
     let item = |id: &str| github.item(id).unwrap_or_else(|| panic!("no item {id}"));
@@ -554,35 +686,48 @@ pub(super) fn counterparts(project: &Value, document: &Value) -> Counterparts {
     at
 }
 
-/// The three scenarios on a board of `items` other items: what each sent, by operation.
+/// The three scenarios on a board of `items` other items: what each sent, by operation. On the
+/// board the copy budgets' workload states, what each cost is recorded as their telemetry.
 fn three_scenarios(items: usize) -> [BTreeMap<String, usize>; 3] {
     let plan = Plan::new(items, Vec::new());
+    let recorded = |name: &str, scenario: &Scenario| {
+        if items == SMALL {
+            record(name, scenario, items);
+        }
+    };
 
-    let (project, document, first) = plan.copy();
-    never_walks("the first copy", &first);
-    let at = counterparts(&project, &document);
+    let first = plan.copy_timed();
+    never_walks("the first copy", &first.calls);
+    let at = counterparts(&first.project, &first.document);
     holds_the_plan(&plan, &at, None);
+    recorded(SCENARIOS[0], &first);
 
     let edited = format!(
         "{}An edit made since the last copy.\n",
         plan.generated.tasks[3]
     );
     plan.write_task(4, &edited, true);
-    let (project, document, changed) = plan.copy();
-    never_walks("the re-copy after one task changed", &changed);
+    let changed = plan.copy_timed();
+    never_walks("the re-copy after one task changed", &changed.calls);
     assert_eq!(
-        counterparts(&project, &document),
+        counterparts(&changed.project, &changed.document),
         at,
         "the re-copy found every item"
     );
     holds_the_plan(&plan, &at, Some((4, &edited)));
+    recorded(SCENARIOS[1], &changed);
 
-    let (project, document, unchanged) = plan.copy();
-    never_walks("the unchanged re-copy", &unchanged);
-    assert_eq!(counterparts(&project, &document), at);
+    let unchanged = plan.copy_timed();
+    never_walks("the unchanged re-copy", &unchanged.calls);
+    assert_eq!(counterparts(&unchanged.project, &unchanged.document), at);
     holds_the_plan(&plan, &at, Some((4, &edited)));
+    recorded(SCENARIOS[2], &unchanged);
 
-    [tally(&first), tally(&changed), tally(&unchanged)]
+    [
+        tally(&first.calls),
+        tally(&changed.calls),
+        tally(&unchanged.calls),
+    ]
 }
 
 #[test]
@@ -730,7 +875,7 @@ const ITEM_READS: [&str; 4] = [
 ];
 
 /// Every item read among `calls`, as its document and the ids its variables name.
-fn item_reads(calls: &[Call]) -> Vec<(String, std::collections::BTreeSet<String>)> {
+pub(super) fn item_reads(calls: &[Call]) -> Vec<(String, std::collections::BTreeSet<String>)> {
     calls
         .iter()
         .filter_map(|call| {
@@ -800,7 +945,7 @@ impl Plan {
     }
 }
 
-fn plan_ids(at: &Counterparts) -> std::collections::BTreeSet<String> {
+pub(super) fn plan_ids(at: &Counterparts) -> std::collections::BTreeSet<String> {
     at.values().cloned().collect()
 }
 

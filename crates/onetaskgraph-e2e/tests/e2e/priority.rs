@@ -666,6 +666,21 @@ fn priority_writes(board: &GitHubBoardFields) -> Vec<String> {
                         });
                     }
                 }
+            } else if query == onetaskgraph_github_projects::graphql::WRITE_FIELD_VALUES {
+                // A copy's batch of the values of the items it created, each slot its own.
+                for slot in 0..onetaskgraph_github_projects::MUTATION_BATCH {
+                    let value = &variables[format!("field{slot}")];
+                    if variables[format!("send{slot}")] == true
+                        && value["fieldId"] == "FIELD-priority"
+                    {
+                        writes.push(
+                            value["value"]["singleSelectOptionId"]
+                                .as_str()
+                                .unwrap()
+                                .to_owned(),
+                        );
+                    }
+                }
             } else if query.contains("clearProjectV2ItemFieldValue(input:$input)") {
                 writes.push("clear".to_owned());
             } else if query.contains("updateProjectV2ItemFieldValue(input:$input)")

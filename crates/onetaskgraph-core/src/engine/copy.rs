@@ -3701,8 +3701,13 @@ impl Engine {
         }
 
         // Tasks this call creates at a destination that creates several in one request are
-        // created there together, before anything of this call lands.
-        let created = if request.dry_run || self.expects_copy() {
+        // created there together, before anything of this call lands — by a copy that cannot
+        // skip a task, since a task created together with others lands without the record a
+        // copy that can skip — `--comments`, or by query — leaves for the next one.
+        let created = if request.dry_run
+            || self.expects_copy()
+            || Stamping::of(request, false) == Stamping::Always
+        {
             BTreeMap::new()
         } else {
             self.create_together(&planned, &filed, running, journal)
@@ -4586,9 +4591,19 @@ impl Engine {
                 }
             }
             // An item naming nothing at a destination is looked for there by its own origin, so
-            // every such question is asked together, before the first of them would be.
+            // every such question is asked together, before the first of them would be — but for
+            // a task whose priority that destination cannot hold, which is refused before the
+            // destination is asked anything.
             for there in &reachable {
-                if link_of(metadata, there).is_none()
+                let refused = match (&read.item, self.writable(there)) {
+                    (Item::Task(task), Ok(destination)) => {
+                        holds_priority(destination, &read.source.to_string(), task.priority)
+                            .is_err()
+                    }
+                    _ => false,
+                };
+                if !refused
+                    && link_of(metadata, there).is_none()
                     && origin_of(metadata).is_none_or(|origin| &origin.source != there)
                 {
                     let asked = read.source.to_string();

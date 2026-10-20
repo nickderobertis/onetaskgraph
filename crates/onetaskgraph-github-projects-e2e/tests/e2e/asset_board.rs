@@ -182,6 +182,51 @@ fn selected_fields(document: &str) -> usize {
     fields
 }
 
+/// A refusal of the GraphQL requests whose document contains `matching`, answered `remaining`
+/// times with `status`, `headers` and `body` and never forwarded to the board behind.
+#[derive(Clone)]
+pub(super) struct GraphqlRefusal {
+    pub matching: &'static str,
+    pub status: u16,
+    pub headers: String,
+    pub body: String,
+    pub remaining: usize,
+}
+
+/// The content creations one request is charged against GitHub's secondary windows: each
+/// mutation field a GraphQL request sends, and one for an upload.
+pub(super) fn creations(path: &str, bytes: &[u8]) -> u64 {
+    if path.starts_with("/user-attachments/assets?") {
+        return 1;
+    }
+    let request: Value = serde_json::from_slice(bytes).unwrap_or(Value::Null);
+    let query = request["query"].as_str().unwrap_or_default();
+    if query.trim_start().starts_with("mutation") {
+        top_level_fields(query, &request["variables"]) as u64
+    } else {
+        0
+    }
+}
+
+/// The secondary points one request is charged: a GraphQL request with a mutation five, one
+/// without one, and a REST request none.
+pub(super) fn secondary_points(path: &str, bytes: &[u8]) -> u64 {
+    if path != "/graphql" {
+        return 0;
+    }
+    let request: Value = serde_json::from_slice(bytes).unwrap_or(Value::Null);
+    if request["query"]
+        .as_str()
+        .unwrap_or_default()
+        .trim_start()
+        .starts_with("mutation")
+    {
+        onetaskgraph_github_projects::SECONDARY_POINTS_PER_MUTATION
+    } else {
+        onetaskgraph_github_projects::SECONDARY_POINTS_PER_QUERY
+    }
+}
+
 #[derive(Clone)]
 pub(super) struct Refusal {
     pub stage: Stage,
@@ -213,8 +258,16 @@ struct State {
     refusal: Option<Refusal>,
     disconnect: Option<Stage>,
     truncate: Option<Stage>,
-    rolling: VecDeque<Duration>,
+    /// Each content creation the board counted, at the time its request arrived.
+    creations: VecDeque<Duration>,
+    /// Each GraphQL request's secondary points, at the time it arrived.
+    points: VecDeque<(Duration, u64)>,
+    /// Whether GitHub's three secondary windows are enforced: a request that would take one
+    /// past its limit is refused as GitHub refuses it, with a `Retry-After`.
     enforce_limit: bool,
+    /// How long every answer is held, when a journey says so.
+    latency: Option<Duration>,
+    graphql_refusal: Option<GraphqlRefusal>,
     /// Whether each answer is held for the spike's measured latency of its [`Kind`] rather than
     /// 200 ms, or 800 ms for an upload.
     measured: bool,
@@ -304,28 +357,62 @@ impl Board {
                         state.truncate = None;
                     }
 
-                    while state.rolling.front().is_some_and(|previous| {
-                        at.saturating_sub(*previous) >= Duration::from_secs(60)
-                    }) {
-                        state.rolling.pop_front();
-                    }
-                    if creating
-                        && state.enforce_limit
-                        && state.rolling.len() as u64
-                            >= onetaskgraph_github_projects::CONTENT_CREATION_PER_MINUTE
+                    let minute = Duration::from_secs(60);
+                    let hour = Duration::from_secs(3_600);
+                    while state
+                        .creations
+                        .front()
+                        .is_some_and(|previous| at.saturating_sub(*previous) >= hour)
                     {
+                        state.creations.pop_front();
+                    }
+                    while state
+                        .points
+                        .front()
+                        .is_some_and(|(previous, _)| at.saturating_sub(*previous) >= minute)
+                    {
+                        state.points.pop_front();
+                    }
+                    let charged = creations(&path, &bytes);
+                    let priced = secondary_points(&path, &bytes);
+                    let in_minute = state
+                        .creations
+                        .iter()
+                        .filter(|previous| at.saturating_sub(**previous) < minute)
+                        .count() as u64;
+                    let in_hour = state.creations.len() as u64;
+                    let points: u64 = state.points.iter().map(|(_, points)| points).sum();
+                    let over = charged > 0
+                        && (in_minute + charged
+                            > onetaskgraph_github_projects::CONTENT_CREATION_PER_MINUTE
+                            || in_hour + charged
+                                > onetaskgraph_github_projects::CONTENT_CREATION_PER_HOUR)
+                        || priced > 0
+                            && points + priced
+                                > onetaskgraph_github_projects::SECONDARY_POINTS_PER_MINUTE;
+                    let refused_graphql = graphql
+                        && state.graphql_refusal.as_ref().is_some_and(|refusal| {
+                            refusal.remaining > 0
+                                && String::from_utf8_lossy(&bytes).contains(refusal.matching)
+                        });
+                    if over && state.enforce_limit {
                         status = 403;
-                        let wait = (state.rolling[0] + Duration::from_secs(60))
-                            .saturating_sub(at)
-                            .as_secs()
-                            + 1;
-                        extra_headers = format!("Retry-After: {wait}\r\n");
+                        extra_headers = "Retry-After: 60\r\n".to_owned();
                         answer = Some(
                             br#"{"message":"You have exceeded a secondary rate limit"}"#.to_vec(),
                         );
+                    } else if refused_graphql {
+                        let refusal = state.graphql_refusal.as_mut().expect("armed");
+                        refusal.remaining -= 1;
+                        status = refusal.status;
+                        extra_headers = refusal.headers.clone();
+                        answer = Some(refusal.body.as_bytes().to_vec());
                     } else {
-                        if creating {
-                            state.rolling.push_back(at);
+                        for _ in 0..charged {
+                            state.creations.push_back(at);
+                        }
+                        if priced > 0 {
+                            state.points.push_back((at, priced));
                         }
                         if let Some(refusal) = &mut state.refusal
                             && refusal.remaining > 0
@@ -424,13 +511,16 @@ impl Board {
                 } else {
                     None
                 };
-                runtime.block_on(request.delay(Duration::from_millis(if measured {
-                    kind.measured_millis()
-                } else if upload {
-                    800
-                } else {
-                    200
-                })));
+                let latency = held.lock().unwrap().latency;
+                runtime.block_on(request.delay(latency.unwrap_or(Duration::from_millis(
+                    if measured {
+                        kind.measured_millis()
+                    } else if upload {
+                        800
+                    } else {
+                        200
+                    },
+                ))));
                 let answered = clock.now();
                 if let Some(call) = held.lock().unwrap().calls.last_mut() {
                     call.answered = answered;
@@ -474,8 +564,19 @@ impl Board {
     pub fn truncate_next(&self, stage: Stage) {
         self.state.lock().unwrap().truncate = Some(stage);
     }
+    /// Enforce GitHub's secondary limits over their windows, as GitHub does at a request's
+    /// arrival: at most 80 content creations in any minute and 500 in any hour, and 2,000
+    /// secondary points in any minute.
     pub fn enforce_limit(&self) {
         self.state.lock().unwrap().enforce_limit = true;
+    }
+    /// Hold every answer for `latency`, whatever its kind.
+    pub fn hold_answers_for(&self, latency: Duration) {
+        self.state.lock().unwrap().latency = Some(latency);
+    }
+    /// Refuse the GraphQL requests `refusal` matches, as many times as it says.
+    pub fn refuse_graphql(&self, refusal: GraphqlRefusal) {
+        self.state.lock().unwrap().graphql_refusal = Some(refusal);
     }
     /// Hold every answer for the spike's measured latency of its kind,
     /// [`Kind::measured_millis`], instead of 200 ms, or 800 ms for an upload.
