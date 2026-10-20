@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.9.0...onetaskgraph-core-v0.9.1) - 2026-10-20
+
+### Performance
+
+- *(copy)* copy and list a plan without reading the whole board ([#3679](https://github.com/nickderobertis/onetaskgraph/pull/3679))
+
 ## [0.9.0](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.8.0...onetaskgraph-core-v0.9.0) - 2026-10-19
 
 ### Added
