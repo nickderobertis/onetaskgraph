@@ -575,9 +575,10 @@ fn a_closed_items_cursor_that_does_not_advance_refuses_the_reconcile_whole_writi
 }
 
 #[test]
-fn a_projects_issue_closed_against_its_card_is_left_alone_by_reconcile_and_by_complete() {
-    // Both verbs reach task items only: the shared dataset's project `P-1`, its issue closed as
-    // completed while its card reads otherwise, is neither listed nor written by either.
+fn a_projects_issue_closed_against_its_card_is_brought_in_line_and_then_completes_unchanged() {
+    // Both verbs reach project items as they reach task items: the shared dataset's project
+    // `P-1`, its issue closed as completed while its card reads otherwise, is listed and its card
+    // alone written by a reconcile, after which a completion naming it finds nothing to do.
     let (items, closures) = mixed();
     let setup = Setup::new(items, &closures, 0);
     setup.board.close("P-1", Some("COMPLETED"));
@@ -592,11 +593,28 @@ fn a_projects_issue_closed_against_its_card_is_left_alone_by_reconcile_and_by_co
         &["--json", "task", "status", "reconcile", "--source", "board"],
         0,
     );
-    assert_eq!(listed(&answer), expected("updated"), "{answer:#}");
+    let (projects, tasks): (Vec<Value>, Vec<Value>) = answer["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .cloned()
+        .partition(|item| item["kind"] == "project");
     assert_eq!(
-        setup.board.status("P-1"),
-        card,
-        "the project's card is as it was"
+        listed(&json!({ "items": tasks })),
+        expected("updated"),
+        "{answer:#}"
+    );
+    assert_eq!(
+        projects,
+        vec![json!({"source":"board:P-1","kind":"project","from":card,
+                     "to":{"category":"done","name":"Done"},"action":"updated"})],
+        "{answer:#}"
+    );
+    assert_eq!(setup.board.status("P-1").as_deref(), Some("Done"));
+    assert_eq!(
+        setup.board.state("P-1"),
+        ("CLOSED".to_owned(), Some("COMPLETED".to_owned())),
+        "the project's issue keeps its state and reason"
     );
 
     let before = setup.mutations().len();
@@ -609,15 +627,11 @@ fn a_projects_issue_closed_against_its_card_is_left_alone_by_reconcile_and_by_co
     );
     assert_eq!(
         completed,
-        json!({"items": [{"issue": reference, "source": "board", "task": null, "from": null,
-                          "to": null, "action": "absent"}],
+        json!({"items": [{"issue": reference, "source": "board", "task": "board:P-1",
+                          "kind": "project", "from": "Done",
+                          "to": {"category": "done", "name": "Done"}, "action": "unchanged"}],
                "unsupported": []}),
-        "a project's issue is answered absent: {completed:#}"
+        "a project's issue closed as completed at Done is unchanged: {completed:#}"
     );
     assert_eq!(setup.mutations().len(), before, "complete wrote nothing");
-    assert_eq!(setup.board.status("P-1"), card);
-    assert_eq!(
-        setup.board.state("P-1"),
-        ("CLOSED".to_owned(), Some("COMPLETED".to_owned()))
-    );
 }

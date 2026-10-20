@@ -297,7 +297,25 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 41);
+    assert_eq!(bundle["version"], 42);
+    // Version 42: each closure item's `kind`, the project item a holding or a contradiction can
+    // carry, and what `project status set` answers with.
+    for root in ["IssueCompleted", "StatusReconciled"] {
+        assert!(
+            bundle["roots"][root].to_string().contains("\"kind\""),
+            "{root} names each item's kind"
+        );
+    }
+    assert!(bundle["roots"]["HeldTask"]["properties"]["kind"].is_object());
+    for root in ["ProjectStatusSet", "ContradictedItem"] {
+        assert!(bundle["roots"][root].is_object(), "{root} is a root");
+    }
+    assert!(
+        bundle["commands"]
+            .as_array()
+            .is_some_and(|commands| commands.contains(&serde_json::json!("project status set"))),
+        "project status set writes machine output"
+    );
     // Version 41: the two capabilities `task status reconcile` and `task status complete` are
     // asked through, and the documents both verbs answer with.
     for member in ["reconcile_status", "complete_by_issue"] {
@@ -385,6 +403,7 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
             "project graph",
             "project copy",
             "project metadata set",
+            "project status set",
             "project create",
             "project render",
             "project answers",

@@ -28,6 +28,7 @@ mod graph;
 mod metadata_fields;
 mod plan_copy;
 mod plan_reads;
+mod project_status;
 mod status_complete;
 mod status_reconcile;
 mod write_order;

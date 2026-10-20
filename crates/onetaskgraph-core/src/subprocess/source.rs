@@ -141,6 +141,9 @@ pub struct SubprocessSource {
     /// Whether the plugin answers `check_task_write` (§3.14). A plugin that said nothing is
     /// never sent it, and every write it is planned is read as one it can represent.
     write_checks: bool,
+    /// Whether the plugin answers `set_project_status` (§3.15). A plugin that said nothing is
+    /// never sent it, and a project status write is refused as the contract's default refuses it.
+    project_status: bool,
     /// The live process.
     connection: Connection,
 }
@@ -382,6 +385,7 @@ impl SubprocessSource {
             comment_copies,
             task_details,
             write_checks,
+            project_status,
         } = match result {
             Ok(result) => result,
             Err(error) => return Err(with_diagnostics(error, &mut peer)),
@@ -417,6 +421,7 @@ impl SubprocessSource {
             comment_copies,
             task_details,
             write_checks,
+            project_status,
             connection: Connection::adopt(peer),
         })
     }
@@ -909,6 +914,28 @@ impl TaskSource for SubprocessSource {
             )
             .await?;
         Ok(result.status)
+    }
+
+    async fn set_project_status(
+        &self,
+        id: &NativeId,
+        category: StatusCategory,
+    ) -> Result<Option<Status>, SourceError> {
+        // §3.15: a plugin that did not declare it answers as the contract's default does, and
+        // is sent nothing.
+        if !self.project_status {
+            return Err(unwritable_field(self.kind, "status"));
+        }
+        self.knows(category)?;
+        // §4.17a: the result is the `Status` itself, or `null` for no such project.
+        self.ask(
+            "set_project_status",
+            params(&StatusParams {
+                id: id.clone(),
+                category,
+            }),
+        )
+        .await
     }
 
     async fn check_task_write(&self, write: &ItemWrite<Task>) -> Result<(), SourceError> {

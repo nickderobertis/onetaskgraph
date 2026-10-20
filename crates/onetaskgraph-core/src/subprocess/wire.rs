@@ -109,11 +109,28 @@ pub(crate) struct Response {
     /// The request's `id`, echoed.
     pub(crate) id: String,
     /// Present on success.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ///
+    /// A `result` of `null` is present, not absent: `set_project_status` (§4.17a) answers
+    /// `null` for no such project, and reading it as "neither" would refuse that answer.
+    #[serde(
+        default,
+        deserialize_with = "held_whatever_its_value",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub(crate) result: Option<Value>,
     /// Present on failure.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) error: Option<SourceError>,
+}
+
+/// A member that is there, whatever its value — `null` included.
+///
+/// `#[serde(default)]` supplies `None` only when the member is missing, so this is called
+/// exactly when it is present.
+fn held_whatever_its_value<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Value>, D::Error> {
+    Value::deserialize(deserializer).map(Some)
 }
 
 impl Response {
@@ -331,6 +348,13 @@ pub(crate) struct InitializeResult {
     /// cannot takes the whole copy back, as before. Omitted when `false`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) write_checks: bool,
+    /// Whether this plugin answers `set_project_status` (§3.15).
+    ///
+    /// Optional, and absent means it does not: such a plugin is never sent the method, and a
+    /// project status write naming it is refused before anything is sent, in the words the
+    /// contract's default refuses it with. Omitted when `false`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) project_status: bool,
 }
 
 /// The `metering` result (§4.14).

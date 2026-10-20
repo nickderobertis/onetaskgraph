@@ -621,6 +621,34 @@ pub trait TaskSource: Send + Sync {
         Err(unwritable_field(self.kind(), "status"))
     }
 
+    /// Set the status of one project this source holds, and change nothing else about it,
+    /// answering with the status as this source now reads it — or `None` when this source
+    /// holds no such project.
+    ///
+    /// The category lands where this source's own mapping sends it for a project, exactly as a
+    /// [`write_project`](Self::write_project) of a project in that category would: a category
+    /// this source has disabled is refused in the words a write of it is refused with. Title,
+    /// content, labels, metadata, repositories, dependencies and the project's tasks are left
+    /// exactly as they are. A project delivers no task, so nothing is kept in step after it.
+    ///
+    /// Defaulted to the refusal [`set_task_status`](Self::set_task_status) defaults to,
+    /// [`unwritable_field`] naming `status`, which is what keeps this an addition rather than a
+    /// break: a source that does not implement it needs no edit. A source declaring
+    /// [`WriteSupport::Unsupported`] is never asked.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SourceError::Refused`] when this source cannot write a project's status, or
+    /// cannot write this one; and whatever else the source could not do the write for.
+    async fn set_project_status(
+        &self,
+        id: &NativeId,
+        category: StatusCategory,
+    ) -> Result<Option<Status>, SourceError> {
+        let _ = (id, category);
+        Err(unwritable_field(self.kind(), "status"))
+    }
+
     /// Set the status of one task this source holds, as [`set_task_status`](Self::set_task_status)
     /// does, and answer with the whole task as this source now reads it — its
     /// [`Task::delivers`] among what a caller keeping delivered tasks in step needs — or `None`

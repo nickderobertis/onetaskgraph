@@ -133,6 +133,16 @@ run_case "a payload member the section stops naming" \
 names "a payload member the section stops naming" \
   '`CommentOrigin` carries the field "author" but "### 4.16a `write_comment_copy`"'
 
+# A contradiction's `item` is `#[serde(flatten)]`, so what crosses is its variant's member —
+# `task` or `project` — and the guard reads those from `ContradictedItem`; were it to read the
+# Rust field name instead, a section that stopped naming the `project` member would pass.
+run_case "a flattened member the section stops naming" \
+  '/^### 4.23 /,/^### 4.24 /{s/"project"/"held"/g;s/`project`/`held`/g;}' \
+  refuse \
+  "restore the reading of a flattened field as its enum's variants in struct_fields in $GUARD"
+names "a flattened member the section stops naming" \
+  '`StatusContradiction` carries the field "project" but "### 4.23 `status_contradictions`"'
+
 run_case "a comment member gone from its table" \
   's/^| `origin` | object, optional | Present only on a comment a copy wrote/| `source` | object, optional | Present only on a comment a copy wrote/' \
   refuse \
@@ -146,7 +156,7 @@ names "a comment member gone from its table" \
 # variants and members from §4.24's bullets; were either reading to stop, a closure value or a
 # holding's member the section stops spelling would pass in silence.
 run_case "a closure value the section stops spelling" \
-  's/`"done"` or `"cancelled"`, the$/`"done"` or cancelled, the/' \
+  's/`"done"` or `"cancelled"`, the only two/`"done"` or cancelled, the only two/' \
   refuse \
   "restore issue.rs in the enum inventory and ClosedAs in ENUM_SECTIONS in $GUARD"
 names "a closure value the section stops spelling" \

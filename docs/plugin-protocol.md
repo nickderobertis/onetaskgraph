@@ -119,7 +119,8 @@ Every response is an object with exactly two or three members:
 | `error` | object | Present on failure. A `SourceError` (§5). |
 
 Exactly one of `result` and `error` is present. A response carrying both, or
-neither, is a protocol violation (§6.3).
+neither, is a protocol violation (§6.3). A `result` of `null` is present: it is the whole
+answer of a method whose result may be `null` (§4.17a).
 
 A response to a request the plugin never received an `id` for — or a second response
 to one `id` — is a protocol violation.
@@ -209,6 +210,7 @@ the source can do natively, and what configuration it is being built with.
 | `comment_copies` | boolean | Whether this plugin answers `write_comment_copy`. Optional; see §3.12. |
 | `task_details` | boolean | Whether this plugin answers `get_task_detail`. Optional; see §3.13. |
 | `write_checks` | boolean | Whether this plugin answers `check_task_write`. Optional; see §3.14. |
+| `project_status` | boolean | Whether this plugin answers `set_project_status`. Optional; see §3.15. |
 
 An `initialize` that fails answers with an `error` envelope, ordinarily
 `{"kind": "config"}` for a `config` block this plugin cannot use, or
@@ -407,6 +409,15 @@ here. One that does not is never sent the method; every task a copy plans for it
 it can represent, and a write it refuses as one it cannot takes the whole copy back, as it did
 before the method existed. Omitted when `false`.
 
+### 3.15 `project_status`
+
+Optional, and absent means `false`: a plugin that answers `set_project_status` (§4.17a) says so
+here. One that does not is never sent the method: a project status write naming it is refused
+before anything is sent with `{"kind": "refused"}` and the message `the <kind> plugin cannot
+write a task's status on its own` — exactly the words the trait's default answers with, so a
+caller cannot tell a plugin that never declared the member from one that declares it and has no
+such write. Omitted when `false`.
+
 ## 4. The methods
 
 One method per trait method, named after it. Each is given below as its `params` and
@@ -441,6 +452,7 @@ its `result`; the JSON shape of every contract type in them is what
 | `delete_comment` | `TaskSource::delete_comment` |
 | `write_comment_copy` | `TaskSource::write_comment_copy` |
 | `set_task_status` | `TaskSource::set_task_status` |
+| `set_project_status` | `TaskSource::set_project_status` |
 | `set_delivered_by` | `TaskSource::set_delivered_by` |
 | `set_task_priority` | `TaskSource::set_task_priority` |
 | `set_task_content` | `TaskSource::set_task_content` |
@@ -1848,6 +1860,40 @@ it the way the trait's default does, with one `get_task` and then, for a task fo
 `set_task_status`, so a plugin written against this document implements nothing more for the
 engine to keep delivered tasks in step after a status write.
 
+### 4.17a `set_project_status`
+
+Only a plugin that answered `"supported"` to §3.3 **and** `project_status: true` to §3.15 is
+ever sent it. It writes one field of one project and nothing else.
+
+```json
+{ "id": "18", "method": "set_project_status", "params": { "id": "I_40", "category": "done" } }
+{ "id": "18", "result": { "category": "done", "name": "Done" } }
+```
+
+`id` is the `NativeId` of a project at **this** source and `category` a `StatusCategory`. The
+plugin sets that project's status to where its own mapping sends the category for a project —
+exactly where a `write_project` of a project in that category would put it — and changes
+**nothing else**: title, content, labels, metadata, repositories, dependencies and the project's
+tasks stay as they are. `result` is the `Status` object the plugin now reads for that project,
+its `category` and `name`, or `null` when it holds no such project — an id naming one of its
+tasks among them. Unlike `set_task_status` (§4.17), the status is the result itself, with no
+`status` member around it. A category this plugin has disabled is refused with `{"kind": "refused"}`, in the
+words its `write_project` refuses that status with. A project delivers no task, so the engine
+keeps nothing in step after it.
+
+The trait method `TaskSource::set_project_status` is defaulted to the refusal
+`set_task_status` defaults to, so a plugin written against the trait that does not implement it
+needs no edit; over this protocol, a plugin that does not answer it leaves `project_status`
+out of its handshake (§3.15). Each plugin of this build writes it: a GitHub board by the paired
+write a task status takes, for the project kind — a terminal category selects the project
+kind's mapped option first and then closes the issue with the category's fixed reason
+(completed for `done`, not planned for `cancelled`), leaving an issue already closed with a
+reason that reads that category as it is, and an open category reopens a closed issue and then
+selects its option, a draft item refused as a task's is; Linear by one `projectUpdate` carrying
+only `statusId`, the project status its `status_mapping` gives the category; a folder of
+Markdown by the project file's own `status` alone; an in-memory source by the held project's
+status.
+
 #### A task's `delivers` and `delivered_by`
 
 A `Task` carries two optional lists of strings, each left out — never `null` — when empty:
@@ -2067,37 +2113,42 @@ source.
 ### 4.23 `status_contradictions`
 
 Sent only to a plugin that declared `reconcile_status` `"native"` (§4.2). It changes nothing:
-it answers every task this source holds whose **card contradicts its issue's closure**, each
-with the status that brings it in line, and the engine writes each one through
-`set_task_status` (§4.17).
+it answers every task and every project this source holds whose **card contradicts its issue's
+closure**, each with the status that brings it in line, and the engine writes each one through
+`set_task_status` (§4.17) for a task and `set_project_status` (§4.17a) for a project.
 
 ```json
 { "id": "25", "method": "status_contradictions", "params": {} }
-{ "id": "25", "result": { "items": [ { "task": { "id": "I_7", "title": "…", "status": { "category": "done", "name": "Done" }, "…": "…" }, "option": "Todo", "closed_as": "done", "to": "Done" } ] } }
+{ "id": "25", "result": { "items": [ { "task": { "id": "I_7", "title": "…", "status": { "category": "done", "name": "Done" }, "…": "…" }, "option": "Todo", "closed_as": "done", "to": "Done" }, { "project": { "id": "I_40", "title": "…", "status": { "category": "done", "name": "Done" }, "…": "…" }, "option": "In Progress", "closed_as": "done", "to": "Done" } ] } }
 ```
 
 The trait method answers `Vec<StatusContradiction>`, carried as `result.items`, one
-`StatusContradiction` per task. A task is answered when its issue is closed with a reason that
-reads `done` (completed, or no reason) or `cancelled` (not planned, duplicate) and its card does
-not sit at the option this source's mapping gives that category; `option` is the option it sits
-at, or `null`, `closed_as` the category its closure reads as — `"done"` or `"cancelled"`, the
-only two a card is brought in line with — and `to` the name of the option that category is written
-at. An open task, a closure that reads `unknown` and a card already in line are never answered —
-nor is any item this source reads as a project rather than a task, whatever its closure, because
-this method reaches task items only — and no task is answered twice: the engine refuses an
-answer naming one task twice as malformed. `task` is the task as `get_task` reads it.
+`StatusContradiction` per item. The item rides under the member naming its kind — `task`, the
+task as `get_task` reads it, or `project`, the project as `get_project` reads it — which is the
+`ContradictedItem` root, so an answer written before a project could be one, naming `task`
+alone, reads unchanged. An item is answered when its issue is closed with a reason that reads
+`done` (completed, or no reason) or `cancelled` (not planned, duplicate) and its card does not
+sit at the option this source's mapping gives that category **for the item's kind** — a plan's
+own home card, the project item whose issue carries the plan's task issues as sub-issues, judged
+against the project kind's half of `status_mapping`; `option` is the option it sits at, or
+`null`, `closed_as` the category its closure reads as — `"done"` or `"cancelled"`, the only two a
+card is brought in line with — and `to` the name of the option that category is written at for
+that kind. An open item, a closure that reads `unknown` and a card already in line are never
+answered, and no item is answered twice: the engine refuses an answer naming one item of one
+kind twice as malformed.
 
-The `set_task_status` the engine sends for each moves the card alone: an issue already closed
-in a way that reads as the category is not closed again, so its state and its reason — a
-duplicate's among them — stay as they are.
+The status write the engine sends for each moves the card alone: an issue already closed in a
+way that reads as the category is not closed again, so its state and its reason — a duplicate's
+among them — stay as they are. Each item the engine reports carries `kind`, `task` or
+`project`, beside `source`, its qualified id.
 
 ### 4.24 `issue_holdings`
 
 Sent only to a plugin that declared `complete_by_issue` `"native"` (§4.2), and never with an
 empty list. It changes nothing: for each issue reference, in the order given and once each, it
-answers the task this source holds for that issue and what moving it to `done` comes to. It
-reaches task items only: an issue this source holds as a project is answered `absent`, exactly
-as one it holds nothing for.
+answers the item this source holds for that issue — a task, or a project such as a plan's own
+home card — and what moving it to `done` comes to, each judged against its own kind's half of
+the source's mapping.
 
 ```json
 { "id": "26", "method": "issue_holdings", "params": { "issues": ["acme/work#12", "acme/work#40"] } }
@@ -2112,19 +2163,23 @@ each reference it was asked about exactly once and in the order given. Each hold
 of:
 
 - `absent` — this source holds no item for the issue, or cannot see the issue at all; it alone
-  carries no `task`;
+  carries no `task`, and the engine reports it with `kind` `task`;
 - `skipped`, with `task` and `reason` — `closed as not planned` or `closed as duplicate`: the
   closure already says the work will not be done here, which a landing does not overrule;
-- `unchanged`, with `task` — the issue is closed as completed and its card already sits at the
-  `done` option;
-- `due`, with `task` and `to`, the name of the `done` option — every other task: the engine
-  writes it `done` through `set_task_status` (§4.17), which selects the `done` option and closes
-  the issue as completed if it is still open, never reopening one.
+- `unchanged`, with `task` — the issue is closed as completed and its card already sits at its
+  kind's `done` option;
+- `due`, with `task` and `to`, the name of its kind's `done` option — every other item: the
+  engine writes it `done` through `set_task_status` (§4.17) for a task and `set_project_status`
+  (§4.17a) for a project, which selects that option and closes the issue as completed if it is
+  still open, never reopening one.
 
-`task` is the `HeldTask` root: the task's own `id`, the `option` its card sits at, and what the
-write and the rules around it need of it — `classification`, `repositories` and `delivers` — so
-the engine keeps every task it delivers in step exactly as after any status write (§4.17),
-without reading the task again. A plugin's read
+`task` is the `HeldTask` root: the item's own `id`, its `kind` — `"task"` or `"project"`,
+defaulted to `"task"` and left out while it is one, so a holding written before a project could
+be held reads unchanged — the `option` its card sits at, and what the write and the rules
+around it need of it — `classification`, `repositories` and `delivers`, which a project leaves
+empty — so the engine keeps every task a task delivers in step exactly as after any status
+write (§4.17), without reading the task again. Each item the engine reports carries the same
+`kind` beside `task`, the held item's qualified id whichever its kind. A plugin's read
 is proportional to the references it is given and never to the size of what it holds.
 
 ## 5. The error envelope
@@ -2230,6 +2285,13 @@ them cannot have done.
 reaches only a plugin that declared its member `"native"`, which a plugin written before them
 cannot have done, so such a plugin is reported as holding nothing to reconcile and listed as
 unsupported by a completion — and is sent nothing either time.
+
+The `project` member of a contradiction and the `kind` member of a `HeldTask` (§4.23, §4.24)
+were added **without** a bump: a plugin written before them names only task items, under
+`task` and with no `kind`, which reads as exactly the task items it meant.
+`set_project_status` (§4.17a) and the `project_status` member of §3.15 were added **without**
+a bump on the terms of §3.14: the method reaches only a plugin that declared the member, and one
+that did not is refused before anything is sent, in the trait's default words.
 
 `set_task_priority` (§4.19), `set_task_content` (§4.20) and the `content_updates` member of
 §3.9 were added **without** a bump, as the methods of §4.18 were: the first reaches only a

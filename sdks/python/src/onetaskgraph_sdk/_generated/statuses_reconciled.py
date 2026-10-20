@@ -24,6 +24,11 @@ class GlobalId(RootModel[str]):
     ]
 
 
+class ItemKind(StrEnum):
+    ItemKindTask = "task"
+    ItemKindProject = "project"
+
+
 class SourceName(RootModel[str]):
     root: Annotated[
         str,
@@ -94,6 +99,12 @@ class StatusReconciledUpdated(BaseModel):
             description="The option its card sat at, or `null` for a card with none.",
         ),
     ] = None
+    kind: Annotated[
+        ItemKind,
+        Field(
+            description="What the item is: `task`, or `project` for a project's own card — a plan's home."
+        ),
+    ]
     source: Annotated[GlobalId, Field(description="The item, by its qualified id.")]
     to: Annotated[
         Status,
@@ -110,6 +121,12 @@ class StatusReconciledWouldUpdate(BaseModel):
             description="The option its card sat at, or `null` for a card with none.",
         ),
     ] = None
+    kind: Annotated[
+        ItemKind,
+        Field(
+            description="What the item is: `task`, or `project` for a project's own card — a plan's home."
+        ),
+    ]
     source: Annotated[GlobalId, Field(description="The item, by its qualified id.")]
     to: Annotated[
         Status,
@@ -126,6 +143,12 @@ class StatusReconciledFailed(BaseModel):
             description="The option its card sat at, or `null` for a card with none.",
         ),
     ] = None
+    kind: Annotated[
+        ItemKind,
+        Field(
+            description="What the item is: `task`, or `project` for a project's own card — a plan's home."
+        ),
+    ]
     source: Annotated[GlobalId, Field(description="The item, by its qualified id.")]
     to: Annotated[
         Status,

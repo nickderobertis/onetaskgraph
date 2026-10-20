@@ -38,7 +38,7 @@ use crate::cli::{
     CacheCommand, Cli, Command, CommentCommand, ConfigCommand, ContentCommand, CopyArgs,
     DependencyArgs, DocumentCommand, DocumentFilterArgs, ExpectArgs, FilterArgs, GraphFormat,
     LabelCommand, MetadataCommand, MetadataSetArgs, PageArgs, PriorityCommand, ProjectCommand,
-    SelectionArgs, ShowArgs, SourcesCommand, StatusCommand, TaskCommand,
+    ProjectStatusCommand, SelectionArgs, ShowArgs, SourcesCommand, StatusCommand, TaskCommand,
 };
 
 /// Everything asked for was answered, by every source asked. Nothing else exits `0`. A
@@ -703,6 +703,22 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
         }
 
         Command::Project {
+            command:
+                ProjectCommand::Status {
+                    command: ProjectStatusCommand::Set(args),
+                },
+        } => {
+            let project = qualified(&args.id)?;
+            let set = engine(loaded)
+                .set_project_status(&project, args.category.category())
+                .await
+                .map_err(|error| Failure::from(&error))?;
+            let rendered = rendering(loaded, &set, render::project_status_set, "the status")?;
+            emit(out, rendered.trim_end(), "the status")?;
+            Ok(EXIT_OK)
+        }
+
+        Command::Project {
             command: ProjectCommand::List(args),
         } => {
             let request = ProjectRequest {
@@ -1037,6 +1053,9 @@ fn term_scope(command: &Command) -> Option<Vec<String>> {
             ProjectCommand::Copy(args) => &args.copy.term_scope,
             ProjectCommand::Metadata {
                 command: MetadataCommand::Set(args),
+            } => &args.term_scope,
+            ProjectCommand::Status {
+                command: ProjectStatusCommand::Set(args),
             } => &args.term_scope,
             ProjectCommand::Create(args) => &args.term_scope,
             ProjectCommand::Render(args) => &args.term_scope,
@@ -2117,6 +2136,7 @@ mod tests {
                 "project graph",
                 "project copy",
                 "project metadata set",
+                "project status set",
                 "project create",
                 "project render",
                 "project answers",

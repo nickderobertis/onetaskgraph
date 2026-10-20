@@ -26,6 +26,7 @@ from onetaskgraph_sdk import (
     OnetaskgraphError,
     Priority,
     ProjectGraph,
+    ProjectStatusSet,
     SourceName,
     StatusCategory,
     StatusesReconciled,
@@ -882,6 +883,98 @@ def test_reconcile_and_complete_drive_the_binary_over_a_source_whose_status_is_i
         run(client.task_status_complete(issue=["onetaskgraph#3"]))
     assert refused.value.exit_code == 2
     assert '"onetaskgraph#3" is not an issue reference' in str(refused.value)
+
+
+def closure_folder(tmp_path: Path) -> Path:
+    """A folder of Markdown `work` holding project `P-1`, beside `closures`, a stdio peer.
+
+    `closures` answers both closure methods with a plan's home project `home` and a task `t1`
+    (see `closure_source.py`), and the folder outlives each invocation, so what a project
+    status write lands there the next one reads back.
+    """
+    projects = tmp_path / "work" / "projects"
+    projects.mkdir(parents=True)
+    (projects / "P-1.md").write_text(
+        "---\ntitle: Engine\nstatus: todo\n---\nPlan.\n", encoding="utf-8"
+    )
+    sources = {
+        "work": {"plugin": "local-md", "config": {"root": str(tmp_path / "work")}},
+        "closures": {
+            "plugin": "subprocess",
+            "config": {
+                # Absolute, because the engine spawns a plugin with a cleared environment and
+                # so no PATH to resolve a bare name against.
+                "command": sys.executable,
+                "args": [str(Path(__file__).with_name("closure_source.py"))],
+            },
+        },
+    }
+    (tmp_path / "onetaskgraph.yaml").write_text(json.dumps({"sources": sources}), encoding="utf-8")
+    return tmp_path
+
+
+def test_each_closure_item_names_its_kind_through_the_binary(binary: Path, tmp_path: Path) -> None:
+    """A reconcile and a completion decode a project item and a task item, each by its kind."""
+    client = Client(binary, cwd=closure_folder(tmp_path))
+
+    reconciled = run(client.task_status_reconcile(source="closures"))
+    assert isinstance(reconciled, StatusesReconciled)
+    assert [
+        (item.root.source.root, item.root.kind, item.root.to.category, item.root.to.name)
+        for item in reconciled.items
+    ] == [
+        ("closures:home", "project", "done", "Done"),
+        ("closures:t1", "task", "cancelled", "Cancelled"),
+    ]
+    assert [item.root.action for item in reconciled.items] == ["updated", "updated"]
+
+    completed = run(
+        client.task_status_complete(
+            issue=["acme/plan#1", "acme/plan#2", "acme/plan#3"], source=["closures"]
+        )
+    )
+    assert isinstance(completed, IssuesCompleted)
+    assert [
+        (item.issue.root, item.task.root if item.task else None, item.kind, item.action)
+        for item in completed.items
+    ] == [
+        ("acme/plan#1", "closures:home", "project", "updated"),
+        ("acme/plan#2", "closures:t1", "task", "updated"),
+        ("acme/plan#3", None, "task", "absent"),
+    ]
+    assert completed.items[0].delivered == [], "a project delivers no task"
+
+
+def test_project_status_set_drives_the_binary(binary: Path, tmp_path: Path) -> None:
+    """Set one project's status through the real binary, read it back, and be refused by name."""
+    cwd = closure_folder(tmp_path)
+    client = Client(binary, cwd=cwd)
+
+    answer = run(
+        client.project_status_set(id="work:P-1", category=StatusCategory.StatusCategoryDone)
+    )
+    assert isinstance(answer, ProjectStatusSet)
+    assert (answer.id.root, answer.status.category, answer.status.name) == (
+        "work:P-1",
+        "done",
+        "done",
+    )
+    assert (cwd / "work" / "projects" / "P-1.md").read_text(encoding="utf-8") == (
+        "---\ntitle: Engine\nstatus: done\n---\nPlan.\n"
+    )
+    shown = run(client.project_show(id="work:P-1")).items[0].item
+    assert shown.status.category == "done"
+
+    over_the_protocol = run(client.project_status_set(id="closures:home", category="cancelled"))
+    assert (over_the_protocol.status.category, over_the_protocol.status.name) == (
+        "cancelled",
+        "Cancelled",
+    )
+
+    with pytest.raises(OnetaskgraphError) as refused:
+        run(client.project_status_set(id="work:P-404", category="done"))
+    assert refused.value.exit_code == 1
+    assert "no project with the id work:P-404" in str(refused.value)
 
 
 def test_task_status_set_answers_when_a_delivered_task_could_not_be_kept_in_step(

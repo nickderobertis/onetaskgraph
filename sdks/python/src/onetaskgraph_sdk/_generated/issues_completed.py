@@ -43,6 +43,11 @@ class IssueRef(RootModel[str]):
     ]
 
 
+class ItemKind(StrEnum):
+    ItemKindTask = "task"
+    ItemKindProject = "project"
+
+
 class SourceName(RootModel[str]):
     root: Annotated[
         str,
@@ -203,7 +208,7 @@ class IssueCompleted(BaseModel):
     delivered: Annotated[
         list[Delivered],
         Field(
-            description="Every task the written task delivers, kept in step with it exactly as `task status set`\nkeeps them — left out when it delivers none.",
+            description="Every task the written task delivers, kept in step with it exactly as `task status set`\nkeeps them — left out when it delivers none, which a project never does.",
             validate_default=True,
         ),
     ] = []
@@ -218,6 +223,12 @@ class IssueCompleted(BaseModel):
         Field(alias="from", description="The option the task's card sat at, or `null`."),
     ] = None
     issue: Annotated[IssueRef, Field(description="The issue, as `owner/name#N`.")]
+    kind: Annotated[
+        ItemKind,
+        Field(
+            description="What the held item is: `task`, or `project` for a project's own card — a plan's home.\n`task` when nothing is held, and for a reference the source could not be asked about."
+        ),
+    ]
     reason: Annotated[
         str | None,
         Field(description="Why it was skipped — `closed as <reason>` — present only then."),
@@ -226,7 +237,7 @@ class IssueCompleted(BaseModel):
     task: Annotated[
         GlobalId | None,
         Field(
-            description="The task that source holds for the issue, by its qualified id — `null` when it holds\nnone."
+            description="The item that source holds for the issue, by its qualified id whichever its kind —\n`null` when it holds none."
         ),
     ] = None
     to: Annotated[

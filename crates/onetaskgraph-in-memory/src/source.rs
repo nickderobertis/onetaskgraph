@@ -761,16 +761,25 @@ impl TaskSource for InMemorySource {
         let Some(task) = held.tasks.iter_mut().find(|task| &task.id == id) else {
             return Ok(None);
         };
-        if task.status.category != category {
-            task.status = Status {
-                category,
-                name: serde_json::to_value(category)
-                    .ok()
-                    .and_then(|spelled| spelled.as_str().map(str::to_owned))
-                    .expect("a status category serialises as its own word"),
-            };
-        }
+        set_category(&mut task.status, category);
         Ok(Some(task.status.clone()))
+    }
+
+    /// The held project's status, and nothing else about it, on the terms a task's is set.
+    async fn set_project_status(
+        &self,
+        id: &NativeId,
+        category: StatusCategory,
+    ) -> Result<Option<Status>, SourceError> {
+        if !self.declared().writes.is_supported() {
+            return Err(unwritable(KIND));
+        }
+        let mut held = self.held()?;
+        let Some(project) = held.projects.iter_mut().find(|project| &project.id == id) else {
+            return Ok(None);
+        };
+        set_category(&mut project.status, category);
+        Ok(Some(project.status.clone()))
     }
 
     async fn set_task_priority(
@@ -1572,5 +1581,19 @@ impl Held {
                 self.labels.push(label.clone());
             }
         }
+    }
+}
+
+/// Put `status` at `category`, spelled as the category's own word, unless it is already there —
+/// in which case the name it holds is kept.
+fn set_category(status: &mut Status, category: StatusCategory) {
+    if status.category != category {
+        *status = Status {
+            category,
+            name: serde_json::to_value(category)
+                .ok()
+                .and_then(|spelled| spelled.as_str().map(str::to_owned))
+                .expect("a status category serialises as its own word"),
+        };
     }
 }

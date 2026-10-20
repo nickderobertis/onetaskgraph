@@ -631,15 +631,15 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
     Capabilities, Classification, ClosedAs, Comment, CommentBody, CommentOrigin, Completion,
-    Coverage, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport,
-    Direction, Document, DocumentQuery, DocumentVersionCoverage, Health, HeldTask, IssueHolding,
-    IssueRef, ItemKind, ItemWrite, Label, LabelFilter, Location, MetadataKey, Metering, NativeId,
-    NewComment, Page, PageRequest, Priority, Project, ProjectFilter, ProjectQuery,
-    ProjectVersionCoverage, Repository, SecretResolver, SharedClock, SourceError, SourceName,
-    SourcePlugin, Status, StatusCategory, StatusContradiction, StatusMapping, Support, Task,
-    TaskDetailRead, TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome, TextFields,
-    TextQuery, UnmappedStatus, UpdatedField, VersionCoverage, WriteJournal, WriteSupport,
-    system_clock,
+    ContradictedItem, Coverage, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind,
+    DependencySupport, Direction, Document, DocumentQuery, DocumentVersionCoverage, Health,
+    HeldTask, IssueHolding, IssueRef, ItemKind, ItemWrite, Label, LabelFilter, Location,
+    MetadataKey, Metering, NativeId, NewComment, Page, PageRequest, Priority, Project,
+    ProjectFilter, ProjectQuery, ProjectVersionCoverage, Repository, SecretResolver, SharedClock,
+    SourceError, SourceName, SourcePlugin, Status, StatusCategory, StatusContradiction,
+    StatusMapping, Support, Task, TaskDetailRead, TaskQuery, TaskRef, TaskSource, TaskUpdate,
+    TaskUpdateOutcome, TextFields, TextQuery, UnmappedStatus, UpdatedField, VersionCoverage,
+    WriteJournal, WriteSupport, system_clock,
 };
 use reqwest::{Client, StatusCode, Url};
 use schemars::{Schema, schema_for};
@@ -6925,14 +6925,16 @@ impl GitHubProjectsSource {
         self.board_fields().await
     }
 
-    /// Set one task's status and nothing else; see [`TaskSource::set_task_status`].
+    /// Set one task's or one project's status and nothing else; see
+    /// [`TaskSource::set_task_status`] and [`TaskSource::set_project_status`].
     async fn set_status(
         &self,
         id: &NativeId,
+        kind: ItemKind,
         category: StatusCategory,
     ) -> Result<Option<Status>, SourceError> {
         // Refused before anything is read, in the words a write of the same status is.
-        let target = self.resolved_target(ItemKind::Task, category)?;
+        let target = self.resolved_target(kind, category)?;
         // An item read by issue reference carries only what this write needs, so what it
         // becomes is never remembered for a later read to be answered from.
         let held = self.take_held(id)?;
@@ -6941,13 +6943,12 @@ impl GitHubProjectsSource {
             Some(item) => Some(item),
             None => self.bound_item(id).await?,
         };
-        let Some(mut item) = bound.filter(|item| item.kind == BoardKind::Work(ItemKind::Task))
-        else {
+        let Some(mut item) = bound.filter(|item| item.kind == BoardKind::Work(kind)) else {
             return Ok(None);
         };
         let board = self.status_board(&item).await?;
         let (field, option, name) = self
-            .column_for(&board.fields, ItemKind::Task, category, &target)?
+            .column_for(&board.fields, kind, category, &target)?
             .ok_or_else(|| SourceError::Malformed {
                 message: format!(
                     "status {} of source {} names no board Status option",
@@ -6990,9 +6991,9 @@ impl GitHubProjectsSource {
                     Some(reason.reason().to_owned())
                 };
                 item.closed = true;
-                item.status =
-                    self.statuses
-                        .status(ItemKind::Task, Some(&name), true, reason.as_deref());
+                item.status = self
+                    .statuses
+                    .status(kind, Some(&name), true, reason.as_deref());
                 item.option = Some(name);
                 item.reason = reason;
             }
@@ -7016,9 +7017,7 @@ impl GitHubProjectsSource {
                     json!({"singleSelectOptionId": option}),
                 )
                 .await?;
-                item.status = self
-                    .statuses
-                    .status(ItemKind::Task, Some(&name), false, None);
+                item.status = self.statuses.status(kind, Some(&name), false, None);
                 item.option = Some(name);
             }
             StatusTarget::Disabled(_) => {
@@ -10778,8 +10777,9 @@ fn spoken_reason(reason: &str) -> String {
 }
 
 impl GitHubProjectsSource {
-    /// Every task of this board whose card contradicts its issue's closure, read through the
-    /// board's own `is:closed` filter, page by page — never the board's unfiltered `items`.
+    /// Every task and project of this board whose card contradicts its issue's closure, each
+    /// judged against its own kind's half of `status_mapping`, read through the board's own
+    /// `is:closed` filter, page by page — never the board's unfiltered `items`.
     ///
     /// Each item the filter answers is confirmed from its own node: an open one, one whose
     /// closure reads `unknown`, and one whose card is already in line are left out whatever
@@ -10823,11 +10823,11 @@ impl GitHubProjectsSource {
                 let Some(resolved) = self.resolve(item)? else {
                     continue;
                 };
-                if resolved.kind != BoardKind::Work(ItemKind::Task) {
+                let BoardKind::Work(kind) = resolved.kind else {
                     continue;
-                }
+                };
                 let Some((closed_as, name)) = self.statuses.contradicted(
-                    ItemKind::Task,
+                    kind,
                     resolved.option.as_deref(),
                     resolved.closed,
                     resolved.reason.as_deref(),
@@ -10838,7 +10838,10 @@ impl GitHubProjectsSource {
                     closed_as,
                     to: name.to_owned(),
                     option: resolved.option.clone(),
-                    task: resolved.task()?,
+                    item: match kind {
+                        ItemKind::Task => ContradictedItem::Task(resolved.task()?),
+                        ItemKind::Project => ContradictedItem::Project(resolved.project()),
+                    },
                 });
             }
             let info = items
@@ -10860,9 +10863,11 @@ impl GitHubProjectsSource {
     ///
     /// An issue GitHub cannot find for this source's credential, and one with no item on this
     /// board, are both absent. A closure that already says the work will not be done here —
-    /// not planned, duplicate — is skipped: a landing does not overrule it. A task closed as
-    /// completed whose card sits at the `done` option is unchanged, and every other task is
-    /// due a `done` write.
+    /// not planned, duplicate — is skipped: a landing does not overrule it. An item closed as
+    /// completed whose card sits at its kind's `done` option is unchanged, and every other item
+    /// is due a `done` write. A project item — a plan's home card, its issue holding the plan's
+    /// tasks as sub-issues — is held under exactly these rules, judged against the project
+    /// kind's half of `status_mapping`.
     async fn holdings(&self, issues: &[IssueRef]) -> Result<Vec<IssueHolding>, SourceError> {
         let mut distinct: Vec<IssueRef> = Vec::with_capacity(issues.len());
         for issue in issues {
@@ -10870,12 +10875,13 @@ impl GitHubProjectsSource {
                 distinct.push(issue.clone());
             }
         }
-        let done = self
-            .statuses
-            .target(ItemKind::Task, StatusCategory::Done)
-            .option()
-            .unwrap_or("Done")
-            .to_owned();
+        let done = |kind: ItemKind| {
+            self.statuses
+                .target(kind, StatusCategory::Done)
+                .option()
+                .unwrap_or("Done")
+                .to_owned()
+        };
         // GitHub numbers an issue with a GraphQL `Int`, a signed 32-bit value, so a reference past
         // its range names no issue any repository can hold: it is answered absent and never sent,
         // where binding it would have GitHub refuse the whole batch.
@@ -10892,27 +10898,46 @@ impl GitHubProjectsSource {
             for (slot, issue) in batch.iter().enumerate() {
                 let node = referenced_issue(&data, slot)?;
                 let resolved = match node {
-                    Some(node) => self
-                        .resolve_issue_as(&held_issue(node)?, false)
-                        .await?
-                        .filter(|item| item.kind == BoardKind::Work(ItemKind::Task)),
+                    Some(node) => self.resolve_issue_as(&held_issue(node)?, false).await?,
                     None => None,
                 };
-                let Some(item) = resolved else {
+                // A task and a project are both held; a document is not work, so nothing is.
+                let Some((item, kind)) = resolved.and_then(|item| match item.kind {
+                    BoardKind::Work(kind) => Some((item, kind)),
+                    BoardKind::Document => None,
+                }) else {
                     holdings.push(IssueHolding {
                         issue: issue.clone(),
                         completion: Completion::Absent,
                     });
                     continue;
                 };
-                let held = item.task()?;
-                let task = HeldTask {
-                    id: held.id,
-                    option: item.option.clone(),
-                    classification: held.classification,
-                    repositories: held.repositories,
-                    delivers: held.delivers,
+                let task = match kind {
+                    ItemKind::Task => {
+                        let held = item.task()?;
+                        HeldTask {
+                            id: held.id,
+                            kind,
+                            option: item.option.clone(),
+                            classification: held.classification,
+                            repositories: held.repositories,
+                            delivers: held.delivers,
+                        }
+                    }
+                    // A project delivers no task, so what its write keeps in step is nothing.
+                    ItemKind::Project => {
+                        let held = item.project();
+                        HeldTask {
+                            id: held.id,
+                            kind,
+                            option: item.option.clone(),
+                            classification: held.classification,
+                            repositories: held.repositories,
+                            delivers: Vec::new(),
+                        }
+                    }
                 };
+                let done = done(kind);
                 let completion = match (item.closed, item.reason.as_deref()) {
                     (true, Some(reason @ ("NOT_PLANNED" | "DUPLICATE"))) => Completion::Skipped {
                         task,
@@ -11504,11 +11529,25 @@ impl TaskSource for GitHubProjectsSource {
         id: &NativeId,
         category: StatusCategory,
     ) -> Result<Option<Status>, SourceError> {
-        self.set_status(id, category).await
+        self.set_status(id, ItemKind::Task, category).await
     }
 
-    /// Every task whose card contradicts its issue's closure, read through the board's own
-    /// `is:closed` filter; see [`TaskSource::status_contradictions`].
+    /// Set one project's status alone, by exactly the paired write a task's status takes, for
+    /// the project kind: a terminal category selects the project kind's mapped option and then
+    /// closes the issue with the category's fixed reason — an issue already closed with a
+    /// reason that reads that category is left as it is — and an open category reopens a closed
+    /// issue and then selects its option. A board draft is refused a terminal category as a
+    /// task's is.
+    async fn set_project_status(
+        &self,
+        id: &NativeId,
+        category: StatusCategory,
+    ) -> Result<Option<Status>, SourceError> {
+        self.set_status(id, ItemKind::Project, category).await
+    }
+
+    /// Every task and project whose card contradicts its issue's closure, read through the
+    /// board's own `is:closed` filter; see [`TaskSource::status_contradictions`].
     async fn status_contradictions(&self) -> Result<Vec<StatusContradiction>, SourceError> {
         self.contradictions().await
     }

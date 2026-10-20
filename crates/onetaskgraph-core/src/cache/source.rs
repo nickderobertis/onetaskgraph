@@ -1356,6 +1356,15 @@ impl TaskSource for CachedSource {
         }
     }
 
+    async fn set_project_status(
+        &self,
+        id: &NativeId,
+        category: StatusCategory,
+    ) -> Result<Option<Status>, SourceError> {
+        self.retiring(Some(id), self.inner.set_project_status(id, category))
+            .await
+    }
+
     async fn set_project_metadata(
         &self,
         id: &NativeId,

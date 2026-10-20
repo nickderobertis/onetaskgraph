@@ -23,6 +23,7 @@ from .models import (
     NativeId,
     Priority,
     ProjectGraph,
+    ProjectStatusSet,
     QueryResponseOfQualifiedDocument,
     QueryResponseOfQualifiedEdge,
     QueryResponseOfQualifiedLabel,
@@ -64,6 +65,7 @@ POSITIONALS: dict[tuple[str, ...], tuple[str, ...]] = {
     ("project", "metadata", "set"): ("id", "key", "value"),
     ("project", "render"): ("id",),
     ("project", "show"): ("id",),
+    ("project", "status", "set"): ("id", "category"),
     ("search",): ("text",),
     ("sources", "fields"): ("source",),
     ("sources", "route"): ("source",),
@@ -798,6 +800,28 @@ class GeneratedClient:
             page_size=page_size,
             pin=pin,
             set=set,
+        )
+
+    async def project_status_set(
+        self,
+        id: GlobalId | str,
+        category: StatusCategory | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> ProjectStatusSet:
+        """Run ``onetaskgraph project status set``."""
+        return await self._invoke(
+            ["project", "status", "set"],
+            ProjectStatusSet,
+            id=id,
+            category=category,
+            default_sources=default_sources,
+            page_size=page_size,
+            set=set,
+            term_scope=_strings("project_status_set", "term_scope", term_scope),
         )
 
     async def search(
