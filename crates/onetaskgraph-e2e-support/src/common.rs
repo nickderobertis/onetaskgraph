@@ -245,7 +245,10 @@ pub fn one_source(boundary: SourceBoundary) -> String {
 }
 
 /// Windows' bound, in UTF-16 units, on the command line `CreateProcessW` takes and on any one
-/// variable of a child's environment. The block holding them all has no bound of its own.
+/// variable of a child's environment, as Microsoft documents both — `CreateProcessW`'s
+/// `lpCommandLine` and "Environment Variables" — and the block holding them all has no bound of
+/// its own. Its gate is the Windows lane, which spawns every command this measures: were it set
+/// past what Windows takes, a spawn it passes would fail there with `os error 206`.
 pub const WINDOWS_SPAWN_LIMIT: usize = 32_767;
 
 /// What spawning `command` hands a Windows child, in UTF-16 units: the command line at its
@@ -260,7 +263,9 @@ pub struct SpawnLengths {
 /// Measure what `command` would hand its child: its program and arguments, each quoted with
 /// every quote and backslash escaped as the most a Windows command line can spell them, and
 /// the environment this process passes on with the command's own settings and removals laid
-/// over it.
+/// over it. `Command` does not say whether `env_clear` was called on it, so a command that
+/// clears its environment is measured with this process's still in it: the figure is then an
+/// over-count, never an under-count, and every command this harness spawns inherits it.
 #[must_use]
 pub fn spawn_lengths(command: &std::process::Command) -> SpawnLengths {
     let units = |text: &std::ffi::OsStr| text.to_string_lossy().encode_utf16().count();

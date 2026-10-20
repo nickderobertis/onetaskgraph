@@ -294,7 +294,12 @@ fn filling_the_minutes_points_with_queries_alone_holds_the_next_query() {
     // inside the length Windows allows a child's command line.
     let paced = Paced::new(0, json!({}));
     paced.board.hold_answers_for(Duration::ZERO);
-    paced.github.add_comments("T-3", COMMENTS);
+    // Inside one second: more comments than the board's one-day clock stamps a second apart.
+    paced.github.hold_clock();
+    for n in 0..COMMENTS {
+        paced.github.add_comment("T-3", &format!("comment {n}"));
+    }
+    paced.github.release_clock();
     let arguments: Vec<String> = ["task", "comment", "list", "board:T-3", "--json"]
         .map(String::from)
         .to_vec();

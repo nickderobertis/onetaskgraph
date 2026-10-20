@@ -1056,23 +1056,25 @@ impl TimelineEvent {
     }
 }
 
-/// Where a page of one issue's comments ended: after `offset` of them, the last being `last`,
-/// at `position - 1` of the board's comments.
+/// Where a page of the comments on issue `issue` ended: after `offset` of them, the last being
+/// comment `last`, at `position - 1` of the board's comments.
+// llmlint: ignore[code_lands_in_the_domain_that_owns_it] Private state of `GitHubBoard` below, which no suite can reach but through that board's handle; it lives beside the board for the reason the board's own directive gives.
 #[derive(Debug)]
 struct CommentResume {
-    issue: Value,
+    issue: String,
     offset: usize,
     position: usize,
-    last: Value,
+    last: String,
 }
 
-/// How many comments `issue` held, counted when the board held `comments` of them all, the
-/// last being `last`.
+/// How many comments issue `issue` held, counted when the board held `comments` of them all,
+/// the last of those being comment `last` — `None` when it held none.
+// llmlint: ignore[code_lands_in_the_domain_that_owns_it] Private state of `GitHubBoard` below, which no suite can reach but through that board's handle; it lives beside the board for the reason the board's own directive gives.
 #[derive(Debug)]
 struct CommentCount {
-    issue: Value,
+    issue: String,
     comments: usize,
-    last: Value,
+    last: Option<String>,
     count: usize,
 }
 
@@ -1088,7 +1090,8 @@ struct GitHubBoard {
     /// Where the last page of comments ended — see [`CommentResume`] — so the next page of the
     /// same walk starts there rather than counting the issue's comments again from the first.
     comment_resume: std::sync::Mutex<Option<CommentResume>>,
-    /// The last count [`Self::comment_count`] made.
+    /// The last count [`Self::comment_count`] made, which answers `totalCount` on every page of
+    /// a walk without counting the issue's comments again while none was added or removed.
     comment_counted: std::sync::Mutex<Option<CommentCount>>,
     /// How many comment timestamps this board has handed out, which makes each one later than
     /// the last and gives every comment an id no other comment has had.
@@ -2177,18 +2180,6 @@ impl GitHubBoardFields {
         added["id"].as_str().expect("a comment id").to_owned()
     }
 
-    /// Add `count` comments to one issue inside one second, as [`Self::add_comment`] adds
-    /// each: more than this board's one-day clock could stamp a second apart.
-    pub fn add_comments(&self, issue: &str, count: usize) {
-        let mut board = self.board.lock().unwrap();
-        let held = board.held_second;
-        board.held_second = Some(held.unwrap_or(board.comment_ticks + 1));
-        for n in 0..count {
-            board.comment(issue, &format!("comment {n}"));
-        }
-        board.held_second = held;
-    }
-
     /// Replace one comment's body, as its author editing it on GitHub would.
     pub fn edit_comment(&self, comment: &str, body: &str) {
         let mut board = self.board.lock().unwrap();
@@ -2608,10 +2599,11 @@ impl GitHubBoard {
         let last = self
             .comments
             .last()
-            .map_or(Value::Null, |held| held["id"].clone());
+            .and_then(|held| held["id"].as_str())
+            .map(str::to_owned);
         let mut counted = self.comment_counted.lock().unwrap();
         if let Some(held) = counted.as_ref()
-            && held.issue == *id
+            && id.as_str() == Some(held.issue.as_str())
             && held.comments == self.comments.len()
             && held.last == last
         {
@@ -2622,8 +2614,8 @@ impl GitHubBoard {
             .iter()
             .filter(|held| held["issue"] == *id)
             .count();
-        *counted = Some(CommentCount {
-            issue: id.clone(),
+        *counted = id.as_str().map(|issue| CommentCount {
+            issue: issue.to_owned(),
             comments: self.comments.len(),
             last,
             count,
@@ -2666,13 +2658,13 @@ impl GitHubBoard {
         let start = resume
             .as_ref()
             .filter(|held| {
-                held.issue == *id
+                id.as_str() == Some(held.issue.as_str())
                     && held.offset == offset
                     && held.position > 0
                     && self
                         .comments
                         .get(held.position - 1)
-                        .is_some_and(|last| last["id"] == held.last)
+                        .is_some_and(|last| last["id"].as_str() == Some(held.last.as_str()))
             })
             .map(|held| held.position);
         let (from, skip) = start.map_or((0, offset), |position| (position, 0));
@@ -2686,11 +2678,13 @@ impl GitHubBoard {
         let page: Vec<(usize, &Value)> = remaining.by_ref().take(first).collect();
         let more = remaining.next().is_some();
         let end = offset + page.len();
-        *resume = page.last().map(|(position, last)| CommentResume {
-            issue: id.clone(),
-            offset: end,
-            position: position + 1,
-            last: last["id"].clone(),
+        *resume = page.last().and_then(|(position, last)| {
+            Some(CommentResume {
+                issue: id.as_str()?.to_owned(),
+                offset: end,
+                position: position + 1,
+                last: last["id"].as_str()?.to_owned(),
+            })
         });
         let nodes = page
             .iter()
