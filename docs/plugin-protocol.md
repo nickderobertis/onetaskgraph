@@ -990,7 +990,9 @@ The plugin stores each asset, and answers with the record and the content it sto
 | --- | --- | --- |
 | `id` | string | The `NativeId` this source now holds the record under, as §4.9's `result` says. |
 | `content` | string or `null` | The content as stored. |
-| `stored_content` | string | The content its backend answered it holds, on §4.9's terms. Optional, and only from a plugin that declared `stored_forms` (§3.16). |
+
+A plugin that declared `stored_forms` (§3.16) may add `stored_content` beside these, on §4.9's
+terms: the content its backend answered, in the write's own response, that it now holds.
 
 A plugin keeps the assets one of two ways:
 
