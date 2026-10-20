@@ -598,8 +598,8 @@ struct State {
     /// response this source cannot read at all. Only a fixture reaches it, because GitHub
     /// answers with an `Int!`.
     creation_number_is_unreadable: bool,
-    /// Whether a read of created issues' board items answers each slot about another issue.
-    board_items_name_another_issue: bool,
+    /// How a read of created issues' board items answers each slot malformed, if it does.
+    board_items_fault: Option<BoardItemsFault>,
     /// Whether `createIssue` answers with the new issue's `number`.
     ///
     /// GitHub declares `Issue.number` non-null and always answers with one, which is the
@@ -1240,9 +1240,9 @@ impl Fixture {
         self.state.lock().unwrap().creation_reports_number = false;
     }
 
-    /// Answer every read of created issues' board items about another issue than each slot asks.
-    fn answer_board_items_about_another_issue(&self) {
-        self.state.lock().unwrap().board_items_name_another_issue = true;
+    /// Answer every read of created issues' board items malformed, as `fault` says.
+    fn answer_board_items_malformed(&self, fault: BoardItemsFault) {
+        self.state.lock().unwrap().board_items_fault = Some(fault);
     }
 
     /// Answer every `createIssue` from here on with a `number` that is not an integer.
@@ -1290,7 +1290,7 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
         guarded_status_options: None,
         drift_guarded_status_description: false,
         creation_number_is_unreadable: false,
-        board_items_name_another_issue: false,
+        board_items_fault: None,
         creation_reports_number: true,
         blank_status_snapshot_id: None,
         origin_field,
@@ -1638,17 +1638,26 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
                     continue;
                 }
                 let id = variables[format!("id{slot}")].as_str().expect("an id");
-                let named = if held.board_items_name_another_issue {
-                    "I_another"
-                } else {
-                    id
-                };
-                let answered = match held.items.iter().find(|item| item.content_id == id) {
-                    Some(item) => json!({"id":named,"projectItems":{"nodes":[{"id":item.item_id,
+                let mut answered = match held.items.iter().find(|item| item.content_id == id) {
+                    Some(item) => json!({"id":id,"projectItems":{"nodes":[{"id":item.item_id,
                         "project":{"id":"PVT_board"},
                         "status":item.status.as_ref().map(|name| json!({"name":name}))}]}}),
                     None => json!({"id":id,"projectItems":{"nodes":[]}}),
                 };
+                match held.board_items_fault {
+                    Some(BoardItemsFault::AnotherIssue) => answered["id"] = json!("I_another"),
+                    Some(BoardItemsFault::NoConnection) => answered["projectItems"] = json!(7),
+                    Some(BoardItemsFault::ItemNamingNoBoard) => {
+                        answered["projectItems"]["nodes"][0]["project"] = Value::Null;
+                    }
+                    Some(BoardItemsFault::StatusNamingNoOption) => {
+                        answered["projectItems"]["nodes"][0]["status"] = json!({"name": 7});
+                    }
+                    Some(BoardItemsFault::BlankItemId) => {
+                        answered["projectItems"]["nodes"][0]["id"] = json!(" ");
+                    }
+                    None => {}
+                }
                 result.insert(format!("i{slot}"), answered);
             }
             return Value::Object(result);
@@ -11114,13 +11123,48 @@ async fn write_tasks_outside_a_copy_creates_each_whole_and_takes_them_back_when_
     );
 }
 
+/// How an answer to the read of created issues' board items comes back malformed.
+#[derive(Debug, Clone, Copy)]
+enum BoardItemsFault {
+    /// About another issue than the slot asked.
+    AnotherIssue,
+    /// With no list of board items.
+    NoConnection,
+    /// With a board item naming no board.
+    ItemNamingNoBoard,
+    /// With a status that names no option.
+    StatusNamingNoOption,
+    /// With a blank board item id.
+    BlankItemId,
+}
+
 #[tokio::test]
-async fn a_board_items_answer_about_another_issue_is_refused_and_takes_back_what_was_created() {
+async fn a_malformed_board_items_answer_is_refused_and_takes_back_what_was_created() {
     // The board item a created issue's fields are written onto is the one the answer names for
-    // that issue; an answer about another issue is no answer, so nothing is written onto it
-    // and the issues created are taken back.
+    // that issue, read whole; an answer that does not say so readably is no answer, so nothing
+    // is written onto it and the issues created are taken back.
+    for (fault, said) in [
+        (BoardItemsFault::AnotherIssue, "I_another"),
+        (BoardItemsFault::NoConnection, "no list of board items"),
+        (
+            BoardItemsFault::ItemNamingNoBoard,
+            "a board item naming no board",
+        ),
+        (
+            BoardItemsFault::StatusNamingNoOption,
+            "a status that names no option",
+        ),
+        (BoardItemsFault::BlankItemId, "blank"),
+    ] {
+        refused_on_board_items(fault, said).await;
+    }
+}
+
+/// A batch of two created, its board items read back as `fault` says: refused saying `said`,
+/// no field written, and both issues taken back.
+async fn refused_on_board_items(fault: BoardItemsFault, said: &str) {
     let fixture = board(vec![]);
-    fixture.answer_board_items_about_another_issue();
+    fixture.answer_board_items_malformed(fault);
     let source = source(&fixture);
     source.begin_deferred_writes();
     source
@@ -11135,14 +11179,17 @@ async fn a_board_items_answer_about_another_issue_is_refused_and_takes_back_what
         .await
         .expect_err("an answer about another issue");
     assert!(
-        matches!(refused, SourceError::Malformed { .. })
-            && refused.to_string().contains("I_another"),
-        "{refused}"
+        matches!(refused, SourceError::Malformed { .. }) && refused.to_string().contains(said),
+        "{fault:?}: {refused}"
     );
-    assert_eq!(fixture.requests("updateProjectV2ItemFieldValue"), 0);
+    assert_eq!(
+        fixture.requests("updateProjectV2ItemFieldValue"),
+        0,
+        "{fault:?}"
+    );
     assert!(
         fixture.state.lock().unwrap().items.is_empty(),
-        "the created issues remain"
+        "{fault:?}: the created issues remain"
     );
 }
 

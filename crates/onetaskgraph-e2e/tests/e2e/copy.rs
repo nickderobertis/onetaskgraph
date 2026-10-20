@@ -1370,7 +1370,7 @@ fn a_copy_says_in_words_what_it_spent_and_nothing_where_nothing_meters() {
 }
 
 #[test]
-fn a_board_that_fails_between_creating_an_issue_and_filing_it_says_so_and_recovers() {
+fn a_board_that_fails_to_read_where_it_filed_a_created_issue_says_so_and_recovers() {
     // Landing an item on a board is more than one call — `createIssue` filing it, then a
     // read of the board item GitHub adds after answering — so GitHub can fail between them,
     // and what happens then is a journey rather than a reading of the code: the copy exits
@@ -3221,7 +3221,7 @@ fn a_cleanup_that_also_fails_reports_the_write_that_failed_rather_than_the_tidy_
 }
 
 #[test]
-fn a_creation_whose_filing_and_cleanup_both_fail_still_reports_the_filing() {
+fn a_creation_whose_filing_read_and_cleanup_both_fail_still_reports_the_read() {
     // The earlier half of the same sequence: `createIssue` lands, the read of the board item
     // it filed does not, and the removal that would take the created issue back is refused as
     // well.

@@ -553,6 +553,36 @@ fn a_held_back_write_answered_malformed_takes_back_every_item_it_created() {
     }
 }
 
+#[test]
+fn a_batched_create_answered_without_one_of_its_issues_leaves_the_board_uncertain_and_says_so() {
+    // The fourth task's create lands and its answer leaves it out, with no error beside it:
+    // the issue exists under an id this copy was never told. Every issue it was told of is
+    // taken back, and the copy is refused naming the board and the plugin method whose answer
+    // it could not read, saying to inspect the board for the one it could not name.
+    let plan = Plan::new(SMALL, Vec::new());
+    plan.github
+        .bend_batch_alias("create3", AliasAnswer::Missing);
+    let lease = plan.clock.lease(0);
+    let output = plan.run(&["project", "copy", "notes:P", "--to", "board", "--json"]);
+    lease.wait_for_detach();
+    drop(lease);
+    assert_ne!(output.status.code(), Some(0), "the copy was refused");
+    let said = onetaskgraph_e2e_support::common::stderr(&output);
+    assert!(
+        said.contains("GitHub issue creation returned no issue")
+            && said.contains("write_tasks")
+            && said.contains("next: inspect board"),
+        "{said}"
+    );
+    for issue in ["ISSUE-1", "ISSUE-2", "ISSUE-3", "ISSUE-4"] {
+        assert!(!plan.github.holds_issue(issue), "{issue} was taken back");
+    }
+    assert!(
+        plan.github.holds_issue("ISSUE-5"),
+        "the issue the answer left out is still there, as the copy says it may be"
+    );
+}
+
 /// A project copy of `plan` with `alias` of its held-back writes refused: refused itself, naming
 /// GitHub's own failure, and leaving nothing behind.
 fn refused_after_landing(plan: &Plan, alias: &'static str) {

@@ -9259,6 +9259,7 @@ impl GitHubProjectsSource {
         let remembered = Resolved {
             // Empty for an issue whose board item is not read yet: `finish_writes` reads it
             // and `learn_item` puts it here.
+            // llmlint: ignore[invalid_states_unrepresentable] `Resolved` is serialised into the cache's stored write context, so its field type is a stored shape this change may not move; the empty id lives only until `finish_writes` reads the board item in this same command, and nothing addresses it before then — `complete_write` refuses any write naming no board item.
             item_id: item_id.unwrap_or_default(),
             id: content_id.clone(),
             content_kind,
@@ -9477,7 +9478,7 @@ impl GitHubProjectsSource {
     /// What one `createIssue` answered, as the item it created — or, when its number cannot be
     /// read, the refusal, after taking the issue back.
     async fn created_landed(&self, created: &Value) -> Result<Landed, SourceError> {
-        let content_id = NativeId(required_str(created, "id")?.to_owned());
+        let content_id = NativeId(required_nonblank_str(created, "id")?.to_owned());
         let url = optional_str(created, "url")?.map(str::to_owned);
         let number = match created_issue_number(created) {
             Ok(number) => number,
@@ -9918,7 +9919,7 @@ impl GitHubProjectsSource {
                         };
                         found.insert(
                             (*id).clone(),
-                            (required_str(item, "id")?.to_owned(), status),
+                            (required_nonblank_str(item, "id")?.to_owned(), status),
                         );
                     }
                 }
