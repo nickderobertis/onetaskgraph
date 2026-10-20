@@ -678,8 +678,21 @@ fn asset_stage_failures_and_bounded_virtual_rate_limit_recovery() {
     }
 }
 
+/// How every asset figure is counted.
+const COUNTED: &str = "counted at the Linear loopback in simulated time";
+
 fn record_workload(budget: &str, value: f64, sizes: &[usize], copies: usize) {
-    crate::telemetry::record_assets(budget, value, sizes, copies);
+    crate::telemetry::record_assets(budget, value, COUNTED, sizes, copies);
+}
+
+/// The concurrent copies' figure, with what each refused copy said. A passing journey's output
+/// is captured and never shown, while `onebudgetspec check` prints the detail beside the
+/// figure, so this is where a refusal on a runner nobody can reproduce on names its cause.
+fn concurrent_refusals_detail(refusals: &[String]) -> String {
+    if refusals.is_empty() {
+        return COUNTED.to_owned();
+    }
+    format!("{COUNTED}; refused: {}", refusals.join("; "))
 }
 
 fn project_workload(journey: &Journey) -> (Vec<usize>, Vec<String>) {
@@ -730,6 +743,7 @@ fn measure_three_concurrent_project_asset_copies() {
     let (sizes, documents) = project_workload(&journey);
     let real_start = std::time::Instant::now();
     let mut refused_clients = [false; 3];
+    let mut refusals = Vec::new();
     for (kind, id) in std::iter::once(("project", "notes:launch"))
         .chain(documents.iter().map(|id| ("document", id.as_str())))
     {
@@ -757,7 +771,13 @@ fn measure_three_concurrent_project_asset_copies() {
             let output = child.wait_with_output().unwrap();
             if !output.status.success() {
                 refused_clients[client] = true;
-                eprintln!("{}", stderr(&output));
+                let said = stderr(&output);
+                eprintln!("{said}");
+                refusals.push(format!(
+                    "client {client}'s {kind} copy of {id} failed ({}): {}",
+                    output.status,
+                    said.trim()
+                ));
             }
         }
     }
@@ -766,15 +786,18 @@ fn measure_three_concurrent_project_asset_copies() {
         "three concurrent copies real duration: {:.3}s",
         elapsed.as_secs_f64()
     );
-    assert!(elapsed < Duration::from_secs(60));
-    assert_eq!(journey.workspace.counts(), (72, 72, 72));
+    // Recorded before anything is asserted, so a refusal that also fails the journey still
+    // leaves what it said where the budget check prints it.
     let sizes: Vec<_> = sizes.iter().copied().cycle().take(72).collect();
-    record_workload(
+    crate::telemetry::record_assets(
         "linear-concurrent-copies-refused",
         refused_clients.iter().filter(|refused| **refused).count() as f64,
+        &concurrent_refusals_detail(&refusals),
         &sizes,
         3,
     );
+    assert!(elapsed < Duration::from_secs(60));
+    assert_eq!(journey.workspace.counts(), (72, 72, 72));
 }
 
 #[test]
