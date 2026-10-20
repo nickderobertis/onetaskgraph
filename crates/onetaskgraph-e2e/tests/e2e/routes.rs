@@ -2175,6 +2175,198 @@ fn a_member_found_by_one_link_alone_files_the_routed_tasks_rather_than_a_second_
 }
 
 #[test]
+fn a_take_over_passes_over_a_copy_link_it_cannot_follow_to_the_home_it_can() {
+    let sandbox = Sandbox::new();
+    let (_, home, member) = split_plan_copied(&sandbox);
+    // The plan's project also links to a source nothing configures and to one that holds no
+    // projects, both met before the home's link: the copy goes past each to the home.
+    sandbox.project_document(&document(&json!({
+        PLAN: {"plugin": "local-md", "config": {"root": sandbox.project().join(PLAN)}},
+        NOTES: {
+            "plugin": "local-md",
+            "config": {"root": sandbox.project().join(NOTES)},
+            "routes": [{"repositories": ["github.com/widgetco/*"], "to": TEAM}],
+        },
+        TEAM: {"plugin": "local-md", "config": {"root": sandbox.project().join(TEAM)}},
+        "bare": {"plugin": "in-memory", "config": {"capabilities": {"projects": "unsupported"}}},
+    })));
+    rewrite(
+        &sandbox,
+        "plan:goal",
+        &format!(
+            "title: Goal\nstatus: todo\nmetadata:\n  onetaskgraph.copies:\n    \
+             bare: bare:goal\n    gone: gone:goal\n    {NOTES}: {home}"
+        ),
+    );
+    let report = answer(&sandbox, &["project", "copy", "plan:goal", "--to", TEAM]);
+    assert_taken_over(&sandbox, &member, &report);
+    assert!(
+        metadata_of(&sandbox, &home)
+            .get("onetaskgraph.members")
+            .is_none()
+    );
+}
+
+#[test]
+fn a_member_of_a_home_since_deleted_is_not_taken_over_and_is_left_as_it_was() {
+    let sandbox = Sandbox::new();
+    let (_, home, member) = split_plan_copied(&sandbox);
+    let (folder, native) = home.split_once(':').expect("a qualified id");
+    std::fs::remove_file(
+        sandbox
+            .project()
+            .join(folder)
+            .join("projects")
+            .join(format!("{native}.md")),
+    )
+    .expect("the home's record");
+    let before = tree(&sandbox.project().join(TEAM).join("projects"));
+    // With no home to name it, nothing says the member is this plan's: the copy makes the
+    // plan's own project in `team` and leaves the member where it was.
+    let report = answer(&sandbox, &["project", "copy", "plan:goal", "--to", TEAM]);
+    assert_eq!(
+        outcome(&report, "plan:goal")["action"],
+        "created",
+        "{report:#}"
+    );
+    let made = landed(&report, "plan:goal");
+    assert_ne!(made, member, "{report:#}");
+    let mut held = projects_in(&sandbox, TEAM);
+    held.sort();
+    let mut expected = vec![made, member.clone()];
+    expected.sort();
+    assert_eq!(held, expected);
+    let (_, member_native) = member.split_once(':').expect("a qualified id");
+    let member_file = sandbox
+        .project()
+        .join(TEAM)
+        .join("projects")
+        .join(format!("{member_native}.md"))
+        .display()
+        .to_string();
+    assert_eq!(
+        tree(&sandbox.project().join(TEAM).join("projects")).get(&member_file),
+        before.get(&member_file),
+        "the member's record is byte for byte what it was"
+    );
+}
+
+// A folder's permissions are Unix's to refuse a write with.
+#[cfg(unix)]
+#[test]
+fn a_home_whose_member_list_is_malformed_refuses_a_take_over_before_anything_is_written() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let sandbox = Sandbox::new();
+    let (plan, home, _) = split_plan_copied(&sandbox);
+    // The plan holds only its project now, so the take-over is the one thing that reads the
+    // home's list.
+    std::fs::remove_dir_all(plan.join("tasks")).expect("the plan's tasks");
+    rewrite(
+        &sandbox,
+        &home,
+        "title: Goal\nstatus: todo\nmetadata: {onetaskgraph.origin: \"plan:goal\", \
+         onetaskgraph.members: \"not a list\"}",
+    );
+    let before = folders_held(&sandbox);
+    // `team` refuses every write — a new record and an edit in place alike — so a copy that
+    // tried one would fail on it instead.
+    let set = |mode: u32| {
+        for kind in ["projects", "tasks"] {
+            let folder = sandbox.project().join(TEAM).join(kind);
+            std::fs::create_dir_all(&folder).expect("the folder");
+            for record in std::fs::read_dir(&folder).expect("the folder's records") {
+                std::fs::set_permissions(
+                    record.expect("a record").path(),
+                    std::fs::Permissions::from_mode(mode & 0o644),
+                )
+                .expect("the record's permissions");
+            }
+            std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(mode))
+                .expect("the folder's permissions");
+        }
+    };
+    set(0o555);
+    let refusal = refused(&sandbox, &["project", "copy", "plan:goal", "--to", TEAM], 1);
+    set(0o755);
+    assert!(
+        !refusal.contains("Permission denied")
+            && refusal.contains(&home)
+            && refusal.contains("onetaskgraph.members")
+            && refusal.contains("is not a list"),
+        "the refusal names the home and its malformed list:\n{refusal}"
+    );
+    assert_eq!(folders_held(&sandbox), before, "nothing was written");
+}
+
+#[test]
+fn a_home_listing_a_member_since_deleted_still_finds_the_member_that_names_it() {
+    let sandbox = Sandbox::new();
+    let (_, home, member) = split_plan_copied(&sandbox);
+    // The home's list names a project `team` no longer holds; the member still names the home.
+    rewrite(
+        &sandbox,
+        &home,
+        &format!(
+            "title: Goal\nstatus: todo\nmetadata: {{onetaskgraph.origin: \"plan:goal\", \
+             onetaskgraph.members: [\"{TEAM}:deleted\"]}}"
+        ),
+    );
+    let report = answer(&sandbox, &["project", "copy", "plan:goal", "--to", TEAM]);
+    assert_taken_over(&sandbox, &member, &report);
+}
+
+#[test]
+fn a_take_over_whose_former_home_cannot_be_written_is_undone() {
+    // The plan's home sits in a source with no write side, so its member list cannot drop the
+    // member once the member has been taken over and written: the copy takes that write back.
+    let sandbox = Sandbox::new();
+    let plan = sandbox.subdirectory(PLAN);
+    let team = sandbox.subdirectory(TEAM);
+    sandbox.project_document(&document(&json!({
+        PLAN: {"plugin": "local-md", "config": {"root": plan}},
+        "frozen": {"plugin": "in-memory", "config": {
+            "capabilities": {"writes": "unsupported"},
+            "projects": [{"id": "P-H", "title": "Goal", "content": null,
+                          "status": {"category": "todo", "name": "Todo"}, "labels": [],
+                          "metadata": {"onetaskgraph.origin": "plan:goal",
+                                       "onetaskgraph.members": ["team:goal"]}}]}},
+        TEAM: {"plugin": "local-md", "config": {"root": team}},
+    })));
+    record(
+        &plan,
+        "projects",
+        "goal",
+        "title: Goal\nstatus: todo\nmetadata: {onetaskgraph.copies: {frozen: \"frozen:P-H\"}}",
+    );
+    record(
+        &plan,
+        "tasks",
+        "api",
+        "title: Pets api\nstatus: todo\nproject: goal\nrepositories: [github.com/widgetco/api]",
+    );
+    record(
+        &team,
+        "projects",
+        "goal",
+        "title: Goal\nstatus: todo\nmetadata:\n  onetaskgraph.member_of: frozen:P-H",
+    );
+    let before = (tree(&plan), tree(&team));
+    let refusal = refused(&sandbox, &["project", "copy", "plan:goal", "--to", TEAM], 1);
+    assert!(
+        refusal.contains("frozen")
+            && refusal.contains("no write side")
+            && !refusal.contains("could not be undone"),
+        "the former home could not be written and the copy was undone:\n{refusal}"
+    );
+    assert_eq!(
+        (tree(&plan), tree(&team)),
+        before,
+        "the member is a member again and no link was recorded"
+    );
+    assert_eq!(projects_in(&sandbox, TEAM), vec!["team:goal".to_owned()]);
+}
+
+#[test]
 fn a_document_with_no_home_to_follow_goes_where_its_own_repositories_route_it() {
     let sandbox = Sandbox::new();
     let plan = folders(&sandbox);
