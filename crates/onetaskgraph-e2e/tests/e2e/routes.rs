@@ -1918,12 +1918,12 @@ fn projects_in(sandbox: &Sandbox, source: &str) -> Vec<String> {
         .collect()
 }
 
-/// The metadata a project carries, read back through the binary.
 fn metadata_of(sandbox: &Sandbox, project: &str) -> Value {
     answer(sandbox, &["project", "show", project])["items"][0]["item"]["metadata"].clone()
 }
 
-/// Rewrite one of `folder`'s project records as `front`, by its qualified id.
+/// Replace a project's record whole, as a person editing its file would: how a journey breaks
+/// one of the links a plan's projects find each other by.
 fn rewrite(sandbox: &Sandbox, project: &str, front: &str) {
     let (folder, native) = project.split_once(':').expect("a qualified id");
     record(&sandbox.project().join(folder), "projects", native, front);
