@@ -2508,14 +2508,20 @@ struct TaskShape {
 /// As [`TaskShape`], for projects.
 struct ProjectShape {
     /// What the source is asked.
-    pushed: ProjectQuery,
+    pushed: ProjectAsk,
     /// What the engine narrows afterwards.
     local: LocalProjects,
     /// What to report.
     outcomes: Outcomes,
-    /// The copy origin the source is asked for instead of `pushed`, when the listing is one
-    /// origin's.
-    origin: Option<GlobalId>,
+}
+
+/// Which of its two project listings a source is asked: one query, or every project copied
+/// from one origin — never both, because the second carries nothing of the first.
+enum ProjectAsk {
+    /// [`TaskSource::query_projects`] with this query.
+    Query(ProjectQuery),
+    /// [`TaskSource::query_projects_by_origin`] for this origin.
+    Origin(GlobalId),
 }
 
 /// As [`TaskShape`], for documents.
@@ -3118,10 +3124,9 @@ fn shape_projects(
     filters: &Filters,
     origin: Option<&GlobalId>,
 ) -> ProjectShape {
-    let mut pushed = ProjectQuery::default();
-    let mut local = LocalProjects::default();
-    let mut outcomes = Outcomes::default();
     if let Some(origin) = origin {
+        let mut local = LocalProjects::default();
+        let mut outcomes = Outcomes::default();
         local.labels = (!filters.labels.is_empty()).then(|| filters.labels.clone());
         local.statuses.clone_from(&filters.statuses);
         local.text.clone_from(&filters.text);
@@ -3137,13 +3142,27 @@ fn shape_projects(
         }
         outcomes.record(Predicate::Origin, Outcome::PushedDown);
         return ProjectShape {
-            pushed,
+            pushed: ProjectAsk::Origin(origin.clone()),
             local,
             outcomes,
-            origin: Some(origin.clone()),
         };
     }
+    let (pushed, local, outcomes) = shape_project_query(capabilities, filters);
+    ProjectShape {
+        pushed: ProjectAsk::Query(pushed),
+        local,
+        outcomes,
+    }
+}
 
+/// Split a project query that names no origin between the source and the engine.
+fn shape_project_query(
+    capabilities: &Capabilities,
+    filters: &Filters,
+) -> (ProjectQuery, LocalProjects, Outcomes) {
+    let mut pushed = ProjectQuery::default();
+    let mut local = LocalProjects::default();
+    let mut outcomes = Outcomes::default();
     if !filters.labels.is_empty() {
         if capabilities.filter_by_label.is_native() {
             pushed.labels = filters.labels.clone();
@@ -3172,13 +3191,7 @@ fn shape_projects(
             outcomes.record_all(predicates, Outcome::AppliedLocally);
         }
     }
-
-    ProjectShape {
-        pushed,
-        local,
-        outcomes,
-        origin: None,
-    }
+    (pushed, local, outcomes)
 }
 
 /// Split a document query between the source and the engine.
@@ -3246,14 +3259,14 @@ fn shape_documents(
 fn shape_hits(capabilities: &Capabilities, filters: &Filters, stream: StreamKind) -> HitShape {
     match stream {
         StreamKind::Projects => {
-            let shaped = shape_projects(capabilities, filters, None);
+            let (projects, local_projects, outcomes) = shape_project_query(capabilities, filters);
             HitShape {
                 stream,
                 tasks: TaskQuery::default(),
-                projects: shaped.pushed,
+                projects,
                 local_tasks: LocalTasks::default(),
-                local_projects: shaped.local,
-                outcomes: shaped.outcomes,
+                local_projects,
+                outcomes,
             }
         }
         StreamKind::Items | StreamKind::Tasks | StreamKind::Recorded => {
@@ -3341,19 +3354,14 @@ async fn fetch_projects(
         |cursor, limit| async move {
             calls.fetch_add(1, Ordering::Relaxed);
             let request = PageRequest { cursor, limit };
-            match &shape.origin {
-                Some(origin) => {
+            match &shape.pushed {
+                ProjectAsk::Origin(origin) => {
                     source
                         .source()
                         .query_projects_by_origin(&origin.to_string(), &request)
                         .await
                 }
-                None => {
-                    source
-                        .source()
-                        .query_projects(&shape.pushed, &request)
-                        .await
-                }
+                ProjectAsk::Query(query) => source.source().query_projects(query, &request).await,
             }
         },
     )
