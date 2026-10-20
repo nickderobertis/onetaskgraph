@@ -18,11 +18,15 @@
 //! waited for too, through that very lookup. One answer is not enough: a later run's wait saw
 //! the label once, and the plugin's own lookup a moment after it was answered with none, so
 //! the wait holds out for [`LABEL_STEADY`] answers in a row.
+//!
+//! A single read lags too: [`token_moved`] reads a task again while its change token has not
+//! yet moved past the read before a change, within [`LINEAR_REPLICA`].
 
+use std::cmp::Ordering;
 use std::future::Future;
 use std::time::{Duration, Instant};
 
-use onetaskgraph_plugin_api::{DocumentQuery, NativeId, PageRequest, TaskQuery, TaskSource};
+use onetaskgraph_plugin_api::{DocumentQuery, NativeId, PageRequest, Task, TaskQuery, TaskSource};
 use serde_json::{Value, json};
 
 /// How many times a listing is read, and how far apart, before its disagreement is the answer.
@@ -389,4 +393,64 @@ pub async fn settled_document_absent(
             .map_err(|error| format!("{what} could not be read: {error}"))
     })
     .await
+}
+
+/// What the live journey gives a lagging replica to answer a read after a change: the first
+/// read, then four more a little over a second apart.
+///
+/// Linear has answered a read after a title edit with an `updatedAt` eighteen seconds older than
+/// the read before the edit, which is a replica that has not caught up rather than the edit
+/// failing to move the token.
+pub const LINEAR_REPLICA: Bound = Bound {
+    reads: 5,
+    interval: Duration::from_millis(1_100),
+};
+
+/// The task `read` answers once its change token orders after `before`'s, read again while it
+/// orders at or before it; an `Err` naming both tokens once `bound` is spent.
+///
+/// A change to a member the token covers never leaves the token equal or earlier, which would
+/// let a cache serve the task as it was. A read that carries no token on either side is
+/// answered as it came, and a read that fails is returned at once, as [`settled`] does.
+pub async fn token_moved<F, Fut>(
+    source: &dyn TaskSource,
+    bound: Bound,
+    kind: &str,
+    before: &Task,
+    mut read: F,
+) -> Result<Task, String>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<Task, String>>,
+{
+    let at_or_before = |after: &Task| {
+        let (Some(was), Some(now)) = (before.version.as_deref(), after.version.as_deref()) else {
+            return None;
+        };
+        let order = source.order_versions(was, now);
+        matches!(order, Some(Ordering::Equal | Ordering::Greater)).then_some(order)
+    };
+    let mut after = read().await?;
+    let mut reads = 1;
+    while at_or_before(&after).is_some() && reads < bound.reads {
+        tokio::time::sleep(bound.interval).await;
+        after = read().await?;
+        reads += 1;
+    }
+    let Some(order) = at_or_before(&after) else {
+        return Ok(after);
+    };
+    let unchanged = |same: bool| if same { "unchanged" } else { "changed" };
+    Err(format!(
+        "{kind} left the task's token at or before {}: it read {} ({order:?}) on each of {reads} \
+         reads; updatedAt {:?} → {:?}, content {}, metadata {} — a read whose members are all \
+         unchanged is older than the write, and one whose content or metadata changed is Linear \
+         not moving updatedAt for it",
+        before.version.as_deref().unwrap_or_default(),
+        after.version.as_deref().unwrap_or_default(),
+        before.updated_at,
+        after.updated_at,
+        unchanged(before.content == after.content),
+        unchanged(before.metadata == after.metadata),
+    ))
 }

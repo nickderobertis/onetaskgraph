@@ -19,12 +19,13 @@
 //! session draws on**, and it cannot spend GraphQL points at all, because it is not a
 //! GraphQL call.
 //!
-//! The alternative GitHub offers — the `rateLimit` object in the GraphQL schema — is
-//! deliberately **not** used. It carries no published statement that it is unmetered, and
-//! GitHub's own guidance on that page points the other way: *"When possible, you should use
-//! the rate limit response headers instead of querying the API to check your rate limit."*
-//! A gate that could not cite a basis for its own read being free would be a gate that
-//! might itself tip a nearly-exhausted account over.
+//! GitHub's other reading — the `rateLimit` object in the GraphQL schema — is read beside it
+//! now, as [`RATE_LIMIT_OBJECT`], and is the one read here that may cost a point: it carries no
+//! published statement that it is unmetered, and GitHub's own guidance on that page is *"When
+//! possible, you should use the rate limit response headers instead of querying the API to
+//! check your rate limit."* It is read anyway because neither free reading proved enough on
+//! its own — see *The 40% rule* below — and it is recorded like every other request, so what it
+//! costs is in every session report.
 //!
 //! **Freeness is not established here by reading twice and comparing.** This account is
 //! shared, so another consumer moving the allowance between two reads would condemn a sound
@@ -59,6 +60,23 @@
 //! readings; a decline is the gate working, where a failure on the next call reads as this
 //! repository being broken. It is still one free read and no extra call: the second reading
 //! is taken off a request the session was making regardless.
+//!
+//! # The 40% rule, on the least of three readings
+//!
+//! A budget is no longer read from one source. The timing spike
+//! (`board-copy-speed-2026-10-18-spike-copy-timing-report`) watched `GET /rate_limit`, and at
+//! times GraphQL's own `rateLimit`, report a GraphQL budget thousands of points fuller than the
+//! headers of real answers in the same minutes, and seven runs started under 40% of it by
+//! GitHub's own headers. So every decision this lane makes — admission in [`precondition`] and
+//! each recheck after it — goes through [`GitHubGauge`]: `GET /rate_limit`, the
+//! [`RATE_LIMIT_OBJECT`], that object's answer's own headers and the headers of the session's
+//! last real answer, and decides on the least of them by `onetaskgraph_live::pace`. A budget
+//! under 40% of its limit is a reason to **pause** until its reset, not to decline — unless
+//! the burn rate since its window began says it resets before this session would exhaust it —
+//! and it is read again after the wait. Only then is the retained buffer applied, and a session
+//! that still cannot afford itself is declined as before. Every pause is printed and kept on
+//! [`Admitted`]. The clock it waits on is the system's, or the virtual one a stand-in installs
+//! with [`wait_on`].
 //!
 //! # The cost model, and the rule it rests on
 //!
@@ -118,9 +136,11 @@ use onetaskgraph_github_projects::accounting::{
     Accounting, Budget, Call, Endpoint, Method, Outcome, RateLimit, Request,
 };
 use onetaskgraph_github_projects::largest_page_sizes;
+use onetaskgraph_live::pace::Admission;
 use onetaskgraph_live::{
-    Allowance, Declined, Demand, Metered, Unaffordable, affordable, still_affordable,
+    Allowance, Declined, Demand, Gauge, Metered, Reading, Unaffordable, still_affordable,
 };
+use onetaskgraph_plugin_api::{SharedClock, system_clock};
 use serde_json::{Value, json};
 
 use crate::lane::SESSION_NAME;
@@ -444,8 +464,15 @@ pub fn observation(answered: &Result<Value, String>, carried: &RateLimit) -> Str
 /// and every budget passed on it; [`recheck`] is what it is for.
 #[derive(Debug)]
 pub struct Admitted {
-    /// One per budget, as the endpoint answered it.
-    demands: Vec<Demand>,
+    /// What the session was admitted on under the 40% rule — one demand per budget, on the
+    /// least reading of it — and every pause it has taken since, at admission and at every
+    /// recheck. Behind a lock so a recheck can add its pauses through the shared reference
+    /// every phase of the journey holds.
+    admission: std::sync::Mutex<Admission>,
+    /// The credential and the host the admission read with, which every recheck reads with
+    /// again.
+    token: String,
+    rest_host: String,
     /// How many requests the accounting held once the allowance read was recorded, so the
     /// request recorded next is the session's first real call — whichever runs of this
     /// journey the same accounting has seen before, which a stand-in driving it several
@@ -455,13 +482,13 @@ pub struct Admitted {
 
 /// Ask GitHub what the account has left, and decide whether this session may start.
 ///
-/// **This is a session's first request and its only one before the decision**: one
-/// `GET /rate_limit`, which answers every budget this session draws on. What comes back is
-/// turned into one [`Demand`] per budget — with the estimate above and the allowance that
-/// budget's own object reported — and handed to [`affordable`], which is where the
-/// [`onetaskgraph_live::RETAINED_BUFFER`] arithmetic lives.
+/// **These are a session's first requests, and its only ones before the decision**: the
+/// three readings [`GitHubGauge`] makes — `GET /rate_limit`, the [`RATE_LIMIT_OBJECT`] and that
+/// object's answer's headers — again after every pause the 40% rule takes. One [`Demand`] per
+/// budget, with the estimate above and the least reading of that budget, is then held to
+/// `affordable`, which is where the [`onetaskgraph_live::RETAINED_BUFFER`] arithmetic lives.
 ///
-/// The estimates are recorded into `into` before the read, so the report of a session that
+/// The estimates are recorded into `into` before the reads, so the report of a session that
 /// does start carries them beside what it really spent.
 ///
 /// What it returns is what it admitted the session on, for [`recheck`] to hold the session's
@@ -471,7 +498,8 @@ pub struct Admitted {
 ///
 /// When any budget's allowance could not be read, or when starting would dip into that
 /// budget's retained buffer. Both are a [`Declined`]: a run that did not happen, which is
-/// neither a pass nor a failing assertion. Nothing here sleeps, polls or retries.
+/// neither a pass nor a failing assertion. Nothing here retries or polls; what waits is the
+/// 40% rule, for a reset still ahead.
 pub async fn precondition(
     token: &str,
     rest_host: &str,
@@ -597,32 +625,324 @@ async fn precondition_estimated(
     for (budget, cost) in &estimated {
         into.estimate(*budget, *cost);
     }
-    let answered = read_allowance(token, rest_host, into).await;
+    let cost = |budget: Budget| estimated.get(&budget).copied().unwrap_or_default();
+    let demands = [
+        (metered(Budget::Graphql), cost(Budget::Graphql)),
+        (metered(Budget::Rest), cost(Budget::Rest)),
+    ];
+    let mut gauge = GitHubGauge::new(token, rest_host, into);
+    let admitted = Admission::admit(&mut gauge, &demands).await;
     // Printed whichever way the decision goes, because a run that declined is the run whose
-    // allowance a reader most wants to see. The read is the last request recorded, since
-    // nothing else has been sent yet.
-    let recorded = into.snapshot();
-    let carried = recorded
-        .requests()
-        .last()
-        .map_or_else(RateLimit::default, |read| read.rate_limit().clone());
-    super::say(&observation(&answered, &carried));
-    let demand = |budget: Budget, resource: &str| {
-        let cost = estimated.get(&budget).copied().unwrap_or_default();
-        match allowance_of(&answered, resource) {
-            Ok(allowance) => Demand::read(metered(budget), cost, allowance),
-            Err(why) => Demand::unread(metered(budget), cost, why),
+    // allowance a reader most wants to see.
+    if let Some((answered, carried)) = &gauge.observed {
+        super::say(&observation(answered, carried));
+    }
+    let admission =
+        admitted.map_err(|cause: Unaffordable| Declined::unaffordable(SESSION_NAME, cause))?;
+    super::say(&admission.report(SESSION_NAME));
+    Ok(Admitted {
+        admission: std::sync::Mutex::new(admission),
+        token: token.to_owned(),
+        rest_host: rest_host.to_owned(),
+        before: into.snapshot().total_requests(),
+    })
+}
+
+/// GraphQL's own rate-limit object: the second of the three readings a budget is decided on.
+///
+/// GitHub's answer carries the GraphQL budget's `limit`, `remaining` and `resetAt` under
+/// `data.rateLimit`. It is read beside `GET /rate_limit` rather than instead of it because the
+/// two have been observed disagreeing about one credential by thousands of points in the same
+/// minutes — `board-copy-speed-2026-10-18-spike-copy-timing-report` records the incident — so
+/// neither is decided on alone: the least of them and of the last real answer's headers is.
+/// It is a query and may cost a point, and it is recorded like every other request, so what
+/// the gate costs is in every session report.
+pub const RATE_LIMIT_OBJECT: &str = "query{rateLimit{cost limit remaining resetAt}}";
+
+/// How that read is named, in the accounting and in every reason it is part of.
+pub const RATE_LIMIT_OBJECT_READ: &str = "the GraphQL rateLimit object";
+
+/// How long one window of either budget lasts: GitHub's primary limits are hourly.
+pub const WINDOW_SECONDS: u64 = 3_600;
+
+/// The clock a session's pauses are waited out on, and the UTC epoch second its origin stands
+/// at — the system clock unless a stand-in has put the journey on a virtual one.
+struct Waiting {
+    clock: SharedClock,
+    epoch_at_origin: u64,
+}
+
+static WAITING: std::sync::OnceLock<Waiting> = std::sync::OnceLock::new();
+
+/// Put every pause this test binary's sessions take on `clock`, whose `now` is the UTC epoch
+/// second `epoch_now` at the moment of this call — once per binary, before any session.
+///
+/// What a stand-in drives the 40% rule with: a virtual clock lets a pause of an hour cost no
+/// real time, and its own `now` says how long the session waited.
+pub fn wait_on(clock: SharedClock, epoch_now: u64) {
+    let epoch_at_origin = epoch_now.saturating_sub(clock.now().as_secs());
+    assert!(
+        WAITING
+            .set(Waiting {
+                clock,
+                epoch_at_origin,
+            })
+            .is_ok(),
+        "a test binary's sessions wait on one clock"
+    );
+}
+
+fn waiting() -> &'static Waiting {
+    WAITING.get_or_init(|| {
+        let clock = system_clock();
+        let epoch = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.as_secs());
+        Waiting {
+            epoch_at_origin: epoch.saturating_sub(clock.now().as_secs()),
+            clock,
+        }
+    })
+}
+
+/// The UTC epoch second it is on the clock this binary's sessions wait on.
+#[must_use]
+pub fn epoch_now() -> u64 {
+    let waiting = waiting();
+    waiting.epoch_at_origin + waiting.clock.now().as_secs()
+}
+
+/// How this lane reads its budgets for the 40% rule: `GET /rate_limit`, GraphQL's own
+/// [`RATE_LIMIT_OBJECT`] and its answer's headers, and the headers of the last real answer
+/// of the session a recheck names — every one recorded into the session's accounting.
+pub struct GitHubGauge<'a> {
+    token: String,
+    rest_host: String,
+    into: &'a Accounting,
+    /// The headers of the last real answer of each budget, read by the recheck that made
+    /// this gauge: what the session's own calls said, beside what the two reads say.
+    latest: Vec<Reading>,
+    /// What the last allowance read answered, and the headers its response carried.
+    observed: Option<(Result<Value, String>, RateLimit)>,
+}
+
+impl<'a> GitHubGauge<'a> {
+    /// A gauge reading with `token` against `rest_host`, recording into `into`.
+    #[must_use]
+    pub fn new(token: &str, rest_host: &str, into: &'a Accounting) -> Self {
+        Self {
+            token: token.to_owned(),
+            rest_host: rest_host.to_owned(),
+            into,
+            latest: Vec::new(),
+            observed: None,
+        }
+    }
+
+    /// This gauge, also counting `reading` — the headers of a real answer the session made.
+    #[must_use]
+    pub fn with_answer(mut self, reading: Reading) -> Self {
+        self.latest.push(reading);
+        self
+    }
+}
+
+impl Gauge for GitHubGauge<'_> {
+    fn read(
+        &mut self,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<Reading>> + Send + '_>> {
+        Box::pin(async move {
+            let answered = read_allowance(&self.token, &self.rest_host, self.into).await;
+            let carried = self
+                .into
+                .snapshot()
+                .requests()
+                .last()
+                .map_or_else(RateLimit::default, |read| read.rate_limit().clone());
+            let object = read_rate_limit_object(&self.token, &self.rest_host, self.into).await;
+            // Its answer's headers are a real answer's word about the GraphQL budget — when
+            // they say they are about that budget.
+            let object_headers = self.into.snapshot().requests().last().and_then(|read| {
+                let headers = read.rate_limit();
+                if headers.resource() != Some(GRAPHQL_RESOURCE) {
+                    return None;
+                }
+                Some(Allowance::read(
+                    headers.limit()?,
+                    headers.remaining()?,
+                    headers.reset()?,
+                ))
+            });
+            let graphql = metered(Budget::Graphql);
+            let mut readings = vec![
+                Reading::new(
+                    graphql,
+                    allowance_read(),
+                    allowance_of(&answered, GRAPHQL_RESOURCE),
+                ),
+                Reading::new(graphql, RATE_LIMIT_OBJECT_READ, object_allowance(&object)),
+                Reading::new(
+                    metered(Budget::Rest),
+                    allowance_read(),
+                    allowance_of(&answered, REST_RESOURCE),
+                ),
+            ];
+            if let Some(headers) = object_headers {
+                readings.push(Reading::new(
+                    graphql,
+                    format!("the headers of {RATE_LIMIT_OBJECT_READ}"),
+                    headers.ok_or_else(|| {
+                        "its headers reported more remaining than the whole allowance".to_owned()
+                    }),
+                ));
+            }
+            readings.extend(self.latest.iter().cloned());
+            self.observed = Some((answered, carried));
+            readings
+        })
+    }
+
+    fn now(&self) -> u64 {
+        epoch_now()
+    }
+
+    fn wait_until(
+        &mut self,
+        until: u64,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        let wait = until.saturating_sub(epoch_now());
+        // The session's own answers were read before the window this wait is for came back,
+        // so after it they say nothing about the budget: only what is read again does.
+        self.latest.clear();
+        super::say(&format!(
+            "the {SESSION_NAME} live session is pausing {wait} s, until {until} (UTC epoch \
+             seconds), under the 40% rule"
+        ));
+        waiting().clock.sleep(std::time::Duration::from_secs(wait))
+    }
+
+    fn window(&self, _: Metered) -> u64 {
+        WINDOW_SECONDS
+    }
+}
+
+/// GraphQL's own rate-limit object, read and recorded into `into` like any other request.
+async fn read_rate_limit_object(
+    token: &str,
+    rest_host: &str,
+    into: &Accounting,
+) -> Result<Value, String> {
+    let sending = |reported_cost| {
+        Request::graphql(
+            RATE_LIMIT_OBJECT,
+            &json!({}),
+            Some(RATE_LIMIT_OBJECT_READ),
+            reported_cost,
+        )
+    };
+    let unanswered = || onetaskgraph_github_projects::accounting::ResponseOutcome::TransportError;
+    // The GraphQL endpoint of the API the journey is pointed at when that is the API whose
+    // REST host this reads, and the one beside the REST host otherwise — which is GitHub's
+    // own arrangement, and a stand-in's that answers both on one host.
+    let endpoint = super::ENDPOINTS
+        .get()
+        .filter(|set| set.rest_host == rest_host)
+        .map_or_else(|| format!("{rest_host}/graphql"), |set| set.graphql.clone());
+    let sent = reqwest::Client::new()
+        .post(endpoint)
+        .header("user-agent", "onetaskgraph-live-test")
+        .bearer_auth(token)
+        .json(&json!({"query": RATE_LIMIT_OBJECT, "variables": {}}))
+        .send()
+        .await;
+    let response = match sent {
+        Ok(response) => response,
+        Err(error) => {
+            into.record(
+                sending(None)
+                    .finished(Outcome::Refused, RateLimit::default())
+                    .with_execution(Some(RATE_LIMIT_OBJECT.to_owned()), unanswered(), 1),
+            );
+            return Err(format!(
+                "{RATE_LIMIT_OBJECT_READ} could not reach GitHub: {error}"
+            ));
         }
     };
-    let demands = vec![
-        demand(Budget::Graphql, resource_of(Budget::Graphql)),
-        demand(Budget::Rest, resource_of(Budget::Rest)),
-    ];
-    affordable(&demands)
-        .map_err(|cause: Unaffordable| Declined::unaffordable(SESSION_NAME, cause))?;
-    Ok(Admitted {
-        demands,
-        before: recorded.total_requests(),
+    let status = response.status();
+    let limits = super::rate_limit_headers(&response);
+    let exhausted = super::budget_exhausted(&response);
+    let body = match response.text().await {
+        Ok(body) => body,
+        Err(error) => {
+            into.record(
+                sending(None)
+                    .finished(Outcome::Refused, limits)
+                    .with_execution(Some(RATE_LIMIT_OBJECT.to_owned()), unanswered(), 1),
+            );
+            return Err(format!(
+                "{RATE_LIMIT_OBJECT_READ} returned no readable body: {error}"
+            ));
+        }
+    };
+    let parsed = serde_json::from_str::<Value>(&body);
+    let refused = parsed
+        .as_ref()
+        .ok()
+        .and_then(|answer| answer.get("errors"))
+        .is_some_and(|errors| !errors.is_null());
+    let outcome = if refused {
+        Outcome::Refused
+    } else {
+        Outcome::of_response(status, exhausted, &body)
+    };
+    // Recorded as the journey records its own GraphQL calls: with the protocol's own outcome
+    // and the price GitHub reported for it.
+    let protocol = onetaskgraph_github_projects::accounting::ResponseOutcome::of_graphql_reply(
+        status,
+        parsed.as_ref().ok(),
+    );
+    let reported_cost = parsed
+        .as_ref()
+        .ok()
+        .and_then(|answer| answer.pointer("/data/rateLimit/cost"))
+        .and_then(Value::as_u64);
+    into.record(
+        sending(reported_cost)
+            .finished(outcome, limits)
+            .with_execution(Some(RATE_LIMIT_OBJECT.to_owned()), protocol, 1),
+    );
+    if !status.is_success() {
+        return Err(format!(
+            "{RATE_LIMIT_OBJECT_READ} failed with HTTP {status}: {body}"
+        ));
+    }
+    parsed.map_err(|error| format!("{RATE_LIMIT_OBJECT_READ} returned invalid JSON: {error}"))
+}
+
+/// The GraphQL budget's allowance out of that object, or why it is not there to read.
+fn object_allowance(answered: &Result<Value, String>) -> Result<Allowance, String> {
+    let answer = answered.as_ref().map_err(Clone::clone)?;
+    let object = answer
+        .pointer("/data/rateLimit")
+        .ok_or_else(|| format!("{RATE_LIMIT_OBJECT_READ} answered without data.rateLimit"))?;
+    let field = |name: &str| {
+        object
+            .get(name)
+            .and_then(Value::as_u64)
+            .ok_or_else(|| format!("{RATE_LIMIT_OBJECT_READ} reported no {name}"))
+    };
+    let reset = object
+        .get("resetAt")
+        .and_then(Value::as_str)
+        .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
+        .and_then(|at| u64::try_from(at.timestamp()).ok())
+        .ok_or_else(|| format!("{RATE_LIMIT_OBJECT_READ} reported no readable resetAt"))?;
+    let (limit, remaining) = (field("limit")?, field("remaining")?);
+    Allowance::read(limit, remaining, reset).ok_or_else(|| {
+        format!(
+            "{RATE_LIMIT_OBJECT_READ} reported {remaining} remaining of a whole allowance of \
+             {limit}, which cannot both be true"
+        )
     })
 }
 
@@ -732,15 +1052,15 @@ fn carried_allowance(first: &Request, claimed: Allowance) -> Carried {
 /// When no request was recorded after the allowance read: the re-check follows the
 /// session's first real call, and asking before it is a defect in the journey rather than
 /// a budget.
-pub fn recheck(admitted: &Admitted, into: &Accounting) -> Result<(), Declined> {
+pub async fn recheck(admitted: &Admitted, into: &Accounting) -> Result<(), Declined> {
     let recorded = into.snapshot();
     let first = recorded
         .requests()
         .get(admitted.before)
         .expect("the re-check follows the session's first real call, and one was recorded");
     let demand = admitted
-        .demands
-        .iter()
+        .demands()
+        .into_iter()
         .find(|demand| demand.metered() == metered(first.budget()))
         .expect("the pre-check admitted every budget this session draws on");
     let claimed = demand
@@ -777,8 +1097,120 @@ pub fn recheck(admitted: &Admitted, into: &Accounting) -> Result<(), Declined> {
         claimed.limit(),
         demand.unit(),
     ));
-    still_affordable(demand, &allowance_read(), carried, &carried_by)
-        .map_err(|cause| Declined::unaffordable(SESSION_NAME, cause))
+    let carried = match carried {
+        // A call refused for a rate limit, or answered without figures, affords nothing:
+        // declined on it, before any further read.
+        Err(why) => {
+            return still_affordable(&demand, &allowance_read(), Err(why), &carried_by)
+                .map_err(|cause| Declined::unaffordable(SESSION_NAME, cause));
+        }
+        Ok(carried) => carried,
+    };
+    admitted
+        .rechecked(
+            into,
+            vec![Reading::new(demand.metered(), carried_by, Ok(carried))],
+            &[(demand.metered(), demand.estimated_cost())],
+        )
+        .await
+}
+
+impl Admitted {
+    /// One demand per budget, on the reading the session was admitted on.
+    #[must_use]
+    pub fn demands(&self) -> Vec<Demand> {
+        self.admission
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .demands()
+    }
+
+    /// Every pause the 40% rule has taken for this session, at admission and since.
+    #[must_use]
+    pub fn pauses(&self) -> Vec<onetaskgraph_live::Pause> {
+        self.admission
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .pauses()
+            .to_vec()
+    }
+
+    /// The session's own report of its pauses, as [`Admission::report`] spells it.
+    #[must_use]
+    pub fn report(&self) -> String {
+        self.admission
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .report(SESSION_NAME)
+    }
+
+    /// Decide the session again under the 40% rule — [`Admission::recheck`] through a
+    /// [`GitHubGauge`] that also counts `answers`, the headers of the session's own last real
+    /// answers — for `remaining`, each budget and what is still estimated of it, and print
+    /// every pause it took.
+    async fn rechecked(
+        &self,
+        into: &Accounting,
+        answers: Vec<Reading>,
+        remaining: &[(Metered, u64)],
+    ) -> Result<(), Declined> {
+        let mut admission = self
+            .admission
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        // The least of every reading is at most what the session's own answers say, so where
+        // one of them already declines it — and the 40% rule would not wait on it — reading
+        // the budget again could only decline it too: it is declined on that answer, with no
+        // further request.
+        let now = epoch_now();
+        for answer in &answers {
+            let Ok(carried) = answer.allowance() else {
+                continue;
+            };
+            let Some(cost) = remaining
+                .iter()
+                .find(|(metered, _)| *metered == answer.metered())
+                .map(|(_, cost)| *cost)
+            else {
+                continue;
+            };
+            let Some(admitted) = admission
+                .demands()
+                .into_iter()
+                .find(|demand| demand.metered() == answer.metered())
+            else {
+                continue;
+            };
+            let (Ok(claimed), onetaskgraph_live::pace::Pace::Go) = (
+                admitted.allowance(),
+                onetaskgraph_live::pace::pace(carried, cost, now, WINDOW_SECONDS),
+            ) else {
+                continue;
+            };
+            let owed = Demand::read(admitted.metered(), cost, claimed);
+            let claimed_by = admission
+                .admitted_by(admitted.metered())
+                .unwrap_or_default()
+                .to_owned();
+            still_affordable(&owed, &claimed_by, Ok(carried), answer.by())
+                .map_err(|cause| Declined::unaffordable(SESSION_NAME, cause))?;
+        }
+        let paused = admission.pauses().len();
+        let mut gauge = answers.into_iter().fold(
+            GitHubGauge::new(&self.token, &self.rest_host, into),
+            GitHubGauge::with_answer,
+        );
+        let decided = admission.recheck(&mut gauge, remaining).await;
+        for pause in &admission.pauses()[paused..] {
+            super::say(&format!("the {SESSION_NAME} live session {pause}"));
+        }
+        *self
+            .admission
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = admission;
+        decided.map_err(|cause| Declined::unaffordable(SESSION_NAME, cause))
+    }
 }
 
 /// Retire completed design allocations; these are estimates, never phase cost gates.
@@ -852,13 +1284,15 @@ fn recheck_budget(request: &Request) -> Result<Option<Budget>, String> {
 
 /// Check the remaining job demand against already-received headers, with the shared 20% buffer.
 /// Owned cleanup is always attempted by the caller even if this recheck refuses.
-pub fn recheck_remaining(
+pub async fn recheck_remaining(
     admitted: &Admitted,
     into: &Accounting,
     remaining_points: u64,
 ) -> Result<(), Declined> {
     let recorded = into.snapshot();
-    for original in &admitted.demands {
+    let mut answers = Vec::new();
+    let mut remaining = Vec::new();
+    for original in admitted.demands() {
         let budget = if original.metered() == metered(Budget::Graphql) {
             Budget::Graphql
         } else {
@@ -886,34 +1320,37 @@ pub fn recheck_remaining(
         let claimed = original
             .allowance()
             .expect("admitted allowance was readable");
-        let remaining = if budget == Budget::Graphql {
+        let still = if budget == Budget::Graphql {
             remaining_points
         } else {
             original.estimated_cost()
         };
-        let demand = Demand::read(original.metered(), remaining, claimed);
-        let carried = match carried_allowance(request, claimed) {
-            Carried::Allowance(allowance) => Ok(allowance),
-            Carried::Declining(why) => Err(why),
+        let demand = Demand::read(original.metered(), still, claimed);
+        let carried_by = format!(
+            "headers of {} while retaining {still} {} of remaining design demand",
+            request.name(),
+            demand.unit()
+        );
+        match carried_allowance(request, claimed) {
+            Carried::Allowance(allowance) => {
+                answers.push(Reading::new(original.metered(), carried_by, Ok(allowance)));
+            }
+            Carried::Declining(why) => {
+                return still_affordable(&demand, &allowance_read(), Err(why), &carried_by)
+                    .map_err(|cause| Declined::unaffordable(SESSION_NAME, cause));
+            }
             Carried::NothingAboutTheBudget(_) => continue,
-        };
-        still_affordable(
-            &demand,
-            &allowance_read(),
-            carried,
-            &format!(
-                "headers of {} while retaining {remaining} {} of remaining design demand",
-                request.name(),
-                demand.unit()
-            ),
-        )
-        .map_err(|cause| Declined::unaffordable(SESSION_NAME, cause))?;
+        }
+        remaining.push((original.metered(), still));
     }
-    Ok(())
+    if remaining.is_empty() {
+        return Ok(());
+    }
+    admitted.rechecked(into, answers, &remaining).await
 }
 
 /// The first executed schema request is already paid, so it no longer reserves demand.
-pub fn recheck_first_session(admitted: &Admitted, into: &Accounting) -> Result<(), Declined> {
+pub async fn recheck_first_session(admitted: &Admitted, into: &Accounting) -> Result<(), Declined> {
     let snapshot = into.snapshot();
     let paid = snapshot
         .requests()
@@ -926,4 +1363,5 @@ pub fn recheck_first_session(admitted: &Admitted, into: &Accounting) -> Result<(
         session_design_points(onetaskgraph_github_live::quota::EntryPoint::Main)
             .saturating_sub(paid),
     )
+    .await
 }

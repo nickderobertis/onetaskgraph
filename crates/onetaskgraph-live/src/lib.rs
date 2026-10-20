@@ -56,7 +56,15 @@
 //! A session that cannot afford itself is **declined**, not failed and not passed: it is
 //! the third answer above, carried by [`Declined::unaffordable`], whose cause is readable
 //! as a value through [`Declined::unaffordable_because`] rather than out of its prose.
-//! Nothing here waits for a budget to come back — see [`Unaffordable`].
+//! A decline never waits for a budget to come back — see [`Unaffordable`].
+//!
+//! **What waits is the 40% rule, and it comes first.** A budget the session draws on holding
+//! under [`PAUSE_BELOW`] of its limit is a reason to pause, not to decline: [`pace`] waits for
+//! that budget's reset — unless the burn rate since its window began says it resets before the
+//! session would exhaust it — and reads it again, at admission ([`Session::open_paced`]) and at
+//! every recheck ([`Session::recheck`]). Every reading it decides on is the least of every read
+//! the lane made of that budget, and every pause it takes is on the session's report. Only then
+//! is the retained buffer applied, and a session that still cannot afford itself is declined.
 //!
 //! **A session is decided twice, and the second decision is the one that stands.** The read
 //! a lane makes before it spends anything is, by choice, a read that spends nothing — and
@@ -74,6 +82,9 @@
 #![deny(missing_docs)]
 
 pub mod artifact;
+pub mod pace;
+
+pub use pace::{Gauge, PAUSE_BELOW, Pause, Reading};
 
 use std::fmt;
 use std::fs::{self, OpenOptions};
@@ -258,6 +269,13 @@ impl fmt::Display for Fraction {
 /// Nothing lowers it: it is a constant, and no environment variable, command-line option
 /// or configuration file reads it or replaces it. A session that cannot fit under it does
 /// not run.
+///
+/// **Where it does not decide.** Under [`PAUSE_BELOW`] of a budget's limit the 40% rule is the
+/// one decision, at admission, at every recheck and at cleanup alike: when the burn rate shows
+/// the budget resetting before the session's estimate would exhaust it, the session goes on
+/// with no wait and no retained-buffer refusal at that decision
+/// ([`pace::Pace::ResetsFirst`]); without that, it waits for the reset and reads the budget
+/// again. At or above [`PAUSE_BELOW`] this buffer decides, as it always has.
 pub const RETAINED_BUFFER: Fraction = Fraction::new(20, 100);
 
 /// A budget, and what it is metered in — one fact rather than two fields.
@@ -424,8 +442,9 @@ impl Demand {
 /// to be told from a run that failed by something reading the outcome rather than by
 /// reading prose. Every figure the decision was made on is on it.
 ///
-/// **Neither case waits.** There is no sleep, no poll and no retry here or in anything that
-/// consults it: a refusal naming a rate limit while the account's own reported budget still
+/// **No case waits.** There is no sleep, no poll and no retry here or in anything that
+/// consults it — the one wait a session takes is the 40% rule's, in [`pace`], before this is
+/// decided: a refusal naming a rate limit while the account's own reported budget still
 /// shows room is GitHub's secondary limiter, which nothing reports and every further attempt
 /// extends. What a declined run does is say when the budget resets and stop.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -840,6 +859,10 @@ pub struct Session {
     credential: Credential,
     /// `None` for a [`Exclusivity::Shared`] lane, which takes no seat at all.
     seat: Option<Seat>,
+    /// What [`Session::open_paced`] admitted the session on, and every pause it has taken —
+    /// what [`Session::recheck`] holds a later reading against. Empty for a session opened
+    /// without a gauge.
+    admission: pace::Admission,
 }
 
 impl Session {
@@ -890,7 +913,67 @@ impl Session {
             name: name.to_owned(),
             credential,
             seat,
+            admission: pace::Admission::default(),
         })
+    }
+
+    /// [`Session::open`], then the budgets: every budget of `demands` — each a budget and what
+    /// this session is estimated to spend of it — admitted by [`pace::Admission::admit`]: read
+    /// through `gauge`, paused for under the 40% rule and read again after every pause, and
+    /// then held to [`affordable`] on the least reading of each.
+    ///
+    /// A budget under [`PAUSE_BELOW`] of its limit is a reason to wait, not to decline: the
+    /// session waits for that budget's reset, unless the burn rate since its window began says
+    /// it resets before this session's estimate would exhaust it. What it waited for is on the
+    /// session — [`Session::pauses`], [`Session::report`].
+    ///
+    /// # Errors
+    ///
+    /// As [`Session::open`]; and a [`Declined`] when, on the readings decided on, a budget was
+    /// not read or the session cannot afford itself and keep [`RETAINED_BUFFER`].
+    pub async fn open_paced(
+        name: &str,
+        credential: Credential,
+        exclusivity: Exclusivity,
+        gauge: &mut dyn Gauge,
+        demands: &[(Metered, u64)],
+    ) -> Result<Self, Declined> {
+        let mut session = Self::open(name, credential, exclusivity)?;
+        session.admission = pace::Admission::admit(gauge, demands)
+            .await
+            .map_err(|cause| Declined::unaffordable(name, cause))?;
+        Ok(session)
+    }
+
+    /// Decide this session again part way through, by [`pace::Admission::recheck`]: on the
+    /// budgets as `gauge` reads them now, with `remaining` — each budget and what the session
+    /// is still estimated to spend of it — under the same 40% rule it was admitted by, and then
+    /// on [`still_affordable`] against the reading it was admitted on.
+    ///
+    /// # Errors
+    ///
+    /// The [`Declined`] [`still_affordable`] refuses with, naming both readings.
+    pub async fn recheck(
+        &mut self,
+        gauge: &mut dyn Gauge,
+        remaining: &[(Metered, u64)],
+    ) -> Result<(), Declined> {
+        self.admission
+            .recheck(gauge, remaining)
+            .await
+            .map_err(|cause| Declined::unaffordable(&self.name, cause))
+    }
+
+    /// Every pause the 40% rule took for this session, at admission and at every recheck.
+    #[must_use]
+    pub fn pauses(&self) -> &[Pause] {
+        self.admission.pauses()
+    }
+
+    /// The session's report of its pauses: one line per pause, or a line saying it took none.
+    #[must_use]
+    pub fn report(&self) -> String {
+        self.admission.report(&self.name)
     }
 
     /// The credential this session was opened with.

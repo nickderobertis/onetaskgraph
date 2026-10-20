@@ -119,6 +119,12 @@ impl Standin {
     }
 }
 
+/// What the precondition asks every stand-in below: the allowance read, then GraphQL's own
+/// rateLimit object — which these stand-ins refuse, so it is a reading the decision skips.
+fn the_two_reads() -> Vec<String> {
+    vec!["GET /rate_limit".to_owned(), "POST /graphql".to_owned()]
+}
+
 /// Everything the precondition asks for and everything it decided, from one drive of it.
 async fn decide(
     standin: &Standin,
@@ -149,14 +155,16 @@ async fn a_budget_with_room_starts_the_session_after_exactly_one_allowance_read(
     let (into, decided) = decide(&standin).await;
     decided.expect("an untouched allowance affords this session and its buffer");
 
-    // The gate's own traffic: one read, and nothing else. The stand-in would have answered
-    // anything else with a 404, so this is the bound rather than a description of it.
-    assert_eq!(standin.asked(), vec!["GET /rate_limit".to_owned()]);
+    // The gate's own traffic: the allowance read and GraphQL's own rateLimit object — the
+    // three readings the 40% rule takes the least of are those two and the object's answer's
+    // headers — and nothing else. The stand-in answers anything but the first with a 404, so
+    // this is the bound rather than a description of it.
+    assert_eq!(standin.asked(), the_two_reads());
 
     // Recorded like any other request, so what the gate itself cost is in every session
     // report rather than assumed — with the rate-limit facts its response carried.
     let session = into.snapshot();
-    assert_eq!(session.total_requests(), 1);
+    assert_eq!(session.total_requests(), 2);
     let read = &session.requests()[0];
     assert_eq!(read.name(), "GET /rate_limit");
     assert_eq!(read.budget(), Budget::Rest);
@@ -272,7 +280,7 @@ async fn an_allowance_read_the_stand_in_refuses_does_not_start_and_says_which_re
         assert!(why.contains("/rate_limit"), "{why}");
         assert!(declined.message().contains("DID NOT RUN"), "{status}");
         // The read that failed is still recorded, so a session report says the gate asked.
-        assert_eq!(into.snapshot().total_requests(), 1);
+        assert_eq!(into.snapshot().total_requests(), 2);
     }
 }
 
@@ -642,9 +650,10 @@ fn a_journey_the_account_cannot_afford_does_not_run_and_says_which_budget_was_sh
     for figure in [LIMIT, remaining, demand, buffer, RESETS_AT] {
         assert!(message.contains(&figure.to_string()), "{figure}: {message}");
     }
-    // One request, and it is the allowance read: a declined session spends the account
-    // nothing beyond the read it declined on, and it does not retry, poll or wait.
-    assert_eq!(standin.asked(), vec!["GET /rate_limit".to_owned()]);
+    // The two reads, and nothing else: a declined session spends the account nothing beyond
+    // the reads it declined on, and it does not retry or poll. Nor does it wait: the 40% rule
+    // waits only for a reset still ahead, and this stand-in's is long past.
+    assert_eq!(standin.asked(), the_two_reads());
 
     if std::env::var_os(budget::FOLLOW_THROUGH).is_some() {
         std::panic::resume_unwind(declined);
@@ -670,8 +679,8 @@ async fn the_combined_design_admits_both_roles_and_keeps_the_whole_retained_buff
             let result =
                 budget::precondition_session("test-token", &server.host, &ledger, role).await;
             assert_eq!(result.is_ok(), succeeds);
-            assert_eq!(*server.asked.lock().unwrap(), vec!["GET /rate_limit"]);
-            assert_eq!(ledger.snapshot().total_requests(), 1);
+            assert_eq!(*server.asked.lock().unwrap(), the_two_reads());
+            assert_eq!(ledger.snapshot().total_requests(), 2);
         }
     }
 }

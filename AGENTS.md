@@ -451,9 +451,19 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   of the third outcome.** The share it may never touch is `RETAINED_BUFFER` in
   `onetaskgraph-live` — twenty per cent of each budget's **whole allowance**, one constant
   for every lane, and nothing lowers it — and `affordable` there is the arithmetic. What
-  belongs to a lane is the *read*: the GitHub Projects journey makes exactly one,
-  `GET /rate_limit`, which GitHub documents as not counting against the REST rate limit and
-  which answers both of its budgets, before it does anything else. The estimate it decides
+  belongs to a lane is the *read*: before it does anything else the GitHub Projects journey
+  reads `GET /rate_limit` — which GitHub documents as not counting against the REST rate limit
+  and which answers both of its budgets — GraphQL's own `rateLimit` object, and that object's
+  answer's headers. **Before the buffer, the 40% rule:** a budget is the least of every reading
+  of it (`onetaskgraph_live::pace`), and one under `PAUSE_BELOW` — forty per cent of its limit —
+  is a reason to *pause* until its reset, not to decline, unless the burn rate since its window
+  began says it resets before the session would exhaust it — then it goes on with no wait and
+  no retained-buffer refusal at that decision, the buffer deciding only at or above forty per
+  cent; it is read again after the wait,
+  every pause is on the session's report, and every recheck below — the cleanup's included —
+  applies the same rule. The
+  product's own copy keeps its rate-limit backoff and never pauses this way.
+  `tests/pause_gate.rs` drives admission, recheck and cleanup on a virtual clock. The estimate it decides
   on is derived offline from that plugin's own per-call record of the session and a cost
   model stated once in `tests/journey/budget.rs`, so it needs no credential and moves with
   the session rather than with an edit; node count is **not** that estimate and cannot stand
@@ -470,7 +480,9 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   limit, or answered without an allowance the session could read, declines the same way; one
   refused for anything else and carrying no figures says nothing about the budget, so it
   goes on and fails as itself — a journey that cannot reach its host is a defect, not a
-  decline. The free read stays first, and no call is added. `tests/recheck_gate.rs` drives
+  decline. The free read stays first; each recheck reads the budgets again, the same three
+  ways, before it decides on the least of them — unless the session's own last answer already
+  declines it, which no lower reading could undo, and then it reads nothing more. `tests/recheck_gate.rs` drives
   all of that against a loopback stand-in. `scripts/check-budget-decline.sh`, a command in that plugin's `test`
   target, follows a decline on each reading through to the conclusion the required check
   reads, because a test that asserts a panic passes and the half worth proving is that the
@@ -1152,6 +1164,17 @@ them do; this is the inventory of what is owed, not a status board.
     written as one outside the copy; every check precedes the first write; any other refusal,
     and a project copy holding such a task, writes nothing; and a ticket write onto a board
     refused part way leaves no item behind and no issue closed behind an unwritten card.
+112. A plan copied onto a GitHub board — `project copy` then `document copy` of a generated
+    10-item plan, first, after one task's body changed and unchanged — sends no page of the
+    board's items or of its issue search and the same requests, by operation, at 2,000 and
+    20,000 items, and leaves the board holding exactly the plan; a task taken out of it is
+    reported orphaned and left as it was. Its counterparts are read in aliased batches of at
+    most `COPY_DETAIL_BATCH` and never one by one, and with the cache on only those no listed
+    token answers are read, an edited one before it is written.
+113. `task list --project`, `document list --project`, `project show` and `document show` on a
+    board read the project's own records, and `project list --origin` lists exactly the
+    projects copied from that origin in `project list`'s rows and JSON; each sends no page of
+    the board and the same requests at 2,000 and 20,000 items.
 
 ## The public boundary
 
