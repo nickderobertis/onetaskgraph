@@ -244,11 +244,12 @@ pub fn one_source(boundary: SourceBoundary) -> String {
     .expect("a one-source document")
 }
 
-/// Windows' bound, in UTF-16 units, on the command line `CreateProcessW` takes and on any one
-/// variable of a child's environment, as Microsoft documents both — `CreateProcessW`'s
-/// `lpCommandLine` and "Environment Variables" — and the block holding them all has no bound of
-/// its own. Its gate is the Windows lane, which spawns every command this measures: were it set
-/// past what Windows takes, a spawn it passes would fail there with `os error 206`.
+/// Windows' bound, in UTF-16 units and counting the terminating null, on the command line
+/// `CreateProcessW` takes and on any one variable of a child's environment, as Microsoft
+/// documents both — `CreateProcessW`'s `lpCommandLine` and "Environment Variables" — so what a
+/// spawn may hand either is one unit less; the block holding them all has no bound of its own.
+/// `tests/spawn_lengths.rs` holds the command line's to the operating system on the Windows
+/// lane: one measured a unit inside it spawns, and one past it fails with `os error 206`.
 pub const WINDOWS_SPAWN_LIMIT: usize = 32_767;
 
 /// What spawning `command` hands a Windows child, in UTF-16 units: the command line at its
@@ -306,8 +307,8 @@ pub fn spawn_lengths(command: &std::process::Command) -> SpawnLengths {
 pub fn assert_spawnable_on_windows(command: &std::process::Command) {
     let lengths = spawn_lengths(command);
     assert!(
-        lengths.command_line <= WINDOWS_SPAWN_LIMIT
-            && lengths.longest_variable <= WINDOWS_SPAWN_LIMIT,
+        lengths.command_line < WINDOWS_SPAWN_LIMIT
+            && lengths.longest_variable < WINDOWS_SPAWN_LIMIT,
         "this spawn hands its child {lengths:?}, past the {WINDOWS_SPAWN_LIMIT} UTF-16 units \
          Windows allows a command line or one environment variable, so `spawn` fails there with \
          os error 206; next: reach the same work through fewer or shorter arguments"
