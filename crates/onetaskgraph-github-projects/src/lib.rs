@@ -9771,8 +9771,6 @@ impl GitHubProjectsSource {
                 self.set_item_fields(board, item, &[], &clears).await?;
             }
         }
-        // Each alias answers with the item it wrote, which is the one its input named: the
-        // board item a field value is set on, the issue closed, the issue blocked.
         // Each alias answers with what it wrote, which is what its input named: the board item a
         // field value is set on, the issue closed, the issue blocked and the one blocking it.
         let field_answer: &[(&str, &str)] = &[("projectV2Item", "itemId")];
