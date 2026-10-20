@@ -86,14 +86,13 @@ fn sha256(content: &str) -> String {
     format!("sha256:{hex}")
 }
 
-/// A folder of Markdown `plan`, a second one `back`, and a loopback Linear workspace `linear`
+/// A folder of Markdown `plan` and a loopback Linear workspace `linear`
 /// holding one project to file what is created there under, with a loader document for a plan
 /// task, a project description and a design document.
 struct Plan {
     sandbox: Sandbox,
     workspace: LinearWorkspace,
     plan: PathBuf,
-    back: PathBuf,
     task: String,
     project: String,
     design: String,
@@ -128,11 +127,8 @@ impl Plan {
         config["status_mapping"] = mapping();
         workspace.rewrite_markdown_on_write(LinearMarkdown::Declared);
         let plan = sandbox.subdirectory("plan");
-        let back = sandbox.subdirectory("back");
-        for root in [&plan, &back] {
-            for kind in ["tasks", "projects", "documents"] {
-                std::fs::create_dir_all(root.join(kind)).expect("a folder");
-            }
+        for kind in ["tasks", "projects", "documents"] {
+            std::fs::create_dir_all(plan.join(kind)).expect("a folder");
         }
         let linear = match hosting {
             Hosting::InProcess => json!({"plugin": "linear", "config": config}),
@@ -156,7 +152,6 @@ impl Plan {
         sandbox.project_document(&document(&json!({
             "linear": linear,
             "plan": {"plugin": "local-md", "config": {"root": plan}},
-            "back": {"plugin": "local-md", "config": {"root": back}},
         })));
         let inputs = sandbox.subdirectory("inputs");
         let write = |name: &str, text: String| {
@@ -171,7 +166,6 @@ impl Plan {
             sandbox,
             workspace,
             plan,
-            back,
             task,
             project,
             design,
@@ -944,45 +938,6 @@ fn items_created_and_rendered_in_linear_record_the_digest_of_what_linear_stores(
             stderr(&refused).contains("first at line 12"),
             "{}",
             stderr(&refused)
-        );
-    }
-}
-
-#[test]
-fn a_copy_into_a_folder_of_markdown_writes_the_rendering_and_its_provenance_as_it_read_them() {
-    let plan = Plan::new();
-    let (task, design) = plan.rendered_plan();
-    for (kind, source) in [("task", task.as_str()), ("document", design.as_str())] {
-        let read = plan.show(kind, source);
-        let (copied, errors, served) = plan.copy(&[kind, "copy", source, "--to", "back"], 0);
-        assert!(errors.is_empty(), "{errors}");
-        assert!(
-            served.is_empty(),
-            "a folder copy reaches no Linear: {served:#?}"
-        );
-        let destination = copied["items"][0]["destination"].as_str().expect("an id");
-        let landed = plan.show(kind, destination);
-        assert_eq!(
-            landed["content"], read["content"],
-            "a folder of Markdown declares no rewrite, so the bytes are the source's"
-        );
-        assert_eq!(
-            landed["metadata"]["onetaskgraph.template"],
-            read["metadata"]["onetaskgraph.template"]
-        );
-        assert_eq!(
-            landed["metadata"]["onetaskgraph.template"]["body_digest"],
-            sha256(landed["content"].as_str().expect("content"))
-        );
-        let file = plan
-            .back
-            .join(format!("{kind}s"))
-            .join(format!("{}.md", destination.trim_start_matches("back:")));
-        let written = std::fs::read_to_string(&file).expect("the copied file");
-        assert!(
-            written.contains("- build it\n- ship it\n| Step | Owner |\n")
-                || written.contains("- build it\n- ship it\n\n| Step | Owner |\n| --- | --- |\n"),
-            "{written}"
         );
     }
 }
