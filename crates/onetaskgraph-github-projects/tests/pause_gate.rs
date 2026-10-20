@@ -98,9 +98,9 @@ struct Standin {
     host: String,
     reported: Arc<Mutex<Reported>>,
     asked: Arc<Mutex<Vec<String>>>,
-    /// Whether the budget stays where it is past every reset, as one another consumer keeps
+    /// How many more resets the budget stays where it is past, as one another consumer keeps
     /// drawing down would — reporting the same remainder, against the next window's reset.
-    stuck: Arc<std::sync::atomic::AtomicBool>,
+    stuck: Arc<std::sync::atomic::AtomicUsize>,
     /// The whole allowance each of the three reads reports against — the endpoint's, the
     /// object's and the headers' — the same unless a case says otherwise.
     limits: Arc<Mutex<[u64; 3]>>,
@@ -189,7 +189,7 @@ impl Standin {
         let host = format!("http://{}", listener.local_addr().unwrap());
         let reported = Arc::new(Mutex::new(reported));
         let asked = Arc::new(Mutex::new(Vec::new()));
-        let stuck = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stuck = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let (script, recorded) = (Arc::clone(&reported), Arc::clone(&asked));
         let held_down = Arc::clone(&stuck);
         let limits = Arc::new(Mutex::new([LIMIT; 3]));
@@ -211,26 +211,36 @@ impl Standin {
                 );
                 recorded.lock().unwrap().push(called.clone());
                 let now = budget::epoch_now();
-                let held = *script.lock().unwrap();
+                let mut held = *script.lock().unwrap();
                 let [endpoint_limit, object_limit, headers_limit] = *against.lock().unwrap();
-                // Past its reset the window has come back whole, and a new one has begun.
-                let (scripted, reset) =
-                    if now >= held.reset && held_down.load(std::sync::atomic::Ordering::SeqCst) {
-                        let reset = now + 1_800;
-                        (Reported { reset, ..held }, reset)
-                    } else if now >= held.reset {
-                        (
-                            Reported {
-                                endpoint: LIMIT,
-                                object: LIMIT,
-                                headers: LIMIT,
-                                reset: now + 3_600,
-                            },
-                            now + 3_600,
+                // Held down, a reset passed begins a new window at the same remainder, once for
+                // every request of the reads that follow it.
+                if now >= held.reset
+                    && held_down
+                        .fetch_update(
+                            std::sync::atomic::Ordering::SeqCst,
+                            std::sync::atomic::Ordering::SeqCst,
+                            |left| left.checked_sub(1),
                         )
-                    } else {
-                        (held, held.reset)
-                    };
+                        .is_ok()
+                {
+                    held.reset = now + 1_800;
+                    *script.lock().unwrap() = held;
+                }
+                // Past its reset the window has come back whole, and a new one has begun.
+                let (scripted, reset) = if now >= held.reset {
+                    (
+                        Reported {
+                            endpoint: LIMIT,
+                            object: LIMIT,
+                            headers: LIMIT,
+                            reset: now + 3_600,
+                        },
+                        now + 3_600,
+                    )
+                } else {
+                    (held, held.reset)
+                };
                 let object_read =
                     called == "POST /graphql" && request.contains(budget::RATE_LIMIT_OBJECT);
                 let failing = *breaking.lock().unwrap();
@@ -314,9 +324,10 @@ impl Standin {
         *self.limits.lock().unwrap() = limits;
     }
 
-    /// Keep the budget where it is past every reset from now on.
-    fn hold_down(&self) {
-        self.stuck.store(true, std::sync::atomic::Ordering::SeqCst);
+    /// Keep the budget where it is past each of the next `resets` resets.
+    fn hold_down_for(&self, resets: usize) {
+        self.stuck
+            .store(resets, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// Report `reported` from now on — the bucket moving under a session already admitted.
@@ -813,10 +824,12 @@ fn the_cleanup_recheck_at_or_above_forty_per_cent_goes_on_at_once() {
 }
 
 #[test]
-fn a_budget_that_never_comes_back_is_waited_for_a_bounded_number_of_times_then_declined() {
-    // Ten per cent, half an hour from its reset, and still ten per cent after every reset: the
-    // session pauses `MOST_PAUSES` times, reading again after each, and then the retained
-    // buffer decides on the last reading — which it cannot afford, so it does not run.
+fn a_budget_that_stays_under_forty_per_cent_is_waited_for_however_many_resets_it_takes() {
+    // Ten per cent, half an hour from its reset, and still ten per cent after each of the next
+    // twelve resets — three times the four pauses the rule was once capped at, after which it
+    // declined. No count of pauses ends the wait: the session pauses at every one, reading
+    // again after each, and is admitted only once a read finds the window come back whole.
+    const RESETS: u64 = 12;
     let _turn = take_the_turn();
     let started = budget::epoch_now();
     let low = LIMIT / 10;
@@ -826,35 +839,30 @@ fn a_budget_that_never_comes_back_is_waited_for_a_bounded_number_of_times_then_d
         headers: low,
         reset: started + 1_800,
     });
-    standin.hold_down();
+    standin.hold_down_for(usize::try_from(RESETS).unwrap());
     let into = Accounting::new();
-    let mut gauge = budget::GitHubGauge::new("test-token", &standin.host, &into);
-    let declined = block_on(Session::open_paced(
-        "pause-gate",
-        Credential::new("test-token").unwrap(),
-        Exclusivity::Shared,
-        &mut gauge,
-        &demands(),
-    ))
-    .expect_err("a budget that never comes back is not one this session can afford");
-    let pauses = u64::try_from(onetaskgraph_live::pace::MOST_PAUSES).unwrap();
+    let session = open(&standin, &into);
+    let pauses = session.pauses();
+    assert_eq!(
+        u64::try_from(pauses.len()).unwrap(),
+        RESETS + 1,
+        "{pauses:?}"
+    );
+    assert!(
+        pauses
+            .iter()
+            .all(|pause| pause.decided_on.remaining() == low),
+        "every pause was for a reading under forty per cent: {pauses:?}"
+    );
     assert_eq!(
         budget::epoch_now(),
-        started + pauses * 1_800,
-        "bounded waiting"
+        started + (RESETS + 1) * 1_800,
+        "waited until every reset the readings reported"
     );
     assert_eq!(
         standin.asked().len(),
-        ONE_READ.len() * (onetaskgraph_live::pace::MOST_PAUSES + 1),
-        "read again after every pause, and no more"
-    );
-    assert!(
-        matches!(
-            declined.unaffordable_because(),
-            Some(onetaskgraph_live::Unaffordable::Short { remaining, .. }) if *remaining == low
-        ),
-        "{}",
-        declined.message()
+        ONE_READ.len() * (pauses.len() + 1),
+        "read again after every pause"
     );
 }
 

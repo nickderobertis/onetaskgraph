@@ -26,6 +26,12 @@
 //! window comes back. Holding it to the buffer as well would end, or stall, the very session
 //! the rule says goes on. A budget nothing could read is not paced at all — there is no
 //! reading to wait on — and is refused by `affordable` exactly as before.
+//!
+//! **The rule has no give-up.** No count of pauses, elapsed wait or retry limit ends a session
+//! whose budget is still under [`PAUSE_BELOW`]: the only ways past such a reading are its reset
+//! followed by a read at or above it, or the burn-rate exception. A lane's wall-clock bound is
+//! the CI job's own timeout, never a cap here — a cap would decline, or spend into, the very
+//! budget the rule exists to protect.
 
 use std::fmt;
 use std::future::Future;
@@ -39,14 +45,6 @@ use crate::{Allowance, Demand, Fraction, Metered, Unaffordable, affordable, stil
 /// for the reason [`RETAINED_BUFFER`](crate::RETAINED_BUFFER) is: what is protected is a fixed
 /// amount, not a share of whatever happens to be left. Nothing lowers it.
 pub const PAUSE_BELOW: Fraction = Fraction::new(40, 100);
-
-/// The most pauses one decision takes before it decides on what it last read.
-///
-/// A window that resets comes back whole, so one pause per budget is what the rule needs; the
-/// bound is what stops a reading that never recovers — a clock that is wrong, an endpoint that
-/// keeps reporting the reset it has already passed — from waiting for ever. What is decided
-/// after it is [`affordable`]'s, on the last reading.
-pub const MOST_PAUSES: usize = 4;
 
 /// One reading of one budget, and the read that made it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -237,14 +235,14 @@ pub trait Gauge: Send {
 /// answer one [`Demand`] per budget, on the least reading of it, with the read that made it.
 ///
 /// Every pause is pushed onto `pauses`, in the order taken, so the session's report says what
-/// it waited for. At most [`MOST_PAUSES`] are taken; what is answered after them is the last
-/// reading, for [`affordable`] to decide.
+/// it waited for. There is no limit on how many: a budget still under [`PAUSE_BELOW`] after its
+/// reset is waited for again, however many resets that takes, because nothing but a reading at
+/// or above it — or a burn rate that resets first — lets a session past it.
 pub async fn paced(
     gauge: &mut dyn Gauge,
     demands: &[(Metered, u64)],
     pauses: &mut Vec<Pause>,
 ) -> Vec<(Demand, String)> {
-    let mut taken = 0;
     loop {
         let readings = gauge.read().await;
         let now = gauge.now();
@@ -265,7 +263,7 @@ pub async fn paced(
             .iter()
             .find_map(|(demand, by, wait)| wait.map(|until| (demand, by, until)));
         match due {
-            Some((demand, by, until)) if taken < MOST_PAUSES => {
+            Some((demand, by, until)) => {
                 pauses.push(Pause {
                     metered: demand.metered(),
                     decided_on: demand
@@ -275,10 +273,9 @@ pub async fn paced(
                     from: now,
                     until,
                 });
-                taken += 1;
                 gauge.wait_until(until).await;
             }
-            _ => {
+            None => {
                 return decided
                     .into_iter()
                     .map(|(demand, by, _)| (demand, by))
@@ -466,24 +463,48 @@ mod tests {
         );
     }
 
-    /// A gauge whose budget never recovers: every read reports ten per cent left, resetting a
-    /// minute after now, and each wait moves now to the reset asked for.
-    struct Stuck {
+    /// A gauge whose budget stays low: every read reports ten per cent left, resetting a minute
+    /// after now, until `recovers_after` waits have passed — then the whole allowance. Each wait
+    /// moves now to the reset asked for; past `wait_forever_after` waits, a wait never completes,
+    /// so a poll shows the decision still waiting rather than made.
+    struct Low {
         now: u64,
         reads: usize,
         waits: Vec<u64>,
+        recovers_after: usize,
+        wait_forever_after: usize,
     }
 
-    impl Gauge for Stuck {
+    impl Low {
+        fn new(recovers_after: usize, wait_forever_after: usize) -> Self {
+            Self {
+                now: 1_000,
+                reads: 0,
+                waits: Vec::new(),
+                recovers_after,
+                wait_forever_after,
+            }
+        }
+    }
+
+    impl Gauge for Low {
         fn read(&mut self) -> Pin<Box<dyn Future<Output = Vec<Reading>> + Send + '_>> {
             self.reads += 1;
-            let reading = Reading::new(GRAPHQL, "stuck", Ok(allowance(500, self.now + 60)));
+            let remaining = if self.waits.len() >= self.recovers_after {
+                5_000
+            } else {
+                500
+            };
+            let reading = Reading::new(GRAPHQL, "low", Ok(allowance(remaining, self.now + 60)));
             Box::pin(std::future::ready(vec![reading]))
         }
         fn now(&self) -> u64 {
             self.now
         }
         fn wait_until(&mut self, until: u64) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+            if self.waits.len() >= self.wait_forever_after {
+                return Box::pin(std::future::pending());
+            }
             self.waits.push(until);
             self.now = until;
             Box::pin(std::future::ready(()))
@@ -494,39 +515,89 @@ mod tests {
         }
     }
 
-    /// Drive a future whose every await is ready, with no runtime.
-    fn ready<T>(future: impl Future<Output = T>) -> T {
+    /// Poll a future once, with no runtime: its value when every await it reached was ready.
+    fn poll_once<T>(future: impl Future<Output = T>) -> std::task::Poll<T> {
         let mut future = std::pin::pin!(future);
         let mut context = std::task::Context::from_waker(std::task::Waker::noop());
-        match future.as_mut().poll(&mut context) {
+        future.as_mut().poll(&mut context)
+    }
+
+    /// Drive a future whose every await is ready, with no runtime.
+    fn ready<T>(future: impl Future<Output = T>) -> T {
+        match poll_once(future) {
             std::task::Poll::Ready(value) => value,
             std::task::Poll::Pending => panic!("every await here is ready"),
         }
     }
 
+    /// Far more resets than the four pauses the rule was once capped at.
+    const MANY: usize = 50;
+
     #[test]
-    fn a_budget_that_never_recovers_is_paused_for_at_most_most_pauses_times_then_decided() {
-        let mut gauge = Stuck {
-            now: 1_000,
-            reads: 0,
-            waits: Vec::new(),
-        };
+    fn a_budget_that_stays_under_forty_per_cent_is_waited_for_however_many_resets_it_takes() {
+        // Still under forty per cent after every one of MANY resets: no decision is made — the
+        // session is still waiting, neither declined nor let through.
+        let mut gauge = Low::new(usize::MAX, MANY);
         let mut pauses = Vec::new();
-        let decided = ready(paced(&mut gauge, &[(GRAPHQL, 100)], &mut pauses));
-        assert_eq!(pauses.len(), MOST_PAUSES);
-        assert_eq!(gauge.waits, [1_060, 1_120, 1_180, 1_240]);
-        assert_eq!(gauge.reads, MOST_PAUSES + 1, "read again after every pause");
-        assert_eq!(decided[0].0.allowance().map(Allowance::remaining), Ok(500));
-        // And then the retained buffer decides, on that last reading.
-        let mut gauge = Stuck {
-            now: 1_000,
-            reads: 0,
-            waits: Vec::new(),
-        };
-        assert!(matches!(
-            ready(Admission::admit(&mut gauge, &[(GRAPHQL, 100)])),
-            Err(Unaffordable::Short { remaining: 500, .. })
-        ));
+        assert!(
+            poll_once(paced(&mut gauge, &[(GRAPHQL, 100)], &mut pauses)).is_pending(),
+            "a budget under forty per cent is never decided on"
+        );
+        assert_eq!(
+            pauses.len(),
+            MANY + 1,
+            "paused once more, for the next reset"
+        );
+        assert_eq!(gauge.waits.len(), MANY);
+        assert_eq!(gauge.reads, MANY + 1, "read again after every pause");
+        let mut gauge = Low::new(usize::MAX, MANY);
+        assert!(
+            poll_once(Admission::admit(&mut gauge, &[(GRAPHQL, 100)])).is_pending(),
+            "admission is not declined while the budget is under forty per cent"
+        );
+        // The same recovering after MANY resets: admitted on the reading after the last one.
+        let mut gauge = Low::new(MANY, usize::MAX);
+        let admitted = ready(Admission::admit(&mut gauge, &[(GRAPHQL, 100)]))
+            .unwrap_or_else(|declined| panic!("{declined:?}"));
+        assert_eq!(admitted.pauses().len(), MANY);
+        assert_eq!(gauge.reads, MANY + 1, "read again after every pause");
+        assert_eq!(
+            gauge.waits,
+            (1..=MANY)
+                .map(|n| 1_000 + 60 * u64::try_from(n).unwrap())
+                .collect::<Vec<_>>(),
+            "each wait is until the reset the reading reported"
+        );
+        assert_eq!(
+            admitted.demands()[0].allowance().map(Allowance::remaining),
+            Ok(5_000)
+        );
+    }
+
+    #[test]
+    fn a_recheck_that_stays_under_forty_per_cent_is_waited_for_however_many_resets_it_takes() {
+        // Admitted at the whole allowance, then a recheck that finds it under forty per cent
+        // through MANY resets: still waiting, never ended.
+        let mut gauge = Low::new(0, usize::MAX);
+        let mut admitted = ready(Admission::admit(&mut gauge, &[(GRAPHQL, 100)])).unwrap();
+        let mut gauge = Low::new(usize::MAX, MANY);
+        assert!(
+            poll_once(admitted.recheck(&mut gauge, &[(GRAPHQL, 100)])).is_pending(),
+            "a recheck under forty per cent does not end the session"
+        );
+        assert_eq!(gauge.waits.len(), MANY);
+        assert_eq!(gauge.reads, MANY + 1, "read again after every pause");
+        // And recovering after MANY resets, the recheck goes on.
+        let mut admitted = ready(Admission::admit(
+            &mut Low::new(0, usize::MAX),
+            &[(GRAPHQL, 100)],
+        ))
+        .unwrap();
+        let mut gauge = Low::new(MANY, usize::MAX);
+        ready(admitted.recheck(&mut gauge, &[(GRAPHQL, 100)]))
+            .unwrap_or_else(|declined| panic!("{declined:?}"));
+        assert_eq!(admitted.pauses().len(), MANY);
+        assert_eq!(gauge.reads, MANY + 1);
     }
 
     #[test]
