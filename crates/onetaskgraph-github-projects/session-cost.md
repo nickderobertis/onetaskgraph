@@ -675,17 +675,16 @@ node count, **not points**:
 <!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] Held by a drift gate: the copy-cost test in `crates/onetaskgraph-github-projects-e2e/tests/e2e/copy_cost.rs` measures (g) and (h), holds `tests/fixtures/copy-cost.txt` to them, and fails unless this table's two rows state the same figures. -->
 |                    | (h) found by searching | (g) found by the link |
 | ------------------ | ---------------------: | --------------------: |
-| **requests**       |                      6 |                     4 |
-| **node count**     |                  21971 |                   912 |
+| **requests**       |                      5 |                     4 |
+| **node count**     |                   2286 |                   912 |
 
-(h) asks the board once for the item whose origin is the task (`looking up the items copied
-from one origin`, the lookup described under *Asking GitHub the narrower question* below)
-and searches the board's issues once to find the project the task is filed under (`searching
-this board's issues`), and that search grows with the board. (g) sends neither: it
-reads the task's issue and its project's issue by their node ids — one `reading one issue`
-more than (h) — and writes exactly what (h) writes. The test asserts on its own that (g)
-sends no board read and no board-scoped search, that (h) sends the one origin lookup and no
-board read, and that both copies update the one item.
+(h) asks the board once for the item whose origin is the task and once for the item whose
+origin is the project the task is filed under (`looking up the items copied from one origin`,
+the lookup described under *Asking GitHub the narrower question* below), and neither grows
+with the board. (g) sends neither: it reads the task's issue and its project's issue by their
+node ids — one `reading one issue` more than (h) — and writes exactly what (h) writes. The test asserts on its own that (g)
+sends no board read and no board-scoped search, that (h) sends the two origin lookups and no
+board read or board-scoped search, and that both copies update the one item.
 
 Rows (a) to (f) do not move. The link a whole copy records is written to the Markdown
 folder the plan lives in, which sends the board nothing, and every copy in (b) to (f) is of
@@ -1138,3 +1137,83 @@ hold, so it is sent afresh.
 **`session-cost.txt`** moves by that one search: the live journey's read of the tasks in its
 board's first column is such a read, so its searches 11 → 12, its request total 192 → 193 and
 its node count by that page's 4,080 nodes, 288,769 → 292,849.
+
+## A copy reads what its plan holds, never the whole board
+
+A copy used to walk its destination twice over: a project copy's orphan check listed every task
+the board holds to find those filed under the copied project, and a project's or a document's
+counterpart was found by the board-scoped issue search (`SEARCH_ISSUES`) or the whole-board read
+(`BOARD`), each growing with everything the board has accumulated. The orphan check now asks the
+destination project for its own members — one `reading a project's tasks` (`SUB_ISSUES`) — and a
+project or a document is found by `TaskSource::query_projects_by_origin` and
+`TaskSource::query_documents_by_origin`, which this source answers with the same
+`ORIGIN_LOOKUP` a task's origin is asked with. A document's references are mapped from each
+referent's own `onetaskgraph.copies` link, the record it names read by id, and only a referent
+with no confirmed link is asked for by origin.
+
+**A copy reads its counterparts together.** Every item of a copy is read at its source before
+any is aimed, so the destination is read for all of their counterparts at once, by
+`TaskSource::read_ahead_for_copy`: this source answers it with `ISSUE_COPY_DETAILS`,
+`COPY_DETAIL_BATCH` (21) items to a request, each held for that item's next read by id in the
+command and dropped by any mutation naming it. A destination with one counterpart to read is
+read by its own `ISSUE` as before, and so is a copy expecting a version of its one target.
+
+**`copy-cost.txt`** moves (a) to (d), (h) and (i). (a), a whole copy of 10 tasks, keeps its 55
+requests and goes from 29,600 worst-case nodes to **10,115**: the project's own origin lookup
+(915) replaces the board-scoped search (20,400). (b), the unchanged repeat, goes from 13
+requests and 35,566 nodes to **2 and 30,734**: one read of the project's sub-issues (25,400)
+replaces the board read (10,150) and the search (20,400), and one batched read of the project
+and its ten tasks (5,334) replaces eleven reads of one issue (5,016) — its node count is the
+project's worst case and one batch's, neither of which grows with the board, where the two
+walks did. (c) and (d), a member copy naming one task, go from 4 requests and 912 nodes to
+**3 and 5,334**: the project and the member are read in one batch instead of two reads of one
+issue, one request and one point fewer, at the batch document's worst case. (h) goes from 6
+requests and 21,971 nodes to **5 and 2,286**, and (i) keeps its 3 requests and goes from 21,771
+to **2,286**: each finds the task's project by the project's origin lookup instead of the
+search, and (h)'s one read of an issue's dependencies is no longer sent beside it. (e) to (g)
+and (j) do not move.
+
+## The live lane pauses under 40% of a budget, on the least of three readings
+
+A live session no longer decides on `GET /rate_limit` alone. Every decision — admission and
+each recheck — reads that endpoint, GraphQL's own `rateLimit` object and the object's answer's
+`x-ratelimit-*` headers, beside the headers of the session's own last real answer, and decides
+on the least of them (`onetaskgraph_live::pace`): a budget under 40% of its limit is waited for
+until its reset, unless the burn rate since its window began says it resets before the session
+would exhaust it, and is read again after the wait; only then is the retained buffer applied.
+
+**`session-cost.txt`** moves by those reads alone: the admission and the eight rechecks of the
+reduced session each read `GET /rate_limit` and `the GraphQL rateLimit object` once, so the
+endpoint's row goes 1 → 9, a row of 9 rateLimit reads is added, and the request total goes
+193 → 210. The rateLimit document has no connection, so the node count does not move; the
+session's estimate, derived from this record, grows by those rows' charge.
+
+## A project's members listing carries the project, and holds what it carried
+
+`SUB_ISSUES` now selects the project issue itself — its `BoardIssue` fields and a page of
+`$nestedFirst` blockers — beside its sub-issues, and once the walk has ended this source keeps
+the project and every sub-issue it carried for `read_ahead_for_copy`, which holds each one it is
+asked for as its own batch would have — for the copy's read of it by id and, where the whole of
+what blocks it came with it, the dependency read after that — instead of reading it again. A
+copy writing a plan reads the project and its tasks before it writes them, and the project's
+own edges are a part no GitHub change token vouches for, so before this the project was read
+again on every cached re-copy, by one `ISSUE_COPY_DETAILS` batch naming it, whatever the cache
+held. Each item is answered at the state GitHub returned in this command, a mutation naming one
+drops what was kept for it, and no read outside a copy's read-before-write is answered from a
+listing: the boundary's re-reads of a project still see it as it is.
+
+**`SUB_ISSUES`** goes from 25,400 worst-case nodes to **25,653**: the project issue's labels,
+board memberships and their field values, and its fifty blockers — one issue rather than a
+page of them. Its price stays **6** points.
+
+**`session-cost.txt`** moves on two lines and its node total: the two `reading a project's
+tasks` requests grow by 253 nodes each (50,800 → 51,306), and the reconciliation of that
+document grows by the same 253 nodes. Nodes go 292,849 → **293,608**. Requests stay **210**,
+including 37 `reading one issue` requests: this journey reads through the ordinary interface,
+which still reaches GitHub even after a project listing. Only a copy's `read_ahead_for_copy`
+takes the records that listing carried; the plan-copy journey proves that reuse.
+
+**`copy-cost.txt`** moves only (b), the uncached unchanged repeat, whose one `reading a
+project's tasks` grows by the same 253 nodes (30,734 → **30,987**) and whose two requests do
+not move: with no cache there is no listing before the read-ahead, so the batch still reads the
+project and its tasks.

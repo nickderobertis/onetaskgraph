@@ -1225,6 +1225,9 @@ struct GitHubBoard {
 /// Whether one request — its document and its variables — is one a [`BoardHook`] counts.
 type RequestMatch = Box<dyn Fn(&str, &Value) -> bool + Send>;
 
+/// A rewrite of one answer, given the request's variables and the `data` it would have carried.
+type AnswerBend = Box<dyn FnMut(&Value, &mut Value) + Send>;
+
 /// One change a journey has the board make part way through a command: after the
 /// `skip + 1`th request `matches` holds of, and before the board reads another.
 struct BoardHook {
@@ -2267,6 +2270,36 @@ impl GitHubBoardFields {
             .iter()
             .find(|item| item["id"] == json!(id))
             .map_or(Value::Null, |item| item["body"].clone())
+    }
+
+    /// One item exactly as this board holds it — its title, body, state, parent, `Status`
+    /// option, origin field and the rest — or `None` when it holds no such item.
+    ///
+    /// What a journey compares a copy's destination against field by field, rather than one
+    /// accessor per field.
+    #[must_use]
+    pub fn item(&self, id: &str) -> Option<Value> {
+        self.board
+            .lock()
+            .unwrap()
+            .items
+            .iter()
+            .find(|item| item["id"] == json!(id))
+            .cloned()
+    }
+
+    /// The ids of the issues this board records as blocking `id`, in the order they were
+    /// recorded.
+    #[must_use]
+    pub fn blockers(&self, id: &str) -> Vec<String> {
+        self.board
+            .lock()
+            .unwrap()
+            .blocked_by
+            .iter()
+            .find(|(near, _)| near == id)
+            .map(|(_, blockers)| blockers.clone())
+            .unwrap_or_default()
     }
 
     /// Which of the documents this board received selected the board's own item
@@ -4473,9 +4506,28 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
                 issue
             })
             .collect::<Vec<_>>();
-        return json!({"node":{"__typename":"Issue",
-            "subIssues":{"nodes":nodes,
-                "pageInfo":{"hasNextPage":end < children.len(),"endCursor":end.to_string()}}}});
+        // The project issue itself, with what blocks it, when the read selects it beside its
+        // sub-issues.
+        let mut node = json!({"__typename":"Issue"});
+        if query.contains("node(id:$id){__typename ...BoardIssue") {
+            let parent = board
+                .items
+                .iter()
+                .find(|item| item["id"] == json!(id))
+                .cloned()
+                .expect("the project read");
+            node = board.as_issue(&parent);
+            let page = blocked_first.expect("nestedFirst beside the project's own blockedBy");
+            let all = board.related(&id, false);
+            let all = all.as_array().expect("related issues");
+            node["blockedBy"] = json!({
+                "nodes": all.iter().take(page).collect::<Vec<_>>(),
+                "pageInfo": {"hasNextPage": all.len() > page,
+                             "endCursor": page.min(all.len()).to_string()}});
+        }
+        node["subIssues"] = json!({"nodes":nodes,
+            "pageInfo":{"hasNextPage":end < children.len(),"endCursor":end.to_string()}});
+        return json!({ "node": node });
     }
     // The board's own id and fields with none of its items: what a write reads when the
     // item it writes does not carry them.
@@ -4890,9 +4942,21 @@ pub fn linear_workspace_failing(
         ledger: Arc::new(Mutex::new(Vec::new())),
         answers: Arc::new(Mutex::new(Vec::new())),
         hooks: Arc::new(Mutex::new(Vec::new())),
+        bends: Arc::new(Mutex::new(Vec::new())),
     };
     let config = linear_serve(sandbox, workspace.clone(), None, failing);
     (config, workspace)
+}
+
+/// A rewrite of what a Linear workspace answers, applied to the next `times` requests
+/// `matches` holds of.
+struct LinearBend {
+    /// Whether one request is one this bend rewrites.
+    matches: RequestMatch,
+    /// How many more matching requests it rewrites.
+    times: usize,
+    /// The rewrite, given the request's variables and the `data` it would have answered.
+    bend: AnswerBend,
 }
 
 /// One change a journey has a Linear workspace make part way through a command: after the
@@ -4927,9 +4991,27 @@ pub struct LinearWorkspace {
     /// What this workspace answered each of those requests with, at the same index.
     answers: Arc<Mutex<Vec<Value>>>,
     hooks: Arc<Mutex<Vec<LinearHook>>>,
+    bends: Arc<Mutex<Vec<LinearBend>>>,
 }
 
 impl LinearWorkspace {
+    /// Have this workspace rewrite its answer to each of the next `times` requests `matches`
+    /// holds of through `bend`, given that request's variables and the `data` it would have
+    /// answered — a Linear whose connections answer as no correct one does.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback Linear's answers, which its request loop builds from its private state: like `after_request` above it can only be a method of this handle, and a suite of one plugin could not add it from outside.
+    pub fn bend_answers(
+        &self,
+        matches: impl Fn(&str, &Value) -> bool + Send + 'static,
+        times: usize,
+        bend: impl FnMut(&Value, &mut Value) + Send + 'static,
+    ) {
+        self.bends.lock().unwrap().push(LinearBend {
+            matches: Box::new(matches),
+            times,
+            bend: Box::new(bend),
+        });
+    }
+
     /// Have this workspace make `change` once it has answered the `skip + 1`th request that
     /// `matches` holds of — its GraphQL document and its variables — and before it reads the
     /// next: a person editing an issue part way through a command.
@@ -5398,6 +5480,7 @@ fn linear_server_over(
         ledger: Arc::new(Mutex::new(Vec::new())),
         answers: Arc::new(Mutex::new(Vec::new())),
         hooks: Arc::new(Mutex::new(Vec::new())),
+        bends: Arc::new(Mutex::new(Vec::new())),
     };
     linear_serve(sandbox, workspace, recorded, failing)
 }
@@ -5545,7 +5628,19 @@ fn linear_serve(
             }
             let (status, response) =
                 match linear_response(&request, recorded.as_ref(), &mut state.lock().unwrap()) {
-                    Ok(body) => ("200 OK", json!({"data":body})),
+                    Ok(mut body) => {
+                        let operation = request["query"].as_str().unwrap_or_default();
+                        let variables = request.get("variables").cloned().unwrap_or(Value::Null);
+                        let mut bends = workspace.bends.lock().unwrap();
+                        if let Some(bend) = bends
+                            .iter_mut()
+                            .find(|bend| bend.times > 0 && (bend.matches)(operation, &variables))
+                        {
+                            bend.times -= 1;
+                            (bend.bend)(&variables, &mut body);
+                        }
+                        ("200 OK", json!({"data":body}))
+                    }
                     Err(message) => ("400 Bad Request", json!({"errors":[{"message":message}]})),
                 };
             answers.lock().unwrap().push(response.clone());

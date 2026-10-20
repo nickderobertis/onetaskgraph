@@ -283,6 +283,7 @@ async fn disposable_task_and_document_asset_copies() {
         &ledger,
         journey::budget::assets_remaining_design_points(),
     )
+    .await
     .unwrap_or_else(|declined| declined.refuse());
     let config = journey::source_config(lane::live_write_config(
         &owner,
@@ -464,7 +465,8 @@ async fn disposable_task_and_document_asset_copies() {
         &admitted,
         &ledger,
         journey::budget::assets_remaining_design_points(),
-    );
+    )
+    .await;
     let cleanup = Plugin
         .build_recording_into(&name("board"), &config, &secrets, ledger.clone())
         .unwrap();

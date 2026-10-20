@@ -1790,6 +1790,27 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
             .expect("an id this board holds");
         return json!({"node":{"__typename":item.typename}});
     }
+    if query == onetaskgraph_github_projects::graphql::ISSUE_COPY_DETAILS {
+        // A copy's batch, read as the detail batch is: each alias the one-item read of the id
+        // its own variable names, always with its first page of comments.
+        let mut answered = serde_json::Map::new();
+        for slot in 0..onetaskgraph_github_projects::COPY_DETAIL_BATCH {
+            let id = variables[format!("id{slot}")]
+                .as_str()
+                .expect("every slot of a batch names an id")
+                .to_owned();
+            let node = detail_node(
+                &mut state,
+                &id,
+                &Value::Null,
+                variables["first"].as_u64().expect("first") as usize,
+                true,
+                asked,
+            );
+            answered.insert(format!("i{slot}"), node);
+        }
+        return Value::Object(answered);
+    }
     if query == onetaskgraph_github_projects::graphql::ISSUE_DETAILS {
         // Each alias is the one-item detail read of the id its own variable names, and the
         // comments ride along only when the batch asked for them.
@@ -18507,6 +18528,259 @@ async fn a_copys_batch_read_is_read_again_alone_refused_whole_or_refused_for_a_m
             if message.contains("no item for I_3")),
         "{:?}",
         read[1]
+    );
+}
+
+/// What a copy reads ahead answers each item's next read by id, once, and nothing it cannot
+/// vouch for: an id the batch answers with no node is held as absent; a draft, and an answer
+/// naming another issue than the one asked for, are left to their own reads; a batch refused
+/// for an id naming no node holds nothing; and one refused for anything else — the first or a
+/// later one — is the read-ahead's failure and holds nothing either, so every item is read on
+/// its own exactly as it was before there was a read-ahead.
+#[tokio::test]
+async fn a_read_ahead_answers_each_items_next_read_once_and_holds_nothing_it_cannot_vouch_for() {
+    let no_comments = json!({"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}});
+    let node = |id: &str| issue_with_comments(id, no_comments.clone())["data"]["node"].clone();
+    let unresolvable = json!({"errors":[{
+        "message":"Could not resolve to a node with the global id of 'garbage'"}]});
+    let refused = json!({"errors":[{"message":"Something went wrong while executing your query"}]});
+
+    // The batch is the one request I_1 and GONE cost: the next one the script answers is
+    // I_9's own read, which only an item the batch did not vouch for sends.
+    let endpoint = sequence_server(vec![
+        json!({"data":{"i0": node("I_1"), "i1": null, "i2": node("I_2"),
+                       "i3": {"__typename":"DraftIssue","id":"DI_1"}}}),
+        issue_read("I_9"),
+    ]);
+    let source = configured(&endpoint, json!({}));
+    source
+        .read_ahead_for_copy(&[native("I_1"), native("GONE"), native("I_9"), native("DI_1")])
+        .await
+        .expect("a batch it can read is held");
+    let held = source.get_task(&native("I_1")).await.unwrap();
+    assert_eq!(held.map(|task| task.id), Some(native("I_1")));
+    assert!(source.get_task(&native("GONE")).await.unwrap().is_none());
+    let own = source.get_task(&native("I_9")).await.unwrap();
+    assert_eq!(
+        own.map(|task| task.id),
+        Some(native("I_9")),
+        "an answer naming I_2 is not I_9's"
+    );
+    // Once: the script is spent, so a second read of I_1 — or any read of the draft the batch
+    // left alone — is sent and refused rather than answered from what was held.
+    assert!(source.get_task(&native("I_1")).await.is_err());
+    assert!(source.get_task(&native("DI_1")).await.is_err());
+
+    // A batch refused for an id naming no node holds nothing, and is no failure of its own.
+    let endpoint = sequence_server(vec![unresolvable, issue_read("I_1")]);
+    let source = configured(&endpoint, json!({}));
+    source
+        .read_ahead_for_copy(&[native("I_1"), native("garbage")])
+        .await
+        .expect("an id naming no node is each item's own read to answer");
+    let own = source.get_task(&native("I_1")).await.unwrap();
+    assert_eq!(own.map(|task| task.id), Some(native("I_1")));
+
+    // Refused for anything else — on its only batch, or on its second after the first was
+    // answered — the read-ahead fails and holds nothing of either.
+    let ids: Vec<NativeId> = (0..=onetaskgraph_github_projects::COPY_DETAIL_BATCH)
+        .map(|n| native(&format!("I_{n}")))
+        .collect();
+    let first: serde_json::Map<String, Value> = ids
+        [..onetaskgraph_github_projects::COPY_DETAIL_BATCH]
+        .iter()
+        .enumerate()
+        .map(|(slot, id)| (format!("i{slot}"), node(&id.0)))
+        .collect();
+    // Its own read answers under a title the batch never held, so a read answered from the
+    // batch could not pass for it.
+    let mut alone = issue_read("I_0");
+    alone["data"]["node"]["title"] = json!("read on its own");
+    for script in [
+        vec![refused.clone(), alone.clone()],
+        vec![json!({"data": first}), refused, alone],
+    ] {
+        let endpoint = sequence_server(script);
+        let source = configured(&endpoint, json!({}));
+        let failed = source.read_ahead_for_copy(&ids).await;
+        assert!(
+            matches!(&failed, Err(SourceError::Refused { message })
+                if message.contains("Something went wrong")),
+            "{failed:?}"
+        );
+        let own = source.get_task(&native("I_0")).await.unwrap();
+        assert_eq!(
+            own.map(|task| task.title),
+            Some("read on its own".to_owned()),
+            "nothing was held"
+        );
+    }
+}
+
+/// A read-ahead naming an item a listing of its project carried and one it did not holds
+/// neither when the batch for the second is refused: the carried item's next read by id is
+/// its own, and observes what a person changed on the board after the listing.
+#[tokio::test]
+async fn a_read_ahead_refused_part_way_holds_nothing_a_project_listing_carried_either() {
+    let fixture = board(vec![
+        Item::issue("I_plan", "Plan").status("Todo").sub_issues(1),
+        Item::issue("I_step", "Step")
+            .status("Todo")
+            .parent("I_plan"),
+        Item::issue("I_loose", "Loose").status("Todo"),
+    ]);
+    let source = configured(&fixture.endpoint, json!({}));
+    assert_eq!(
+        project_titles(source.as_ref(), "I_plan").await,
+        [("I_step".to_owned(), "Step".to_owned())],
+        "the listing carries the plan's one task"
+    );
+    fixture.refuse("issueDetails");
+    let failed = source
+        .read_ahead_for_copy(&[native("I_step"), native("I_loose")])
+        .await;
+    assert!(
+        matches!(&failed, Err(SourceError::Refused { message })
+            if message.contains("issueDetails is refused")),
+        "{failed:?}"
+    );
+    fixture.retitled_by_something_else("I_step", "Retitled by a person");
+    let reads = fixture.requests("issue");
+    assert_eq!(
+        source
+            .get_task(&native("I_step"))
+            .await
+            .unwrap()
+            .map(|task| task.title),
+        Some("Retitled by a person".to_owned()),
+        "nothing the listing carried was held by a read-ahead that failed"
+    );
+    assert_eq!(fixture.requests("issue"), reads + 1, "read on its own");
+}
+
+/// A read-ahead whose second batch is refused leaves nothing of its first batch to answer a
+/// dependency read with: what an item is blocked by is asked of GitHub, as it was before there
+/// was a read-ahead.
+#[tokio::test]
+async fn a_read_ahead_refused_part_way_answers_no_dependency_read_from_its_first_batch() {
+    let batch = onetaskgraph_github_projects::COPY_DETAIL_BATCH;
+    let no_comments = json!({"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}});
+    // The first batch carries every item's whole `blockedBy`, empty; GitHub's own dependency
+    // read names one far end, so an answer from that batch would report none.
+    let node = |id: &str| {
+        let mut node = issue_with_comments(id, no_comments.clone())["data"]["node"].clone();
+        node["blockedBy"] = json!({"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}});
+        node
+    };
+    let ids: Vec<NativeId> = (0..=batch).map(|n| native(&format!("I_{n}"))).collect();
+    let first: serde_json::Map<String, Value> = ids[..batch]
+        .iter()
+        .enumerate()
+        .map(|(slot, id)| (format!("i{slot}"), node(&id.0)))
+        .collect();
+    let endpoint = sequence_server(vec![
+        json!({ "data": first }),
+        json!({"errors":[{"message":"Something went wrong while executing your query"}]}),
+        json!({"data":{"node":{"__typename":"Issue",
+            "blockedBy":{"nodes":[{"id":"I_far","title":"Far work","body":null,"parent":null,
+                                   "subIssuesSummary":{"total":0}}],
+                        "pageInfo":{"hasNextPage":false,"endCursor":null}},
+            "blocking":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}),
+        board_json(usable_fields(), complete(json!([]))),
+    ]);
+    let source = configured(&endpoint, json!({}));
+    assert!(source.read_ahead_for_copy(&ids).await.is_err());
+    let forward = source
+        .task_dependencies(&native("I_0"), Direction::DependsOn, &page(10))
+        .await
+        .expect("GitHub answers the dependency read");
+    assert_eq!(
+        forward
+            .items
+            .iter()
+            .map(|edge| edge.to.id().to_owned())
+            .collect::<Vec<_>>(),
+        ["I_far"],
+        "asked of GitHub, not answered from the refused read-ahead's first batch"
+    );
+}
+
+/// A read-ahead of more ids than one batch holds is sent as consecutive batches of at most
+/// [`COPY_DETAIL_BATCH`](onetaskgraph_github_projects::COPY_DETAIL_BATCH), and once every batch
+/// is answered each id's next read is answered from the batch that carried it — the last,
+/// short batch's as much as the first, full one's — without another request.
+#[tokio::test]
+async fn a_read_ahead_past_one_batch_answers_every_items_next_read_from_its_own_batch() {
+    let batch = onetaskgraph_github_projects::COPY_DETAIL_BATCH;
+    let no_comments = json!({"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}});
+    let node = |id: &str| {
+        let mut node = issue_with_comments(id, no_comments.clone())["data"]["node"].clone();
+        node["title"] = json!(format!("held {id}"));
+        node
+    };
+    let ids: Vec<NativeId> = (0..batch + 3).map(|n| native(&format!("I_{n}"))).collect();
+    let answered = |part: &[NativeId]| {
+        let slots: serde_json::Map<String, Value> = part
+            .iter()
+            .enumerate()
+            .map(|(slot, id)| (format!("i{slot}"), node(&id.0)))
+            .collect();
+        json!({ "data": slots })
+    };
+    // Exactly two answers: a third request of any kind is refused, so every read below that
+    // succeeds was answered from what the two batches held.
+    let endpoint = sequence_server(vec![answered(&ids[..batch]), answered(&ids[batch..])]);
+    let source = configured(&endpoint, json!({}));
+    source
+        .read_ahead_for_copy(&ids)
+        .await
+        .expect("both batches are answered");
+    for id in &ids {
+        let held = source.get_task(id).await.unwrap();
+        assert_eq!(
+            held.map(|task| task.title),
+            Some(format!("held {}", id.0)),
+            "{} is answered from its batch",
+            id.0
+        );
+    }
+    // Once each: with the script spent, a second read is sent and refused.
+    assert!(source.get_task(&ids[0]).await.is_err());
+    assert!(source.get_task(&ids[batch + 2]).await.is_err());
+}
+
+/// A read held ahead for a copy answers nothing once its item has been written or the command
+/// has ended: a delete of the item before its held read is taken, and a person's change after
+/// the command it was read in, are each what the next read of it observes.
+#[tokio::test]
+async fn a_read_held_ahead_is_dropped_by_a_write_naming_its_item_and_by_the_end_of_the_command() {
+    let fixture = board(vec![
+        Item::issue("I_1", "one").status("Todo"),
+        Item::issue("I_2", "two").status("Todo"),
+    ]);
+    let source = configured(&fixture.endpoint, json!({}));
+    source
+        .read_ahead_for_copy(&[native("I_1"), native("I_2")])
+        .await
+        .expect("the board answers the batch");
+    source
+        .delete_task(&native("I_1"))
+        .await
+        .expect("a task this board holds");
+    assert!(
+        source.get_task(&native("I_1")).await.unwrap().is_none(),
+        "a deleted item is not answered from what was read of it before"
+    );
+    source.end_command().await.expect("a command ends");
+    fixture.retitled_by_something_else("I_2", "Retitled by a person");
+    assert_eq!(
+        source
+            .get_task(&native("I_2"))
+            .await
+            .unwrap()
+            .map(|task| task.title),
+        Some("Retitled by a person".to_owned()),
+        "the next command reads the item as a person left it"
     );
 }
 

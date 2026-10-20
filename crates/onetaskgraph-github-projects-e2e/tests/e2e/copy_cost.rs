@@ -201,8 +201,9 @@ fn rendered(heading: &str, session: &Session) -> String {
 /// measured on this harness against the engine as it stood at onetaskgraph 0.2.28.
 const BEFORE: (usize, usize) = (69, 47);
 
-/// The documents a member copy may send: reads and writes of one issue and its board item,
-/// and nothing that walks the board, searches its issues or reads a project's sub-issues.
+/// The documents a member copy may send: reads and writes of issues named by their node ids
+/// and their board items, and nothing that walks the board, searches its issues or reads a
+/// project's sub-issues.
 ///
 /// Named by the document itself from `graphql::DOCUMENTS` rather than by the label a
 /// record prints, so renaming a row cannot let a board walk through.
@@ -210,6 +211,7 @@ fn per_node(document: &str) -> bool {
     use onetaskgraph_github_projects::graphql;
     [
         graphql::ISSUE,
+        graphql::ISSUE_COPY_DETAILS,
         graphql::ISSUE_BOARD_ITEMS,
         graphql::ISSUE_DEPENDENCIES,
         graphql::UPDATE_ISSUE,
@@ -224,15 +226,33 @@ fn per_node(document: &str) -> bool {
     .contains(&document)
 }
 
-/// Whether a document reads one issue by the node id its `id` variable carries.
-fn reads_one_issue(document: &str) -> bool {
+/// Whether a document reads issues by the node ids its variables carry — one `id`, or each
+/// slot of a batched read.
+fn reads_by_node_id(document: &str) -> bool {
     use onetaskgraph_github_projects::graphql;
     [
         graphql::ISSUE,
+        graphql::ISSUE_COPY_DETAILS,
         graphql::ISSUE_BOARD_ITEMS,
         graphql::ISSUE_DEPENDENCIES,
     ]
     .contains(&document)
+}
+
+/// Every issue one read by node id names: its one `id`, or each slot of a batched read.
+fn named_issues(variables: &Value) -> Vec<String> {
+    variables
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter(|(name, _)| {
+            *name == "id"
+                || name
+                    .strip_prefix("id")
+                    .is_some_and(|slot| slot.bytes().all(|byte| byte.is_ascii_digit()))
+        })
+        .filter_map(|(_, id)| id.as_str().map(str::to_owned))
+        .collect()
 }
 
 /// The native id a qualified destination id in a copy report names.
@@ -387,10 +407,11 @@ fn a_task_copy_finding_no_counterpart() -> Measured {
 }
 
 /// Hold a task copy to its second rule's one question: the board is asked for the origin of
-/// `task` once, and its items are never walked.
+/// each of `items` once — the task, and the project it is filed under when the copy has no
+/// link to that project either — and its items are never walked nor its issues searched.
 fn asks_for_the_origin_and_never_walks_the_board(
     what: &str,
-    task: &str,
+    items: &[&str],
     served: &[(String, Value)],
 ) {
     let lookups = served
@@ -400,14 +421,23 @@ fn asks_for_the_origin_and_never_walks_the_board(
         .collect::<Vec<_>>();
     assert_eq!(
         lookups,
-        [json!(format!("onetaskgraph.origin:\"plans:{task}\""))],
-        "{what} asks the board for that origin once: {served:#?}"
+        items
+            .iter()
+            .map(|item| json!(format!("onetaskgraph.origin:\"plans:{item}\"")))
+            .collect::<Vec<_>>(),
+        "{what} asks the board for each origin once: {served:#?}"
     );
     let whole: Vec<&(String, Value)> = served
         .iter()
-        .filter(|(document, _)| document == onetaskgraph_github_projects::graphql::BOARD)
+        .filter(|(document, _)| {
+            document == onetaskgraph_github_projects::graphql::BOARD
+                || document == onetaskgraph_github_projects::graphql::SEARCH_ISSUES
+        })
         .collect();
-    assert!(whole.is_empty(), "{what} read the whole board: {whole:#?}");
+    assert!(
+        whole.is_empty(),
+        "{what} read the whole board or searched its issues: {whole:#?}"
+    );
 }
 
 #[test]
@@ -447,7 +477,8 @@ fn a_project_copy_into_a_board_costs_what_the_record_beside_the_session_record_s
     );
 
     // (c) and (d): the same number of requests, whatever the project holds besides the one
-    // member named, and every one of them about one issue and its board item.
+    // member named, and every one of them about named issues and their board items — the
+    // project and the member read together, ahead of the copy aiming either.
     assert_eq!(
         of_ten.total_requests(),
         of_three.total_requests(),
@@ -478,8 +509,10 @@ fn a_project_copy_into_a_board_costs_what_the_record_beside_the_session_record_s
         "{of_ten_report:#}"
     );
     for (document, variables) in &of_ten_served {
-        if reads_one_issue(document) {
-            let id = variables["id"].as_str().expect("a node id").to_owned();
+        if !reads_by_node_id(document) {
+            continue;
+        }
+        for id in named_issues(variables) {
             assert!(
                 reached.contains(&id),
                 "(c) read issue {id}, which is neither the project's nor the named member's \
@@ -490,15 +523,16 @@ fn a_project_copy_into_a_board_costs_what_the_record_beside_the_session_record_s
 
     // (e) and (f): the targeted update of one existing task of the same ten, as a settlement
     // writes it — its status, three keys set and one removed — and the same update when the
-    // task already holds every value it names. (e) sends fewer requests than the member copy
-    // (c) of one changed task and no more mutations; (f) sends no mutation at all. Neither
+    // task already holds every value it names. (e) sends no more requests than the member copy
+    // (c) of one changed task, which reads the project and the member in one batch, and no
+    // more mutations; (f) sends no mutation at all. Neither
     // reads anything but the one issue, and neither writes its origin.
     let [
         (settled, settled_served, settled_report),
         (repeat_update, repeat_update_served, again),
     ] = one_targeted_update(10, 3);
     assert!(
-        settled.total_requests() < of_ten.total_requests()
+        settled.total_requests() <= of_ten.total_requests()
             && mutations(&settled_served) <= mutations(&of_ten_served),
         "the targeted update sent {} requests and {} mutations; the one-member copy (c) sent {} \
          and {}",
@@ -521,7 +555,7 @@ fn a_project_copy_into_a_board_costs_what_the_record_beside_the_session_record_s
     for (what, served) in [("(e)", &settled_served), ("(f)", &repeat_update_served)] {
         let issue_reads = served
             .iter()
-            .filter(|(document, _)| reads_one_issue(document))
+            .filter(|(document, _)| reads_by_node_id(document))
             .count();
         assert_eq!(
             issue_reads, 1,
@@ -571,7 +605,7 @@ fn a_project_copy_into_a_board_costs_what_the_record_beside_the_session_record_s
             "(g) read the board or searched its issues: {walked:#?}"
         );
     }
-    asks_for_the_origin_and_never_walks_the_board("(h)", "T-3", &by_origin_served);
+    asks_for_the_origin_and_never_walks_the_board("(h)", &["T-3", "P"], &by_origin_served);
     assert!(
         by_link.total_node_count() < by_origin.total_node_count(),
         "(g) cost {} worst-case nodes and (h) {}",
@@ -605,9 +639,9 @@ fn a_project_copy_into_a_board_costs_what_the_record_beside_the_session_record_s
     // never by walking the board — one written the way the release before this one wrote it,
     // with its origin in the board field alone, included — and creates when there is none.
     let (found, found_served, _) = a_task_copy_finding_a_counterpart_written_before_this_release();
-    asks_for_the_origin_and_never_walks_the_board("(i)", "T-0", &found_served);
+    asks_for_the_origin_and_never_walks_the_board("(i)", &["T-0", "P"], &found_served);
     let (created, created_served, _) = a_task_copy_finding_no_counterpart();
-    asks_for_the_origin_and_never_walks_the_board("(j)", "L", &created_served);
+    asks_for_the_origin_and_never_walks_the_board("(j)", &["L"], &created_served);
 
     let measured = [
         rendered("(a) a whole copy of a project of 10 tasks", &whole),
@@ -1164,8 +1198,8 @@ fn a_create_copy_sends_no_origin_lookup_and_refuses_what_it_cannot_assert() {
     assert!(
         !sent
             .iter()
-            .any(|(document, variables)| reads_one_issue(document)
-                && variables["id"] == first.as_str()),
+            .any(|(document, variables)| reads_by_node_id(document)
+                && named_issues(variables).contains(&first)),
         "the item it created is answered from its own record: {sent:#?}"
     );
 

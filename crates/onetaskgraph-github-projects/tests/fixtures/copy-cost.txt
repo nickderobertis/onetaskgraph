@@ -1,40 +1,38 @@
 (a) a whole copy of a project of 10 tasks
 requests 55
-node count 29600
+node count 10115
 
 requests per call
    11       0  adding an issue to the board
    11       0  creating an issue
    10       0  filing an issue under its project
-   10    9150  looking up the items copied from one origin
+   11   10065  looking up the items copied from one origin
     1      50  reading the board's fields and the destination repository
-    1   20400  searching this board's issues
    11       0  writing board fields together
 
 (b) a repeat whole copy of the same project, unchanged, each item recording its origin
-requests 13
-node count 35566
+requests 2
+node count 30987
 
 requests per call
-   11    5016  reading one issue
-    1   10150  reading the board
-    1   20400  searching this board's issues
+    1    5334  reading a batch of issues with their comments and dependencies for a copy
+    1   25653  reading a project's tasks
 
 (c) a member copy naming 1 of those 10 tasks, its status changed, every task recording its origin
-requests 4
-node count 912
+requests 3
+node count 5334
 
 requests per call
-    2     912  reading one issue
+    1    5334  reading a batch of issues with their comments and dependencies for a copy
     1       0  updating an issue
     1       0  writing a board field
 
 (d) the same one-member copy of a project of 3 tasks
-requests 4
-node count 912
+requests 3
+node count 5334
 
 requests per call
-    2     912  reading one issue
+    1    5334  reading a batch of issues with their comments and dependencies for a copy
     1       0  updating an issue
     1       0  writing a board field
 
@@ -64,25 +62,22 @@ requests per call
     1       0  writing a board field
 
 (h) the same task copy with every link removed, found by asking the board for its origin
-requests 6
-node count 21971
+requests 5
+node count 2286
 
 requests per call
-    1     915  looking up the items copied from one origin
-    1     200  reading an issue's dependencies
+    2    1830  looking up the items copied from one origin
     1     456  reading one issue
-    1   20400  searching this board's issues
     1       0  updating an issue
     1       0  writing a board field
 
 (i) a task copy into a board holding its counterpart, its origin in the board field alone
 requests 3
-node count 21771
+node count 2286
 
 requests per call
-    1     915  looking up the items copied from one origin
+    2    1830  looking up the items copied from one origin
     1     456  reading one issue
-    1   20400  searching this board's issues
 
 (j) a task copy into a board holding no counterpart
 requests 5

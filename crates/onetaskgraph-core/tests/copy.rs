@@ -2602,6 +2602,9 @@ struct Misbehaving {
     project: bool,
     /// Whether it declares documents, without which a copy never names it at either end.
     documents: bool,
+    /// Whether it declares `filter_by_origin`, which sends a copy's search for the records
+    /// copied from one origin to it as that one question rather than walking it.
+    origins: bool,
     /// The largest page it serves.
     ceiling: u32,
     /// Every page it has served, of any kind, counted so a test can show the walk stopped
@@ -2627,6 +2630,7 @@ impl Misbehaving {
             onset,
             project: false,
             documents: false,
+            origins: false,
             ceiling: 2,
             pages_served: Arc::new(AtomicU32::new(0)),
             tasks_written: AtomicU32::new(0),
@@ -2655,6 +2659,14 @@ impl Misbehaving {
     fn with_documents(self) -> Self {
         Self {
             documents: true,
+            ..self
+        }
+    }
+
+    /// The same source, declaring that it answers a question about one origin natively.
+    fn filtering_by_origin(self) -> Self {
+        Self {
+            origins: true,
             ..self
         }
     }
@@ -2817,7 +2829,11 @@ impl TaskSource for Misbehaving {
             filter_by_priority: Support::Unsupported,
             filter_by_comment_activity: Support::Unsupported,
             filter_by_metadata: Support::Unsupported,
-            filter_by_origin: Support::Unsupported,
+            filter_by_origin: if self.origins {
+                Support::Native
+            } else {
+                Support::Unsupported
+            },
             reconcile_status: Support::Unsupported,
             complete_by_issue: Support::Unsupported,
             orphan_tasks: Support::Native,
@@ -3514,6 +3530,96 @@ fn figures(report: &onetaskgraph_core::CopyReport) -> (u64, u64, u64) {
 }
 
 #[tokio::test]
+async fn a_reference_whose_link_no_longer_names_its_counterpart_is_found_by_its_origin() {
+    // Alpha's link names a record the destination no longer holds, and Beta's names one a
+    // person re-pointed at something else. Neither link is believed: each referent is asked
+    // for by its origin instead, and the document names the records that really are theirs.
+    let mut from = authoring_store(Some(("root:P-1", "root:A", "root:B")));
+    from["tasks"][0]["metadata"][MetadataKey::COPIES_KEY] = json!({"into": "into:GONE"});
+    from["tasks"][1]["metadata"][MetadataKey::COPIES_KEY] = json!({"into": "into:X"});
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "config": from},
+        "into": {"plugin": "in-memory", "config": {
+            "capabilities": {"documents": "native"},
+            "projects": [located_project("/srv/into/board", Some("root:P-1"))],
+            "tasks": [
+                located("A", "Alpha", "/srv/into/board/A.md", Some("root:A")),
+                located("B", "Beta", "/srv/into/board/B.md", Some("root:B")),
+                located("X", "Someone else's", "/srv/into/board/X.md", Some("elsewhere:X")),
+            ],
+        }},
+    }));
+    let report = copy_document(&engine, "from:D-1").await;
+    let landed = report.items[0]
+        .destination()
+        .expect("the document landed")
+        .to_string();
+    let content = body(&engine, &landed).await;
+    assert!(content.contains("`/srv/into/board/A.md`"), "{content}");
+    assert!(content.contains("`/srv/into/board/B.md`"), "{content}");
+    assert!(!content.contains("/srv/into/board/X.md"), "{content}");
+    assert_eq!(
+        figures(&report).0,
+        3,
+        "both tasks and the project are rewritten"
+    );
+}
+
+#[tokio::test]
+async fn a_reference_whose_link_is_answered_with_another_record_is_found_by_its_origin() {
+    // Alpha's link names X, and the destination answers a read of X with A1 — a record that
+    // does record Alpha's origin, but is not the one the link names. That answer says nothing
+    // about the link, so Alpha is asked for by its origin, which two records answer: the
+    // reference is ambiguous and left as it was, rather than pointed at whichever record the
+    // destination happened to answer with.
+    let mut from = authoring_store(Some(("root:P-1", "root:A", "root:B")));
+    from["tasks"][0]["metadata"][MetadataKey::COPIES_KEY] = json!({"into": "into:X"});
+    let into = json!({
+        "capabilities": {"documents": "native"},
+        "projects": [located_project("/srv/into/board", Some("root:P-1"))],
+        "tasks": [
+            located("A1", "Alpha", "/srv/into/board/A1.md", Some("root:A")),
+            located("A2", "Alpha again", "/srv/into/board/A2.md", Some("root:A")),
+            located("B", "Beta", "/srv/into/board/B.md", Some("root:B")),
+            located("X", "Someone else's", "/srv/into/board/X.md", Some("elsewhere:X")),
+        ],
+    });
+    let built = |source: &str, config: &Value| {
+        onetaskgraph_in_memory::Plugin
+            .build(&name(source), config, &NoSecrets)
+            .expect("the in-memory plugin builds")
+    };
+    let engine = Engine::new(
+        vec![
+            ConfiguredSource::Ready(ResolvedSource::adopt(name("from"), built("from", &from))),
+            ConfiguredSource::Ready(ResolvedSource::adopt(
+                name("into"),
+                Box::new(Careless {
+                    inner: built("into", &into),
+                    malformed: &[],
+                    misread: Some(("X", "A1")),
+                }),
+            )),
+        ],
+        vec![name("from"), name("into")],
+    );
+    let report = copy_document(&engine, "from:D-1").await;
+    let landed = report.items[0]
+        .destination()
+        .expect("the document landed")
+        .to_string();
+    let content = body(&engine, &landed).await;
+    assert!(!content.contains("/srv/into/board/A1.md"), "{content}");
+    assert!(content.contains("`/srv/from/plans/P-1/A.md`"), "{content}");
+    assert!(content.contains("`/srv/into/board/B.md`"), "{content}");
+    assert!(
+        figures(&report).2 >= 1,
+        "Alpha's reference is counted ambiguous: {:?}",
+        figures(&report)
+    );
+}
+
+#[tokio::test]
 async fn a_document_arrives_naming_the_destinations_own_records_across_a_one_level_fan_out() {
     // The fan-out: `root` is where all three records were authored, `from` and `into` are
     // the two stores they were copied into, and the document travels by the `from` route
@@ -3932,7 +4038,7 @@ fn board_holding_counterparts() -> Value {
 }
 
 #[tokio::test]
-async fn the_destination_is_walked_once_for_a_whole_invocation_and_not_at_all_for_nothing() {
+async fn each_referent_is_asked_for_once_for_a_whole_invocation_and_nothing_for_nothing() {
     let (engine, task_pages) =
         into_counting(two_documents_of_one_project(), board_holding_counterparts());
 
@@ -3940,13 +4046,15 @@ async fn the_destination_is_walked_once_for_a_whole_invocation_and_not_at_all_fo
         .copy(&many(&["from:D-1", "from:D-2"], CopyScope::Documents))
         .await
         .expect("the document copy runs");
-    // Three references apiece, and one walk serving both documents and every referent.
+    // Three references apiece. The destination is asked about each referent's two keys once
+    // for the whole invocation — Alpha's own id and its recorded origin, and Beta's — however
+    // many documents name them, and never walked: it answers a question about one origin.
     assert_eq!(figures(&report), (6, 0, 0));
     assert_eq!(
         task_pages.load(Ordering::Relaxed),
-        1,
-        "the destination is walked for counterparts once per copy invocation, not once \
-         per document"
+        4,
+        "the destination is asked for each referent's counterparts once per copy \
+         invocation, not once per document"
     );
 
     // A copy whose documents hold no candidate reference makes no such walk at all: the
@@ -4472,6 +4580,68 @@ async fn a_destination_whose_cursors_cycle_stops_the_walk_for_a_documents_refere
     );
 }
 
+/// A document copy into a destination answering a question about one origin natively, so the
+/// counterparts its references name are asked for one origin at a time rather than walked —
+/// and that question's own guards are what stop a destination misbehaving under it.
+async fn origin_question_refusal(fault: Fault) -> (String, u32) {
+    let (engine, pages) = into_misbehaving_over(
+        naming_every_level(),
+        Misbehaving::new(At::Tasks, fault, Onset::FirstRead)
+            .with_documents()
+            .filtering_by_origin(),
+    );
+    let refused = document_refusal(&engine).await;
+    // The pages the copy was served before its task level was asked are the same whatever
+    // the fault, so what each case adds to them is the walk it is about.
+    (
+        refused,
+        pages.load(Ordering::Relaxed) - ANSWERED_BEFORE_THE_TASK_LEVEL,
+    )
+}
+
+/// The pages a document copy over [`naming_every_level`] is served before its task level's
+/// question about one origin is asked.
+const ANSWERED_BEFORE_THE_TASK_LEVEL: u32 = 3;
+
+#[tokio::test]
+async fn a_destination_overrunning_its_page_under_the_origin_question_stops_the_copy() {
+    let (refused, pages) = origin_question_refusal(Fault::OverrunsThePage).await;
+    assert!(
+        refused.contains("the source returned 3 rows for a page of at most 2"),
+        "{refused}"
+    );
+    // The task level's first page, and nothing after it.
+    assert_eq!(pages, 1, "the question stopped at the page it refused");
+}
+
+#[tokio::test]
+async fn a_destination_repeating_its_cursor_under_the_origin_question_stops_the_copy() {
+    let (refused, pages) = origin_question_refusal(Fault::RepeatsTheCursor).await;
+    assert!(
+        refused.contains("the records copied from one origin a document's references name"),
+        "the refusal names what the question was for: {refused}"
+    );
+    // The first page, and the one answering with the cursor it was given.
+    assert_eq!(pages, 2, "the question stopped at the cursor it repeated");
+}
+
+#[tokio::test]
+async fn a_destination_whose_cursors_cycle_under_the_origin_question_stops_the_copy() {
+    // Two cursors answering each other: every page advances, so only the question's memory
+    // of every cursor it has sent can see it.
+    let (refused, pages) = origin_question_refusal(Fault::CyclesItsCursors).await;
+    assert!(
+        refused.contains(
+            "cursor it had already been given while it was being asked for the \
+                          records copied from one origin"
+        ),
+        "the refusal says the question would never end: {refused}"
+    );
+    // The full half, the empty half and the full half again, whose next cursor is refused
+    // before it is sent.
+    assert_eq!(pages, 3, "the question stopped rather than cycling");
+}
+
 #[tokio::test]
 async fn routes_a_rust_caller_builds_place_a_copy_exactly_as_a_configuration_does() {
     // A caller holding sources it built itself states the routes in code, and they are
@@ -4657,10 +4827,12 @@ async fn a_destination_never_keeps_the_change_token_a_copied_task_arrives_with()
 
 /// A source that answers exactly as the `in-memory` source it wraps, except that a write of an
 /// item titled one of `malformed` is applied and then answered malformed — the plugin that
-/// stored what it was asked to and then could not say under which id.
+/// stored what it was asked to and then could not say under which id — and that a read of the
+/// task `misread` names first is answered with the task it names second.
 struct Careless {
     inner: Box<dyn TaskSource>,
     malformed: &'static [&'static str],
+    misread: Option<(&'static str, &'static str)>,
 }
 
 impl Careless {
@@ -4695,7 +4867,12 @@ impl TaskSource for Careless {
     }
 
     async fn get_task(&self, id: &NativeId) -> Result<Option<Task>, SourceError> {
-        self.inner.get_task(id).await
+        match self.misread {
+            Some((asked, answered)) if id.0 == asked => {
+                self.inner.get_task(&NativeId(answered.to_owned())).await
+            }
+            _ => self.inner.get_task(id).await,
+        }
     }
 
     async fn get_project(&self, id: &NativeId) -> Result<Option<Project>, SourceError> {
@@ -4799,6 +4976,7 @@ fn careless_engine(config: &Value, malformed: &'static [&'static str]) -> Engine
                 Box::new(Careless {
                     inner: built("into", config),
                     malformed,
+                    misread: None,
                 }),
             )),
         ],
