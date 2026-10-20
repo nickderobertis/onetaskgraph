@@ -2,15 +2,13 @@
 //!
 //! **A re-copy writes only the members that changed**, each in the one mutation that carries
 //! it, and nothing at all for an item that did not change — so a person's edit of a member it
-//! does not change, made between its read and its write, is kept. The base this change starts
-//! from sent one `updateIssue` per project and task on every re-copy — the timing spike's no-op
-//! writes — carrying a title, a body and a state the board already held. The board records
-//! every request it is sent, so a re-copy writing anything it did not have to shows up here as
-//! a mutation naming an item nothing changed.
+//! does not change, made between its read and its write, is kept. The board records every
+//! request it is sent, so a re-copy writing anything it did not have to shows up here as a
+//! mutation naming an item nothing changed.
 //!
 //! **A first copy files each item by its own create** and sends the rest of what every item
-//! needs together once they all exist, as the timing spike found GitHub accepts; one of those
-//! aliased writes refused part way takes back every item the copy created.
+//! needs together once they all exist; one of those aliased writes refused part way takes back
+//! every item the copy created.
 
 use super::asset_board::{Call, Kind};
 use super::plan_copy::{Counterparts, Plan, SMALL, TASKS, counterparts, operation};
@@ -414,6 +412,58 @@ fn a_first_copy_whose_batched_create_is_refused_part_way_takes_back_every_item_i
     // The fourth task's create fails after the three before it — and the project's, sent on
     // its own first — created their issues: every one of them is taken back.
     refused_part_way("create3");
+}
+
+/// The waits a copy's process made for GitHub to file the items it created on the board.
+fn filing_waits(plan: &Plan) -> Vec<std::time::Duration> {
+    plan.clock
+        .slept()
+        .into_iter()
+        .filter(|slept| slept.cause.as_deref() == Some("board-filing"))
+        .map(|slept| slept.length)
+        .collect()
+}
+
+#[test]
+fn a_first_copy_waits_for_github_to_file_the_items_it_created_and_then_lands_the_plan() {
+    // GitHub adds a created issue to the board its create names after answering, and twice
+    // more the read of where it is answers that it is nowhere yet: the copy waits a second,
+    // then two, reads again, and lands the plan whole.
+    let plan = Plan::new(SMALL, Vec::new());
+    plan.github.file_created_items_after(2);
+    let (project, document, _) = plan.copy();
+    let at = counterparts(&project, &document);
+    super::plan_copy::holds_the_plan(&plan, &at, None);
+    assert_eq!(
+        filing_waits(&plan),
+        [1, 2].map(std::time::Duration::from_secs),
+        "the waits for GitHub to file what the copy created"
+    );
+}
+
+#[test]
+fn a_first_copy_whose_items_github_never_files_takes_back_every_item_it_created() {
+    // Never filed: the copy waits one, two, four, eight and sixteen seconds, reading again after
+    // each, then refuses naming what GitHub never added, and takes back every issue it created.
+    let plan = Plan::new(SMALL, Vec::new());
+    plan.github.file_created_items_after(usize::MAX);
+    let lease = plan.clock.lease(0);
+    let output = plan.run(&["project", "copy", "notes:P", "--to", "board", "--json"]);
+    lease.wait_for_detach();
+    drop(lease);
+    assert_ne!(output.status.code(), Some(0), "the copy was refused");
+    let said = onetaskgraph_e2e_support::common::stderr(&output);
+    assert!(
+        said.contains("has not added them to it after 31 seconds")
+            && said.contains("run the copy again once GitHub has caught up"),
+        "{said}"
+    );
+    assert_eq!(
+        filing_waits(&plan),
+        [1, 2, 4, 8, 16].map(std::time::Duration::from_secs),
+        "the waits for GitHub to file what the copy created"
+    );
+    left_nothing(&plan, TASKS + 1);
 }
 
 #[test]

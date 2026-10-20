@@ -6793,8 +6793,8 @@ impl GitHubProjectsSource {
 
     /// Forget one item this process has just deleted, from every half of its own view.
     fn forget(&self, id: &NativeId) -> Result<(), SourceError> {
-        if let Some(deferred) = self.deferred()?.as_mut() {
-            deferred.created.retain(|held| held.content != *id);
+        if let Some(Deferred::Held { created, .. }) = self.deferred()?.as_mut() {
+            created.retain(|held| held.content != *id);
         }
         self.resolved_cache()?.remove(id);
         self.read_ahead()?.remove(id);
@@ -9429,7 +9429,7 @@ impl GitHubProjectsSource {
         Ok(self
             .deferred()?
             .as_ref()
-            .is_some_and(|deferred| deferred.created.iter().any(|held| held.content == *content)))
+            .is_some_and(|deferred| deferred.holds(content)))
     }
 
     fn deferred(&self) -> Result<std::sync::MutexGuard<'_, Option<Deferred>>, SourceError> {
@@ -9537,15 +9537,19 @@ impl GitHubProjectsSource {
             .then(|| state_input(status_target));
         let mut deferred = self.deferred()?;
         let deferred = deferred.get_or_insert_with(Deferred::default);
-        deferred.board.get_or_insert_with(|| board_id.to_owned());
-        let held = match deferred
-            .created
-            .iter_mut()
-            .position(|held| held.content == *content)
-        {
-            Some(at) => &mut deferred.created[at],
+        if let Deferred::Nothing = deferred {
+            *deferred = Deferred::Held {
+                board: board_id.to_owned(),
+                created: Vec::new(),
+            };
+        }
+        let Deferred::Held { created, .. } = deferred else {
+            unreachable!("held back on the line above");
+        };
+        let held = match created.iter().position(|held| held.content == *content) {
+            Some(at) => &mut created[at],
             None => {
-                deferred.created.push(HeldBack {
+                created.push(HeldBack {
                     content: content.clone(),
                     fields: Vec::new(),
                     status: None,
@@ -9553,7 +9557,7 @@ impl GitHubProjectsSource {
                     close: None,
                     edges: Vec::new(),
                 });
-                deferred.created.last_mut().expect("just held")
+                created.last_mut().expect("just held")
             }
         };
         for (field, value) in fields {
@@ -9700,19 +9704,19 @@ impl GitHubProjectsSource {
     /// requests of [`MUTATION_BATCH`]. Anything refused takes back every issue held, and
     /// answers the refusal.
     async fn send_held_back(&self) -> Result<(), SourceError> {
-        let Some(deferred) = self.deferred()?.take() else {
+        let Some(Deferred::Held { board, created }) = self.deferred()?.take() else {
             return Ok(());
         };
-        let (Some(board), false) = (deferred.board.clone(), deferred.created.is_empty()) else {
+        if created.is_empty() {
             return Ok(());
-        };
-        let sent = self.send_deferred(&board, &deferred).await;
+        }
+        let sent = self.send_deferred(&board, &created).await;
         if let Err(error) = sent {
             // Best effort, and the failure is what the caller is told, as a write of one item
             // that fails part way takes back what it created: the copy that held these back
             // journalled every one, so one this cannot take back its undo tries again, and says
             // so when it cannot either.
-            for held in &deferred.created {
+            for held in &created {
                 let _ = self.delete_issue(&held.content).await;
             }
             return Err(error);
@@ -9721,16 +9725,16 @@ impl GitHubProjectsSource {
     }
 
     /// The requests [`Self::send_held_back`] makes.
-    async fn send_deferred(&self, board: &str, deferred: &Deferred) -> Result<(), SourceError> {
-        let items = self.created_board_items(board, &deferred.created).await?;
+    async fn send_deferred(&self, board: &str, created: &[HeldBack]) -> Result<(), SourceError> {
+        let items = self.created_board_items(board, created).await?;
         let mut fields: Vec<Value> = Vec::new();
         let mut closes: Vec<Value> = Vec::new();
         let mut edges: Vec<Value> = Vec::new();
-        for held in &deferred.created {
+        for held in created {
             let (item, status) = &items[&held.content];
             let mut values = held.fields.clone();
-            // A status the board already shows — set by a workflow filing new items at it, as
-            // GitHub's own default one does — is not written again.
+            // A status the board already shows — set by a workflow a person turned on to file
+            // new items at it — is not written again.
             if let Some((field, option, name)) = &held.status
                 && status.as_deref() != Some(name.as_str())
             {
@@ -9782,7 +9786,7 @@ impl GitHubProjectsSource {
                 }
             }
         }
-        for held in &deferred.created {
+        for held in created {
             self.learn_item(&held.content, &items[&held.content].0)?;
         }
         Ok(())
@@ -9828,6 +9832,22 @@ impl GitHubProjectsSource {
                     .graphql(graphql::CREATED_BOARD_ITEMS, Value::Object(variables))
                     .await?;
                 for (slot, id) in chunk.iter().enumerate() {
+                    // An answer for another issue than the one asked about says nothing of
+                    // where that one is filed, and its board item is not this one's.
+                    let node = data.get(format!("i{slot}")).filter(|node| !node.is_null());
+                    let named = node.map(|node| node.get("id").and_then(Value::as_str));
+                    if let Some(named) = named
+                        && named != Some(id.0.as_str())
+                    {
+                        return Err(SourceError::Malformed {
+                            message: format!(
+                                "GitHub answered the board items of {} when asked for those of \
+                                 {}",
+                                named.unwrap_or("an issue it did not name"),
+                                id.0
+                            ),
+                        });
+                    }
                     let item = data
                         .pointer(&format!("/i{slot}/projectItems/nodes"))
                         .and_then(Value::as_array)
@@ -10741,11 +10761,27 @@ struct Prepared {
 /// What a copy has held back of the items it created; see
 /// [`GitHubProjectsSource::hold_back`].
 #[derive(Debug, Default)]
-struct Deferred {
-    /// The board every one of them is on.
-    board: Option<String>,
-    /// Each created item, in the order it was created.
-    created: Vec<HeldBack>,
+enum Deferred {
+    /// Writes are being held back, and nothing has been held yet.
+    #[default]
+    Nothing,
+    /// The items held back, every one of them on `board`.
+    Held {
+        /// The board every one of them is on.
+        board: String,
+        /// Each created item, in the order it was created.
+        created: Vec<HeldBack>,
+    },
+}
+
+impl Deferred {
+    /// Whether `content` is one of the items held back.
+    fn holds(&self, content: &NativeId) -> bool {
+        match self {
+            Self::Nothing => false,
+            Self::Held { created, .. } => created.iter().any(|held| held.content == *content),
+        }
+    }
 }
 
 /// One created item's parts that land once [`TaskSource::finish_writes`] is called.
@@ -12635,7 +12671,18 @@ impl TaskSource for GitHubProjectsSource {
         }
     }
 
+    // llmlint: ignore[invalid_states_unrepresentable] The signature is the plugin contract's additive `TaskSource::write_tasks`, which the manager approved taking `ItemWrite<Task>` as `write_task` does; a create-only input type would be a new contract type. A write naming an existing target is refused below before anything is sent.
     async fn write_tasks(&self, writes: &[ItemWrite<Task>]) -> Result<Vec<NativeId>, SourceError> {
+        if let Some(write) = writes.iter().find(|write| write.target.is_some()) {
+            return Err(SourceError::Refused {
+                message: format!(
+                    "write_tasks creates tasks, and the write of {} names the existing task {}; \
+                     next: update it with write_task",
+                    write.item.id,
+                    write.target.as_ref().map_or("", |target| target.0.as_str())
+                ),
+            });
+        }
         if !self.deferring()? {
             let mut created = Vec::with_capacity(writes.len());
             for write in writes {

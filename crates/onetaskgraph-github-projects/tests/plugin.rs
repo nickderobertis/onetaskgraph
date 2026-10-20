@@ -598,6 +598,8 @@ struct State {
     /// response this source cannot read at all. Only a fixture reaches it, because GitHub
     /// answers with an `Int!`.
     creation_number_is_unreadable: bool,
+    /// Whether a read of created issues' board items answers each slot about another issue.
+    board_items_name_another_issue: bool,
     /// Whether `createIssue` answers with the new issue's `number`.
     ///
     /// GitHub declares `Issue.number` non-null and always answers with one, which is the
@@ -1238,6 +1240,11 @@ impl Fixture {
         self.state.lock().unwrap().creation_reports_number = false;
     }
 
+    /// Answer every read of created issues' board items about another issue than each slot asks.
+    fn answer_board_items_about_another_issue(&self) {
+        self.state.lock().unwrap().board_items_name_another_issue = true;
+    }
+
     /// Answer every `createIssue` from here on with a `number` that is not an integer.
     fn creation_reports_an_unreadable_number(&self) {
         self.state.lock().unwrap().creation_number_is_unreadable = true;
@@ -1283,6 +1290,7 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
         guarded_status_options: None,
         drift_guarded_status_description: false,
         creation_number_is_unreadable: false,
+        board_items_name_another_issue: false,
         creation_reports_number: true,
         blank_status_snapshot_id: None,
         origin_field,
@@ -1630,8 +1638,13 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
                     continue;
                 }
                 let id = variables[format!("id{slot}")].as_str().expect("an id");
+                let named = if held.board_items_name_another_issue {
+                    "I_another"
+                } else {
+                    id
+                };
                 let answered = match held.items.iter().find(|item| item.content_id == id) {
-                    Some(item) => json!({"id":id,"projectItems":{"nodes":[{"id":item.item_id,
+                    Some(item) => json!({"id":named,"projectItems":{"nodes":[{"id":item.item_id,
                         "project":{"id":"PVT_board"},
                         "status":item.status.as_ref().map(|name| json!({"name":name}))}]}}),
                     None => json!({"id":id,"projectItems":{"nodes":[]}}),
@@ -11007,28 +11020,69 @@ async fn the_shipped_budget_bounds_a_wait_no_configuration_asked_for() {
 }
 
 #[tokio::test]
-async fn at_the_shipped_defaults_a_writes_mutations_go_out_as_fast_as_they_are_answered() {
-    // The shipped default paces by GitHub's windows rather than by a fixed spacing: a write's
-    // few mutations are nowhere near the minute's 80 creations, so each goes out the moment
-    // the one before it is answered. Spacing them `MIN_MUTATION_INTERVAL_MS` apart — the
-    // default this replaced — was most of a plan copy's wall time, and every gap below would
-    // be at least that.
+async fn write_tasks_refuses_a_write_naming_an_existing_task_before_sending_anything() {
+    // `write_tasks` creates; a write naming a task the board holds would be taken back as one
+    // it created if a later one failed, so it is refused before any request, held back or not.
+    for deferring in [false, true] {
+        let fixture = board(vec![]);
+        let source = source(&fixture);
+        if deferring {
+            source.begin_deferred_writes();
+        }
+        let existing = ItemWrite {
+            target: Some(NativeId("I_held".to_owned())),
+            ..write(task("T-2", "Held", status(StatusCategory::Todo, "Todo")))
+        };
+        let refused = source
+            .write_tasks(&[
+                write(task("T-1", "New", status(StatusCategory::Todo, "Todo"))),
+                existing,
+            ])
+            .await
+            .expect_err("a write naming an existing task");
+        assert!(
+            matches!(refused, SourceError::Refused { .. })
+                && refused.to_string().contains("T-2")
+                && refused.to_string().contains("write_task"),
+            "deferring {deferring}: {refused}"
+        );
+        assert_eq!(
+            fixture.operations(),
+            Vec::<String>::new(),
+            "deferring {deferring}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_board_items_answer_about_another_issue_is_refused_and_takes_back_what_was_created() {
+    // The board item a created issue's fields are written onto is the one the answer names for
+    // that issue; an answer about another issue is no answer, so nothing is written onto it
+    // and the issues created are taken back.
     let fixture = board(vec![]);
-    let source = configured(&fixture.endpoint, json!({"pacing": null}));
+    fixture.answer_board_items_about_another_issue();
+    let source = source(&fixture);
+    source.begin_deferred_writes();
     source
-        .write_task(&write(task(
-            "T-1",
-            "Publish",
-            status(StatusCategory::Todo, "Todo"),
-        )))
+        .write_tasks(&[
+            write(task("T-1", "One", status(StatusCategory::Todo, "Todo"))),
+            write(task("T-2", "Two", status(StatusCategory::Todo, "Todo"))),
+        ])
         .await
-        .expect("one task");
-    let gaps = fixture.mutation_gaps();
-    assert!(!gaps.is_empty(), "a created task is more than one mutation");
-    let spacing = Duration::from_millis(onetaskgraph_github_projects::MIN_MUTATION_INTERVAL_MS);
+        .expect("both created");
+    let refused = source
+        .finish_writes()
+        .await
+        .expect_err("an answer about another issue");
     assert!(
-        gaps.iter().all(|gap| *gap < spacing / 2),
-        "a mutation was held although every window had room: {gaps:?}"
+        matches!(refused, SourceError::Malformed { .. })
+            && refused.to_string().contains("I_another"),
+        "{refused}"
+    );
+    assert_eq!(fixture.requests("updateProjectV2ItemFieldValue"), 0);
+    assert!(
+        fixture.state.lock().unwrap().items.is_empty(),
+        "the created issues remain"
     );
 }
 

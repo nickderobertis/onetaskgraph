@@ -1178,6 +1178,9 @@ struct GitHubBoard {
     /// GitHub's default workflows, none of which sets one on an item added to it; `false`
     /// files it at `Todo`, as a board with that workflow turned on does.
     files_without_status: bool,
+    /// How many more reads of created issues' board items answer that GitHub has not filed
+    /// them yet, as it may not have in the moments after a create naming the board.
+    unfiled_board_item_reads: usize,
     status_snapshot_page_size: Option<usize>,
     status_field_present: bool,
     status_board_accessible: bool,
@@ -1728,6 +1731,12 @@ impl GitHubBoardFields {
     /// added one — or, with `false`, at `Todo`, as a board with that workflow turned on does.
     pub fn file_new_items_without_status(&self, without: bool) {
         self.board.lock().unwrap().files_without_status = without;
+    }
+
+    /// Answer the next `reads` reads of created issues' board items as GitHub answers before it
+    /// has filed them: each issue on no board yet.
+    pub fn file_created_items_after(&self, reads: usize) {
+        self.board.lock().unwrap().unfiled_board_item_reads = reads;
     }
 
     /// Force Status snapshots to span pages even though the client requests 100 items.
@@ -3231,6 +3240,7 @@ fn github_projects_board_at(
         remint_after_status_update: false,
         omit_added_status_option: false,
         files_without_status: false,
+        unfiled_board_item_reads: 0,
         status_snapshot_page_size: None,
         status_field_present: true,
         status_board_accessible: true,
@@ -3791,7 +3801,9 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
             return Value::Object(result);
         }
         if query == documents::CREATED_BOARD_ITEMS {
-            let held = board.lock().unwrap();
+            let mut held = board.lock().unwrap();
+            let unfiled = held.unfiled_board_item_reads > 0;
+            held.unfiled_board_item_reads = held.unfiled_board_item_reads.saturating_sub(1);
             let mut result = serde_json::Map::new();
             for slot in 0..onetaskgraph_github_projects::COPY_DETAIL_BATCH {
                 if variables[format!("read{slot}")] != true {
@@ -3799,6 +3811,7 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
                 }
                 let id = &variables[format!("id{slot}")];
                 let answer = match held.items.iter().find(|item| item["id"] == *id) {
+                    Some(_) if unfiled => json!({"id":id,"projectItems":{"nodes":[]}}),
                     Some(item) => json!({"id":id,"projectItems":{"nodes":[{
                         "id":item["item"],"project":{"id":"PVT-board"},
                         "status": item["status"].as_str().map(|name| json!({"name":name}))}]}}),

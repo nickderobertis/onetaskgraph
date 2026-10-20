@@ -159,6 +159,15 @@
         }
       ],
       "//": "Reports the current complete main/assets pair and ordinary offline telemetry through onebudgetspec. Current identity inputs prevent stale-session cache reuse. Credentialless or explicitly not-selected runs print live measurement unavailable and retain offline budgets."
+    },
+    "budgets-host": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["test"],
+      "options": {
+        "command": "bun run onebudgetspec check crates/onetaskgraph-github-projects-e2e/budgets.yaml --label host"
+      },
+      "cache": false,
+      "//": "The plan copy's real process time, which the host's load moves, so never cached, not a dependency of `check` and not a target `just test` selects: `budgets` excludes the `host` label, and this checks it alone, as pool-maintenance's `budgets-host` does. It reads the telemetry the crate's own `test` recorded."
     }
   }
 }

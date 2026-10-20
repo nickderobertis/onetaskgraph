@@ -1189,8 +1189,19 @@ pub trait TaskSource: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Whatever [`write_task`](Self::write_task) of one of them refuses with.
+    /// Refused, before anything is written, when a write names an existing target; otherwise
+    /// whatever [`write_task`](Self::write_task) of one of them refuses with.
+    // llmlint: ignore[invalid_states_unrepresentable] Approved by the contract's owner as an additive method taking `ItemWrite<Task>` exactly as `write_task` does; a create-only input type would be a new contract type. A write naming an existing target is refused below before anything is written, so rollback only ever takes back what this call created.
     async fn write_tasks(&self, writes: &[ItemWrite<Task>]) -> Result<Vec<NativeId>, SourceError> {
+        if let Some(write) = writes.iter().find(|write| write.target.is_some()) {
+            return Err(SourceError::Refused {
+                message: format!(
+                    "write_tasks creates tasks, and the write of {} names an existing target; \
+                     next: update it with write_task",
+                    write.item.id
+                ),
+            });
+        }
         let mut created = Vec::with_capacity(writes.len());
         for write in writes {
             match self.write_task(write).await {

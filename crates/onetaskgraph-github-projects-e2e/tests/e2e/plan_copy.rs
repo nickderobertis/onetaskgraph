@@ -409,9 +409,9 @@ fn spike_points(call: &Call) -> u64 {
 }
 
 /// Record what `scenario` cost as the copy budgets' telemetry, for
-/// `budget_runner::report_plan_copy`: its seconds — the simulated seconds of both commands and
-/// the real seconds their processes ran — and its points, and for a first copy the writes
-/// GitHub's secondary limit may count.
+/// `budget_runner::report_plan_copy`: its seconds — the simulated seconds of both commands —
+/// and, apart, the real seconds their processes ran; its points; and for a first copy the
+/// writes GitHub's secondary limit may count.
 fn record(name: &str, scenario: &Scenario, board: usize) {
     let simulated: f64 = scenario
         .phases
@@ -483,9 +483,20 @@ fn record(name: &str, scenario: &Scenario, board: usize) {
     let mut recordings = vec![
         (
             format!("github-plan-copy-seconds-{name}"),
-            simulated + real,
-            json!({"simulated seconds by phase": phases, "real seconds": real,
+            simulated,
+            json!({"simulated seconds by phase": phases,
                    "requests by operation": requests, "milliseconds charged by kind": latencies}),
+        ),
+        // The processes' own real time, which the host's load moves: reported beside the
+        // simulated figure, never added to it.
+        (
+            format!("github-plan-copy-real-seconds-{name}"),
+            real,
+            json!({"real seconds by phase": scenario
+                .phases
+                .iter()
+                .map(|(kind, _, real)| (*kind, real.as_secs_f64()))
+                .collect::<BTreeMap<&str, f64>>()}),
         ),
         (
             format!("github-plan-copy-points-{name}"),
