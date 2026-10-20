@@ -4948,6 +4948,81 @@ pub fn linear_workspace_failing(
     (config, workspace)
 }
 
+// llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] The loopback Linear lives in the shared e2e harness because more than one suite drives it, and its write handlers here are what apply this rewrite.
+/// What a Linear workspace does to the Markdown of a long form it is written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinearMarkdown {
+    /// Stores it byte for byte, as every workspace does until told otherwise.
+    Verbatim,
+    /// Applies every rule the Linear plugin's ruling on what Linear does to Markdown on write
+    /// declares — that plugin's own `stored_form`.
+    Declared,
+    /// Applies those, and one rewrite the ruling does not declare: a line opening `1) ` comes
+    /// back opening `1. `.
+    Undeclared,
+    /// Applies those, and leaves out every image alone on a line whose line before the blank
+    /// one setting it apart is an image alone on a line too — the reading of an answer that
+    /// blanked the second of two adjacent images in which Linear really dropped it.
+    DropsAdjacentImage,
+    /// Applies those, and ends a field with a line break wherever they leave it without one —
+    /// a rewrite the ruling declares only after a table.
+    TrailingLineBreak,
+}
+
+/// The line the [`LinearMarkdown::Undeclared`] rewrite moves, as it is written and as it is
+/// stored.
+pub const LINEAR_UNDECLARED_REWRITE: (&str, &str) = ("1) ", "1. ");
+
+/// `written` as the workspace `data` stores a long form, by what it was told with
+/// [`LinearWorkspace::rewrite_markdown_on_write`].
+fn linear_stored(data: &Value, written: Option<&Value>) -> Value {
+    let Some(text) = written.and_then(Value::as_str) else {
+        return written.cloned().unwrap_or(Value::Null);
+    };
+    match data["_linear_markdown"].as_str() {
+        Some("declared") => json!(onetaskgraph_linear::stored_form::stored_form(text)),
+        Some("undeclared") => {
+            let (from, to) = LINEAR_UNDECLARED_REWRITE;
+            let stored = onetaskgraph_linear::stored_form::stored_form(text)
+                .split('\n')
+                .map(|line| match line.strip_prefix(from) {
+                    Some(rest) => format!("{to}{rest}"),
+                    None => line.to_owned(),
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            json!(stored)
+        }
+        Some("trailing-line-break") => {
+            let stored = onetaskgraph_linear::stored_form::stored_form(text);
+            json!(if stored.ends_with('\n') {
+                stored
+            } else {
+                format!("{stored}\n")
+            })
+        }
+        Some("drops-adjacent-image") => {
+            let lone_image = |line: &str| line.starts_with("![") && line.ends_with(')');
+            let stored = onetaskgraph_linear::stored_form::stored_form(text);
+            let lines: Vec<&str> = stored.split('\n').collect();
+            let kept: Vec<&str> = lines
+                .iter()
+                .enumerate()
+                .filter(|&(index, line)| {
+                    !(lone_image(line)
+                        && index >= 2
+                        && lines[index - 1].is_empty()
+                        && lone_image(lines[index - 2]))
+                })
+                .map(|(_, line)| *line)
+                .collect();
+            json!(kept.join("\n"))
+        }
+        _ => json!(text),
+    }
+}
+// llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
+
 /// A rewrite of what a Linear workspace answers, applied to the next `times` requests
 /// `matches` holds of.
 struct LinearBend {
@@ -5336,6 +5411,20 @@ impl LinearWorkspace {
     /// the order they arrived.
     pub fn served(&self) -> Vec<(String, Value)> {
         self.ledger.lock().unwrap().clone()
+    }
+
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the shared loopback Linear's handle, which more than one suite drives.
+    /// Have this workspace store every long form it is written — an issue's `description`, a
+    /// project's and a document's `content` — as `rewrite` says Linear does, from the next
+    /// write on.
+    pub fn rewrite_markdown_on_write(&self, rewrite: LinearMarkdown) {
+        self.state.lock().unwrap()["_linear_markdown"] = json!(match rewrite {
+            LinearMarkdown::Verbatim => "verbatim",
+            LinearMarkdown::Declared => "declared",
+            LinearMarkdown::Undeclared => "undeclared",
+            LinearMarkdown::DropsAdjacentImage => "drops-adjacent-image",
+            LinearMarkdown::TrailingLineBreak => "trailing-line-break",
+        });
     }
 
     /// What this workspace answered each request [`served`](Self::served) names with, at the
@@ -6330,6 +6419,7 @@ fn linear_response(
             ("documents", "content", "documentUpdate", "document")
         };
         let id = vars["id"].as_str().ok_or("update id must be a string")?;
+        let stored = linear_stored(data, vars["input"].get(field));
         let (_, stamp) = linear_tick(data);
         let row = data[collection]
             .as_array_mut()
@@ -6337,13 +6427,13 @@ fn linear_response(
             .iter_mut()
             .find(|row| row["id"] == id)
             .ok_or("update target does not exist")?;
-        row["_linear_description"] = vars["input"][field].clone();
+        row["_linear_description"] = stored.clone();
         // A project's `updatedAt` moves for its content; a document's does not, which is what
         // `spike-linear-coverage` measured Linear doing (4 of 4).
         if collection == "projects" {
             row["_updated"] = json!(stamp);
         }
-        return Ok(json!({ (root): {"success":true,(payload):{"id":id}} }));
+        return Ok(json!({ (root): {"success":true,(payload):{"id":id,(field):stored}} }));
     }
     if matches!(operation, graphql::PROJECT_CREATE | graphql::PROJECT_UPDATE) {
         return linear_write_item(data, &vars, operation == graphql::PROJECT_CREATE, true);
@@ -6687,6 +6777,7 @@ fn linear_write_item(
     let (_, stamp) = linear_tick(data);
     let vocabulary = json!({"_linear_states": data["_linear_states"].clone(),
         "_linear_project_statuses": data["_linear_project_statuses"].clone()});
+    let vocabulary_markdown = json!({"_linear_markdown": data["_linear_markdown"].clone()});
     let rows = data[collection]
         .as_array_mut()
         .ok_or("fixture collection is not an array")?;
@@ -6730,17 +6821,16 @@ fn linear_write_item(
             .ok_or("stateId names no state of the team")?;
         (Some(held), Value::Null)
     };
+    // An issue's long form is its `description`, a project's its `content`.
+    let long_form_key = if project { "content" } else { "description" };
+    let stored = linear_stored(&vocabulary_markdown, input.get(long_form_key));
     let mut row = json!({
         "id": id,
         "title": input.get(title_key).and_then(Value::as_str).ok_or("title must be a string")?,
         "content": "",
         "status": status,
         "labels": labels,
-        // An issue's long form is its `description`, a project's its `content`.
-        "_linear_description": input
-            .get(if project { "content" } else { "description" })
-            .cloned()
-            .unwrap_or(Value::Null),
+        "_linear_description": stored,
     });
     if let Some(state) = state {
         linear_put_state(&mut row, state);
@@ -6761,7 +6851,8 @@ fn linear_write_item(
     } else {
         rows.push(row);
     }
-    let payload = json!({"id":id});
+    // The write's own answer carries the long form as it is now stored, as the plugin asks.
+    let payload = json!({"id":id, (long_form_key): stored});
     Ok(if project {
         if create {
             json!({"projectCreate":{"success":true,"project":payload}})
@@ -6784,6 +6875,7 @@ fn linear_write_document(
     let input = vars["input"]
         .as_object()
         .ok_or("write input must be an object")?;
+    let stored = linear_stored(data, input.get("content"));
     let rows = data["documents"]
         .as_array_mut()
         .ok_or("fixture collection is not an array")?;
@@ -6804,7 +6896,7 @@ fn linear_write_document(
         "title": input.get("title").and_then(Value::as_str).ok_or("title must be a string")?,
         "content": "",
         "labels": [],
-        "_linear_description": input.get("content").cloned().unwrap_or(Value::Null),
+        "_linear_description": stored,
     });
     if let Some(project) = input.get("projectId").filter(|value| !value.is_null()) {
         row["project"] = project.clone();
@@ -6818,7 +6910,7 @@ fn linear_write_document(
     } else {
         rows.push(row);
     }
-    let payload = json!({"success":true,"document":{"id":id}});
+    let payload = json!({"success":true,"document":{"id":id,"content":stored}});
     Ok(if create {
         json!({ "documentCreate": payload })
     } else {
@@ -7456,6 +7548,9 @@ fn linear_narrow_issue_update(
 ) -> Result<Value, &'static str> {
     let id = vars["id"].as_str().ok_or("update id must be a string")?;
     let states = json!({"_linear_states": data["_linear_states"].clone()});
+    let stored = vars["input"]
+        .get("description")
+        .map(|description| linear_stored(data, Some(description)));
     let (_, stamp) = linear_tick(data);
     let row = data["tasks"]
         .as_array_mut()
@@ -7466,7 +7561,7 @@ fn linear_narrow_issue_update(
     if let Some(priority) = vars["input"].get("priority") {
         row["priority"] = linear_priority_name(priority);
     }
-    if let Some(description) = vars["input"].get("description") {
+    if let Some(description) = &stored {
         row["_linear_description"] = description.clone();
     }
     if let Some(title) = vars["input"].get("title") {
@@ -7483,7 +7578,11 @@ fn linear_narrow_issue_update(
             json!({"issueUpdate":{"success":true,
                    "issue":{"id":id,"priority":linear_priority(&row["priority"])}}})
         } else {
-            json!({"issueUpdate":{"success":true,"issue":{"id":id}}})
+            let mut issue = json!({"id":id});
+            if let Some(description) = stored {
+                issue["description"] = description;
+            }
+            json!({"issueUpdate":{"success":true,"issue":issue}})
         },
     )
 }

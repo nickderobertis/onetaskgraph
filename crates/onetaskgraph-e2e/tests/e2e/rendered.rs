@@ -2749,3 +2749,69 @@ fn a_rendering_whose_references_a_copy_leaves_alone_carries_its_provenance_uncha
     let (recorded, hashed) = recorded_and_hashed(&copied);
     assert_eq!(recorded["body_digest"], hashed);
 }
+
+/// A folder of Markdown declares no rewrite of what it is written, so a rendering copied into
+/// one lands as the bytes it was read as, with the provenance it was read with: the text a
+/// Linear destination rewrites — bullets, a table's delimiter row, a domain-like token,
+/// brackets, a tilde and an underscore emphasis — comes through as written, and the recorded
+/// digest is still that of the content.
+#[test]
+fn a_rendering_copied_into_a_folder_of_markdown_lands_as_it_was_read() {
+    let plan = Plan::new();
+    let body = "---\nonetaskgraph_template: 1\nvariables:\n  goal:\n    description: What it \
+                is for\n---\n# Plan\nGoal: {{ goal }}\n\n- build it\n- ship it\n| Step | Owner \
+                |\n| --- | --- |\n\nShip it to example.com once [x] is ticked, ~2 days, \
+                _soon_.\n\n\n";
+    let template = plan.file("markdown.md", body);
+    for kind in ["task", "document"] {
+        let source = plan.json(&[
+            kind,
+            "create",
+            "notes",
+            "--project",
+            "P-1",
+            "--title",
+            "Plan",
+            "--template",
+            &template,
+            "--var",
+            "goal=Ship the plan",
+            "--no-interactive",
+        ])["items"][0]["id"]
+            .as_str()
+            .expect("an id")
+            .to_owned();
+        let read = plan.json(&[kind, "show", &source])["items"][0]["item"].clone();
+        let copied = plan.json(&[kind, "copy", &source, "--to", "back"]);
+        let destination = copied["items"][0]["destination"]
+            .as_str()
+            .expect("an id")
+            .to_owned();
+        let landed = plan.json(&[kind, "show", &destination])["items"][0]["item"].clone();
+        assert_eq!(
+            landed["content"], read["content"],
+            "{kind}: the source's bytes"
+        );
+        assert_eq!(
+            landed["metadata"]["onetaskgraph.template"], read["metadata"]["onetaskgraph.template"],
+            "{kind}: the provenance it was read with"
+        );
+        assert_eq!(
+            landed["metadata"]["onetaskgraph.template"]["body_digest"],
+            json!(sha256(landed["content"].as_str().expect("content"))),
+            "{kind}"
+        );
+        let file = plan
+            .back
+            .join(format!("{kind}s"))
+            .join(format!("{}.md", native(&destination)));
+        let written = std::fs::read_to_string(&file).expect("the copied file");
+        assert!(
+            written.contains(
+                "- build it\n- ship it\n| Step | Owner |\n| --- | --- |\n\nShip it to \
+                 example.com once [x] is ticked, ~2 days, _soon_.\n"
+            ),
+            "{kind}: {written}"
+        );
+    }
+}

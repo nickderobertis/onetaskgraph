@@ -510,6 +510,58 @@ pub trait TaskSource: Send + Sync {
         WriteSupport::Unsupported
     }
 
+    /// The content this source's backend stores when it is written `content`: the rewrite
+    /// the backend applies to the long-form text of a task, a project or a document on
+    /// write, declared rather than discovered.
+    ///
+    /// The engine applies it to the content before a copy, a create or a render sends it, so
+    /// what it sends is already what the backend keeps — and a rendering's `body_digest`, which
+    /// it records over that rewritten content where the provenance vouched for the content it
+    /// started from, is the digest of what a later read reports. A backend owes that applying
+    /// it to its own output changes nothing more. Defaulted to the identity: a backend that
+    /// stores what it is given declares nothing.
+    ///
+    /// Asynchronous and fallible because a source hosted over the stdio plugin protocol asks
+    /// the plugin that declares it; an in-process source answers at once and never fails.
+    ///
+    /// # Errors
+    ///
+    /// A [`SourceError`] when the source could not say what its backend stores — never the
+    /// identity in its place, which would record a digest of content the backend does not keep.
+    async fn stored_form(&self, content: &str) -> Result<String, SourceError> {
+        Ok(content.to_owned())
+    }
+
+    /// The status this source's backend holds once an item of `kind` is written at `status`:
+    /// the name it records for the category, where it names a category itself rather than
+    /// keeping the name it was given.
+    ///
+    /// What a copy compares a destination item's status with, beside
+    /// [`stored_form`](Self::stored_form), so an item whose category it already holds reads as
+    /// unchanged rather than as differing by a name no write could change. Defaulted to
+    /// `status` as given: a backend that keeps the name it is written declares nothing.
+    ///
+    /// # Errors
+    ///
+    /// A [`SourceError`] on the terms of [`stored_form`](Self::stored_form).
+    async fn stored_status(&self, kind: ItemKind, status: &Status) -> Result<Status, SourceError> {
+        let _ = kind;
+        Ok(status.clone())
+    }
+
+    /// The content the backend answered it now holds for the `record` `id`, as the response
+    /// to this instance's latest write of that item's content reported it — taken, so a second
+    /// call answers `None` until the next such write.
+    ///
+    /// What the engine compares, byte for byte, with the content it sent: a difference is a
+    /// rewrite [`stored_form`](Self::stored_form) does not declare. It is read off the write's
+    /// own response, never by a request of its own. Defaulted to `None`, which leaves the
+    /// engine nothing to compare and compares nothing.
+    fn stored_content(&self, record: MetadataRecord, id: &NativeId) -> Option<String> {
+        let _ = (record, id);
+        None
+    }
+
     /// Create or update one task, answering with the native id the destination holds it
     /// under.
     ///

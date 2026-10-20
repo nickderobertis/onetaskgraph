@@ -225,6 +225,11 @@ fn cause(error: &EngineError) -> (String, Option<SourceName>, Option<&SourceErro
             ("no-comments".to_owned(), configured(name), None)
         }
         EngineError::ChangedWhileCopied { .. } => ("changed-while-copied".to_owned(), None, None),
+        EngineError::StoredContentDiverged { item, .. } => (
+            "stored-content-diverged".to_owned(),
+            Some(item.source.clone()),
+            None,
+        ),
         EngineError::QueryNotTasks => ("query-not-tasks".to_owned(), None, None),
         EngineError::StatusesNotTasks => ("statuses-not-tasks".to_owned(), None, None),
         EngineError::CommentsNotDocuments => ("comments-not-documents".to_owned(), None, None),

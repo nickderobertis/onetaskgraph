@@ -32,6 +32,7 @@ mod metadata;
 mod narrow;
 mod rendered;
 mod resume;
+mod stored;
 mod update;
 
 use std::collections::BTreeMap;
@@ -1145,6 +1146,43 @@ pub enum EngineError {
         item: GlobalId,
     },
 
+    /// A write's own answer says its destination stores the item's content other than it was
+    /// sent, in a way the destination's declared rewrite —
+    /// [`TaskSource::stored_form`](onetaskgraph_plugin_api::TaskSource::stored_form) — does not
+    /// explain.
+    ///
+    /// The engine applies that rewrite before it sends, so what it sends is what a backend
+    /// declaring its rewrite in full keeps. The item was written, and the `body_digest` it
+    /// records is still the digest of what was sent: so every check that hashes the content a
+    /// read hands back refuses it, rather than this store vouching for text it did not write.
+    #[error(
+        "{item} was written, but source {} stored its content other than it was sent, first at \
+         line {line}:\n\
+         sent:   {}\n\
+         stored: {}\n\
+         no declared rule of source {} explains the difference, so the digest the item records \
+         is still that of what was sent and no rendering check will accept it\n\
+         next: add the rule this line shows to the ruling its plugin's `stored_form` implements \
+         — for the linear plugin, \"Ruling: what Linear does to Markdown on write, declared\" in \
+         crates/onetaskgraph-linear/src/lib.rs — then write the item again.",
+        item.source,
+        diverged_line(sent.as_deref(), *line),
+        diverged_line(stored.as_deref(), *line),
+        item.source
+    )]
+    StoredContentDiverged {
+        /// The item as the destination holds it, qualified by the destination source.
+        item: GlobalId,
+        /// The first line, counted from 1, at which the two differ.
+        line: usize,
+        /// That line as it was sent, `None` when the sent content ended before it — told apart
+        /// from an empty line, because a line Linear inserts and a line it leaves out read alike
+        /// otherwise.
+        sent: Option<String>,
+        /// That line as the destination stored it, `None` when the stored content ended before it.
+        stored: Option<String>,
+    },
+
     /// `--create` named an item that itself records a counterpart at the destination.
     ///
     /// Refused rather than created: the item's own `onetaskgraph.copies` link — or its
@@ -1324,6 +1362,15 @@ pub enum EngineError {
         operation: String,
         // llmlint: ignore-end[invalid_states_unrepresentable]
     },
+}
+
+/// One side's `line` of a [`EngineError::StoredContentDiverged`] as its message shows it: the
+/// line quoted, or that side's content having ended before it.
+fn diverged_line(text: Option<&str>, line: usize) -> String {
+    match text {
+        Some(text) => format!("{text:?}"),
+        None => format!("no line {line}: the content ends at line {}", line - 1),
+    }
 }
 
 /// Why a wrapped failure happened, without the next action it would give on its own: a

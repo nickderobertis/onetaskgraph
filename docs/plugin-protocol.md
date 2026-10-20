@@ -211,6 +211,7 @@ the source can do natively, and what configuration it is being built with.
 | `task_details` | boolean | Whether this plugin answers `get_task_detail`. Optional; see §3.13. |
 | `write_checks` | boolean | Whether this plugin answers `check_task_write`. Optional; see §3.14. |
 | `project_status` | boolean | Whether this plugin answers `set_project_status`. Optional; see §3.15. |
+| `stored_forms` | boolean | Whether this plugin answers `stored_form` and `stored_status`, and says in a content write's result what its backend stores. Optional; see §3.16. |
 
 An `initialize` that fails answers with an `error` envelope, ordinarily
 `{"kind": "config"}` for a `config` block this plugin cannot use, or
@@ -418,6 +419,15 @@ write a task's status on its own` — exactly the words the trait's default answ
 caller cannot tell a plugin that never declared the member from one that declares it and has no
 such write. Omitted when `false`.
 
+### 3.16 `stored_forms`
+
+Optional, and absent means `false`: a plugin whose backend rewrites what it is written — a
+hosted tracker that re-renders Markdown, or names a status category itself — says so here, and
+then answers `stored_form` and `stored_status` (§4.25) and may carry `stored_content` in the
+result of a content write (§4.9, §4.9a, §4.12). One that does not is never sent either method:
+the engine writes the content and the status exactly as it was given them and compares nothing
+after the write, as it did before the member existed. Omitted when `false`.
+
 ## 4. The methods
 
 One method per trait method, named after it. Each is given below as its `params` and
@@ -463,6 +473,8 @@ its `result`; the JSON shape of every contract type in them is what
 | `end_command` | `TaskSource::end_command` |
 | `status_contradictions` | `TaskSource::status_contradictions` |
 | `issue_holdings` | `TaskSource::issue_holdings` |
+| `stored_form` | `TaskSource::stored_form` |
+| `stored_status` | `TaskSource::stored_status` |
 
 `kind`, `capabilities` and `writes` are not methods of their own: all three are settled
 by the handshake, and the engine reads capabilities once per connection.
@@ -498,6 +510,11 @@ write an item that may only be written somewhere private to it, whatever its con
 declares, and treats it as public for everything else. Its writes still cross only after the
 engine has applied the same classification and term checks it applies to every source, so a
 hosted plugin cannot be a way around them.
+
+`stored_content` — the content a write's own answer says the backend stores — is not a
+method: it crosses as the `stored_content` member of a content write's result (§4.9, §4.9a,
+§4.12), from a plugin that declared `stored_forms` (§3.16), and the engine compares it with
+what it sent exactly as it does for a source built in process.
 
 ### 4.1 Common parameter shapes
 
@@ -902,7 +919,12 @@ to the empty list.
 
 `result` is `{"id": …}`, carrying the `NativeId` this source now holds the item under. A
 create is free to choose an id other than the one `item` suggested; an update answers
-with `target`. A create's answer is the only way the engine learns that id, so a create
+with `target`. A plugin that declared `stored_forms` (§3.16) may add `stored_content`, a
+string: the item's content as its backend answered, in the write's own response, that it now
+holds it. The engine compares it with the content it sent, byte for byte, and refuses the item
+as `stored-content-diverged` — naming the item, the first differing line and both texts — when
+they differ, because that is a rewrite `stored_form` (§4.25) does not declare. Absent or `null`
+means the plugin has nothing to say, and nothing is compared. A create's answer is the only way the engine learns that id, so a create
 answered in any other shape is reported to a copy's caller as a destination that may hold
 an item the copy could not take back, rather than as a refusal: a plugin that refuses a
 create answers `error` and holds nothing.
@@ -977,6 +999,9 @@ The plugin stores each asset, and answers with the record and the content it sto
 | --- | --- | --- |
 | `id` | string | The `NativeId` this source now holds the record under, as §4.9's `result` says. |
 | `content` | string or `null` | The content as stored. |
+
+A plugin that declared `stored_forms` (§3.16) may add `stored_content` beside these, on §4.9's
+terms: the content its backend answered, in the write's own response, that it now holds.
 
 A plugin keeps the assets one of two ways:
 
@@ -1110,7 +1135,8 @@ Only a plugin that answered `"supported"` to §3.3 is ever sent either of these.
 
 `write` is an `ItemWrite` whose `item` is a `Document`, and it is read exactly as §4.9
 reads one: `target` is the id of the document at **this** source to update or `null` to
-create, `result` is `{"id": …}` carrying the `NativeId` this source now holds it under, and
+create, `result` is `{"id": …}` carrying the `NativeId` this source now holds it under — and
+the `stored_content` §4.9 specifies, from a plugin that declared `stored_forms` — and
 nothing the item carries is silently dropped. `depends_on` is always the empty list here,
 because a document has no dependencies.
 
@@ -2182,6 +2208,34 @@ write (§4.17), without reading the task again. Each item the engine reports car
 `kind` beside `task`, the held item's qualified id whichever its kind. A plugin's read
 is proportional to the references it is given and never to the size of what it holds.
 
+### 4.25 `stored_form` and `stored_status`
+
+Sent only to a plugin that answered `stored_forms: true` at the handshake (§3.16), and never to
+one that did not. Neither changes anything: each says what this source's backend would hold if
+it were written what the engine names.
+
+```json
+{ "id": "27", "method": "stored_form", "params": { "content": "- one\n- two" } }
+{ "id": "27", "result": { "content": "* one\n* two" } }
+{ "id": "28", "method": "stored_status", "params": { "kind": "task", "status": { "category": "done", "name": "done" } } }
+{ "id": "28", "result": { "status": { "category": "done", "name": "Shipped" } } }
+```
+
+`stored_form` takes the long-form `content` of a task, a project or a document and answers the
+`content`, a `String`, the backend stores when written it. The engine applies it before a copy sends an
+item's content, so what it sends is already what the backend keeps, and records a rendering's
+`body_digest` over the answer where the item's provenance vouched for the content it started
+from. Applying it to its own answer must change nothing more. The identity is a correct answer
+for a backend that stores what it is given.
+
+`stored_status` takes an item `kind` — `"task"` or `"project"` — and the `Status` it would be
+written at, and answers the `status` the backend holds once it is: the name it records for the
+category, where it names a category itself. A copy compares a destination item's status with
+that answer, so an item whose category it already holds reads as unchanged.
+
+An error envelope from either means the plugin could not say, and the engine refuses the write
+it was about to make rather than sending the content or the status as given.
+
 ## 5. The error envelope
 
 `error` carries a `SourceError` whole. It is internally tagged on `kind`, and every
@@ -2292,6 +2346,14 @@ were added **without** a bump: a plugin written before them names only task item
 `set_project_status` (§4.17a) and the `project_status` member of §3.15 were added **without**
 a bump on the terms of §3.14: the method reaches only a plugin that declared the member, and one
 that did not is refused before anything is sent, in the trait's default words.
+
+`stored_form` and `stored_status` (§4.25), the `stored_forms` member of §3.16 and the
+`stored_content` member of a content write's result (§4.9) were added **without** a bump, on
+the terms of §3.14: both methods reach only a plugin that answered `stored_forms: true`, which a
+plugin written before them cannot have done, and the engine reads `stored_content` only from such
+a plugin. A plugin that declares none of them is written the content and the status it is given,
+and nothing is compared after the write — exactly as before they existed. The wire shapes are
+held by `crates/onetaskgraph-core/tests/fixtures/stored-forms-wire.json`.
 
 `set_task_priority` (§4.19), `set_task_content` (§4.20) and the `content_updates` member of
 §3.9 were added **without** a bump, as the methods of §4.18 were: the first reaches only a

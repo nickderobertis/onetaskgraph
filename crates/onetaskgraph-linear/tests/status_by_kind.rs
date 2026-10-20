@@ -322,8 +322,10 @@ impl Workspace {
                 }
                 let answered = match query.as_str() {
                     graphql::ISSUE_UPDATE_READ => issue.clone(),
-                    graphql::ISSUE_REWRITE => json!({"id":id,"relations":no_relations()}),
-                    _ => json!({"id":id}),
+                    graphql::ISSUE_REWRITE => {
+                        json!({"id":id,"description":issue["description"],"relations":no_relations()})
+                    }
+                    _ => json!({"id":id,"description":issue["description"]}),
                 };
                 json!({"issueUpdate":{"success":true,"issue":answered}})
             }
@@ -338,7 +340,7 @@ impl Workspace {
                     "description":input["description"],"url":null,"createdAt":null,"updatedAt":null,
                     "archivedAt":null,"state":{"name":state["name"],"type":state["type"]},"priority":0,
                     "labels":{"nodes":[]},"project":null}));
-                json!({"issueCreate":{"success":true,"issue":{"id":new}}})
+                json!({"issueCreate":{"success":true,"issue":{"id":new,"description":input["description"]}}})
             }
             graphql::PROJECT_CREATE | graphql::PROJECT_UPDATE | graphql::PROJECT_REWRITE => {
                 let status = input["statusId"].as_str().unwrap_or_default().to_owned();
@@ -356,7 +358,7 @@ impl Workspace {
                         .push(json!({"id":new,"name":input["name"],"content":null,
                         "url":null,"createdAt":null,"updatedAt":null,"archivedAt":null,
                         "status":status,"labels":{"nodes":[]}}));
-                    json!({"projectCreate":{"success":true,"project":{"id":new}}})
+                    json!({"projectCreate":{"success":true,"project":{"id":new,"content":input["content"]}}})
                 } else {
                     let Some(project) =
                         held.projects.iter_mut().find(|project| project["id"] == id)
@@ -364,7 +366,7 @@ impl Workspace {
                         return json!({"errors":[{"message":"Entity not found: Project"}]});
                     };
                     project["status"] = status;
-                    json!({"projectUpdate":{"success":true,"project":{"id":id,"relations":no_relations()}}})
+                    json!({"projectUpdate":{"success":true,"project":{"id":id,"content":input["content"],"relations":no_relations()}}})
                 }
             }
             graphql::PROJECT_STATUS_UPDATE => {

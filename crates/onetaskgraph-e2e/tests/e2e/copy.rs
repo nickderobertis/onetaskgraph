@@ -3881,9 +3881,15 @@ fn a_reference_carrying_a_fragment_lands_on_the_copied_tasks_destination_locatio
             authored.contains(&format!("[t1]({here}#budgets)")),
             "{authored}"
         );
+        // Linear stores a table's delimiter row as its plugin's ruling declares, and the
+        // copy sends it that way; links and code spans it keeps as written.
+        let mut expected = authored.replace(&here, &there);
+        if plugin == "linear" {
+            expected = expected.replace("| --- | --- |", "| -- | -- |");
+        }
         assert_eq!(
             body(&sandbox, landed),
-            authored.replace(&here, &there),
+            expected,
             "{plugin}: the link names the destination's task with its fragment kept, and \
              nothing else moved"
         );

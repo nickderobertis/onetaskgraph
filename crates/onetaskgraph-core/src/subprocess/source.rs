@@ -16,7 +16,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use onetaskgraph_plugin_api::{
     AssetWrite, AssetsWritten, Capabilities, Comment, CommentBody, CommentCopy, DependencyEdge,
-    Direction, Document, DocumentQuery, Health, IssueHolding, IssueRef, ItemWrite, Label,
+    Direction, Document, DocumentQuery, Health, IssueHolding, IssueRef, ItemKind, ItemWrite, Label,
     MetadataKey, MetadataRecord, Metering, NativeId, NewComment, Page, PageRequest, Priority,
     Project, ProjectQuery, SourceError, SourceName, Status, StatusCategory, StatusContradiction,
     Task, TaskDetailRead, TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome,
@@ -34,10 +34,10 @@ use super::wire::{
     DocumentWriteParams, EditCommentParams, EngineIdentity, HoldingsParams, HoldingsResult,
     IdParams, InitializeParams, InitializeResult, LabelParams, MetadataParams, MeteringResult,
     PROTOCOL_VERSION, PriorityParams, PriorityResult, ProjectQueryParams, ProjectResult,
-    ProjectWriteParams, Request, StatusParams, StatusResult, TaskAssetWriteParams,
-    TaskDetailParams, TaskDetailResult, TaskQueryParams, TaskResult, TaskWriteParams, UpdateParams,
-    UpdateResult, WriteResult, after_the_first_vocabulary, knows_every_category, spelled,
-    vocabulary,
+    ProjectWriteParams, Request, StatusParams, StatusResult, StoredFormParams, StoredFormResult,
+    StoredStatusParams, StoredStatusResult, TaskAssetWriteParams, TaskDetailParams,
+    TaskDetailResult, TaskQueryParams, TaskResult, TaskWriteParams, UpdateParams, UpdateResult,
+    WriteResult, after_the_first_vocabulary, knows_every_category, spelled, vocabulary,
 };
 
 /// The id the handshake is sent under. §3 makes it the first request on a connection, so
@@ -144,6 +144,13 @@ pub struct SubprocessSource {
     /// Whether the plugin answers `set_project_status` (§3.15). A plugin that said nothing is
     /// never sent it, and a project status write is refused as the contract's default refuses it.
     project_status: bool,
+    /// Whether the plugin answers `stored_form` and `stored_status`, and says in each content
+    /// write's result what its backend stores (§3.16). A plugin that said nothing is never sent
+    /// either method: what it is written is what it is given, and nothing is compared after.
+    stored_forms: bool,
+    /// What the plugin's latest content write of each record answered its backend stores,
+    /// until [`TaskSource::stored_content`] takes it (§4.9).
+    stored: std::sync::Mutex<std::collections::HashMap<(MetadataRecord, NativeId), String>>,
     /// The live process.
     connection: Connection,
 }
@@ -386,6 +393,7 @@ impl SubprocessSource {
             task_details,
             write_checks,
             project_status,
+            stored_forms,
         } = match result {
             Ok(result) => result,
             Err(error) => return Err(with_diagnostics(error, &mut peer)),
@@ -422,6 +430,8 @@ impl SubprocessSource {
             task_details,
             write_checks,
             project_status,
+            stored_forms,
+            stored: std::sync::Mutex::new(std::collections::HashMap::new()),
             connection: Connection::adopt(peer),
         })
     }
@@ -589,6 +599,44 @@ impl SubprocessSource {
         Ok(())
     }
 
+    /// Keep what a content write's result said the backend stores of the `record` `id`, for
+    /// [`TaskSource::stored_content`] to take — or let go of an earlier answer when it said
+    /// nothing (§4.9).
+    fn keep_stored(&self, record: MetadataRecord, id: &NativeId, stored: Option<String>) {
+        let mut held = self
+            .stored
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match stored {
+            Some(content) if self.stored_forms => {
+                held.insert((record, id.clone()), content);
+            }
+            _ => {
+                held.remove(&(record, id.clone()));
+            }
+        }
+    }
+
+    /// A content write that carries `assets`, answered with what was written and what the
+    /// backend stores (§4.9, §4.9a).
+    async fn write_with_assets(
+        &self,
+        method: &str,
+        record: MetadataRecord,
+        params: Value,
+    ) -> Result<AssetsWritten, SourceError> {
+        let mut result = self.connection.call(method, params).await?;
+        let stored = stored_content(method, &mut result)?;
+        let written: AssetsWritten =
+            serde_json::from_value(result).map_err(|error| SourceError::Malformed {
+                message: format!(
+                    "the plugin's answer to {method} is not the shape it promises: {error}"
+                ),
+            })?;
+        self.keep_stored(record, &written.id, stored);
+        Ok(written)
+    }
+
     /// One call, with its result parsed into the shape the method promises.
     async fn ask<T: for<'de> Deserialize<'de>>(
         &self,
@@ -601,6 +649,24 @@ impl SubprocessSource {
                 "the plugin's answer to {method} is not the shape it promises: {error}"
             ),
         })
+    }
+}
+
+/// Take the `stored_content` member out of a content write's `result` (§4.9): a string, or
+/// absent or `null` when the plugin has nothing to say.
+fn stored_content(method: &str, result: &mut Value) -> Result<Option<String>, SourceError> {
+    let Some(members) = result.as_object_mut() else {
+        return Ok(None);
+    };
+    match members.remove("stored_content") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(content)) => Ok(Some(content)),
+        Some(other) => Err(SourceError::Malformed {
+            message: format!(
+                "the plugin's answer to {method} carries a stored_content that is not a \
+                 string: {other}"
+            ),
+        }),
     }
 }
 
@@ -802,6 +868,47 @@ impl TaskSource for SubprocessSource {
         self.writes
     }
 
+    /// The plugin's own answer, for one that declared `stored_forms`; the identity, unasked,
+    /// for one that did not (§3.16, §4.25).
+    async fn stored_form(&self, content: &str) -> Result<String, SourceError> {
+        if !self.stored_forms {
+            return Ok(content.to_owned());
+        }
+        let result: StoredFormResult = self
+            .ask(
+                "stored_form",
+                params(&StoredFormParams {
+                    content: content.to_owned(),
+                }),
+            )
+            .await?;
+        Ok(result.content)
+    }
+
+    /// On the terms of [`stored_form`](TaskSource::stored_form).
+    async fn stored_status(&self, kind: ItemKind, status: &Status) -> Result<Status, SourceError> {
+        if !self.stored_forms {
+            return Ok(status.clone());
+        }
+        let result: StoredStatusResult = self
+            .ask(
+                "stored_status",
+                params(&StoredStatusParams {
+                    kind,
+                    status: status.clone(),
+                }),
+            )
+            .await?;
+        Ok(result.status)
+    }
+
+    fn stored_content(&self, record: MetadataRecord, id: &NativeId) -> Option<String> {
+        self.stored
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&(record, id.clone()))
+    }
+
     async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
         self.writable_task(&write.item)?;
         let result: WriteResult = self
@@ -812,6 +919,7 @@ impl TaskSource for SubprocessSource {
                 }),
             )
             .await?;
+        self.keep_stored(MetadataRecord::Task, &result.id, result.stored_content);
         Ok(result.id)
     }
 
@@ -828,8 +936,9 @@ impl TaskSource for SubprocessSource {
         }
         self.stores_assets()?;
         self.writable_task(&write.item)?;
-        self.ask(
+        self.write_with_assets(
             "write_task",
+            MetadataRecord::Task,
             params(&TaskAssetWriteParams {
                 write: write.clone(),
                 assets: assets.clone(),
@@ -850,8 +959,9 @@ impl TaskSource for SubprocessSource {
             return Err(self.unrendered("a document create from a template"));
         }
         self.stores_assets()?;
-        self.ask(
+        self.write_with_assets(
             "write_document",
+            MetadataRecord::Document,
             params(&DocumentAssetWriteParams {
                 write: write.clone(),
                 assets: assets.clone(),
@@ -894,6 +1004,7 @@ impl TaskSource for SubprocessSource {
                 }),
             )
             .await?;
+        self.keep_stored(MetadataRecord::Project, &result.id, result.stored_content);
         Ok(result.id)
     }
 
@@ -1305,6 +1416,7 @@ impl TaskSource for SubprocessSource {
                 }),
             )
             .await?;
+        self.keep_stored(MetadataRecord::Document, &result.id, result.stored_content);
         Ok(result.id)
     }
 
