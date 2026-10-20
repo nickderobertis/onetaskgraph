@@ -1056,6 +1056,26 @@ impl TimelineEvent {
     }
 }
 
+/// Where a page of one issue's comments ended: after `offset` of them, the last being `last`,
+/// at `position - 1` of the board's comments.
+#[derive(Debug)]
+struct CommentResume {
+    issue: Value,
+    offset: usize,
+    position: usize,
+    last: Value,
+}
+
+/// How many comments `issue` held, counted when the board held `comments` of them all, the
+/// last being `last`.
+#[derive(Debug)]
+struct CommentCount {
+    issue: Value,
+    comments: usize,
+    last: Value,
+    count: usize,
+}
+
 /// The board this fixture keeps, and everything a request may change on it.
 // llmlint: ignore[code_lands_in_the_domain_that_owns_it] The shared e2e harness is where the agreed e2e layout puts every loopback server, so no suite copies one: the journey-matrix table in this file builds each of its rows through both hosted plugins' loopbacks, and the engine's own suite drives both, so neither can live in one plugin's suite. Editing it re-selects every suite, as editing any shared harness does.
 struct GitHubBoard {
@@ -1065,6 +1085,11 @@ struct GitHubBoard {
     /// Held here rather than per request because the server outlives one invocation of the
     /// binary, so a comment one command adds is what the next command lists, edits or removes.
     comments: Vec<Value>,
+    /// Where the last page of comments ended — see [`CommentResume`] — so the next page of the
+    /// same walk starts there rather than counting the issue's comments again from the first.
+    comment_resume: std::sync::Mutex<Option<CommentResume>>,
+    /// The last count [`Self::comment_count`] made.
+    comment_counted: std::sync::Mutex<Option<CommentCount>>,
     /// How many comment timestamps this board has handed out, which makes each one later than
     /// the last and gives every comment an id no other comment has had.
     comment_ticks: u64,
@@ -2152,6 +2177,18 @@ impl GitHubBoardFields {
         added["id"].as_str().expect("a comment id").to_owned()
     }
 
+    /// Add `count` comments to one issue inside one second, as [`Self::add_comment`] adds
+    /// each: more than this board's one-day clock could stamp a second apart.
+    pub fn add_comments(&self, issue: &str, count: usize) {
+        let mut board = self.board.lock().unwrap();
+        let held = board.held_second;
+        board.held_second = Some(held.unwrap_or(board.comment_ticks + 1));
+        for n in 0..count {
+            board.comment(issue, &format!("comment {n}"));
+        }
+        board.held_second = held;
+    }
+
     /// Replace one comment's body, as its author editing it on GitHub would.
     pub fn edit_comment(&self, comment: &str, body: &str) {
         let mut board = self.board.lock().unwrap();
@@ -2563,11 +2600,35 @@ impl GitHubBoard {
     }
 
     /// How many comments the issue `id` holds, as `comments { totalCount }` answers.
+    ///
+    /// Counted again only when the board's comments may have changed since the last count of
+    /// that issue: comments are only ever added at the end, under an id no comment has had, so
+    /// none was added or removed while their number and the last one's id stand.
     fn comment_count(&self, id: &Value) -> usize {
-        self.comments
+        let last = self
+            .comments
+            .last()
+            .map_or(Value::Null, |held| held["id"].clone());
+        let mut counted = self.comment_counted.lock().unwrap();
+        if let Some(held) = counted.as_ref()
+            && held.issue == *id
+            && held.comments == self.comments.len()
+            && held.last == last
+        {
+            return held.count;
+        }
+        let count = self
+            .comments
             .iter()
             .filter(|held| held["issue"] == *id)
-            .count()
+            .count();
+        *counted = Some(CommentCount {
+            issue: id.clone(),
+            comments: self.comments.len(),
+            last,
+            count,
+        });
+        count
     }
 
     /// Put a comment on `issue`, signed as [`GITHUB_COMMENTER`] — the account this board's
@@ -2582,6 +2643,12 @@ impl GitHubBoard {
     }
 
     /// One page of an issue's comments, oldest first, resumed from `after`.
+    ///
+    /// `after` counts the issue's comments already listed. The page starts where the page that
+    /// answered that cursor ended when nothing at or before its last comment has gone since —
+    /// comments are only ever added at the end — and otherwise counts them again from the first,
+    /// so either way the answer is the same: a walk of many pages costs each page its own length
+    /// rather than every comment the board holds.
     fn comment_connection(&self, id: &Value, after: &Value, first: &Value) -> Value {
         let offset = match after {
             Value::Null => 0,
@@ -2595,19 +2662,42 @@ impl GitHubBoard {
         )
         .expect("GraphQL first fits usize");
         assert!((1..=100).contains(&first), "comments first is out of range");
-        let on = self
+        let mut resume = self.comment_resume.lock().unwrap();
+        let start = resume
+            .as_ref()
+            .filter(|held| {
+                held.issue == *id
+                    && held.offset == offset
+                    && held.position > 0
+                    && self
+                        .comments
+                        .get(held.position - 1)
+                        .is_some_and(|last| last["id"] == held.last)
+            })
+            .map(|held| held.position);
+        let (from, skip) = start.map_or((0, offset), |position| (position, 0));
+        let mut remaining = self
             .comments
             .iter()
-            .filter(|held| held["issue"] == *id)
-            .collect::<Vec<_>>();
-        let end = (offset + first).min(on.len());
-        let nodes = on[offset.min(end)..end]
+            .enumerate()
+            .skip(from)
+            .filter(|(_, held)| held["issue"] == *id)
+            .skip(skip);
+        let page: Vec<(usize, &Value)> = remaining.by_ref().take(first).collect();
+        let more = remaining.next().is_some();
+        let end = offset + page.len();
+        *resume = page.last().map(|(position, last)| CommentResume {
+            issue: id.clone(),
+            offset: end,
+            position: position + 1,
+            last: last["id"].clone(),
+        });
+        let nodes = page
             .iter()
-            .copied()
-            .map(GitHubBoard::comment_node)
+            .map(|(_, held)| GitHubBoard::comment_node(held))
             .collect::<Vec<_>>();
-        json!({"nodes":nodes,"pageInfo":{"hasNextPage":end < on.len(),
-                                          "endCursor":(end > offset).then(|| end.to_string())}})
+        json!({"nodes":nodes,"pageInfo":{"hasNextPage":more,
+                                          "endCursor":(!page.is_empty()).then(|| end.to_string())}})
     }
 
     /// One node a detail read reaches: the issue as a node read answers it, with a page of
@@ -3262,6 +3352,8 @@ fn github_projects_board_at(
             .unwrap()
             .clone(),
         ),
+        comment_resume: std::sync::Mutex::new(None),
+        comment_counted: std::sync::Mutex::new(None),
         drift_after_priority_update: false,
         drops_priority_writes: false,
         priority_response: None,

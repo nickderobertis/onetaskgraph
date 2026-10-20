@@ -18,7 +18,7 @@ use super::plan_copy::{Plan, SMALL, counterparts, success};
 use onetaskgraph_e2e_support::{
     binary,
     clock::{SimulatedClock, Slept},
-    common::{Sandbox, stderr, stdout},
+    common::{Sandbox, assert_spawnable_on_windows, stderr, stdout},
     fixtures::{GitHubBoardFields, document, github_projects_with_items},
 };
 use serde_json::{Value, json};
@@ -29,6 +29,9 @@ use std::{
 
 const MINUTE: Duration = Duration::from_secs(60);
 const HOUR: Duration = Duration::from_secs(3_600);
+
+/// The comments the points journey lists: 2,000 of GitHub's largest pages and one more.
+const COMMENTS: usize = 2_000 * onetaskgraph_github_projects::MAX_PAGE_SIZE as usize + 1;
 
 /// The waits a window holds a request for, by the cause the pacer names each.
 const WINDOWS: [&str; 3] = [
@@ -90,17 +93,15 @@ impl Paced {
         let calls = self.board.calls().len();
         let slept = self.clock.slept().len();
         let lease = self.clock.lease(0);
-        let output = self
-            .sandbox
-            .subprocess(binary())
+        let mut command = self.sandbox.subprocess(binary());
+        command
             .args(arguments)
             .envs(self.clock.client_env(0))
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap()
-            .wait_with_output()
-            .unwrap();
+            .stderr(Stdio::piped());
+        // What used to fail Windows alone: the spawn is held to its bound on every platform.
+        assert_spawnable_on_windows(&command);
+        let output = command.spawn().unwrap().wait_with_output().unwrap();
         lease.wait_for_detach();
         drop(lease);
         (
@@ -287,15 +288,18 @@ fn filling_the_hours_creations_holds_the_next_until_the_first_has_left_the_hour(
 
 #[test]
 fn filling_the_minutes_points_with_queries_alone_holds_the_next_query() {
-    // A read of 48,024 tasks by id is 2,001 batched reads, a point each, sent back to back on a
-    // board answering at once: the 2,001st waits for the first to leave the minute.
+    // One task's comments listed past 2,000 of GitHub's largest pages are 2,001 page reads, a
+    // point each, sent back to back on a board answering at once: the 2,001st waits for the
+    // first to leave the minute. A short command line reaches all of them, so the spawn stays
+    // inside the length Windows allows a child's command line.
     let paced = Paced::new(0, json!({}));
     paced.board.hold_answers_for(Duration::ZERO);
-    let reads = onetaskgraph_github_projects::DETAIL_BATCH * 2_001;
-    let mut arguments: Vec<String> = vec!["task".into(), "show-many".into()];
-    arguments.extend((0..reads).map(|n| format!("board:ISSUE-QUERY-{n}")));
-    arguments.push("--json".into());
-    let (_, calls, slept) = paced.run(&arguments);
+    paced.github.add_comments("T-3", COMMENTS);
+    let arguments: Vec<String> = ["task", "comment", "list", "board:T-3", "--json"]
+        .map(String::from)
+        .to_vec();
+    let (output, calls, slept) = paced.run(&arguments);
+    success(&output);
     assert_eq!(calls.len(), 2_001);
     assert!(
         calls

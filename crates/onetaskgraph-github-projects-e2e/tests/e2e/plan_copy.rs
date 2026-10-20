@@ -16,7 +16,7 @@ use super::asset_board::{Board, Call, Kind, creations};
 use onetaskgraph_e2e_support::{
     binary,
     clock::SimulatedClock,
-    common::{Sandbox, stderr, stdout},
+    common::{Sandbox, assert_spawnable_on_windows, stderr, stdout},
     fixtures::{GitHubBoardFields, document, github_projects_with_items},
     images,
 };
@@ -339,16 +339,14 @@ impl Plan {
 
     /// One command through the binary, attached to the clock.
     pub fn run(&self, arguments: &[&str]) -> Output {
-        self.sandbox
-            .subprocess(binary())
+        let mut command = self.sandbox.subprocess(binary());
+        command
             .args(arguments)
             .envs(self.clock.client_env(0))
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap()
-            .wait_with_output()
-            .unwrap()
+            .stderr(Stdio::piped());
+        assert_spawnable_on_windows(&command);
+        command.spawn().unwrap().wait_with_output().unwrap()
     }
 
     /// One scenario as `just copy-plan` sends it — `project copy` then `document copy` — with
