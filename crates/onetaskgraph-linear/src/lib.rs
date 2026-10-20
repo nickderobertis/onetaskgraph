@@ -122,7 +122,10 @@
 //! of its own, and [`TaskSource::stored_content`] hands it to the
 //! engine, which compares it with what it sent byte for byte and refuses the item as
 //! `stored-content-diverged` where they differ. **A difference is a rule missing from this
-//! section, and the fix is to add it here and to [`stored_form`] together.**
+//! section, and the fix is to add it here and to [`stored_form`] together.** Both halves hold
+//! whichever way the store loads this source: served over the stdio plugin protocol, the rewrite
+//! crosses as `stored_form` and the stored content as a write result's `stored_content`
+//! (`docs/plugin-protocol.md` §3.16, §4.25).
 //!
 //! Every rule applies outside a fenced block — from a line of three or more backticks or tildes,
 //! indented at most three spaces, to the line closing it with at least as many of the same — and
@@ -3043,20 +3046,20 @@ impl TaskSource for LinearSource {
         WriteSupport::Supported
     }
     /// The rewrite the ruling on what Linear does to Markdown on write declares.
-    fn stored_form(&self, content: &str) -> String {
-        stored_form::stored_form(content)
+    async fn stored_form(&self, content: &str) -> Result<String, SourceError> {
+        Ok(stored_form::stored_form(content))
     }
     /// The name `status_mapping` gives the kind and the category, which is the whole of what a
     /// write sends; see the ruling on what a status is. A category it gives no name is left as
     /// it is, for the write to refuse.
-    fn stored_status(&self, kind: ItemKind, status: &Status) -> Status {
-        match self.statuses.name_for(status.category, kind) {
+    async fn stored_status(&self, kind: ItemKind, status: &Status) -> Result<Status, SourceError> {
+        Ok(match self.statuses.name_for(status.category, kind) {
             Ok(name) => Status {
                 category: status.category,
                 name: name.as_str().to_owned(),
             },
             Err(_) => status.clone(),
-        }
+        })
     }
     fn stored_content(&self, record: MetadataRecord, id: &NativeId) -> Option<String> {
         self.stored

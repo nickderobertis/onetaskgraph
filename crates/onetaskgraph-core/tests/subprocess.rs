@@ -16,10 +16,10 @@ use onetaskgraph_core::{
     MAX_LINE, RequestDeadline, SubprocessConfig, SubprocessSource, plugin_for, serve,
 };
 use onetaskgraph_plugin_api::{
-    Cursor, Direction, Document, DocumentQuery, ItemWrite, LabelFilter, Location, MetadataKey,
-    NativeId, PageRequest, Priority, ProjectFilter, ProjectQuery, SecretResolver, SourceError,
-    SourceName, Status, StatusCategory, Support, Task, TaskQuery, TaskRef, TaskSource,
-    WriteSupport,
+    Cursor, Direction, Document, DocumentQuery, ItemKind, ItemWrite, LabelFilter, Location,
+    MetadataKey, MetadataRecord, NativeId, PageRequest, Priority, ProjectFilter, ProjectQuery,
+    SecretResolver, SourceError, SourceName, Status, StatusCategory, Support, Task, TaskQuery,
+    TaskRef, TaskSource, WriteSupport,
 };
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -390,6 +390,116 @@ async fn a_plugin_that_says_nothing_about_writing_is_read_as_one_that_cannot() {
     ])
     .expect("the handshake succeeds");
     assert_eq!(silent.writes(), WriteSupport::Unsupported);
+}
+
+/// A handshake answer from a plugin that can be written through, with `stored_forms` as given.
+fn writable_handshake(stored_forms: bool) -> String {
+    let mut result = json!({"protocol_version":2,"kind":"rewriting","writes":"supported",
+        "capabilities":{
+            "projects":"native","orphan_tasks":"native","filter_by_label":"native",
+            "filter_by_status":"native","search_title":"native","search_content":"native",
+            "task_dependencies":"both-directions","project_dependencies":"both-directions",
+            "max_page_size":10}});
+    if stored_forms {
+        result["stored_forms"] = json!(true);
+    }
+    json!({"id":"0","result":result}).to_string()
+}
+
+/// A task to write, holding `content`.
+fn task_holding(content: &str) -> ItemWrite<Task> {
+    ItemWrite {
+        target: None,
+        item: serde_json::from_value(json!({
+            "id": "T-1", "title": "Rewritten", "content": content,
+            "status": {"category": "done", "name": "done"}, "labels": []
+        }))
+        .expect("a task"),
+        depends_on: Vec::new(),
+    }
+}
+
+#[tokio::test]
+async fn a_plugin_that_says_nothing_about_stored_forms_is_never_asked_and_its_answer_never_read() {
+    // §3.16: absent means the plugin stores what it is given. The peer answers the handshake and
+    // one write, and nothing else — so a `stored_form` or `stored_status` sent to it would find
+    // no answer and fail rather than read as the identity.
+    let silent = scripted(vec![
+        writable_handshake(false),
+        r#"{"id":"1","result":{"id":"I-1","stored_content":"* one"}}"#.to_owned(),
+    ])
+    .expect("the handshake succeeds");
+    assert_eq!(silent.stored_form("- one").await.unwrap(), "- one");
+    let status = Status {
+        category: StatusCategory::Done,
+        name: "done".to_owned(),
+    };
+    assert_eq!(
+        silent.stored_status(ItemKind::Task, &status).await.unwrap(),
+        status
+    );
+    let id = silent.write_task(&task_holding("- one")).await.unwrap();
+    assert_eq!(silent.stored_content(MetadataRecord::Task, &id), None);
+}
+
+#[tokio::test]
+async fn a_plugin_declaring_stored_forms_is_asked_and_what_its_write_says_it_stores_is_kept_once() {
+    let declaring = scripted(vec![
+        writable_handshake(true),
+        r#"{"id":"1","result":{"content":"* one"}}"#.to_owned(),
+        r#"{"id":"2","result":{"status":{"category":"done","name":"Shipped"}}}"#.to_owned(),
+        r#"{"id":"3","result":{"id":"I-1","stored_content":"* one"}}"#.to_owned(),
+        r#"{"id":"4","result":{"id":"I-2"}}"#.to_owned(),
+        r#"{"id":"5","result":{"id":"I-3","stored_content":7}}"#.to_owned(),
+    ])
+    .expect("the handshake succeeds");
+    assert_eq!(declaring.stored_form("- one").await.unwrap(), "* one");
+    let status = Status {
+        category: StatusCategory::Done,
+        name: "done".to_owned(),
+    };
+    assert_eq!(
+        declaring
+            .stored_status(ItemKind::Project, &status)
+            .await
+            .unwrap()
+            .name,
+        "Shipped"
+    );
+    let id = declaring.write_task(&task_holding("* one")).await.unwrap();
+    assert_eq!(
+        declaring
+            .stored_content(MetadataRecord::Task, &id)
+            .as_deref(),
+        Some("* one")
+    );
+    // Taken: a second ask answers nothing until the next write says something.
+    assert_eq!(declaring.stored_content(MetadataRecord::Task, &id), None);
+    let quiet = declaring.write_task(&task_holding("* two")).await.unwrap();
+    assert_eq!(declaring.stored_content(MetadataRecord::Task, &quiet), None);
+    let Err(SourceError::Malformed { message }) =
+        declaring.write_task(&task_holding("* three")).await
+    else {
+        panic!("a stored_content that is not a string is malformed");
+    };
+    assert!(message.contains("write_task"), "{message}");
+}
+
+#[test]
+fn the_reference_host_declares_stored_forms_and_answers_both_methods_as_its_plugin_does() {
+    let answers = served(&[
+        handshake(2, hosted_settings()),
+        json!({"id":"1","method":"stored_form","params":{"content":"- one"}}),
+        json!({"id":"2","method":"stored_status","params":{
+            "kind":"task","status":{"category":"done","name":"Finished"}}}),
+    ]);
+    assert_eq!(answers[0]["result"]["stored_forms"], json!(true));
+    // The in-memory plugin stores what it is given, so it declares the identity.
+    assert_eq!(answers[1]["result"], json!({"content": "- one"}));
+    assert_eq!(
+        answers[2]["result"],
+        json!({"status": {"category": "done", "name": "Finished"}})
+    );
 }
 
 #[tokio::test]

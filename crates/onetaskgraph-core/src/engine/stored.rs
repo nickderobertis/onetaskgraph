@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 
-use onetaskgraph_plugin_api::{MetadataRecord, NativeId};
+use onetaskgraph_plugin_api::{MetadataRecord, NativeId, SourceError};
 use serde_json::Value;
 
 use super::EngineError;
@@ -23,22 +23,28 @@ use crate::template::TemplateProvenance;
 /// carried as it was, never laundered.
 ///
 /// A destination declaring no rewrite leaves both exactly as they were.
-pub(super) fn apply(
+///
+/// # Errors
+///
+/// What `destination` answered when it could not say what it stores; both are then left as
+/// they were.
+pub(super) async fn apply(
     destination: &ResolvedSource,
     content: &mut Option<String>,
     metadata: &mut BTreeMap<String, Value>,
-) {
+) -> Result<(), SourceError> {
     let Some(read) = content.as_deref() else {
-        return;
+        return Ok(());
     };
-    let written = destination.source().stored_form(read);
+    let written = destination.source().stored_form(read).await?;
     if written == read {
-        return;
+        return Ok(());
     }
     if let Some(provenance) = restamped(metadata, read, &written) {
         metadata.insert(TemplateProvenance::KEY.to_owned(), provenance.to_value());
     }
     *content = Some(written);
+    Ok(())
 }
 
 /// Let go of what `destination` still holds from an earlier write of the `record` `id`, before
@@ -110,8 +116,8 @@ mod tests {
         fn capabilities(&self) -> Capabilities {
             self.inner.capabilities()
         }
-        fn stored_form(&self, content: &str) -> String {
-            content.to_uppercase()
+        async fn stored_form(&self, content: &str) -> Result<String, SourceError> {
+            Ok(content.to_uppercase())
         }
         fn stored_content(&self, _record: MetadataRecord, _id: &NativeId) -> Option<String> {
             self.stored.lock().expect("the answer").take()
@@ -179,12 +185,14 @@ mod tests {
         )])
     }
 
-    #[test]
-    fn a_vouched_rendering_is_rewritten_and_restamped_and_a_hand_edit_only_rewritten() {
+    #[tokio::test]
+    async fn a_vouched_rendering_is_rewritten_and_restamped_and_a_hand_edit_only_rewritten() {
         let destination = shouting(None);
         let mut content = Some("one\ntwo".to_owned());
         let mut metadata = provenance("one\ntwo");
-        apply(&destination, &mut content, &mut metadata);
+        apply(&destination, &mut content, &mut metadata)
+            .await
+            .expect("an in-process source answers");
         assert_eq!(content.as_deref(), Some("ONE\nTWO"));
         assert_eq!(
             metadata["onetaskgraph.template"]["body_digest"],
@@ -193,13 +201,17 @@ mod tests {
 
         let mut edited = Some("edited".to_owned());
         let mut vouching_for_another = provenance("rendered");
-        apply(&destination, &mut edited, &mut vouching_for_another);
+        apply(&destination, &mut edited, &mut vouching_for_another)
+            .await
+            .expect("an in-process source answers");
         assert_eq!(edited.as_deref(), Some("EDITED"));
         assert_eq!(vouching_for_another, provenance("rendered"));
 
         let mut nothing = None;
         let mut none = BTreeMap::new();
-        apply(&destination, &mut nothing, &mut none);
+        apply(&destination, &mut nothing, &mut none)
+            .await
+            .expect("an in-process source answers");
         assert_eq!((nothing, none), (None, BTreeMap::new()));
     }
 

@@ -608,7 +608,12 @@ impl Engine {
         } = request.body.parts(&request.metadata);
         // What the source will store, so the provenance a rendering records is of that.
         let mut content = Some(content);
-        stored::apply(source, &mut content, &mut metadata);
+        stored::apply(source, &mut content, &mut metadata)
+            .await
+            .map_err(|error| EngineError::SourceFailed {
+                name: source.name().to_string(),
+                error,
+            })?;
         let category = request.status.unwrap_or(StatusCategory::Todo);
         let id = NativeId::from(slug(&request.title, "task").as_str());
         let depends_on = request
@@ -803,7 +808,12 @@ impl Engine {
             answers,
         } = request.body.parts(&request.metadata);
         let mut content = Some(content);
-        stored::apply(source, &mut content, &mut metadata);
+        stored::apply(source, &mut content, &mut metadata)
+            .await
+            .map_err(|error| EngineError::SourceFailed {
+                name: source.name().to_string(),
+                error,
+            })?;
         let declared = request.classification.strictest(
             held.as_ref()
                 .map_or(Classification::Public, |held| held.classification),
@@ -974,7 +984,12 @@ impl Engine {
             }
         };
         metadata.extend(given);
-        stored::apply(source, &mut content, &mut metadata);
+        stored::apply(source, &mut content, &mut metadata)
+            .await
+            .map_err(|error| EngineError::SourceFailed {
+                name: source.name().to_string(),
+                error,
+            })?;
         let status = request.status.map_or(status, |category| Status {
             category,
             name: category_word(category),
@@ -1228,7 +1243,14 @@ impl Engine {
         let source = self.built(&id.source)?;
         // What the source will store, so a render it holds already reads as unchanged and the
         // digest recorded is of what a read hands back. A fresh rendering vouches for itself.
-        let body = source.source().stored_form(&rendered.body);
+        let body = source
+            .source()
+            .stored_form(&rendered.body)
+            .await
+            .map_err(|error| EngineError::SourceFailed {
+                name: source.name().to_string(),
+                error,
+            })?;
         if body != rendered.body {
             provenance.body_digest = Sha256Digest::of(body.as_bytes());
             rendered.body = body;

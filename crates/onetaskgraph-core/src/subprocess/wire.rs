@@ -16,10 +16,10 @@ use std::path::Path;
 
 use onetaskgraph_plugin_api::{
     AssetWrite, Capabilities, Comment, CommentBody, CommentCopy, Direction, Document,
-    DocumentQuery, IssueHolding, IssueRef, ItemWrite, MetadataKey, Metering, NativeId, NewComment,
-    Page, PageRequest, Priority, Project, ProjectQuery, SourceError, Status, StatusCategory,
-    StatusContradiction, Task, TaskDetailRead, TaskQuery, TaskRef, TaskUpdate, TaskUpdateOutcome,
-    WriteSupport,
+    DocumentQuery, IssueHolding, IssueRef, ItemKind, ItemWrite, MetadataKey, Metering, NativeId,
+    NewComment, Page, PageRequest, Priority, Project, ProjectQuery, SourceError, Status,
+    StatusCategory, StatusContradiction, Task, TaskDetailRead, TaskQuery, TaskRef, TaskUpdate,
+    TaskUpdateOutcome, WriteSupport,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -355,6 +355,14 @@ pub(crate) struct InitializeResult {
     /// contract's default refuses it with. Omitted when `false`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) project_status: bool,
+    /// Whether this plugin answers `stored_form` and `stored_status`, and says in each content
+    /// write's result what its backend stores (§3.16).
+    ///
+    /// Optional, and absent means it does not: such a plugin is never sent either method, the
+    /// engine writes the content and the status it was given, and it compares nothing after
+    /// the write. Omitted when `false`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) stored_forms: bool,
 }
 
 /// The `metering` result (§4.14).
@@ -948,6 +956,40 @@ fn caller_or_copies<'de, D: serde::Deserializer<'de>>(
 pub(crate) struct WriteResult {
     /// The destination's own id for the item that was written.
     pub(crate) id: NativeId,
+    /// The content the write's own answer says the backend stores (§4.9), from a plugin that
+    /// declared `stored_forms`. Omitted when the plugin has nothing to say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) stored_content: Option<String>,
+}
+
+/// The `params` of `stored_form` (§4.25): the content a write would send.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct StoredFormParams {
+    /// The content, as the engine would send it.
+    pub(crate) content: String,
+}
+
+/// The result of `stored_form` (§4.25): the content the backend would store.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct StoredFormResult {
+    /// The content, as the backend would store it.
+    pub(crate) content: String,
+}
+
+/// The `params` of `stored_status` (§4.25): the status an item of one kind would be written at.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct StoredStatusParams {
+    /// Whether the item written is a task or a project.
+    pub(crate) kind: ItemKind,
+    /// The status it would be written at.
+    pub(crate) status: Status,
+}
+
+/// The result of `stored_status` (§4.25): the status the backend would hold.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct StoredStatusResult {
+    /// The status, as the backend would hold it.
+    pub(crate) status: Status,
 }
 
 #[cfg(test)]

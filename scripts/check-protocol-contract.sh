@@ -157,17 +157,9 @@ NOT_METHODS = {
         "not carried: the paragraph after §4's method table says a source over this protocol "
         "answers `unknown`, which is never private"
     ),
-    "stored_form": (
-        "not carried: the paragraph after §4's method table says a source over this protocol "
-        "declares the identity"
-    ),
-    "stored_status": (
-        "not carried: the paragraph after §4's method table says a source over this protocol "
-        "declares the identity"
-    ),
     "stored_content": (
-        "not carried: the paragraph after §4's method table says a source over this protocol "
-        "answers no stored content"
+        "not a message: the paragraph after §4's method table says it crosses as the "
+        "`stored_content` member of a content write's result, which §4.9 specifies"
     ),
     "version_coverage": CACHE_ONLY_REASON,
     "project_version_coverage": CACHE_ONLY_REASON,
@@ -242,6 +234,8 @@ METHOD_SECTIONS = {
     "end_command": "### 4.22 `end_command`",
     "status_contradictions": "### 4.23 `status_contradictions`",
     "issue_holdings": "### 4.24 `issue_holdings`",
+    "stored_form": "### 4.25 `stored_form` and `stored_status`",
+    "stored_status": "### 4.25 `stored_form` and `stored_status`",
 }
 
 ENUM_SECTIONS = {

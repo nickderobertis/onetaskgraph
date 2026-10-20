@@ -106,6 +106,15 @@ impl Plan {
     /// [`Plan::new`], with the Linear source's local cache on when `cache` says so — the store
     /// then reaches the plugin through the cache that stands in front of it.
     fn caching(cache: bool) -> Self {
+        Self::configured(if cache {
+            Hosting::Cached
+        } else {
+            Hosting::InProcess
+        })
+    }
+
+    /// [`Plan::new`], with the Linear source reached as `hosting` says.
+    fn configured(hosting: Hosting) -> Self {
         let sandbox = Sandbox::new();
         let held = json!({
             "tasks": [], "documents": [], "labels": [],
@@ -124,10 +133,25 @@ impl Plan {
                 std::fs::create_dir_all(root.join(kind)).expect("a folder");
             }
         }
-        let mut linear = json!({"plugin": "linear", "config": config});
-        if cache {
-            linear["cache"] = json!({"enabled": true, "dir": sandbox.subdirectory("cache")});
-        }
+        let linear = match hosting {
+            Hosting::InProcess => json!({"plugin": "linear", "config": config}),
+            Hosting::Cached => json!({
+                "plugin": "linear",
+                "config": config,
+                "cache": {"enabled": true, "dir": sandbox.subdirectory("cache")},
+            }),
+            // The Linear plugin of this build served by the binary's own stdio host, so every
+            // request the store makes of it crosses the plugin protocol over a real pipe.
+            Hosting::Stdio => json!({
+                "plugin": "subprocess",
+                "config": {
+                    "command": onetaskgraph_e2e_support::binary(),
+                    "args": ["plugin-serve", "linear"],
+                    "secrets": ["LINEAR_API_KEY"],
+                    "settings": config,
+                },
+            }),
+        };
         sandbox.project_document(&document(&json!({
             "linear": linear,
             "plan": {"plugin": "local-md", "config": {"root": plan}},
@@ -263,6 +287,18 @@ impl Plan {
             project_served.len() + document_served.len(),
         )
     }
+}
+
+/// How the store reaches the Linear plugin.
+#[derive(Debug, Clone, Copy)]
+enum Hosting {
+    /// Built in process, as `plugin: linear` configures it.
+    InProcess,
+    /// Built in process behind the source's local cache.
+    Cached,
+    /// Spawned and spoken to over the stdio plugin protocol, as `plugin: subprocess` running
+    /// `onetaskgraph plugin-serve linear` configures it.
+    Stdio,
 }
 
 /// The outcome a copy report gave the item copied from `source`.
@@ -464,15 +500,15 @@ fn a_re_rendered_plan_updates_each_linear_item_to_a_digest_its_content_reads_as(
 
 #[test]
 fn a_rewrite_the_ruling_does_not_declare_is_refused_as_stored_content_diverged() {
-    for cache in [false, true] {
-        refused_as_diverged(cache);
+    for hosting in [Hosting::InProcess, Hosting::Cached] {
+        refused_as_diverged(hosting);
     }
 }
 
 /// [`a_rewrite_the_ruling_does_not_declare_is_refused_as_stored_content_diverged`], with the
-/// Linear source's cache on or off.
-fn refused_as_diverged(cache: bool) {
-    let plan = Plan::caching(cache);
+/// Linear source reached as `hosting` says.
+fn refused_as_diverged(hosting: Hosting) {
+    let plan = Plan::configured(hosting);
     let (task, design) = plan.rendered_plan();
     plan.workspace
         .rewrite_markdown_on_write(LinearMarkdown::Undeclared);
@@ -514,9 +550,57 @@ fn refused_as_diverged(cache: bool) {
         let copied = plan.show(kind_of(source), source);
         assert!(
             copied["metadata"]["onetaskgraph.copies"]["linear"].is_null(),
-            "cache {cache}: {copied}"
+            "{hosting:?}: {copied}"
         );
     }
+}
+
+/// The Linear plugin served over the stdio plugin protocol declares its rewrite, and says what
+/// Linear stored, across the pipe: a copied plan reads back as the digest it records, a repeat
+/// copy of it writes nothing, and a rewrite the ruling does not declare is refused as it is in
+/// process.
+#[test]
+fn over_the_stdio_protocol_linear_stores_what_the_copy_records_and_refuses_what_it_cannot_explain()
+{
+    let plan = Plan::configured(Hosting::Stdio);
+    let (task, design) = plan.rendered_plan();
+    let (items, errors, _) = plan.copy_plan(&design, 0);
+    assert!(errors.is_empty(), "{errors}");
+    for source in ["plan:goal", task.as_str(), design.as_str()] {
+        let landed = outcome(&items, source);
+        assert_eq!(landed["action"], "created", "{landed}");
+        let destination = landed["destination"].as_str().expect("an id");
+        verifiable(&plan.show(kind_of(source), destination), destination);
+    }
+
+    let (project, _, project_served) =
+        plan.copy(&["project", "copy", "plan:goal", "--to", "linear"], 0);
+    let (document, _, document_served) =
+        plan.copy(&["document", "copy", &design, "--to", "linear"], 0);
+    let updates: Vec<String> = mutations(&project_served)
+        .into_iter()
+        .chain(mutations(&document_served))
+        .filter(|root| {
+            matches!(
+                root.as_str(),
+                "issueUpdate" | "projectUpdate" | "documentUpdate"
+            )
+        })
+        .collect();
+    assert!(
+        updates.is_empty(),
+        "an unchanged plan writes nothing over the pipe: {updates:?}"
+    );
+    for item in project["items"]
+        .as_array()
+        .into_iter()
+        .chain(document["items"].as_array())
+        .flatten()
+    {
+        assert_eq!(item["action"], "unchanged", "{item}");
+    }
+
+    refused_as_diverged(Hosting::Stdio);
 }
 
 #[test]

@@ -398,8 +398,16 @@ pub trait TaskSource: Send + Sync {
     /// started from, is the digest of what a later read reports. A backend owes that applying
     /// it to its own output changes nothing more. Defaulted to the identity: a backend that
     /// stores what it is given declares nothing.
-    fn stored_form(&self, content: &str) -> String {
-        content.to_owned()
+    ///
+    /// Asynchronous and fallible because a source hosted over the stdio plugin protocol asks
+    /// the plugin that declares it; an in-process source answers at once and never fails.
+    ///
+    /// # Errors
+    ///
+    /// A [`SourceError`] when the source could not say what its backend stores — never the
+    /// identity in its place, which would record a digest of content the backend does not keep.
+    async fn stored_form(&self, content: &str) -> Result<String, SourceError> {
+        Ok(content.to_owned())
     }
 
     /// The status this source's backend holds once an item of `kind` is written at `status`:
@@ -410,9 +418,13 @@ pub trait TaskSource: Send + Sync {
     /// [`stored_form`](Self::stored_form), so an item whose category it already holds reads as
     /// unchanged rather than as differing by a name no write could change. Defaulted to
     /// `status` as given: a backend that keeps the name it is written declares nothing.
-    fn stored_status(&self, kind: ItemKind, status: &Status) -> Status {
+    ///
+    /// # Errors
+    ///
+    /// A [`SourceError`] on the terms of [`stored_form`](Self::stored_form).
+    async fn stored_status(&self, kind: ItemKind, status: &Status) -> Result<Status, SourceError> {
         let _ = kind;
-        status.clone()
+        Ok(status.clone())
     }
 
     /// The content the backend answered it now holds for the `record` `id`, as the response

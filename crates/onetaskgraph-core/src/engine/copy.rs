@@ -2486,7 +2486,7 @@ impl Engine {
         }
         let home_source = project.to.clone();
         let mut project = project;
-        self.store_forms(std::slice::from_mut(&mut project))?;
+        self.store_forms(std::slice::from_mut(&mut project)).await?;
         let unchanged = match &project.target {
             Target::Update { id: target, .. } => {
                 let settled = self.shown_edges(
@@ -3183,25 +3183,31 @@ impl Engine {
     /// Make each planned item's content and status what its destination will store — see
     /// [`stored::apply`] and `TaskSource::stored_status` — so it is compared and written in
     /// that form.
-    fn store_forms(&self, planned: &mut [Planned]) -> Result<(), EngineError> {
+    async fn store_forms(&self, planned: &mut [Planned]) -> Result<(), EngineError> {
         for item in planned {
             let destination = self.writable(&item.to)?;
             let (content, metadata) = match &mut item.item {
                 Item::Task(task) => {
                     task.status = destination
                         .source()
-                        .stored_status(ItemKind::Task, &task.status);
+                        .stored_status(ItemKind::Task, &task.status)
+                        .await
+                        .map_err(|error| refused(destination, error))?;
                     (&mut task.content, &mut task.metadata)
                 }
                 Item::Project(project) => {
                     project.status = destination
                         .source()
-                        .stored_status(ItemKind::Project, &project.status);
+                        .stored_status(ItemKind::Project, &project.status)
+                        .await
+                        .map_err(|error| refused(destination, error))?;
                     (&mut project.content, &mut project.metadata)
                 }
                 Item::Document(document) => (&mut document.content, &mut document.metadata),
             };
-            stored::apply(destination, content, metadata);
+            stored::apply(destination, content, metadata)
+                .await
+                .map_err(|error| refused(destination, error))?;
         }
         Ok(())
     }
@@ -3236,7 +3242,7 @@ impl Engine {
         // Once a document's references point where they land, and before anything is compared
         // with the destination or written to it: every content is what its destination will
         // store, so an unchanged item reads as unchanged and what is sent is what is kept.
-        self.store_forms(&mut planned)?;
+        self.store_forms(&mut planned).await?;
         // A task copy carries every task past one its destination cannot represent: each is
         // asked about before anything is written, and one refused is left out — reported
         // `failed` with the destination's own reason — and read by every other task as an item

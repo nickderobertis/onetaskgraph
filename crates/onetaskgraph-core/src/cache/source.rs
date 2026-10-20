@@ -1168,12 +1168,12 @@ impl TaskSource for CachedSource {
         self.inner.writes()
     }
 
-    fn stored_form(&self, content: &str) -> String {
-        self.inner.stored_form(content)
+    async fn stored_form(&self, content: &str) -> Result<String, SourceError> {
+        self.inner.stored_form(content).await
     }
 
-    fn stored_status(&self, kind: ItemKind, status: &Status) -> Status {
-        self.inner.stored_status(kind, status)
+    async fn stored_status(&self, kind: ItemKind, status: &Status) -> Result<Status, SourceError> {
+        self.inner.stored_status(kind, status).await
     }
 
     fn stored_content(&self, record: MetadataRecord, id: &NativeId) -> Option<String> {
