@@ -138,7 +138,8 @@
 //! | Rule | Written | Stored |
 //! | --- | --- | --- |
 //! | A line opening `- `, indented or not, is a `* ` bullet | ``- one\n  - two`` | ``* one\n  * two`` |
-//! | A table's delimiter row is one `--` a cell, its alignment colons kept, one space beside every pipe | ``\| --- \|:---:\|`` | ``\| -- \| :--: \|`` |
+//! | A line after a list item that opens no block of its own — no bullet, fence, lone image, heading, quotation, HTML block or `1. ` item — runs on from the item, indented under its text, and is prose rather than a table | ``- bullet\n\| a \| b \|\n\| --- \| --- \|`` | ``* bullet\n  \| a \| b \|\n  \| --- \| --- \|`` |
+//! | A table's delimiter row outside a list item is one `--` a cell, its alignment colons kept, one space beside every pipe | ``\| --- \|:---:\|`` | ``\| -- \| :--: \|`` |
 //! | A URL opening `http://` or `https://` is linked to itself, trailing punctuation outside the link | ``see https://example.com/a.`` | ``see [https://example.com/a](<https://example.com/a>).`` |
 //! | A domain-like token under one of [`stored_form::AUTOLINKED_TOP_LEVEL_DOMAINS`], not following a letter, a digit or one of `@ / . - _ : \ # = + %`, is linked to `http://` and itself | ``example.com and "caller.live"`` | ``[example.com](<http://example.com>) and "[caller.live](<http://caller.live>)"`` |
 //! | A `[` that opens no link, and every `]`, are escaped | ``[x] done`` | ``\[x\] done`` |
@@ -147,8 +148,23 @@
 //! | The backslash of `\"` is dropped | ``say \"hi\"`` | ``say "hi"`` |
 //! | A backslash before a letter is doubled | ``a \d b`` | ``a \\d b`` |
 //! | A line opening `-->` is escaped | ``-->`` | ``\-->`` |
-//! | A fenced block is kept byte for byte | `` ```\n- [x] _y_ example.com ~\n```\n- z `` | `` ```\n- [x] _y_ example.com ~\n```\n* z `` |
+//! | A fenced block is kept byte for byte, and set apart by a blank line from the line before it and the line after it | `` see\n```\n- [x] _y_ example.com ~\n```\n- z `` | `` see\n\n```\n- [x] _y_ example.com ~\n```\n\n* z `` |
+//! | An image alone on a line is a block of its own, set apart by a blank line from the lines beside it | ``![a](https://uploads.linear.app/a)\n![b](https://uploads.linear.app/b)`` | ``![a](https://uploads.linear.app/a)\n\n![b](https://uploads.linear.app/b)`` |
 //! | An inline code span is kept byte for byte | ``a `- [x] _y_ example.com ~` b`` | ``a `- [x] _y_ example.com ~` b`` |
+//!
+//! The three block rules — a list item's lines running on under it, a fence set apart, a lone
+//! image set apart — are what real Linear did in CI run 39361674659, and Linear's own answer is
+//! their evidence. The live probe below came back with every line after `* bullet` indented two
+//! spaces under it (so its `| --- |` row was never a table's, and was kept), and with a blank line
+//! before its fence and another after it. The asset journey wrote two images on adjacent lines,
+//! `![alt 0](…)` then `![alt 1](…)`, and Linear's answer kept the first and held an empty line
+//! second. That is declared as the blank line setting the second image apart, the reading the
+//! fence's blank lines in the same run make of a block Linear holds on its own; an answer that
+//! left the second image out and kept a trailing line break would read the same at that line, so
+//! the asset journey is what settles it, and its refusal now tells a line the answer does not
+//! have from an empty one, naming whichever it sees. The escapes, the
+//! angle-bracketed link targets, the autolinked domains and `*y*` came back in that run exactly
+//! as the rows above declare them.
 //!
 //! Each example is the rule's input and the stored form it produces, and
 //! `every_example_the_ruling_states_is_what_the_rewrite_stores` reads this table and fails when
@@ -157,7 +173,9 @@
 //! against Linear itself is `drive_follow_ups` in `tests/live.rs`, a leg of
 //! `real_linear_applies_every_declared_capability_and_leaves_no_residue`, which writes a probe
 //! holding one instance of each rule to an issue's description and a document's content and
-//! asserts its stored form exactly. Text none of these rules names — `**bold**`, `1. one`,
+//! asserts its stored form exactly — every rule but the lone image, whose comparison against
+//! Linear is `live_disposable_issue_and_document_assets_copy_and_recopy` in the
+//! `onetaskgraph-linear-e2e` suite, because only an upload gives it a target Linear keeps. Text none of these rules names — `**bold**`, `1. one`,
 //! `snake_case`, `README.md`, `caller.key` — comes back as written.
 //!
 //! ## Ruling: a Linear document carries no label, and that is Linear's

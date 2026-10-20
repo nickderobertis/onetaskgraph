@@ -3,7 +3,8 @@
 //! The loopback Linear is made to store every long form it is written as the Linear plugin's
 //! ruling on what Linear does to Markdown on write declares — `- ` bullets come back `* `, a
 //! delimiter row `| -- |`, a domain-like token linked, brackets and tildes escaped, `_y_` as
-//! `*y*` — so a store recording the digest of what it *sent* would record one no read matches.
+//! `*y*`, a list item's next lines run on under it, a fence and a lone image set apart by blank
+//! lines — so a store recording the digest of what it *sent* would record one no read matches.
 //! Every journey reads the item back through the binary and hashes its content here, never
 //! taking a digest from the engine that wrote it, and reads the workspace's request log for what
 //! was sent. A second mode adds one rewrite the ruling does not declare, which the store refuses
@@ -387,6 +388,78 @@ fn a_copied_plan_reads_back_from_linear_as_the_digest_its_provenance_records() {
             verifiable(&plan.show(kind_of(source), destination), destination);
         }
     }
+}
+
+/// The Markdown the Linear plugin's live probe sent real Linear in CI run 39361674659, and two
+/// images on adjacent lines as the asset journey of that run wrote them.
+const OBSERVED_SENT: &str = "- bullet\n| a | b |\n| --- | --- |\nsee https://example.com/a.\n\
+example.com and \"caller.live\"\n[x] done ~5 _y_\nsay \\\"hi\\\" a \\d b\n-->\n```\n\
+- [x] _y_ example.com ~\n```\nkept `- [x] _y_ example.com ~` span\n\n\
+![alt 0](https://uploads.linear.app/a)\n![alt 1](https://uploads.linear.app/b)\n";
+
+/// What real Linear stored of [`OBSERVED_SENT`] in that run, quoted from its log: every line
+/// after the bullet run on under it, a blank line either side of the fence — and of the second
+/// image, the empty line the asset journey's refusal quoted at line 2.
+const OBSERVED_STORED: &str = concat!(
+    "* bullet\n  | a | b |\n  | --- | --- |\n",
+    "  see [https://example.com/a](<https://example.com/a>).\n",
+    "  [example.com](<http://example.com>) and \"[caller.live](<http://caller.live>)\"\n",
+    "  \\[x\\] done \\~5 *y*\n  say \"hi\" a \\\\d b\n  \\-->\n\n```\n- [x] _y_ example.com ~\n```\n\n",
+    "kept `- [x] _y_ example.com ~` span\n\n",
+    "![alt 0](https://uploads.linear.app/a)\n\n![alt 1](https://uploads.linear.app/b)\n",
+);
+
+#[test]
+fn a_rendering_holding_what_real_linear_rewrote_is_copied_as_linear_stores_it() {
+    let plan = Plan::new();
+    plan.rendered_plan();
+    let inputs = plan.sandbox.subdirectory("observed");
+    let source = format!(
+        "---\nonetaskgraph_template: 1\nvariables:\n  goal:\n    description: What it is for\n\
+         ---\nGoal: {{{{ goal }}}}\n\n{OBSERVED_SENT}"
+    );
+    let path = inputs.join("observed.json");
+    std::fs::write(
+        &path,
+        json!({
+            "reference": "host:observed",
+            "entry": "entry.md",
+            "templates": [{"name": "entry.md", "source": source}],
+        })
+        .to_string(),
+    )
+    .expect("a loader document");
+    let task = plan.printed(&[
+        "task",
+        "create",
+        "plan",
+        "--project",
+        "goal",
+        "--title",
+        "Observed",
+        "--template-loader",
+        &path.display().to_string(),
+        "--var",
+        "goal=Hold what Linear did",
+        "--no-interactive",
+    ]);
+    let (report, errors, _) = plan.copy(&["task", "copy", &task, "--to", "linear"], 0);
+    assert!(errors.is_empty(), "{errors}");
+    let items = report["items"].as_array().expect("items");
+    let landed = outcome(items, &task);
+    assert_eq!(landed["action"], "created", "{landed}");
+    let item = plan.show("task", landed["destination"].as_str().expect("an id"));
+    let content = item["content"].as_str().expect("content");
+    assert_eq!(
+        content,
+        format!("Goal: Hold what Linear did\n\n{OBSERVED_STORED}"),
+        "the copy sends, and the loopback stores, exactly what real Linear stored"
+    );
+    assert_eq!(
+        item["metadata"]["onetaskgraph.template"]["body_digest"],
+        sha256(content),
+        "{item}"
+    );
 }
 
 #[test]

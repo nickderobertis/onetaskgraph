@@ -25,6 +25,12 @@ pub const AUTOLINKED_TOP_LEVEL_DOMAINS: &[&str] = &[
 pub fn stored_form(content: &str) -> String {
     let mut stored = String::with_capacity(content.len());
     let mut fence: Option<(char, usize)> = None;
+    // The column a list item's text starts at, while the lines that follow continue it.
+    let mut item: Option<usize> = None;
+    // Whether the line before closed a fence or held an image alone, which the next line that
+    // is not blank is set apart from by a blank line.
+    let mut apart = false;
+    let mut after_blank = true;
     for line in content.split_inclusive('\n') {
         let body = line.trim_end_matches(['\n', '\r']);
         let end = &line[body.len()..];
@@ -33,29 +39,56 @@ pub fn stored_form(content: &str) -> String {
                 closing == mark && run >= length && rest.trim().is_empty()
             }) {
                 fence = None;
+                apart = true;
             }
             stored.push_str(line);
+            after_blank = false;
             continue;
         }
-        if let Some((mark, run, _)) = fence_mark(body) {
-            fence = Some((mark, run));
+        if body.trim().is_empty() {
             stored.push_str(line);
+            (item, apart, after_blank) = (None, false, true);
             continue;
         }
-        if let Some(row) = delimiter_row(body) {
-            stored.push_str(&row);
-            stored.push_str(end);
+        let opens = fence_mark(body);
+        let image = lone_image(body);
+        if !after_blank && (apart || opens.is_some() || image) {
+            stored.push('\n');
+        }
+        (apart, after_blank) = (image, false);
+        if let Some((mark, run, _)) = opens {
+            fence = Some((mark, run));
+            item = None;
+            stored.push_str(line);
             continue;
         }
         let indent = &body[..body.len() - body.trim_start_matches([' ', '\t']).len()];
         let rest = &body[indent.len()..];
-        stored.push_str(indent);
-        let rest = match rest.strip_prefix("- ") {
-            Some(item) => {
+        let bullet = rest.strip_prefix("- ").or_else(|| rest.strip_prefix("* "));
+        let continued = item.filter(|_| bullet.is_none() && !image && !opens_block(rest));
+        if let Some(width) = continued {
+            stored.push_str(indent);
+            stored.push_str(&" ".repeat(width.saturating_sub(indent.len())));
+        } else if let Some(row) = delimiter_row(body).filter(|_| !image) {
+            item = None;
+            stored.push_str(&row);
+            stored.push_str(end);
+            continue;
+        } else {
+            stored.push_str(indent);
+        }
+        let rest = match bullet {
+            Some(text) => {
                 stored.push_str("* ");
-                item
+                item = Some(indent.len() + 2);
+                text
             }
-            None => rest,
+            None => {
+                if continued.is_none() {
+                    item = None;
+                }
+                rest
+            }
         };
         if rest.starts_with("-->") {
             stored.push('\\');
@@ -64,6 +97,23 @@ pub fn stored_form(content: &str) -> String {
         stored.push_str(end);
     }
     stored
+}
+
+/// Whether `line`, its indentation taken off, holds one image and nothing else:
+/// `![alt](target)`.
+fn lone_image(line: &str) -> bool {
+    let text = line.trim();
+    text.starts_with("![") && link_end(text, 1) == Some(text.len())
+}
+
+/// Whether `text`, a line with its indentation taken off, opens a block of its own that a list
+/// item's text does not run on into — a heading, a quotation, an HTML block or an ordered list's
+/// first item — so it is left where it is rather than indented under the item.
+fn opens_block(text: &str) -> bool {
+    text.starts_with(['#', '>', '<'])
+        || text.starts_with("+ ")
+        || text.starts_with("1. ")
+        || text.starts_with("1) ")
 }
 
 /// The fence a line opens or closes with — its character, how many of it, and what follows —
@@ -369,7 +419,7 @@ mod tests {
         let span = "`- [x] _y_ example.com ~`";
         assert_eq!(stored_form(span), span);
         let tilde = "~~~ text\n- kept\n~~~\n- moved";
-        assert_eq!(stored_form(tilde), "~~~ text\n- kept\n~~~\n* moved");
+        assert_eq!(stored_form(tilde), "~~~ text\n- kept\n~~~\n\n* moved");
     }
 
     #[test]

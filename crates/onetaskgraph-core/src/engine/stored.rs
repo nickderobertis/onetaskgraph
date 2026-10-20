@@ -77,8 +77,8 @@ pub(super) fn diverged(
             return Some(EngineError::StoredContentDiverged {
                 item: GlobalId::new(destination.name().clone(), id.clone()),
                 line,
-                sent: sent_line.unwrap_or_default().to_owned(),
-                stored: stored_line.unwrap_or_default().to_owned(),
+                sent: sent_line.map(str::to_owned),
+                stored: stored_line.map(str::to_owned),
             });
         }
     }
@@ -244,7 +244,7 @@ mod tests {
             panic!("a difference is refused");
         };
         assert_eq!((item.to_string(), line), ("loud:T-1".to_owned(), 3));
-        assert_eq!((sent.as_str(), stored.as_str()), ("C", "c"));
+        assert_eq!((sent.as_deref(), stored.as_deref()), (Some("C"), Some("c")));
         // A stored content that runs on past the one sent names the line it alone holds.
         let Some(EngineError::StoredContentDiverged {
             line, sent, stored, ..
@@ -257,7 +257,18 @@ mod tests {
         else {
             panic!("a difference is refused");
         };
-        assert_eq!((line, sent.as_str(), stored.as_str()), (2, "", "more"));
+        assert_eq!(
+            (line, sent.as_deref(), stored.as_deref()),
+            (2, None, Some("more"))
+        );
+        // A line one side does not have is told apart from an empty one.
+        let shown = diverged(&shouting(Some("A\n")), MetadataRecord::Task, &id, Some("A"))
+            .expect("a difference is refused")
+            .to_string();
+        assert!(
+            shown.contains("sent:   no line 2: the content ends at line 1\nstored: \"\"\n"),
+            "{shown}"
+        );
         // What an earlier write left is let go of before the one compared.
         let earlier = shouting(Some("stale"));
         forget(&earlier, MetadataRecord::Task, &id);

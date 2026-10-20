@@ -893,14 +893,19 @@ const PROBE: &str = "P.\n\n<!-- probe {\"site\":\"example.com\",\"list\":[1]} --
 const PROBE_STORED: &str = "P.\n\n<!-- probe {\"site\":\"[example.com](<http://example.com>)\",\"list\":\\[1\\]} -->\n\n<!-- probe\n{\"k\":\"v\"}\n\\-->\n\n<!-- probe `{\"site\":\"example.com\",\"list\":[1]}` -->";
 
 /// One instance of each rule the plugin's ruling on what Linear does to Markdown on write
-/// declares: a bullet, a table's delimiter row, a URL, two domain-like tokens, brackets, a tilde,
-/// an underscore emphasis, an escaped quote, a backslash before a letter, a line opening `-->`,
-/// and the same text inside a fenced block and an inline code span, where it is kept.
-const MARKDOWN_PROBE: &str = "- bullet\n| a | b |\n| --- | --- |\nsee https://example.com/a.\nexample.com and \"caller.live\"\n[x] done ~5 _y_\nsay \\\"hi\\\" a \\d b\n-->\n```\n- [x] _y_ example.com ~\n```\nkept `- [x] _y_ example.com ~` span";
+/// declares but the lone image, which `linear_assets`' live journey writes with real uploads: a
+/// bullet the next lines run on from, a URL, two domain-like tokens, brackets, a tilde, an
+/// underscore emphasis, an escaped quote, a backslash before a letter, a line opening `-->`, a
+/// fenced block and a line after it, each set apart, the same text inside the fence and an
+/// inline code span, where it is kept, and last a table, whose delimiter row is one only outside
+/// a list item.
+const MARKDOWN_PROBE: &str = "- bullet\n| a | b |\n| --- | --- |\nsee https://example.com/a.\nexample.com and \"caller.live\"\n[x] done ~5 _y_\nsay \\\"hi\\\" a \\d b\n-->\n```\n- [x] _y_ example.com ~\n```\nkept `- [x] _y_ example.com ~` span\n\n| a | b |\n| --- | --- |";
 
 /// What that ruling declares Linear stores [`MARKDOWN_PROBE`] as — the plugin's `stored_form`
 /// of it, which its unit tests hold to this — and what the live leg asserts Linear hands back.
-const MARKDOWN_PROBE_STORED: &str = "* bullet\n| a | b |\n| -- | -- |\nsee [https://example.com/a](<https://example.com/a>).\n[example.com](<http://example.com>) and \"[caller.live](<http://caller.live>)\"\n\\[x\\] done \\~5 *y*\nsay \"hi\" a \\\\d b\n\\-->\n```\n- [x] _y_ example.com ~\n```\nkept `- [x] _y_ example.com ~` span";
+/// Everything above the table is byte for byte what real Linear handed back from an issue's
+/// description in CI run 39361674659.
+const MARKDOWN_PROBE_STORED: &str = "* bullet\n  | a | b |\n  | --- | --- |\n  see [https://example.com/a](<https://example.com/a>).\n  [example.com](<http://example.com>) and \"[caller.live](<http://caller.live>)\"\n  \\[x\\] done \\~5 *y*\n  say \"hi\" a \\\\d b\n  \\-->\n\n```\n- [x] _y_ example.com ~\n```\n\nkept `- [x] _y_ example.com ~` span\n\n| a | b |\n| -- | -- |";
 
 /// What the follow-up flow rests on, against Linear itself: what Linear does to an HTML comment
 /// in an issue's description, a comment's body and a document's content, recorded in the
