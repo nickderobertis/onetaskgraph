@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.2](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-plugin-api-v0.9.1...onetaskgraph-plugin-api-v0.9.2) - 2026-10-20
+
+### Added
+
+- *(copy)* [**breaking**] record the body_digest of what Linear stores ([#3687](https://github.com/nickderobertis/onetaskgraph/pull/3687))
+
+### Performance
+
+- *(github-projects)* write a copied item in fewer requests ([#3692](https://github.com/nickderobertis/onetaskgraph/pull/3692))
+
 ## [0.9.1](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-plugin-api-v0.9.0...onetaskgraph-plugin-api-v0.9.1) - 2026-10-20
 
 ### Performance
