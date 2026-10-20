@@ -1207,10 +1207,26 @@ pub trait TaskSource: Send + Sync {
             match self.write_task(write).await {
                 Ok(id) => created.push(id),
                 Err(error) => {
+                    // The caller is never handed these ids, so one this source will not take
+                    // back is named here or by nobody.
+                    let mut left: Vec<&str> = Vec::new();
                     for id in &created {
-                        let _ = self.delete_task(id).await;
+                        if self.delete_task(id).await.is_err() {
+                            left.push(id.0.as_str());
+                        }
                     }
-                    return Err(error);
+                    if left.is_empty() {
+                        return Err(error);
+                    }
+                    return Err(SourceError::Refused {
+                        message: format!(
+                            "{error}; this source then refused to take back {}, which this \
+                             write created and which it still holds; next: delete {} before \
+                             writing again",
+                            left.join(", "),
+                            if left.len() == 1 { "it" } else { "them" }
+                        ),
+                    });
                 }
             }
         }

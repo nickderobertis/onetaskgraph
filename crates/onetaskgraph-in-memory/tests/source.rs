@@ -2031,4 +2031,30 @@ async fn the_default_batch_create_creates_each_in_turn_and_takes_them_back_when_
             .title,
         "Overwritten"
     );
+    // One this source will not take back is named, because nothing else could name it.
+    let keeping: Box<dyn TaskSource> = Box::new(
+        onetaskgraph_in_memory::InMemorySource::new(with_capabilities(json!({
+            "uncreatable_titles": ["Refused"],
+            "undeletable_ids": ["T-12"]
+        })))
+        .expect("the fixture graph is coherent"),
+    );
+    let Err(SourceError::Refused { message }) = keeping
+        .write_tasks(&[create("T-12", "Twelve"), create("T-13", "Refused")])
+        .await
+    else {
+        panic!("the second create is refused");
+    };
+    assert!(
+        message.contains("refused to take back T-12") && message.contains("delete it"),
+        "{message}"
+    );
+    assert!(
+        keeping
+            .get_task(&NativeId("T-12".into()))
+            .await
+            .unwrap()
+            .is_some(),
+        "T-12 is still there, as said"
+    );
 }

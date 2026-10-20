@@ -8832,7 +8832,7 @@ impl GitHubProjectsSource {
             // Its content is written last, by `complete_write`, once everything else has landed.
             WriteDestination::Existing(item) => Landed {
                 content_id: item.id.clone(),
-                item_id: item.item_id.clone(),
+                item_id: Some(item.item_id.clone()),
                 url: item.url.clone(),
                 number: item.number,
             },
@@ -9145,12 +9145,12 @@ impl GitHubProjectsSource {
                 &projections,
                 &native,
             )
-        } else {
+        } else if let Some(item_id) = item_id.as_deref() {
             self.finish_write(
                 board.id.as_str(),
                 incoming,
                 &content_id,
-                &item_id,
+                item_id,
                 content_kind,
                 existing,
                 origin_field.as_deref(),
@@ -9163,6 +9163,16 @@ impl GitHubProjectsSource {
                 &mut origin_landed,
             )
             .await
+        } else {
+            // An issue a create filed on the board itself has no board item this process
+            // knows until `finish_writes` reads it, so nothing but a held-back write may land
+            // on it before then.
+            Err(SourceError::Malformed {
+                message: format!(
+                    "issue {} was written before the board item GitHub filed it as was read",
+                    content_id.0
+                ),
+            })
         };
         // An existing item's title, body and state go last, in one `updateIssue`, once its board
         // fields and its relationships have landed: a refusal of any of those then leaves its
@@ -9247,7 +9257,9 @@ impl GitHubProjectsSource {
         // So the rest of this command reads what it just did rather than what the board
         // said before it. See `remember_written` for which half takes it.
         let remembered = Resolved {
-            item_id,
+            // Empty for an issue whose board item is not read yet: `finish_writes` reads it
+            // and `learn_item` puts it here.
+            item_id: item_id.unwrap_or_default(),
             id: content_id.clone(),
             content_kind,
             kind: incoming.written.kind(),
@@ -9477,7 +9489,7 @@ impl GitHubProjectsSource {
         self.note_written(&content_id, url.as_deref());
         Ok(Landed {
             content_id,
-            item_id: String::new(),
+            item_id: None,
             url,
             number,
         })
@@ -9676,21 +9688,27 @@ impl GitHubProjectsSource {
                     left.push(created.content_id.0.as_str());
                 }
             }
-            if left.is_empty() {
-                return Err(error);
-            }
-            return Err(SourceError::Refused {
-                message: format!(
-                    "{error}; GitHub then refused to take back {}, which this write created and \
-                     which are still in the repository; next: delete {} before writing again",
-                    left.join(", "),
-                    if left.len() == 1 { "it" } else { "them" }
-                ),
-            });
+            return Err(left_behind(error, &left));
         }
+        let created: Vec<NativeId> = landed
+            .iter()
+            .map(|landed| landed.content_id.clone())
+            .collect();
         let mut ids = Vec::with_capacity(landed.len());
         for ((incoming, prepared), landed) in incomings.iter().zip(prepared).zip(landed) {
-            ids.push(self.complete_write(incoming, prepared, landed).await?.id);
+            match self.complete_write(incoming, prepared, landed).await {
+                Ok(written) => ids.push(written.id),
+                // llmlint: ignore[changed_behavior_has_e2e] While writes are held back, which is the only time a batch is created, completing a created item only holds its parts back, and that fails on nothing but a poisoned lock, which no journey can cause; the issues are taken back regardless, because the caller is never handed their ids.
+                Err(error) => {
+                    let mut left: Vec<&str> = Vec::new();
+                    for id in &created {
+                        if self.delete_issue(id).await.is_err() {
+                            left.push(id.0.as_str());
+                        }
+                    }
+                    return Err(left_behind(error, &left));
+                }
+            }
         }
         Ok(ids)
     }
@@ -10590,7 +10608,7 @@ impl GitHubProjectsSource {
         self.note_written(&content_id, url.as_deref());
         Ok(Landed {
             content_id,
-            item_id: required_str(item, "id")?.to_owned(),
+            item_id: Some(required_str(item, "id")?.to_owned()),
             url,
             number,
         })
@@ -10770,6 +10788,23 @@ struct Prepared {
     /// The copy origin the item records, empty for none.
     origin: String,
     origin_field: Option<String>,
+}
+
+/// `error`, which stopped a batch of creates, and — when GitHub refused to take any of them
+/// back — each issue of `left` it created that is still in the repository, which its caller,
+/// never handed their ids, could not name.
+fn left_behind(error: SourceError, left: &[&str]) -> SourceError {
+    if left.is_empty() {
+        return error;
+    }
+    SourceError::Refused {
+        message: format!(
+            "{error}; GitHub then refused to take back {}, which this write created and which \
+             are still in the repository; next: delete {} before writing again",
+            left.join(", "),
+            if left.len() == 1 { "it" } else { "them" }
+        ),
+    }
 }
 
 /// What one write lands on: the item it updates, as it stood, or where it creates a new one.
@@ -11257,9 +11292,11 @@ impl TryFrom<String> for BoardId {
 struct Landed {
     /// The issue's own node id, which is the [`NativeId`] this source reports.
     content_id: NativeId,
-    /// The board item's id, which is what a field write addresses.
+    /// The board item's id, which is what a field write addresses — `None` for an issue its
+    /// create filed on the board itself, whose board item GitHub adds after answering and
+    /// [`TaskSource::finish_writes`] reads.
     // llmlint: ignore[invalid_states_unrepresentable] This field and the one below are `Resolved::item_id` and `Resolved::url` carried out of one call: the update arm assigns them from an existing `Resolved` and the whole record is assigned straight back into one. A newtype introduced here alone would be wrapped at both of those boundaries and unwrapped at every use, and would make this private record disagree with the type the same values have on the struct they come from and return to. Where the board item id gets a newtype is on `Resolved`, which is the contract's own shape and not this change's to move.
-    item_id: String,
+    item_id: Option<String>,
     /// The web address GitHub gave the issue, when it gave one.
     // llmlint: ignore[invalid_states_unrepresentable] The answer `Resolved::url` and the contract's `Task::url` already record: a web address this source never parses, resolves or compares — it reads GitHub's string and hands it back, and `Location::Url` is where the contract gives it a shape. Validating it here would have this plugin decide what GitHub may call an address.
     url: Option<String>,
@@ -12721,10 +12758,13 @@ impl TaskSource for GitHubProjectsSource {
                 match self.write_task(write).await {
                     Ok(id) => created.push(id),
                     Err(error) => {
+                        let mut left: Vec<&str> = Vec::new();
                         for id in &created {
-                            let _ = self.delete_issue(id).await;
+                            if self.delete_issue(id).await.is_err() {
+                                left.push(id.0.as_str());
+                            }
                         }
-                        return Err(error);
+                        return Err(left_behind(error, &left));
                     }
                 }
             }

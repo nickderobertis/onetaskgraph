@@ -1031,9 +1031,10 @@ fn follow_up_writes_resolve_each_item_once_and_batch_the_copy_fields() {
                 onetaskgraph_github_projects::worst_case_point_cost(document).unwrap()
             })
             .sum();
-        // llmlint: ignore[tests_hold_no_nonfunctional_thresholds] The drift gate between the cost table in the plugin's module documentation and `docs/plugin-protocol.md` and what each verb really sends, as it was before this change: the figures are the documented ones, asserted below to be the table's own cells, so a verb that moves fails until its row is restated.
+        // llmlint: ignore-block[tests_hold_no_nonfunctional_thresholds] The drift gate between the cost table in the plugin's module documentation and `docs/plugin-protocol.md` and what each verb really sends, requests and points alike, as it was before this change: the figures are the documented ones, asserted below to be the table's own cells, so a verb that moves fails until its row is restated.
         assert_eq!(sent.len(), expected, "{verb}: {sent:#?}");
         assert_eq!(points, priced, "{verb}");
+        // llmlint: ignore-end[tests_hold_no_nonfunctional_thresholds]
         let cell = if priced == expected as u64 {
             expected.to_string()
         } else {

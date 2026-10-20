@@ -11090,6 +11090,28 @@ async fn write_tasks_outside_a_copy_creates_each_whole_and_takes_them_back_when_
         fixture.state.lock().unwrap().items.is_empty(),
         "and taken back"
     );
+    // A delete GitHub refuses leaves that issue there, and the refusal names it.
+    let fixture = board(vec![]);
+    fixture.refuse("deleteIssue");
+    let keeping = source(&fixture);
+    let refused = keeping
+        .write_tasks(&[
+            write(task("T-1", "One", status(StatusCategory::Todo, "Todo"))),
+            write(Task {
+                priority: Priority::High,
+                ..task("T-2", "Two", status(StatusCategory::Todo, "Todo"))
+            }),
+        ])
+        .await
+        .expect_err("a priority this board cannot hold");
+    let left = fixture.state.lock().unwrap().items[0].content_id.clone();
+    assert!(
+        refused.to_string().contains("priority")
+            && refused
+                .to_string()
+                .contains(&format!("GitHub then refused to take back {left}")),
+        "{refused}"
+    );
 }
 
 #[tokio::test]

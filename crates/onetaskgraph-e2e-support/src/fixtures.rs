@@ -4958,13 +4958,16 @@ impl IssueSearch {
 
     /// Whether an issue holding this title and body is in the answer.
     ///
-    /// A field is split into words only when it could hold every phrase at all, so a search of
-    /// a board of thousands of items costs this loopback what it costs GitHub — nothing a copy's
-    /// simulated time does not already charge — rather than a word list of every item's body.
+    /// A field is split into words only when it could hold one of the phrases at all — each
+    /// phrase may be held by either field — so a search of a board of thousands of items costs
+    /// this loopback what it costs GitHub, nothing a copy's simulated time does not already
+    /// charge, rather than a word list of every item's body.
     fn admits(&self, title: &str, body: &str) -> bool {
         let words = |field: &str, searched: bool| {
-            (searched && self.phrases.iter().all(|phrase| may_hold(field, phrase)))
-                .then(|| search_words(field))
+            (searched
+                && (self.phrases.is_empty()
+                    || self.phrases.iter().any(|phrase| may_hold(field, phrase))))
+            .then(|| search_words(field))
         };
         let (title, body) = (words(title, self.in_title), words(body, self.in_body));
         let holds = |field: &Option<Vec<String>>, phrase: &[String]| {
@@ -8289,4 +8292,23 @@ pub fn dataset() -> Value {
              "to": {"id": "elsewhere:T-9", "kind": "task"}, "kind": "blocks"}
         ]
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::IssueSearch;
+
+    #[test]
+    fn each_phrase_of_a_search_may_be_held_by_either_field() {
+        // GitHub admits an issue when every phrase is in a field searched, whichever field
+        // holds it; one phrase in the title and another in the body is such an issue.
+        let search = IssueSearch::parse(r#"in:title,body "alpha plan" beta"#);
+        assert!(search.admits("The alpha plan", "beta, in the body"));
+        assert!(search.admits("Nothing", "Beta follows the ALPHA PLAN."));
+        assert!(!search.admits("The alpha plan", "nothing else"));
+        assert!(!search.admits("alpha and plan apart", "beta"));
+        let titles = IssueSearch::parse(r#"in:title "alpha plan""#);
+        assert!(!titles.admits("Nothing", "the alpha plan"));
+        assert!(titles.admits("The Ålpha plan or the alpha plan", ""));
+    }
 }
