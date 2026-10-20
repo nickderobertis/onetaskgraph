@@ -268,6 +268,19 @@ async fn drive_every_declared_capability(
         missing.is_none(),
         "a status mutation to a nonexistent issue was not not-found"
     );
+    // And the same for a project, whose spelling `PROJECT_NOT_FOUND_MESSAGE` and its
+    // presentable alternative record: a project status write to no project is no such project.
+    let missing = source
+        .set_project_status(
+            &NativeId("00000000-0000-0000-0000-000000000000".into()),
+            StatusCategory::Todo,
+        )
+        .await
+        .map_err(|error| format!("the live missing-project status contract drifted: {error}"))?;
+    ensure!(
+        missing.is_none(),
+        "a status mutation to a nonexistent project was not not-found"
+    );
     // Every listing below is scoped by the label all three issues carry, because Linear's
     // `issues` connection is the whole workspace: without it these would be containments
     // rather than the exact sets that tell an honoured predicate from an ignored one.

@@ -18,6 +18,7 @@ import type {
   NativeId,
   Priority,
   ProjectGraph,
+  ProjectStatusSet,
   QueryResponseOfQualifiedDocument,
   QueryResponseOfQualifiedEdge,
   QueryResponseOfQualifiedLabel,
@@ -260,6 +261,8 @@ export const commandResponseRoots: Readonly<Record<string, keyof typeof runtimeS
   "project graph": "ProjectGraph",
   "project copy": "CopyReport",
   "project metadata set": "MetadataSet",
+  // One project's status set on its own, as its source reads it back.
+  "project status set": "ProjectStatusSet",
   // A created project as `project show` answers with it.
   "project create": "QueryResponseOfQualifiedProject",
   "project render": "Regenerated",
@@ -1193,6 +1196,19 @@ export class OnetaskgraphClient {
       key,
       value,
       ...termScopeFlags("projectMetadataSet", options),
+    ]);
+  }
+  // Set one project's status and nothing else about it; a project delivers no task, so nothing
+  // is kept in step after it.
+  projectStatusSet(
+    id: string,
+    category: StatusCategory,
+    options: WriteOptions = {},
+  ): Promise<ProjectStatusSet> {
+    return this.run("project status set", [
+      id,
+      category,
+      ...termScopeFlags("projectStatusSet", options),
     ]);
   }
   documentList(

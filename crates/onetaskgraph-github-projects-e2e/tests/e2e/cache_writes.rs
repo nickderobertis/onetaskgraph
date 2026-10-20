@@ -458,3 +458,42 @@ fn a_pin_reaches_the_cache_through_both_sdks_and_a_rust_caller() {
         Some(pin.as_str())
     );
 }
+
+#[test]
+fn a_project_status_write_takes_the_projects_entry_out_of_service_whether_or_not_it_lands() {
+    let cached = Cached::new();
+    let status = |shown: &Value| shown["items"][0]["item"]["status"].clone();
+
+    // Refused part way: its entry is taken out of service before anything is sent, so the read
+    // pinned to the token held before is the board's, answering what the board still holds.
+    let held = filled(&cached, "project", "board:P-1");
+    let (before, _) = show(&cached, "project", "board:P-1", Some(&held));
+    cached
+        .board
+        .refuse_once("updateProjectV2ItemFieldValue(input:$input)");
+    let output = cached.run_with(&["project", "status", "set", "board:P-1", "done"], None);
+    assert_eq!(output.status.code(), Some(1), "the refused write exits 1");
+    assert!(
+        !entry_path(&cached, "projects-v2", "P-1").exists(),
+        "a refused project status write leaves no entry to serve"
+    );
+    let (current, sent) = show(&cached, "project", "board:P-1", Some(&held));
+    assert!(
+        !sent.is_empty(),
+        "the read after the refusal is the board's"
+    );
+    assert_eq!(status(&current), status(&before), "{current}");
+
+    // Landed: the next read pinned to the token held before is the board's, answering the
+    // status the write left — never the entry's.
+    let held = filled(&cached, "project", "board:P-1");
+    let (written, _) = cached.ok(&["project", "status", "set", "board:P-1", "done", "--json"]);
+    assert_eq!(written["status"]["category"], "done", "{written}");
+    assert!(
+        !entry_path(&cached, "projects-v2", "P-1").exists(),
+        "a project status write takes its entry out of service"
+    );
+    let (current, sent) = show(&cached, "project", "board:P-1", Some(&held));
+    assert!(!sent.is_empty(), "the read after the write is the board's");
+    assert_eq!(status(&current), written["status"], "{current}");
+}

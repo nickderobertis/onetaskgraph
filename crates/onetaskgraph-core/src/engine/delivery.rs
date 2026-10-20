@@ -52,6 +52,15 @@ pub struct TaskStatusSet {
     pub spent: Option<Spent>,
 }
 
+/// What `project status set` and [`Engine::set_project_status`] answer with.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectStatusSet {
+    /// The project whose status was set.
+    pub id: GlobalId,
+    /// Its status as its source reads it back.
+    pub status: Status,
+}
+
 /// What keeping one delivered task in step with one deliverer came to.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Delivered {
@@ -170,6 +179,57 @@ impl Engine {
             result,
             fallback,
             spent,
+        })
+    }
+
+    /// Set one project's status, and nothing else about it.
+    ///
+    /// A project delivers no task, so nothing is kept in step after it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::UnknownSource`] for a source nothing configures,
+    /// [`EngineError::StatusNotWritable`] for one with no write side,
+    /// [`EngineError::NoSuchProject`] when the project is not there, and
+    /// [`EngineError::SourceFailed`] when the source refuses — a category it has disabled
+    /// included.
+    pub async fn set_project_status(
+        &self,
+        id: &GlobalId,
+        category: StatusCategory,
+    ) -> Result<ProjectStatusSet, EngineError> {
+        let source = self.status_writable(&id.source)?;
+        self.admit_existing(
+            source,
+            &id.to_string(),
+            &id.native,
+            Held::Project,
+            &Exposure::metadata([category_name(category)]),
+        )
+        .await?;
+        let status = source
+            .source()
+            .set_project_status(&id.native, category)
+            .await
+            .map_err(|error| source_failed(source, error))?
+            .ok_or_else(|| EngineError::NoSuchProject { id: id.to_string() })?;
+        // What a plugin answers is input: a write that reads back as another category did not
+        // land as asked, and is refused as malformed rather than reported as having written it.
+        if status.category != category {
+            return Err(source_failed(
+                source,
+                SourceError::Malformed {
+                    message: format!(
+                        "a write of {id} to {} read back as {}",
+                        category_name(category),
+                        category_name(status.category)
+                    ),
+                },
+            ));
+        }
+        Ok(ProjectStatusSet {
+            id: id.clone(),
+            status,
         })
     }
 

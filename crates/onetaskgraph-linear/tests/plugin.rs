@@ -535,6 +535,7 @@ fn pinned_schema_names_every_write_operation_the_plugin_sends() {
         (graphql::ISSUE_PRIORITY_UPDATE, true),
         (graphql::PROJECT_CREATE, true),
         (graphql::PROJECT_UPDATE, true),
+        (graphql::PROJECT_STATUS_UPDATE, true),
         (graphql::ISSUE_RELATION_CREATE, true),
         (graphql::PROJECT_RELATION_CREATE, true),
         (graphql::ISSUE_RELATION_DELETE, true),

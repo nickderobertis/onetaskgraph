@@ -73,7 +73,7 @@ pub use copy::{
     BudgetSpent, CommentCounts, CopyAction, CopyItems, CopyLink, CopyLookup, CopyOutcome,
     CopyReport, CopyRequest, CopyScope, CopyVia, MatchBy, NoCounterpart, Spent,
 };
-pub use delivery::{Delivered, DeliveryOutcome, TaskStatusSet, settled};
+pub use delivery::{Delivered, DeliveryOutcome, ProjectStatusSet, TaskStatusSet, settled};
 pub use graph::{
     GraphDirection, GraphEdge, GraphNode, GroupKey, PROJECT_GRAPH_SCHEMA_VERSION, ProjectGraph,
     ProjectGraphRequest, label as graph_label,

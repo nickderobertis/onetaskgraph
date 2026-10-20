@@ -294,6 +294,88 @@ async fn a_write_crosses_the_wire_and_lands_in_the_source_on_the_other_side() {
     );
 }
 
+#[test]
+fn a_project_status_write_is_answered_with_the_status_itself_or_null() {
+    // §4.17a: unlike a task's (§4.17), the result is the `Status` with no `status` member
+    // around it, and `null` — present, not absent — for a project the plugin does not hold.
+    let request = |id: &str, project: &str| {
+        json!({"id": id, "method": "set_project_status",
+               "params": {"id": project, "category": "done"}})
+    };
+    let answers = served(&[
+        handshake(2, hosted_settings()),
+        request("1", "P-1"),
+        request("2", "nope"),
+        request("3", "T-1"),
+    ]);
+
+    assert_eq!(answers[0]["result"]["project_status"], json!(true));
+    assert_eq!(
+        answers[1],
+        json!({"id": "1", "result": {"category": "done", "name": "done"}})
+    );
+    assert_eq!(answers[2], json!({"id": "2", "result": null}));
+    assert_eq!(
+        answers[3],
+        json!({"id": "3", "result": null}),
+        "a task's id names no project"
+    );
+}
+
+#[tokio::test]
+async fn a_project_status_read_back_across_the_wire_is_the_status_or_none() {
+    let there = a_process_away(hosted_settings()).expect("the handshake succeeds");
+    let written = there
+        .set_project_status(&NativeId("P-1".to_owned()), StatusCategory::Done)
+        .await
+        .expect("the plugin takes the write");
+    assert_eq!(
+        written,
+        in_process()
+            .set_project_status(&NativeId("P-1".to_owned()), StatusCategory::Done)
+            .await
+            .expect("the same write in process"),
+    );
+    assert_eq!(
+        written.map(|status| status.category),
+        Some(StatusCategory::Done)
+    );
+    assert_eq!(
+        there
+            .get_project(&NativeId("P-1".to_owned()))
+            .await
+            .unwrap()
+            .unwrap()
+            .status
+            .category,
+        StatusCategory::Done
+    );
+    assert_eq!(
+        there
+            .set_project_status(&NativeId("nope".to_owned()), StatusCategory::Done)
+            .await,
+        Ok(None),
+        "a `null` result is no such project, not a protocol violation"
+    );
+
+    // A plugin answering the wrapped shape `set_task_status` uses is not answering §4.17a.
+    let wrapped = scripted(vec![
+        json!({"id": "0", "result": {"protocol_version": 2, "kind": "made-up",
+               "capabilities": capabilities(), "writes": "supported",
+               "project_status": true}})
+        .to_string(),
+        json!({"id": "1", "result": {"status": {"category": "done", "name": "Done"}}}).to_string(),
+    ])
+    .expect("the handshake succeeds");
+    let Err(SourceError::Malformed { message }) = wrapped
+        .set_project_status(&NativeId("P-1".to_owned()), StatusCategory::Done)
+        .await
+    else {
+        panic!("a wrapped status is not the shape §4.17a promises");
+    };
+    assert!(message.contains("set_project_status"), "{message}");
+}
+
 #[tokio::test]
 async fn a_plugin_that_says_nothing_about_writing_is_read_as_one_that_cannot() {
     // §3.3: the member is optional, and absent means unsupported — which is what a

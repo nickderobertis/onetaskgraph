@@ -1367,23 +1367,17 @@ impl TaskSource for LocalMdSource {
         id: &NativeId,
         category: StatusCategory,
     ) -> Result<Option<Status>, SourceError> {
-        let Some(path) = self.locate(Kind::Task, id)? else {
-            return Ok(None);
-        };
-        let entry = self.parse(WorkKind::Task, &path)?;
-        if entry.status.category == category {
-            return Ok(Some(entry.status));
-        }
-        let word = self.word_for(category);
-        let status = Status {
-            category,
-            name: word,
-        };
-        self.representable_status(&status, &StatusHolder::own(id))?;
-        // A string always renders as a YAML scalar.
-        let rendered = yaml::to_string(&status.name).expect("a status word renders");
-        self.rewrite_front_entry(&path, "status", Some(rendered.trim_end()))?;
-        Ok(Some(status))
+        self.set_status(WorkKind::Task, id, category)
+    }
+
+    /// Rewrite the one `status:` entry of the project file's front matter, and nothing else,
+    /// on exactly the terms [`set_task_status`](TaskSource::set_task_status) rewrites a task's.
+    async fn set_project_status(
+        &self,
+        id: &NativeId,
+        category: StatusCategory,
+    ) -> Result<Option<Status>, SourceError> {
+        self.set_status(WorkKind::Project, id, category)
     }
 
     /// Rewrite the one `priority:` entry of the task's front matter, and nothing else —
@@ -3791,6 +3785,33 @@ impl LocalMdSource {
                 base.display()
             ),
         })
+    }
+
+    /// Rewrite the one `status:` entry of the task's or project's front matter, and nothing
+    /// else — the shared body of the two status writes.
+    fn set_status(
+        &self,
+        work: WorkKind,
+        id: &NativeId,
+        category: StatusCategory,
+    ) -> Result<Option<Status>, SourceError> {
+        let Some(path) = self.locate(work.kind(), id)? else {
+            return Ok(None);
+        };
+        let entry = self.parse(work, &path)?;
+        if entry.status.category == category {
+            return Ok(Some(entry.status));
+        }
+        let word = self.word_for(category);
+        let status = Status {
+            category,
+            name: word,
+        };
+        self.representable_status(&status, &StatusHolder::own(id))?;
+        // A string always renders as a YAML scalar.
+        let rendered = yaml::to_string(&status.name).expect("a status word renders");
+        self.rewrite_front_entry(&path, "status", Some(rendered.trim_end()))?;
+        Ok(Some(status))
     }
 
     /// Refuse a status this folder would read back as another category, in the one wording a

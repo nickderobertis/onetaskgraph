@@ -482,6 +482,13 @@ pub mod graphql {
     pub const ISSUE_NOT_FOUND_MESSAGE: &str = "Entity not found: Issue";
     /// Its user-facing alternative; the loopback fixture shares this contract.
     pub const ISSUE_NOT_FOUND_PRESENTABLE: &str = "Could not find referenced Issue.";
+    /// The same error for a project a mutation addresses: Linear spells every missing entity
+    /// `Entity not found: <type>`. Reconciled with the service by the live capability journey,
+    /// which sends a project status write to a nonexistent project and requires `None`; the
+    /// loopback fixture shares this contract.
+    pub const PROJECT_NOT_FOUND_MESSAGE: &str = "Entity not found: Project";
+    /// Its user-facing alternative, on the terms of [`ISSUE_NOT_FOUND_PRESENTABLE`].
+    pub const PROJECT_NOT_FOUND_PRESENTABLE: &str = "Could not find referenced Project.";
 
     /// Check the authenticated viewer.
     pub const VIEWER: &str = "query { viewer { id } }";
@@ -579,6 +586,9 @@ pub mod graphql {
     pub const PROJECT_CREATE: &str = "mutation($input:ProjectCreateInput!){ projectCreate(input:$input){success project{id content}} }";
     /// Update a project.
     pub const PROJECT_UPDATE: &str = "mutation($id:String!,$input:ProjectUpdateInput!){ projectUpdate(id:$id,input:$input){success project{id content}} }";
+    /// Set one project's status alone — its input carries `statusId` and nothing else — and
+    /// read back the status it then holds.
+    pub const PROJECT_STATUS_UPDATE: &str = "mutation($id:String!,$input:ProjectUpdateInput!){ projectUpdate(id:$id,input:$input){success project{id status{name type}}} }";
     /// Create a native issue dependency.
     pub const ISSUE_RELATION_CREATE: &str = "mutation($input:IssueRelationCreateInput!){ issueRelationCreate(input:$input){success issueRelation{id}} }";
     /// Create a native project dependency.
@@ -1632,14 +1642,29 @@ impl Refusal {
     /// and anything else, is a refusal. The live capability journey sends this mutation
     /// to a nonexistent issue and requires `None`, so changed service wording fails the lane.
     fn entity_missing(&self) -> bool {
+        self.missing(
+            graphql::ISSUE_NOT_FOUND_MESSAGE,
+            graphql::ISSUE_NOT_FOUND_PRESENTABLE,
+        )
+    }
+
+    /// Whether Linear refused because the project the request addressed is not there, on the
+    /// terms of [`Self::entity_missing`].
+    fn project_missing(&self) -> bool {
+        self.missing(
+            graphql::PROJECT_NOT_FOUND_MESSAGE,
+            graphql::PROJECT_NOT_FOUND_PRESENTABLE,
+        )
+    }
+
+    /// Whether this refusal is Linear's `message` — or its `presentable` alternative — for the
+    /// one entity the request addressed.
+    fn missing(&self, message: &str, presentable: &str) -> bool {
         let lowered = self.0.message.to_ascii_lowercase();
-        // The Issue the mutation addressed, and nothing it merely refers to: a state the input
-        // names that Linear does not hold is a refusal of the write, never no such task.
-        lowered.trim_end() == graphql::ISSUE_NOT_FOUND_MESSAGE.to_ascii_lowercase()
-            || lowered.starts_with(&format!(
-                "{} ",
-                graphql::ISSUE_NOT_FOUND_MESSAGE.to_ascii_lowercase()
-            ))
+        // The entity the mutation addressed, and nothing it merely refers to: a state the input
+        // names that Linear does not hold is a refusal of the write, never no such item.
+        lowered.trim_end() == message.to_ascii_lowercase()
+            || lowered.starts_with(&format!("{} ", message.to_ascii_lowercase()))
             || self
                 .0
                 .extensions
@@ -1647,11 +1672,8 @@ impl Refusal {
                 .and_then(|extensions| extensions.get("userPresentableMessage"))
                 .and_then(Value::as_str)
                 .is_some_and(|said| {
-                    said.to_ascii_lowercase().starts_with(
-                        &graphql::ISSUE_NOT_FOUND_PRESENTABLE
-                            .trim_end_matches('.')
-                            .to_ascii_lowercase(),
-                    )
+                    said.to_ascii_lowercase()
+                        .starts_with(&presentable.trim_end_matches('.').to_ascii_lowercase())
                 })
     }
 
@@ -1792,7 +1814,7 @@ impl LinearSource {
                 .ok()
                 .and_then(|body| body.errors.into_iter().next())
                 .map(Refusal)
-                .filter(Refusal::entity_missing)
+                .filter(|refusal| refusal.entity_missing() || refusal.project_missing())
             {
                 return Ok(Err(missing));
             }
@@ -3703,6 +3725,55 @@ impl TaskSource for LinearSource {
         category: StatusCategory,
     ) -> Result<Option<Task>, SourceError> {
         self.status_written(id, category).await
+    }
+    /// One `projectUpdate` carrying only `statusId` — the project status this source's mapping
+    /// gives the category — and nothing before it but the vocabulary it resolves that status
+    /// against, answering the status the update's own selection reports.
+    async fn set_project_status(
+        &self,
+        id: &NativeId,
+        category: StatusCategory,
+    ) -> Result<Option<Status>, SourceError> {
+        if let Some(refused) = self.project_out_of_scope(Some(id)) {
+            return Err(refused);
+        }
+        let (status, _) = self.status_id(category, ItemKind::Project).await?;
+        let answered = self
+            .answer(
+                graphql::PROJECT_STATUS_UPDATE,
+                json!({"id":id.0,"input":{"statusId":status.0}}),
+            )
+            .await;
+        let data = match answered {
+            Ok(Ok(data)) => data,
+            // A project Linear does not hold is no such project, never a refusal of the write.
+            Ok(Err(refusal)) if refusal.project_missing() => return Ok(None),
+            Ok(Err(refusal)) => {
+                self.forget_vocabulary();
+                return Err(refusal.into_error());
+            }
+            Err(error) => {
+                self.forget_vocabulary();
+                return Err(error);
+            }
+        };
+        let project = mutation_payload(&data, MutationRoot::ProjectUpdate)?
+            .get("project")
+            .filter(|project| !project.is_null())
+            .ok_or_else(|| SourceError::Malformed {
+                message: "missing projectUpdate.project".into(),
+            })?;
+        acknowledged(project, id, MutationRoot::ProjectUpdate)?;
+        mapped_status(
+            project
+                .get("status")
+                .ok_or_else(|| SourceError::Malformed {
+                    message: "missing projectUpdate.project.status".into(),
+                })?,
+            &self.statuses,
+            ItemKind::Project,
+        )
+        .map(Some)
     }
     async fn set_task_priority(
         &self,

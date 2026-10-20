@@ -5935,6 +5935,15 @@ fn validate_linear_variables(operation: &str, variables: &Value) -> Result<(), &
                             == 1
                     })
         }
+        // A project's status alone: `statusId`, and nothing beside it.
+        graphql::PROJECT_STATUS_UPDATE => {
+            exact_linear_variable_keys(variables, &["id", "input"])
+                && variables
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| !id.is_empty())
+                && valid_linear_write_input(variables.get("input"), &["statusId"], &[])
+        }
         // The narrow long-form writes of a project and a document: the one field the metadata
         // slot lives in — `content`, for both — and nothing beside it.
         graphql::PROJECT_UPDATE | graphql::DOCUMENT_UPDATE
@@ -6106,6 +6115,7 @@ fn linear_response(
         graphql::ISSUE_PRIORITY_UPDATE,
         graphql::PROJECT_CREATE,
         graphql::PROJECT_UPDATE,
+        graphql::PROJECT_STATUS_UPDATE,
         graphql::ISSUE_RELATION_CREATE,
         graphql::PROJECT_RELATION_CREATE,
         graphql::ISSUE_RELATION_DELETE,
@@ -6207,6 +6217,28 @@ fn linear_response(
         answer[root][payload]["relations"] =
             linear_relations(data, key, id, suffix, recorded)["relations"].clone();
         return Ok(answer);
+    }
+    // A project's status alone, which the project then reads back at — answered, as Linear
+    // answers one addressing a project it does not hold, with `Entity not found: Project`.
+    if operation == graphql::PROJECT_STATUS_UPDATE {
+        let id = vars["id"].as_str().ok_or("update id must be a string")?;
+        let held = linear_held_status(data, vars["input"]["statusId"].as_str().unwrap_or_default())
+            .ok_or("statusId names no project status of the workspace")?;
+        let category = linear_status_category(held["type"].as_str().unwrap_or_default());
+        let (_, stamp) = linear_tick(data);
+        let Some(row) = data["projects"]
+            .as_array_mut()
+            .ok_or("fixture collection is not an array")?
+            .iter_mut()
+            .find(|row| row["id"] == id)
+        else {
+            return Err(graphql::PROJECT_NOT_FOUND_MESSAGE);
+        };
+        row["status"] = json!({"name":held["name"],"category":category,"_linear_status":held});
+        row["_updated"] = json!(stamp);
+        let status = linear_project_status(&row["status"]);
+        return Ok(json!({"projectUpdate":{"success":true,
+                         "project":{"id":id,"status":status}}}));
     }
     if operation == graphql::ISSUE_UPDATE_READ {
         let id = vars["id"].as_str().unwrap_or_default();
