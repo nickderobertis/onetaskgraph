@@ -464,6 +464,7 @@ fn a_document_copy_into_a_destination_with_no_documents_reads_nothing_from_the_s
     );
 }
 
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] What this proves is the engine's own half of the stdio protocol (§3.16, §4.25) against the document-store peer, which no single plugin owns: AGENTS.md puts the engine's journeys in `onetaskgraph-e2e`, and the eight document-store journeys already in this file sit behind that same edge.
 #[test]
 fn a_store_that_cannot_say_what_it_keeps_is_written_nothing_by_a_copy_or_a_create() {
     // A peer declaring `stored_forms` and refusing both questions (§3.16, §4.25): every write

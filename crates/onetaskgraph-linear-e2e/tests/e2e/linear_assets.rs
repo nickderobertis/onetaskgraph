@@ -1958,23 +1958,32 @@ fn an_asset_carrying_rendering_records_what_linear_stores_and_an_undeclared_rewr
     }
 }
 
-/// Two images on adjacent lines, copied out of a folder of Markdown into Linear under each of
-/// the three readings CI run 39361674659 leaves open of the answer that blanked the second: (a)
-/// Linear sets the second apart with a blank line and keeps both, which the ruling declares; (b)
-/// it keeps both but its answer to the write leaves the second out, and one read of the issue
-/// confirms it; (c) it drops the second, and the copy is refused naming the line.
+/// Two images on adjacent lines in a task, a document and a project, copied out of a folder of
+/// Markdown into Linear under each of the three readings CI run 39361674659 leaves open of the
+/// answer that blanked the second: (a) Linear sets the second apart with a blank line and keeps
+/// both, which the ruling declares; (b) it keeps both but its answer to the write leaves the
+/// second out, and one read of the item confirms it; (c) it drops the second, and the copy is
+/// refused naming the line. A confirming read that finds no item confirms nothing, and the
+/// answer's difference is refused as it stands.
 #[test]
 fn a_copy_never_records_a_digest_over_stored_content_missing_an_image_it_sent() {
+    use onetaskgraph_linear::graphql;
     let journey = Journey::new();
     let held = &journey.workspace.held;
-    held.rewrite_markdown_on_write(LinearMarkdown::Declared);
     let inputs = journey.sandbox.subdirectory("adjacent-inputs");
-    let template = inputs.join("adjacent.md");
-    std::fs::write(&template, "![alt 0](./first.png)\n![alt 1](./second.png)\n").unwrap();
     let first = inputs.join("first.png");
     let second = inputs.join("second.png");
     std::fs::write(&first, images::png(800, 60_000)).unwrap();
     std::fs::write(&second, images::png(801, 60_000)).unwrap();
+    let uploaded = inputs.join("uploaded.md");
+    std::fs::write(&uploaded, "![alt 0](./first.png)\n![alt 1](./second.png)\n").unwrap();
+    // A project carries no assets, so its images are already where they are served.
+    let served = inputs.join("served.md");
+    std::fs::write(
+        &served,
+        "![alt 0](http://images.invalid/0.png)\n![alt 1](http://images.invalid/1.png)\n",
+    )
+    .unwrap();
     let run = |arguments: &[&str]| {
         journey
             .sandbox
@@ -1984,37 +1993,82 @@ fn a_copy_never_records_a_digest_over_stored_content_missing_an_image_it_sent() 
             .output()
             .unwrap()
     };
-    let rendered = |title: &str| -> String {
-        let output = run(&[
+    // Each kind's create mutation, the member of its answer holding the item, and its read.
+    let kinds = [
+        (
             "task",
+            "issueCreate",
+            "issue",
+            "description",
+            graphql::ISSUE,
+        ),
+        (
+            "document",
+            "documentCreate",
+            "document",
+            "content",
+            graphql::DOCUMENT,
+        ),
+        (
+            "project",
+            "projectCreate",
+            "project",
+            "content",
+            graphql::PROJECT,
+        ),
+    ];
+    let mut slug = 0;
+    let mut rendered = |kind: &str| -> String {
+        slug += 1;
+        let title = format!("Adjacent {slug}");
+        let (first, second) = (first.to_str().unwrap(), second.to_str().unwrap());
+        let mut arguments = vec![
+            kind,
             "create",
             "notes",
-            "--project",
-            "launch",
             "--title",
-            title,
-            "--template",
-            template.to_str().unwrap(),
-            "--asset",
-            first.to_str().unwrap(),
-            "--asset",
-            second.to_str().unwrap(),
+            &title,
             "--no-interactive",
-            "--json",
-        ]);
+        ];
+        let id = format!("adjacent-{slug}");
+        if kind == "project" {
+            arguments.extend(["--id", &id, "--template", served.to_str().unwrap()]);
+        } else {
+            arguments.extend([
+                "--project",
+                "launch",
+                "--template",
+                uploaded.to_str().unwrap(),
+            ]);
+            arguments.extend(["--asset", first, "--asset", second]);
+        }
+        arguments.push("--json");
+        let output = run(&arguments);
         assert!(output.status.success(), "{}", stderr(&output));
         serde_json::from_str::<Value>(&stdout(&output)).unwrap()["items"][0]["id"]
             .as_str()
             .expect("an id")
             .to_owned()
     };
-    let copied_and_verifiable = |source: &str| -> String {
-        let report = journey.copy("task", source, true);
-        let landed = report["items"][0]["destination"]
+    let copy = |kind: &str, source: &str| run(&["--json", kind, "copy", source, "--to", "dest"]);
+    let landed = |report: &Value, source: &str| -> Value {
+        report["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .find(|item| item["source"] == source)
+            .unwrap_or_else(|| panic!("{source} in {report}"))
+            .clone()
+    };
+    let copied_and_verifiable = |kind: &str, source: &str| {
+        let output = copy(kind, source);
+        assert!(output.status.success(), "{}", stderr(&output));
+        let report: Value = serde_json::from_str(&stdout(&output)).unwrap();
+        let destination = landed(&report, source)["destination"]
             .as_str()
             .expect("an id")
             .to_owned();
-        let output = run(&["task", "show", &landed, "--json"]);
+        let output = run(&[kind, "show", &destination, "--json"]);
         assert!(output.status.success(), "{}", stderr(&output));
         let item =
             serde_json::from_str::<Value>(&stdout(&output)).unwrap()["items"][0]["item"].clone();
@@ -2031,58 +2085,83 @@ fn a_copy_never_records_a_digest_over_stored_content_missing_an_image_it_sent() 
             content_digest(content),
             "{item}"
         );
-        landed
     };
-    let issue_reads = || {
-        held.served()
-            .iter()
-            .filter(|(query, _)| query == onetaskgraph_linear::graphql::ISSUE)
-            .count()
+    let refused_at_the_second_image = |kind: &str, source: &str, stored: &str| {
+        let output = copy(kind, source);
+        assert_eq!(output.status.code(), Some(4), "{}", stderr(&output));
+        let report: Value = serde_json::from_str(&stdout(&output)).unwrap();
+        let error = &landed(&report, source)["error"];
+        assert_eq!(error["kind"], "stored-content-diverged", "{report}");
+        let message = error["message"].as_str().expect("a message");
+        assert!(
+            message.contains("dest:")
+                && message.contains("line 3")
+                && message.contains("sent:   \"![alt 1](")
+                && message.contains(&format!("stored: {stored}")),
+            "{message}"
+        );
     };
+    let reads = |query: &'static str| {
+        move || {
+            held.served()
+                .iter()
+                .filter(|(served, _)| served == query)
+                .count()
+        }
+    };
+    let answered_short = |mutation: &'static str, member: &'static str, field: &'static str| {
+        held.bend_answers(
+            move |query, _| query.contains(mutation),
+            1,
+            move |_, data| {
+                let item = &mut data[mutation][member];
+                let long_form = item[field].as_str().expect("a long form");
+                let short: Vec<&str> = long_form
+                    .split('\n')
+                    .filter(|line| !line.starts_with("![alt 1]"))
+                    .collect();
+                item[field] = json!(short.join("\n"));
+            },
+        );
+    };
+    for (kind, mutation, member, field, read) in kinds {
+        let reads = reads(read);
+        held.rewrite_markdown_on_write(LinearMarkdown::Declared);
 
-    // (a) The blank line Linear sets the second image apart with is declared: accepted, the
-    // answer taken at its word with no read of its own.
-    let source = rendered("Set apart");
-    let before = issue_reads();
-    copied_and_verifiable(&source);
-    let taken_at_its_word = issue_reads() - before;
+        // (a) The blank line Linear sets the second image apart with is declared: accepted, the
+        // answer taken at its word.
+        let source = rendered(kind);
+        let before = reads();
+        copied_and_verifiable(kind, &source);
+        let taken_at_its_word = reads() - before;
 
-    // (b) Linear keeps both, but its answer to the create leaves the second image out: one read
-    // of the issue confirms it, and the copy records the digest of what that read holds.
-    let source = rendered("Answered short");
-    held.bend_answers(
-        |query, _| query.contains("issueCreate"),
-        1,
-        |_, data| {
-            let issue = &mut data["issueCreate"]["issue"];
-            let description = issue["description"].as_str().expect("a description");
-            let short: Vec<&str> = description
-                .split('\n')
-                .filter(|line| !line.starts_with("![alt 1]"))
-                .collect();
-            issue["description"] = json!(short.join("\n"));
-        },
-    );
-    let before = issue_reads();
-    copied_and_verifiable(&source);
-    assert_eq!(
-        issue_reads() - before,
-        taken_at_its_word + 1,
-        "the short answer was confirmed by one read of the issue"
-    );
+        // (b) Linear keeps both, but its answer to the create leaves the second image out: one
+        // read of the item confirms it, and the copy records the digest of what that read holds.
+        let source = rendered(kind);
+        answered_short(mutation, member, field);
+        let before = reads();
+        copied_and_verifiable(kind, &source);
+        assert_eq!(
+            reads() - before,
+            taken_at_its_word + 1,
+            "the short answer to the {kind} was confirmed by one read of it"
+        );
 
-    // (c) Linear drops the second image: no declared rule explains that, so the copy is refused
-    // naming the item and the image line the stored issue does not have.
-    held.rewrite_markdown_on_write(LinearMarkdown::DropsAdjacentImage);
-    let source = rendered("Dropped");
-    let output = run(&["--json", "task", "copy", &source, "--to", "dest"]);
-    assert_eq!(output.status.code(), Some(4), "{}", stderr(&output));
-    let report: Value = serde_json::from_str(&stdout(&output)).unwrap();
-    let error = &report["items"][0]["error"];
-    assert_eq!(error["kind"], "stored-content-diverged", "{report}");
-    let message = error["message"].as_str().expect("a message");
-    assert!(
-        message.contains("dest:") && message.contains("line 3") && message.contains("![alt 1]("),
-        "{message}"
-    );
+        // A confirming read that finds no item confirms nothing: the answer is refused as it
+        // stands, at the line it blanked.
+        let source = rendered(kind);
+        answered_short(mutation, member, field);
+        held.bend_answers(
+            move |query, _| query == read,
+            1,
+            move |_, data| data[member] = Value::Null,
+        );
+        refused_at_the_second_image(kind, &source, "\"\"");
+
+        // (c) Linear drops the second image: no declared rule explains that, so the copy is
+        // refused naming the item and the image line the stored item does not have.
+        held.rewrite_markdown_on_write(LinearMarkdown::DropsAdjacentImage);
+        let source = rendered(kind);
+        refused_at_the_second_image(kind, &source, "\"\"");
+    }
 }
