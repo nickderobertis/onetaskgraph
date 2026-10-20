@@ -12,6 +12,7 @@
 
 use super::asset_board::{Call, Kind};
 use super::plan_copy::{Counterparts, Plan, SMALL, TASKS, counterparts, operation};
+use onetaskgraph_e2e_support::fixtures::AliasAnswer;
 use serde_json::{Value, json};
 
 /// Every mutation among `calls`: the plugin's name for it and its variables.
@@ -382,23 +383,7 @@ fn left_nothing(plan: &Plan, created: usize) {
 /// A project copy of the plan with `alias` of a copy's batched writes refused: refused itself,
 /// naming GitHub's own failure, and leaving nothing behind.
 fn refused_part_way(alias: &'static str) {
-    let plan = Plan::new(SMALL, Vec::new());
-    plan.github.fail_field_alias(alias);
-    let lease = plan.clock.lease(0);
-    let output = plan.run(&["project", "copy", "notes:P", "--to", "board", "--json"]);
-    lease.wait_for_detach();
-    drop(lease);
-    assert_ne!(
-        output.status.code(),
-        Some(0),
-        "{alias}: the copy was refused"
-    );
-    let said = onetaskgraph_e2e_support::common::stderr(&output);
-    assert!(
-        said.contains("Something went wrong while executing your query") && said.contains(alias),
-        "{alias}: the failure GitHub reported is what the caller is told: {said}"
-    );
-    left_nothing(&plan, TASKS + 1);
+    refused_after_landing(&Plan::new(SMALL, Vec::new()), alias);
 }
 
 #[test]
@@ -500,6 +485,93 @@ fn a_batched_create_refused_part_way_whose_cleanup_github_refuses_names_what_is_
         !plan.github.holds_issue("ISSUE-1"),
         "the project was taken back"
     );
+}
+
+#[test]
+fn a_first_copy_closes_a_done_task_it_created_once_its_option_is_written() {
+    // A task the plan holds `done` is created open, filed like the rest, and closed completed
+    // in the held-back writes, after its `Status` option — in one request of closes.
+    let plan = Plan::new(SMALL, Vec::new());
+    plan.edit_task(2, "status: todo", "status: done");
+    let (project, document, calls) = plan.copy();
+    let at = counterparts(&project, &document);
+    let held = plan.github.item(&at["T-2"]).expect("T-2's issue");
+    assert_eq!(
+        (
+            held["state"].clone(),
+            held["reason"].clone(),
+            held["status"].clone()
+        ),
+        (json!("CLOSED"), json!("COMPLETED"), json!("Done")),
+        "{held:#}"
+    );
+    let written = mutations(&calls);
+    let closes: Vec<Value> = written
+        .iter()
+        .filter(|(name, _)| name == "closing the issues a copy created")
+        .flat_map(|(_, variables)| sent(variables, "close"))
+        .collect();
+    assert_eq!(closes.len(), 1, "{written:#?}");
+    assert_eq!(closes[0]["id"], json!(at["T-2"]));
+    for n in [1, 3, 8] {
+        let open = plan.github.item(&at[&format!("T-{n}")]).expect("an issue");
+        assert_eq!(open["state"], json!("OPEN"), "T-{n}");
+    }
+}
+
+#[test]
+fn a_first_copy_whose_close_is_refused_takes_back_every_item_it_created() {
+    let plan = Plan::new(SMALL, Vec::new());
+    plan.edit_task(2, "status: todo", "status: done");
+    refused_after_landing(&plan, "close0");
+}
+
+#[test]
+fn a_held_back_write_answered_malformed_takes_back_every_item_it_created() {
+    // Each of these landed, and GitHub's answer does not say so of the item it was asked to
+    // write — an alias missing, or answered naming another item — so the copy cannot vouch
+    // for it, refuses, and takes back every issue it created.
+    for (alias, answer) in [
+        ("field4", AliasAnswer::Missing),
+        ("field4", AliasAnswer::NamingAnother),
+        ("block2", AliasAnswer::NamingAnother),
+    ] {
+        let plan = Plan::new(SMALL, Vec::new());
+        plan.github.bend_batch_alias(alias, answer);
+        let lease = plan.clock.lease(0);
+        let output = plan.run(&["project", "copy", "notes:P", "--to", "board", "--json"]);
+        lease.wait_for_detach();
+        drop(lease);
+        assert_ne!(output.status.code(), Some(0), "{alias} {answer:?}");
+        let said = onetaskgraph_e2e_support::common::stderr(&output);
+        let expected = match answer {
+            AliasAnswer::Missing => format!("with nothing at {alias}"),
+            AliasAnswer::NamingAnother => format!("at {alias} with ANOTHER-ITEM"),
+        };
+        assert!(said.contains(&expected), "{alias} {answer:?}: {said}");
+        left_nothing(&plan, TASKS + 1);
+    }
+}
+
+/// A project copy of `plan` with `alias` of its held-back writes refused: refused itself, naming
+/// GitHub's own failure, and leaving nothing behind.
+fn refused_after_landing(plan: &Plan, alias: &'static str) {
+    plan.github.fail_field_alias(alias);
+    let lease = plan.clock.lease(0);
+    let output = plan.run(&["project", "copy", "notes:P", "--to", "board", "--json"]);
+    lease.wait_for_detach();
+    drop(lease);
+    assert_ne!(
+        output.status.code(),
+        Some(0),
+        "{alias}: the copy was refused"
+    );
+    let said = onetaskgraph_e2e_support::common::stderr(&output);
+    assert!(
+        said.contains("Something went wrong while executing your query") && said.contains(alias),
+        "{alias}: {said}"
+    );
+    left_nothing(plan, TASKS + 1);
 }
 
 #[test]

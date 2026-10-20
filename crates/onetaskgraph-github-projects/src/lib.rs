@@ -9134,7 +9134,7 @@ impl GitHubProjectsSource {
         let holding = (existing.is_none() && self.deferring()?) || self.holds_back(&content_id)?;
         let landed = if holding {
             self.hold_back(
-                board.id.as_str(),
+                &board.id,
                 &content_id,
                 existing,
                 origin_field.as_deref(),
@@ -9503,7 +9503,7 @@ impl GitHubProjectsSource {
     #[allow(clippy::too_many_arguments)]
     fn hold_back(
         &self,
-        board_id: &str,
+        board_id: &BoardId,
         content: &NativeId,
         existing: Option<&Resolved>,
         origin_field: Option<&str>,
@@ -9528,13 +9528,15 @@ impl GitHubProjectsSource {
         });
         let (fields, clears) =
             field_writes(existing, origin_field, origin, None, priority, projections);
-        let close = matches!(status_target, Some(StatusTarget::Terminal(_, _)))
-            .then(|| state_input(status_target));
+        let close = match status_target {
+            Some(StatusTarget::Terminal(_, reason)) => Some(*reason),
+            _ => None,
+        };
         let mut deferred = self.deferred()?;
         let deferred = deferred.get_or_insert_with(Deferred::default);
         if let Deferred::Nothing = deferred {
             *deferred = Deferred::Held {
-                board: board_id.to_owned(),
+                board: board_id.clone(),
                 created: Vec::new(),
             };
         }
@@ -9574,7 +9576,7 @@ impl GitHubProjectsSource {
         }
         // Nothing of an item created in this command has been sent but its create, so the edges
         // it is to have are exactly the ones its latest write names.
-        held.edges = native.to_vec();
+        held.edges = native.iter().map(|far| NativeId(far.clone())).collect();
         Ok(())
     }
 
@@ -9724,7 +9726,7 @@ impl GitHubProjectsSource {
         if created.is_empty() {
             return Ok(());
         }
-        let sent = self.send_deferred(&board, &created).await;
+        let sent = self.send_deferred(board.as_str(), &created).await;
         if let Err(error) = sent {
             // Best effort, and the failure is what the caller is told, as a write of one item
             // that fails part way takes back what it created: the copy that held these back
@@ -9757,11 +9759,11 @@ impl GitHubProjectsSource {
             for (field, value) in values {
                 fields.push(json!({"projectId":board,"itemId":item,"fieldId":field,"value":value}));
             }
-            if let Some(close) = &held.close {
-                closes.push(json!({"id": held.content.0, "stateInput": close}));
+            if let Some(reason) = held.close {
+                closes.push(json!({"id": held.content.0, "stateInput": closed_input(reason)}));
             }
             for far in &held.edges {
-                edges.push(json!({"issueId": held.content.0, "blockingIssueId": far}));
+                edges.push(json!({"issueId": held.content.0, "blockingIssueId": far.0}));
             }
             if !held.clears.is_empty() {
                 let clears: Vec<&str> = held.clears.iter().map(String::as_str).collect();
@@ -9882,23 +9884,41 @@ impl GitHubProjectsSource {
                             ),
                         });
                     }
-                    let item = data
-                        .pointer(&format!("/i{slot}/projectItems/nodes"))
+                    // An issue GitHub does not answer yet is not filed yet; one it answers is
+                    // read whole, its connection, each board item's board and its status, and
+                    // any of them unreadable is refused rather than read as not filed.
+                    let Some(node) = node else { continue };
+                    let malformed = |what: &str| SourceError::Malformed {
+                        message: format!("GitHub answered the board items of {} with {what}", id.0),
+                    };
+                    let nodes = node
+                        .pointer("/projectItems/nodes")
                         .and_then(Value::as_array)
-                        .and_then(|nodes| {
-                            nodes.iter().find(|node| {
-                                node.pointer("/project/id").and_then(Value::as_str) == Some(board)
-                            })
-                        });
+                        .ok_or_else(|| malformed("no list of board items"))?;
+                    let mut item = None;
+                    for node in nodes {
+                        let on = node
+                            .pointer("/project/id")
+                            .and_then(Value::as_str)
+                            .ok_or_else(|| malformed("a board item naming no board"))?;
+                        if on == board {
+                            item = Some(node);
+                        }
+                    }
                     if let Some(item) = item {
+                        let status = match item.get("status") {
+                            None | Some(Value::Null) => None,
+                            Some(status) => Some(
+                                status
+                                    .get("name")
+                                    .and_then(Value::as_str)
+                                    .ok_or_else(|| malformed("a status that names no option"))?
+                                    .to_owned(),
+                            ),
+                        };
                         found.insert(
                             (*id).clone(),
-                            (
-                                required_str(item, "id")?.to_owned(),
-                                item.pointer("/status/name")
-                                    .and_then(Value::as_str)
-                                    .map(str::to_owned),
-                            ),
+                            (required_str(item, "id")?.to_owned(), status),
                         );
                     }
                 }
@@ -10835,7 +10855,7 @@ enum Deferred {
     /// The items held back, every one of them on `board`.
     Held {
         /// The board every one of them is on.
-        board: String,
+        board: BoardId,
         /// Each created item, in the order it was created.
         created: Vec<HeldBack>,
     },
@@ -10862,10 +10882,10 @@ struct HeldBack {
     status: Option<(String, String, String)>,
     /// The fields it clears after those are written.
     clears: Vec<String>,
-    /// The `stateInput` that closes it, once its option is selected.
-    close: Option<Value>,
+    /// The reason it is closed for, once its option is selected; `None` leaves it open.
+    close: Option<ClosedState>,
     /// The issues it is blocked by.
-    edges: Vec<String>,
+    edges: Vec<NativeId>,
 }
 
 /// The member [`answer_with_errors`] carries a response's GraphQL errors under, beside its data:
@@ -11271,7 +11291,7 @@ struct BoardFields {
 ///
 /// Never blank, because a blank one addresses no board — so an id GitHub answers blank is
 /// refused where it is read, and one an item names blank is read as not named at all.
-#[derive(Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(try_from = "String")]
 struct BoardId(String);
 
@@ -13681,6 +13701,11 @@ fn related_kind(value: &Value) -> Result<ItemKind, SourceError> {
     })
 }
 
+/// The `stateInput` that closes an issue for `reason`.
+fn closed_input(reason: ClosedState) -> Value {
+    json!({"value":"CLOSED","stateReason":reason.reason()})
+}
+
 /// The `IssueStateUpdateInput` one status target asks for.
 ///
 /// `stateInput` and `state` are mutually exclusive on `UpdateIssueInput`, and only this
@@ -13689,9 +13714,7 @@ fn related_kind(value: &Value) -> Result<ItemKind, SourceError> {
 /// would report a change forever. A document has no status at all, and asks for neither.
 fn state_input(target: Option<&StatusTarget>) -> Value {
     match target {
-        Some(StatusTarget::Terminal(_, reason)) => {
-            json!({"value":"CLOSED","stateReason":reason.reason()})
-        }
+        Some(StatusTarget::Terminal(_, reason)) => closed_input(*reason),
         Some(StatusTarget::Column(_) | StatusTarget::Disabled(_)) => json!({"value":"OPEN"}),
         // A document has no status, so a write of one says nothing about the issue's open
         // or closed state rather than forcing it open: `stateInput` is what carries that

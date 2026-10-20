@@ -1082,6 +1082,8 @@ struct GitHubBoard {
     /// alias before it — the way GitHub runs a document's mutation fields in order and answers
     /// one that failed with `null` and an error, without undoing the ones before it.
     failing_alias: Option<&'static str>,
+    /// An alias of one batched write this board performs and then answers malformed, once.
+    bent_alias: Option<(&'static str, AliasAnswer)>,
     /// The id of a board field whose write, in whichever alias of a batched field write carries
     /// it, this board fails once in the same way.
     failing_field: Option<String>,
@@ -1598,6 +1600,12 @@ impl GitHubBoardFields {
             (id, blocker),
             TimelineEvent::dependency(RelationshipChange::Removed),
         );
+    }
+
+    /// Perform the batched write aliased `alias` in the next document carrying it, and answer
+    /// it as `answer` says, once.
+    pub fn bend_batch_alias(&self, alias: &'static str, answer: AliasAnswer) {
+        self.board.lock().unwrap().bent_alias = Some((alias, answer));
     }
 
     /// Fail the field write aliased `alias` in the next batched field write, once, after
@@ -3123,6 +3131,15 @@ fn github_projects_board_lagging(sandbox: &Sandbox, lagging_reads: usize) -> Val
 const GITHUB_FIXTURE_SECRETS: &str =
     "GITHUB_PROJECTS_FIXTURE_TOKEN=test-token\nGITHUB_PROJECTS_FIXTURE_TOKEN_B=test-token-b\n";
 
+/// How one alias of a batched write that landed is answered malformed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AliasAnswer {
+    /// With no member for the alias at all, and no error beside it.
+    Missing,
+    /// With another item's id than the one its input named.
+    NamingAnother,
+}
+
 /// How a read by issue reference can come back malformed in its first slot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReferenceFault {
@@ -3182,6 +3199,7 @@ fn github_projects_board_at(
         read_lag: Some(3600),
         pending: Vec::new(),
         failing_alias: None,
+        bent_alias: None,
         failing_field: None,
         owed_errors: Vec::new(),
         refusing: Vec::new(),
@@ -3885,7 +3903,33 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
                     one["priorityName"] = json!("Priority");
                 }
                 let answer = github_answer(board, single, &one);
-                result.insert(alias, answer[*root].clone());
+                let bent = {
+                    let mut held = board.lock().unwrap();
+                    match held.bent_alias {
+                        Some((bent, answer)) if bent == alias => {
+                            held.bent_alias = None;
+                            Some(answer)
+                        }
+                        _ => None,
+                    }
+                };
+                let mut answered = answer[*root].clone();
+                match bent {
+                    Some(AliasAnswer::Missing) => continue,
+                    Some(AliasAnswer::NamingAnother) => {
+                        for member in answered
+                            .as_object_mut()
+                            .into_iter()
+                            .flat_map(|m| m.values_mut())
+                        {
+                            if let Some(id) = member.get_mut("id") {
+                                *id = json!("ANOTHER-ITEM");
+                            }
+                        }
+                    }
+                    None => {}
+                }
+                result.insert(alias, answered);
             }
             return Value::Object(result);
         }
