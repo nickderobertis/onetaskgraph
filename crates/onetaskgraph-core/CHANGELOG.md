@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.2](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.9.1...onetaskgraph-core-v0.9.2) - 2026-10-20
+
+### Added
+
+- *(copy)* [**breaking**] home a plan where its repository-naming tasks route, and reuse its member project ([#3685](https://github.com/nickderobertis/onetaskgraph/pull/3685))
+- *(copy)* [**breaking**] record the body_digest of what Linear stores ([#3687](https://github.com/nickderobertis/onetaskgraph/pull/3687))
+
+### Performance
+
+- *(github-projects)* write a copied item in fewer requests ([#3692](https://github.com/nickderobertis/onetaskgraph/pull/3692))
+
 ## [0.9.1](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.9.0...onetaskgraph-core-v0.9.1) - 2026-10-20
 
 ### Performance
