@@ -2701,6 +2701,10 @@ pub async fn settled_fixture(
     // The last answer both searches gave whole, and whether one was abandoned at the deadline.
     let mut last = None;
     let mut cut_off = false;
+    // When each item was first reported, from the start of the wait, and how many attempts
+    // it took: what a passing run prints, so the bound can be checked against what GitHub took.
+    let mut first_reported = BTreeMap::new();
+    let mut attempts = 0_usize;
     let mut source = rebuilt();
     loop {
         let reader = source.as_ref();
@@ -2731,9 +2735,24 @@ pub async fn settled_fixture(
             break;
         };
         let (tasks, projects) = read?;
+        attempts += 1;
+        let answered_at = started.elapsed();
+        for (_, title) in tasks_expected.iter().chain(projects_expected) {
+            if tasks.contains(title) || projects.contains(title) {
+                first_reported.entry(title.clone()).or_insert(answered_at);
+            }
+        }
         if missing(tasks_expected, &tasks).is_empty()
             && missing(projects_expected, &projects).is_empty()
         {
+            say(&format!(
+                "the live fixture converged: GitHub's issue search for titles {prefix}* reported \
+                 all {} of its items at attempt {attempts}, {:.1}s after the wait began; each was \
+                 first reported at {}",
+                first_reported.len(),
+                answered_at.as_secs_f64(),
+                reported_at(&first_reported)
+            ));
             return Ok(Settled {
                 source,
                 tasks,
@@ -2790,12 +2809,23 @@ pub async fn settled_fixture(
         },
         if answered {
             format!(
-                "the last search it answered reported the tasks {tasks:?} and the projects {projects:?}"
+                "the last search it answered, attempt {attempts}, reported the tasks {tasks:?} \
+                 and the projects {projects:?}; each item reported was first reported at {}",
+                reported_at(&first_reported)
             )
         } else {
             "no search answered in full before it, so every item is named".to_owned()
         },
     ))
+}
+
+/// Each title a fixture wait saw reported, with how far into the wait it first was.
+fn reported_at(first_reported: &BTreeMap<String, std::time::Duration>) -> String {
+    first_reported
+        .iter()
+        .map(|(title, at)| format!("{title:?} {:.1}s", at.as_secs_f64()))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// One item a fixture wait gave up on, with what a read of it by its own id — which GitHub

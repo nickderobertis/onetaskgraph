@@ -450,6 +450,20 @@ fn run_pair(scenario: &str) {
         assert!(read_bill(&records, &current).is_err());
         return;
     }
+    if scenario == "search-behind" {
+        // A passing run prints when the search reported each item, which is what the bound
+        // is checked against; the late task is reported at an attempt after the first.
+        let said = String::from_utf8_lossy(&outputs[0].stderr);
+        let converged = said
+            .lines()
+            .find(|line| line.starts_with("the live fixture converged: "))
+            .unwrap_or_else(|| panic!("no convergence record: {said}"));
+        assert!(
+            converged.contains("reported all 5 of its items at attempt ")
+                && !converged.contains("at attempt 1,"),
+            "{converged}"
+        );
+    }
     for output in outputs {
         assert!(
             output.status.success(),
