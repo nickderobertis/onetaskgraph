@@ -20723,9 +20723,7 @@ fn live_pair_fixture_child() {
         _ => None,
     };
     fixture.items_connection_falls_behind();
-    // The run's second task, the one main's run 39499941270 never saw its search report: kept
-    // out of the next four searches that would list it — two attempts of the fixture wait —
-    // or out of every one.
+    // Four searches are two attempts of the fixture wait: each attempt lists tasks and projects.
     match scenario.as_str() {
         "search-behind" => fixture.search_withholds(3, 4),
         "search-never" => fixture.search_withholds(3, usize::MAX),

@@ -312,243 +312,239 @@ impl Board {
         // board behind it too, rather than a connection per request on that side.
         let mut upstream = Upstream::new(upstream.parse().expect("the board's own address"));
         serve_until(listener, Arc::clone(&stopping), move |sent, stream| {
+            if stopping.load(Ordering::SeqCst) {
+                return After::Close;
+            }
+            let request = clock.request(client);
+            let (headers, bytes) = (sent.head().to_owned(), sent.body().to_vec());
+            let raw = sent.bytes();
+            let first = headers.lines().next().unwrap();
+            let path = first.split_whitespace().nth(1).unwrap().to_owned();
+            let upload = first.starts_with("POST /user-attachments/assets?");
+            let attachment_read = first.starts_with("GET /user-attachments/assets/");
+            let graphql = path == "/graphql";
+            let creating = upload
+                || (graphql
+                    && serde_json::from_slice::<Value>(&bytes).unwrap()["query"]
+                        .as_str()
+                        .unwrap()
+                        .trim_start()
+                        .starts_with("mutation"));
+            let at = clock.now();
+            let mut answer = None;
+            let mut disconnect = false;
+            let mut truncate = false;
+            let mut status = 200;
+            let mut extra_headers = String::new();
+            let kind = Kind::of(&path, &bytes);
+            let measured;
             {
-                if stopping.load(Ordering::SeqCst) {
-                    return After::Close;
+                let mut state = held.lock().unwrap();
+                measured = state.measured;
+                let stage = if upload {
+                    Some(Stage::Upload)
+                } else if attachment_read {
+                    Some(Stage::Read)
+                } else if path.starts_with("/repos/") {
+                    Some(Stage::Repository)
+                } else {
+                    None
+                };
+                if state.disconnect.is_some() && state.disconnect == stage {
+                    disconnect = true;
+                    state.disconnect = None;
                 }
-                let request = clock.request(client);
-                let (headers, bytes) = (sent.head().to_owned(), sent.body().to_vec());
-                let raw = sent.bytes();
-                let first = headers.lines().next().unwrap();
-                let path = first.split_whitespace().nth(1).unwrap().to_owned();
-                let upload = first.starts_with("POST /user-attachments/assets?");
-                let attachment_read = first.starts_with("GET /user-attachments/assets/");
-                let graphql = path == "/graphql";
-                let creating = upload
-                    || (graphql
-                        && serde_json::from_slice::<Value>(&bytes).unwrap()["query"]
-                            .as_str()
-                            .unwrap()
-                            .trim_start()
-                            .starts_with("mutation"));
-                let at = clock.now();
-                let mut answer = None;
-                let mut disconnect = false;
-                let mut truncate = false;
-                let mut status = 200;
-                let mut extra_headers = String::new();
-                let kind = Kind::of(&path, &bytes);
-                let measured;
+
+                if state.truncate.is_some() && state.truncate == stage {
+                    truncate = true;
+                    state.truncate = None;
+                }
+
+                let minute = Duration::from_secs(60);
+                let hour = Duration::from_secs(3_600);
+                while state
+                    .creations
+                    .front()
+                    .is_some_and(|previous| at.saturating_sub(*previous) >= hour)
                 {
-                    let mut state = held.lock().unwrap();
-                    measured = state.measured;
-                    let stage = if upload {
-                        Some(Stage::Upload)
-                    } else if attachment_read {
-                        Some(Stage::Read)
-                    } else if path.starts_with("/repos/") {
-                        Some(Stage::Repository)
-                    } else {
-                        None
-                    };
-                    if state.disconnect.is_some() && state.disconnect == stage {
-                        disconnect = true;
-                        state.disconnect = None;
+                    state.creations.pop_front();
+                }
+                while state
+                    .points
+                    .front()
+                    .is_some_and(|(previous, _)| at.saturating_sub(*previous) >= minute)
+                {
+                    state.points.pop_front();
+                }
+                let charged = creations(&path, &bytes);
+                let priced = secondary_points(&path, &bytes);
+                let in_minute = state
+                    .creations
+                    .iter()
+                    .filter(|previous| at.saturating_sub(**previous) < minute)
+                    .count() as u64;
+                let in_hour = state.creations.len() as u64;
+                let points: u64 = state.points.iter().map(|(_, points)| points).sum();
+                let over = charged > 0
+                    && (in_minute + charged
+                        > onetaskgraph_github_projects::CONTENT_CREATION_PER_MINUTE
+                        || in_hour + charged
+                            > onetaskgraph_github_projects::CONTENT_CREATION_PER_HOUR)
+                    || priced > 0
+                        && points + priced
+                            > onetaskgraph_github_projects::SECONDARY_POINTS_PER_MINUTE;
+                let refused_graphql = graphql
+                    && state.graphql_refusal.as_ref().is_some_and(|refusal| {
+                        refusal.remaining > 0
+                            && String::from_utf8_lossy(&bytes).contains(refusal.matching)
+                    });
+                if over && state.enforce_limit {
+                    status = 403;
+                    extra_headers = "Retry-After: 60\r\n".to_owned();
+                    answer =
+                        Some(br#"{"message":"You have exceeded a secondary rate limit"}"#.to_vec());
+                } else if refused_graphql {
+                    let refusal = state.graphql_refusal.as_mut().expect("armed");
+                    refusal.remaining -= 1;
+                    status = refusal.status;
+                    extra_headers = refusal.headers.clone();
+                    answer = Some(refusal.body.as_bytes().to_vec());
+                } else {
+                    for _ in 0..charged {
+                        state.creations.push_back(at);
                     }
-
-                    if state.truncate.is_some() && state.truncate == stage {
-                        truncate = true;
-                        state.truncate = None;
+                    if priced > 0 {
+                        state.points.push_back((at, priced));
                     }
-
-                    let minute = Duration::from_secs(60);
-                    let hour = Duration::from_secs(3_600);
-                    while state
-                        .creations
-                        .front()
-                        .is_some_and(|previous| at.saturating_sub(*previous) >= hour)
+                    if let Some(refusal) = &mut state.refusal
+                        && refusal.remaining > 0
+                        && ((upload && refusal.stage == Stage::Upload)
+                            || (attachment_read && refusal.stage == Stage::Read)
+                            || (path.starts_with("/repos/") && refusal.stage == Stage::Repository))
                     {
-                        state.creations.pop_front();
-                    }
-                    while state
-                        .points
-                        .front()
-                        .is_some_and(|(previous, _)| at.saturating_sub(*previous) >= minute)
-                    {
-                        state.points.pop_front();
-                    }
-                    let charged = creations(&path, &bytes);
-                    let priced = secondary_points(&path, &bytes);
-                    let in_minute = state
-                        .creations
-                        .iter()
-                        .filter(|previous| at.saturating_sub(**previous) < minute)
-                        .count() as u64;
-                    let in_hour = state.creations.len() as u64;
-                    let points: u64 = state.points.iter().map(|(_, points)| points).sum();
-                    let over = charged > 0
-                        && (in_minute + charged
-                            > onetaskgraph_github_projects::CONTENT_CREATION_PER_MINUTE
-                            || in_hour + charged
-                                > onetaskgraph_github_projects::CONTENT_CREATION_PER_HOUR)
-                        || priced > 0
-                            && points + priced
-                                > onetaskgraph_github_projects::SECONDARY_POINTS_PER_MINUTE;
-                    let refused_graphql = graphql
-                        && state.graphql_refusal.as_ref().is_some_and(|refusal| {
-                            refusal.remaining > 0
-                                && String::from_utf8_lossy(&bytes).contains(refusal.matching)
-                        });
-                    if over && state.enforce_limit {
-                        status = 403;
-                        extra_headers = "Retry-After: 60\r\n".to_owned();
-                        answer = Some(
-                            br#"{"message":"You have exceeded a secondary rate limit"}"#.to_vec(),
-                        );
-                    } else if refused_graphql {
-                        let refusal = state.graphql_refusal.as_mut().expect("armed");
                         refusal.remaining -= 1;
                         status = refusal.status;
                         extra_headers = refusal.headers.clone();
                         answer = Some(refusal.body.as_bytes().to_vec());
-                    } else {
-                        for _ in 0..charged {
-                            state.creations.push_back(at);
-                        }
-                        if priced > 0 {
-                            state.points.push_back((at, priced));
-                        }
-                        if let Some(refusal) = &mut state.refusal
-                            && refusal.remaining > 0
-                            && ((upload && refusal.stage == Stage::Upload)
-                                || (attachment_read && refusal.stage == Stage::Read)
-                                || (path.starts_with("/repos/")
-                                    && refusal.stage == Stage::Repository))
-                        {
-                            refusal.remaining -= 1;
-                            status = refusal.status;
-                            extra_headers = refusal.headers.clone();
-                            answer = Some(refusal.body.as_bytes().to_vec());
-                        }
                     }
-                    if !disconnect && answer.is_none() && upload {
-                        assert!(
-                            headers
-                                .to_ascii_lowercase()
-                                .contains("authorization: bearer test-token")
-                        );
-                        assert!(
-                            headers
-                                .to_ascii_lowercase()
-                                .contains("content-type: image/png")
-                        );
-                        let id = state.assets.len() + 1;
-                        let key = format!("/user-attachments/assets/{id}");
-                        state.assets.insert(key.clone(), bytes.clone());
-                        status = 201;
-                        answer = Some(
-                            serde_json::to_vec(&json!({"url":format!("http://{address}{key}")}))
-                                .unwrap(),
-                        );
-                    } else if !disconnect && answer.is_none() && attachment_read {
-                        let authenticated = headers
+                }
+                if !disconnect && answer.is_none() && upload {
+                    assert!(
+                        headers
                             .to_ascii_lowercase()
-                            .contains("authorization: bearer test-token");
-                        answer = Some(if authenticated {
-                            state.assets.get(&path).cloned().unwrap_or_else(|| {
-                                status = 404;
-                                Vec::new()
-                            })
-                        } else {
+                            .contains("authorization: bearer test-token")
+                    );
+                    assert!(
+                        headers
+                            .to_ascii_lowercase()
+                            .contains("content-type: image/png")
+                    );
+                    let id = state.assets.len() + 1;
+                    let key = format!("/user-attachments/assets/{id}");
+                    state.assets.insert(key.clone(), bytes.clone());
+                    status = 201;
+                    answer = Some(
+                        serde_json::to_vec(&json!({"url":format!("http://{address}{key}")}))
+                            .unwrap(),
+                    );
+                } else if !disconnect && answer.is_none() && attachment_read {
+                    let authenticated = headers
+                        .to_ascii_lowercase()
+                        .contains("authorization: bearer test-token");
+                    answer = Some(if authenticated {
+                        state.assets.get(&path).cloned().unwrap_or_else(|| {
                             status = 404;
                             Vec::new()
-                        });
-                    } else if !disconnect && answer.is_none() && path.starts_with("/repos/") {
-                        assert!(
-                            headers
-                                .to_ascii_lowercase()
-                                .contains("authorization: bearer test-token")
-                        );
-                        answer = Some(if path == "/repos/fixture/transferred" {
-                            br#"{"id":654321}"#.to_vec()
-                        } else {
-                            br#"{"id":123456}"#.to_vec()
-                        });
-                    }
-                    if !disconnect {
-                        state.calls.push(Call {
-                            client,
-                            path: path.clone(),
-                            headers: headers.clone(),
-                            bytes: bytes.clone(),
-                            at,
-                            status,
-                            creating,
-                            kind,
-                            answered: at,
-                        });
-                    }
-                }
-                if disconnect {
-                    return After::Close;
-                }
-                let forwarded = if answer.is_none() {
-                    assert!(graphql, "unexpected endpoint {path}");
-                    let mut response = upstream.forward(&raw);
-                    let transfers = held.lock().unwrap().transferred.clone();
-                    if !transfers.is_empty() {
-                        let body = response
-                            .windows(4)
-                            .position(|part| part == b"\r\n\r\n")
-                            .unwrap()
-                            + 4;
-                        let mut value: Value = serde_json::from_slice(&response[body..]).unwrap();
-                        transfer_repositories(&mut value, &transfers);
-                        let body = serde_json::to_vec(&value).unwrap();
-                        response = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n", body.len()).into_bytes();
-                        response.extend(body);
-                    }
-                    Some(response)
-                } else {
-                    None
-                };
-                let latency = held.lock().unwrap().latency;
-                runtime.block_on(request.delay(latency.unwrap_or(Duration::from_millis(
-                    if measured {
-                        kind.measured_millis()
-                    } else if upload {
-                        800
+                        })
                     } else {
-                        200
-                    },
-                ))));
-                let answered = clock.now();
-                if let Some(call) = held.lock().unwrap().calls.last_mut() {
-                    call.answered = answered;
-                }
-                // A board that closed its connection unanswered is relayed as just that.
-                let after = if forwarded.as_ref().is_some_and(Vec::is_empty) || truncate {
-                    After::Close
-                } else {
-                    After::KeepOpen
-                };
-                if let Some(forwarded) = forwarded {
-                    stream.write_all(&forwarded).unwrap();
-                } else {
-                    let answer = answer.unwrap();
-                    // A body cut short is followed by the connection closing, as it is on a
-                    // real host, so the client reads it as cut short rather than waiting.
-                    let closing = if truncate {
-                        "Connection: close\r\n"
+                        status = 404;
+                        Vec::new()
+                    });
+                } else if !disconnect && answer.is_none() && path.starts_with("/repos/") {
+                    assert!(
+                        headers
+                            .to_ascii_lowercase()
+                            .contains("authorization: bearer test-token")
+                    );
+                    answer = Some(if path == "/repos/fixture/transferred" {
+                        br#"{"id":654321}"#.to_vec()
                     } else {
-                        ""
-                    };
-                    write!(stream, "HTTP/1.1 {status} Fixture\r\nContent-Length: {}\r\n{closing}{extra_headers}\r\n", answer.len() + usize::from(truncate)).unwrap();
-                    stream.write_all(&answer).unwrap();
+                        br#"{"id":123456}"#.to_vec()
+                    });
                 }
-                drop(request);
-                after
+                if !disconnect {
+                    state.calls.push(Call {
+                        client,
+                        path: path.clone(),
+                        headers: headers.clone(),
+                        bytes: bytes.clone(),
+                        at,
+                        status,
+                        creating,
+                        kind,
+                        answered: at,
+                    });
+                }
             }
+            if disconnect {
+                return After::Close;
+            }
+            let forwarded = if answer.is_none() {
+                assert!(graphql, "unexpected endpoint {path}");
+                let mut response = upstream.forward(&raw);
+                let transfers = held.lock().unwrap().transferred.clone();
+                if !transfers.is_empty() {
+                    let body = response
+                        .windows(4)
+                        .position(|part| part == b"\r\n\r\n")
+                        .unwrap()
+                        + 4;
+                    let mut value: Value = serde_json::from_slice(&response[body..]).unwrap();
+                    transfer_repositories(&mut value, &transfers);
+                    let body = serde_json::to_vec(&value).unwrap();
+                    response = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n", body.len()).into_bytes();
+                    response.extend(body);
+                }
+                Some(response)
+            } else {
+                None
+            };
+            let latency = held.lock().unwrap().latency;
+            runtime.block_on(request.delay(latency.unwrap_or(Duration::from_millis(
+                if measured {
+                    kind.measured_millis()
+                } else if upload {
+                    800
+                } else {
+                    200
+                },
+            ))));
+            let answered = clock.now();
+            if let Some(call) = held.lock().unwrap().calls.last_mut() {
+                call.answered = answered;
+            }
+            // A board that closed its connection unanswered is relayed as just that.
+            let after = if forwarded.as_ref().is_some_and(Vec::is_empty) || truncate {
+                After::Close
+            } else {
+                After::KeepOpen
+            };
+            if let Some(forwarded) = forwarded {
+                stream.write_all(&forwarded).unwrap();
+            } else {
+                let answer = answer.unwrap();
+                // A body cut short is followed by the connection closing, as it is on a
+                // real host, so the client reads it as cut short rather than waiting.
+                let closing = if truncate {
+                    "Connection: close\r\n"
+                } else {
+                    ""
+                };
+                write!(stream, "HTTP/1.1 {status} Fixture\r\nContent-Length: {}\r\n{closing}{extra_headers}\r\n", answer.len() + usize::from(truncate)).unwrap();
+                stream.write_all(&answer).unwrap();
+            }
+            drop(request);
+            after
         });
         Self {
             endpoint,

@@ -104,7 +104,6 @@ fn a_connection_the_board_closes_unanswered_is_replaced_and_the_copy_lands() {
         "the connection closed under the binary is the one it stops using, and every request \
          after it shares the one that replaced it"
     );
-    // The board answers a later invocation on a connection of its own.
     let b = copied["items"][0]["destination"]
         .as_str()
         .expect("the copy names where B landed");
