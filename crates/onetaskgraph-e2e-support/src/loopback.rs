@@ -1,10 +1,7 @@
-//! Persistent HTTP/1.1 connections for a loopback server a journey's binary talks to.
-//!
-//! A connection per request leaves a socket in `TIME_WAIT` per request, and a suite opening
-//! thousands a minute runs the Windows runner out of ephemeral ports (AGENTS.md says how). So
-//! a binary's requests share the one connection its client keeps alive, and the server closes
-//! a connection only once its client has, or asked it to — so a client is never handed back a
-//! connection the server already closed.
+//! Persistent HTTP/1.1 connections for a loopback server a journey's binary talks to — why
+//! they are persistent is in AGENTS.md. A binary's requests share the one connection its
+//! client keeps alive, and the server closes a connection only once its client has, or asked
+//! it to, so a client is never handed back a connection the server already closed.
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};

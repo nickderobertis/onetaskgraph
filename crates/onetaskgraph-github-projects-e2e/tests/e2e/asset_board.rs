@@ -308,9 +308,8 @@ impl Board {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap();
-        // The binary's connection stays open between its requests, and so does this proxy's
-        // to the board behind it: a connection per request, on either side, is what ran the
-        // Windows runner out of ephemeral ports. See `onetaskgraph_e2e_support::loopback`.
+        // The binary keeps its connection to this proxy open, so the proxy keeps one to the
+        // board behind it too, rather than a connection per request on that side.
         let mut upstream = Upstream::new(upstream.parse().expect("the board's own address"));
         serve_until(listener, Arc::clone(&stopping), move |sent, stream| {
             {
