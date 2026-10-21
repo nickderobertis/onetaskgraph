@@ -380,3 +380,28 @@ fn a_document_write_refuses_a_version_it_cannot_order_and_a_document_the_board_l
     assert_ne!(refused.status.code(), Some(0), "{}", stdout(&refused));
     assert!(stderr(&refused).contains("leave --expect out"));
 }
+
+#[test]
+fn a_document_write_refused_after_its_version_held_writes_nothing_and_the_next_one_lands() {
+    let (plan, _, document) = copied(false);
+    let id = format!("board:{document}");
+    let version = shown_version(&plan, &id);
+    let before = plan.github.body(&document);
+    plan.github.refuse_once("updateIssue(input:$input)");
+    let (refused, calls) = set_expecting(&plan, &id, KEY, &version);
+    assert_ne!(refused.status.code(), Some(0), "{}", stdout(&refused));
+    assert_eq!(
+        sent(&calls),
+        GUARDED_WRITE,
+        "the write was sent once, after the read"
+    );
+    let failure: Value = serde_json::from_str(&stdout(&refused)).expect("a failure document");
+    assert_ne!(failure["failure"]["kind"], "version-moved", "{failure}");
+    assert_eq!(plan.github.body(&document), before);
+
+    // Nothing was written, so the version still holds and the next write lands.
+    let (landed, calls) = set_expecting(&plan, &id, KEY, &version);
+    assert_eq!(landed.status.code(), Some(0), "{}", stderr(&landed));
+    assert_eq!(sent(&calls), GUARDED_WRITE);
+    assert_eq!(slot(&plan, &document)[KEY], json!(true));
+}

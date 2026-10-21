@@ -171,7 +171,7 @@ fn report_metadata_fields() {
     let (value, detail) = metadata_field_share(&budget).unwrap_or_else(|error| refuse(&error));
     hand_over(value, &detail);
 }
-// llmlint: ignore-block[budget_commands_measure_directly] Every budget of this crate selects its own report-only entry here, the harness-runner convention it landed with (report_visibility_reads, report_metadata_fields), and the task registering this one names the measuring command this crate's point budgets use. It reads only the telemetry `approval.rs` recorded during the crate's ordinary test run, refuses a recording of another sequence or board, and hands the figure to onebudgetspec, which alone judges it.
+// llmlint: ignore-block[budget_commands_measure_directly] This entry reports the telemetry the `approval` journey measured in the crate's test run, refusing any other recording; onebudgetspec judges the figure.
 #[test]
 fn report_approval_calls() {
     let Some(budget) = selected() else {
@@ -345,6 +345,64 @@ fn approval_calls_of(value: &Value) -> Result<(f64, String), String> {
     let detail = value["detail"].as_str().ok_or("missing detail")?.to_owned();
     let figure = u32::try_from(figure).map_err(|_| "figure out of range")?;
     Ok((f64::from(figure), detail))
+}
+
+#[test]
+fn the_approval_report_entry_hands_over_only_a_recording_of_the_approval() {
+    use onetaskgraph_e2e_support::common::Sandbox;
+    use serde_json::json;
+    let sandbox = Sandbox::new();
+    let directory = sandbox.subdirectory("approval");
+    std::fs::create_dir_all(&directory).unwrap();
+    let budget = super::approval::BUDGET;
+    let run = |recorded: &Value| {
+        let path = onetaskgraph_e2e_support::telemetry::file_in(&directory, budget);
+        std::fs::write(&path, recorded.to_string()).unwrap();
+        let result = directory.join("result.json");
+        let _ = std::fs::remove_file(&result);
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "budget_runner::report_approval_calls",
+                "--exact",
+                "--nocapture",
+            ])
+            .env("GITHUB_ASSET_TELEMETRY_DIR", &directory)
+            .env("ONEBUDGETSPEC_BUDGET_ID", budget)
+            .env("ONEBUDGETSPEC_RESULT", &result)
+            .output()
+            .unwrap();
+        (output, std::fs::read_to_string(&result).ok())
+    };
+    let calls: Vec<Value> = super::approval::CALLS
+        .iter()
+        .map(|call| json!({"call": call, "requests": 1, "points": 1}))
+        .collect();
+    let valid = json!({"budget": budget, "value": calls.len(), "detail": "recorded",
+        "workload": super::approval::WORKLOAD, "board": super::plan_copy::SMALL,
+        "tasks": super::plan_copy::TASKS, "documents": 1, "calls": calls});
+    let (output, written) = run(&valid);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let written: Value = serde_json::from_str(&written.expect("a figure")).unwrap();
+    assert_eq!(
+        written["value"].as_f64(),
+        Some(super::approval::CALLS.len() as f64),
+        "{written}"
+    );
+
+    let mut other = valid.clone();
+    other["workload"] = json!("a plan copy");
+    let (output, written) = run(&other);
+    assert!(!output.status.success(), "accepted another workload");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("not of the approval sequence"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(written, None, "reported a figure over another workload");
 }
 
 #[test]
