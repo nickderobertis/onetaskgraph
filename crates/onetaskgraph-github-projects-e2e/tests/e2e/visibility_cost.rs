@@ -122,7 +122,11 @@ fn serve(
             request["query"] == onetaskgraph_github_projects::graphql::PROJECT_VISIBILITY
         });
     let mut connection = TcpStream::connect(upstream).expect("the fixture board");
-    connection.write_all(&raw).expect("forwarded");
+    // One request per connection, both ways: the board closes this one after answering, which
+    // is what reading to its end needs, and says so to the binary this proxy relays it to.
+    connection
+        .write_all(&onetaskgraph_e2e_support::loopback::closing(&raw))
+        .expect("forwarded");
     let mut response = Vec::new();
     connection.read_to_end(&mut response).expect("answered");
     if visibility {

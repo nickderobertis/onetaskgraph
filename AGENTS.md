@@ -1510,6 +1510,14 @@ The capture drives `local-md` and `in-memory` only: no credential or socket.
   three scripts that need it again with a relative entry first on PATH — and refuses to run
   at all when the host cannot reproduce the defect, because a simulation that did not take
   would look exactly like a pass.
+- **A loopback board keeps its connections alive, and a proxy in front of one forwards
+  through `loopback::Upstream`.** Answering every request `Connection: close` left a socket
+  in `TIME_WAIT` per request, and on the Windows runner — 120 seconds of it, one range of
+  16,384 ports for every ephemeral port and listener — a suite opening thousands a minute ran
+  out, and a request failed `error sending request` against a board that was listening.
+  `crates/onetaskgraph-e2e-support/src/loopback.rs` serves persistent HTTP/1.1 and closes a
+  connection only once its client has, or asked to; a proxy that forwards and then reads to
+  the end of the board's answer waits forever on it.
 - **Suppress narrowly.** A diagnostic is an error or a suppression at that one site with a
   stated reason. `notignored` posts every suppression a PR adds, so they are read.
 - **`gh-secrets.json` is tracked and load-bearing.** It declares the repository secrets

@@ -1,9 +1,10 @@
 //! The asset journeys' HTTP boundary: real sockets, whole bodies and GitHub's rolling limiter.
 use onetaskgraph_e2e_support::clock::SimulatedClock;
+use onetaskgraph_e2e_support::loopback::{After, Upstream, serve_until};
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, VecDeque},
-    io::{Read, Write},
+    io::Write,
     net::{TcpListener, TcpStream},
     sync::{
         Arc, Mutex,
@@ -304,17 +305,21 @@ impl Board {
             .unwrap()
             .to_owned();
         let clock = clock.clone();
-        std::thread::spawn(move || {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .build()
-                .unwrap();
-            for stream in listener.incoming() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        // The binary's connection stays open between its requests, and so does this proxy's
+        // to the board behind it: a connection per request, on either side, is what ran the
+        // Windows runner out of ephemeral ports. See `onetaskgraph_e2e_support::loopback`.
+        let mut upstream = Upstream::new(&upstream);
+        serve_until(listener, Arc::clone(&stopping), move |sent, stream| {
+            {
                 if stopping.load(Ordering::SeqCst) {
-                    break;
+                    return After::Close;
                 }
-                let mut stream = stream.unwrap();
                 let request = clock.request(client);
-                let (headers, bytes, raw) = read_request(&mut stream);
+                let (headers, bytes) = (sent.head.clone(), sent.body.clone());
+                let raw = [sent.head.as_bytes(), &sent.body].concat();
                 let first = headers.lines().next().unwrap();
                 let path = first.split_whitespace().nth(1).unwrap().to_owned();
                 let upload = first.starts_with("POST /user-attachments/assets?");
@@ -486,14 +491,11 @@ impl Board {
                     }
                 }
                 if disconnect {
-                    continue;
+                    return After::Close;
                 }
                 let forwarded = if answer.is_none() {
                     assert!(graphql, "unexpected endpoint {path}");
-                    let mut connection = TcpStream::connect(&upstream).unwrap();
-                    connection.write_all(&raw).unwrap();
-                    let mut response = Vec::new();
-                    connection.read_to_end(&mut response).unwrap();
+                    let mut response = upstream.forward(&raw);
                     let transfers = held.lock().unwrap().transferred.clone();
                     if !transfers.is_empty() {
                         let body = response
@@ -504,7 +506,7 @@ impl Board {
                         let mut value: Value = serde_json::from_slice(&response[body..]).unwrap();
                         transfer_repositories(&mut value, &transfers);
                         let body = serde_json::to_vec(&value).unwrap();
-                        response = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).into_bytes();
+                        response = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n", body.len()).into_bytes();
                         response.extend(body);
                     }
                     Some(response)
@@ -525,14 +527,28 @@ impl Board {
                 if let Some(call) = held.lock().unwrap().calls.last_mut() {
                     call.answered = answered;
                 }
+                // A board that closed its connection unanswered is relayed as just that.
+                let after = if forwarded.as_ref().is_some_and(Vec::is_empty) || truncate {
+                    After::Close
+                } else {
+                    After::KeepOpen
+                };
                 if let Some(forwarded) = forwarded {
                     stream.write_all(&forwarded).unwrap();
                 } else {
                     let answer = answer.unwrap();
-                    write!(stream, "HTTP/1.1 {status} Fixture\r\nContent-Length: {}\r\nConnection: close\r\n{extra_headers}\r\n", answer.len() + usize::from(truncate)).unwrap();
+                    // A body cut short is followed by the connection closing, as it is on a
+                    // real host, so the client reads it as cut short rather than waiting.
+                    let closing = if truncate {
+                        "Connection: close\r\n"
+                    } else {
+                        ""
+                    };
+                    write!(stream, "HTTP/1.1 {status} Fixture\r\nContent-Length: {}\r\n{closing}{extra_headers}\r\n", answer.len() + usize::from(truncate)).unwrap();
                     stream.write_all(&answer).unwrap();
                 }
                 drop(request);
+                after
             }
         });
         Self {
@@ -619,35 +635,4 @@ impl Drop for Board {
             .unwrap();
         let _ = TcpStream::connect(address);
     }
-}
-fn read_request(stream: &mut TcpStream) -> (String, Vec<u8>, Vec<u8>) {
-    let mut raw = Vec::new();
-    let mut chunk = [0; 8192];
-    let end = loop {
-        let count = stream.read(&mut chunk).unwrap();
-        assert!(count > 0, "request ended before headers");
-        raw.extend_from_slice(&chunk[..count]);
-        if let Some(end) = raw.windows(4).position(|bytes| bytes == b"\r\n\r\n") {
-            break end + 4;
-        }
-    };
-    let headers = String::from_utf8(raw[..end].to_vec()).unwrap();
-    let length = headers
-        .lines()
-        .find_map(|line| {
-            line.to_ascii_lowercase()
-                .strip_prefix("content-length: ")
-                .map(|number| {
-                    number
-                        .parse::<usize>()
-                        .expect("Content-Length must be an unsigned integer")
-                })
-        })
-        .unwrap_or(0);
-    while raw.len() < end + length {
-        let count = stream.read(&mut chunk).unwrap();
-        assert!(count > 0, "request ended before all declared bytes");
-        raw.extend_from_slice(&chunk[..count]);
-    }
-    (headers, raw[end..end + length].to_vec(), raw)
 }
