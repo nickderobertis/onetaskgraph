@@ -1,10 +1,7 @@
 //! How many TCP connections the binary opens to the loopback board, and what one closed under
-//! it leaves.
-//!
-//! A connection per request is what ran the Windows runner out of ports and failed `task copy
-//! plans:B plans:C --to board` against a board that was listening; see
-//! `onetaskgraph_e2e_support::loopback`. Each journey here drives that command's own sequence
-//! — a fresh board, then the copy — and holds the binary to the one connection it keeps alive.
+//! it leaves; `onetaskgraph_e2e_support::loopback` says why that count matters. Each journey
+//! drives the sequence of the copy that failed on Windows — a fresh board, then `task copy
+//! plans:B plans:C --to board` — and holds the binary to the one connection it keeps alive.
 
 use std::process::Output;
 
