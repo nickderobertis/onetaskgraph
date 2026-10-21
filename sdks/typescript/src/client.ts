@@ -1178,11 +1178,14 @@ export class OnetaskgraphClient {
   projectCopy(
     id: string,
     to: string,
-    options: CopyOptions & { noTasks?: boolean; members?: string[] } = {},
+    // `membersOnly` copies the named `members` into the project the destination already holds,
+    // leaving that project unread and unwritten; it is refused without a member.
+    options: CopyOptions & { noTasks?: boolean; members?: string[]; membersOnly?: boolean } = {},
   ): Promise<CopyReport> {
     const args = [id, "--to", to, ...copyFlags("projectCopy", options)];
     if (options.noTasks) args.push("--no-tasks");
     for (const member of options.members ?? []) args.push("--member", member);
+    if (options.membersOnly) args.push("--members-only");
     return this.run("project copy", args);
   }
   projectMetadataSet(

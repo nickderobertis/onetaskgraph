@@ -543,6 +543,34 @@ def test_project_copy_drives_the_binary(binary: Path, tmp_path: Path) -> None:
     assert refused.value.exit_code == 1
     assert "from:T-9 is not a task of from:P-1" in str(refused.value)
 
+    # Members only: the project already there is left exactly as it is, though its source moved.
+    (root / "from" / "projects" / "P-1.md").write_text(
+        "---\ntitle: Engine, renamed\nstatus: todo\n---\nthe engine\n", encoding="utf-8"
+    )
+    (root / "from" / "tasks" / "T-2.md").write_text(
+        "---\ntitle: Beta engine\nstatus: todo\nproject: P-1\n---\nmore core\n",
+        encoding="utf-8",
+    )
+    held = (root / "into" / "projects" / "P-1.md").read_bytes()
+    only = run(
+        client.project_copy(id="from:P-1", to="into", member=["from:T-2"], members_only=True)
+    )
+    assert [(item.root.source.root, item.root.action) for item in only.items] == [
+        ("from:T-2", "created"),
+    ]
+    assert (root / "into" / "projects" / "P-1.md").read_bytes() == held
+    (root / "from" / "projects" / "P-2.md").write_text(
+        "---\ntitle: Not copied\nstatus: todo\n---\n", encoding="utf-8"
+    )
+    (root / "from" / "tasks" / "T-3.md").write_text(
+        "---\ntitle: Gamma\nstatus: todo\nproject: P-2\n---\n", encoding="utf-8"
+    )
+    with pytest.raises(OnetaskgraphError) as lacking:
+        run(client.project_copy(id="from:P-2", to="into", member=["from:T-3"], members_only=True))
+    assert lacking.value.exit_code == 1
+    assert "`onetaskgraph project copy from:P-2 --to into`" in str(lacking.value)
+    assert not (root / "into" / "tasks" / "T-3.md").exists()
+
 
 def test_project_graph_drives_the_binary(binary: Path, tmp_path: Path) -> None:
     """Read a project's graph as the JSON form names it, grouped and refused."""

@@ -396,6 +396,24 @@ test("copy drives the real binary and reports what it did to each item", async (
     await expect(
       copyClient.projectCopy("from:P-1", "into", { members: ["from:T-9"] }),
     ).rejects.toThrow("from:T-9 is not a task of from:P-1");
+    // Members only: the project already there is left exactly as it is, though its source moved.
+    const projectFile = resolve(copyRoot, "from/projects/P-1.md");
+    writeFileSync(
+      projectFile,
+      readFileSync(projectFile, "utf8").replace("title: Engine", "title: Engine, renamed"),
+    );
+    const held = readFileSync(resolve(copyRoot, "into/projects/P-1.md"), "utf8");
+    const only = await copyClient.projectCopy("from:P-1", "into", {
+      members: ["from:T-1"],
+      membersOnly: true,
+    });
+    expect(only.items.map((item) => [item.source, item.action])).toEqual([
+      ["from:T-1", "unchanged"],
+    ]);
+    expect(readFileSync(resolve(copyRoot, "into/projects/P-1.md"), "utf8")).toBe(held);
+    await expect(copyClient.projectCopy("from:P-1", "into", { membersOnly: true })).rejects.toThrow(
+      "--member",
+    );
 
     // A destination with no write side is refused, naming the source and its plugin.
     writeFileSync(
