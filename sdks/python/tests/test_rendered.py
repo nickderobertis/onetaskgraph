@@ -68,7 +68,9 @@ def plan(binary: Path, tmp_path: Path) -> tuple[Client, Path]:
     template.write_text(TASK, encoding="utf-8", newline="\n")
     environment = dict(os.environ)
     environment["ONETASKGRAPH_INTERACTIVE"] = "true"
-    return Client(binary, cwd=tmp_path, environment=environment), template
+    client = Client(binary, cwd=tmp_path, environment=environment)
+    run(client.project_create("notes", "P-1", "Plan"))
+    return client, template
 
 
 def provenance(detail: TaskDetail) -> TemplateProvenance:

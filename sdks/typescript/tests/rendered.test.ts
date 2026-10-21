@@ -37,12 +37,14 @@ let root = "";
 let template = "";
 let client: OnetaskgraphClient;
 
-beforeAll(() => {
+beforeAll(async () => {
   root = mkdtempSync(resolve(tmpdir(), "onetaskgraph-rendered-"));
   mkdirSync(resolve(root, "notes"));
   writeFileSync(
     resolve(root, "onetaskgraph.yaml"),
-    JSON.stringify({ sources: { notes: { plugin: "local-md", config: { root: "notes" } } } }),
+    JSON.stringify({
+      sources: { notes: { plugin: "local-md", visibility: "private", config: { root: "notes" } } },
+    }),
   );
   template = resolve(root, "task.md");
   writeFileSync(template, TASK);
@@ -52,6 +54,7 @@ beforeAll(() => {
     cwd: root,
     env: { ONETASKGRAPH_INTERACTIVE: "true" },
   });
+  await client.projectCreate("notes", "P-1", "Plan", { classification: "private" });
 });
 
 afterAll(() => {
