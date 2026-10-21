@@ -31,7 +31,6 @@ pub(super) const CALLS: [&str; 5] = [
     "document metadata set --expect",
 ];
 
-/// The metadata key approval writes.
 const KEY: &str = "plan.approval";
 
 /// One call of the sequence: what it printed, and the requests the board answered for it.
@@ -71,7 +70,6 @@ fn version_of(shown: &Value) -> String {
         .to_owned()
 }
 
-/// The approval sequence, as approval sends it.
 fn approve(plan: &Plan, project: &str, document: &str) -> Vec<Step> {
     let project = format!("board:{project}");
     let document = format!("board:{document}");
@@ -500,6 +498,71 @@ fn a_document_write_whose_entry_cannot_be_retired_is_refused_unsent() {
             .all(|call| !operation(call).starts_with("updating an issue")),
         "{:?}",
         calls.iter().map(operation).collect::<Vec<_>>()
+    );
+    assert_eq!(plan.github.body(&document), before);
+}
+
+#[test]
+fn a_document_write_expecting_a_version_newer_than_the_cache_holds_reads_it_and_writes() {
+    let (plan, project, document) = copied();
+    let id = format!("board:{document}");
+    let held = version_of(&success(&plan.run(&["document", "show", &id, "--json"])));
+    plan.github
+        .edit_body(&document, "Edited by a person before approval.");
+    // A listing reports the newer version without keeping an entry for it.
+    let listed = success(&plan.run(&[
+        "document",
+        "list",
+        "--source",
+        "board",
+        "--project",
+        &format!("board:{project}"),
+        "--json",
+    ]));
+    let newer = version_of(&listed);
+    assert_ne!(newer, held);
+    let (output, calls) = plan.measured_output(&[
+        "document", "metadata", "set", &id, KEY, "true", "--expect", &newer, "--json",
+    ]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let operations: Vec<String> = calls.iter().map(operation).collect();
+    assert_eq!(operations.len(), 2, "{operations:?}");
+    assert_eq!(operations[0], "reading one issue");
+    let answer: Value = serde_json::from_str(&stdout(&output)).unwrap();
+    assert!(
+        answer["fallback"]["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("expected version")),
+        "{answer}"
+    );
+    let body = plan.github.body(&document);
+    assert!(
+        body.as_str()
+            .unwrap()
+            .starts_with("Edited by a person before approval."),
+        "{body}"
+    );
+    assert_eq!(slot(&plan, &document)[KEY], json!(true));
+
+    // A version the source cannot order against what it holds is read, and refused on it.
+    let before = plan.github.body(&document);
+    let (refused, calls) = plan.measured_output(&[
+        "document",
+        "metadata",
+        "set",
+        &id,
+        "plan.other",
+        "true",
+        "--expect",
+        "not-a-version",
+    ]);
+    assert_ne!(refused.status.code(), Some(0), "{}", stdout(&refused));
+    let operations: Vec<String> = calls.iter().map(operation).collect();
+    assert_eq!(operations, vec!["reading one issue".to_owned()]);
+    assert!(
+        stderr(&refused).contains("not-a-version"),
+        "{}",
+        stderr(&refused)
     );
     assert_eq!(plan.github.body(&document), before);
 }

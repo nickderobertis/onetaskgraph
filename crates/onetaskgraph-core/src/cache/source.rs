@@ -656,15 +656,10 @@ impl CachedSource {
         if let (Some((held, _)), Some(Ordering::Greater)) = (&held, order) {
             return refuse(held, "the store's cache already holds that later version");
         }
-        let context = match (held, order) {
-            (Some((_, Some(context))), Some(Ordering::Equal)) => Some((context, None)),
-            _ => None,
-        };
-        let (context, reason) = match context {
-            Some(found) => found,
+        let equal = order == Some(Ordering::Equal);
+        let (context, reason) = match held.and_then(|(_, context)| context).filter(|_| equal) {
+            Some(context) => (context, None),
             None => {
-                // One read, which keeps what it answered — its context included — as any read of
-                // the document does.
                 let Some(read) = self.get_document(id).await? else {
                     self.cache.take_expected(id);
                     return Ok(None);
@@ -676,13 +671,16 @@ impl CachedSource {
                         "a read of it made for this write answered that version",
                     );
                 }
-                let reason = "the cache did not hold this document at the expected version, so \
-                              it was read"
-                    .to_owned();
-                match self.inner.write_context(id) {
-                    Some(context) => (context, Some(reason)),
-                    None => (Value::Null, Some(reason)),
-                }
+                let reason = if equal {
+                    "the cache kept nothing a write of this document could take instead of \
+                     reading it, so it was read"
+                } else {
+                    "the cache did not hold this document at the expected version, so it was read"
+                };
+                (
+                    self.inner.write_context(id).unwrap_or(Value::Null),
+                    Some(reason.to_owned()),
+                )
             }
         };
         let primed = !context.is_null() && self.inner.prime_write(id, &context, None);
@@ -738,9 +736,11 @@ impl CachedSource {
                 fallback: reason.map(|reason| WriteFallback { read: true, reason }),
                 spent,
             },
+            // A source that records no journal says nothing of its mutations, and the read made
+            // here for want of what the write could take is still the store's to report.
             None => ExpectedWrite {
                 result: None,
-                fallback: None,
+                fallback: reason.map(|reason| WriteFallback { read: true, reason }),
                 spent,
             },
         };

@@ -1017,3 +1017,52 @@ fn every_linear_write_takes_the_entries_naming_its_item_out_of_service() {
     assert_eq!(sent.len(), 1, "the copied-over issue is read from Linear");
     assert_eq!(shown["items"][0]["item"]["title"], "Copied in again");
 }
+
+/// Linear's documents are cached without anything a write could take in place of reading, so a
+/// metadata write expecting the version the store holds reads the document once, says why, and
+/// writes; one expecting a version the store has seen superseded writes nothing.
+#[test]
+fn a_document_write_expecting_its_cached_version_reads_once_when_the_source_keeps_no_context() {
+    let cached = Cached::new(dataset());
+    let held = cached.listed("document", "linear:D-1").expect("a token");
+    cached.ok(&strs(&pinned("document", "linear:D-1", &held)));
+    let (answer, sent) = cached.ok(&[
+        "document",
+        "metadata",
+        "set",
+        "linear:D-1",
+        "caller.note",
+        "\"noted\"",
+        "--expect",
+        &held,
+        "--json",
+    ]);
+    assert!(sent.len() >= 2, "a read, then the write: {sent:?}");
+    assert!(
+        answer["fallback"]["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("kept nothing a write")),
+        "{answer}"
+    );
+    assert_eq!(answer["value"], "noted", "{answer}");
+
+    let later = cached.listed("document", "linear:D-1").expect("a token");
+    assert_ne!(later, held, "the write moved the document's version");
+    cached.ok(&strs(&pinned("document", "linear:D-1", &later)));
+    let refused = cached.run(&[
+        "document",
+        "metadata",
+        "set",
+        "linear:D-1",
+        "caller.other",
+        "true",
+        "--expect",
+        &held,
+    ]);
+    assert_ne!(refused.status.code(), Some(0));
+    let said = String::from_utf8_lossy(&refused.stderr);
+    assert!(
+        said.contains(&held) && said.contains("nothing was written"),
+        "{said}"
+    );
+}

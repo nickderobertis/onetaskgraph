@@ -768,18 +768,9 @@ const BOARD_ITEMS_PAGE_SIZE: u32 = 3;
 const ORIGIN_PAGE_SIZE: u32 = 3;
 
 /// How many of one project's sub-issues one [`graphql::SUB_ISSUES`] page asks for: the most
-/// one point buys.
-///
-/// GitHub charges a page for every connection under it, once per row: each sub-issue carries
-/// its labels, its page of board memberships, the field values of each of those three
-/// memberships and its `blockedBy` — six requests' worth of the aggregate GitHub divides by a
-/// hundred and rounds — and the project issue beside them carries those and the `subIssues`
-/// connection itself, seven. Twenty-three rows come to 145, which rounds to one point;
-/// twenty-four come to 151, which rounds to two. At [`MAX_PAGE_SIZE`] the page cost six, so a
-/// plan's project — a handful of tasks and its design document — paid six points to be listed
-/// where one buys every row of it; a project of more than a page costs a point per page, which
-/// is still never more than the hundred-row pages cost per row. `tests/point_cost.rs` prices the
-/// document at one point and fails if one row more would still be priced at one.
+/// one point buys, since every row carries six connections GitHub charges for once per row.
+/// `session-cost.md` derives it; `tests/point_cost.rs` prices the document at one point and
+/// fails if one row more would still be priced at one.
 pub const MEMBER_PAGE_SIZE: u32 = 23;
 
 pub use github_graphql_node_count::{NodeCountError, Variables};

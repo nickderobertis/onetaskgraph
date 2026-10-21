@@ -337,7 +337,7 @@ fn approval_calls_of(value: &Value) -> Result<(f64, String), String> {
         let (Some(_), Some(spent)) = (call["requests"].as_u64(), call["points"].as_u64()) else {
             return Err("a call of the breakdown has no whole requests and points".into());
         };
-        points += spent;
+        points = u64::checked_add(points, spent).ok_or("the breakdown's points overflow")?;
     }
     if points != figure {
         return Err("the breakdown does not add up to the figure".into());
