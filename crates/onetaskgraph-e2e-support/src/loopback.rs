@@ -207,12 +207,12 @@ fn serve_counting<A>(
                 Ok(stream) => stream,
                 // llmlint: ignore[changed_behavior_has_e2e] A loopback accept fails only for a connection reset before it was accepted or a host out of sockets, neither of which a test can provoke on Linux or macOS; this is the Windows failure it exists to name.
                 Err(error) => {
-                    eprintln!(
+                    report(format!(
                         "loopback server on {}: an accept failed: {error}",
                         listener
                             .local_addr()
                             .map_or_else(|_| "?".to_owned(), |at| at.to_string())
-                    );
+                    ));
                     continue;
                 }
             };
@@ -224,6 +224,7 @@ fn serve_counting<A>(
             thread::spawn(move || {
                 let reading = match stream.try_clone() {
                     Ok(reading) => reading,
+                    // llmlint: ignore[changed_behavior_has_e2e] Duplicating a socket's handle fails only when the host is out of handles, which no test can arrange without starving the suite around it.
                     Err(error) => {
                         unheard("a connection could not be read", &stream, &error);
                         return;
@@ -255,15 +256,37 @@ fn serve_counting<A>(
     });
 }
 
-/// Say on standard error what went wrong on a connection the server was serving — which the
-/// test harness shows beside the failure of the test that started the server, and nowhere else.
+/// Every failure a loopback server or proxy in this process has reported, in order.
+static REPORTED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Say `line` on standard error — which the test harness shows beside the failure of the test
+/// that started the server, and nowhere else — and keep it for [`reported`].
+fn report(line: String) {
+    eprintln!("{line}");
+    REPORTED
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .push(line);
+}
+
+/// Every failure a loopback server or proxy in this process has reported on standard error, in
+/// the order it reported them.
+#[must_use]
+pub fn reported() -> Vec<String> {
+    REPORTED
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone()
+}
+
+/// Report what went wrong on a connection the server was serving, naming both its ends.
 fn unheard(what: &str, stream: &TcpStream, error: &io::Error) {
     let end = |at: io::Result<SocketAddr>| at.map_or_else(|_| "?".to_owned(), |at| at.to_string());
-    eprintln!(
+    report(format!(
         "loopback server on {}: {what} on the connection from {}: {error}",
         end(stream.local_addr()),
         end(stream.peer_addr())
-    );
+    ));
 }
 
 /// One connection a proxy keeps to the server it forwards to, so that forwarding a client's
@@ -288,7 +311,10 @@ impl Upstream {
     /// the next request then replaces.
     pub fn forward(&mut self, request: &[u8]) -> Vec<u8> {
         let failed = |what: &str, error: &io::Error| {
-            eprintln!("loopback proxy to {}: {what}: {error}", self.address);
+            report(format!(
+                "loopback proxy to {}: {what}: {error}",
+                self.address
+            ));
             Vec::new()
         };
         let mut connection = match self.connection.take() {
