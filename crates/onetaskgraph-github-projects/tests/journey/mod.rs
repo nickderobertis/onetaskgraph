@@ -2617,16 +2617,12 @@ impl FixtureWait {
 /// sixty a two-minute wait at two-second intervals spent.
 ///
 /// **The bound is a margin chosen above what GitHub was measured to take, not a measurement.**
-/// Three credentialed runs on 2026-10-21, each printing the convergence record this wait
-/// writes, saw the search report all five items 6.3 s, 5.9 s and 1.8 s after the wait began —
-/// at most one attempt after the first. Main's run 39499941270 on 2026-10-20 is not among
-/// them: its search left one task out of all 60 attempts of a two-minute wait, while the
-/// cleanup straight after found that task on the board's own item listing and deleted its issue
-/// by its id — so the write had landed and the index was behind on it. That says only that two
-/// minutes did not suffice that once, and nothing about how long would have. GitHub
-/// publishes no bound on the index's lag, so the margin is wide; a run that outlasts it fails
-/// saying, by a read of each missing item by its own id, whether the index or the write is at
-/// fault.
+/// Every converging run prints when the search reported each item, and those have taken
+/// seconds. A search can also leave an item it has certainly written out for minutes — the
+/// board's own item listing and a delete by its id finding it meanwhile — and how long such
+/// a lag lasts is unmeasured, which is why the margin is wide rather than what sizes it.
+/// GitHub publishes no bound on the index's lag; a run that outlasts this one fails saying,
+/// by a read of each missing item by its own id, whether the index or the write is at fault.
 pub const FIXTURE_WAIT: FixtureWait = FixtureWait {
     bound: std::time::Duration::from_secs(600),
     first: std::time::Duration::from_secs(2),
