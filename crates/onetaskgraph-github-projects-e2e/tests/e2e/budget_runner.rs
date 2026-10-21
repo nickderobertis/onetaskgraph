@@ -326,21 +326,19 @@ fn approval_calls_of(value: &Value) -> Result<(f64, String), String> {
         .as_u64()
         .ok_or("missing whole-number figure")?;
     let calls = value["calls"].as_array().ok_or("missing call breakdown")?;
-    let named: Vec<&str> = calls
-        .iter()
-        .filter_map(|call| call["call"].as_str())
-        .collect();
-    if named != CALLS {
+    if calls.len() != CALLS.len() {
         return Err("the breakdown does not name the approval's calls in order".into());
     }
-    let points = calls
-        .iter()
-        .map(|call| {
-            call["requests"].as_u64()?;
-            call["points"].as_u64()
-        })
-        .sum::<Option<u64>>()
-        .ok_or("a call of the breakdown has no whole requests and points")?;
+    let mut points = 0;
+    for (call, named) in calls.iter().zip(CALLS) {
+        if call["call"].as_str() != Some(named) {
+            return Err("the breakdown does not name the approval's calls in order".into());
+        }
+        let (Some(_), Some(spent)) = (call["requests"].as_u64(), call["points"].as_u64()) else {
+            return Err("a call of the breakdown has no whole requests and points".into());
+        };
+        points += spent;
+    }
     if points != figure {
         return Err("the breakdown does not add up to the figure".into());
     }
@@ -378,6 +376,22 @@ fn the_approval_report_hands_over_the_recorded_figure_and_refuses_another_worklo
         (
             with("/calls/1/call", json!("project list")),
             "calls in order",
+        ),
+        (with("/calls/1/call", json!(null)), "calls in order"),
+        (
+            {
+                let mut longer = valid.clone();
+                longer["calls"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!({"requests": 1, "points": 0}));
+                longer
+            },
+            "calls in order",
+        ),
+        (
+            with("/calls/2/requests", json!(-1)),
+            "no whole requests and points",
         ),
         (
             with("/calls/4/points", json!(null)),

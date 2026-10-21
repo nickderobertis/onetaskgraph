@@ -204,7 +204,7 @@ fn the_check_reports_a_failure_naming_a_document_nobody_priced() {
 /// half: the same document grown by one aliased item — written the way every alias in it is —
 /// is priced at two, so a batch constant left below what one point buys fails here rather
 /// than spending a request a caller did not need to.
-// llmlint: ignore-block[tests_hold_no_nonfunctional_thresholds] These hold each batch constant to GitHub's own pricing model rather than to a budget: the constant is the number of items the plugin puts in one request, and the check is that it is the largest batch one point buys — one item more costs two — which is a property of the constant against the published model, not a cost ceiling a test invented. `DETAIL_BATCH`'s check predates this change; the helper generalises it so `COPY_DETAIL_BATCH`, the copy's batch read, is held to the same property.
+// llmlint: ignore-block[tests_hold_no_nonfunctional_thresholds] These hold each batch constant to GitHub's own pricing model rather than to a budget: the constant is the number of items the plugin puts in one request, and the check is that it is the largest batch one point buys — one item more costs two — which is a property of the constant against the published model, not a cost ceiling a test invented. `DETAIL_BATCH`'s check predates this change; the helper generalises it so `COPY_DETAIL_BATCH`, the copy's batch read, is held to the same property. `MEMBER_PAGE_SIZE` is held to the same property over a page size: the most sub-issues one point lists.
 #[test]
 fn the_batch_read_is_the_largest_one_point_buys() {
     const {

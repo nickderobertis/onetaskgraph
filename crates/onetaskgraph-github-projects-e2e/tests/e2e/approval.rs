@@ -17,10 +17,9 @@ use onetaskgraph_e2e_support::common::{stderr, stdout};
 use onetaskgraph_github_projects::worst_case_point_cost;
 use serde_json::{Value, json};
 
-/// The budget this journey records.
 pub(super) const BUDGET: &str = "github-approval-calls-points";
 
-/// What a recording of the budget names the sequence it measured.
+/// Named in the recording, so the runner refuses telemetry another journey wrote.
 pub(super) const WORKLOAD: &str = "plan approval store calls";
 
 /// The calls an approval makes, in the order it makes them, by what each is.
@@ -32,7 +31,7 @@ pub(super) const CALLS: [&str; 5] = [
     "document metadata set --expect",
 ];
 
-/// The metadata key approval writes, and the value it writes.
+/// The metadata key approval writes.
 const KEY: &str = "plan.approval";
 
 /// One call of the sequence: what it printed, and the requests the board answered for it.
@@ -198,6 +197,7 @@ fn approving_a_plan_lists_each_kind_in_one_point_and_writes_its_approval_in_one_
     let step = |what: &str| steps.iter().find(|step| step.what == what).unwrap();
 
     // Each listing is one request, priced at one point, carrying the project's whole page.
+    // llmlint: ignore-block[tests_hold_no_nonfunctional_thresholds] The node's acceptance criteria require this journey to show each listing is one request priced at one point by the plugin's own table: the point is the functional outcome of MEMBER_PAGE_SIZE, which `tests/point_cost.rs` pins, rather than a budget figure. The sequence's total is recorded below for onebudgetspec, which alone judges it against `github-approval-calls-points`.
     for (what, records) in [
         ("task list --project", TASKS),
         ("document list --project", 1),
@@ -216,6 +216,7 @@ fn approving_a_plan_lists_each_kind_in_one_point_and_writes_its_approval_in_one_
         );
         assert_eq!(rows(&listing.report).len(), records, "{what}");
     }
+    // llmlint: ignore-end[tests_hold_no_nonfunctional_thresholds]
 
     // The tasks come back in the order they were filed under the project, each with what a read
     // of it by its own id reports.
@@ -376,4 +377,129 @@ fn a_document_write_whose_version_the_cache_does_not_hold_reads_once_and_says_so
     ]);
     assert_ne!(refused.status.code(), Some(0), "{}", stdout(&refused));
     assert!(stderr(&refused).contains("leave --expect out"));
+}
+
+/// The one document entry the board source's cache holds, read whole.
+fn document_entry(plan: &Plan) -> std::path::PathBuf {
+    fn files(directory: &std::path::Path, found: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(directory).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                files(&path, found);
+            } else if path
+                .extension()
+                .is_some_and(|extension| extension == "json")
+            {
+                found.push(path);
+            }
+        }
+    }
+    let mut found = Vec::new();
+    files(
+        &plan.sandbox.subdirectory("board-cache").join(format!(
+            "documents-v{}",
+            onetaskgraph_core::cache::KIND_ENTRY_SCHEMA
+        )),
+        &mut found,
+    );
+    assert_eq!(found.len(), 1, "{found:?}");
+    found.remove(0)
+}
+
+#[test]
+fn a_document_entry_without_a_context_the_source_takes_is_read_once_before_the_write() {
+    for (case, context) in [
+        ("an entry holding no context", None),
+        (
+            "a context the source cannot take",
+            Some(json!({"version": 0})),
+        ),
+    ] {
+        let (plan, _, document) = copied();
+        let id = format!("board:{document}");
+        let version = version_of(&success(&plan.run(&["document", "show", &id, "--json"])));
+        let path = document_entry(&plan);
+        let mut entry: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(
+            entry.get("context").is_some(),
+            "{case}: the read kept a context"
+        );
+        match &context {
+            Some(context) => entry["context"] = context.clone(),
+            None => {
+                entry.as_object_mut().unwrap().remove("context");
+            }
+        }
+        std::fs::write(&path, serde_json::to_vec(&entry).unwrap()).unwrap();
+        let (output, calls) = plan.measured_output(&[
+            "document", "metadata", "set", &id, KEY, "true", "--expect", &version, "--json",
+        ]);
+        assert_eq!(output.status.code(), Some(0), "{case}: {}", stderr(&output));
+        let operations: Vec<String> = calls.iter().map(operation).collect();
+        assert_eq!(operations.len(), 2, "{case}: {operations:?}");
+        assert_eq!(operations[0], "reading one issue", "{case}");
+        let answer: Value = serde_json::from_str(&stdout(&output)).unwrap();
+        assert_eq!(answer["fallback"]["read"], json!(true), "{case}: {answer}");
+        assert_eq!(slot(&plan, &document)[KEY], json!(true), "{case}");
+    }
+}
+
+#[test]
+fn a_document_write_whose_kept_id_went_stale_reads_and_is_sent_once_more() {
+    let (plan, _, document) = copied();
+    let id = format!("board:{document}");
+    let version = version_of(&success(&plan.run(&["document", "show", &id, "--json"])));
+    plan.github
+        .refuse_as_stale_once("updateIssue(input:$input)");
+    let (output, calls) = plan.measured_output(&[
+        "document", "metadata", "set", &id, KEY, "true", "--expect", &version, "--json",
+    ]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let operations: Vec<String> = calls.iter().map(operation).collect();
+    assert_eq!(operations.len(), 3, "{operations:?}");
+    assert_eq!(operations[1], "reading one issue", "{operations:?}");
+    let answer: Value = serde_json::from_str(&stdout(&output)).unwrap();
+    assert!(
+        answer["fallback"]["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("stale")),
+        "{answer}"
+    );
+    let parts = answer["result"]["parts"].as_array().unwrap();
+    assert_eq!(parts.len(), 2, "{answer}");
+    assert_eq!(parts[1]["outcome"], json!("landed"), "{answer}");
+    assert_eq!(slot(&plan, &document)[KEY], json!(true));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_document_write_whose_entry_cannot_be_retired_is_refused_unsent() {
+    use std::os::unix::fs::PermissionsExt;
+    let (plan, _, document) = copied();
+    let id = format!("board:{document}");
+    let version = version_of(&success(&plan.run(&["document", "show", &id, "--json"])));
+    let before = plan.github.body(&document);
+    let entries = document_entry(&plan).parent().unwrap().to_path_buf();
+    std::fs::set_permissions(&entries, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let path = document_entry(&plan);
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let (output, calls) = plan.measured_output(&[
+        "document", "metadata", "set", &id, KEY, "true", "--expect", &version, "--json",
+    ]);
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    std::fs::set_permissions(&entries, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_ne!(output.status.code(), Some(0), "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("was not sent"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(
+        calls
+            .iter()
+            .all(|call| !operation(call).starts_with("updating an issue")),
+        "{:?}",
+        calls.iter().map(operation).collect::<Vec<_>>()
+    );
+    assert_eq!(plan.github.body(&document), before);
 }
