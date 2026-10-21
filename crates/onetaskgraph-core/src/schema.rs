@@ -256,10 +256,7 @@ pub fn schema_bundle() -> Value {
     roots.insert("TemplateAnswers", schema_for!(TemplateAnswers));
     roots.insert("TemplateProvenance", schema_for!(TemplateProvenance));
     // llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
-    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] This is the schema bundle
-    // every CLI response registers in so both SDK generators can discover it. The type
-    // lives in engine/assets.rs; this line registers its schema, and the versioned golden
-    // tracks that registration alongside the other response roots.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] Every CLI response registers here for both SDK generators; the type lives in engine/assets.rs, and the versioned golden tracks this registration beside the other roots.
     roots.insert("TaskAssetNames", schema_for!(TaskAssetNames));
 
     roots.insert("EffectiveConfig", schema_for!(EffectiveConfig));
