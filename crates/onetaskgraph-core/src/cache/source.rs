@@ -59,6 +59,16 @@ type Writing<'a, T> = Pin<Box<dyn Future<Output = Result<T, SourceError>> + Send
 type Reading<'a> =
     Pin<Box<dyn Future<Output = Vec<Result<Option<TaskDetailRead>, SourceError>>> + Send + 'a>>;
 
+/// What a read made for a write expecting a document at a version found.
+enum ReadAt {
+    /// The source holds no such document.
+    Missing,
+    /// The document, at another version than the one expected.
+    Other(String),
+    /// The document at the expected version, with what the source left a write could take.
+    At(Option<Value>),
+}
+
 /// Why a read could not be answered from the cache.
 enum Miss {
     /// Nothing pins it: an unpinned read goes to the source, as it always did.
@@ -647,7 +657,8 @@ impl CachedSource {
             self.cache.take_expected(id);
             Err(SourceError::Refused {
                 message: format!(
-                    "document {id} is at version {at}, not the version {version} this write                      expects — {seen} — so nothing was written\n\
+                    "document {id} is at version {at}, not the version {version} this write \
+                     expects — {seen} — so nothing was written\n\
                      next: read the document again (`onetaskgraph document show`), decide \
                      whether the write still applies, and pass the version that read reports"
                 ),
@@ -657,39 +668,38 @@ impl CachedSource {
             return refuse(held, "the store's cache already holds that later version");
         }
         let equal = order == Some(Ordering::Equal);
-        let (context, reason) = match held.and_then(|(_, context)| context).filter(|_| equal) {
-            Some(context) => (context, None),
-            None => {
-                let Some(read) = self.get_document(id).await? else {
+        let kept = held.and_then(|(_, context)| context).filter(|_| equal);
+        let mut primed = kept
+            .as_ref()
+            .is_some_and(|context| self.inner.prime_write(id, context, None));
+        let mut reason = None;
+        if !primed {
+            reason = Some(
+                if kept.is_some() {
+                    "the source could not take what the cache kept for this document, so it was \
+                     read"
+                } else if equal {
+                    "the cache kept nothing a write of this document could take instead of \
+                     reading it, so it was read"
+                } else {
+                    "the cache did not hold this document at the expected version, so it was read"
+                }
+                .to_owned(),
+            );
+            match self.read_expected(id, &version).await? {
+                ReadAt::Missing => {
                     self.cache.take_expected(id);
                     return Ok(None);
-                };
-                let at = read.version.clone().unwrap_or_default();
-                if self.inner.order_versions(&at, &version) != Some(Ordering::Equal) {
+                }
+                ReadAt::Other(at) => {
                     return refuse(
                         &at,
                         "a read of it made for this write answered that version",
                     );
                 }
-                let reason = if equal {
-                    "the cache kept nothing a write of this document could take instead of \
-                     reading it, so it was read"
-                } else {
-                    "the cache did not hold this document at the expected version, so it was read"
-                };
-                (
-                    self.inner.write_context(id).unwrap_or(Value::Null),
-                    Some(reason.to_owned()),
-                )
+                ReadAt::At(context) => primed = self.prime_read(id, context.as_ref()),
             }
-        };
-        let primed = !context.is_null() && self.inner.prime_write(id, &context, None);
-        let mut reason = reason.or_else(|| {
-            (!primed).then(|| {
-                "the source could not take what the cache kept for this document, so it was read"
-                    .to_owned()
-            })
-        });
+        }
         if let Err(error) = self.cache.retire_before_write(id) {
             self.inner.unprime(id);
             self.cache.take_expected(id);
@@ -699,18 +709,32 @@ impl CachedSource {
         let mut written = write().await;
         let mut journal = self.inner.end_journal();
         if written.is_err() && primed && journal.as_ref().is_some_and(WriteJournal::stale) {
-            // An id the context kept no longer resolves: read, then send the write once more.
+            // An id the context kept no longer resolves, and nothing was written: read, and send
+            // the write once more only while the document is still at the expected version.
             reason = Some(
                 "an id the cache kept was stale, so the document was read and the write sent \
                  once more"
                     .to_owned(),
             );
             self.inner.unprime(id);
-            self.inner.begin_journal();
-            written = write().await;
-            if let (Some(first), Some(again)) = (journal.as_mut(), self.inner.end_journal()) {
-                first.requests.extend(again.requests);
-            }
+            written = match self.read_expected(id, &version).await {
+                Err(error) => Err(error),
+                Ok(ReadAt::Missing) => Ok(None),
+                Ok(ReadAt::Other(at)) => refuse(
+                    &at,
+                    "the read made after a kept id went stale answered that version",
+                ),
+                Ok(ReadAt::At(context)) => {
+                    self.prime_read(id, context.as_ref());
+                    self.inner.begin_journal();
+                    let again = write().await;
+                    if let (Some(first), Some(more)) = (journal.as_mut(), self.inner.end_journal())
+                    {
+                        first.requests.extend(more.requests);
+                    }
+                    again
+                }
+            };
         }
         self.inner.unprime(id);
         self.cache.invalidate(id);
@@ -746,6 +770,24 @@ impl CachedSource {
         };
         self.cache.report(id, report);
         written
+    }
+
+    /// Read document `id` from the source for a write expecting it at `version`, keeping what
+    /// the read answered as any read of it does.
+    async fn read_expected(&self, id: &NativeId, version: &str) -> Result<ReadAt, SourceError> {
+        let Some(read) = self.get_document(id).await? else {
+            return Ok(ReadAt::Missing);
+        };
+        let at = read.version.unwrap_or_default();
+        if self.inner.order_versions(&at, version) != Some(Ordering::Equal) {
+            return Ok(ReadAt::Other(at));
+        }
+        Ok(ReadAt::At(self.inner.write_context(id)))
+    }
+
+    /// Prime the source with the context a read of `id` left, when it left one it takes.
+    fn prime_read(&self, id: &NativeId, context: Option<&Value>) -> bool {
+        context.is_some_and(|context| self.inner.prime_write(id, context, None))
     }
 
     /// The version reads of project `id` are pinned to in this command: a caller's pin, or the

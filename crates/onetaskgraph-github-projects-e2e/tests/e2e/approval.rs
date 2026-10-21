@@ -566,3 +566,117 @@ fn a_document_write_expecting_a_version_newer_than_the_cache_holds_reads_it_and_
     );
     assert_eq!(plan.github.body(&document), before);
 }
+
+#[test]
+fn a_document_write_reads_again_before_it_writes_and_refuses_a_version_that_moved() {
+    // The kept context unusable, and the document edited since: the read the write falls back
+    // to finds the newer version and refuses.
+    let (plan, _, document) = copied();
+    let id = format!("board:{document}");
+    let version = version_of(&success(&plan.run(&["document", "show", &id, "--json"])));
+    let path = document_entry(&plan);
+    let mut entry: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    entry["context"] = json!({"version": 0});
+    std::fs::write(&path, serde_json::to_vec(&entry).unwrap()).unwrap();
+    plan.github.edit_body(
+        &document,
+        "Edited while the cache held an unusable context.",
+    );
+    let edited = plan.github.body(&document);
+    let (refused, calls) = plan.measured_output(&[
+        "document", "metadata", "set", &id, KEY, "true", "--expect", &version,
+    ]);
+    assert_ne!(refused.status.code(), Some(0), "{}", stdout(&refused));
+    let operations: Vec<String> = calls.iter().map(operation).collect();
+    assert_eq!(operations, vec!["reading one issue".to_owned()]);
+    assert!(
+        stderr(&refused).contains("nothing was written"),
+        "{}",
+        stderr(&refused)
+    );
+    assert_eq!(plan.github.body(&document), edited);
+
+    // A kept id gone stale, and the document edited since: the read after the refused mutation
+    // finds the newer version, and the write is not sent again.
+    let (plan, _, document) = copied();
+    let id = format!("board:{document}");
+    let version = version_of(&success(&plan.run(&["document", "show", &id, "--json"])));
+    plan.github
+        .edit_body(&document, "Edited before a kept id went stale.");
+    let edited = plan.github.body(&document);
+    plan.github
+        .refuse_as_stale_once("updateIssue(input:$input)");
+    let (refused, calls) = plan.measured_output(&[
+        "document", "metadata", "set", &id, KEY, "true", "--expect", &version,
+    ]);
+    assert_ne!(refused.status.code(), Some(0), "{}", stdout(&refused));
+    let operations: Vec<String> = calls.iter().map(operation).collect();
+    assert_eq!(operations.len(), 2, "{operations:?}");
+    assert_eq!(operations[1], "reading one issue", "{operations:?}");
+    assert!(
+        stderr(&refused).contains("went stale"),
+        "{}",
+        stderr(&refused)
+    );
+    assert_eq!(plan.github.body(&document), edited);
+
+    // A document the board does not hold is answered as one, and nothing is written.
+    let (missing, calls) = plan.measured_output(&[
+        "document",
+        "metadata",
+        "set",
+        "board:ISSUE-NOT-HELD",
+        KEY,
+        "true",
+        "--expect",
+        &version,
+    ]);
+    assert_ne!(missing.status.code(), Some(0), "{}", stdout(&missing));
+    assert!(
+        calls
+            .iter()
+            .all(|call| !operation(call).starts_with("updating an issue")),
+        "{:?}",
+        calls.iter().map(operation).collect::<Vec<_>>()
+    );
+    assert!(
+        stderr(&missing).contains("ISSUE-NOT-HELD"),
+        "{}",
+        stderr(&missing)
+    );
+}
+
+#[test]
+fn a_document_write_reports_a_rejected_or_lost_mutation_and_sends_it_once() {
+    for (refusal, outcome) in [("refuse", "rejected"), ("drop", "unknown")] {
+        let (plan, _, document) = copied();
+        let id = format!("board:{document}");
+        let version = version_of(&success(&plan.run(&["document", "show", &id, "--json"])));
+        let before = plan.github.body(&document);
+        match refusal {
+            "refuse" => plan.github.refuse_once("updateIssue(input:$input)"),
+            _ => plan.github.drop_response_once("updateIssue(input:$input)"),
+        }
+        let (output, calls) = plan.measured_output(&[
+            "document", "metadata", "set", &id, KEY, "true", "--expect", &version, "--json",
+        ]);
+        assert_ne!(
+            output.status.code(),
+            Some(0),
+            "{refusal}: {}",
+            stdout(&output)
+        );
+        assert_eq!(calls.len(), 1, "{refusal}: sent once, and never again");
+        let failure: Value = serde_json::from_str(&stdout(&output)).expect("a failure document");
+        assert_eq!(
+            failure["result"]["parts"][0]["outcome"], outcome,
+            "{refusal}: {failure}"
+        );
+        if refusal == "refuse" {
+            assert_eq!(plan.github.body(&document), before);
+        }
+        // The entry was taken out of service, so the next read is the board's.
+        let (_, calls) = plan.measured(&["document", "show", &id, "--pin", &version, "--json"]);
+        assert_eq!(calls.len(), 1, "{refusal}: the entry is served no longer");
+    }
+}
