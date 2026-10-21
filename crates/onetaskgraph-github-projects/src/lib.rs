@@ -2416,6 +2416,25 @@ fn whole_seconds(value: Option<&reqwest::header::HeaderValue>) -> Option<u64> {
         .and_then(|value| value.trim().parse::<u64>().ok())
 }
 
+/// A transport failure with every cause beneath it, outermost first.
+///
+/// The client's own text for a request it could not complete is `error sending request for
+/// url (…)`, and the socket error that says why — a refused or reset connection, an exhausted
+/// port range, a connection closed before its answer — is only in the chain of sources below
+/// it. Those differ in what to do next, so all of them are kept.
+pub(crate) fn transport_error(error: &(dyn std::error::Error + 'static)) -> String {
+    let mut text = error.to_string();
+    let mut cause = error.source();
+    while let Some(next) = cause {
+        let said = next.to_string();
+        if !text.ends_with(&said) {
+            text = format!("{text}: {said}");
+        }
+        cause = next.source();
+    }
+    text
+}
+
 /// Every mutation this source sends creates content — an issue, a board item, a field of
 /// one, a sub-issue link, a dependency, a comment — or edits or removes content of that
 /// kind, and no query in [`graphql::DOCUMENTS`] does, so what the secondary limiter counts
@@ -5100,7 +5119,7 @@ impl GitHubProjectsSource {
             .await
             .map_err(|e| {
                 Attempt::Failed(SourceError::Unavailable {
-                    message: format!("GitHub GraphQL request failed: {e}"),
+                    message: format!("GitHub GraphQL request failed: {}", transport_error(&e)),
                 })
             })?;
         let status = response.status();
@@ -5152,7 +5171,10 @@ impl GitHubProjectsSource {
         // only "forbidden" — and a non-success response was never parsed at all.
         let body = response.text().await.map_err(|e| {
             Attempt::Failed(SourceError::Unavailable {
-                message: format!("GitHub GraphQL response could not be read: {e}"),
+                message: format!(
+                    "GitHub GraphQL response could not be read: {}",
+                    transport_error(&e)
+                ),
             })
         })?;
         *reported_cost = serde_json::from_str::<Value>(&body)

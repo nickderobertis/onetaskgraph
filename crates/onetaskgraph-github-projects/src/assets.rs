@@ -315,7 +315,10 @@ impl GitHubProjectsSource {
                             ),
                     );
                     return Err(SourceError::Unavailable {
-                        message: format!("GitHub asset {name} {stage} request failed: {error}"),
+                        message: format!(
+                            "GitHub asset {name} {stage} request failed: {}",
+                            crate::transport_error(&error)
+                        ),
                     });
                 }
             };
@@ -371,7 +374,8 @@ impl GitHubProjectsSource {
                     );
                     return Err(SourceError::Unavailable {
                         message: format!(
-                            "GitHub asset {name} {stage} response could not be read: {error}"
+                            "GitHub asset {name} {stage} response could not be read: {}",
+                            crate::transport_error(&error)
                         ),
                     });
                 }

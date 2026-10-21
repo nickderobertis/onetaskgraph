@@ -128,3 +128,41 @@ fn a_change_made_part_way_through_a_copy_sees_the_connection_the_copy_holds() {
         "the board a change is handed counts the connection the copy's first request came on"
     );
 }
+
+/// What a command reading `board`, configured in `sandbox`, said on standard error, having had
+/// to fail.
+fn unreached(sandbox: &Sandbox, board: &Value) -> String {
+    sandbox.project_document(&document(&json!({
+        "board": {"plugin":"github-projects","config":board}
+    })));
+    let output = run(sandbox, &["task", "list", "--source", "board", "--json"]);
+    assert_ne!(output.status.code(), Some(0), "{}", stdout(&output));
+    stderr(&output)
+}
+
+#[test]
+fn a_connection_closed_before_its_answer_is_named_beneath_the_failed_send() {
+    let sandbox = Sandbox::new();
+    let said = unreached(
+        &sandbox,
+        &crate::fixtures::github_projects_hanging_up(&sandbox),
+    );
+    assert!(
+        said.contains("error sending request for url")
+            && said.contains("connection closed before message completed"),
+        "the failure names the client's error and the cause beneath it: {said}"
+    );
+}
+
+#[test]
+fn a_refused_connection_carries_the_operating_systems_own_error() {
+    let sandbox = Sandbox::new();
+    let said = unreached(
+        &sandbox,
+        &crate::fixtures::github_projects_unreachable(&sandbox),
+    );
+    assert!(
+        said.contains("error sending request for url") && said.contains("(os error "),
+        "the failure names the socket error the operating system gave: {said}"
+    );
+}
