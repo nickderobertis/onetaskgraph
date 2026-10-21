@@ -97,16 +97,41 @@ pub fn next_request(reader: &mut impl BufRead) -> io::Result<Option<Request>> {
     let invalid = |what: String| io::Error::new(io::ErrorKind::InvalidData, what);
     let mut lines = head.lines();
     let first = lines.next().unwrap_or_default();
-    if !first.split(' ').any(|part| part.starts_with("HTTP/")) {
-        return Err(invalid(format!("{first:?} names no HTTP version")));
+    if !(is_request_line(first) || is_status_line(first)) {
+        return Err(invalid(format!(
+            "{first:?} is neither an HTTP/1.x request line nor a status line"
+        )));
     }
-    if let Some(line) = lines.find(|line| !line.is_empty() && !line.contains(':')) {
-        return Err(invalid(format!("the header line {line:?} has no colon")));
+    for line in lines.filter(|line| !line.is_empty()) {
+        let named = line.split_once(':').is_some_and(|(name, _)| {
+            !name.is_empty()
+                && name
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte))
+        });
+        if !named {
+            return Err(invalid(format!(
+                "the header line {line:?} does not begin with a header name and a colon"
+            )));
+        }
     }
     let mut request = Request {
         head,
         body: Vec::new(),
     };
+    let lengths = request
+        .head
+        .lines()
+        .skip(1)
+        .filter_map(|line| line.split_once(':'))
+        .filter(|(name, _)| name.trim().eq_ignore_ascii_case("content-length"))
+        .map(|(_, value)| value.trim())
+        .collect::<std::collections::BTreeSet<_>>();
+    if lengths.len() > 1 {
+        return Err(invalid(format!(
+            "the Content-Length headers disagree: {lengths:?}"
+        )));
+    }
     if let Some(encoding) = request.header("transfer-encoding") {
         return Err(invalid(format!(
             "a Transfer-Encoding of {encoding:?} is framing this server does not read"
@@ -123,6 +148,25 @@ pub fn next_request(reader: &mut impl BufRead) -> io::Result<Option<Request>> {
         reader.read_exact(&mut request.body)?;
     }
     Ok(Some(request))
+}
+
+/// `POST /graphql HTTP/1.1`: a method, a target and an HTTP/1.x version, one space apart.
+fn is_request_line(line: &str) -> bool {
+    let parts = line.split(' ').collect::<Vec<_>>();
+    matches!(parts.as_slice(), [method, target, version]
+        if !method.is_empty()
+            && method.bytes().all(|byte| byte.is_ascii_uppercase())
+            && !target.is_empty()
+            && matches!(*version, "HTTP/1.0" | "HTTP/1.1"))
+}
+
+/// `HTTP/1.1 200 OK`: an HTTP/1.x version and a three-digit status, then any reason phrase.
+fn is_status_line(line: &str) -> bool {
+    let mut parts = line.splitn(3, ' ');
+    matches!(parts.next(), Some("HTTP/1.0" | "HTTP/1.1"))
+        && parts.next().is_some_and(|status| {
+            status.len() == 3 && status.bytes().all(|byte| byte.is_ascii_digit())
+        })
 }
 
 /// Serve `listener` on a thread of its own, each connection on another, answering each of its

@@ -309,16 +309,48 @@ fn a_client_asking_to_close_ends_a_connection_its_handler_keeps_open() {
 
 #[test]
 fn a_head_that_is_not_http_is_refused_by_name() {
-    let error = after_sending(b"hello there\r\n\r\n").expect_err("no version");
+    for line in [
+        "hello there",
+        "hello HTTP/garbage",
+        "POST /graphql HTTP/2",
+        "HTTP/1.1 2xx OK",
+    ] {
+        let error = after_sending(format!("{line}\r\n\r\n").as_bytes()).expect_err(line);
+        assert_eq!(error.kind(), ErrorKind::InvalidData, "{error}");
+        assert!(
+            error
+                .to_string()
+                .contains("is neither an HTTP/1.x request line nor a status line"),
+            "{error}"
+        );
+    }
+    for header in ["no colon here", "bad name: value", ": nameless"] {
+        let sent = format!("POST /graphql HTTP/1.1\r\n{header}\r\n\r\n");
+        let error = after_sending(sent.as_bytes()).expect_err(header);
+        assert_eq!(error.kind(), ErrorKind::InvalidData, "{error}");
+        assert!(
+            error.to_string().contains(&format!("{header:?}")),
+            "{error}"
+        );
+    }
+    let answered = after_sending(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+        .expect("a status line is read as a response");
+    assert_eq!(answered.as_deref(), Some("HTTP/1.1 200 OK"));
+}
+
+#[test]
+fn content_lengths_that_disagree_are_refused() {
+    let error = after_sending(
+        b"POST /graphql HTTP/1.1\r\nContent-Length: 2\r\nContent-Length: 10\r\n\r\n{}",
+    )
+    .expect_err("ambiguous framing");
     assert_eq!(error.kind(), ErrorKind::InvalidData, "{error}");
-    assert!(
-        error.to_string().contains("names no HTTP version"),
-        "{error}"
-    );
-    let error = after_sending(b"POST /graphql HTTP/1.1\r\nno colon here\r\n\r\n")
-        .expect_err("a header without a colon");
-    assert_eq!(error.kind(), ErrorKind::InvalidData, "{error}");
-    assert!(error.to_string().contains("\"no colon here\""), "{error}");
+    assert!(error.to_string().contains("disagree"), "{error}");
+    let agreed = after_sending(
+        b"POST /graphql HTTP/1.1\r\nContent-Length: 2\r\nContent-Length: 2\r\n\r\n{}",
+    )
+    .expect("repeated lengths that agree frame one body");
+    assert_eq!(agreed.as_deref(), Some("POST /graphql HTTP/1.1"));
 }
 
 #[test]
