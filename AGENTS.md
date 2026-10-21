@@ -1192,6 +1192,10 @@ them do; this is the inventory of what is owed, not a status board.
     public member whose refused write takes the whole copy back. A copy that would create a
     second project of a plan in a source takes over the member already there, found by either
     link alone.
+116. `project copy --member … --members-only` lands the named tasks under the project a folder of
+    Markdown or a GitHub board already holds, reported as `--member` reports them, sending
+    nothing that compares or rewrites that project; one with no counterpart is refused before
+    any write, naming the `project copy` that creates it.
 
 ## The public boundary
 
