@@ -145,6 +145,7 @@ where
             }
             match stream.write_all(reply.as_bytes()) {
                 Ok(()) => After::KeepOpen,
+                // llmlint: ignore[changed_behavior_has_e2e] A write to a loopback peer fails only once the peer's reset has arrived, which no test can order against the write; the read side of the same reporting is held by tests/loopback_reads.rs.
                 Err(error) => {
                     unheard("an answer could not be written", stream, &error);
                     After::Close
@@ -204,6 +205,7 @@ fn serve_counting<A>(
         for stream in listener.incoming() {
             let stream = match stream {
                 Ok(stream) => stream,
+                // llmlint: ignore[changed_behavior_has_e2e] A loopback accept fails only for a connection reset before it was accepted or a host out of sockets, neither of which a test can provoke on Linux or macOS; this is the Windows failure it exists to name.
                 Err(error) => {
                     eprintln!(
                         "loopback server on {}: an accept failed: {error}",

@@ -52,3 +52,38 @@ fn a_length_that_is_not_one_is_refused_by_name() {
     assert_eq!(error.kind(), ErrorKind::InvalidData, "{error}");
     assert!(error.to_string().contains("\"ten\""), "{error}");
 }
+
+/// A proxy's connection to its server, closed under it unanswered, is replaced by the next
+/// request it forwards, which is answered.
+#[test]
+fn an_upstream_closed_unanswered_is_replaced_by_the_next_request() {
+    use onetaskgraph_e2e_support::loopback::{After, Upstream, serve_with};
+    let listener = TcpListener::bind("127.0.0.1:0").expect("a listener");
+    let address = listener.local_addr().expect("an address");
+    let mut answered = 0;
+    let accepted = serve_with(listener, move |_, stream| {
+        answered += 1;
+        if answered == 1 {
+            return After::Close;
+        }
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+            .expect("answered");
+        After::KeepOpen
+    });
+    let request = b"POST /graphql HTTP/1.1\r\nContent-Length: 2\r\n\r\n{}";
+    let mut upstream = Upstream::new(address);
+    assert!(upstream.forward(request).is_empty(), "closed unanswered");
+    let answer = upstream.forward(request);
+    assert!(
+        answer.ends_with(b"\r\n\r\nok"),
+        "{}",
+        String::from_utf8_lossy(&answer)
+    );
+    assert_eq!(
+        upstream.forward(request),
+        answer,
+        "the replacement is kept for the next"
+    );
+    assert_eq!(accepted.load(std::sync::atomic::Ordering::SeqCst), 2);
+}

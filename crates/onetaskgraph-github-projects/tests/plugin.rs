@@ -11043,13 +11043,8 @@ async fn the_fixture_wait_reads_through_a_source_built_after_the_board_caught_up
         Item::issue("T_orphan", &titles[4]).status("Todo"),
     ]);
     fixture.read_behind(1);
-    // The catch-up is the board's own, made as it answers the first attempt's second search,
-    // so when it happens is this board's business and not the wait's. One attempt is two
-    // searches — the task listing narrowed to the run's prefix, then the board-scoped search
-    // that lists projects — so the first attempt is answered whole, behind, and every later
-    // one sees the fixture. It is inside the request rather than on a thread of its own
-    // because a thread is scheduled when the host gets round to it, and on a loaded runner
-    // that was after the wait's second attempt had already been answered behind.
+    // Inside the request that answers the first attempt's second search, not on a thread of
+    // its own, which a loaded host can schedule after the second attempt was answered.
     fixture.catches_up_after_searches(2);
 
     let built = std::cell::Cell::new(0_usize);
