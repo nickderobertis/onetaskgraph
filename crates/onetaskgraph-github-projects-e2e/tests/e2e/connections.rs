@@ -108,3 +108,23 @@ fn a_connection_the_board_closes_unanswered_is_replaced_and_the_copy_lands() {
     assert_eq!(shown["items"][0]["item"]["title"], "Second", "{shown}");
     assert_eq!(board.connections(), 3);
 }
+
+#[test]
+fn a_change_made_part_way_through_a_copy_sees_the_connection_the_copy_holds() {
+    let (sandbox, board) = setup();
+    let seen = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let recorded = std::sync::Arc::clone(&seen);
+    board.after_request(
+        |_, _| true,
+        0,
+        move |during| {
+            recorded.store(during.connections(), std::sync::atomic::Ordering::SeqCst);
+        },
+    );
+    ok(&sandbox, COPY);
+    assert_eq!(
+        seen.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the board a change is handed counts the connection the copy's first request came on"
+    );
+}

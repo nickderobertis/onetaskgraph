@@ -102,24 +102,29 @@ pub fn closing(request: &[u8]) -> Vec<u8> {
 /// `Connection: close` so the client keeps the connection — or, for `None`, closing that
 /// connection with the request unanswered.
 ///
-/// Returns the count of connections accepted.
-pub(crate) fn serve<A>(listener: TcpListener, mut answer: A) -> Arc<AtomicUsize>
+/// Counts each connection accepted on `accepted`, which the caller may already have handed out.
+pub(crate) fn serve<A>(listener: TcpListener, accepted: Arc<AtomicUsize>, mut answer: A)
 where
     A: FnMut(&Request) -> Option<String> + Send + 'static,
 {
-    serve_with(listener, move |request, stream| {
-        let Some(mut reply) = answer(request) else {
-            return After::Close;
-        };
-        if request.closes() {
-            // Said, so the client knows not to send another request on it.
-            reply = reply.replacen("\r\n", "\r\nConnection: close\r\n", 1);
-        }
-        match stream.write_all(reply.as_bytes()) {
-            Ok(()) => After::KeepOpen,
-            Err(_) => After::Close,
-        }
-    })
+    serve_counting(
+        listener,
+        Arc::default(),
+        accepted,
+        move |request, stream| {
+            let Some(mut reply) = answer(request) else {
+                return After::Close;
+            };
+            if request.closes() {
+                // Said, so the client knows not to send another request on it.
+                reply = reply.replacen("\r\n", "\r\nConnection: close\r\n", 1);
+            }
+            match stream.write_all(reply.as_bytes()) {
+                Ok(()) => After::KeepOpen,
+                Err(_) => After::Close,
+            }
+        },
+    );
 }
 
 /// What a connection does once [`serve_with`]'s handler has answered one of its requests.
@@ -150,9 +155,21 @@ pub fn serve_until<A>(listener: TcpListener, stop: Arc<AtomicBool>, answer: A) -
 where
     A: FnMut(&Request, &mut TcpStream) -> After + Send + 'static,
 {
+    let accepted = Arc::default();
+    serve_counting(listener, stop, Arc::clone(&accepted), answer);
+    accepted
+}
+
+/// [`serve_until`], counting each connection accepted on `counted`.
+fn serve_counting<A>(
+    listener: TcpListener,
+    stop: Arc<AtomicBool>,
+    counted: Arc<AtomicUsize>,
+    answer: A,
+) where
+    A: FnMut(&Request, &mut TcpStream) -> After + Send + 'static,
+{
     let answer = Arc::new(Mutex::new(answer));
-    let accepted = Arc::new(AtomicUsize::new(0));
-    let counted = Arc::clone(&accepted);
     thread::spawn(move || {
         // An accept that fails is a client that gave up before it was accepted, not a reason to
         // stop listening for every client after it.
@@ -182,7 +199,6 @@ where
             });
         }
     });
-    accepted
 }
 
 /// One connection a proxy keeps to the server it forwards to, so that forwarding a client's

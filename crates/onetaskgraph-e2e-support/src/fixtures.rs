@@ -3400,12 +3400,13 @@ fn github_projects_board_at(
     }));
     let mut owed_failures: Vec<&'static str> = fail_first.to_vec();
     let watched = Arc::clone(&board);
+    let connections = Arc::<AtomicUsize>::default();
     let hooked = GitHubBoardFields {
         endpoint: endpoint.clone(),
         board: Arc::clone(&board),
-        connections: Arc::default(),
+        connections: Arc::clone(&connections),
     };
-    let connections = loopback::serve(listener, move |sent| {
+    loopback::serve(listener, Arc::clone(&connections), move |sent| {
         let (line, request, token) = http_request_parts(sent);
         // The one REST read a write to a source declared private sends: the visibility of
         // the repository an issue lives in. Recorded beside the GraphQL documents, so a
