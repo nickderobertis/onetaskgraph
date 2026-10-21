@@ -4812,7 +4812,7 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         return json!({"search":{"nodes":nodes,
             "pageInfo":{"hasNextPage":end < matched.len(),"endCursor":end.to_string()}}});
     }
-    if query.contains("subIssues(first:$first") {
+    if query.contains("subIssues(first:$memberFirst") {
         let id = variables["id"].as_str().expect("a node id").to_owned();
         let Some(item) = board.items.iter().find(|item| item["id"] == json!(id)) else {
             return json!({ "node": null });
@@ -4827,11 +4827,11 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
             other => panic!("GraphQL after must be null or a numeric string: {other}"),
         };
         let first = usize::try_from(
-            variables["first"]
+            variables["memberFirst"]
                 .as_u64()
-                .expect("GraphQL first must be an unsigned integer"),
+                .expect("GraphQL memberFirst must be an unsigned integer"),
         )
-        .expect("GraphQL first fits usize");
+        .expect("GraphQL memberFirst fits usize");
         let children = board
             .items
             .iter()

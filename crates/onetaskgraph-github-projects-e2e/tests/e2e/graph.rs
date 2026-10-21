@@ -50,7 +50,7 @@ fn github_projects_with_plan(sandbox: &Sandbox, tasks: &[PlanIssue]) -> (Value, 
 const PLAN: &str = "PLAN-1";
 
 /// How many sub-issues one page of GitHub's `subIssues` holds as this source asks for them.
-const LISTING_PAGE: usize = onetaskgraph_github_projects::MAX_PAGE_SIZE as usize;
+const LISTING_PAGE: usize = onetaskgraph_github_projects::MEMBER_PAGE_SIZE as usize;
 
 /// A plan of `count` tasks, most with one or two edges: each task after the first is blocked by
 /// the one before it, every third by the one before that too, and every tenth by nothing.
@@ -112,7 +112,7 @@ fn named(served: &[String]) -> Vec<&'static str> {
     served
         .iter()
         .map(|query| {
-            if query.contains("subIssues(first:$first") {
+            if query.contains("subIssues(first:$memberFirst") {
                 "subIssues page"
             } else if query.contains("blocking(first:$first") {
                 "dependency read"
@@ -183,7 +183,7 @@ fn carried_blockers() -> usize {
     board
         .served()
         .iter()
-        .find(|(query, _)| query.contains("subIssues(first:$first"))
+        .find(|(query, _)| query.contains("subIssues(first:$memberFirst"))
         .and_then(|(_, variables)| variables["nestedFirst"].as_u64())
         .and_then(|page| usize::try_from(page).ok())
         .expect("the sub-issue read names how many blockers it carries")
@@ -193,12 +193,12 @@ fn carried_blockers() -> usize {
 fn a_board_refusing_a_later_listing_page_prints_no_part_of_the_graph() {
     for format in ["mermaid", "json"] {
         let (sandbox, board) = hosted(&tasks(LISTING_PAGE + 20));
-        board.refuse_after("subIssues(first:$first", 1);
+        board.refuse_after("subIssues(first:$memberFirst", 1);
         let (output, served) = graph(&sandbox, &board, &["--format", format]);
         assert_ne!(output.status.code(), Some(0));
         assert_eq!(stdout(&output), "", "a graph was printed in part");
         assert!(
-            stderr(&output).contains("subIssues(first:$first"),
+            stderr(&output).contains("subIssues(first:$memberFirst"),
             "the source's error is not reported: {}",
             stderr(&output)
         );
