@@ -11179,12 +11179,12 @@ async fn a_fixture_wait_gives_up_within_its_deadline_and_bounds_the_read_that_ex
     );
 }
 
+/// The id and title of each item a run created, as a fixture wait is told them.
+type Created = Vec<(NativeId, String)>;
+
 /// A run's five artifacts on a board, titled under `prefix`, and the ids and titles a fixture
 /// wait is told the run created: its three tasks and its two projects, and any `extra` tasks.
-fn fixture_run(
-    prefix: &str,
-    extra: &[(&str, &str)],
-) -> (Fixture, Vec<(NativeId, String)>, Vec<(NativeId, String)>) {
+fn fixture_run(prefix: &str, extra: &[(&str, &str)]) -> (Fixture, Created, Created) {
     let title = |number: usize| format!("{prefix}{number}");
     let fixture = board(vec![
         Item::issue("P_alpha", &title(1))

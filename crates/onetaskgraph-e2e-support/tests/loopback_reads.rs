@@ -16,7 +16,6 @@ fn after_sending(sent: &[u8]) -> std::io::Result<Option<String>> {
     let (served, _) = listener.accept().expect("accepted");
     let mut reader = BufReader::new(served);
     let first = next_request(&mut reader)?.map(|request| request.line().to_owned());
-    // Whatever the first read said, the connection has nothing after it.
     assert!(matches!(next_request(&mut reader), Ok(None) | Err(_)));
     Ok(first)
 }
