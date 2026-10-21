@@ -12,7 +12,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::config::ConfigError;
-use crate::engine::EngineError;
+use crate::engine::{EngineError, TaskAssetsError};
 
 /// Whether repeating a failed request unchanged could change the answer.
 ///
@@ -331,6 +331,15 @@ fn cause(error: &EngineError) -> (String, Option<SourceName>, Option<&SourceErro
 impl From<&EngineError> for Failure {
     fn from(error: &EngineError) -> Self {
         let (kind, source, caused_by) = cause(error);
+        Self::caused(kind, source, caused_by, error.to_string())
+    }
+}
+
+impl From<&TaskAssetsError> for Failure {
+    /// Classed by what stopped the read, and written as the read's own message, which names
+    /// the task as well as that cause.
+    fn from(error: &TaskAssetsError) -> Self {
+        let (kind, source, caused_by) = cause(&error.error);
         Self::caused(kind, source, caused_by, error.to_string())
     }
 }

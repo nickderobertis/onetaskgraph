@@ -12,7 +12,9 @@ use onetaskgraph_plugin_api::{
 };
 use serde_json::Value;
 
-use super::EngineError;
+use super::delivery::source_failed;
+use super::{Engine, EngineError};
+use crate::GlobalId;
 use crate::resolve::ResolvedSource;
 
 /// Which kind of record an asset belongs to: the two that hold assets.
@@ -150,6 +152,88 @@ pub(super) fn ordered(mut listed: Vec<Asset>, content: Option<&str>) -> Vec<Asse
             .then_with(|| left.name.cmp(&right.name))
     });
     listed
+}
+
+/// One image asset a task holds, with its bytes: what [`Engine::task_assets`] answers with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeldAsset {
+    /// The name the task's content references it by, as `![alt](./<name>)`.
+    pub name: AssetName,
+    /// Its bytes, as the task's source holds them.
+    pub bytes: Vec<u8>,
+}
+
+/// Why [`Engine::task_assets`] could not read the image assets of the task `id`: the task is
+/// not there, or its source could not be built or could not answer — `error` says which, in
+/// the store's own words.
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+#[error("could not read the image assets of task {id}: {error}")]
+pub struct TaskAssetsError {
+    /// The task whose assets were asked for.
+    pub id: GlobalId,
+    /// What stopped the read.
+    pub error: EngineError,
+}
+
+impl Engine {
+    /// Every image asset the task `id` holds, each with its bytes, in the order its content
+    /// first references them and any it does not reference after those by name — none for a
+    /// task holding none, or for one in a source that keeps no assets.
+    ///
+    /// Read through the source's own asset reads, so a caller never reaches into where a
+    /// plugin keeps them.
+    ///
+    /// # Errors
+    ///
+    /// A [`TaskAssetsError`] naming `id`, carrying [`EngineError::NoSuchTask`] when the source
+    /// holds no such task, [`EngineError::SourceUnavailable`] when the source could not be
+    /// built, [`EngineError::SourceFailed`] with the source's own error when it could not
+    /// answer, and [`EngineError::UnknownSource`] when nothing configures the source `id`
+    /// names.
+    pub async fn task_assets(&self, id: &GlobalId) -> Result<Vec<HeldAsset>, TaskAssetsError> {
+        let failed = |error| TaskAssetsError {
+            id: id.clone(),
+            error,
+        };
+        let source = self.built(&id.source).map_err(failed)?;
+        let task = source
+            .source()
+            .get_task(&id.native)
+            .await
+            .map_err(|error| failed(source_failed(source, error)))?
+            .ok_or_else(|| failed(EngineError::NoSuchTask { id: id.to_string() }))?;
+        let listed = source
+            .source()
+            .task_assets(&id.native)
+            .await
+            .map_err(|error| failed(source_failed(source, error)))?;
+        let mut held = Vec::with_capacity(listed.len());
+        for asset in ordered(listed, task.content.as_deref()) {
+            let bytes = source
+                .source()
+                .task_asset(&id.native, &asset.name)
+                .await
+                .map_err(|error| failed(source_failed(source, error)))?
+                // A source that lists an asset and then holds no bytes for it has contradicted
+                // itself, which is the source failing rather than the task holding less.
+                .ok_or_else(|| {
+                    failed(source_failed(
+                        source,
+                        SourceError::Malformed {
+                            message: format!(
+                                "the task {id} lists the asset {} but holds no bytes for it",
+                                asset.name
+                            ),
+                        },
+                    ))
+                })?;
+            held.push(HeldAsset {
+                name: asset.name,
+                bytes,
+            });
+        }
+        Ok(held)
+    }
 }
 
 /// Whether `held` — what a record holds — is exactly `carried`, name for name and digest for
