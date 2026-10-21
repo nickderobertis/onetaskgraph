@@ -27,6 +27,7 @@ import {
   OnetaskgraphClient,
   OnetaskgraphExecutionError,
   OnetaskgraphValidationError,
+  projectCopyFlags,
   projectGraphDirections,
   taskCopyFlags,
   taskUpdateFlags,
@@ -1924,4 +1925,40 @@ test("a copy with comments carries them, and a repeat by query skips the unchang
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("projectCopy flags agree with the binary help and validate membersOnly", () => {
+  const flags = (verb: string[]) => {
+    const help = spawnSync(binary, [...verb, "--help"], { encoding: "utf8" });
+    expect(help.status, help.stderr).toBe(0);
+    return new Set(
+      [...help.stdout.matchAll(/^\s+(?:-[a-zA-Z], )?(--[a-z][a-z-]*)/gm)].flatMap((found) =>
+        found[1] === undefined ? [] : [found[1]],
+      ),
+    );
+  };
+  const global = flags(["config", "show"]);
+  const own = [...flags(["project", "copy"])]
+    .filter((flag) => !global.has(flag) && flag !== "--to")
+    .sort();
+  const sent = projectCopyFlags({
+    matchBy: "title",
+    recreate: true,
+    dryRun: true,
+    noLink: true,
+    comments: true,
+    noTasks: true,
+    members: ["from:T-1"],
+    membersOnly: true,
+    termScope: ["github.com/example/project"],
+  });
+  const all = new Set(
+    [...sent, ...projectCopyFlags({ termScope: [] })].filter((flag) => flag.startsWith("--")),
+  );
+  expect([...all].sort()).toEqual(own);
+  expect(projectCopyFlags({ membersOnly: false })).not.toContain("--members-only");
+  // Untyped JavaScript callers can pass a string despite this TypeScript declaration.
+  expect(() => projectCopyFlags({ membersOnly: "false" as unknown as boolean })).toThrow(
+    "membersOnly must be a boolean",
+  );
 });

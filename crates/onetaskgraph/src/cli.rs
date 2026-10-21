@@ -1970,6 +1970,7 @@ pub struct ProjectCopyArgs {
     /// project as it is: it is found by the link or origin it records, or by a lookup of its
     /// origin, and is never read for comparison, written or reported. A project the
     /// destination does not hold yet is refused, naming the `project copy` that creates it.
+    // llmlint: ignore[invalid_states_unrepresentable] Clap rejects this flag without a member at parse; the command conversion then constructs MembersOnly with nonempty CopyItems. Keeping the clap argument beside member follows this boundary's existing flag representation.
     #[arg(long = "members-only", requires = "member")]
     pub members_only: bool,
 

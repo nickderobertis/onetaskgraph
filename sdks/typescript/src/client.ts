@@ -835,6 +835,19 @@ export function taskCopyFlags(options: TaskCopyOptions): string[] {
   ];
 }
 
+export function projectCopyFlags(
+  options: CopyOptions & { noTasks?: boolean; members?: string[]; membersOnly?: boolean },
+): string[] {
+  const args = copyFlags("projectCopy", options);
+  if (options.noTasks) args.push("--no-tasks");
+  for (const member of options.members ?? []) args.push("--member", member);
+  if (options.membersOnly !== undefined && typeof options.membersOnly !== "boolean") {
+    throw new TypeError("projectCopy: membersOnly must be a boolean");
+  }
+  if (options.membersOnly === true) args.push("--members-only");
+  return args;
+}
+
 function copyFlags(method: string, options: CopyOptions & CopyQueryOptions): string[] {
   const args: string[] = [...termScopeFlags(method, options)];
   for (const flag of ["noLink", "comments"] as const) {
@@ -1182,10 +1195,7 @@ export class OnetaskgraphClient {
     // leaving that project unread and unwritten; it is refused without a member.
     options: CopyOptions & { noTasks?: boolean; members?: string[]; membersOnly?: boolean } = {},
   ): Promise<CopyReport> {
-    const args = [id, "--to", to, ...copyFlags("projectCopy", options)];
-    if (options.noTasks) args.push("--no-tasks");
-    for (const member of options.members ?? []) args.push("--member", member);
-    if (options.membersOnly) args.push("--members-only");
+    const args = [id, "--to", to, ...projectCopyFlags(options)];
     return this.run("project copy", args);
   }
   projectMetadataSet(

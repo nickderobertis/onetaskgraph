@@ -71,7 +71,6 @@ impl Plan {
     }
 }
 
-/// The source-to-destination pairs of a copy report.
 fn landed(report: &Value) -> Vec<(String, String)> {
     report["items"]
         .as_array()
@@ -105,7 +104,6 @@ fn rewrites(document: &str) -> bool {
     .contains(&document)
 }
 
-/// The reads of issues by their node ids.
 fn reads_by_node_id(document: &str) -> bool {
     [
         graphql::ISSUE,
@@ -118,7 +116,7 @@ fn reads_by_node_id(document: &str) -> bool {
 }
 
 #[test]
-fn a_members_only_copy_lands_its_members_and_neither_reads_nor_writes_the_boards_project() {
+fn a_members_only_copy_lands_its_members_without_comparing_or_writing_the_boards_project() {
     let plan = Plan::new();
     plan.write(
         "projects/P.md",
@@ -264,7 +262,6 @@ fn names(variables: &Value, native: &str) -> bool {
     }
 }
 
-/// Each item of a copy report as its source id and action.
 fn actions(report: &Value) -> Vec<(String, String)> {
     report["items"]
         .as_array()
@@ -324,4 +321,137 @@ fn a_members_only_copy_of_a_project_the_board_lacks_writes_nothing() {
         "a refused members-only copy sent a mutation: {served:#?}"
     );
     assert_eq!(held(&plan), before, "the board holds no new item");
+}
+
+#[test]
+fn a_members_only_copy_reports_an_unstable_member_beside_the_one_that_lands() {
+    let plan = Plan::new();
+    plan.write(
+        "projects/P.md",
+        "---\ntitle: Plan\nstatus: Todo\n---\nplan\n",
+    );
+    for task in ["A", "B"] {
+        plan.write(
+            &format!("tasks/{task}.md"),
+            &format!("---\ntitle: {task}\nstatus: Todo\nproject: P\n---\nbody\n"),
+        );
+    }
+    let initial = plan.json(&["project", "copy", "plans:P", "--to", "board", "--json"]);
+    let ids = landed(&initial);
+    let counterpart = |source: &str| {
+        ids.iter()
+            .find(|(from, _)| from == source)
+            .expect("copied")
+            .1
+            .clone()
+    };
+    let project = counterpart("plans:P");
+    let unstable = counterpart("plans:A");
+    let stable = counterpart("plans:B");
+    let native = unstable.strip_prefix("board:").expect("board task");
+    for n in 0..120 {
+        plan.board.add_comment(native, &format!("comment {n}"));
+    }
+    for pass in 0..2 {
+        let watched = native.to_owned();
+        let changed = watched.clone();
+        plan.board.after_request(
+            move |document, variables| {
+                (document == graphql::ISSUE_COPY_DETAILS
+                    || document == graphql::ISSUE_DETAILS
+                    || document == graphql::ISSUE_DETAIL)
+                    && variables
+                        .as_object()
+                        .is_some_and(|fields| fields.values().any(|value| value == &watched))
+                    && variables["after"].is_null()
+            },
+            pass,
+            move |board| board.edit_body(&changed, &format!("changed {pass}")),
+        );
+    }
+    let before = std::fs::read(plan.root.join("projects/P.md")).expect("project");
+    let (out, _, _) = plan.run(
+        &[
+            "project",
+            "copy",
+            &project,
+            "--to",
+            "plans",
+            "--member",
+            &unstable,
+            "--member",
+            &stable,
+            "--members-only",
+            "--comments",
+            "--json",
+        ],
+        4,
+    );
+    let report: Value = serde_json::from_str(&out).expect("report");
+    let items = report["items"].as_array().expect("items");
+    let failed = items
+        .iter()
+        .find(|item| item["source"] == unstable)
+        .expect("unstable member");
+    assert_eq!(
+        failed["error"]["kind"], "changed-while-copied",
+        "{report:#}"
+    );
+    assert!(
+        items
+            .iter()
+            .any(|item| item["source"] == stable && item["destination"].is_string()),
+        "{report:#}"
+    );
+    assert_eq!(
+        std::fs::read(plan.root.join("projects/P.md")).expect("project"),
+        before
+    );
+}
+
+#[test]
+fn a_members_only_copy_rolls_back_created_members_when_a_later_write_fails() {
+    let plan = Plan::new();
+    plan.write(
+        "projects/P.md",
+        "---\ntitle: Plan\nstatus: Todo\n---\nplan\n",
+    );
+    let initial = plan.json(&["project", "copy", "plans:P", "--to", "board", "--json"]);
+    let project = landed(&initial)[0].1.clone();
+    let before = plan.json(&["project", "show", &project, "--json"])["items"].clone();
+    for task in ["A", "B"] {
+        plan.write(
+            &format!("tasks/{task}.md"),
+            &format!("---\ntitle: Rollback {task}\nstatus: Doing\nproject: P\n---\nbody\n"),
+        );
+    }
+    plan.board.fail_field_write("FIELD-status");
+    let (_, error, served) = plan.run(
+        &[
+            "project",
+            "copy",
+            "plans:P",
+            "--to",
+            "board",
+            "--member",
+            "plans:A",
+            "--member",
+            "plans:B",
+            "--members-only",
+        ],
+        1,
+    );
+    assert!(error.contains("field0 failed"), "{error}");
+    assert!(
+        served
+            .iter()
+            .any(|(document, _)| document.contains("createIssue(input:")),
+        "{served:#?}"
+    );
+    let tasks = plan.json(&["task", "list", "--source", "board", "--json"]);
+    assert!(!tasks.to_string().contains("Rollback"), "{tasks:#}");
+    assert_eq!(
+        plan.json(&["project", "show", &project, "--json"])["items"],
+        before
+    );
 }

@@ -2976,6 +2976,25 @@ fn a_members_only_copy_carries_the_named_members_and_leaves_the_project_alone() 
         }
         let notes = sandbox.project().join(NOTES);
         let before = files(&notes);
+        if only {
+            let source = sandbox.project().join("remote");
+            let source_before = files(&source);
+            let mut preview = arguments.clone();
+            preview.push("--dry-run");
+            let preview: Value =
+                serde_json::from_str(&ok(&sandbox, &preview)).expect("preview JSON");
+            assert_eq!(preview["items"].as_array().expect("preview items").len(), 2);
+            assert_eq!(
+                files(&source),
+                source_before,
+                "dry-run leaves source links unchanged"
+            );
+            assert_eq!(
+                files(&notes),
+                before,
+                "dry-run leaves the destination unchanged"
+            );
+        }
         let report: Value =
             serde_json::from_str(&ok(&sandbox, &arguments)).expect("a copy emits JSON");
         (sandbox, before, report)
@@ -3074,6 +3093,29 @@ fn a_members_only_copy_of_a_project_the_destination_lacks_is_refused_before_any_
     )
     .expect("its task");
     let before = files(&notes);
+
+    let output = sandbox
+        .command()
+        .args([
+            "project",
+            "copy",
+            "remote:P-2",
+            "--to",
+            NOTES,
+            "--member",
+            "remote:T-6",
+            "--members-only",
+            "--json",
+        ])
+        .assert()
+        .code(1)
+        .get_output()
+        .clone();
+    let failure: Value = serde_json::from_slice(&output.stdout).expect("a failure document");
+    assert_eq!(
+        failure["failure"]["kind"], "no-project-counterpart",
+        "{failure:#}"
+    );
 
     let said = refused(
         &sandbox,
@@ -4313,4 +4355,34 @@ fn a_copy_by_id_beside_a_status_refuses_an_id_it_cannot_read_and_writes_nothing(
         "---\ntitle: A proposal\nstatus: backlog\n---\nAsked for.\n",
         "the source records no link to a copy that never happened"
     );
+}
+
+#[test]
+fn a_members_only_copy_refuses_an_unrecorded_edge_before_writing() {
+    let sandbox = Sandbox::new();
+    shadowed(&sandbox);
+    let notes = sandbox.project().join(NOTES);
+    let before = files(&notes);
+    let said = refused(
+        &sandbox,
+        &[
+            "project",
+            "copy",
+            "remote:P-1",
+            "--to",
+            NOTES,
+            "--member",
+            "remote:T-2",
+            "--member",
+            "remote:T-4",
+            "--members-only",
+        ],
+        1,
+    );
+    assert!(
+        said.contains("remote:T-4 depends on remote:T-1")
+            && said.contains("records no origin in notes"),
+        "{said}"
+    );
+    assert_eq!(files(&notes), before);
 }
