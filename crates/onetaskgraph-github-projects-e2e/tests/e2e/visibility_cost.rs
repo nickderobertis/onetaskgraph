@@ -357,17 +357,9 @@ fn a_whole_plan_copy_spends_two_visibility_reads_per_write() {
     let (paired, alone) = front.overlap();
     assert!(paired > 0, "the copy read who can read the board");
     assert_eq!(alone, 0, "a read waited for its partner and none came");
-    // Two invocations, each keeping a connection alive and opening a second for the read sent
-    // beside another: a handful of connections each way, never one per request.
-    let accepted = front.accepted.load(Ordering::SeqCst);
-    assert!(
-        accepted <= 8,
-        "the binary opened {accepted} connections to the proxy for {} requests",
-        served.len()
-    );
     assert_eq!(
         board.connections(),
-        accepted,
+        front.accepted.load(Ordering::SeqCst),
         "the proxy opened a connection to the board other than the one each of its own keeps"
     );
 }

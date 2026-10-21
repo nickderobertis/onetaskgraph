@@ -277,3 +277,32 @@ fn connections_served_each_are_answered_side_by_side_over_their_own_upstreams() 
         "each proxy connection kept its one upstream"
     );
 }
+
+/// A connection whose client asked for it to close ends after the answer, though the handler
+/// would have kept it open.
+#[test]
+fn a_client_asking_to_close_ends_a_connection_its_handler_keeps_open() {
+    use std::io::Read;
+
+    use onetaskgraph_e2e_support::loopback::{After, serve_with};
+    let listener = TcpListener::bind("127.0.0.1:0").expect("a listener");
+    let address = listener.local_addr().expect("an address");
+    serve_with(listener, |_, stream| {
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+            .expect("answered");
+        After::KeepOpen
+    });
+    let mut client = TcpStream::connect(address).expect("a client");
+    client
+        .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+        .expect("a timeout");
+    client
+        .write_all(b"POST /graphql HTTP/1.1\r\nConnection: close\r\nContent-Length: 2\r\n\r\n{}")
+        .expect("sent");
+    let mut answer = Vec::new();
+    client
+        .read_to_end(&mut answer)
+        .expect("answered, and then the connection ends");
+    assert!(answer.ends_with(b"\r\n\r\nok"), "{answer:?}");
+}

@@ -198,3 +198,31 @@ fn a_refused_connection_carries_the_operating_systems_own_error() {
         "the failure names the socket error the operating system gave: {said}"
     );
 }
+
+#[test]
+fn a_client_asking_to_close_is_told_so_and_its_connection_ends_after_the_answer() {
+    use std::io::{Read, Write};
+    let sandbox = Sandbox::new();
+    let (config, board) = github_projects_with_board(&sandbox);
+    let address = config["endpoint"]
+        .as_str()
+        .and_then(|endpoint| endpoint.strip_prefix("http://"))
+        .and_then(|rest| rest.split('/').next())
+        .expect("the board's address");
+    let mut client = std::net::TcpStream::connect(address).expect("a connection");
+    client
+        .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+        .expect("a timeout");
+    client
+        .write_all(b"GET /repos/acme/work HTTP/1.1\r\nHost: board\r\nAuthorization: Bearer test-token\r\nConnection: close\r\n\r\n")
+        .expect("sent");
+    // Read to the end, which only comes once the board has closed the connection.
+    let mut answer = String::new();
+    client
+        .read_to_string(&mut answer)
+        .expect("the board answers and then closes");
+    let head = answer.split("\r\n\r\n").next().unwrap_or_default();
+    assert!(head.starts_with("HTTP/1.1 200"), "{answer}");
+    assert!(head.contains("\r\nConnection: close\r\n"), "{answer}");
+    assert_eq!(board.connections(), 1);
+}
