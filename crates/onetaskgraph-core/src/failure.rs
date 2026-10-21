@@ -221,6 +221,7 @@ fn cause(error: &EngineError) -> (String, Option<SourceName>, Option<&SourceErro
         }
         EngineError::NotCached { name } => ("not-cached".to_owned(), configured(name), None),
         EngineError::ExpectOneTask => ("expect-one-task".to_owned(), None, None),
+        EngineError::VersionMoved { .. } => ("version-moved".to_owned(), None, None),
         EngineError::NoComments { name, .. } | EngineError::CommentlessDestination { name, .. } => {
             ("no-comments".to_owned(), configured(name), None)
         }

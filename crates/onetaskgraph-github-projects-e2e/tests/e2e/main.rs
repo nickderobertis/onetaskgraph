@@ -11,6 +11,7 @@
 
 use onetaskgraph_e2e_support::{common, fixtures};
 
+mod approval;
 mod boundary;
 mod cache;
 mod cache_assets;

@@ -2420,7 +2420,7 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         return json!({"search":{"nodes":nodes,
             "pageInfo":{"hasNextPage":end < matched.len(),"endCursor":end.to_string()}}});
     }
-    if query.contains("subIssues(first:$first") {
+    if query.contains("subIssues(first:$memberFirst") {
         let id = variables["id"].as_str().expect("a node id").to_owned();
         let Some(parent) = state.items.iter().find(|item| item.content_id == id) else {
             return json!({ "node": null });
@@ -2433,7 +2433,7 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
             Value::String(cursor) => cursor.parse::<usize>().expect("a numeric cursor"),
             other => panic!("after must be null or a string: {other}"),
         };
-        let first = variables["first"].as_u64().expect("first") as usize;
+        let first = variables["memberFirst"].as_u64().expect("memberFirst") as usize;
         let options = state.options();
         let children = state
             .items
@@ -3641,7 +3641,7 @@ fn committed_server() -> String {
                     .collect::<Vec<_>>();
                 json!({"data":{"search":{"nodes":matched,
                     "pageInfo":{"hasNextPage":false,"endCursor":null}}}})
-            } else if query.contains("subIssues(first:$first") {
+            } else if query.contains("subIssues(first:$memberFirst") {
                 let id = variables["id"].as_str().expect("a node id");
                 if id == "I_plan" {
                     children.clone()

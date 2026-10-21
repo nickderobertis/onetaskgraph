@@ -1249,3 +1249,21 @@ requests to **4**, its creation filed on the board in the same request.
 **`session-cost.txt`** gains the reconciliation of the two documents the live journey now
 prices — `ORIGIN_LOOKUPS` (9,200 nodes) and `CREATED_BOARD_ITEMS` (63) — and the copy batch's
 sub-issue page (7,413 → **7,463**): requests go 210 → **212** and nodes 293,608 → **302,921**.
+
+## A project's members listing is paged at what one point buys
+
+`SUB_ISSUES` pages a project's sub-issues at `$memberFirst`, bound to `MEMBER_PAGE_SIZE` (23),
+rather than at `$first` (100). GitHub charges a page once per row for each connection under it:
+six per sub-issue — its labels, its board memberships, their three field-value pages and its
+`blockedBy` — and seven for the project issue beside them. A hundred rows came to 607, six
+points, which listing a plan's project of a handful of tasks and its design document paid in
+full; twenty-three come to 145, **one** point, and twenty-four would be two. A project of more
+than twenty-three members costs one request and one point per page, never more per row than the
+hundred-row page did. Nothing selected moves, so every record and its order are as before.
+
+**`SUB_ISSUES`** goes from 25,653 worst-case nodes to **6,095** and from 6 points to **1**.
+
+**`session-cost.txt`** moves on two lines and its node total: the reconciliation of that
+document goes 25,653 → **6,095** and the two `reading a project's tasks` requests 51,306 →
+**12,190**. Nodes go 302,921 → **244,247**. Requests stay **212**: the live journey's projects
+hold fewer than twenty-three members, so each is still listed in one page.
