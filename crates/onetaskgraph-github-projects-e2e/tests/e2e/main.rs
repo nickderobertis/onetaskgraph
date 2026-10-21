@@ -26,6 +26,7 @@ mod copy_unsettled;
 mod fields;
 mod github_status_by_kind;
 mod graph;
+mod member_copy;
 mod metadata_fields;
 mod plan_copy;
 mod plan_locations;
