@@ -11252,6 +11252,67 @@ async fn a_fixture_wait_names_a_project_the_index_is_behind_on_and_a_task_that_n
     );
 }
 
+/// A wait settles on every item it was told of by title rather than on a count: another item
+/// under the run's prefix does not hold it, and does not stand in for one that never came.
+#[tokio::test]
+async fn a_fixture_wait_counts_titles_not_items() {
+    let prefix = "onetaskgraph live cleanup 4242-914-";
+    let title = |number: usize| format!("{prefix}{number}");
+    let items = || {
+        vec![
+            Item::issue("P_alpha", &title(1))
+                .status("Todo")
+                .sub_issues(1),
+            Item::issue("P_beta", &title(2))
+                .status("Todo")
+                .sub_issues(1),
+            Item::issue("T_first", &title(3))
+                .status("Todo")
+                .parent("P_alpha"),
+            Item::issue("T_second", &title(4))
+                .status("Todo")
+                .parent("P_beta"),
+            Item::issue("T_orphan", &title(5)).status("Todo"),
+            // Under the run's prefix, and not one the run was told it created.
+            Item::issue("T_other", &title(6)).status("Todo"),
+        ]
+    };
+    let named = |id: &str, number: usize| (NativeId(id.to_owned()), title(number));
+    let projects = vec![named("P_alpha", 1), named("P_beta", 2)];
+    let fixture = board(items());
+    let tasks = vec![
+        named("T_first", 3),
+        named("T_second", 4),
+        named("T_orphan", 5),
+    ];
+    let settled =
+        journey::settled_fixture(&|| source(&fixture), prefix, &tasks, &projects, GIVE_UP)
+            .await
+            .expect("every item it was told of is reported");
+    assert_eq!(settled.tasks, vec![title(3), title(4), title(5), title(6)]);
+
+    // As many tasks reported as it was told of, one of them not the one it is waiting for.
+    let fixture = board(items());
+    let tasks = vec![
+        named("T_first", 3),
+        named("T_second", 4),
+        named("T_orphan", 5),
+        named("T_ghost", 7),
+    ];
+    let Err(said) =
+        journey::settled_fixture(&|| source(&fixture), prefix, &tasks, &projects, GIVE_UP).await
+    else {
+        panic!("T_ghost is never reported, so the wait cannot settle on T_other in its place");
+    };
+    assert!(
+        said.contains(&format!(
+            "never reported the task \"{}\" (T_ghost)",
+            title(7)
+        )),
+        "{said}"
+    );
+}
+
 /// A wait whose every search outlasts its deadline answered nothing, so it names every item it
 /// was waiting for, each with what a read by its own id found.
 #[tokio::test]
