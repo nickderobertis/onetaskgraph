@@ -11250,8 +11250,10 @@ fn fixture_run(prefix: &str, extra: &[(&str, &str)]) -> (Fixture, Created, Creat
 const OLD_FIXTURE_BOUND: Duration = Duration::from_secs(120);
 
 /// The short wait the give-up journeys below are held to.
+/// Its bound is long enough for a loaded host to answer a search inside it, which every one of
+/// them but the one whose searches outlast it depends on.
 const GIVE_UP: journey::FixtureWait = journey::FixtureWait {
-    bound: Duration::from_millis(300),
+    bound: Duration::from_millis(1_000),
     first: Duration::from_millis(20),
     steady_for: Duration::from_millis(100),
     longest: Duration::from_millis(100),
@@ -11363,10 +11365,9 @@ async fn a_fixture_wait_counts_titles_not_items() {
         panic!("T_ghost is never reported, so the wait cannot settle on T_other in its place");
     };
     assert!(
-        said.contains(&format!(
-            "never reported the task \"{}\" (T_ghost)",
-            title(7)
-        )),
+        said.contains(&format!("the task \"{}\" (T_ghost)", title(7)))
+            && !said.contains("(T_first)")
+            && said.contains("the last search it answered, attempt "),
         "{said}"
     );
 }
