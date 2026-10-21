@@ -280,7 +280,6 @@ export const commandResponseRoots: Readonly<Record<string, keyof typeof runtimeS
   "task create": "TaskDetail",
   "task render": "Regenerated",
   "task answers": "TemplateAnswers",
-  // The names of the image assets a task holds, as `task assets` wrote them.
   "task assets": "TaskAssetNames",
   "document create": "DocumentDetail",
   "document render": "Regenerated",

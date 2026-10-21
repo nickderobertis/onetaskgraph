@@ -3033,7 +3033,7 @@ const FORTY_THIRD_BUNDLE_SHAPE: [(&str, u64); 132] = [
     ("StatusReconciled", 0xc7ebba9481c79438),
     ("StatusesReconciled", 0x70c7a2c5693acf6d),
     ("Task", 0x4635270f674704ec),
-    ("TaskAssetNames", 0x82b9b3f24c82f249),
+    ("TaskAssetNames", 0xc964f4e9ef203e23),
     ("TaskContentSet", 0xeecadacd39de0eb6),
     ("TaskDetail", 0x8ed1d84bda5f5185),
     ("TaskDetails", 0x5062a81c886f4ba2),

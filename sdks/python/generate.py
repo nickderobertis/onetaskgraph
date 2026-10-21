@@ -72,7 +72,6 @@ RESPONSE_ROOTS = {
     "task_create": "TaskDetail",
     "task_render": "Regenerated",
     "task_answers": "TemplateAnswers",
-    # The names of the image assets a task holds, as `task assets` wrote them.
     "task_assets": "TaskAssetNames",
     # A created project as `project show` answers with it.
     "project_create": "QueryResponseOfQualifiedProject",

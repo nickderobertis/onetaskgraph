@@ -2631,7 +2631,53 @@ fn task_assets_writes_each_asset_a_task_holds_under_its_name_and_lists_exactly_t
         photo
     );
 
-    // Without --json, the names one a line; a directory not yet there is created.
+    std::fs::write(out.join("diagram.png"), b"old export").expect("an existing export");
+    folders.exits(
+        &["task", "assets", &pictured, "--output-dir", &spelled(&out)],
+        0,
+    );
+    assert_eq!(
+        std::fs::read(out.join("diagram.png")).expect("replaced"),
+        diagram
+    );
+    let blocked = folders.text("blocked", "a file, not a directory");
+    let failure = folders.refused(&["task", "assets", &pictured, "--output-dir", &blocked]);
+    assert!(failure.contains("could not write"), "{failure}");
+    let unwritable = folders.sandbox.subdirectory("unwritable");
+    std::fs::create_dir(unwritable.join("diagram.png")).expect("a directory at the asset path");
+    let failure = folders.refused(&[
+        "task",
+        "assets",
+        &pictured,
+        "--output-dir",
+        &spelled(&unwritable),
+    ]);
+    assert!(failure.contains("diagram.png"), "{failure}");
+    assert!(failure.contains("could not write"), "{failure}");
+
+    let partial = folders.sandbox.subdirectory("partial");
+    std::fs::create_dir(partial.join("photo.jpg")).expect("a directory at the later asset path");
+    let failure = folders.exits(
+        &[
+            "task",
+            "assets",
+            &pictured,
+            "--output-dir",
+            &spelled(&partial),
+            "--json",
+        ],
+        1,
+    );
+    let response: Value = serde_json::from_str(&stdout(&failure)).expect("a failure document");
+    assert_eq!(response["failure"]["kind"], "write");
+    assert!(!response.is_array(), "no success names on failure");
+    assert!(String::from_utf8_lossy(&failure.stderr).contains("photo.jpg"));
+    assert_eq!(
+        std::fs::read(partial.join("diagram.png")).expect("the earlier export"),
+        diagram
+    );
+    assert!(partial.join("photo.jpg").is_dir());
+
     let fresh = folders.sandbox.subdirectory("fresh").join("nested");
     let text = stdout(&folders.exits(
         &[
@@ -2678,6 +2724,13 @@ fn task_assets_writes_each_asset_a_task_holds_under_its_name_and_lists_exactly_t
         json!([])
     );
     assert!(Folders::files(&empty).is_empty());
+    assert_eq!(
+        stdout(&folders.exits(
+            &["task", "assets", &plain, "--output-dir", &spelled(&empty)],
+            0
+        )),
+        ""
+    );
 }
 
 #[test]
