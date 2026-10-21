@@ -1517,9 +1517,13 @@ The capture drives `local-md` and `in-memory` only: no credential or socket.
   kept alive. On the Windows runner, where `TIME_WAIT` lasts 120 seconds by default and
   listeners and ephemeral ports share one 16,384-port range, a late request of that suite
   failed `error sending request` against a board that was listening (run 39500544982). The
-  binary does not print the socket error beneath that message, so whether it was an
-  exhausted range or a clash with a connection still in `TIME_WAIT` is not established;
-  keeping connections alive removes the churn behind both.
+  binary did not print the socket error beneath that message. Keeping connections alive did
+  not end it: with that in place, run 39531470241 failed the same way in `visibility_cost`,
+  whose proxy still opens a connection to the board per request, and that proxy's read of
+  the board's answer was reset (`os error 10054`) while the board was serving. **The cause is
+  not established.** A failed request now names every cause beneath it, down to the socket
+  error, and a loopback server or proxy says on standard error — shown beside the failing
+  test — each accept, read or write it could not complete, so the next failure says which.
   `crates/onetaskgraph-e2e-support/src/loopback.rs` serves persistent HTTP/1.1 and closes a
   connection only once its client has, or asked to; a proxy that forwards and then reads to
   the end of the board's answer waits forever on it.
