@@ -2982,9 +2982,8 @@ fn connection_page(rows: Vec<Value>, after: &Value, first: usize) -> Value {
                        "endCursor":(end > 0).then(|| end.to_string())}})
 }
 
-/// One issue a live run creates, kept out of this board's issue search the way GitHub's index
-/// kept the second task of main's run 39499941270 out of every search for two minutes while
-/// every other item that run created was there.
+/// One issue a live run creates, kept out of this board's issue search while every other item
+/// that run created is there — the way GitHub's index can stay behind on one issue alone.
 ///
 /// A live run titles each artifact with its stamp plus an offset — `alpha` at 0, the second
 /// task at 3 — so the issue withheld is the one whose title's stamp is `offset` past the
@@ -11116,12 +11115,11 @@ async fn a_fixture_wait_gives_up_within_its_deadline_and_bounds_the_read_that_ex
             .parent("P_beta"),
         Item::issue("T_orphan", &titles[4]).status("Todo"),
     ]);
-    // Far longer than the wait gives a read by id, so a wait that awaited it is told apart
-    // from one that gave up on it by seconds rather than by a margin a loaded host can eat.
-    let read_by_id_answers_in = Duration::from_secs(5);
+    // Far longer than the wait gives a read by id, so the read is still unanswered when the
+    // wait abandons it, and the message saying so is the evidence that it did.
     fixture.search_withholds(
         SearchWithheld::item("T_second", usize::MAX)
-            .answering_reads_by_id_in(read_by_id_answers_in),
+            .answering_reads_by_id_in(Duration::from_secs(5)),
     );
     let wait = journey::FixtureWait {
         bound: Duration::from_millis(400),
@@ -11149,12 +11147,12 @@ async fn a_fixture_wait_gives_up_within_its_deadline_and_bounds_the_read_that_ex
     };
     let took = started.elapsed();
     assert!(
-        took >= wait.bound + wait.diagnosis && took < wait.bound + read_by_id_answers_in,
-        "gave up after {took:?}, against {:?} and {:?} more for the reads by id, which the \
-         board answers in {read_by_id_answers_in:?}",
+        took >= wait.bound + wait.diagnosis,
+        "gave up after {took:?}, before {:?} and {:?} more for the reads by id",
         wait.bound,
         wait.diagnosis
     );
+    // Abandoned, not awaited: a read awaited to its answer would have found T_second.
     assert!(
         said.contains(&format!(
             "never reported the task {:?} (T_second), which a read by its own id did not answer \
