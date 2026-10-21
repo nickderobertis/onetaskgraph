@@ -69,8 +69,10 @@ pub fn read_request(reader: &mut impl BufRead) -> Option<Request> {
 
 /// [`read_request`], telling the connection ending where a request would begin — `Ok(None)`,
 /// a client done with it — from a read that failed: the socket's own error, a connection that
-/// ended part way through a request as `UnexpectedEof`, or a `Content-Length` that is not a
-/// length as `InvalidData`.
+/// ended part way through a request as `UnexpectedEof`, or as `InvalidData` a head that is not
+/// HTTP/1.1 — a first line naming no `HTTP/` version, a header line with no colon — a
+/// `Content-Length` that is not a length, or a `Transfer-Encoding`, whose framing nothing here
+/// reads, so that its body is never taken for the next request.
 ///
 /// # Errors
 ///
@@ -92,10 +94,24 @@ pub fn next_request(reader: &mut impl BufRead) -> io::Result<Option<Request>> {
             break;
         }
     }
+    let invalid = |what: String| io::Error::new(io::ErrorKind::InvalidData, what);
+    let mut lines = head.lines();
+    let first = lines.next().unwrap_or_default();
+    if !first.split(' ').any(|part| part.starts_with("HTTP/")) {
+        return Err(invalid(format!("{first:?} names no HTTP version")));
+    }
+    if let Some(line) = lines.find(|line| !line.is_empty() && !line.contains(':')) {
+        return Err(invalid(format!("the header line {line:?} has no colon")));
+    }
     let mut request = Request {
         head,
         body: Vec::new(),
     };
+    if let Some(encoding) = request.header("transfer-encoding") {
+        return Err(invalid(format!(
+            "a Transfer-Encoding of {encoding:?} is framing this server does not read"
+        )));
+    }
     if let Some(length) = request.header("content-length") {
         let length = length.parse::<usize>().map_err(|_| {
             io::Error::new(

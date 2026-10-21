@@ -306,3 +306,27 @@ fn a_client_asking_to_close_ends_a_connection_its_handler_keeps_open() {
         .expect("answered, and then the connection ends");
     assert!(answer.ends_with(b"\r\n\r\nok"), "{answer:?}");
 }
+
+#[test]
+fn a_head_that_is_not_http_is_refused_by_name() {
+    let error = after_sending(b"hello there\r\n\r\n").expect_err("no version");
+    assert_eq!(error.kind(), ErrorKind::InvalidData, "{error}");
+    assert!(
+        error.to_string().contains("names no HTTP version"),
+        "{error}"
+    );
+    let error = after_sending(b"POST /graphql HTTP/1.1\r\nno colon here\r\n\r\n")
+        .expect_err("a header without a colon");
+    assert_eq!(error.kind(), ErrorKind::InvalidData, "{error}");
+    assert!(error.to_string().contains("\"no colon here\""), "{error}");
+}
+
+#[test]
+fn a_chunked_body_is_refused_rather_than_read_as_the_next_request() {
+    let error = after_sending(
+        b"POST /graphql HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n2\r\n{}\r\n0\r\n\r\n",
+    )
+    .expect_err("unframeable");
+    assert_eq!(error.kind(), ErrorKind::InvalidData, "{error}");
+    assert!(error.to_string().contains("\"chunked\""), "{error}");
+}
