@@ -11094,6 +11094,7 @@ async fn the_fixture_wait_reads_through_a_source_built_after_the_board_caught_up
         prefix,
         &created(&[("T_first", 2), ("T_second", 3), ("T_orphan", 4)]),
         &created(&[("P_alpha", 0), ("P_beta", 1)]),
+        &BTreeMap::new(),
         journey::STAND_IN_FIXTURE_WAIT,
     )
     .await
@@ -11166,6 +11167,7 @@ async fn a_fixture_wait_gives_up_within_its_deadline_and_bounds_the_read_that_ex
         prefix,
         &created(&[("T_first", 2), ("T_second", 3), ("T_orphan", 4)]),
         &created(&[("P_alpha", 0), ("P_beta", 1)]),
+        &BTreeMap::new(),
         wait,
     )
     .await
@@ -11263,8 +11265,15 @@ async fn a_fixture_wait_names_a_project_the_index_is_behind_on_and_a_task_that_n
     let prefix = "onetaskgraph live cleanup 4242-911-";
     let (fixture, tasks, projects) = fixture_run(prefix, &[("T_ghost", "6")]);
     fixture.search_withholds(SearchWithheld::item("P_beta", usize::MAX));
-    let Err(said) =
-        journey::settled_fixture(&|| source(&fixture), prefix, &tasks, &projects, GIVE_UP).await
+    let Err(said) = journey::settled_fixture(
+        &|| source(&fixture),
+        prefix,
+        &tasks,
+        &projects,
+        &BTreeMap::new(),
+        GIVE_UP,
+    )
+    .await
     else {
         panic!("neither P_beta nor T_ghost is ever reported, so the wait cannot settle");
     };
@@ -11321,10 +11330,16 @@ async fn a_fixture_wait_counts_titles_not_items() {
         named("T_second", 4),
         named("T_orphan", 5),
     ];
-    let settled =
-        journey::settled_fixture(&|| source(&fixture), prefix, &tasks, &projects, GIVE_UP)
-            .await
-            .expect("every item it was told of is reported");
+    let settled = journey::settled_fixture(
+        &|| source(&fixture),
+        prefix,
+        &tasks,
+        &projects,
+        &BTreeMap::new(),
+        GIVE_UP,
+    )
+    .await
+    .expect("every item it was told of is reported");
     assert_eq!(settled.tasks, vec![title(3), title(4), title(5), title(6)]);
 
     // As many tasks reported as it was told of, one of them not the one it is waiting for.
@@ -11335,8 +11350,15 @@ async fn a_fixture_wait_counts_titles_not_items() {
         named("T_orphan", 5),
         named("T_ghost", 7),
     ];
-    let Err(said) =
-        journey::settled_fixture(&|| source(&fixture), prefix, &tasks, &projects, GIVE_UP).await
+    let Err(said) = journey::settled_fixture(
+        &|| source(&fixture),
+        prefix,
+        &tasks,
+        &projects,
+        &BTreeMap::new(),
+        GIVE_UP,
+    )
+    .await
     else {
         panic!("T_ghost is never reported, so the wait cannot settle on T_other in its place");
     };
@@ -11358,8 +11380,15 @@ async fn a_fixture_wait_no_search_answered_names_every_item() {
     fixture.search_withholds(
         SearchWithheld::item("T_second", usize::MAX).answering_searches_in(Duration::from_secs(2)),
     );
-    let Err(said) =
-        journey::settled_fixture(&|| source(&fixture), prefix, &tasks, &projects, GIVE_UP).await
+    let Err(said) = journey::settled_fixture(
+        &|| source(&fixture),
+        prefix,
+        &tasks,
+        &projects,
+        &BTreeMap::new(),
+        GIVE_UP,
+    )
+    .await
     else {
         panic!("no search answers inside the deadline, so the wait cannot settle");
     };
@@ -11384,8 +11413,15 @@ async fn a_fixture_wait_names_a_read_by_id_that_failed() {
     // The searches read no issue by its id, so the one read of an issue this board is sent is
     // the one that explains why T_second never came.
     fixture.script_for("issue", vec![Refusal::unavailable()]);
-    let Err(said) =
-        journey::settled_fixture(&|| source(&fixture), prefix, &tasks, &projects, GIVE_UP).await
+    let Err(said) = journey::settled_fixture(
+        &|| source(&fixture),
+        prefix,
+        &tasks,
+        &projects,
+        &BTreeMap::new(),
+        GIVE_UP,
+    )
+    .await
     else {
         panic!("the search never reports T_second, so the wait cannot settle");
     };

@@ -2646,9 +2646,14 @@ pub const FIXTURE_WAIT: FixtureWait = FixtureWait {
 /// How many times faster a stand-in board's fixture wait runs than [`FIXTURE_WAIT`].
 pub const STAND_IN_SCALE: u32 = 200;
 
-/// [`FIXTURE_WAIT`], every duration of it [`STAND_IN_SCALE`] times shorter, for a stand-in
-/// board: a search lag of `d` on GitHub is one of `d / STAND_IN_SCALE` there.
-pub const STAND_IN_FIXTURE_WAIT: FixtureWait = FIXTURE_WAIT.scaled(STAND_IN_SCALE);
+/// [`FIXTURE_WAIT`], every duration of its schedule [`STAND_IN_SCALE`] times shorter, for a
+/// stand-in board: a search lag of `d` on GitHub is one of `d / STAND_IN_SCALE` there. The
+/// reads by id are given what a loopback read takes on a loaded host, which is latency rather
+/// than lag and does not scale.
+pub const STAND_IN_FIXTURE_WAIT: FixtureWait = FixtureWait {
+    diagnosis: std::time::Duration::from_millis(500),
+    ..FIXTURE_WAIT.scaled(STAND_IN_SCALE)
+};
 
 /// Waits until one source reports every item of a run's fixture, and hands that source back.
 ///
@@ -2690,6 +2695,9 @@ pub async fn settled_fixture(
     // The tasks and projects the run created: each one's id and title.
     tasks_expected: &[(NativeId, String)],
     projects_expected: &[(NativeId, String)],
+    // When the write of each item, by title, was answered: what a converging run measures
+    // each item's first report against. An item missing here is reported without that figure.
+    written: &BTreeMap<String, tokio::time::Instant>,
     wait: FixtureWait,
 ) -> Result<Settled, String> {
     let ours = || {
@@ -2757,11 +2765,14 @@ pub async fn settled_fixture(
         {
             say(&format!(
                 "the live fixture converged: GitHub's issue search for titles {prefix}* reported \
-                 all {} of its items at attempt {attempts}, {:.1}s after the wait began; each was \
-                 first reported at {}",
+                 all {} of its items at attempt {attempts}, {:.1}s after the wait began, at {}; \
+                 each was first reported at {}; and this long after its own write was answered: \
+                 {}",
                 first_reported.len(),
                 answered_at.as_secs_f64(),
-                reported_at(&first_reported)
+                chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ"),
+                reported_at(&first_reported),
+                after_write(started, &first_reported, written)
             ));
             return Ok(Settled {
                 source,
@@ -2827,6 +2838,27 @@ pub async fn settled_fixture(
             "no search answered in full before it, so every item is named".to_owned()
         },
     ))
+}
+
+/// Each title a fixture wait saw reported, with how long after its own write was answered the
+/// search answer that first reported it arrived — an upper bound on the item's lag, coarse by
+/// the time between attempts.
+fn after_write(
+    started: tokio::time::Instant,
+    first_reported: &BTreeMap<String, std::time::Duration>,
+    written: &BTreeMap<String, tokio::time::Instant>,
+) -> String {
+    first_reported
+        .iter()
+        .map(|(title, at)| match written.get(title) {
+            Some(written) => format!(
+                "{title:?} {:.1}s",
+                (started + *at).duration_since(*written).as_secs_f64()
+            ),
+            None => format!("{title:?} (its write was not recorded)"),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Each title a fixture wait saw reported, with how far into the wait it first was.
@@ -2918,6 +2950,8 @@ async fn drive_every_declared_capability(
         })
         .await
         .map_err(|error| format!("live project write of {alpha:?} failed: {error}"))?;
+    let mut written = BTreeMap::new();
+    written.insert(alpha.clone(), tokio::time::Instant::now());
     await_on_board(rebuilt, &alpha_id, ItemKind::Project, &prefix, BOARD_WAIT).await?;
     let beta_id = writer
         .write_project(&ItemWrite {
@@ -2927,6 +2961,7 @@ async fn drive_every_declared_capability(
         })
         .await
         .map_err(|error| format!("live project write of {beta:?} failed: {error}"))?;
+    written.insert(beta.clone(), tokio::time::Instant::now());
     let mut round_trip = BTreeMap::new();
     round_trip.insert(
         "live.round_trip".to_owned(),
@@ -2946,6 +2981,7 @@ async fn drive_every_declared_capability(
         })
         .await
         .map_err(|error| format!("live task write of {first:?} failed: {error}"))?;
+    written.insert(first.clone(), tokio::time::Instant::now());
     await_on_board(rebuilt, &first_id, ItemKind::Task, &prefix, BOARD_WAIT).await?;
     let second_id = writer
         .write_task(&ItemWrite {
@@ -2961,6 +2997,7 @@ async fn drive_every_declared_capability(
         })
         .await
         .map_err(|error| format!("live task write of {second:?} failed: {error}"))?;
+    written.insert(second.clone(), tokio::time::Instant::now());
     let orphan_id = writer
         .write_task(&ItemWrite {
             target: None,
@@ -2975,6 +3012,7 @@ async fn drive_every_declared_capability(
         })
         .await
         .map_err(|error| format!("live task write of {orphan:?} failed: {error}"))?;
+    written.insert(orphan.clone(), tokio::time::Instant::now());
     let label_id = create_artifact_label(&run.token, &run.repository, &label_name).await?;
     attach_artifact_label(&run.token, &first_id.0, &label_id).await?;
     // That label went onto the issue through GitHub's own REST API rather than through this
@@ -2996,6 +3034,7 @@ async fn drive_every_declared_capability(
             (alpha_id.clone(), alpha.clone()),
             (beta_id.clone(), beta.clone()),
         ],
+        &written,
         endpoints().fixture_wait,
     )
     .await?;

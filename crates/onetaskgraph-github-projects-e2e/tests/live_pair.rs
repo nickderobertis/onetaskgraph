@@ -469,6 +469,28 @@ fn run_pair(scenario: &str) {
                 && !converged.contains("at attempt 1,"),
             "{converged}"
         );
+        // Each item's first report, measured from when its own write was answered: the task
+        // the stand-in held back for 1.2s after creating it is the latest, at least 1s on.
+        let lags = converged
+            .split_once("this long after its own write was answered: ")
+            .map_or_else(Vec::new, |(_, figures)| {
+                figures
+                    .split(", ")
+                    .map(|figure| {
+                        figure
+                            .rsplit(' ')
+                            .next()
+                            .and_then(|seconds| seconds.strip_suffix('s'))
+                            .and_then(|seconds| seconds.parse::<f64>().ok())
+                            .unwrap_or_else(|| panic!("no lag in {figure:?}: {converged}"))
+                    })
+                    .collect()
+            });
+        assert_eq!(lags.len(), 5, "{converged}");
+        assert!(
+            lags.iter().copied().fold(0.0, f64::max) >= 1.0,
+            "{converged}"
+        );
     }
     for output in outputs {
         assert!(
