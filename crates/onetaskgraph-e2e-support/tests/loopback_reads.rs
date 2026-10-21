@@ -166,3 +166,51 @@ fn a_proxy_reports_what_it_could_not_forward_and_recovers() {
     ));
     assert!(upstream.forward(request).ends_with(b"\r\n\r\nok"));
 }
+
+/// An answer saying `Connection: close` is relayed whole, and the next request opens a
+/// connection of its own.
+#[test]
+fn an_upstream_answering_close_is_replaced_for_the_next_request() {
+    use onetaskgraph_e2e_support::loopback::{After, Upstream, serve_with};
+    let listener = TcpListener::bind("127.0.0.1:0").expect("a listener");
+    let address = listener.local_addr().expect("an address");
+    let accepted = serve_with(listener, |_, stream| {
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 2\r\n\r\nok")
+            .expect("answered");
+        After::Close
+    });
+    let request = b"POST /graphql HTTP/1.1\r\nContent-Length: 2\r\n\r\n{}";
+    let mut upstream = Upstream::new(address);
+    for _ in 0..2 {
+        assert!(upstream.forward(request).ends_with(b"\r\n\r\nok"));
+    }
+    assert_eq!(accepted.load(std::sync::atomic::Ordering::SeqCst), 2);
+}
+
+/// A handler that panicked answering one request leaves the server answering the next.
+#[test]
+fn a_server_goes_on_answering_after_its_handler_panicked() {
+    use onetaskgraph_e2e_support::loopback::{After, Upstream, serve_with};
+    let listener = TcpListener::bind("127.0.0.1:0").expect("a listener");
+    let address = listener.local_addr().expect("an address");
+    let mut answered = 0;
+    serve_with(listener, move |_, stream| {
+        answered += 1;
+        assert!(answered > 1, "the first request's handler panics");
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+            .expect("answered");
+        After::KeepOpen
+    });
+    let request = b"POST /graphql HTTP/1.1\r\nContent-Length: 2\r\n\r\n{}";
+    assert!(
+        Upstream::new(address).forward(request).is_empty(),
+        "the panicking one"
+    );
+    assert!(
+        Upstream::new(address)
+            .forward(request)
+            .ends_with(b"\r\n\r\nok")
+    );
+}

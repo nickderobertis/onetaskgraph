@@ -324,6 +324,7 @@ impl Upstream {
                 Err(error) => return failed("could not connect", &error),
             },
         };
+        // llmlint: ignore[changed_behavior_has_e2e] A send on a kept connection fails only once the server's reset has arrived, which no test can order against the send; a server closing it is otherwise seen at the read, which tests/loopback_reads.rs proves.
         if let Err(error) = connection.get_mut().write_all(request) {
             return failed("could not send a request", &error);
         }
