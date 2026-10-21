@@ -197,8 +197,12 @@ fn approving_a_plan_lists_each_kind_in_one_point_and_writes_its_approval_behind_
     let waits_before = plan.clock.slept().len();
     let steps = approve(&plan, &project, &document);
     let waits: Vec<_> = plan.clock.slept()[waits_before..].to_vec();
-    assert!(
-        waits.is_empty(),
+    // Every wait the binary schedules — pacing, a secondary limit, a backoff — is recorded on the
+    // clock with its cause, and the board answers nothing to a binary not attached to it, so a
+    // count of none is a record of none rather than an absence of one.
+    assert_eq!(
+        waits.len(),
+        0,
         "the approval sequence waited on the clock — pacing, a secondary limit or a backoff: \
          {waits:?}"
     );
