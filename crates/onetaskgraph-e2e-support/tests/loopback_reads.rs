@@ -214,3 +214,66 @@ fn a_server_goes_on_answering_after_its_handler_panicked() {
             .ends_with(b"\r\n\r\nok")
     );
 }
+
+/// A request held on one connection until a request arrives on a second is answered, with
+/// each connection kept to a proxy connection of its own to the server behind.
+#[test]
+fn connections_served_each_are_answered_side_by_side_over_their_own_upstreams() {
+    use std::sync::{Arc, Barrier};
+    use std::time::Duration;
+
+    use onetaskgraph_e2e_support::loopback::{After, Upstream, serve_each, serve_with};
+    let server = TcpListener::bind("127.0.0.1:0").expect("a listener");
+    let address = server.local_addr().expect("an address");
+    let behind = serve_with(server, |_, stream| {
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+            .expect("answered");
+        After::KeepOpen
+    });
+    let proxy = TcpListener::bind("127.0.0.1:0").expect("a listener");
+    let front = proxy.local_addr().expect("an address");
+    let together = Arc::new(Barrier::new(2));
+    let accepted = serve_each(proxy, move || {
+        let (together, mut upstream) = (Arc::clone(&together), Upstream::new(address));
+        move |sent: &onetaskgraph_e2e_support::loopback::Request, stream: &mut TcpStream| {
+            let answer = upstream.forward(&sent.bytes());
+            // Released only once the other connection's request is here too.
+            together.wait();
+            stream.write_all(&answer).expect("relayed");
+            After::KeepOpen
+        }
+    });
+    let clients: Vec<_> = (0..2)
+        .map(|_| {
+            std::thread::spawn(move || {
+                let mut client = TcpStream::connect(front).expect("a client");
+                client
+                    .set_read_timeout(Some(Duration::from_secs(10)))
+                    .expect("a timeout");
+                let mut reader = BufReader::new(client.try_clone().expect("a reader"));
+                for _ in 0..2 {
+                    client
+                        .write_all(b"POST /graphql HTTP/1.1\r\nContent-Length: 2\r\n\r\n{}")
+                        .expect("sent");
+                    let answer = next_request(&mut reader)
+                        .expect("an answer before the timeout")
+                        .expect("answered");
+                    assert_eq!(answer.body(), b"ok");
+                }
+            })
+        })
+        .collect();
+    for client in clients {
+        client.join().expect("both clients answered twice");
+    }
+    let count = |connections: &std::sync::atomic::AtomicUsize| {
+        connections.load(std::sync::atomic::Ordering::SeqCst)
+    };
+    assert_eq!(count(&accepted), 2, "each client kept its one connection");
+    assert_eq!(
+        count(&behind),
+        2,
+        "each proxy connection kept its one upstream"
+    );
+}

@@ -109,18 +109,6 @@ pub fn next_request(reader: &mut impl BufRead) -> io::Result<Option<Request>> {
     Ok(Some(request))
 }
 
-/// `request`, whole as a client sent it, asking the server to close the connection after
-/// answering it — for a proxy that forwards one request per connection to a server keeping
-/// connections alive, and relays the answer to a client that must not reuse its own.
-pub fn closing(request: &[u8]) -> Vec<u8> {
-    let line = request
-        .windows(2)
-        .position(|window| window == b"\r\n")
-        .expect("a request line")
-        + 2;
-    [&request[..line], b"Connection: close\r\n", &request[line..]].concat()
-}
-
 /// Serve `listener` on a thread of its own, each connection on another, answering each of its
 /// requests in turn with what `answer` returns — whole HTTP/1.1 response bytes, sent without a
 /// `Connection: close` so the client keeps the connection — or, for `None`, closing that
@@ -198,6 +186,42 @@ fn serve_counting<A>(
     A: FnMut(&Request, &mut TcpStream) -> After + Send + 'static,
 {
     let answer = Arc::new(Mutex::new(answer));
+    serve_connections(listener, stop, counted, move || {
+        let answer = Arc::clone(&answer);
+        // A poisoned lock is an answer that panicked, and the panic already says why; every
+        // later request goes on being answered rather than repeating it.
+        move |request: &Request, stream: &mut TcpStream| {
+            (answer.lock().unwrap_or_else(PoisonError::into_inner))(request, stream)
+        }
+    });
+}
+
+/// [`serve_with`], for a server whose connections are answered side by side: each connection
+/// accepted gets a handler of its own from `connected`, which answers that connection's
+/// requests in turn while other connections' handlers answer theirs — for a proxy holding one
+/// request until another arrives on a second connection. Returns the count of connections
+/// accepted.
+pub fn serve_each<C, A>(listener: TcpListener, connected: C) -> Arc<AtomicUsize>
+where
+    C: Fn() -> A + Send + 'static,
+    A: FnMut(&Request, &mut TcpStream) -> After + Send + 'static,
+{
+    let accepted = Arc::default();
+    serve_connections(listener, Arc::default(), Arc::clone(&accepted), connected);
+    accepted
+}
+
+/// Accept on `listener` until `stop` is set, counting each connection on `counted` and serving
+/// it on a thread of its own with the handler `connected` makes for it.
+fn serve_connections<C, A>(
+    listener: TcpListener,
+    stop: Arc<AtomicBool>,
+    counted: Arc<AtomicUsize>,
+    connected: C,
+) where
+    C: Fn() -> A + Send + 'static,
+    A: FnMut(&Request, &mut TcpStream) -> After + Send + 'static,
+{
     thread::spawn(move || {
         // An accept that fails is a client that gave up before it was accepted, not a reason to
         // stop listening for every client after it — but it is said, since it is also what a
@@ -220,7 +244,7 @@ fn serve_counting<A>(
                 break;
             }
             counted.fetch_add(1, Ordering::SeqCst);
-            let answer = Arc::clone(&answer);
+            let mut answer = connected();
             thread::spawn(move || {
                 let reading = match stream.try_clone() {
                     Ok(reading) => reading,
@@ -241,12 +265,7 @@ fn serve_counting<A>(
                             return;
                         }
                     };
-                    // A poisoned lock is an answer that panicked, and the panic already says
-                    // why; every later request goes on being answered rather than repeating it.
-                    let after = (answer.lock().unwrap_or_else(PoisonError::into_inner))(
-                        &request,
-                        &mut writer,
-                    );
+                    let after = answer(&request, &mut writer);
                     if matches!(after, After::Close) || request.closes() {
                         return;
                     }
