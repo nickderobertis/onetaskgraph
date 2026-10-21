@@ -280,6 +280,13 @@ fn task_and_document_assets_are_uploaded_verified_reused_and_replaced() {
         new_requests += uploads(calls).len() + attachment_reads(calls);
         records.push(plan.assert_record(&report, &format!("notes:{id}"), bytes));
     }
+    // Two copies' requests through the proxy, two processes apart, reach the board behind it
+    // over the one connection the proxy keeps to it.
+    assert_eq!(
+        plan.github.connections(),
+        1,
+        "the proxy opened a connection to the board per request rather than keeping one"
+    );
     // A copy creating a record reads the repository's numeric id beside the board's fields, in
     // the one read that finds nothing copied there yet, so it sends no repository read at all.
     assert_eq!(

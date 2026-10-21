@@ -11179,6 +11179,133 @@ async fn a_fixture_wait_gives_up_within_its_deadline_and_bounds_the_read_that_ex
     );
 }
 
+/// A run's five artifacts on a board, titled under `prefix`, and the ids and titles a fixture
+/// wait is told the run created: its three tasks and its two projects, and any `extra` tasks.
+fn fixture_run(
+    prefix: &str,
+    extra: &[(&str, &str)],
+) -> (Fixture, Vec<(NativeId, String)>, Vec<(NativeId, String)>) {
+    let title = |number: usize| format!("{prefix}{number}");
+    let fixture = board(vec![
+        Item::issue("P_alpha", &title(1))
+            .status("Todo")
+            .sub_issues(1),
+        Item::issue("P_beta", &title(2))
+            .status("Todo")
+            .sub_issues(1),
+        Item::issue("T_first", &title(3))
+            .status("Todo")
+            .parent("P_alpha"),
+        Item::issue("T_second", &title(4))
+            .status("Todo")
+            .parent("P_beta"),
+        Item::issue("T_orphan", &title(5)).status("Todo"),
+    ]);
+    let named = |id: &str, title: String| (NativeId(id.to_owned()), title);
+    let mut tasks = vec![
+        named("T_first", title(3)),
+        named("T_second", title(4)),
+        named("T_orphan", title(5)),
+    ];
+    tasks.extend(
+        extra
+            .iter()
+            .map(|(id, suffix)| named(id, format!("{prefix}{suffix}"))),
+    );
+    let projects = vec![named("P_alpha", title(1)), named("P_beta", title(2))];
+    (fixture, tasks, projects)
+}
+
+/// The short wait the give-up journeys below are held to.
+const GIVE_UP: journey::FixtureWait = journey::FixtureWait {
+    bound: Duration::from_millis(300),
+    first: Duration::from_millis(20),
+    steady_for: Duration::from_millis(100),
+    longest: Duration::from_millis(100),
+    diagnosis: Duration::from_millis(300),
+};
+
+/// A wait that gives up names each item the search never reported by its kind, and says what a
+/// read by its own id found: a project the index was behind on, and a task no read finds.
+#[tokio::test]
+async fn a_fixture_wait_names_a_project_the_index_is_behind_on_and_a_task_that_never_landed() {
+    let prefix = "onetaskgraph live cleanup 4242-911-";
+    let (fixture, tasks, projects) = fixture_run(prefix, &[("T_ghost", "6")]);
+    fixture.search_withholds(SearchWithheld::item("P_beta", usize::MAX));
+    let Err(said) =
+        journey::settled_fixture(&|| source(&fixture), prefix, &tasks, &projects, GIVE_UP).await
+    else {
+        panic!("neither P_beta nor T_ghost is ever reported, so the wait cannot settle");
+    };
+    assert!(
+        said.contains(&format!(
+            "never reported the task \"{prefix}6\" (T_ghost), which a read by its own id does \
+             not find on the board either"
+        )),
+        "{said}"
+    );
+    assert!(
+        said.contains(&format!(
+            "the project \"{prefix}2\" (P_beta), which a read by its own id finds on the board, \
+             so the index was behind on it"
+        )),
+        "{said}"
+    );
+    assert!(
+        said.contains("the last search it answered, attempt "),
+        "{said}"
+    );
+}
+
+/// A wait whose every search outlasts its deadline answered nothing, so it names every item it
+/// was waiting for, each with what a read by its own id found.
+#[tokio::test]
+async fn a_fixture_wait_no_search_answered_names_every_item() {
+    let prefix = "onetaskgraph live cleanup 4242-912-";
+    let (fixture, tasks, projects) = fixture_run(prefix, &[]);
+    fixture.search_withholds(
+        SearchWithheld::item("T_second", usize::MAX).answering_searches_in(Duration::from_secs(2)),
+    );
+    let Err(said) =
+        journey::settled_fixture(&|| source(&fixture), prefix, &tasks, &projects, GIVE_UP).await
+    else {
+        panic!("no search answers inside the deadline, so the wait cannot settle");
+    };
+    assert!(
+        said.contains("a search still unanswered at the deadline was abandoned")
+            && said.contains("no search answered in full before it, so every item is named"),
+        "{said}"
+    );
+    assert_eq!(
+        said.matches("which a read by its own id").count(),
+        5,
+        "{said}"
+    );
+}
+
+/// A read by id that fails is named with what it failed with, rather than read as an answer.
+#[tokio::test]
+async fn a_fixture_wait_names_a_read_by_id_that_failed() {
+    let prefix = "onetaskgraph live cleanup 4242-913-";
+    let (fixture, tasks, projects) = fixture_run(prefix, &[]);
+    fixture.search_withholds(SearchWithheld::item("T_second", usize::MAX));
+    // The searches read no issue by its id, so the one read of an issue this board is sent is
+    // the one that explains why T_second never came.
+    fixture.script_for("issue", vec![Refusal::unavailable()]);
+    let Err(said) =
+        journey::settled_fixture(&|| source(&fixture), prefix, &tasks, &projects, GIVE_UP).await
+    else {
+        panic!("the search never reports T_second, so the wait cannot settle");
+    };
+    assert!(
+        said.contains(&format!(
+            "never reported the task \"{prefix}4\" (T_second), which a read by its own id could \
+             not answer: "
+        )),
+        "{said}"
+    );
+}
+
 /// What the credentialed lane waits for its fixture to be indexed: `journey::FIXTURE_WAIT`'s
 /// own documentation is where the ten minutes come from, and this is what holds the schedule
 /// to what that documentation says of it.
