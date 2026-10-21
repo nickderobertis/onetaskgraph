@@ -5202,10 +5202,10 @@ fn http_request_parts(request: &loopback::Request) -> (String, Option<Value>, St
     // Named rather than asserted away: this fixture's only client is the binary under
     // test, so a body that is not JSON is that binary's defect, and the bytes it sent are
     // what says which one.
-    let body = serde_json::from_slice(&request.body).unwrap_or_else(|problem| {
+    let body = serde_json::from_slice(request.body()).unwrap_or_else(|problem| {
         panic!(
             "fixture request body is not JSON ({problem}): {}",
-            String::from_utf8_lossy(&request.body)
+            String::from_utf8_lossy(request.body())
         )
     });
     (line, Some(body), token)

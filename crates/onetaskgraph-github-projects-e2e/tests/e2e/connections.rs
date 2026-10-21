@@ -1,13 +1,10 @@
 //! How many TCP connections the binary opens to the loopback board, and what one closed under
 //! it leaves.
 //!
-//! The board once answered every request `Connection: close`, so each request the binary sent
-//! was a connection of its own and each left a socket in `TIME_WAIT`; on the Windows runner,
-//! where that state lasts 120 seconds and every ephemeral port comes out of one range of
-//! 16,384, a suite opening thousands of them a minute ran out, and `task copy plans:B plans:C
-//! --to board` failed `error sending request` against a board that was listening. Each
-//! journey here drives that command's own sequence — a fresh board, then the copy — and holds
-//! the binary to the one connection its client keeps alive.
+//! A connection per request is what ran the Windows runner out of ports and failed `task copy
+//! plans:B plans:C --to board` against a board that was listening; see
+//! `onetaskgraph_e2e_support::loopback`. Each journey here drives that command's own sequence
+//! — a fresh board, then the copy — and holds the binary to the one connection it keeps alive.
 
 use std::process::Output;
 

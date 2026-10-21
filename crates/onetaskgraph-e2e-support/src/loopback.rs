@@ -1,37 +1,51 @@
 //! Persistent HTTP/1.1 connections for a loopback server a journey's binary talks to.
 //!
-//! A server that answers every request `Connection: close` costs the binary one TCP connection
-//! per request, and each connection a closing side leaves in `TIME_WAIT` holds an ephemeral
-//! port: 60 seconds on Linux, which reuses a loopback `TIME_WAIT` port on connect anyway,
-//! and 120 seconds on Windows, which does neither and draws every ephemeral port and every
-//! loopback listener from one range of 16,384. One run of the GitHub Projects suite opens
-//! over fifteen thousand connections a minute at its peak, so on the Windows runner a
-//! request could find no port to connect from and failed `error sending request`, naming
-//! a board that was listening all along. Kept alive, a binary's requests share the one
-//! connection its client pools, and the server closes a connection only once its client
-//! has — so the client is never handed back a connection the server already closed.
+//! A connection per request leaves a socket in `TIME_WAIT` per request, and a suite opening
+//! thousands a minute runs the Windows runner out of ephemeral ports (AGENTS.md says how). So
+//! a binary's requests share the one connection its client keeps alive, and the server closes
+//! a connection only once its client has, or asked it to — so a client is never handed back a
+//! connection the server already closed.
 
 use std::io::{BufRead, BufReader, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 
-/// One request read off a connection, and no byte of the one after it.
+/// One request read off a connection, and no byte of the one after it. Only [`read_request`]
+/// makes one, so its body is always exactly what its head declares.
 pub struct Request {
-    /// The request line and every header, through the blank line that ends them.
-    pub head: String,
-    /// Exactly the `Content-Length` bytes the head declares, or none.
-    pub body: Vec<u8>,
+    head: String,
+    body: Vec<u8>,
 }
 
 impl Request {
+    /// The request line and every header, through the blank line that ends them.
+    #[must_use]
+    pub fn head(&self) -> &str {
+        &self.head
+    }
+
+    /// Exactly the `Content-Length` bytes the head declares, or none when it declares none.
+    #[must_use]
+    pub fn body(&self) -> &[u8] {
+        &self.body
+    }
+
+    /// The request whole, as the client sent it.
+    #[must_use]
+    pub fn bytes(&self) -> Vec<u8> {
+        [self.head.as_bytes(), &self.body].concat()
+    }
+
     /// The request line, `POST /graphql HTTP/1.1`.
+    #[must_use]
     pub fn line(&self) -> &str {
         self.head.lines().next().unwrap_or_default()
     }
 
     /// The value of the header `name`, matched without regard to case.
+    #[must_use]
     pub fn header(&self, name: &str) -> Option<&str> {
         self.head.lines().skip(1).find_map(|line| {
             let (key, value) = line.split_once(':')?;
@@ -49,8 +63,9 @@ impl Request {
 }
 
 /// The next request on `reader`, or `None` when the connection ended — or failed — before one
-/// was whole, which is a client going away rather than a request. A response is read the same
-/// way, its status line standing where a request's line does.
+/// was whole, which is a client going away rather than a request, or when its `Content-Length`
+/// is not a length, after which nothing on the connection can be framed. A response is read
+/// the same way, its status line standing where a request's line does.
 pub fn read_request(reader: &mut impl BufRead) -> Option<Request> {
     let mut head = String::new();
     loop {
@@ -66,11 +81,8 @@ pub fn read_request(reader: &mut impl BufRead) -> Option<Request> {
         head,
         body: Vec::new(),
     };
-    if let Some(length) = request
-        .header("content-length")
-        .and_then(|value| value.parse::<usize>().ok())
-    {
-        request.body.resize(length, 0);
+    if let Some(length) = request.header("content-length") {
+        request.body.resize(length.parse::<usize>().ok()?, 0);
         reader.read_exact(&mut request.body).ok()?;
     }
     Some(request)
@@ -179,36 +191,37 @@ where
 /// One connection a proxy keeps to the server it forwards to, so that forwarding a client's
 /// kept-alive connection does not cost a connection per request on the far side instead.
 pub struct Upstream {
-    address: String,
+    address: SocketAddr,
     connection: Option<BufReader<TcpStream>>,
 }
 
 impl Upstream {
-    /// A connection to `address`, `host:port`, opened by the first request forwarded.
+    /// A connection to `address`, opened by the first request forwarded.
     #[must_use]
-    pub fn new(address: &str) -> Self {
+    pub const fn new(address: SocketAddr) -> Self {
         Self {
-            address: address.to_owned(),
+            address,
             connection: None,
         }
     }
 
     /// Send `request` and read back the one response it is answered with, whole — or nothing,
-    /// when the server closed the connection without an answer, which the next request then
-    /// replaces.
+    /// when the server could not be reached or closed the connection without an answer, which
+    /// the next request then replaces.
     pub fn forward(&mut self, request: &[u8]) -> Vec<u8> {
         let connection = match self.connection.take() {
             Some(connection) => connection,
-            None => BufReader::new(
-                TcpStream::connect(&self.address).expect("the upstream server accepts"),
-            ),
+            None => match TcpStream::connect(self.address) {
+                Ok(stream) => BufReader::new(stream),
+                Err(_) => return Vec::new(),
+            },
         };
         let mut connection = connection;
         let sent = connection.get_mut().write_all(request).is_ok();
         let Some(response) = sent.then(|| read_request(&mut connection)).flatten() else {
             return Vec::new();
         };
-        let whole = [response.head.as_bytes(), &response.body].concat();
+        let whole = response.bytes();
         if !response.closes() {
             self.connection = Some(connection);
         }

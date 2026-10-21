@@ -311,15 +311,15 @@ impl Board {
         // The binary's connection stays open between its requests, and so does this proxy's
         // to the board behind it: a connection per request, on either side, is what ran the
         // Windows runner out of ephemeral ports. See `onetaskgraph_e2e_support::loopback`.
-        let mut upstream = Upstream::new(&upstream);
+        let mut upstream = Upstream::new(upstream.parse().expect("the board's own address"));
         serve_until(listener, Arc::clone(&stopping), move |sent, stream| {
             {
                 if stopping.load(Ordering::SeqCst) {
                     return After::Close;
                 }
                 let request = clock.request(client);
-                let (headers, bytes) = (sent.head.clone(), sent.body.clone());
-                let raw = [sent.head.as_bytes(), &sent.body].concat();
+                let (headers, bytes) = (sent.head().to_owned(), sent.body().to_vec());
+                let raw = sent.bytes();
                 let first = headers.lines().next().unwrap();
                 let path = first.split_whitespace().nth(1).unwrap().to_owned();
                 let upload = first.starts_with("POST /user-attachments/assets?");

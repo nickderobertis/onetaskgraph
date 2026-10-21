@@ -2599,16 +2599,11 @@ impl FixtureWait {
 /// thirty and then backing off to every thirty, which is 38 attempts at most — fewer than the
 /// sixty a two-minute wait at two-second intervals spent.
 ///
-/// **The bound is GitHub's observed convergence, not a guess at it.** In 32 of the 33
-/// credentialed runs of this journey CI recorded between 2026-10-10 and 2026-10-20, the
-/// session sent 11 to 18 issue searches in all — never more than seven past the fewest — so
-/// the index had every item within a few attempts, which is seconds. In the 33rd, main's run
-/// 39499941270, it sent 127: the second task was still missing from the search after every
-/// one of sixty attempts over two minutes, while its own writes had all landed. GitHub publishes no bound on that index's lag, and the longest lag this
-/// repository has measured on any of GitHub's enumerations of a board is nine minutes — an
-/// item `ProjectV2.items` still did not list (see the plugin's module documentation). Ten
-/// minutes covers it, and the early cadence keeps a run that converges in seconds as fast
-/// as it was.
+/// **The bound is what GitHub has been seen to need, with margin.** A credentialed run's index
+/// usually reports its fixture within a few attempts, but one on main went two minutes without
+/// reporting one task it had certainly written. GitHub publishes no bound on that lag, and the
+/// longest this repository has measured on any of GitHub's enumerations of a board is nine
+/// minutes (see the plugin's module documentation), which ten covers.
 pub const FIXTURE_WAIT: FixtureWait = FixtureWait {
     bound: std::time::Duration::from_secs(600),
     first: std::time::Duration::from_secs(2),
