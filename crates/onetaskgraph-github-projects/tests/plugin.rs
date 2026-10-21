@@ -21348,11 +21348,13 @@ fn live_pair_fixture_child() {
             println!(
                 "the wait read the missing task by id {took:?} after the search first left it out"
             );
-            // Each attempt takes a second, so the deadline falls inside one and cuts it off.
+            // Each attempt takes a second, so the deadline falls inside one and cuts it off; the
+            // read by id is sent inside the `diagnosis` the wait allows itself after it.
+            let diagnosis = journey::STAND_IN_FIXTURE_WAIT.diagnosis;
             assert!(
-                took >= bound - Duration::from_millis(200)
-                    && took <= bound + Duration::from_millis(300),
-                "gave up {took:?} after it began, against a {bound:?} deadline"
+                took >= bound - Duration::from_millis(200) && took <= bound + diagnosis,
+                "gave up {took:?} after it began, against a {bound:?} deadline and {diagnosis:?} \
+                 for the reads by id"
             );
         }
     }
