@@ -136,7 +136,7 @@ onetaskgraph project answers <ID>
 
 onetaskgraph document list / show                # the same flags, minus --status
 onetaskgraph document copy <ID>... --to <SOURCE> [--match-by KEY] [--recreate] [--dry-run]
-onetaskgraph document metadata set <ID> <KEY> <VALUE>
+onetaskgraph document metadata set <ID> <KEY> <VALUE> [--expect VERSION]
 onetaskgraph document create <SOURCE> --project P --title TITLE [--id DOC]
                              ...                 # the body, label, repository, metadata,
                                                  # asset, classification and term-scope
@@ -1517,6 +1517,14 @@ not a conditional write**: neither GitHub nor Linear takes a precondition, so a 
 to a field the write *does* set, made after the caller's read, is overwritten. The one request
 the cache can add is the first write after a board option it kept was renamed or deleted: the
 refused mutation, one read that refreshes the board's kept ids, and that part once more.
+
+On `document metadata set`, **`--expect VERSION` is the document's version and is held where
+the store can see past it**: the write is refused, sending nothing, when the cache already holds
+the document at a later version, and when the cache holds no entry at `VERSION` the one read it
+makes must answer that version or the write is refused, naming both. At exactly that version —
+the version a `document show` through the same cache reported — the write sends one request, the
+body update. A person's edit made after the cache last read the document is still one the store
+cannot see without that read, and is overwritten.
 
 The cache is an efficiency layer and never a snapshot: it serves the pinned version or a later
 one, keeps one entry per record, and is shared and cleared freely. To keep an exact version of a

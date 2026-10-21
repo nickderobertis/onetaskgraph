@@ -199,3 +199,13 @@ budgets:
     unit: writes
     direction: max
     threshold: 40
+  - id: github-approval-calls-points
+    description: >-
+      An inner measure of the shared board token that no check may spend: the GitHub GraphQL points the store calls approving a plan's design document on the board spend — `project show`, `task list --project`, `document list --project`, `document show`, then `document metadata set` carrying the version that read reported — on a project of 8 tasks and 1 document on a loopback board holding 2,000 other items with the board source's cache on, driven through the binary and priced with the plugin's own point-cost table; each call's requests and points are its detail. It protects every manager's share of that token from what an approval spends.
+    labels: [github]
+    measure: reported
+    # llmlint: ignore[budget_commands_measure_directly] Every budget of this file selects its own report-only entry in `budget_runner`, the harness-runner convention this crate's point budgets landed with (report_landing_closure, report_plan_copy), and the task registering this one names that measuring command. The entry reads only the telemetry the `approval` journey recorded during the crate's test run, refuses a recording of another sequence or board, and hands the figure to onebudgetspec, which alone judges it.
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_approval_calls", "--exact", "--nocapture"]
+    unit: points
+    direction: max
+    threshold: 5

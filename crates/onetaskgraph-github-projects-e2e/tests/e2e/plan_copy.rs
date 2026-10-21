@@ -1017,12 +1017,18 @@ impl Plan {
 
     /// One command through the binary, and every request the board answered for it.
     pub(super) fn measured(&self, arguments: &[&str]) -> (Value, Vec<Call>) {
+        let (output, calls) = self.measured_output(arguments);
+        (success(&output), calls)
+    }
+
+    /// [`Self::measured`], for a command that may fail: what it exited with and printed.
+    pub(super) fn measured_output(&self, arguments: &[&str]) -> (Output, Vec<Call>) {
         let before = self.board.calls().len();
         let lease = self.clock.lease(0);
-        let report = success(&self.run(arguments));
+        let output = self.run(arguments);
         lease.wait_for_detach();
         drop(lease);
-        (report, self.board.calls()[before..].to_vec())
+        (output, self.board.calls()[before..].to_vec())
     }
 }
 
@@ -1202,8 +1208,8 @@ fn a_recopy_whose_pinning_listings_are_refused_reads_what_they_would_have_carrie
     let (project, document, _) = plan.copy();
     let at = counterparts(&project, &document);
     plan.read_back(&at);
-    plan.github.refuse_once("subIssues(first:$first");
-    plan.github.refuse_once("subIssues(first:$first");
+    plan.github.refuse_once("subIssues(first:$memberFirst");
+    plan.github.refuse_once("subIssues(first:$memberFirst");
     let (report, calls) = plan.measured(&["project", "copy", "notes:P", "--to", "board", "--json"]);
     assert!(
         report["items"]

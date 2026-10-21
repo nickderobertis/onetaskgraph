@@ -144,7 +144,9 @@ pub struct ExpectArgs {
     /// the write takes the task's ids and current values from the source's local cache at
     /// that version or a later one, and sends only its mutations — one read first when the
     /// cache does not hold them. Not a precondition: a person's edit to a field this write
-    /// sets is overwritten. Needs the source's `cache.enabled`.
+    /// sets is overwritten. Needs the source's `cache.enabled`. On `document metadata set` it
+    /// is the document's version, and the write is refused, sending nothing, when the cache
+    /// holds a later one or the one read it makes answers another.
     ///
     /// llmlint: ignore[invalid_states_unrepresentable] — a version is the source's own opaque
     /// token, which only the source that spelled it reads; there is no narrower type.
@@ -897,7 +899,9 @@ pub struct MetadataSetArgs {
     #[arg(value_name = "VALUE", allow_hyphen_values = true)]
     pub value: String,
 
-    /// As `--expect` on every task write; a project's or a document's metadata takes none.
+    /// As `--expect` on every task write, for a task's or a document's metadata; a project's
+    /// takes none. A document's write expecting a version is refused, sending nothing, where
+    /// the store sees the document past it.
     #[command(flatten)]
     pub expect: ExpectArgs,
 

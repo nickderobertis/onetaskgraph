@@ -1885,9 +1885,9 @@ fn a_task_created_with_an_asset_retires_the_far_ends_reverse_edges_in_a_caching_
         .unwrap()
         .flatten()
         .map(|entry| entry.path())
-        .find(|path| path.join("reverse-edges-v2").is_dir())
+        .find(|path| path.join("reverse-edges-v3").is_dir())
         .unwrap_or_else(|| cache.clone())
-        .join("reverse-edges-v2");
+        .join("reverse-edges-v3");
     let kept = directory.join(format!("{}.json", asset_sha256(native.as_bytes())));
     assert!(kept.exists(), "{}", kept.display());
 

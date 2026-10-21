@@ -171,6 +171,18 @@ fn report_metadata_fields() {
     let (value, detail) = metadata_field_share(&budget).unwrap_or_else(|error| refuse(&error));
     hand_over(value, &detail);
 }
+// llmlint: ignore-block[budget_commands_measure_directly] Every budget of this crate selects its own report-only entry here, the harness-runner convention it landed with (report_visibility_reads, report_metadata_fields), and the task registering this one names the measuring command this crate's point budgets use. It reads only the telemetry `approval.rs` recorded during the crate's ordinary test run, refuses a recording of another sequence or board, and hands the figure to onebudgetspec, which alone judges it.
+#[test]
+fn report_approval_calls() {
+    let Some(budget) = selected() else {
+        return;
+    };
+    let (value, detail) =
+        approval_calls_of(&recorded(&budget).unwrap_or_else(|error| refuse(&error)))
+            .unwrap_or_else(|error| refuse(&error));
+    hand_over(value, &detail);
+}
+// llmlint: ignore-end[budget_commands_measure_directly]
 // llmlint: ignore-block[budget_commands_measure_directly] Every budget of this crate selects its own report-only entry here, the harness-runner convention it landed with (report_visibility_reads, report_metadata_fields), and the task registering the plan-copy budgets names this one entry for all seven of them. It reads only the telemetry `plan_copy.rs` recorded during the crate's ordinary test run, refuses a recording of another plan, board size or scenario, and hands the figure to onebudgetspec, which alone judges it.
 #[test]
 fn report_plan_copy() {
@@ -290,6 +302,93 @@ fn the_plan_copy_report_hands_over_the_recorded_figure_and_refuses_another_workl
         );
         let written: Value = serde_json::from_str(&written.expect("a figure")).unwrap();
         assert_eq!(written["value"], json!(5.25), "{budget}: {written}");
+    }
+}
+
+/// What `approval.rs` recorded, refused unless it is that journey's recording of the approval
+/// sequence on a board of 2,000 items over a plan of eight tasks and one document, with each
+/// call of the sequence in its breakdown and their points adding up to the figure.
+fn approval_calls_of(value: &Value) -> Result<(f64, String), String> {
+    use super::approval::{CALLS, WORKLOAD};
+    if value["workload"].as_str() != Some(WORKLOAD) {
+        return Err("the recording is not of the approval sequence".into());
+    }
+    if value["board"].as_u64() != Some(super::plan_copy::SMALL as u64)
+        || value["tasks"].as_u64() != Some(super::plan_copy::TASKS as u64)
+        || value["documents"].as_u64() != Some(1)
+    {
+        return Err(
+            "the recording is not of a project of 8 tasks and 1 document on a board of 2000 items"
+                .into(),
+        );
+    }
+    let figure = value["value"]
+        .as_u64()
+        .ok_or("missing whole-number figure")?;
+    let calls = value["calls"].as_array().ok_or("missing call breakdown")?;
+    let named: Vec<&str> = calls
+        .iter()
+        .filter_map(|call| call["call"].as_str())
+        .collect();
+    if named != CALLS {
+        return Err("the breakdown does not name the approval's calls in order".into());
+    }
+    let points = calls
+        .iter()
+        .map(|call| {
+            call["requests"].as_u64()?;
+            call["points"].as_u64()
+        })
+        .sum::<Option<u64>>()
+        .ok_or("a call of the breakdown has no whole requests and points")?;
+    if points != figure {
+        return Err("the breakdown does not add up to the figure".into());
+    }
+    let detail = value["detail"].as_str().ok_or("missing detail")?.to_owned();
+    let figure = u32::try_from(figure).map_err(|_| "figure out of range")?;
+    Ok((f64::from(figure), detail))
+}
+
+#[test]
+fn the_approval_report_hands_over_the_recorded_figure_and_refuses_another_workload() {
+    use serde_json::json;
+    let calls: Vec<Value> = super::approval::CALLS
+        .iter()
+        .map(|call| json!({"call": call, "requests": 1, "points": 1}))
+        .collect();
+    let valid = json!({"budget": super::approval::BUDGET, "value": 5, "detail": "recorded",
+        "workload": super::approval::WORKLOAD, "board": super::plan_copy::SMALL,
+        "tasks": super::plan_copy::TASKS, "documents": 1, "calls": calls});
+    assert_eq!(approval_calls_of(&valid), Ok((5.0, "recorded".to_owned())));
+    let with = |pointer: &str, replaced: Value| {
+        let mut changed = valid.clone();
+        *changed.pointer_mut(pointer).unwrap() = replaced;
+        changed
+    };
+    for (recorded, refusal) in [
+        (
+            with("/workload", json!("a plan copy")),
+            "not of the approval sequence",
+        ),
+        (
+            with("/board", json!(super::plan_copy::LARGE)),
+            "board of 2000 items",
+        ),
+        (with("/tasks", json!(9)), "8 tasks and 1 document"),
+        (
+            with("/calls/1/call", json!("project list")),
+            "calls in order",
+        ),
+        (
+            with("/calls/4/points", json!(null)),
+            "no whole requests and points",
+        ),
+        (with("/value", json!(4)), "does not add up"),
+        (with("/value", json!(5.5)), "whole-number figure"),
+        (with("/detail", json!(null)), "missing detail"),
+    ] {
+        let refused = approval_calls_of(&recorded).expect_err(refusal);
+        assert!(refused.contains(refusal), "{refused}");
     }
 }
 

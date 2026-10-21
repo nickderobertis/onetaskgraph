@@ -121,7 +121,10 @@ impl Engine {
     ///
     /// As [`set_task_metadata`](Self::set_task_metadata), with [`EngineError::NoDocuments`]
     /// for a source declaring it has none — which is never asked — and
-    /// [`EngineError::NoSuchDocument`] when the document is not there.
+    /// [`EngineError::NoSuchDocument`] when the document is not there. A write
+    /// [`Engine::expect`] expects at a version is refused by the source, sending nothing, when
+    /// the store's cache holds the document at a later version or the one read made for want of
+    /// an entry answers another.
     pub async fn set_document_metadata(
         &self,
         id: &GlobalId,
@@ -143,7 +146,9 @@ impl Engine {
             .await
             .map_err(|error| source_failed(source, error))?
             .ok_or_else(|| EngineError::NoSuchDocument { id: id.to_string() })?;
-        answer(source, id, key, &document.metadata, document.location)
+        let mut set = answer(source, id, key, &document.metadata, document.location)?;
+        (set.result, set.fallback, set.spent) = self.expected_parts(id);
+        Ok(set)
     }
 
     /// The built source `id` names, when a metadata write of `record` may be sent to it.

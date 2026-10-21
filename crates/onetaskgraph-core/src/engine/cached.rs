@@ -67,6 +67,10 @@ impl Engine {
     /// and ids, never a conditional write: a person's edit to a field the write sets, made
     /// after the caller read `version`, is overwritten.
     ///
+    /// A document's metadata write holds `version` further, where the store can see past it:
+    /// it is refused, sending nothing, when the cache holds the document at a later version, or
+    /// when the one read made for want of an entry at `version` answers another.
+    ///
     /// # Errors
     ///
     /// [`EngineError::NotCached`] for a source keeping no cache, and

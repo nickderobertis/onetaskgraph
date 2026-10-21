@@ -1516,11 +1516,11 @@ async fn metadata_set(
     let id = qualified(&args.id)?;
     let key = metadata_key(&args.key)?;
     let value = metadata_value(&args.value)?;
-    if args.expect.expect.is_some() && record != MetadataRecord::Task {
+    if args.expect.expect.is_some() && record == MetadataRecord::Project {
         return Err(Failure::decided(
             "expect-one-task",
-            "--expect names the version of a task, and a project's or a document's metadata \
-             is written without one\n\
+            "--expect names the version of a task or a document, and a project's metadata is \
+             written without one\n\
              next: leave --expect out"
                 .to_owned(),
         ));

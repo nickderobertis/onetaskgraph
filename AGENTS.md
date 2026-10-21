@@ -1192,6 +1192,11 @@ them do; this is the inventory of what is owed, not a status board.
     public member whose refused write takes the whole copy back. A copy that would create a
     second project of a plan in a source takes over the member already there, found by either
     link alone.
+116. Approving a plan on a board — `project show`, `task list --project`, `document list
+    --project`, `document show`, then `document metadata set --expect` the version that read
+    reported — lists each kind in one request of one point with every record and its order
+    intact, writes the approval in one request and waits on the clock for nothing; a document
+    write expecting a version the store has seen superseded is refused, writing nothing.
 
 ## The public boundary
 

@@ -16,8 +16,11 @@ const PUBLISHED_ENTRIES: &[(u32, u64)] = &[(1, 0x9da1_0712_ef55_81f8)];
 
 /// Every project, document, edge and byte entry schema number with the digest of the shapes it
 /// publishes — the same rule, for the kinds whose directories that number names.
-const PUBLISHED_KIND_ENTRIES: &[(u32, u64)] =
-    &[(1, 0xe94c_8da5_254a_45d2), (2, 0x75c8_dae9_dbc6_b859)];
+const PUBLISHED_KIND_ENTRIES: &[(u32, u64)] = &[
+    (1, 0xe94c_8da5_254a_45d2),
+    (2, 0x75c8_dae9_dbc6_b859),
+    (3, 0x8ef7_a8e4_78f5_8027),
+];
 
 #[test]
 fn the_entry_schema_number_moves_whenever_the_entry_shape_does() {

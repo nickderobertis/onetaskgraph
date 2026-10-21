@@ -318,6 +318,7 @@
 //! | priority | 2 | ISSUE, UPDATE_FIELD or CLEAR_FIELD, with stored priority in the mutation response |
 //! | content | 2 | ISSUE, UPDATE_ISSUE |
 //! | metadata | 2 | ISSUE, UPDATE_ISSUE |
+//! | document metadata, `--expect` the version the cache holds | 1 | UPDATE_ISSUE, answered whole: the store's entry carries the document's record, so nothing is read; a later version the cache holds refuses it with no request, and an entry missing is one ISSUE first |
 //! | update | 3 | `task update` naming any of title, body, metadata, status and priority — all five included: ISSUE, UPDATE_FIELDS (the status option and the priority together), UPDATE_ISSUE (title, body with its metadata slot, and state) last |
 //! | record only | 1 | ISSUE |
 //!
@@ -766,14 +767,30 @@ const BOARD_ITEMS_PAGE_SIZE: u32 = 3;
 /// worst-case nodes than the one whole-board read they replaced.
 const ORIGIN_PAGE_SIZE: u32 = 3;
 
+/// How many of one project's sub-issues one [`graphql::SUB_ISSUES`] page asks for: the most
+/// one point buys.
+///
+/// GitHub charges a page for every connection under it, once per row: each sub-issue carries
+/// its labels, its page of board memberships, the field values of each of those three
+/// memberships and its `blockedBy` — six requests' worth of the aggregate GitHub divides by a
+/// hundred and rounds — and the project issue beside them carries those and the `subIssues`
+/// connection itself, seven. Twenty-three rows come to 145, which rounds to one point;
+/// twenty-four come to 151, which rounds to two. At [`MAX_PAGE_SIZE`] the page cost six, so a
+/// plan's project — a handful of tasks and its design document — paid six points to be listed
+/// where one buys every row of it; a project of more than a page costs a point per page, which
+/// is still never more than the hundred-row pages cost per row. `tests/point_cost.rs` prices the
+/// document at one point and fails if one row more would still be priced at one.
+pub const MEMBER_PAGE_SIZE: u32 = 23;
+
 pub use github_graphql_node_count::{NodeCountError, Variables};
 
 /// The largest value this source can bind to each page-size variable its documents name.
 ///
-/// Every `first:` in [`graphql`] reads one of these four, and each is capped at the
+/// Every `first:` in [`graphql`] reads one of these five, and each is capped at the
 /// constant above it wherever a caller's own limit could reach it — `$first` at
 /// [`MAX_PAGE_SIZE`], `$nestedFirst` at `NESTED_PAGE_SIZE`, `$boardItems` at
-/// `BOARD_ITEMS_PAGE_SIZE`, `$originFirst` at `ORIGIN_PAGE_SIZE`. So this is the worst case a caller can drive this source to,
+/// `BOARD_ITEMS_PAGE_SIZE`, `$originFirst` at `ORIGIN_PAGE_SIZE`, `$memberFirst` at
+/// [`MEMBER_PAGE_SIZE`]. So this is the worst case a caller can drive this source to,
 /// not one configuration of it, which is what makes a bound computed under it a bound on
 /// every read.
 pub fn largest_page_sizes() -> Variables {
@@ -782,6 +799,7 @@ pub fn largest_page_sizes() -> Variables {
         ("nestedFirst".to_owned(), NESTED_PAGE_SIZE),
         ("boardItems".to_owned(), BOARD_ITEMS_PAGE_SIZE),
         ("originFirst".to_owned(), ORIGIN_PAGE_SIZE),
+        ("memberFirst".to_owned(), MEMBER_PAGE_SIZE),
     ])
 }
 
@@ -1006,6 +1024,10 @@ pub mod graphql {
     /// One project's tasks: the sub-issues of the issue that project is, each with a page of
     /// what blocks it.
     ///
+    /// Paged at `$memberFirst` — [`MEMBER_PAGE_SIZE`](super::MEMBER_PAGE_SIZE), the most rows
+    /// one point buys — rather than at `$first`, because every row carries six connections and
+    /// a hundred-row page cost six points to list a project of ten.
+    ///
     /// The work this costs is the project's own size. Nothing about it grows as the board
     /// gains projects, or as those projects gain tasks.
     ///
@@ -1028,12 +1050,12 @@ pub mod graphql {
     /// copy's read of a task this listing carried is answered by it rather than sent again.
     /// Only a copy's read-before-write takes them; every other read by id reads GitHub.
     pub const SUB_ISSUES: &str = concat!(
-        r#"query($id:ID!,$first:Int!,$after:String,$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!"#,
+        r#"query($id:ID!,$memberFirst:Int!,$after:String,$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!"#,
         relationship_events_variable!(),
         r#"){
       node(id:$id){__typename ...BoardIssue
         ... on Issue{blockedBy(first:$nestedFirst){nodes{...Related}pageInfo{hasNextPage endCursor}}
-          subIssues(first:$first,after:$after){
+          subIssues(first:$memberFirst,after:$after){
           pageInfo{hasNextPage endCursor}
           nodes{__typename ...BoardIssue ... on Issue{
             blockedBy(first:$nestedFirst){nodes{...Related}pageInfo{hasNextPage endCursor}}
@@ -6029,7 +6051,7 @@ impl GitHubProjectsSource {
             let asked = self
                 .graphql(
                     graphql::SUB_ISSUES,
-                    json!({"id":id.0,"first":MAX_PAGE_SIZE,"after":after,
+                    json!({"id":id.0,"memberFirst":MEMBER_PAGE_SIZE,"after":after,
                            "nestedFirst":NESTED_PAGE_SIZE,
                            "boardItems":BOARD_ITEMS_PAGE_SIZE,"duplicates":true}),
                 )
@@ -12614,11 +12636,15 @@ impl TaskSource for GitHubProjectsSource {
         ))
     }
     async fn get_document(&self, id: &NativeId) -> Result<Option<Document>, SourceError> {
-        Ok(self
+        let Some(item) = self
             .item_by_id(id)
             .await?
             .filter(|item| item.kind == BoardKind::Document)
-            .map(|item| item.document()))
+        else {
+            return Ok(None);
+        };
+        self.expected.read_document(&item);
+        Ok(Some(item.document()))
     }
     async fn query_documents_by_origin(
         &self,
