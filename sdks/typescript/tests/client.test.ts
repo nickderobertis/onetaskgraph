@@ -1958,7 +1958,10 @@ test("projectCopy flags agree with the binary help and validate membersOnly", ()
   expect([...all].sort()).toEqual(own);
   expect(projectCopyFlags({ membersOnly: false })).not.toContain("--members-only");
   // Untyped JavaScript callers can pass a string despite this TypeScript declaration.
-  expect(() => projectCopyFlags({ membersOnly: "false" as unknown as boolean })).toThrow(
-    "membersOnly must be a boolean",
-  );
+  expect(() =>
+    client.projectCopy("from:P-1", "into", {
+      members: ["from:T-1"],
+      membersOnly: "false" as unknown as boolean,
+    }),
+  ).toThrow("membersOnly must be a boolean");
 });
