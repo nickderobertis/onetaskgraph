@@ -2620,8 +2620,10 @@ impl FixtureWait {
 /// Three credentialed runs on 2026-10-21, each printing the convergence record this wait
 /// writes, saw the search report all five items 6.3 s, 5.9 s and 1.8 s after the wait began —
 /// at most one attempt after the first. Main's run 39499941270 on 2026-10-20 is not among
-/// them: its search left one task out for the whole of a two-minute wait, so it says only that
-/// two minutes did not suffice that once, and nothing about how long would have. GitHub
+/// them: its search left one task out of all 60 attempts of a two-minute wait, while the
+/// cleanup straight after found that task on the board's own item listing and deleted its issue
+/// by its id — so the write had landed and the index was behind on it. That says only that two
+/// minutes did not suffice that once, and nothing about how long would have. GitHub
 /// publishes no bound on the index's lag, so the margin is wide; a run that outlasts it fails
 /// saying, by a read of each missing item by its own id, whether the index or the write is at
 /// fault.
