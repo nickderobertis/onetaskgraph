@@ -253,6 +253,7 @@ def test_image_assets_are_stored_with_a_created_task_and_document_and_listed_on_
 ) -> None:
     """`asset` names the files a create stores; `assets` lists them on what it answers."""
     client, _ = plan(binary, tmp_path)
+    run(client.project_create("notes", "asset-plan", "Asset plan"))
     (tmp_path / "inputs").mkdir()
     pixel = tmp_path / "inputs" / "pixel.gif"
     data = gif(5)
@@ -285,6 +286,7 @@ def test_task_assets_writes_every_image_a_task_holds_and_names_each(
 ) -> None:
     """`task_assets` writes a task's images under their reference names and answers with them."""
     client, _ = plan(binary, tmp_path)
+    run(client.project_create("notes", "asset-plan", "Asset plan"))
     (tmp_path / "inputs").mkdir()
     first, second = tmp_path / "inputs" / "first.gif", tmp_path / "inputs" / "second.gif"
     first.write_bytes(gif(21))
@@ -292,7 +294,7 @@ def test_task_assets_writes_every_image_a_task_holds_and_names_each(
     body = "![b](./second.gif)\n![a](./first.gif)\n"
     task = run(
         client.task_create(
-            "notes", "P-1", "Two pictures", body=body, asset=[str(first), str(second)]
+            "notes", "asset-plan", "Two pictures", body=body, asset=[str(first), str(second)]
         )
     )
     out = tmp_path / "out"

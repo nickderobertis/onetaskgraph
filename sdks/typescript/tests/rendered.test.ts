@@ -1,7 +1,7 @@
 import "./ambient.ts";
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
@@ -204,13 +204,14 @@ test("image assets are stored with a created task and document and listed on sho
 });
 
 test("taskAssets writes every image a task holds into a directory and names each", async () => {
+  await client.projectCreate("notes", "asset-plan", "Asset plan");
   mkdirSync(resolve(root, "inputs"), { recursive: true });
   const first = resolve(root, "inputs", "first.gif");
   const second = resolve(root, "inputs", "second.gif");
   writeFileSync(first, gif(11));
   writeFileSync(second, gif(12));
   const body = "![b](./second.gif)\n![a](./first.gif)\n";
-  const task = await client.taskCreate("notes", "P-1", "Two pictures", {
+  const task = await client.taskCreate("notes", "asset-plan", "Two pictures", {
     body,
     assets: [first, second],
   });
