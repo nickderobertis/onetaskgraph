@@ -229,6 +229,7 @@ static STANDIN: LazyLock<Standin> = LazyLock::new(|| {
         rest_host: standin.host.clone(),
         source: Some(json!({"endpoint": format!("{}/graphql", standin.host)})),
         settle: std::time::Duration::ZERO,
+        fixture_wait: journey::STAND_IN_FIXTURE_WAIT,
     });
     standin
 });

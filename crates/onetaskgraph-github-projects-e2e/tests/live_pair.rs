@@ -110,6 +110,16 @@ fn a_shared_board_smaller_than_the_measured_one_runs_and_bills_within_the_budget
 }
 
 #[test]
+fn a_task_the_search_index_reports_late_within_the_bound_is_waited_for_and_the_journey_proceeds() {
+    run_pair("search-behind");
+}
+
+#[test]
+fn a_task_the_search_index_never_reports_ends_the_wait_at_its_bound_naming_that_task() {
+    run_pair("search-never");
+}
+
+#[test]
 fn missing_or_unadmitted_board_observations_never_start_the_fixture_or_make_a_bill() {
     for scenario in ["missing-items", "missing-fields", "board-91", "board-50"] {
         run_pair(scenario);
@@ -218,6 +228,42 @@ fn run_pair(scenario: &str) {
         if let Some(items) = population {
             assert_eq!(main.workload.initial_items, items);
         }
+        assert!(!records.join("assets.json").exists());
+        return;
+    }
+    if scenario == "search-never" {
+        assert_eq!(outputs.len(), 1);
+        assert!(!outputs[0].status.success());
+        let said = String::from_utf8_lossy(&outputs[0].stderr);
+        // The stand-in's wait is `journey::STAND_IN_FIXTURE_WAIT`, whose bound is 1.5 seconds.
+        assert!(
+            said.contains(
+                "the live fixture never became readable: after waiting 1.5s, GitHub's issue \
+                 search for titles onetaskgraph live cleanup ci-37616803489-2-"
+            ),
+            "{said}"
+        );
+        assert!(
+            said.contains("never reported the task \"onetaskgraph live cleanup ci-37616803489-2-")
+                && said.contains(
+                    "which a read by its own id finds on the board, so the index was behind on it"
+                ),
+            "{said}"
+        );
+        assert_eq!(
+            said.matches("which a read by its own id").count(),
+            1,
+            "only the one task the search left out is named: {said}"
+        );
+        assert!(
+            fixture_status.success(),
+            "{}",
+            std::fs::read_to_string(directory.join("fixture.log")).unwrap()
+        );
+        let main: SessionRecord =
+            serde_json::from_slice(&std::fs::read(records.join("main.json")).unwrap()).unwrap();
+        assert!(!main.complete);
+        assert!(main.calls.iter().any(|call| call.phase == Phase::Cleanup));
         assert!(!records.join("assets.json").exists());
         return;
     }
