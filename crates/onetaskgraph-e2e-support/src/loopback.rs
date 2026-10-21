@@ -3,7 +3,7 @@
 //! client keeps alive, and the server closes a connection only once its client has, or asked
 //! it to, so a client is never handed back a connection the server already closed.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -64,11 +64,29 @@ impl Request {
 /// is not a length, after which nothing on the connection can be framed. A response is read
 /// the same way, its status line standing where a request's line does.
 pub fn read_request(reader: &mut impl BufRead) -> Option<Request> {
+    next_request(reader).ok().flatten()
+}
+
+/// [`read_request`], telling the connection ending where a request would begin — `Ok(None)`,
+/// a client done with it — from a read that failed: the socket's own error, a connection that
+/// ended part way through a request as `UnexpectedEof`, or a `Content-Length` that is not a
+/// length as `InvalidData`.
+///
+/// # Errors
+///
+/// Whatever stopped a request being read whole.
+pub fn next_request(reader: &mut impl BufRead) -> io::Result<Option<Request>> {
     let mut head = String::new();
     loop {
         let before = head.len();
-        if reader.read_line(&mut head).ok()? == 0 {
-            return None;
+        if reader.read_line(&mut head)? == 0 {
+            if head.is_empty() {
+                return Ok(None);
+            }
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "the connection ended inside a request's head",
+            ));
         }
         if matches!(&head[before..], "\r\n" | "\n") {
             break;
@@ -79,10 +97,16 @@ pub fn read_request(reader: &mut impl BufRead) -> Option<Request> {
         body: Vec::new(),
     };
     if let Some(length) = request.header("content-length") {
-        request.body.resize(length.parse::<usize>().ok()?, 0);
-        reader.read_exact(&mut request.body).ok()?;
+        let length = length.parse::<usize>().map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("a Content-Length of {length:?} is not a length"),
+            )
+        })?;
+        request.body.resize(length, 0);
+        reader.read_exact(&mut request.body)?;
     }
-    Some(request)
+    Ok(Some(request))
 }
 
 /// `request`, whole as a client sent it, asking the server to close the connection after
@@ -121,7 +145,10 @@ where
             }
             match stream.write_all(reply.as_bytes()) {
                 Ok(()) => After::KeepOpen,
-                Err(_) => After::Close,
+                Err(error) => {
+                    unheard("an answer could not be written", stream, &error);
+                    After::Close
+                }
             }
         },
     );
@@ -172,20 +199,45 @@ fn serve_counting<A>(
     let answer = Arc::new(Mutex::new(answer));
     thread::spawn(move || {
         // An accept that fails is a client that gave up before it was accepted, not a reason to
-        // stop listening for every client after it.
-        for stream in listener.incoming().flatten() {
+        // stop listening for every client after it — but it is said, since it is also what a
+        // host short of sockets looks like from here.
+        for stream in listener.incoming() {
+            let stream = match stream {
+                Ok(stream) => stream,
+                Err(error) => {
+                    eprintln!(
+                        "loopback server on {}: an accept failed: {error}",
+                        listener
+                            .local_addr()
+                            .map_or_else(|_| "?".to_owned(), |at| at.to_string())
+                    );
+                    continue;
+                }
+            };
             if stop.load(Ordering::SeqCst) {
                 break;
             }
             counted.fetch_add(1, Ordering::SeqCst);
             let answer = Arc::clone(&answer);
             thread::spawn(move || {
-                let Ok(reading) = stream.try_clone() else {
-                    return;
+                let reading = match stream.try_clone() {
+                    Ok(reading) => reading,
+                    Err(error) => {
+                        unheard("a connection could not be read", &stream, &error);
+                        return;
+                    }
                 };
                 let mut reader = BufReader::new(reading);
                 let mut writer = stream;
-                while let Some(request) = read_request(&mut reader) {
+                loop {
+                    let request = match next_request(&mut reader) {
+                        Ok(Some(request)) => request,
+                        Ok(None) => return,
+                        Err(error) => {
+                            unheard("a request could not be read", &writer, &error);
+                            return;
+                        }
+                    };
                     // A poisoned lock is an answer that panicked, and the panic already says
                     // why; every later request goes on being answered rather than repeating it.
                     let after = (answer.lock().unwrap_or_else(PoisonError::into_inner))(
@@ -199,6 +251,17 @@ fn serve_counting<A>(
             });
         }
     });
+}
+
+/// Say on standard error what went wrong on a connection the server was serving — which the
+/// test harness shows beside the failure of the test that started the server, and nowhere else.
+fn unheard(what: &str, stream: &TcpStream, error: &io::Error) {
+    let end = |at: io::Result<SocketAddr>| at.map_or_else(|_| "?".to_owned(), |at| at.to_string());
+    eprintln!(
+        "loopback server on {}: {what} on the connection from {}: {error}",
+        end(stream.local_addr()),
+        end(stream.peer_addr())
+    );
 }
 
 /// One connection a proxy keeps to the server it forwards to, so that forwarding a client's
@@ -222,17 +285,25 @@ impl Upstream {
     /// when the server could not be reached or closed the connection without an answer, which
     /// the next request then replaces.
     pub fn forward(&mut self, request: &[u8]) -> Vec<u8> {
-        let connection = match self.connection.take() {
+        let failed = |what: &str, error: &io::Error| {
+            eprintln!("loopback proxy to {}: {what}: {error}", self.address);
+            Vec::new()
+        };
+        let mut connection = match self.connection.take() {
             Some(connection) => connection,
             None => match TcpStream::connect(self.address) {
                 Ok(stream) => BufReader::new(stream),
-                Err(_) => return Vec::new(),
+                Err(error) => return failed("could not connect", &error),
             },
         };
-        let mut connection = connection;
-        let sent = connection.get_mut().write_all(request).is_ok();
-        let Some(response) = sent.then(|| read_request(&mut connection)).flatten() else {
-            return Vec::new();
+        if let Err(error) = connection.get_mut().write_all(request) {
+            return failed("could not send a request", &error);
+        }
+        let response = match next_request(&mut connection) {
+            Ok(Some(response)) => response,
+            // Closed unanswered, which a server may do on purpose.
+            Ok(None) => return Vec::new(),
+            Err(error) => return failed("could not read an answer", &error),
         };
         let whole = response.bytes();
         if !response.closes() {
