@@ -770,15 +770,16 @@ async fn task_assets_answers_every_asset_a_task_holds_with_its_bytes_and_none_fo
         .task_assets(&pictured)
         .await
         .expect("its assets read");
-    let read: Vec<(String, Vec<u8>)> = held
-        .into_iter()
-        .map(|asset| (asset.name.to_string(), asset.bytes))
+    // Compared by digest, so a mismatch prints two lines rather than every byte.
+    let read: Vec<(String, String)> = held
+        .iter()
+        .map(|asset| (asset.name.to_string(), asset_sha256(&asset.bytes)))
         .collect();
     assert_eq!(
         read,
         vec![
-            ("diagram.png".to_owned(), diagram),
-            ("photo.jpg".to_owned(), photo)
+            ("diagram.png".to_owned(), asset_sha256(&diagram)),
+            ("photo.jpg".to_owned(), asset_sha256(&photo))
         ]
     );
     assert_eq!(

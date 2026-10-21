@@ -10,6 +10,8 @@ use std::collections::BTreeMap;
 use onetaskgraph_plugin_api::{
     Asset, AssetName, AssetPayload, AssetUploads, AssetWrite, SourceError, asset_references,
 };
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::delivery::source_failed;
@@ -162,6 +164,12 @@ pub struct HeldAsset {
     /// Its bytes, as the task's source holds them.
     pub bytes: Vec<u8>,
 }
+
+/// What `task assets` answers with under `--json`: the name of every image asset it wrote, in
+/// the order the task's content first references them — `[]` for a task holding none.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(transparent)]
+pub struct TaskAssetNames(pub Vec<AssetName>);
 
 /// Why [`Engine::task_assets`] could not read the image assets of the task `id`: the task is
 /// not there, or its source could not be built or could not answer — `error` says which, in

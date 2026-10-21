@@ -2580,3 +2580,151 @@ fn the_protocol_document_states_exactly_the_asset_members_the_binary_emits() {
 
     assert!(bundle["roots"]["Capabilities"]["properties"]["assets"].is_object());
 }
+
+#[test]
+fn task_assets_writes_each_asset_a_task_holds_under_its_name_and_lists_exactly_those() {
+    let folders = Folders::new();
+    let diagram = images::png(200, 60_000);
+    let photo = images::jpeg(201);
+    let body = folders.text(
+        "pictured.md",
+        "# Flow\n\n![flow](./diagram.png)\n\n![desk](./photo.jpg)\n",
+    );
+    let given_diagram = folders.image("t", "diagram.png", &diagram);
+    let given_photo = folders.image("t", "photo.jpg", &photo);
+    let pictured = folders.created(&[
+        "task",
+        "create",
+        "notes",
+        "--project",
+        "launch",
+        "--title",
+        "Pictured",
+        "--body-file",
+        &body,
+        "--asset",
+        &given_photo,
+        "--asset",
+        &given_diagram,
+    ]);
+    let out = folders.sandbox.subdirectory("out");
+    let listed: Value = serde_json::from_str(&stdout(&folders.exits(
+        &[
+            "task",
+            "assets",
+            &pictured,
+            "--output-dir",
+            &spelled(&out),
+            "--json",
+        ],
+        0,
+    )))
+    .expect("a list of names");
+    assert_eq!(listed, json!(["diagram.png", "photo.jpg"]));
+    assert_eq!(Folders::files(&out), ["diagram.png", "photo.jpg"]);
+    assert_eq!(
+        std::fs::read(out.join("diagram.png")).expect("written"),
+        diagram
+    );
+    assert_eq!(
+        std::fs::read(out.join("photo.jpg")).expect("written"),
+        photo
+    );
+
+    // Without --json, the names one a line; a directory not yet there is created.
+    let fresh = folders.sandbox.subdirectory("fresh").join("nested");
+    let text = stdout(&folders.exits(
+        &[
+            "task",
+            "assets",
+            &pictured,
+            "--output-dir",
+            &spelled(&fresh),
+        ],
+        0,
+    ));
+    assert_eq!(text, "diagram.png\nphoto.jpg\n");
+    assert_eq!(
+        std::fs::read(fresh.join("photo.jpg")).expect("written"),
+        photo
+    );
+
+    let plain_body = folders.text("plain.md", "No pictures here.\n");
+    let plain = folders.created(&[
+        "task",
+        "create",
+        "notes",
+        "--project",
+        "launch",
+        "--title",
+        "Plain",
+        "--body-file",
+        &plain_body,
+    ]);
+    let empty = folders.sandbox.subdirectory("empty");
+    let listed = stdout(&folders.exits(
+        &[
+            "task",
+            "assets",
+            &plain,
+            "--output-dir",
+            &spelled(&empty),
+            "--json",
+        ],
+        0,
+    ));
+    assert_eq!(
+        serde_json::from_str::<Value>(&listed).expect("JSON"),
+        json!([])
+    );
+    assert!(Folders::files(&empty).is_empty());
+}
+
+#[test]
+fn task_assets_of_a_missing_task_or_an_unreadable_source_fails_naming_the_id_and_the_reason() {
+    let folders = Folders::new();
+    let out = folders.sandbox.subdirectory("out");
+    let missing = folders.refused(&[
+        "task",
+        "assets",
+        "notes:nowhere",
+        "--output-dir",
+        &spelled(&out),
+    ]);
+    assert!(missing.contains("notes:nowhere"), "{missing}");
+    assert!(missing.contains("no task with the id"), "{missing}");
+    assert_eq!(
+        folders.failure_kind(&[
+            "task",
+            "assets",
+            "notes:nowhere",
+            "--output-dir",
+            &spelled(&out),
+        ]),
+        "no-such-item"
+    );
+
+    let body = folders.text("broken.md", "![p](./p.png)\n");
+    let png = folders.image("p", "p.png", &images::png(202, 50_000));
+    let broken = folders.created(&[
+        "task",
+        "create",
+        "notes",
+        "--project",
+        "launch",
+        "--title",
+        "Broken",
+        "--body-file",
+        &body,
+        "--asset",
+        &png,
+    ]);
+    // The task's asset directory replaced by a file: its store can no longer read them.
+    let directory = folders.notes.join("tasks/broken.assets");
+    std::fs::remove_dir_all(&directory).expect("the asset directory");
+    std::fs::write(&directory, "not a directory").expect("a file in its place");
+    let unreadable = folders.refused(&["task", "assets", &broken, "--output-dir", &spelled(&out)]);
+    assert!(unreadable.contains(&broken), "{unreadable}");
+    assert!(unreadable.contains("broken.assets"), "{unreadable}");
+    assert!(Folders::files(&out).is_empty());
+}

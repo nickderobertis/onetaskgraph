@@ -280,6 +280,34 @@ def test_image_assets_are_stored_with_a_created_task_and_document_and_listed_on_
     assert "pixel.gif" in str(refused.value)
 
 
+def test_task_assets_writes_every_image_a_task_holds_and_names_each(
+    binary: Path, tmp_path: Path
+) -> None:
+    """`task_assets` writes a task's images under their reference names and answers with them."""
+    client, _ = plan(binary, tmp_path)
+    (tmp_path / "inputs").mkdir()
+    first, second = tmp_path / "inputs" / "first.gif", tmp_path / "inputs" / "second.gif"
+    first.write_bytes(gif(21))
+    second.write_bytes(gif(22))
+    body = "![b](./second.gif)\n![a](./first.gif)\n"
+    task = run(
+        client.task_create(
+            "notes", "P-1", "Two pictures", body=body, asset=[str(first), str(second)]
+        )
+    )
+    out = tmp_path / "out"
+
+    names = run(client.task_assets(task.items[0].id.root, str(out)))
+    assert [name.root for name in names.root] == ["second.gif", "first.gif"]
+    assert (out / "first.gif").read_bytes() == gif(21)
+    assert (out / "second.gif").read_bytes() == gif(22)
+
+    with pytest.raises(OnetaskgraphError) as missing:
+        run(client.task_assets("notes:nowhere", str(out)))
+    assert missing.value.exit_code == 1
+    assert "notes:nowhere" in str(missing.value)
+
+
 PICTURED = """---
 onetaskgraph_template: 1
 variables:

@@ -23,11 +23,12 @@ use onetaskgraph_core::{
     Delivered, DeliveryOutcome, DependencyRequest, DocumentFilters, DocumentRequest, Engine,
     Environment, ExpectedWrite, Failure, FailureDocument, Filters, GlobalId, LabelRequest, Loaded,
     MatchBy, OutputFormat, PageToken, Paging, ProjectGraphRequest, ProjectRequest, ProjectSelector,
-    QueryResponse, ReconcileOutcome, RenderedRecord, SearchRequest, SourceFailure, TaskRequest,
+    QueryResponse, ReconcileOutcome, RenderedRecord, SearchRequest, SourceFailure, TaskAssetNames,
+    TaskRequest,
 };
 use onetaskgraph_plugin_api::{
-    CommentBody, LabelFilter, MetadataKey, MetadataRecord, NativeId, NewComment, SharedClock,
-    SourceName, TextQuery, system_clock,
+    AssetName, CommentBody, LabelFilter, MetadataKey, MetadataRecord, NativeId, NewComment,
+    SharedClock, SourceName, TextQuery, system_clock,
 };
 use onetaskgraph_status_options::{
     FieldsReport, GitHubProjectsConfig, SetupMode, StatusOptionsReport,
@@ -38,7 +39,8 @@ use crate::cli::{
     CacheCommand, Cli, Command, CommentCommand, ConfigCommand, ContentCommand, CopyArgs,
     DependencyArgs, DocumentCommand, DocumentFilterArgs, ExpectArgs, FilterArgs, GraphFormat,
     LabelCommand, MetadataCommand, MetadataSetArgs, PageArgs, PriorityCommand, ProjectCommand,
-    ProjectStatusCommand, SelectionArgs, ShowArgs, SourcesCommand, StatusCommand, TaskCommand,
+    ProjectStatusCommand, SelectionArgs, ShowArgs, SourcesCommand, StatusCommand, TaskAssetsArgs,
+    TaskCommand,
 };
 
 /// Everything asked for was answered, by every source asked. Nothing else exits `0`. A
@@ -591,6 +593,9 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
         Command::Task {
             command: TaskCommand::Answers(args),
         } => rendered::stored(out, loaded, RenderedRecord::Task, args).await,
+        Command::Task {
+            command: TaskCommand::Assets(args),
+        } => task_assets(out, loaded, args).await,
         Command::Project {
             command: ProjectCommand::Create(args),
         } => rendered::create_project(out, loaded, args).await,
@@ -1810,6 +1815,47 @@ fn dependency_request(
 }
 
 /// One value as pretty-printed JSON.
+/// `task assets`: every image asset the task holds, written into `--output-dir` under its
+/// name, and the names written printed — one a line, or under `--json` as one list.
+async fn task_assets(
+    out: &mut impl Write,
+    loaded: &Loaded,
+    args: &TaskAssetsArgs,
+) -> Result<u8, Failure> {
+    let id = qualified(&args.id)?;
+    let held = engine(loaded)
+        .task_assets(&id)
+        .await
+        .map_err(|error| Failure::from(&error))?;
+    let unwritten = |path: &std::path::Path, error: io::Error| {
+        Failure::decided(
+            "write",
+            format!(
+                "could not write {}: {error}\n\
+                 next: name an --output-dir this command can create and write into, then run it \
+                 again.",
+                path.display()
+            ),
+        )
+    };
+    std::fs::create_dir_all(&args.output_dir)
+        .map_err(|error| unwritten(&args.output_dir, error))?;
+    for asset in &held {
+        let path = args.output_dir.join(asset.name.as_str());
+        std::fs::write(&path, &asset.bytes).map_err(|error| unwritten(&path, error))?;
+    }
+    let names = TaskAssetNames(held.into_iter().map(|asset| asset.name).collect());
+    match loaded.config.output() {
+        OutputFormat::Json => emit(out, &json(&names, "the asset names")?, "the asset names")?,
+        OutputFormat::Text if names.0.is_empty() => {}
+        OutputFormat::Text => {
+            let lines: Vec<&str> = names.0.iter().map(AssetName::as_str).collect();
+            emit(out, &lines.join("\n"), "the asset names")?;
+        }
+    }
+    Ok(EXIT_OK)
+}
+
 fn json(value: &impl Serialize, what: &str) -> Result<String, Failure> {
     serde_json::to_string_pretty(value)
         .map_err(|error| Failure::decided("render", format!("could not render {what}: {error}")))

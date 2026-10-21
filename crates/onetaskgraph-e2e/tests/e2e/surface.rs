@@ -181,6 +181,10 @@ const SURFACE: &[(&[&str], &[&str])] = &[
         ],
     ),
     (&["help", "task", "answers"], &["<ID>", "--json"]),
+    (
+        &["help", "task", "assets"],
+        &["<SOURCE:ID>", "--output-dir", "--json"],
+    ),
     (&["help", "document"], &["create", "render", "answers"]),
     (
         &["help", "document", "create"],
@@ -397,6 +401,7 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
             "task create",
             "task render",
             "task answers",
+            "task assets",
             "project list",
             "project show",
             "project deps",

@@ -39,6 +39,7 @@ from .models import (
     StatusesReconciled,
     StatusNamesReport,
     StatusOptionsReport,
+    TaskAssetNames,
     TaskContentSet,
     TaskDetail,
     TaskDetails,
@@ -71,6 +72,7 @@ POSITIONALS: dict[tuple[str, ...], tuple[str, ...]] = {
     ("sources", "route"): ("source",),
     ("sources", "status-options"): ("source",),
     ("task", "answers"): ("id",),
+    ("task", "assets"): ("id",),
     ("task", "comment", "add"): ("id",),
     ("task", "comment", "delete"): ("id", "comment_id"),
     ("task", "comment", "edit"): ("id", "comment_id"),
@@ -947,6 +949,26 @@ class GeneratedClient:
             ["task", "answers"],
             TemplateAnswers,
             id=id,
+            default_sources=default_sources,
+            page_size=page_size,
+            set=set,
+        )
+
+    async def task_assets(
+        self,
+        id: GlobalId | str,
+        output_dir: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> TaskAssetNames:
+        """Run ``onetaskgraph task assets``."""
+        return await self._invoke(
+            ["task", "assets"],
+            TaskAssetNames,
+            id=id,
+            output_dir=output_dir,
             default_sources=default_sources,
             page_size=page_size,
             set=set,

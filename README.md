@@ -116,6 +116,8 @@ onetaskgraph task render <ID> [--template FILE | --template-loader FILE] [--sear
 # edit — takes --term-scope REPOSITORY (repeatable) or --term-scope-empty: see
 # "The public boundary" below.
 onetaskgraph task answers <ID>
+onetaskgraph task assets <SOURCE:ID> --output-dir DIR [--json]
+                                                 # write the task's image assets into DIR
 
 onetaskgraph project list / show / deps          # the same flags, minus the project filter
 onetaskgraph project list [--source S]... --origin SOURCE:ID [--json]
@@ -1100,6 +1102,13 @@ first references them — `[]` for a record that holds none:
 a directory beside its file ([`docs/local-md.md`](./docs/local-md.md)) — and `null` for a
 hosted source. `content_type` is `image/png`, `image/jpeg`, `image/gif` or `image/webp`,
 decided by the extension.
+
+`task assets <SOURCE:ID> --output-dir DIR` writes every asset the task holds to `DIR/<name>`,
+under the name its content references it by, creating `DIR` when it is not there; `--json`
+prints the names it wrote as one list, `[]` for a task holding none. The bytes come through the
+task's own source — a `local-md` folder's files, a board's uploaded images — so it reads the
+same on every store, and a Rust caller reaches the same read as `Engine::task_assets`. A task
+that is not there, or a source that cannot be read, fails naming the id and the store's reason.
 
 **A copy carries every asset a record's content references.** `task copy`, `document copy` and
 every project copy that carries tasks or documents hand each asset's bytes to the destination

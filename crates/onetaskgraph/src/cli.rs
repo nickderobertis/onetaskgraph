@@ -424,6 +424,25 @@ pub enum TaskCommand {
     Render(ItemRenderArgs),
     /// Print the template answers stored beside one task.
     Answers(AnswersArgs),
+    /// Write every image asset one task holds into a directory, each as `<DIR>/<name>` under
+    /// the name its content references it by.
+    ///
+    /// Read through the task's source, so it works the same on every store that keeps assets;
+    /// a task holding none writes nothing. Under --json it prints the names it wrote, as a list.
+    Assets(TaskAssetsArgs),
+}
+
+/// `onetaskgraph task assets`.
+#[derive(Debug, Args)]
+pub struct TaskAssetsArgs {
+    /// The task's qualified id, `<source>:<native-id>`.
+    // llmlint: ignore[invalid_states_unrepresentable] As `ShowArgs::id`: `qualified` in `main` converts it through `GlobalId::from_str` before anything is read, with the next action a user typing an unqualified id needs.
+    #[arg(value_name = "SOURCE:ID")]
+    pub id: String,
+    /// The directory each asset is written into, created when it is not there. A file already
+    /// there under an asset's name is replaced.
+    #[arg(long, value_name = "DIR")]
+    pub output_dir: std::path::PathBuf,
 }
 
 /// Where a created item's body comes from: exactly one of a template file, a loader

@@ -203,6 +203,29 @@ test("image assets are stored with a created task and document and listed on sho
   expect(unreferenced.message).toContain("pixel.gif");
 });
 
+test("taskAssets writes every image a task holds into a directory and names each", async () => {
+  mkdirSync(resolve(root, "inputs"), { recursive: true });
+  const first = resolve(root, "inputs", "first.gif");
+  const second = resolve(root, "inputs", "second.gif");
+  writeFileSync(first, gif(11));
+  writeFileSync(second, gif(12));
+  const body = "![b](./second.gif)\n![a](./first.gif)\n";
+  const task = await client.taskCreate("notes", "P-1", "Two pictures", {
+    body,
+    assets: [first, second],
+  });
+  const id = task.items[0]?.id ?? "";
+  const out = resolve(root, "out");
+
+  expect(await client.taskAssets(id, out)).toEqual(["second.gif", "first.gif"]);
+  expect(readFileSync(resolve(out, "first.gif"))).toEqual(Buffer.from(gif(11)));
+  expect(readFileSync(resolve(out, "second.gif"))).toEqual(Buffer.from(gif(12)));
+
+  const missing = await refusal(client.taskAssets("notes:nowhere", out));
+  expect(missing.exitCode).toBe(1);
+  expect(missing.message).toContain("notes:nowhere");
+});
+
 test("asset options that are not a list of paths are refused before the binary runs", async () => {
   await expect(
     client.taskCreate("notes", "P-1", "Refused", {

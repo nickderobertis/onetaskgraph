@@ -60,7 +60,7 @@ use local::{LocalDocuments, LocalProjects, LocalTasks};
 pub(crate) use resume::{Owed, Resumption, StreamState};
 use resume::{Resume, StreamKind};
 
-pub use assets::{HeldAsset, TaskAssetsError};
+pub use assets::{HeldAsset, TaskAssetNames, TaskAssetsError};
 pub use closure::{
     CompleteAction, IssueCompleted, IssuesCompleted, ReconcileOutcome, StatusReconciled,
     StatusesReconciled,

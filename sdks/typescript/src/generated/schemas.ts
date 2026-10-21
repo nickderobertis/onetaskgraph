@@ -19225,6 +19225,21 @@ export const runtimeSchemas = {
     "title": "Task",
     "type": "object"
   },
+  "TaskAssetNames": {
+    "$defs": {
+      "AssetName": {
+        "description": "One asset's name: a bare file name ending in an accepted image extension.\n\nValidated wherever one is built, deserialized included: non-empty, no `/`, no `\\`, no\n`..`, no whitespace, control character or parenthesis — none of which a bare Markdown link\ntarget can hold — and ending, case-insensitively, in `.png`, `.jpg`, `.jpeg`, `.gif` or\n`.webp` after a non-empty stem. The name is kept exactly as written, case included: it is\nthe text a reference names and the file name a source stores the bytes under.",
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "What `task assets` answers with under `--json`: the name of every image asset it wrote, in\nthe order the task's content first references them — `[]` for a task holding none.",
+    "items": {
+      "$ref": "#/$defs/AssetName"
+    },
+    "title": "TaskAssetNames",
+    "type": "array"
+  },
   "TaskContentSet": {
     "$defs": {
       "BudgetSpent": {
