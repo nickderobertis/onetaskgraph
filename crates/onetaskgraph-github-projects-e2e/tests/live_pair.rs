@@ -235,12 +235,20 @@ fn run_pair(scenario: &str) {
         assert_eq!(outputs.len(), 1);
         assert!(!outputs[0].status.success());
         let said = String::from_utf8_lossy(&outputs[0].stderr);
-        // The stand-in's wait is `journey::STAND_IN_FIXTURE_WAIT`, whose bound is 1.5 seconds.
+        // How long the wait really took is the stand-in's to measure, against
+        // `journey::STAND_IN_FIXTURE_WAIT`'s 1.5-second deadline, so its verdict comes first.
         assert!(
-            said.contains(
-                "the live fixture never became readable: after waiting 1.5s, GitHub's issue \
-                 search for titles onetaskgraph live cleanup ci-37616803489-2-"
-            ),
+            fixture_status.success(),
+            "{}",
+            std::fs::read_to_string(directory.join("fixture.log")).unwrap()
+        );
+        assert!(
+            said.contains("the live fixture never became readable: after waiting ")
+                && said.contains(
+                    "s against a deadline of 1.5s, GitHub's issue search for titles \
+                     onetaskgraph live cleanup ci-37616803489-2-*"
+                )
+                && said.contains("a search still unanswered at the deadline was abandoned"),
             "{said}"
         );
         assert!(
@@ -254,11 +262,6 @@ fn run_pair(scenario: &str) {
             said.matches("which a read by its own id").count(),
             1,
             "only the one task the search left out is named: {said}"
-        );
-        assert!(
-            fixture_status.success(),
-            "{}",
-            std::fs::read_to_string(directory.join("fixture.log")).unwrap()
         );
         let main: SessionRecord =
             serde_json::from_slice(&std::fs::read(records.join("main.json")).unwrap()).unwrap();

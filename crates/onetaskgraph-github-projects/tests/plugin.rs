@@ -1153,13 +1153,19 @@ impl Fixture {
     /// Leave one issue a live run creates out of this board's issue search for the next
     /// `searches` searches that would have listed it — `usize::MAX` for every one. See
     /// [`SearchWithheld`].
-    fn search_withholds(&self, offset: u64, searches: usize) {
-        self.state.lock().unwrap().search_withheld = Some(SearchWithheld {
-            offset,
-            searches,
-            first_stamp: None,
-            content_id: None,
-        });
+    fn search_withholds(&self, withheld: SearchWithheld) {
+        self.state.lock().unwrap().search_withheld = Some(withheld);
+    }
+    /// When this board's search began leaving its withheld issue out, when a search first
+    /// reported it after all, and when it was first read by its own id since.
+    fn search_withheld_timeline(&self) -> (Option<Instant>, Option<Instant>, Option<Instant>) {
+        let state = self.state.lock().unwrap();
+        let withheld = state.search_withheld.as_ref().expect("an issue withheld");
+        (
+            withheld.searched_at.first().copied(),
+            withheld.reported_at,
+            withheld.read_by_id_at.first().copied(),
+        )
     }
     /// Answer this board's next `count` requests inside the change token's settling margin.
     fn answer_unsettled(&self, count: usize) {
@@ -1339,11 +1345,24 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
     thread::spawn(move || {
         for stream in listener.incoming() {
             let mut stream = stream.expect("fixture connection");
-            let request = read_http_json(&mut stream);
+            let Some(request) = read_http_json_unless_abandoned(&mut stream) else {
+                continue;
+            };
             let query = request["query"].as_str().expect("a GraphQL document");
             graphql_parser::parse_query::<String>(query).expect("a valid GraphQL document");
             let variables = &request["variables"];
             served.lock().unwrap().documents.push(query.to_owned());
+            // Slept here rather than under the lock, so the board's state stays readable while
+            // an answer is held back.
+            let held_for = served
+                .lock()
+                .unwrap()
+                .search_withheld
+                .as_mut()
+                .map_or(Duration::ZERO, |withheld| {
+                    withheld.arrived(query, variables)
+                });
+            thread::sleep(held_for);
             // The limiter answers before the board does, exactly as GitHub's does: a
             // refused request never reaches the board and changes nothing on it.
             let limited = served
@@ -1467,7 +1486,13 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
             if let (Some(delay), true) = (delay, is_mutation(query)) {
                 thread::sleep(delay);
             }
-            stream.write_all(response.as_bytes()).expect("a response");
+            // A client that stopped waiting for an answer held back is not this board's failure.
+            if stream.write_all(response.as_bytes()).is_err() {
+                assert!(
+                    !held_for.is_zero(),
+                    "the client went away before its answer"
+                );
+            }
         }
     });
     Fixture { endpoint, state }
@@ -2344,6 +2369,12 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         {
             matched.remove(at);
             withheld.searches -= 1;
+        } else if let Some(withheld) = state.search_withheld.as_mut()
+            && matched
+                .iter()
+                .any(|item| withheld.content_id.as_deref() == Some(item.content_id.as_str()))
+        {
+            withheld.reported_at.get_or_insert_with(Instant::now);
         }
         if state.search_order_varies_with_first {
             // One deterministic order per page size, and a different one at each: the same
@@ -2949,9 +2980,67 @@ struct SearchWithheld {
     /// The stamp of the first artifact this board created.
     first_stamp: Option<u64>,
     content_id: Option<String>,
+    /// How long each search takes to answer while the issue is still left out, and how long
+    /// a read of the issue by its own id takes once one search has left it out.
+    search_answers_in: Duration,
+    read_by_id_answers_in: Duration,
+    /// When each search arrived while the issue was left out, when the first search to report
+    /// it after all arrived, and when each read of it by its own id arrived.
+    searched_at: Vec<Instant>,
+    reported_at: Option<Instant>,
+    read_by_id_at: Vec<Instant>,
 }
 
 impl SearchWithheld {
+    /// The issue a live run titles with its stamp plus `offset`, left out of `searches`
+    /// searches that would have listed it.
+    fn run_artifact(offset: u64, searches: usize) -> Self {
+        Self {
+            offset,
+            searches,
+            first_stamp: None,
+            content_id: None,
+            search_answers_in: Duration::ZERO,
+            read_by_id_answers_in: Duration::ZERO,
+            searched_at: Vec::new(),
+            reported_at: None,
+            read_by_id_at: Vec::new(),
+        }
+    }
+    /// The issue this board already holds as `content_id`, left out the same way.
+    fn item(content_id: &str, searches: usize) -> Self {
+        Self {
+            content_id: Some(content_id.to_owned()),
+            ..Self::run_artifact(0, searches)
+        }
+    }
+    fn answering_searches_in(self, delay: Duration) -> Self {
+        Self {
+            search_answers_in: delay,
+            ..self
+        }
+    }
+    fn answering_reads_by_id_in(self, delay: Duration) -> Self {
+        Self {
+            read_by_id_answers_in: delay,
+            ..self
+        }
+    }
+    /// Note a request arriving now, and say how long this board takes to answer it.
+    fn arrived(&mut self, query: &str, variables: &Value) -> Duration {
+        let Some(content_id) = self.content_id.as_deref() else {
+            return Duration::ZERO;
+        };
+        if self.searches > 0 && query.contains("search(query:$search") {
+            self.searched_at.push(Instant::now());
+            self.search_answers_in
+        } else if !self.searched_at.is_empty() && variables["id"] == content_id {
+            self.read_by_id_at.push(Instant::now());
+            self.read_by_id_answers_in
+        } else {
+            Duration::ZERO
+        }
+    }
     /// Note an issue this board created, titled `title`, as `content_id`.
     fn created(&mut self, title: &str, content_id: &str) {
         let Some(stamp) = title
@@ -3074,10 +3163,19 @@ fn operation_name(query: &str) -> &str {
 }
 
 fn read_http_json(stream: &mut impl Read) -> Value {
+    read_http_json_unless_abandoned(stream).expect("the request ended before its headers")
+}
+
+/// [`read_http_json`], or `None` for a connection that ended before its first byte — a client
+/// that gave up on a request it never sent, as a journey's read abandoned at its deadline does.
+fn read_http_json_unless_abandoned(stream: &mut impl Read) -> Option<Value> {
     let mut bytes = Vec::new();
     let mut chunk = [0_u8; 4096];
     loop {
-        let count = stream.read(&mut chunk).expect("a fixture request");
+        let count = stream.read(&mut chunk).unwrap_or(0);
+        if count == 0 && bytes.is_empty() {
+            return None;
+        }
         assert!(count > 0, "the request ended before its headers");
         bytes.extend_from_slice(&chunk[..count]);
         if bytes.windows(4).any(|window| window == b"\r\n\r\n") {
@@ -3104,7 +3202,7 @@ fn read_http_json(stream: &mut impl Read) -> Value {
         assert!(count > 0, "the request ended before its declared body");
         bytes.extend_from_slice(&chunk[..count]);
     }
-    serde_json::from_slice(&bytes[header_end..header_end + length]).expect("request JSON")
+    Some(serde_json::from_slice(&bytes[header_end..header_end + length]).expect("request JSON"))
 }
 
 fn raw_server(status: &str, body: &str) -> String {
@@ -10994,6 +11092,87 @@ async fn the_fixture_wait_reads_through_a_source_built_after_the_board_caught_up
     assert_eq!(fixture.requests("search"), 4);
 }
 
+/// A fixture wait that gives up ends within its deadline plus the time its reads by id are
+/// given, even when the board never answers one: the item the search left out is named, and so
+/// is the read that did not come back.
+#[tokio::test]
+async fn a_fixture_wait_gives_up_within_its_deadline_and_bounds_the_read_that_explains_it() {
+    let prefix = "onetaskgraph live cleanup 4242-910-";
+    let titles = (1..=5)
+        .map(|number| format!("{prefix}{number}"))
+        .collect::<Vec<_>>();
+    let fixture = board(vec![
+        Item::issue("P_alpha", &titles[0])
+            .status("Todo")
+            .sub_issues(1),
+        Item::issue("P_beta", &titles[1])
+            .status("Todo")
+            .sub_issues(1),
+        Item::issue("T_first", &titles[2])
+            .status("Todo")
+            .parent("P_alpha"),
+        Item::issue("T_second", &titles[3])
+            .status("Todo")
+            .parent("P_beta"),
+        Item::issue("T_orphan", &titles[4]).status("Todo"),
+    ]);
+    fixture.search_withholds(
+        SearchWithheld::item("T_second", usize::MAX)
+            .answering_reads_by_id_in(Duration::from_secs(3)),
+    );
+    let wait = journey::FixtureWait {
+        bound: Duration::from_millis(400),
+        first: Duration::from_millis(20),
+        steady_for: Duration::from_millis(100),
+        longest: Duration::from_millis(100),
+        diagnosis: Duration::from_millis(300),
+    };
+    let created = |ids: &[(&str, usize)]| {
+        ids.iter()
+            .map(|(id, title)| (NativeId((*id).to_owned()), titles[*title].clone()))
+            .collect::<Vec<_>>()
+    };
+    let started = Instant::now();
+    let Err(said) = journey::settled_fixture(
+        &|| source(&fixture),
+        prefix,
+        &created(&[("T_first", 2), ("T_second", 3), ("T_orphan", 4)]),
+        &created(&[("P_alpha", 0), ("P_beta", 1)]),
+        wait,
+    )
+    .await
+    else {
+        panic!("the search never reports T_second, so the wait cannot settle");
+    };
+    let took = started.elapsed();
+    assert!(
+        took >= wait.bound + wait.diagnosis && took < wait.bound + wait.diagnosis * 2,
+        "gave up after {took:?}, against {:?} and {:?} more for the reads by id",
+        wait.bound,
+        wait.diagnosis
+    );
+    assert!(
+        said.contains(&format!(
+            "never reported the task {:?} (T_second), which a read by its own id did not answer \
+             within the 0.3s given it",
+            titles[3]
+        )),
+        "{said}"
+    );
+    assert_eq!(
+        said.matches("which a read by its own id").count(),
+        1,
+        "{said}"
+    );
+    let (began, reported, read_by_id) = fixture.search_withheld_timeline();
+    assert!(reported.is_none());
+    let read_by_id = read_by_id.expect("the wait read T_second by its own id") - began.unwrap();
+    assert!(
+        read_by_id >= wait.bound - Duration::from_millis(100) && read_by_id < took,
+        "read by id {read_by_id:?} into the wait"
+    );
+}
+
 /// What the credentialed lane waits for its fixture to be indexed: `journey::FIXTURE_WAIT`'s
 /// own documentation is where the ten minutes come from, and this is what holds the schedule
 /// to what that documentation says of it.
@@ -11001,7 +11180,11 @@ async fn the_fixture_wait_reads_through_a_source_built_after_the_board_caught_up
 fn the_live_fixture_wait_asks_every_two_seconds_then_backs_off_to_its_ten_minute_bound() {
     let sleeps = journey::FIXTURE_WAIT.sleeps();
     assert_eq!(sleeps.iter().sum::<Duration>(), Duration::from_secs(600));
-    assert_eq!(sleeps.len() + 1, 38, "attempts at most");
+    assert_eq!(
+        sleeps.len(),
+        37,
+        "attempts at most: one before each sleep, and none after the one reaching the deadline"
+    );
     assert!(
         sleeps[..15]
             .iter()
@@ -20723,10 +20906,17 @@ fn live_pair_fixture_child() {
         _ => None,
     };
     fixture.items_connection_falls_behind();
-    // Four searches are two attempts of the fixture wait: each attempt lists tasks and projects.
+    // Each attempt of the fixture wait is two searches, tasks then projects: behind, the task is
+    // left out of the first attempt only; never, every search takes long enough that the
+    // stand-in deadline falls inside the second attempt.
     match scenario.as_str() {
-        "search-behind" => fixture.search_withholds(3, 4),
-        "search-never" => fixture.search_withholds(3, usize::MAX),
+        "search-behind" => fixture.search_withholds(
+            SearchWithheld::run_artifact(3, 2).answering_searches_in(Duration::from_millis(300)),
+        ),
+        "search-never" => fixture.search_withholds(
+            SearchWithheld::run_artifact(3, usize::MAX)
+                .answering_searches_in(Duration::from_millis(500)),
+        ),
         _ => {}
     }
     fixture.state.lock().unwrap().limits.malformed_ceiling_error = malformed_ceiling;
@@ -20769,12 +20959,20 @@ fn live_pair_fixture_child() {
             let mut bytes = Vec::new();
             let mut chunk = [0; 4096];
             let end = loop {
-                let n = stream.read(&mut chunk).unwrap();
+                let n = stream.read(&mut chunk).unwrap_or(0);
+                // A connection closed before its first byte is a client that gave up on a
+                // request it never sent — the journey abandoning a read at its fixture deadline.
+                if n == 0 && bytes.is_empty() {
+                    break None;
+                }
                 assert!(n > 0);
                 bytes.extend_from_slice(&chunk[..n]);
                 if let Some(end) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
-                    break end + 4;
+                    break Some(end + 4);
                 }
+            };
+            let Some(end) = end else {
+                continue;
             };
             let headers = String::from_utf8(bytes[..end].to_vec()).unwrap();
             let length = headers
@@ -20843,7 +21041,8 @@ fn live_pair_fixture_child() {
                 upstream.write_all(&bytes).unwrap();
                 let mut response = Vec::new();
                 upstream.read_to_end(&mut response).unwrap();
-                stream.write_all(&response).unwrap();
+                // The journey abandons a search still in flight at its fixture deadline.
+                let _ = stream.write_all(&response);
             }
         }
     });
@@ -20853,17 +21052,36 @@ fn live_pair_fixture_child() {
     std::fs::rename(&staged, &ready).unwrap();
     let mut done = String::new();
     std::io::stdin().read_to_string(&mut done).unwrap();
-    if let Some(withheld) = fixture.state.lock().unwrap().search_withheld.as_ref() {
-        assert!(
-            withheld.content_id.is_some(),
-            "the run never created the task this board was to keep out of its search"
-        );
-        match scenario.as_str() {
-            "search-behind" => assert_eq!(
-                withheld.searches, 0,
-                "the run went on before the search had reported its second task"
-            ),
-            _ => assert!(withheld.searches > 0),
+    // Measured here, by the board, from when its search first left the task out: the journey's
+    // own account of how long it waited is what is being checked, so it is not the evidence.
+    if fixture.state.lock().unwrap().search_withheld.is_some() {
+        let bound = journey::STAND_IN_FIXTURE_WAIT.bound;
+        let (began, reported, read_by_id) = fixture.search_withheld_timeline();
+        let began = began.expect("the board's search never left the run's second task out");
+        if scenario == "search-behind" {
+            let took = reported.expect("the board's search never reported the task") - began;
+            println!("the search reported the withheld task {took:?} after it first left it out");
+            assert!(
+                took < bound,
+                "converged in {took:?}, past the {bound:?} deadline"
+            );
+        } else {
+            assert!(
+                reported.is_none(),
+                "the search was meant never to report it"
+            );
+            let took =
+                read_by_id.expect("the wait never read the missing task by its own id") - began;
+            println!(
+                "the wait read the missing task by id {took:?} after the search first left it out"
+            );
+            // Its first attempt answers whole by a second in; its second would run to two: the
+            // deadline, half a second before that, cuts it off.
+            assert!(
+                took >= bound - Duration::from_millis(200)
+                    && took <= bound + Duration::from_millis(300),
+                "gave up {took:?} after it began, against a {bound:?} deadline"
+            );
         }
     }
     if decline
