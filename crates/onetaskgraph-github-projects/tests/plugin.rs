@@ -634,6 +634,10 @@ struct State {
     /// is answered out of the source's own record of what it created until the board
     /// catches up — and what that record holds is only observable while it is behind.
     lagging_reads: usize,
+    /// How many board-scoped searches this board answers behind before it catches up on its
+    /// own — `lagging_reads` dropping to nothing as the last of them is answered, inside that
+    /// request, so the next search sees everything whatever the client did in between.
+    catches_up_after_searches: Option<usize>,
     /// The one created issue this board's issue search leaves out, and for how many more of
     /// the searches that would have listed it. See [`SearchWithheld`].
     search_withheld: Option<SearchWithheld>,
@@ -1150,6 +1154,11 @@ impl Fixture {
     fn read_behind(&self, count: usize) {
         self.state.lock().unwrap().lagging_reads = count;
     }
+    /// Stop holding this board's reads behind once it has answered `searches` board-scoped
+    /// searches, at the moment it answers the last of them.
+    fn catches_up_after_searches(&self, searches: usize) {
+        self.state.lock().unwrap().catches_up_after_searches = Some(searches);
+    }
     /// Leave one issue a live run creates out of this board's issue search for the next
     /// `searches` searches that would have listed it — `usize::MAX` for every one. See
     /// [`SearchWithheld`].
@@ -1322,6 +1331,7 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
         refuses: BTreeSet::new(),
         refuse_after: BTreeMap::new(),
         lagging_reads: 0,
+        catches_up_after_searches: None,
         search_withheld: None,
         unsettled_answers: 0,
         search_order_varies_with_first: false,
@@ -2343,6 +2353,13 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         // A search index is behind what the board really holds, exactly as GitHub's is —
         // which is what a read taken straight after a write has to answer through anyway.
         let visible = state.items.len().saturating_sub(state.lagging_reads);
+        if state
+            .catches_up_after_searches
+            .is_some_and(|after| state.searches.len() >= after)
+        {
+            state.lagging_reads = 0;
+            state.catches_up_after_searches = None;
+        }
         let options = state.options();
         let indexed: Vec<Item> = state.items[..visible]
             .iter()
@@ -10991,8 +11008,8 @@ async fn the_change_kind_leg_asks_again_while_a_token_is_withheld() {
 ///
 /// The board is held one item behind what it really holds, which is what GitHub's
 /// eventually-consistent item connection and its issue search both do to a run reading the
-/// fixture it has just written. **It then catches up on its own, when it has answered the
-/// first attempt's second read, rather than when the wait does anything** — which is what
+/// fixture it has just written. **It then catches up on its own, as it answers the first
+/// attempt's second read, rather than when the wait does anything** — which is what
 /// makes this evidence about the wait rather than about the fixture. By the time the second
 /// attempt runs the item is there and readable, so a wait that kept its first source would
 /// be reading a board read taken while that item was still hidden, and would never see it
@@ -11027,27 +11044,14 @@ async fn the_fixture_wait_reads_through_a_source_built_after_the_board_caught_up
         Item::issue("T_orphan", &titles[4]).status("Todo"),
     ]);
     fixture.read_behind(1);
-
-    // The catch-up, from a thread of its own so that when it happens is this board's
-    // business and not the wait's. One attempt is two searches — the task listing narrowed to
-    // the run's prefix, then the board-scoped search that lists projects — and this board
-    // records a search as it answers it, so two recorded searches mean the first attempt has
-    // been answered whole, behind.
-    let catching_up = Arc::clone(&fixture.state);
-    let caught_up = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(30);
-        while Instant::now() < deadline {
-            {
-                let mut state = catching_up.lock().unwrap();
-                if state.searches.len() >= 2 {
-                    state.lagging_reads = 0;
-                    return true;
-                }
-            }
-            thread::sleep(Duration::from_millis(5));
-        }
-        false
-    });
+    // The catch-up is the board's own, made as it answers the first attempt's second search,
+    // so when it happens is this board's business and not the wait's. One attempt is two
+    // searches — the task listing narrowed to the run's prefix, then the board-scoped search
+    // that lists projects — so the first attempt is answered whole, behind, and every later
+    // one sees the fixture. It is inside the request rather than on a thread of its own
+    // because a thread is scheduled when the host gets round to it, and on a loaded runner
+    // that was after the wait's second attempt had already been answered behind.
+    fixture.catches_up_after_searches(2);
 
     let built = std::cell::Cell::new(0_usize);
     let rebuild = || {
@@ -11069,10 +11073,6 @@ async fn the_fixture_wait_reads_through_a_source_built_after_the_board_caught_up
     .await
     .expect("the wait settles once the board has caught up");
 
-    assert!(
-        caught_up.join().expect("the catch-up thread"),
-        "this board never caught up, so nothing below would be about the wait"
-    );
     assert_eq!(
         built.get(),
         2,
@@ -11116,9 +11116,12 @@ async fn a_fixture_wait_gives_up_within_its_deadline_and_bounds_the_read_that_ex
             .parent("P_beta"),
         Item::issue("T_orphan", &titles[4]).status("Todo"),
     ]);
+    // Far longer than the wait gives a read by id, so a wait that awaited it is told apart
+    // from one that gave up on it by seconds rather than by a margin a loaded host can eat.
+    let read_by_id_answers_in = Duration::from_secs(5);
     fixture.search_withholds(
         SearchWithheld::item("T_second", usize::MAX)
-            .answering_reads_by_id_in(Duration::from_secs(3)),
+            .answering_reads_by_id_in(read_by_id_answers_in),
     );
     let wait = journey::FixtureWait {
         bound: Duration::from_millis(400),
@@ -11146,8 +11149,9 @@ async fn a_fixture_wait_gives_up_within_its_deadline_and_bounds_the_read_that_ex
     };
     let took = started.elapsed();
     assert!(
-        took >= wait.bound + wait.diagnosis && took < wait.bound + wait.diagnosis * 2,
-        "gave up after {took:?}, against {:?} and {:?} more for the reads by id",
+        took >= wait.bound + wait.diagnosis && took < wait.bound + read_by_id_answers_in,
+        "gave up after {took:?}, against {:?} and {:?} more for the reads by id, which the \
+         board answers in {read_by_id_answers_in:?}",
         wait.bound,
         wait.diagnosis
     );
@@ -11166,9 +11170,13 @@ async fn a_fixture_wait_gives_up_within_its_deadline_and_bounds_the_read_that_ex
     );
     let (began, reported, read_by_id) = fixture.search_withheld_timeline();
     assert!(reported.is_none());
-    let read_by_id = read_by_id.expect("the wait read T_second by its own id") - began.unwrap();
+    assert!(began.is_some(), "the search never left T_second out");
+    // Counted from before the wait began rather than from its first search, which a loaded
+    // host can deliver well after the deadline started running: the read by id comes once
+    // the deadline has passed, and the deadline is the wait's own.
+    let read_by_id = read_by_id.expect("the wait read T_second by its own id") - started;
     assert!(
-        read_by_id >= wait.bound - Duration::from_millis(100) && read_by_id < took,
+        read_by_id >= wait.bound && read_by_id < took,
         "read by id {read_by_id:?} into the wait"
     );
 }
