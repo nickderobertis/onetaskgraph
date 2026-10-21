@@ -1723,14 +1723,14 @@ and the mutation, is overwritten. A write whose rule depends on a value a person
 the caller's to sequence: the store compares against the version the caller expects, and never
 re-reads it behind the caller's back.
 
-**`document metadata set --expect VERSION` holds the version where the store can see past it.**
-The document's cache entry carries the record the plugin read it as (`write_context`, version 3
-of the kind entries), so at exactly `VERSION` the write is primed with it and sends one request,
-`UPDATE_ISSUE` answered whole. The cache holding the document at a later version refuses the
-write with no request; an entry missing, older or incomparable is one `ISSUE` read first, and a
-read answering another version refuses it. Either refusal names both versions and writes
-nothing. A change the store has not read is still overwritten, as above. The entry is left
-unserveable after the write, so the next pinned read reads the document.
+**`document metadata set --expect VERSION` is a precondition, held by a read.** The engine
+reads the document (`ISSUE`) and refuses the write with `version-moved`, naming both versions and
+writing nothing, unless that read answers `VERSION`; otherwise the write follows (`UPDATE_ISSUE`),
+primed with what the read left (`write_context`), so it is the read and the write and nothing
+else. It needs no cache. The read is the only way to hold it: GitHub's `UpdateIssueInput` takes
+no expected version — the public schema's only compare-and-swap inputs are `expectedHeadOid` on
+commits and pull-request merges — and its REST API supports no conditional write. A change
+landing between the read and the write is still overwritten.
 
 ### 4.14 `metering`
 

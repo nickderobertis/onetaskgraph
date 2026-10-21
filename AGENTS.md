@@ -1193,10 +1193,11 @@ them do; this is the inventory of what is owed, not a status board.
     second project of a plan in a source takes over the member already there, found by either
     link alone.
 116. Approving a plan on a board — `project show`, `task list --project`, `document list
-    --project`, `document show`, then `document metadata set --expect` the version that read
-    reported — lists each kind in one request of one point with every record and its order
-    intact, writes the approval in one request and waits on the clock for nothing; a document
-    write expecting a version the store has seen superseded is refused, writing nothing.
+    --project`, then `document metadata set --expect` the version that listing reported — lists
+    each kind in one request of one point with every record and its order intact, carries the
+    document whole as `document show` would, writes the approval behind one read and waits on the
+    clock for nothing; a document write expecting a version the board has moved past — a person's
+    edit nothing has read included, with the cache on or off — is refused, writing nothing.
 
 ## The public boundary
 

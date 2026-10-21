@@ -76,8 +76,8 @@ pub(super) struct Held {
     /// The comments a primed context says each issue holds, `None` where it read none.
     primed: Mutex<BTreeMap<NativeId, Option<BTreeMap<NativeId, String>>>>,
     /// The design documents this process read by id, as it resolved them: what a write of one
-    /// expecting the version that read spelled takes instead of reading it again, handed to the
-    /// store through [`GitHubProjectsSource::context_of`]. Dropped with the command.
+    /// the engine has just held to that read's version takes instead of reading it again, handed
+    /// back through [`GitHubProjectsSource::context_of`]. Dropped with the command.
     documents: Mutex<BTreeMap<NativeId, Resolved>>,
     /// Issues an expected write was primed for and then let go of — to read afresh after a
     /// stale id — which still send only what differs from what they read, so a part that

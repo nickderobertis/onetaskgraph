@@ -1518,13 +1518,14 @@ to a field the write *does* set, made after the caller's read, is overwritten. T
 the cache can add is the first write after a board option it kept was renamed or deleted: the
 refused mutation, one read that refreshes the board's kept ids, and that part once more.
 
-On `document metadata set`, **`--expect VERSION` is the document's version and is held where
-the store can see past it**: the write is refused, sending nothing, when the cache already holds
-the document at a later version, and when the cache holds no entry at `VERSION` the one read it
-makes must answer that version or the write is refused, naming both. At exactly that version —
-the version a `document show` through the same cache reported — the write sends one request, the
-body update. A person's edit made after the cache last read the document is still one the store
-cannot see without that read, and is overwritten.
+On `document metadata set`, **`--expect VERSION` is the document's version, and it is a
+precondition**: the document is read first, and a read answering any other version — a change
+made on the board since the caller's read, whether or not anything has read it since — refuses
+the write, naming both versions and writing nothing. At that version the write follows in one
+more request, taking what the read answered rather than reading again: two requests, and no
+cache needed. Neither GitHub's `updateIssue` nor its REST API takes a precondition, so the read
+is what holds the version; a change landing in the moment between the read and the write is the
+one still overwritten.
 
 The cache is an efficiency layer and never a snapshot: it serves the pinned version or a later
 one, keeps one entry per record, and is shared and cleared freely. To keep an exact version of a

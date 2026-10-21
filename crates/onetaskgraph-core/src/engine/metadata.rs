@@ -121,17 +121,66 @@ impl Engine {
     ///
     /// As [`set_task_metadata`](Self::set_task_metadata), with [`EngineError::NoDocuments`]
     /// for a source declaring it has none — which is never asked — and
-    /// [`EngineError::NoSuchDocument`] when the document is not there. A write
-    /// [`Engine::expect`] expects at a version is refused by the source, sending nothing, when
-    /// the store's cache holds the document at a later version or the one read made for want of
-    /// an entry answers another.
+    /// [`EngineError::NoSuchDocument`] when the document is not there.
     pub async fn set_document_metadata(
         &self,
         id: &GlobalId,
         key: &MetadataKey,
         value: &Value,
     ) -> Result<MetadataSet, EngineError> {
+        self.write_document_metadata(id, key, value, None).await
+    }
+
+    /// [`set_document_metadata`](Self::set_document_metadata), only while the document is at
+    /// `version`: the document is read first, and a read answering any other version — a
+    /// change made at the source since the caller read it, whether or not anything here has
+    /// seen it — refuses the write with nothing sent.
+    ///
+    /// The read is one request more than the write alone, and it is made because no backend this
+    /// build writes to accepts a precondition: GitHub's `UpdateIssueInput` takes no expected
+    /// version, and its REST API supports no conditional write. What the read answered is what
+    /// the write then takes instead of reading again, so the whole is that read and the write.
+    /// A change landing between the two — the time one request takes — is still overwritten.
+    ///
+    /// # Errors
+    ///
+    /// As [`set_document_metadata`](Self::set_document_metadata), and
+    /// [`EngineError::VersionMoved`] when the document is not at `version`.
+    pub async fn set_document_metadata_at(
+        &self,
+        id: &GlobalId,
+        key: &MetadataKey,
+        value: &Value,
+        version: &str,
+    ) -> Result<MetadataSet, EngineError> {
+        self.write_document_metadata(id, key, value, Some(version))
+            .await
+    }
+
+    async fn write_document_metadata(
+        &self,
+        id: &GlobalId,
+        key: &MetadataKey,
+        value: &Value,
+        version: Option<&str>,
+    ) -> Result<MetadataSet, EngineError> {
         let source = self.metadata_writable(id, MetadataRecord::Document)?;
+        if let Some(version) = version {
+            let read = source
+                .source()
+                .get_document(&id.native)
+                .await
+                .map_err(|error| source_failed(source, error))?
+                .ok_or_else(|| EngineError::NoSuchDocument { id: id.to_string() })?;
+            let at = read.version.unwrap_or_default();
+            if source.source().order_versions(&at, version) != Some(std::cmp::Ordering::Equal) {
+                return Err(EngineError::VersionMoved {
+                    id: id.to_string(),
+                    expected: version.to_owned(),
+                    found: at,
+                });
+            }
+        }
         self.admit_existing(
             source,
             &id.to_string(),
@@ -140,15 +189,23 @@ impl Engine {
             &Exposure::of_entry(key.as_str(), value),
         )
         .await?;
-        let document = source
+        // The write takes what the read above left, rather than reading the document again.
+        let primed = version.is_some()
+            && source
+                .source()
+                .write_context(&id.native)
+                .is_some_and(|context| source.source().prime_write(&id.native, &context, None));
+        let written = source
             .source()
             .set_document_metadata(&id.native, key, value)
-            .await
+            .await;
+        if primed {
+            source.source().unprime(&id.native);
+        }
+        let document = written
             .map_err(|error| source_failed(source, error))?
             .ok_or_else(|| EngineError::NoSuchDocument { id: id.to_string() })?;
-        let mut set = answer(source, id, key, &document.metadata, document.location)?;
-        (set.result, set.fallback, set.spent) = self.expected_parts(id);
-        Ok(set)
+        answer(source, id, key, &document.metadata, document.location)
     }
 
     /// The built source `id` names, when a metadata write of `record` may be sent to it.

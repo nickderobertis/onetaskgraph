@@ -2,9 +2,9 @@
 //! project's forward and reverse edges each read on their own, and the verified bytes of an image
 //! asset.
 //!
-//! **Each kind lives in a directory of its own, named with its schema** — `projects-v3/`,
-//! `documents-v3/`, `edges-v3/`, `reverse-edges-v3/`, `project-edges-v3/`,
-//! `project-reverse-edges-v3/`, `bytes-v3/` — so an id cannot name one kind's entry for
+//! **Each kind lives in a directory of its own, named with its schema** — `projects-v2/`,
+//! `documents-v2/`, `edges-v2/`, `reverse-edges-v2/`, `project-edges-v2/`,
+//! `project-reverse-edges-v2/`, `bytes-v2/` — so an id cannot name one kind's entry for
 //! another's, and a release writing this schema never writes over a file a release of another
 //! schema wrote: that one lives in its own directory. Each entry still carries its schema, its
 //! kind and the remote it is from, and a reader holds it to all three, so a file another release
@@ -36,10 +36,7 @@ use super::{SourceCache, digest};
 /// Version 2 added a task's reverse edges and a project's forward and reverse edges as kinds of
 /// their own; what version 1 kept is left in its own directories, unread, for
 /// `cache clear` of that release.
-///
-/// Version 3 added a document's write context beside its fields, so a metadata write of the
-/// document expecting the version it was read at takes it instead of reading the document again.
-pub const KIND_ENTRY_SCHEMA: u32 = 3;
+pub const KIND_ENTRY_SCHEMA: u32 = 2;
 
 /// Which kind an entry is: written into it and held to the directory it is read from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -176,11 +173,6 @@ pub(crate) struct DocumentEntry {
     /// The manifest of its image assets — each one's name, digest and type — absent until a
     /// read of them followed a read of the document at this version.
     pub(crate) assets: Option<Vec<Asset>>,
-    /// What the source held about the document when it was read at this version that a write of
-    /// it could take instead of reading it ([`onetaskgraph_plugin_api::TaskSource::write_context`]),
-    /// opaque to the store; absent when the source gave none.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) context: Option<Value>,
 }
 
 /// One item's edges in one direction as a dependency read answered them — a task's or a

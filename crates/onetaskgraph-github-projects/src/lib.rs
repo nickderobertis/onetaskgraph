@@ -318,7 +318,7 @@
 //! | priority | 2 | ISSUE, UPDATE_FIELD or CLEAR_FIELD, with stored priority in the mutation response |
 //! | content | 2 | ISSUE, UPDATE_ISSUE |
 //! | metadata | 2 | ISSUE, UPDATE_ISSUE |
-//! | document metadata, `--expect` the version the cache holds | 1 | UPDATE_ISSUE, answered whole: the store's entry carries the document's record, so nothing is read; a later version the cache holds refuses it with no request, and an entry missing is one ISSUE first |
+//! | document metadata, `--expect` a version | 2 | ISSUE, then UPDATE_ISSUE only when the issue is still at that version — the precondition GitHub's own update cannot take — primed with what the read answered |
 //! | update | 3 | `task update` naming any of title, body, metadata, status and priority — all five included: ISSUE, UPDATE_FIELDS (the status option and the priority together), UPDATE_ISSUE (title, body with its metadata slot, and state) last |
 //! | record only | 1 | ISSUE |
 //!

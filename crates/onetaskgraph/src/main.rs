@@ -1525,11 +1525,22 @@ async fn metadata_set(
                 .to_owned(),
         ));
     }
-    let engine = expecting(loaded, &id, &args.expect)?;
-    let set = match record {
-        MetadataRecord::Task => engine.set_task_metadata(&id, &key, &value).await,
-        MetadataRecord::Project => engine.set_project_metadata(&id, &key, &value).await,
-        MetadataRecord::Document => engine.set_document_metadata(&id, &key, &value).await,
+    // A document's `--expect` is held by a read of the document before the write, so it needs no
+    // cache; a task's takes what its write needs from the cache instead.
+    let engine = if record == MetadataRecord::Document {
+        engine(loaded)
+    } else {
+        expecting(loaded, &id, &args.expect)?
+    };
+    let set = match (record, &args.expect.expect) {
+        (MetadataRecord::Task, _) => engine.set_task_metadata(&id, &key, &value).await,
+        (MetadataRecord::Project, _) => engine.set_project_metadata(&id, &key, &value).await,
+        (MetadataRecord::Document, None) => engine.set_document_metadata(&id, &key, &value).await,
+        (MetadataRecord::Document, Some(version)) => {
+            engine
+                .set_document_metadata_at(&id, &key, &value, version)
+                .await
+        }
     }
     .map_err(|error| write_failed(&engine, &error))?;
     let rendered = rendering(loaded, &set, render::metadata_set, "the metadata key")?;

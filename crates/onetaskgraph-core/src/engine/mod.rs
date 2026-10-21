@@ -592,6 +592,23 @@ pub enum EngineError {
     )]
     ExpectOneTask,
 
+    /// A document write expecting a version was refused because a read of the document answered
+    /// another — a change made at the source since the caller's read.
+    #[error(
+        "document {id} is at version {found}, not the version {expected} this write expects — \
+         it changed since that version was read — so nothing was written\n\
+         next: read the document again (`onetaskgraph document show`), decide whether the write \
+         still applies, and pass the version that read reports"
+    )]
+    VersionMoved {
+        /// The qualified id of the document.
+        id: String,
+        /// The version the write expected.
+        expected: String,
+        /// The version the read answered.
+        found: String,
+    },
+
     /// `--expect` named a task of a source that keeps no local cache, which is where what an
     /// expected write takes instead of reading lives.
     #[error(

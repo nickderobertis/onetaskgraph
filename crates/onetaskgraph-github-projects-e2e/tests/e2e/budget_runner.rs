@@ -352,7 +352,15 @@ fn the_approval_report_hands_over_the_recorded_figure_and_refuses_another_worklo
     use serde_json::json;
     let calls: Vec<Value> = super::approval::CALLS
         .iter()
-        .map(|call| json!({"call": call, "requests": 1, "points": 1}))
+        .map(|call| {
+            // The guarded write is a read and the write, each a point.
+            let spent = if call.starts_with("document metadata set") {
+                2
+            } else {
+                1
+            };
+            json!({"call": call, "requests": spent, "points": spent})
+        })
         .collect();
     let valid = json!({"budget": super::approval::BUDGET, "value": 5, "detail": "recorded",
         "workload": super::approval::WORKLOAD, "board": super::plan_copy::SMALL,
@@ -394,7 +402,7 @@ fn the_approval_report_hands_over_the_recorded_figure_and_refuses_another_worklo
             "no whole requests and points",
         ),
         (
-            with("/calls/4/points", json!(null)),
+            with("/calls/3/points", json!(null)),
             "no whole requests and points",
         ),
         (with("/value", json!(4)), "does not add up"),
