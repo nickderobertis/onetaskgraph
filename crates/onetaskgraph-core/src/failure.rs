@@ -270,6 +270,9 @@ fn cause(error: &EngineError) -> (String, Option<SourceName>, Option<&SourceErro
         EngineError::CreateWith { .. } => ("create-with".to_owned(), None, None),
         EngineError::CreateCarried { .. } => ("create-carried".to_owned(), None, None),
         EngineError::NotAMember { .. } => ("not-a-member".to_owned(), None, None),
+        EngineError::NoProjectCounterpart { .. } => {
+            ("no-project-counterpart".to_owned(), None, None)
+        }
         EngineError::UnrecordedMember { .. } => ("unrecorded-member".to_owned(), None, None),
         EngineError::Misrouted { .. } => ("misrouted".to_owned(), None, None),
         EngineError::SplitPrivateHome { .. } => ("split-private-home".to_owned(), None, None),

@@ -691,6 +691,7 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
                 .map(|member| qualified(member))
                 .collect::<Result<Vec<_>, _>>()?;
             let scope = match CopyItems::new(members) {
+                Some(members) if args.members_only => CopyScope::MembersOnly(members),
                 Some(members) => CopyScope::Members(members),
                 None => CopyScope::Projects {
                     tasks: !args.no_tasks,

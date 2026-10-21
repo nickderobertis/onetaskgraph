@@ -260,6 +260,20 @@ pub enum CopyScope {
     /// the id its own `onetaskgraph.copies` link records in any source the copy reaches.
     /// When that member records neither, the copy is refused before anything is written.
     Members(CopyItems),
+    /// The ids name projects the destination already holds, and of the tasks in them exactly
+    /// these are copied into those projects; the projects themselves are left alone.
+    ///
+    /// Each project's counterpart is resolved from its own records alone — the
+    /// `onetaskgraph.copies` link it records for a source the copy reaches, then the origin it
+    /// records there, then a lookup by origin — and is never read for comparison, never
+    /// planned, never written and never reported. A project with no counterpart is refused
+    /// before anything is written, as [`EngineError::NoProjectCounterpart`], because creating
+    /// it is what a whole project copy is for.
+    ///
+    /// Everything else is as [`CopyScope::Members`] has it: a member the list does not name is
+    /// neither read nor reported, an edge to one resolves the same way, and no walk for what
+    /// the copy left behind runs.
+    MembersOnly(CopyItems),
     /// The ids name documents, and only those documents are copied.
     ///
     /// Nothing travels with a document: it takes part in no dependency graph, and it holds
@@ -1997,6 +2011,12 @@ impl Engine {
                 self.copy_projects(request, &projects, &unrecorded, &mut running, journal)
                     .await?
             }
+            CopyScope::MembersOnly(named) => {
+                let (projects, unrecorded) =
+                    self.named_members(request, named, &mut running).await?;
+                self.copy_into_projects(request, &projects, &unrecorded, &mut running, journal)
+                    .await?
+            }
         };
         let references = running.references;
         let delivers_rewritten = running.delivers_rewritten;
@@ -2665,6 +2685,161 @@ impl Engine {
         Ok(outcomes)
     }
 
+    /// Copy the members a members-only copy names into the projects the destination already
+    /// holds, leaving each project as it is: see [`CopyScope::MembersOnly`].
+    ///
+    /// Every project's counterpart, and the member project of it in each other source a task
+    /// is routed to, is settled before anything is read at the destination, so a project with
+    /// none is refused while nothing is written. The tasks are then landed as a task copy lands
+    /// them, each filed under the counterpart settled here rather than under one it looks for.
+    async fn copy_into_projects(
+        &self,
+        request: &CopyRequest,
+        projects: &[(GlobalId, Vec<GlobalId>)],
+        unrecorded: &[GlobalId],
+        running: &mut Running,
+        journal: &mut Journal,
+    ) -> Result<Vec<CopyOutcome>, EngineError> {
+        let mut planned = Vec::new();
+        let mut changed = Vec::new();
+        for (id, members) in projects {
+            let home = self.held_counterpart(request, id).await?;
+            running.counterparts.insert(id.to_string(), home.clone());
+            running.filings.insert(
+                (id.to_string(), home.source.clone()),
+                Some(home.native.clone()),
+            );
+            self.prefetch(request, members, running).await;
+            let mut reads = Vec::new();
+            for member in members {
+                match self
+                    .read_for_copy(request, Level::Task, member, running)
+                    .await
+                {
+                    Ok(read) => reads.push(read),
+                    Err(error @ EngineError::ChangedWhileCopied { .. }) => {
+                        changed.push(failed(member.clone(), &error));
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            self.read_ahead(request, &reads, running).await;
+            for read in reads {
+                let classification = self.copied_classification(request, &read, running).await?;
+                // A task naming no repository follows its project, wherever that is held.
+                let placement = match &read.item {
+                    Item::Task(task) if !task.repositories.is_empty() => self
+                        .routes
+                        .place_classified(&request.destination, classification, &task.repositories),
+                    _ => self.placed_at(request, &home.source),
+                };
+                let key = (id.to_string(), placement.destination.clone());
+                if let std::collections::btree_map::Entry::Vacant(vacant) =
+                    running.filings.entry(key)
+                {
+                    let member = self
+                        .held_member(request, id, &home, &placement.destination)
+                        .await?;
+                    vacant.insert(Some(member));
+                }
+                let aimed = running.aimed.remove(&read.source.to_string());
+                planned.push(
+                    self.aim(
+                        request,
+                        read,
+                        placement,
+                        classification,
+                        aimed,
+                        &mut running.home_members,
+                    )
+                    .await?,
+                );
+            }
+        }
+        for item in &planned {
+            unrecorded_far_end(item, unrecorded)?;
+        }
+        let mut outcomes = self
+            .copy_items(request, planned, None, running, journal)
+            .await?;
+        // A task that would not hold still is reported beside the ones that landed, having
+        // written nothing.
+        outcomes.extend(changed);
+        Ok(outcomes)
+    }
+
+    /// The project the destination — or a source it routes to — already holds for `project`,
+    /// found without reading it: the `onetaskgraph.copies` link `project` records there, else
+    /// its recorded origin when that names one of those sources, else the first project there
+    /// recording `project` as its origin.
+    ///
+    /// # Errors
+    ///
+    /// [`EngineError::NoProjectCounterpart`] when none of the three finds one.
+    async fn held_counterpart(
+        &self,
+        request: &CopyRequest,
+        project: &GlobalId,
+    ) -> Result<GlobalId, EngineError> {
+        let reachable = self.routes.reachable(&request.destination);
+        let held = self.read(Level::Project, project).await?;
+        let (_, metadata) = described(&held.item);
+        if let Some(link) = reachable.iter().find_map(|there| link_of(metadata, there)) {
+            return Ok(link);
+        }
+        if let Some(origin) =
+            origin_of(metadata).filter(|origin| reachable.contains(&origin.source))
+        {
+            return Ok(origin);
+        }
+        for there in reachable {
+            let at = self.writable(&there)?;
+            if let Some(found) = self
+                .scan(at, Level::Project, &Wanted::Origin(project.to_string()))
+                .await?
+            {
+                return Ok(GlobalId::new(there, found));
+            }
+        }
+        Err(EngineError::NoProjectCounterpart {
+            project: project.clone(),
+            destination: request.destination.clone(),
+            missing: request.destination.clone(),
+        })
+    }
+
+    /// The member project `home` already has in `to`, for a task a members-only copy routes
+    /// there: the project in `to` recording `home` at `onetaskgraph.member_of`. The home itself
+    /// is not read for the list it keeps, because a members-only copy reads nothing of it.
+    ///
+    /// # Errors
+    ///
+    /// [`EngineError::NoProjectCounterpart`] when `to` holds none, which only a whole project
+    /// copy creates.
+    async fn held_member(
+        &self,
+        request: &CopyRequest,
+        project: &GlobalId,
+        home: &GlobalId,
+        to: &SourceName,
+    ) -> Result<NativeId, EngineError> {
+        let there = self.writable(to)?;
+        self.scan(
+            there,
+            Level::Project,
+            &Wanted::Metadata(
+                MetadataKey::MEMBER_OF_KEY.to_owned(),
+                Value::String(home.to_string()),
+            ),
+        )
+        .await?
+        .ok_or_else(|| EngineError::NoProjectCounterpart {
+            project: project.clone(),
+            destination: request.destination.clone(),
+            missing: to.clone(),
+        })
+    }
+
     /// A project's classification from its read and its tasks' (see
     /// [`Engine::project_class`]), remembered for the rest of this command.
     async fn read_project_class(
@@ -2871,7 +3046,7 @@ impl Engine {
     ) -> Result<Vec<CopyOutcome>, EngineError> {
         let (carries_tasks, walks_orphans) = match request.scope {
             CopyScope::Projects { tasks } => (tasks, tasks),
-            CopyScope::Members(_) => (true, false),
+            CopyScope::Members(_) | CopyScope::MembersOnly(_) => (true, false),
             CopyScope::Tasks | CopyScope::Documents => (false, false),
         };
         let id = project.source.clone();
