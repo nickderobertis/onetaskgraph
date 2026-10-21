@@ -634,6 +634,13 @@ struct State {
     /// is answered out of the source's own record of what it created until the board
     /// catches up — and what that record holds is only observable while it is behind.
     lagging_reads: usize,
+    /// How many board-scoped searches this board answers behind before it catches up on its
+    /// own — `lagging_reads` dropping to nothing as the last of them is answered, inside that
+    /// request, so the next search sees everything whatever the client did in between.
+    catches_up_after_searches: Option<usize>,
+    /// The one created issue this board's issue search leaves out, and for how many more of
+    /// the searches that would have listed it. See [`SearchWithheld`].
+    search_withheld: Option<SearchWithheld>,
     /// How many of this board's next answers carry a `Date` in the very second of its last
     /// change, as GitHub's do when a read lands just after a write by GitHub's own clock —
     /// inside the change token's settling margin, so the plugin withholds every token.
@@ -1147,6 +1154,37 @@ impl Fixture {
     fn read_behind(&self, count: usize) {
         self.state.lock().unwrap().lagging_reads = count;
     }
+    /// Stop holding this board's reads behind once it has answered `searches` board-scoped
+    /// searches, at the moment it answers the last of them.
+    fn catches_up_after_searches(&self, searches: usize) {
+        self.state.lock().unwrap().catches_up_after_searches = Some(searches);
+    }
+    /// Leave one issue a live run creates out of this board's issue search for the next
+    /// `searches` searches that would have listed it — `usize::MAX` for every one. See
+    /// [`SearchWithheld`].
+    fn search_withholds(&self, withheld: SearchWithheld) {
+        self.state.lock().unwrap().search_withheld = Some(withheld);
+    }
+    /// When this board created the issue its search withholds, if it did.
+    fn search_withheld_created(&self) -> Option<Instant> {
+        let state = self.state.lock().unwrap();
+        state
+            .search_withheld
+            .as_ref()
+            .expect("an issue withheld")
+            .created_at
+    }
+    /// When this board's search began leaving its withheld issue out, when a search first
+    /// reported it after all, and when it was first read by its own id since.
+    fn search_withheld_timeline(&self) -> (Option<Instant>, Option<Instant>, Option<Instant>) {
+        let state = self.state.lock().unwrap();
+        let withheld = state.search_withheld.as_ref().expect("an issue withheld");
+        (
+            withheld.searched_at.first().copied(),
+            withheld.reported_at,
+            withheld.read_by_id_at.first().copied(),
+        )
+    }
     /// Answer this board's next `count` requests inside the change token's settling margin.
     fn answer_unsettled(&self, count: usize) {
         self.state.lock().unwrap().unsettled_answers = count;
@@ -1302,6 +1340,8 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
         refuses: BTreeSet::new(),
         refuse_after: BTreeMap::new(),
         lagging_reads: 0,
+        catches_up_after_searches: None,
+        search_withheld: None,
         unsettled_answers: 0,
         search_order_varies_with_first: false,
         items_connection_behind_from: None,
@@ -1324,11 +1364,24 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
     thread::spawn(move || {
         for stream in listener.incoming() {
             let mut stream = stream.expect("fixture connection");
-            let request = read_http_json(&mut stream);
+            let Some(request) = read_http_json_unless_abandoned(&mut stream) else {
+                continue;
+            };
             let query = request["query"].as_str().expect("a GraphQL document");
             graphql_parser::parse_query::<String>(query).expect("a valid GraphQL document");
             let variables = &request["variables"];
             served.lock().unwrap().documents.push(query.to_owned());
+            // Slept here rather than under the lock, so the board's state stays readable while
+            // an answer is held back.
+            let held_for = served
+                .lock()
+                .unwrap()
+                .search_withheld
+                .as_mut()
+                .map_or(Duration::ZERO, |withheld| {
+                    withheld.arrived(query, variables)
+                });
+            thread::sleep(held_for);
             // The limiter answers before the board does, exactly as GitHub's does: a
             // refused request never reaches the board and changes nothing on it.
             let limited = served
@@ -1452,7 +1505,13 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
             if let (Some(delay), true) = (delay, is_mutation(query)) {
                 thread::sleep(delay);
             }
-            stream.write_all(response.as_bytes()).expect("a response");
+            // A client that stopped waiting for an answer held back is not this board's failure.
+            if stream.write_all(response.as_bytes()).is_err() {
+                assert!(
+                    !held_for.is_zero(),
+                    "the client went away before its answer"
+                );
+            }
         }
     });
     Fixture { endpoint, state }
@@ -2038,6 +2097,9 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         state.next += 1;
         let id = format!("I_new{}", state.next);
         let mut created = Item::issue(&id, input["title"].as_str().unwrap_or_default());
+        if let Some(withheld) = state.search_withheld.as_mut() {
+            withheld.created(&created.title, &created.content_id);
+        }
         // An issue this board creates carries every part of its change token.
         created.updated_at = Some(state.tick());
         created.comment_count = Some(0);
@@ -2300,6 +2362,13 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         // A search index is behind what the board really holds, exactly as GitHub's is —
         // which is what a read taken straight after a write has to answer through anyway.
         let visible = state.items.len().saturating_sub(state.lagging_reads);
+        if state
+            .catches_up_after_searches
+            .is_some_and(|after| state.searches.len() >= after)
+        {
+            state.lagging_reads = 0;
+            state.catches_up_after_searches = None;
+        }
         let options = state.options();
         let indexed: Vec<Item> = state.items[..visible]
             .iter()
@@ -2316,6 +2385,23 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
                 ) && wanted.admits_state(item.state)
             })
             .collect::<Vec<_>>();
+        if let Some(withheld) = state
+            .search_withheld
+            .as_mut()
+            .filter(|withheld| withheld.withholding())
+            && let Some(at) = matched
+                .iter()
+                .position(|item| withheld.content_id.as_deref() == Some(item.content_id.as_str()))
+        {
+            matched.remove(at);
+            withheld.searches = withheld.searches.saturating_sub(1);
+        } else if let Some(withheld) = state.search_withheld.as_mut()
+            && matched
+                .iter()
+                .any(|item| withheld.content_id.as_deref() == Some(item.content_id.as_str()))
+        {
+            withheld.reported_at.get_or_insert_with(Instant::now);
+        }
         if state.search_order_varies_with_first {
             // One deterministic order per page size, and a different one at each: the same
             // request is always answered alike, and two sizes rarely agree.
@@ -2905,6 +2991,120 @@ fn connection_page(rows: Vec<Value>, after: &Value, first: usize) -> Value {
                        "endCursor":(end > 0).then(|| end.to_string())}})
 }
 
+/// One issue a live run creates, kept out of this board's issue search while every other item
+/// that run created is there — the way GitHub's index can stay behind on one issue alone.
+///
+/// A live run titles each artifact with its stamp plus an offset — `alpha` at 0, the second
+/// task at 3 — so the issue withheld is the one whose title's stamp is `offset` past the
+/// first artifact this board was asked to create. Reads of it by its own id answer it as
+/// they answer any other: the index is behind, and the issue is there.
+struct SearchWithheld {
+    offset: u64,
+    /// How many more searches that would have listed it leave it out.
+    searches: usize,
+    /// How long after it was created every search leaves it out, whatever their count.
+    withheld_for: Option<Duration>,
+    /// When this board created it.
+    created_at: Option<Instant>,
+    /// The stamp of the first artifact this board created.
+    first_stamp: Option<u64>,
+    content_id: Option<String>,
+    /// How long each search takes to answer while the issue is still left out, and how long
+    /// a read of the issue by its own id takes once one search has left it out.
+    search_answers_in: Duration,
+    read_by_id_answers_in: Duration,
+    /// When each search arrived while the issue was left out, when the first search to report
+    /// it after all arrived, and when each read of it by its own id arrived.
+    searched_at: Vec<Instant>,
+    reported_at: Option<Instant>,
+    read_by_id_at: Vec<Instant>,
+}
+
+impl SearchWithheld {
+    /// The issue a live run titles with its stamp plus `offset`, left out of `searches`
+    /// searches that would have listed it.
+    fn run_artifact(offset: u64, searches: usize) -> Self {
+        Self {
+            offset,
+            searches,
+            withheld_for: None,
+            created_at: None,
+            first_stamp: None,
+            content_id: None,
+            search_answers_in: Duration::ZERO,
+            read_by_id_answers_in: Duration::ZERO,
+            searched_at: Vec::new(),
+            reported_at: None,
+            read_by_id_at: Vec::new(),
+        }
+    }
+    /// The issue a live run titles with its stamp plus `offset`, left out of every search until
+    /// `delay` after this board created it.
+    fn run_artifact_for(offset: u64, delay: Duration) -> Self {
+        Self {
+            withheld_for: Some(delay),
+            ..Self::run_artifact(offset, 0)
+        }
+    }
+    /// Whether a search arriving now leaves the issue out.
+    fn withholding(&self) -> bool {
+        self.searches > 0
+            || matches!(
+                (self.withheld_for, self.created_at),
+                (Some(delay), Some(created)) if created.elapsed() < delay
+            )
+    }
+    /// The issue this board already holds as `content_id`, left out the same way.
+    fn item(content_id: &str, searches: usize) -> Self {
+        Self {
+            content_id: Some(content_id.to_owned()),
+            ..Self::run_artifact(0, searches)
+        }
+    }
+    fn answering_searches_in(self, delay: Duration) -> Self {
+        Self {
+            search_answers_in: delay,
+            ..self
+        }
+    }
+    fn answering_reads_by_id_in(self, delay: Duration) -> Self {
+        Self {
+            read_by_id_answers_in: delay,
+            ..self
+        }
+    }
+    /// Note a request arriving now, and say how long this board takes to answer it.
+    fn arrived(&mut self, query: &str, variables: &Value) -> Duration {
+        let Some(content_id) = self.content_id.as_deref() else {
+            return Duration::ZERO;
+        };
+        if self.withholding() && query.contains("search(query:$search") {
+            self.searched_at.push(Instant::now());
+            self.search_answers_in
+        } else if !self.searched_at.is_empty() && variables["id"] == content_id {
+            self.read_by_id_at.push(Instant::now());
+            self.read_by_id_answers_in
+        } else {
+            Duration::ZERO
+        }
+    }
+    /// Note an issue this board created, titled `title`, as `content_id`.
+    fn created(&mut self, title: &str, content_id: &str) {
+        let Some(stamp) = title
+            .strip_prefix(onetaskgraph_github_live::ARTIFACT_PREFIX)
+            .and_then(|rest| rest.rsplit('-').next())
+            .and_then(|stamp| stamp.parse::<u64>().ok())
+        else {
+            return;
+        };
+        let first = *self.first_stamp.get_or_insert(stamp);
+        if stamp == first + self.offset {
+            self.content_id = Some(content_id.to_owned());
+            self.created_at = Some(Instant::now());
+        }
+    }
+}
+
 /// The two halves of an origin lookup, answered the way GitHub answers each.
 ///
 /// `originItems` is the board's own item connection under its field filter: an **exact**
@@ -3011,10 +3211,19 @@ fn operation_name(query: &str) -> &str {
 }
 
 fn read_http_json(stream: &mut impl Read) -> Value {
+    read_http_json_unless_abandoned(stream).expect("the request ended before its headers")
+}
+
+/// [`read_http_json`], or `None` for a connection that ended before its first byte — a client
+/// that gave up on a request it never sent, as a journey's read abandoned at its deadline does.
+fn read_http_json_unless_abandoned(stream: &mut impl Read) -> Option<Value> {
     let mut bytes = Vec::new();
     let mut chunk = [0_u8; 4096];
     loop {
-        let count = stream.read(&mut chunk).expect("a fixture request");
+        let count = stream.read(&mut chunk).unwrap_or(0);
+        if count == 0 && bytes.is_empty() {
+            return None;
+        }
         assert!(count > 0, "the request ended before its headers");
         bytes.extend_from_slice(&chunk[..count]);
         if bytes.windows(4).any(|window| window == b"\r\n\r\n") {
@@ -3041,7 +3250,7 @@ fn read_http_json(stream: &mut impl Read) -> Value {
         assert!(count > 0, "the request ended before its declared body");
         bytes.extend_from_slice(&chunk[..count]);
     }
-    serde_json::from_slice(&bytes[header_end..header_end + length]).expect("request JSON")
+    Some(serde_json::from_slice(&bytes[header_end..header_end + length]).expect("request JSON"))
 }
 
 fn raw_server(status: &str, body: &str) -> String {
@@ -10830,8 +11039,8 @@ async fn the_change_kind_leg_asks_again_while_a_token_is_withheld() {
 ///
 /// The board is held one item behind what it really holds, which is what GitHub's
 /// eventually-consistent item connection and its issue search both do to a run reading the
-/// fixture it has just written. **It then catches up on its own, when it has answered the
-/// first attempt's second read, rather than when the wait does anything** — which is what
+/// fixture it has just written. **It then catches up on its own, as it answers the first
+/// attempt's second read, rather than when the wait does anything** — which is what
 /// makes this evidence about the wait rather than about the fixture. By the time the second
 /// attempt runs the item is there and readable, so a wait that kept its first source would
 /// be reading a board read taken while that item was still hidden, and would never see it
@@ -10866,41 +11075,31 @@ async fn the_fixture_wait_reads_through_a_source_built_after_the_board_caught_up
         Item::issue("T_orphan", &titles[4]).status("Todo"),
     ]);
     fixture.read_behind(1);
-
-    // The catch-up, from a thread of its own so that when it happens is this board's
-    // business and not the wait's. One attempt is two searches — the task listing narrowed to
-    // the run's prefix, then the board-scoped search that lists projects — and this board
-    // records a search as it answers it, so two recorded searches mean the first attempt has
-    // been answered whole, behind.
-    let catching_up = Arc::clone(&fixture.state);
-    let caught_up = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(30);
-        while Instant::now() < deadline {
-            {
-                let mut state = catching_up.lock().unwrap();
-                if state.searches.len() >= 2 {
-                    state.lagging_reads = 0;
-                    return true;
-                }
-            }
-            thread::sleep(Duration::from_millis(5));
-        }
-        false
-    });
+    // Inside the request that answers the first attempt's second search, not on a thread of
+    // its own, which a loaded host can schedule after the second attempt was answered.
+    fixture.catches_up_after_searches(2);
 
     let built = std::cell::Cell::new(0_usize);
     let rebuild = || {
         built.set(built.get() + 1);
         source(&fixture)
     };
-    let settled = journey::settled_fixture(&rebuild, prefix, 3, 2)
-        .await
-        .expect("the wait settles once the board has caught up");
+    let created = |ids: &[(&str, usize)]| {
+        ids.iter()
+            .map(|(id, title)| (NativeId((*id).to_owned()), titles[*title].clone()))
+            .collect::<Vec<_>>()
+    };
+    let settled = journey::settled_fixture(
+        &rebuild,
+        prefix,
+        &created(&[("T_first", 2), ("T_second", 3), ("T_orphan", 4)]),
+        &created(&[("P_alpha", 0), ("P_beta", 1)]),
+        &BTreeMap::new(),
+        journey::STAND_IN_FIXTURE_WAIT,
+    )
+    .await
+    .expect("the wait settles once the board has caught up");
 
-    assert!(
-        caught_up.join().expect("the catch-up thread"),
-        "this board never caught up, so nothing below would be about the wait"
-    );
     assert_eq!(
         built.get(),
         2,
@@ -10918,6 +11117,342 @@ async fn the_fixture_wait_reads_through_a_source_built_after_the_board_caught_up
     // request the rebuild buys, and it is the whole cost of being able to wait at all.
     assert_eq!(fixture.requests("board"), 0);
     assert_eq!(fixture.requests("search"), 4);
+}
+
+/// A fixture wait that gives up ends within its deadline plus the time its reads by id are
+/// given, even when the board never answers one: the item the search left out is named, and so
+/// is the read that did not come back.
+#[tokio::test]
+async fn a_fixture_wait_gives_up_within_its_deadline_and_bounds_the_read_that_explains_it() {
+    let prefix = "onetaskgraph live cleanup 4242-910-";
+    let titles = (1..=5)
+        .map(|number| format!("{prefix}{number}"))
+        .collect::<Vec<_>>();
+    let fixture = board(vec![
+        Item::issue("P_alpha", &titles[0])
+            .status("Todo")
+            .sub_issues(1),
+        Item::issue("P_beta", &titles[1])
+            .status("Todo")
+            .sub_issues(1),
+        Item::issue("T_first", &titles[2])
+            .status("Todo")
+            .parent("P_alpha"),
+        Item::issue("T_second", &titles[3])
+            .status("Todo")
+            .parent("P_beta"),
+        Item::issue("T_orphan", &titles[4]).status("Todo"),
+    ]);
+    // Far longer than the wait gives a read by id, so the read is still unanswered when the
+    // wait abandons it, and the message saying so is the evidence that it did.
+    fixture.search_withholds(
+        SearchWithheld::item("T_second", usize::MAX)
+            .answering_reads_by_id_in(Duration::from_secs(5)),
+    );
+    let wait = journey::FixtureWait {
+        bound: Duration::from_millis(400),
+        first: Duration::from_millis(20),
+        steady_for: Duration::from_millis(100),
+        longest: Duration::from_millis(100),
+        diagnosis: Duration::from_millis(300),
+    };
+    let created = |ids: &[(&str, usize)]| {
+        ids.iter()
+            .map(|(id, title)| (NativeId((*id).to_owned()), titles[*title].clone()))
+            .collect::<Vec<_>>()
+    };
+    let started = Instant::now();
+    let Err(said) = journey::settled_fixture(
+        &|| source(&fixture),
+        prefix,
+        &created(&[("T_first", 2), ("T_second", 3), ("T_orphan", 4)]),
+        &created(&[("P_alpha", 0), ("P_beta", 1)]),
+        &BTreeMap::new(),
+        wait,
+    )
+    .await
+    else {
+        panic!("the search never reports T_second, so the wait cannot settle");
+    };
+    let took = started.elapsed();
+    assert!(
+        took >= wait.bound + wait.diagnosis,
+        "gave up after {took:?}, before {:?} and {:?} more for the reads by id",
+        wait.bound,
+        wait.diagnosis
+    );
+    // Abandoned, not awaited: a read awaited to its answer would have found T_second.
+    assert!(
+        said.contains(&format!(
+            "never reported the task {:?} (T_second), which a read by its own id did not answer \
+             within the 0.3s given it",
+            titles[3]
+        )),
+        "{said}"
+    );
+    assert_eq!(
+        said.matches("which a read by its own id").count(),
+        1,
+        "{said}"
+    );
+    let (began, reported, read_by_id) = fixture.search_withheld_timeline();
+    assert!(reported.is_none());
+    assert!(began.is_some(), "the search never left T_second out");
+    // Counted from before the wait began rather than from its first search, which a loaded
+    // host can deliver well after the deadline started running: the read by id comes once
+    // the deadline has passed, and the deadline is the wait's own.
+    let read_by_id = read_by_id.expect("the wait read T_second by its own id") - started;
+    assert!(
+        read_by_id >= wait.bound && read_by_id < took,
+        "read by id {read_by_id:?} into the wait"
+    );
+}
+
+/// The id and title of each item a run created, as a fixture wait is told them.
+type Created = Vec<(NativeId, String)>;
+
+/// A run's five artifacts on a board, titled under `prefix`, and the ids and titles a fixture
+/// wait is told the run created: its three tasks and its two projects, and any `extra` tasks.
+fn fixture_run(prefix: &str, extra: &[(&str, &str)]) -> (Fixture, Created, Created) {
+    let title = |number: usize| format!("{prefix}{number}");
+    let fixture = board(vec![
+        Item::issue("P_alpha", &title(1))
+            .status("Todo")
+            .sub_issues(1),
+        Item::issue("P_beta", &title(2))
+            .status("Todo")
+            .sub_issues(1),
+        Item::issue("T_first", &title(3))
+            .status("Todo")
+            .parent("P_alpha"),
+        Item::issue("T_second", &title(4))
+            .status("Todo")
+            .parent("P_beta"),
+        Item::issue("T_orphan", &title(5)).status("Todo"),
+    ]);
+    let named = |id: &str, title: String| (NativeId(id.to_owned()), title);
+    let mut tasks = vec![
+        named("T_first", title(3)),
+        named("T_second", title(4)),
+        named("T_orphan", title(5)),
+    ];
+    tasks.extend(
+        extra
+            .iter()
+            .map(|(id, suffix)| named(id, format!("{prefix}{suffix}"))),
+    );
+    let projects = vec![named("P_alpha", title(1)), named("P_beta", title(2))];
+    (fixture, tasks, projects)
+}
+
+/// The two minutes the live fixture wait was held to before a run outlasted them: a stand-in
+/// search lagging longer than this, scaled, proves what the longer bound buys.
+const OLD_FIXTURE_BOUND: Duration = Duration::from_secs(120);
+
+/// The short wait the give-up journeys below are held to.
+/// Its bound is long enough for a loaded host to answer a search inside it, which every one of
+/// them but the one whose searches outlast it depends on.
+const GIVE_UP: journey::FixtureWait = journey::FixtureWait {
+    bound: Duration::from_millis(1_000),
+    first: Duration::from_millis(20),
+    steady_for: Duration::from_millis(100),
+    longest: Duration::from_millis(100),
+    diagnosis: Duration::from_millis(300),
+};
+
+/// A wait that gives up names each item the search never reported by its kind, and says what a
+/// read by its own id found: a project the index was behind on, and a task no read finds.
+#[tokio::test]
+async fn a_fixture_wait_names_a_project_the_index_is_behind_on_and_a_task_that_never_landed() {
+    let prefix = "onetaskgraph live cleanup 4242-911-";
+    let (fixture, tasks, projects) = fixture_run(prefix, &[("T_ghost", "6")]);
+    fixture.search_withholds(SearchWithheld::item("P_beta", usize::MAX));
+    let Err(said) = journey::settled_fixture(
+        &|| source(&fixture),
+        prefix,
+        &tasks,
+        &projects,
+        &BTreeMap::new(),
+        GIVE_UP,
+    )
+    .await
+    else {
+        panic!("neither P_beta nor T_ghost is ever reported, so the wait cannot settle");
+    };
+    assert!(
+        said.contains(&format!(
+            "never reported the task \"{prefix}6\" (T_ghost), which a read by its own id does \
+             not find on the board either"
+        )),
+        "{said}"
+    );
+    assert!(
+        said.contains(&format!(
+            "the project \"{prefix}2\" (P_beta), which a read by its own id finds on the board, \
+             so the index was behind on it"
+        )),
+        "{said}"
+    );
+    assert!(
+        said.contains("the last search it answered, attempt "),
+        "{said}"
+    );
+}
+
+/// A wait settles on every item it was told of by title rather than on a count: another item
+/// under the run's prefix does not hold it, and does not stand in for one that never came.
+#[tokio::test]
+async fn a_fixture_wait_counts_titles_not_items() {
+    let prefix = "onetaskgraph live cleanup 4242-914-";
+    let title = |number: usize| format!("{prefix}{number}");
+    let items = || {
+        vec![
+            Item::issue("P_alpha", &title(1))
+                .status("Todo")
+                .sub_issues(1),
+            Item::issue("P_beta", &title(2))
+                .status("Todo")
+                .sub_issues(1),
+            Item::issue("T_first", &title(3))
+                .status("Todo")
+                .parent("P_alpha"),
+            Item::issue("T_second", &title(4))
+                .status("Todo")
+                .parent("P_beta"),
+            Item::issue("T_orphan", &title(5)).status("Todo"),
+            // Under the run's prefix, and not one the run was told it created.
+            Item::issue("T_other", &title(6)).status("Todo"),
+        ]
+    };
+    let named = |id: &str, number: usize| (NativeId(id.to_owned()), title(number));
+    let projects = vec![named("P_alpha", 1), named("P_beta", 2)];
+    let fixture = board(items());
+    let tasks = vec![
+        named("T_first", 3),
+        named("T_second", 4),
+        named("T_orphan", 5),
+    ];
+    let settled = journey::settled_fixture(
+        &|| source(&fixture),
+        prefix,
+        &tasks,
+        &projects,
+        &BTreeMap::new(),
+        GIVE_UP,
+    )
+    .await
+    .expect("every item it was told of is reported");
+    assert_eq!(settled.tasks, vec![title(3), title(4), title(5), title(6)]);
+
+    // As many tasks reported as it was told of, one of them not the one it is waiting for.
+    let fixture = board(items());
+    let tasks = vec![
+        named("T_first", 3),
+        named("T_second", 4),
+        named("T_orphan", 5),
+        named("T_ghost", 7),
+    ];
+    let Err(said) = journey::settled_fixture(
+        &|| source(&fixture),
+        prefix,
+        &tasks,
+        &projects,
+        &BTreeMap::new(),
+        GIVE_UP,
+    )
+    .await
+    else {
+        panic!("T_ghost is never reported, so the wait cannot settle on T_other in its place");
+    };
+    assert!(
+        said.contains(&format!("the task \"{}\" (T_ghost)", title(7)))
+            && !said.contains("(T_first)")
+            && said.contains("the last search it answered, attempt "),
+        "{said}"
+    );
+}
+
+/// A wait whose every search outlasts its deadline answered nothing, so it names every item it
+/// was waiting for, each with what a read by its own id found.
+#[tokio::test]
+async fn a_fixture_wait_no_search_answered_names_every_item() {
+    let prefix = "onetaskgraph live cleanup 4242-912-";
+    let (fixture, tasks, projects) = fixture_run(prefix, &[]);
+    fixture.search_withholds(
+        SearchWithheld::item("T_second", usize::MAX).answering_searches_in(Duration::from_secs(2)),
+    );
+    let Err(said) = journey::settled_fixture(
+        &|| source(&fixture),
+        prefix,
+        &tasks,
+        &projects,
+        &BTreeMap::new(),
+        GIVE_UP,
+    )
+    .await
+    else {
+        panic!("no search answers inside the deadline, so the wait cannot settle");
+    };
+    assert!(
+        said.contains("a search still unanswered at the deadline was abandoned")
+            && said.contains("no search answered in full before it, so every item is named"),
+        "{said}"
+    );
+    assert_eq!(
+        said.matches("which a read by its own id").count(),
+        5,
+        "{said}"
+    );
+}
+
+/// A read by id that fails is named with what it failed with, rather than read as an answer.
+#[tokio::test]
+async fn a_fixture_wait_names_a_read_by_id_that_failed() {
+    let prefix = "onetaskgraph live cleanup 4242-913-";
+    let (fixture, tasks, projects) = fixture_run(prefix, &[]);
+    fixture.search_withholds(SearchWithheld::item("T_second", usize::MAX));
+    // The searches read no issue by its id, so the one read of an issue this board is sent is
+    // the one that explains why T_second never came.
+    fixture.script_for("issue", vec![Refusal::unavailable()]);
+    let Err(said) = journey::settled_fixture(
+        &|| source(&fixture),
+        prefix,
+        &tasks,
+        &projects,
+        &BTreeMap::new(),
+        GIVE_UP,
+    )
+    .await
+    else {
+        panic!("the search never reports T_second, so the wait cannot settle");
+    };
+    assert!(
+        said.contains(&format!(
+            "never reported the task \"{prefix}4\" (T_second), which a read by its own id could \
+             not answer: "
+        )),
+        "{said}"
+    );
+}
+
+/// What the credentialed lane waits for its fixture to be indexed: `journey::FIXTURE_WAIT`'s
+/// own documentation is where the ten minutes come from, and this is what holds the schedule
+/// to what that documentation says of it.
+#[test]
+fn the_live_fixture_wait_asks_every_two_seconds_then_backs_off_to_its_ten_minute_bound() {
+    let sleeps = journey::FIXTURE_WAIT.sleeps();
+    assert_eq!(sleeps.iter().sum::<Duration>(), Duration::from_secs(600));
+    assert_eq!(
+        sleeps.len(),
+        37,
+        "attempts at most: one before each sleep, and none after the one reaching the deadline"
+    );
+    assert!(
+        sleeps[..15]
+            .iter()
+            .all(|sleep| *sleep == Duration::from_secs(2))
+    );
+    assert!(sleeps.iter().all(|sleep| *sleep <= Duration::from_secs(30)));
 }
 
 #[test]
@@ -13722,6 +14257,7 @@ async fn a_whole_session_of_the_live_journey_costs_what_the_record_beside_it_say
         source: Some(json!({"endpoint":fixture.endpoint,
             "pacing":{"min_mutation_interval_ms":0,"retry_budget_ms":0}})),
         settle: std::time::Duration::ZERO,
+        fixture_wait: journey::STAND_IN_FIXTURE_WAIT,
     });
     journey::run(journey::Nomination {
         token: "test-token".to_owned(),
@@ -20564,6 +21100,7 @@ async fn fresh_token_polling_child() {
         rest_host: fixture.endpoint.clone(),
         source: None,
         settle: std::time::Duration::ZERO,
+        fixture_wait: journey::STAND_IN_FIXTURE_WAIT,
     });
     // The token is the plugin's own: a read by id of a source built afresh, as the live lane
     // reads every token it asserts on.
@@ -20631,6 +21168,21 @@ fn live_pair_fixture_child() {
         _ => None,
     };
     fixture.items_connection_falls_behind();
+    // Each attempt of the fixture wait is two searches, tasks then projects: behind, the task is
+    // left out of every search until twice the old two-minute bound after it was created, scaled
+    // as the stand-in's wait is; never, every search takes long enough that the stand-in
+    // deadline falls inside an attempt.
+    match scenario.as_str() {
+        "search-behind" => fixture.search_withholds(
+            SearchWithheld::run_artifact_for(3, 2 * OLD_FIXTURE_BOUND / journey::STAND_IN_SCALE)
+                .answering_searches_in(Duration::from_millis(100)),
+        ),
+        "search-never" => fixture.search_withholds(
+            SearchWithheld::run_artifact(3, usize::MAX)
+                .answering_searches_in(Duration::from_millis(500)),
+        ),
+        _ => {}
+    }
     fixture.state.lock().unwrap().limits.malformed_ceiling_error = malformed_ceiling;
     fixture.state.lock().unwrap().limits.reported_query_cost = Some(1);
     fixture.state.lock().unwrap().limits.refuse_pricing_aliases = scenario == "aliases";
@@ -20671,12 +21223,20 @@ fn live_pair_fixture_child() {
             let mut bytes = Vec::new();
             let mut chunk = [0; 4096];
             let end = loop {
-                let n = stream.read(&mut chunk).unwrap();
+                let n = stream.read(&mut chunk).unwrap_or(0);
+                // A connection closed before its first byte is a client that gave up on a
+                // request it never sent — the journey abandoning a read at its fixture deadline.
+                if n == 0 && bytes.is_empty() {
+                    break None;
+                }
                 assert!(n > 0);
                 bytes.extend_from_slice(&chunk[..n]);
                 if let Some(end) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
-                    break end + 4;
+                    break Some(end + 4);
                 }
+            };
+            let Some(end) = end else {
+                continue;
             };
             let headers = String::from_utf8(bytes[..end].to_vec()).unwrap();
             let length = headers
@@ -20745,7 +21305,8 @@ fn live_pair_fixture_child() {
                 upstream.write_all(&bytes).unwrap();
                 let mut response = Vec::new();
                 upstream.read_to_end(&mut response).unwrap();
-                stream.write_all(&response).unwrap();
+                // The journey abandons a search still in flight at its fixture deadline.
+                let _ = stream.write_all(&response);
             }
         }
     });
@@ -20755,11 +21316,55 @@ fn live_pair_fixture_child() {
     std::fs::rename(&staged, &ready).unwrap();
     let mut done = String::new();
     std::io::stdin().read_to_string(&mut done).unwrap();
+    // Measured here, by the board, from when its search first left the task out: the journey's
+    // own account of how long it waited is what is being checked, so it is not the evidence.
+    if fixture.state.lock().unwrap().search_withheld.is_some() {
+        let bound = journey::STAND_IN_FIXTURE_WAIT.bound;
+        let (began, reported, read_by_id) = fixture.search_withheld_timeline();
+        let began = began.expect("the board's search never left the run's second task out");
+        if scenario == "search-behind" {
+            let reported = reported.expect("the board's search never reported the task");
+            let created = fixture
+                .search_withheld_created()
+                .expect("the board created the withheld task");
+            let lag = reported - created;
+            let old = OLD_FIXTURE_BOUND / journey::STAND_IN_SCALE;
+            println!("the search reported the withheld task {lag:?} after the board created it");
+            assert!(
+                lag > old,
+                "lagged {lag:?}, inside the old bound's {old:?}, which proves nothing new"
+            );
+            let took = reported - began;
+            assert!(
+                took < bound,
+                "converged in {took:?}, past the {bound:?} deadline"
+            );
+        } else {
+            assert!(
+                reported.is_none(),
+                "the search was meant never to report it"
+            );
+            let took =
+                read_by_id.expect("the wait never read the missing task by its own id") - began;
+            println!(
+                "the wait read the missing task by id {took:?} after the search first left it out"
+            );
+            // Each attempt takes a second, so the deadline falls inside one and cuts it off; the
+            // read by id is sent inside the `diagnosis` the wait allows itself after it.
+            let diagnosis = journey::STAND_IN_FIXTURE_WAIT.diagnosis;
+            assert!(
+                took >= bound - Duration::from_millis(200) && took <= bound + diagnosis,
+                "gave up {took:?} after it began, against a {bound:?} deadline and {diagnosis:?} \
+                 for the reads by id"
+            );
+        }
+    }
     if decline
         || aliases
         || scalar
         || malformed_ceiling
         || scenario.starts_with("missing-")
+        || scenario == "search-never"
         || refused_population
     {
         assert!(upload_sizes.lock().unwrap().is_empty());

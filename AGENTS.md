@@ -1510,6 +1510,25 @@ The capture drives `local-md` and `in-memory` only: no credential or socket.
   three scripts that need it again with a relative entry first on PATH — and refuses to run
   at all when the host cannot reproduce the defect, because a simulation that did not take
   would look exactly like a pass.
+- **A loopback board keeps its connections alive, and a proxy in front of one forwards
+  through `loopback::Upstream`.** Answering every request `Connection: close` cost a TCP
+  connection per request — one run of the GitHub Projects suite opened about 37,000 and held
+  up to about 16,700 loopback sockets in `TIME_WAIT` on Linux, against about 12,400 and 6,500
+  kept alive. On the Windows runner, where `TIME_WAIT` lasts 120 seconds by default and
+  listeners and ephemeral ports share one 16,384-port range, a late request of that suite
+  failed `error sending request` against a board that was listening (run 39500544982). The
+  binary did not print the socket error beneath that message. Keeping connections alive did
+  not end it: with that in place, run 39531470241 failed the same way in `visibility_cost`,
+  whose proxy then opened a connection to the board per request — 256 for its copy — and
+  whose read of the board's answer was reset (`os error 10054`) while the board was serving.
+  That proxy now keeps one board connection per connection of its own (`loopback::serve_each`,
+  four for the same copy), so no loopback board here is sent a connection per request. **The
+  cause is not established.** A failed request now names every cause beneath it, down to the
+  socket error, and a loopback server or proxy says on standard error — shown beside the
+  failing test — each accept, read or write it could not complete, so the next failure says
+  which. `crates/onetaskgraph-e2e-support/src/loopback.rs` serves persistent HTTP/1.1 and
+  closes a connection only once its client has, or asked to; a proxy that forwards and then
+  reads to the end of the board's answer waits forever on it.
 - **Suppress narrowly.** A diagnostic is an error or a suppression at that one site with a
   stated reason. `notignored` posts every suppression a PR adds, so they are read.
 - **`gh-secrets.json` is tracked and load-bearing.** It declares the repository secrets

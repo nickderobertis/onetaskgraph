@@ -16,11 +16,15 @@ use serde_json::{Value, json};
 use std::{
     io::{Read, Write},
     net::{TcpListener, TcpStream},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
     thread,
 };
 
 use crate::common::{Sandbox, SourceBoundary};
+use crate::loopback;
 
 /// One row: a source kind, in one configuration, over the shared dataset.
 pub struct Row {
@@ -1344,9 +1348,17 @@ impl RepositoryAnswer {
 pub struct GitHubBoardFields {
     endpoint: String,
     board: Arc<Mutex<GitHubBoard>>,
+    connections: Arc<AtomicUsize>,
 }
 
 impl GitHubBoardFields {
+    /// How many TCP connections this board has accepted — what a journey holding the binary's
+    /// requests to the connections its client keeps alive counts.
+    #[must_use]
+    pub fn connections(&self) -> usize {
+        self.connections.load(Ordering::SeqCst)
+    }
+
     /// Every GraphQL document this board has received, in order.
     ///
     /// What a journey needs to say that a read never *asked* for something, which is a
@@ -3388,220 +3400,212 @@ fn github_projects_board_at(
     }));
     let mut owed_failures: Vec<&'static str> = fail_first.to_vec();
     let watched = Arc::clone(&board);
+    let connections = Arc::<AtomicUsize>::default();
     let hooked = GitHubBoardFields {
         endpoint: endpoint.clone(),
         board: Arc::clone(&board),
+        connections: Arc::clone(&connections),
     };
-    thread::spawn(move || {
-        for stream in listener.incoming() {
-            let mut stream = stream.expect("GitHub fixture connection");
-            let (line, request, token) = read_http_request(&mut stream);
-            // The one REST read a write to a source declared private sends: the visibility of
-            // the repository an issue lives in. Recorded beside the GraphQL documents, so a
-            // journey counting what a write spent counts it too.
-            if let Some(slug) = line
-                .strip_prefix("GET /repos/")
-                .and_then(|rest| rest.split_whitespace().next())
-            {
-                let answer = {
-                    let mut served = board.lock().unwrap();
-                    served.documents.push(format!("GET /repos/{slug}"));
-                    served.variables.push(Value::Null);
-                    served.tokens.push(token.clone());
-                    served.arrivals.push(std::time::Instant::now());
-                    served
-                        .repository_visibility
-                        .get(slug)
-                        .copied()
-                        .unwrap_or(RepositoryAnswer::Private)
-                };
-                let (status, body) = answer.served(slug);
-                let response = format!(
-                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len()
-                );
-                stream
-                    .write_all(response.as_bytes())
-                    .expect("GitHub fixture response");
-                continue;
-            }
-            let request = request.unwrap_or_else(|| panic!("a {line} carries no JSON body"));
-            // Every one of these refuses a request the plugin should not have sent, and
-            // each names the request it refused: a shape assumed silently here surfaces as
-            // a journey failing about something else entirely.
-            let query = request["query"]
-                .as_str()
-                .unwrap_or_else(|| panic!("GraphQL request carries no query string: {request}"));
-            graphql_parser::parse_query::<String>(query)
-                .unwrap_or_else(|problem| panic!("invalid GraphQL document ({problem}): {query}"));
-            let variables = request["variables"].as_object().unwrap_or_else(|| {
-                panic!("GraphQL request carries no variables object: {request}")
-            });
-            let variables = Value::Object(variables.clone());
-            {
+    loopback::serve(listener, Arc::clone(&connections), move |sent| {
+        let (line, request, token) = http_request_parts(sent);
+        // The one REST read a write to a source declared private sends: the visibility of
+        // the repository an issue lives in. Recorded beside the GraphQL documents, so a
+        // journey counting what a write spent counts it too.
+        if let Some(slug) = line
+            .strip_prefix("GET /repos/")
+            .and_then(|rest| rest.split_whitespace().next())
+        {
+            let answer = {
                 let mut served = board.lock().unwrap();
-                served.documents.push(query.to_owned());
-                served.variables.push(variables.clone());
+                served.documents.push(format!("GET /repos/{slug}"));
+                served.variables.push(Value::Null);
                 served.tokens.push(token.clone());
                 served.arrivals.push(std::time::Instant::now());
-                served.membership_first = ["memberships", "boardItems"]
-                    .iter()
-                    .find_map(|name| variables[name].as_u64())
-                    .map_or(usize::MAX, |first| {
-                        usize::try_from(first).expect("a membership page fits usize")
-                    });
-                let named = variables["id"].as_str().unwrap_or_default().to_owned();
-                if let Some(at) = served.replacing.iter().position(|(id, ..)| *id == named) {
-                    if served.replacing[at].1 == 0 {
-                        let (_, _, replacement) = served.replacing.remove(at);
-                        served.items.retain(|item| item["id"] != named.as_str());
-                        served.items.extend(replacement);
-                    } else {
-                        served.replacing[at].1 -= 1;
-                    }
+                served
+                    .repository_visibility
+                    .get(slug)
+                    .copied()
+                    .unwrap_or(RepositoryAnswer::Private)
+            };
+            let (status, body) = answer.served(slug);
+            return Some(format!(
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            ));
+        }
+        let request = request.unwrap_or_else(|| panic!("a {line} carries no JSON body"));
+        // Every one of these refuses a request the plugin should not have sent, and
+        // each names the request it refused: a shape assumed silently here surfaces as
+        // a journey failing about something else entirely.
+        let query = request["query"]
+            .as_str()
+            .unwrap_or_else(|| panic!("GraphQL request carries no query string: {request}"));
+        graphql_parser::parse_query::<String>(query)
+            .unwrap_or_else(|problem| panic!("invalid GraphQL document ({problem}): {query}"));
+        let variables = request["variables"]
+            .as_object()
+            .unwrap_or_else(|| panic!("GraphQL request carries no variables object: {request}"));
+        let variables = Value::Object(variables.clone());
+        {
+            let mut served = board.lock().unwrap();
+            served.documents.push(query.to_owned());
+            served.variables.push(variables.clone());
+            served.tokens.push(token.clone());
+            served.arrivals.push(std::time::Instant::now());
+            served.membership_first = ["memberships", "boardItems"]
+                .iter()
+                .find_map(|name| variables[name].as_u64())
+                .map_or(usize::MAX, |first| {
+                    usize::try_from(first).expect("a membership page fits usize")
+                });
+            let named = variables["id"].as_str().unwrap_or_default().to_owned();
+            if let Some(at) = served.replacing.iter().position(|(id, ..)| *id == named) {
+                if served.replacing[at].1 == 0 {
+                    let (_, _, replacement) = served.replacing.remove(at);
+                    served.items.retain(|item| item["id"] != named.as_str());
+                    served.items.extend(replacement);
+                } else {
+                    served.replacing[at].1 -= 1;
                 }
             }
-            {
-                // Refusals named after the board was built join the ones it was built with.
-                let mut held = board.lock().unwrap();
-                owed_failures.append(&mut held.refusing);
-            }
-            let late = {
-                let mut held = board.lock().unwrap();
-                let due = held
-                    .refusing_after
-                    .iter()
-                    .position(|(operation, _)| query.contains(operation));
-                match due {
-                    Some(at) if held.refusing_after[at].1 == 0 => {
-                        Some(held.refusing_after.remove(at).0)
-                    }
-                    Some(at) => {
-                        held.refusing_after[at].1 -= 1;
-                        None
-                    }
-                    None => None,
+        }
+        {
+            // Refusals named after the board was built join the ones it was built with.
+            let mut held = board.lock().unwrap();
+            owed_failures.append(&mut held.refusing);
+        }
+        let late = {
+            let mut held = board.lock().unwrap();
+            let due = held
+                .refusing_after
+                .iter()
+                .position(|(operation, _)| query.contains(operation));
+            match due {
+                Some(at) if held.refusing_after[at].1 == 0 => {
+                    Some(held.refusing_after.remove(at).0)
                 }
-            };
-            let owed = late.or_else(|| {
-                owed_failures
-                    .iter()
-                    .position(|operation| query.contains(operation))
-                    .map(|at| owed_failures.remove(at))
-            });
-            let stale = {
-                let mut held = board.lock().unwrap();
-                held.refusing_stale
-                    .iter()
-                    .position(|operation| query.contains(operation))
-                    .map(|at| held.refusing_stale.remove(at))
-            };
-            let body = if let Some(operation) = stale {
-                json!({"data":Value::Null,
+                Some(at) => {
+                    held.refusing_after[at].1 -= 1;
+                    None
+                }
+                None => None,
+            }
+        };
+        let owed = late.or_else(|| {
+            owed_failures
+                .iter()
+                .position(|operation| query.contains(operation))
+                .map(|at| owed_failures.remove(at))
+        });
+        let stale = {
+            let mut held = board.lock().unwrap();
+            held.refusing_stale
+                .iter()
+                .position(|operation| query.contains(operation))
+                .map(|at| held.refusing_stale.remove(at))
+        };
+        let body = if let Some(operation) = stale {
+            json!({"data":Value::Null,
                        "errors":[{"message":format!(
                            "Could not resolve to a node with the global id of '{operation}'")}]})
-                .to_string()
-            } else if let Some(operation) = owed {
-                // The operation is named in the message so a journey can tell *which*
-                // failure reached the caller — a copy whose write failed and whose tidy-up
-                // then failed too has two, and which one it reports is the behaviour.
-                json!({"data":Value::Null,
+            .to_string()
+        } else if let Some(operation) = owed {
+            // The operation is named in the message so a journey can tell *which*
+            // failure reached the caller — a copy whose write failed and whose tidy-up
+            // then failed too has two, and which one it reports is the behaviour.
+            json!({"data":Value::Null,
                        "errors":[{"message":format!(
                            "Something went wrong while executing your query: {operation}")}]})
-                .to_string()
-            } else {
-                // A document selecting the whole issue it writes is answered as its plain twin
-                // is, and then with that issue as a read of it by its own id shows it.
-                let plain = github_plain_of(query);
-                let data = github_answer(&board, plain.unwrap_or(query), &variables);
-                let data = match plain {
-                    Some(_) => board.lock().unwrap().whole(query, data, &variables),
-                    None => data,
-                };
+            .to_string()
+        } else {
+            // A document selecting the whole issue it writes is answered as its plain twin
+            // is, and then with that issue as a read of it by its own id shows it.
+            let plain = github_plain_of(query);
+            let data = github_answer(&board, plain.unwrap_or(query), &variables);
+            let data = match plain {
+                Some(_) => board.lock().unwrap().whole(query, data, &variables),
+                None => data,
+            };
+            {
+                let mut held = board.lock().unwrap();
+                if let Some(at) = held
+                    .erring_beside
+                    .iter()
+                    .position(|(operation, _)| query.contains(operation))
                 {
-                    let mut held = board.lock().unwrap();
-                    if let Some(at) = held
-                        .erring_beside
-                        .iter()
-                        .position(|(operation, _)| query.contains(operation))
-                    {
-                        let (_, message) = held.erring_beside.remove(at);
-                        held.owed_errors.push(message);
-                    }
+                    let (_, message) = held.erring_beside.remove(at);
+                    held.owed_errors.push(message);
                 }
-                let owed = std::mem::take(&mut board.lock().unwrap().owed_errors);
-                let objects = std::mem::take(&mut board.lock().unwrap().owed_error_objects);
-                if owed.is_empty() && objects.is_empty() {
-                    json!({ "data": data }).to_string()
-                } else {
-                    json!({"data": data,
+            }
+            let owed = std::mem::take(&mut board.lock().unwrap().owed_errors);
+            let objects = std::mem::take(&mut board.lock().unwrap().owed_error_objects);
+            if owed.is_empty() && objects.is_empty() {
+                json!({ "data": data }).to_string()
+            } else {
+                json!({"data": data,
                            "errors": owed.iter().map(|message| json!({"message": message}))
                                .chain(objects)
                                .collect::<Vec<_>>()})
-                    .to_string()
-                }
-            };
-            // Answered, and not yet sent: a change made here is one the next request sees and
-            // this one did not.
-            let due: Vec<BoardHook> = {
-                let mut held = board.lock().unwrap();
-                let mut due = Vec::new();
-                let mut kept = Vec::new();
-                for mut hook in std::mem::take(&mut held.hooks) {
-                    if !(hook.matches)(query, &variables) {
-                        kept.push(hook);
-                    } else if hook.skip == 0 {
-                        due.push(hook);
-                    } else {
-                        hook.skip -= 1;
-                        kept.push(hook);
-                    }
-                }
-                held.hooks = kept;
-                due
-            };
-            for hook in due {
-                (hook.change)(&hooked);
+                .to_string()
             }
-            let dropped = {
-                let mut held = board.lock().unwrap();
-                match held
-                    .dropping
-                    .iter()
-                    .position(|operation| query.contains(operation))
-                {
-                    Some(at) => {
-                        held.dropping.remove(at);
-                        true
-                    }
-                    None => false,
+        };
+        // Answered, and not yet sent: a change made here is one the next request sees and
+        // this one did not.
+        let due: Vec<BoardHook> = {
+            let mut held = board.lock().unwrap();
+            let mut due = Vec::new();
+            let mut kept = Vec::new();
+            for mut hook in std::mem::take(&mut held.hooks) {
+                if !(hook.matches)(query, &variables) {
+                    kept.push(hook);
+                } else if hook.skip == 0 {
+                    due.push(hook);
+                } else {
+                    hook.skip -= 1;
+                    kept.push(hook);
                 }
-            };
-            if dropped {
-                // Applied, and never answered: the caller cannot know which.
-                drop(stream);
-                continue;
             }
-            let date = board
-                .lock()
-                .unwrap()
-                .served_at()
-                .map(|at| format!("Date: {at}\r\n"))
-                .unwrap_or_default();
-            let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n{date}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            );
-            stream
-                .write_all(response.as_bytes())
-                .expect("GitHub fixture response");
+            held.hooks = kept;
+            due
+        };
+        for hook in due {
+            (hook.change)(&hooked);
         }
+        let dropped = {
+            let mut held = board.lock().unwrap();
+            match held
+                .dropping
+                .iter()
+                .position(|operation| query.contains(operation))
+            {
+                Some(at) => {
+                    held.dropping.remove(at);
+                    true
+                }
+                None => false,
+            }
+        };
+        if dropped {
+            // Applied, and never answered: the caller cannot know which.
+            return None;
+        }
+        let date = board
+            .lock()
+            .unwrap()
+            .served_at()
+            .map(|at| format!("Date: {at}\r\n"))
+            .unwrap_or_default();
+        Some(format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n{date}Content-Length: {}\r\n\r\n{body}",
+            body.len()
+        ))
     });
     (
         github_projects_block_at(&endpoint),
         GitHubBoardFields {
             endpoint,
             board: watched,
+            connections,
         },
     )
 }
@@ -5171,54 +5175,38 @@ fn read_http_json(stream: &mut impl Read) -> Value {
 
 /// One request's line and, when it carries one, its JSON body.
 fn read_http_request(stream: &mut impl Read) -> (String, Option<Value>, String) {
-    let mut bytes = Vec::new();
-    let mut chunk = [0_u8; 4096];
-    loop {
-        let count = stream.read(&mut chunk).expect("fixture request");
-        assert!(count > 0, "fixture request ended before its HTTP headers");
-        bytes.extend_from_slice(&chunk[..count]);
-        if bytes.windows(4).any(|window| window == b"\r\n\r\n") {
-            break;
-        }
-    }
-    let header_end = bytes
-        .windows(4)
-        .position(|window| window == b"\r\n\r\n")
-        .expect("HTTP header terminator")
-        + 4;
-    let headers = String::from_utf8_lossy(&bytes[..header_end]).into_owned();
-    assert!(headers.contains("authorization: Bearer test-token"));
-    let token = headers
-        .lines()
-        .find_map(|line| line.strip_prefix("authorization: Bearer "))
+    let request = loopback::read_request(&mut std::io::BufReader::new(stream))
+        .expect("fixture request ended before its HTTP headers or its declared body");
+    http_request_parts(&request)
+}
+
+/// One request's line, its JSON body when it carries one, and the bearer token it was sent with.
+fn http_request_parts(request: &loopback::Request) -> (String, Option<Value>, String) {
+    let token = request
+        .header("authorization")
+        .and_then(|value| value.strip_prefix("Bearer "))
         .unwrap_or_default()
-        .trim()
         .to_owned();
-    let line = headers.lines().next().unwrap_or_default().to_owned();
-    let Some(length) = headers.lines().find_map(|line| {
-        line.to_ascii_lowercase()
-            .strip_prefix("content-length: ")
-            .and_then(|value| value.parse::<usize>().ok())
-    }) else {
+    assert!(
+        token.starts_with("test-token"),
+        "a {} carries no fixture credential",
+        request.line()
+    );
+    let line = request.line().to_owned();
+    if request.header("content-length").is_none() {
         assert!(
             line.starts_with("GET "),
             "a {line} carries no Content-Length"
         );
         return (line, None, token);
-    };
-    while bytes.len() - header_end < length {
-        let count = stream.read(&mut chunk).expect("fixture request body");
-        assert!(count > 0, "fixture request ended before its declared body");
-        bytes.extend_from_slice(&chunk[..count]);
     }
-    let body = &bytes[header_end..header_end + length];
     // Named rather than asserted away: this fixture's only client is the binary under
     // test, so a body that is not JSON is that binary's defect, and the bytes it sent are
     // what says which one.
-    let body = serde_json::from_slice(body).unwrap_or_else(|problem| {
+    let body = serde_json::from_slice(request.body()).unwrap_or_else(|problem| {
         panic!(
             "fixture request body is not JSON ({problem}): {}",
-            String::from_utf8_lossy(body)
+            String::from_utf8_lossy(request.body())
         )
     });
     (line, Some(body), token)

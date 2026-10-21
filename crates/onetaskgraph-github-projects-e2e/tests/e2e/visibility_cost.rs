@@ -13,14 +13,16 @@
 //! telemetry with no threshold of its own; `budget_runner::report_visibility_reads` reports the
 //! figure with that breakdown and those seconds as its detail, and runs no copy.
 
-use std::io::{Read, Write};
+use std::io::Write;
 use std::net::{TcpListener, TcpStream};
 use std::process::Output;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use onetaskgraph_e2e_support::binary;
 use onetaskgraph_e2e_support::clock::SimulatedClock;
+use onetaskgraph_e2e_support::loopback::{self, After, Upstream};
 use serde_json::{Value, json};
 
 use crate::common::{Sandbox, stderr, stdout};
@@ -56,6 +58,8 @@ struct Pairing {
 struct VisibilityBoard {
     endpoint: String,
     pairing: Arc<(Mutex<Pairing>, Condvar)>,
+    /// The connections the binary opened to this proxy.
+    accepted: Arc<AtomicUsize>,
 }
 
 impl VisibilityBoard {
@@ -68,19 +72,26 @@ impl VisibilityBoard {
         let upstream = upstream
             .strip_prefix("http://")
             .and_then(|rest| rest.split('/').next())
-            .expect("the fixture board's address")
-            .to_owned();
+            .and_then(|address| address.parse().ok())
+            .expect("the fixture board's address");
         let pairing = Arc::new((Mutex::new(Pairing::default()), Condvar::new()));
         let held = Arc::clone(&pairing);
         let clock = clock.clone();
-        std::thread::spawn(move || {
-            for stream in listener.incoming() {
-                let Ok(stream) = stream else { continue };
-                let (clock, upstream, held) = (clock.clone(), upstream.clone(), Arc::clone(&held));
-                std::thread::spawn(move || serve(stream, &clock, &upstream, &held));
+        // Each connection the binary keeps alive to this proxy keeps one of its own to the board
+        // behind it, and connections are answered side by side, so a write's two visibility
+        // reads, sent together on two connections, are both held here at once.
+        let accepted = loopback::serve_each(listener, move || {
+            let (clock, held) = (clock.clone(), Arc::clone(&held));
+            let mut upstream = Upstream::new(upstream);
+            move |sent: &loopback::Request, stream: &mut TcpStream| {
+                serve(sent, stream, &clock, &mut upstream, &held)
             }
         });
-        Self { endpoint, pairing }
+        Self {
+            endpoint,
+            pairing,
+            accepted,
+        }
     }
 
     /// How many pairs of reads were in flight together, and how many reads arrived alone.
@@ -108,23 +119,23 @@ impl VisibilityBoard {
 }
 
 fn serve(
-    mut stream: TcpStream,
+    sent: &loopback::Request,
+    stream: &mut TcpStream,
     clock: &SimulatedClock,
-    upstream: &str,
+    upstream: &mut Upstream,
     pairing: &Arc<(Mutex<Pairing>, Condvar)>,
-) {
+) -> After {
     let request = clock.request(0);
-    let raw = read_request(&mut stream);
-    let text = String::from_utf8_lossy(&raw);
-    let body = text.split_once("\r\n\r\n").map_or("", |(_, body)| body);
-    let visibility = text.starts_with("GET /repos/")
-        || serde_json::from_str::<Value>(body).is_ok_and(|request| {
+    let visibility = sent.line().starts_with("GET /repos/")
+        || serde_json::from_slice::<Value>(sent.body()).is_ok_and(|request| {
             request["query"] == onetaskgraph_github_projects::graphql::PROJECT_VISIBILITY
         });
-    let mut connection = TcpStream::connect(upstream).expect("the fixture board");
-    connection.write_all(&raw).expect("forwarded");
-    let mut response = Vec::new();
-    connection.read_to_end(&mut response).expect("answered");
+    let response = upstream.forward(&sent.bytes());
+    if response.is_empty() {
+        // Unanswered, which `Upstream` has said why on standard error: the binary is told the
+        // same way, by its connection closing.
+        return After::Close;
+    }
     if visibility {
         let (lock, paired) = &**pairing;
         let mut state = lock.lock().expect("not poisoned");
@@ -158,42 +169,11 @@ fn serve(
             .expect("not poisoned")
             .intervals
             .push((started, clock.now()));
-        stream.write_all(&response).expect("the answer");
-        return;
     }
-    stream.write_all(&response).expect("the answer");
-    drop(request);
-}
-
-/// One whole HTTP request, its head and its declared body.
-fn read_request(stream: &mut TcpStream) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    let mut chunk = [0_u8; 8192];
-    let head = loop {
-        let count = stream.read(&mut chunk).expect("a request");
-        assert!(count > 0, "a request ended before its headers");
-        bytes.extend_from_slice(&chunk[..count]);
-        if let Some(at) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
-            break at + 4;
-        }
-    };
-    let headers = String::from_utf8_lossy(&bytes[..head]).to_ascii_lowercase();
-    let length = headers
-        .lines()
-        .find_map(|line| line.strip_prefix("content-length: "))
-        .and_then(|value| value.trim().parse::<usize>().ok())
-        .unwrap_or(0);
-    while bytes.len() < head + length {
-        let count = stream.read(&mut chunk).expect("a request body");
-        assert!(count > 0, "a request ended before its body");
-        bytes.extend_from_slice(&chunk[..count]);
+    match stream.write_all(&response) {
+        Ok(()) => After::KeepOpen,
+        Err(error) => panic!("the answer could not be written to the binary: {error}"),
     }
-    // The fixture board answers one request per connection and closes it.
-    let text = String::from_utf8_lossy(&bytes[..head])
-        .replace("connection: keep-alive", "connection: close");
-    let mut forwarded = text.into_bytes();
-    forwarded.extend_from_slice(&bytes[head..]);
-    forwarded
 }
 
 fn author(root: &std::path::Path) {
@@ -377,4 +357,9 @@ fn a_whole_plan_copy_spends_two_visibility_reads_per_write() {
     let (paired, alone) = front.overlap();
     assert!(paired > 0, "the copy read who can read the board");
     assert_eq!(alone, 0, "a read waited for its partner and none came");
+    assert_eq!(
+        board.connections(),
+        front.accepted.load(Ordering::SeqCst),
+        "the proxy opened a connection to the board other than the one each of its own keeps"
+    );
 }

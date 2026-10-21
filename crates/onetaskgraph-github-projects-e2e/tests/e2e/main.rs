@@ -18,6 +18,7 @@ mod cache_budget;
 mod cache_kinds;
 mod cache_writes;
 mod closed_status;
+mod connections;
 mod copy_cost;
 mod copy_recopy;
 mod copy_status;

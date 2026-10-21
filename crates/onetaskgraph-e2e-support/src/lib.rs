@@ -10,6 +10,7 @@
 //! - [`fixtures`]: the journey-matrix table and the loopback servers behind its rows;
 //! - [`linear_vocabulary`]: the one Linear team's vocabulary more than one suite configures;
 //! - [`images`]: the test images every asset journey stores or copies, generated in the test;
+//! - [`loopback`]: the persistent HTTP/1.1 connections those servers keep with the binary;
 //! - [`clock`]: the simulated clock a spawned binary's pacing and backoff run on;
 //! - [`sdk`]: one script run through either SDK, as a caller of it reads through the binary;
 //!
@@ -23,6 +24,7 @@ pub mod common;
 pub mod fixtures;
 pub mod images;
 pub mod linear_vocabulary;
+pub mod loopback;
 pub mod sdk;
 pub mod telemetry;
 

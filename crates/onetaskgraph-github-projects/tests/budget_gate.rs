@@ -617,6 +617,7 @@ fn a_journey_the_account_cannot_afford_does_not_run_and_says_which_budget_was_sh
         rest_host: standin.host.clone(),
         source: Some(json!({"endpoint": format!("{}/graphql", standin.host)})),
         settle: std::time::Duration::ZERO,
+        fixture_wait: journey::STAND_IN_FIXTURE_WAIT,
     });
     let declined = thread::spawn(move || {
         // Its own runtime on its own thread, so the panic `Declined::refuse` makes can be

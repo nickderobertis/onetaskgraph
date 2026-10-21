@@ -82,6 +82,10 @@ pub struct Endpoints {
     /// plugin gives none until the change is more than `change_token::SETTLED` behind the
     /// server's `Date`. Nothing for a stand-in whose `Date` is already well past every change.
     pub settle: std::time::Duration,
+    /// How long the journey waits for GitHub's issue search to report the fixture it wrote:
+    /// [`FIXTURE_WAIT`] for GitHub, and [`STAND_IN_FIXTURE_WAIT`], the same wait scaled down,
+    /// for a stand-in.
+    pub fixture_wait: FixtureWait,
 }
 
 impl Endpoints {
@@ -95,6 +99,7 @@ impl Endpoints {
                 .to_std()
                 .expect("a positive margin")
                 + std::time::Duration::from_secs(2),
+            fixture_wait: FIXTURE_WAIT,
         }
     }
     /// Only explicit loopback URLs may replace GitHub in entry-point regressions.
@@ -151,6 +156,7 @@ impl Endpoints {
             ),
             // The double supplies a Date past SETTLED; the token itself still checks 60 seconds.
             settle: std::time::Duration::ZERO,
+            fixture_wait: STAND_IN_FIXTURE_WAIT,
         })
     }
 
@@ -2556,11 +2562,117 @@ pub struct Settled {
     pub projects: Vec<String>,
 }
 
-/// Waits until one source reports the whole of a run's fixture, and hands that source back.
+/// How long [`settled_fixture`] waits for GitHub's issue search to report a run's fixture, and
+/// how often it asks while it does.
+///
+/// `bound` is a deadline on the monotonic clock, counted from the moment the wait begins: no
+/// sleep runs past it, and a search still in flight when it passes is abandoned rather than
+/// awaited. Once it has passed, the reads by id that say what became of each missing item get
+/// `diagnosis` more, and nothing else — so the whole wait ends within `bound + diagnosis`.
+///
+/// Between attempts it sleeps `first` while less than `steady_for` has elapsed, and after that
+/// twice the sleep before, up to `longest`. The journey waits [`FIXTURE_WAIT`]; a stand-in
+/// board waits [`STAND_IN_FIXTURE_WAIT`], the same wait scaled down.
+#[derive(Clone, Copy, Debug)]
+pub struct FixtureWait {
+    pub bound: std::time::Duration,
+    pub first: std::time::Duration,
+    pub steady_for: std::time::Duration,
+    pub longest: std::time::Duration,
+    pub diagnosis: std::time::Duration,
+}
+
+impl FixtureWait {
+    /// This wait with every duration `by` times shorter.
+    pub const fn scaled(self, by: u32) -> Self {
+        Self {
+            bound: self.bound.checked_div(by).expect("a nonzero scale"),
+            first: self.first.checked_div(by).expect("a nonzero scale"),
+            steady_for: self.steady_for.checked_div(by).expect("a nonzero scale"),
+            longest: self.longest.checked_div(by).expect("a nonzero scale"),
+            diagnosis: self.diagnosis.checked_div(by).expect("a nonzero scale"),
+        }
+    }
+
+    /// The sleep after an attempt that ended `elapsed` into the wait, `previous` being the
+    /// sleep before it, if there was one — before the deadline caps it.
+    pub fn sleep_after(
+        self,
+        elapsed: std::time::Duration,
+        previous: Option<std::time::Duration>,
+    ) -> std::time::Duration {
+        match previous {
+            Some(previous) if elapsed >= self.steady_for => (previous * 2).min(self.longest),
+            _ => self.first,
+        }
+    }
+
+    /// Every sleep of a wait whose every search answers at once, in order: the most attempts
+    /// it can make, since time a search takes only leaves less for the rest.
+    pub fn sleeps(self) -> Vec<std::time::Duration> {
+        let mut sleeps = Vec::new();
+        let mut elapsed = std::time::Duration::ZERO;
+        while elapsed < self.bound {
+            let sleep = self
+                .sleep_after(elapsed, sleeps.last().copied())
+                .min(self.bound - elapsed);
+            sleeps.push(sleep);
+            elapsed += sleep;
+        }
+        sleeps
+    }
+}
+
+/// The journey's own fixture wait: ten minutes, asking every two seconds for the first
+/// thirty and then backing off to every thirty, which is 37 attempts at most — fewer than the
+/// sixty a two-minute wait at two-second intervals spent.
+///
+/// **The bound is a margin chosen above what GitHub was measured to take, not a measurement.**
+/// Every converging run prints when the search reported each item, and those have taken
+/// seconds. A search can also leave an item it has certainly written out for minutes — the
+/// board's own item listing and a delete by its id finding it meanwhile — and how long such
+/// a lag lasts is unmeasured, which is why the margin is wide rather than what sizes it.
+/// GitHub publishes no bound on the index's lag; a run that outlasts this one fails saying,
+/// by a read of each missing item by its own id, whether the index or the write is at fault.
+pub const FIXTURE_WAIT: FixtureWait = FixtureWait {
+    bound: std::time::Duration::from_secs(600),
+    first: std::time::Duration::from_secs(2),
+    steady_for: std::time::Duration::from_secs(30),
+    longest: std::time::Duration::from_secs(30),
+    // At most five reads by id, each one request that GitHub answers in well under a second.
+    diagnosis: std::time::Duration::from_secs(30),
+};
+
+/// How many times faster a stand-in board's fixture wait runs than [`FIXTURE_WAIT`].
+pub const STAND_IN_SCALE: u32 = 200;
+
+/// [`FIXTURE_WAIT`], every duration of its schedule [`STAND_IN_SCALE`] times shorter, for a
+/// stand-in board: a search lag of `d` on GitHub is one of `d / STAND_IN_SCALE` there. The
+/// reads by id are given what a loopback read takes on a loaded host, which is latency rather
+/// than lag and does not scale.
+pub const STAND_IN_FIXTURE_WAIT: FixtureWait = FixtureWait {
+    diagnosis: std::time::Duration::from_millis(500),
+    ..FIXTURE_WAIT.scaled(STAND_IN_SCALE)
+};
+
+/// Waits until one source reports every item of a run's fixture, and hands that source back.
 ///
 /// GitHub decides when a created issue appears on the board and when its issue search
 /// reports one — the search is an index and is documented as eventually consistent — so a
 /// run reads its own fixture by waiting for it rather than by racing it.
+///
+/// **What it waits on is the read the journey asserts next: one title search for the run's
+/// prefix, for tasks and for projects.** That is the `search_title` capability itself, and
+/// GitHub offers no search that is not its index, so no lag-free path can stand in for it.
+/// What GitHub does offer without the lag is a read of an item by its own id, and the wait
+/// spends that only once it has given up: each item the search never reported is read by its
+/// id, so the failure says whether the index was behind on an item that is certainly there or
+/// the item never landed at all. [`FixtureWait`] says how long each half may take.
+///
+/// It waits for each item by its title, not for a count: a count can be met by another item
+/// taking a missing one's place, and is no help to a reader asking which one never came. An
+/// item the search reports beyond the fixture does not hold the wait, and the journey's own
+/// assertion on the answer names it.
 ///
 /// **Each attempt asks through a source built afresh, and that is the whole of what makes
 /// this a wait.** A source reads the board once and answers every later question from that
@@ -2577,11 +2689,16 @@ pub struct Settled {
 /// confirmed complete rather than one taken before the fixture had settled.
 pub async fn settled_fixture(
     rebuilt: &dyn Fn() -> Box<dyn TaskSource>,
-    // Narrowed to one run's own titles, so what is counted is that run's fixture however
+    // Narrowed to one run's own titles, so what is waited on is that run's fixture however
     // much else the nominated board holds.
     prefix: &str,
-    tasks_expected: usize,
-    projects_expected: usize,
+    // The tasks and projects the run created: each one's id and title.
+    tasks_expected: &[(NativeId, String)],
+    projects_expected: &[(NativeId, String)],
+    // When the write of each item, by title, was answered: what a converging run measures
+    // each item's first report against. An item missing here is reported without that figure.
+    written: &BTreeMap<String, tokio::time::Instant>,
+    wait: FixtureWait,
 ) -> Result<Settled, String> {
     let ours = || {
         Some(TextQuery {
@@ -2589,50 +2706,192 @@ pub async fn settled_fixture(
             fields: TextFields::Title,
         })
     };
-    let mut last_read = (Vec::new(), Vec::new());
+    let missing = |expected: &[(NativeId, String)], reported: &[String]| {
+        expected
+            .iter()
+            .filter(|(_, title)| !reported.contains(title))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let started = tokio::time::Instant::now();
+    let deadline = started + wait.bound;
+    let mut previous = None;
+    // The last answer both searches gave whole, and whether one was abandoned at the deadline.
+    let mut last = None;
+    let mut cut_off = false;
+    // When each item was first reported, from the start of the wait, and how many attempts
+    // it took: what a passing run prints, so the bound can be checked against what GitHub took.
+    let mut first_reported = BTreeMap::new();
+    let mut attempts = 0_usize;
     let mut source = rebuilt();
-    // Two minutes at two-second intervals, against an index whose lag is usually seconds:
-    // patience costs nothing on a run that is going to pass, and the two requests an
-    // attempt makes are spent only by a run that is already failing.
-    for attempt in 0..60 {
-        if attempt > 0 {
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-            source = rebuilt();
-        }
+    loop {
         let reader = source.as_ref();
-        let tasks = task_titles(
-            reader,
-            &TaskQuery {
-                text: ours(),
-                ..Default::default()
-            },
-            "fixture settling task read",
-        )
-        .await?;
-        let projects = project_titles(
-            reader,
-            &ProjectQuery {
-                text: ours(),
-                ..Default::default()
-            },
-            "fixture settling project read",
-        )
-        .await?;
-        if tasks.len() == tasks_expected && projects.len() == projects_expected {
+        let read = tokio::time::timeout_at(deadline, async {
+            let tasks = task_titles(
+                reader,
+                &TaskQuery {
+                    text: ours(),
+                    ..Default::default()
+                },
+                "fixture settling task read",
+            )
+            .await?;
+            let projects = project_titles(
+                reader,
+                &ProjectQuery {
+                    text: ours(),
+                    ..Default::default()
+                },
+                "fixture settling project read",
+            )
+            .await?;
+            Ok::<_, String>((tasks, projects))
+        })
+        .await;
+        let Ok(read) = read else {
+            cut_off = true;
+            break;
+        };
+        let (tasks, projects) = read?;
+        attempts += 1;
+        let answered_at = started.elapsed();
+        for (_, title) in tasks_expected.iter().chain(projects_expected) {
+            if tasks.contains(title) || projects.contains(title) {
+                first_reported.entry(title.clone()).or_insert(answered_at);
+            }
+        }
+        if missing(tasks_expected, &tasks).is_empty()
+            && missing(projects_expected, &projects).is_empty()
+        {
+            say(&format!(
+                "the live fixture converged: GitHub's issue search for titles {prefix}* reported \
+                 all {} of its items at attempt {attempts}, {:.1}s after the wait began, at {}; \
+                 each was first reported at {}; and this long after its own write was answered: \
+                 {}",
+                first_reported.len(),
+                answered_at.as_secs_f64(),
+                chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ"),
+                reported_at(&first_reported),
+                after_write(started, &first_reported, written)
+            ));
             return Ok(Settled {
                 source,
                 tasks,
                 projects,
             });
         }
-        last_read = (tasks, projects);
+        last = Some((tasks, projects));
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            break;
+        }
+        let sleep = wait.sleep_after(now - started, previous);
+        previous = Some(sleep);
+        tokio::time::sleep_until((now + sleep).min(deadline)).await;
+        if tokio::time::Instant::now() >= deadline {
+            break;
+        }
+        source = rebuilt();
     }
-    let (tasks, projects) = last_read;
+    let waited = started.elapsed();
+    let answered = last.is_some();
+    let (tasks, projects) = last.unwrap_or_default();
+    let reader = rebuilt();
+    let diagnosed_by = tokio::time::Instant::now() + wait.diagnosis;
+    let mut unreported = Vec::new();
+    for (kind, (id, title)) in missing(tasks_expected, &tasks)
+        .into_iter()
+        .map(|item| ("task", item))
+        .chain(
+            missing(projects_expected, &projects)
+                .into_iter()
+                .map(|item| ("project", item)),
+        )
+    {
+        let held = tokio::time::timeout_at(diagnosed_by, async {
+            match kind {
+                "task" => reader.get_task(&id).await.map(|held| held.is_some()),
+                _ => reader.get_project(&id).await.map(|held| held.is_some()),
+            }
+        })
+        .await;
+        unreported.push(by_its_id(kind, &id, &title, held, wait.diagnosis));
+    }
     Err(format!(
-        "the live fixture never became readable: the board never reported all \
-         {tasks_expected} tasks and all {projects_expected} projects titled {prefix}*; the \
-         last read of it reported the tasks {tasks:?} and the projects {projects:?}"
+        "the live fixture never became readable: after waiting {:.1}s against a deadline of \
+         {}s, GitHub's issue search for titles {prefix}* never reported {}; {}{}",
+        waited.as_secs_f64(),
+        wait.bound.as_secs_f64(),
+        unreported.join(", nor "),
+        if cut_off {
+            "a search still unanswered at the deadline was abandoned, and "
+        } else {
+            ""
+        },
+        if answered {
+            format!(
+                "the last search it answered, attempt {attempts}, reported the tasks {tasks:?} \
+                 and the projects {projects:?}; each item reported was first reported at {}",
+                reported_at(&first_reported)
+            )
+        } else {
+            "no search answered in full before it, so every item is named".to_owned()
+        },
     ))
+}
+
+/// Each title a fixture wait saw reported, with how long after its own write was answered the
+/// search answer that first reported it arrived — an upper bound on the item's lag, coarse by
+/// the time between attempts.
+fn after_write(
+    started: tokio::time::Instant,
+    first_reported: &BTreeMap<String, std::time::Duration>,
+    written: &BTreeMap<String, tokio::time::Instant>,
+) -> String {
+    first_reported
+        .iter()
+        .map(|(title, at)| match written.get(title) {
+            Some(written) => format!(
+                "{title:?} {:.1}s",
+                (started + *at).duration_since(*written).as_secs_f64()
+            ),
+            None => format!("{title:?} (its write was not recorded)"),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Each title a fixture wait saw reported, with how far into the wait it first was.
+fn reported_at(first_reported: &BTreeMap<String, std::time::Duration>) -> String {
+    first_reported
+        .iter()
+        .map(|(title, at)| format!("{title:?} {:.1}s", at.as_secs_f64()))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// One item a fixture wait gave up on, with what a read of it by its own id — which GitHub
+/// answers without the search's lag — said of it.
+fn by_its_id(
+    kind: &str,
+    id: &NativeId,
+    title: &str,
+    held: Result<Result<bool, SourceError>, tokio::time::error::Elapsed>,
+    within: std::time::Duration,
+) -> String {
+    let read = match held {
+        Err(_) => format!(
+            "which a read by its own id did not answer within the {}s given it",
+            within.as_secs_f64()
+        ),
+        Ok(Ok(true)) => {
+            "which a read by its own id finds on the board, so the index was behind on it"
+                .to_owned()
+        }
+        Ok(Ok(false)) => "which a read by its own id does not find on the board either".to_owned(),
+        Ok(Err(error)) => format!("which a read by its own id could not answer: {error}"),
+    };
+    format!("the {kind} {title:?} ({}), {read}", id.0)
 }
 
 /// Drives every field of the source's declared `Capabilities` against the real board.
@@ -2691,6 +2950,8 @@ async fn drive_every_declared_capability(
         })
         .await
         .map_err(|error| format!("live project write of {alpha:?} failed: {error}"))?;
+    let mut written = BTreeMap::new();
+    written.insert(alpha.clone(), tokio::time::Instant::now());
     await_on_board(rebuilt, &alpha_id, ItemKind::Project, &prefix, BOARD_WAIT).await?;
     let beta_id = writer
         .write_project(&ItemWrite {
@@ -2700,6 +2961,7 @@ async fn drive_every_declared_capability(
         })
         .await
         .map_err(|error| format!("live project write of {beta:?} failed: {error}"))?;
+    written.insert(beta.clone(), tokio::time::Instant::now());
     let mut round_trip = BTreeMap::new();
     round_trip.insert(
         "live.round_trip".to_owned(),
@@ -2719,6 +2981,7 @@ async fn drive_every_declared_capability(
         })
         .await
         .map_err(|error| format!("live task write of {first:?} failed: {error}"))?;
+    written.insert(first.clone(), tokio::time::Instant::now());
     await_on_board(rebuilt, &first_id, ItemKind::Task, &prefix, BOARD_WAIT).await?;
     let second_id = writer
         .write_task(&ItemWrite {
@@ -2734,6 +2997,7 @@ async fn drive_every_declared_capability(
         })
         .await
         .map_err(|error| format!("live task write of {second:?} failed: {error}"))?;
+    written.insert(second.clone(), tokio::time::Instant::now());
     let orphan_id = writer
         .write_task(&ItemWrite {
             target: None,
@@ -2748,6 +3012,7 @@ async fn drive_every_declared_capability(
         })
         .await
         .map_err(|error| format!("live task write of {orphan:?} failed: {error}"))?;
+    written.insert(orphan.clone(), tokio::time::Instant::now());
     let label_id = create_artifact_label(&run.token, &run.repository, &label_name).await?;
     attach_artifact_label(&run.token, &first_id.0, &label_id).await?;
     // That label went onto the issue through GitHub's own REST API rather than through this
@@ -2757,7 +3022,22 @@ async fn drive_every_declared_capability(
         source,
         tasks: run_tasks,
         projects: run_projects,
-    } = settled_fixture(rebuilt, &prefix, 3, 2).await?;
+    } = settled_fixture(
+        rebuilt,
+        &prefix,
+        &[
+            (first_id.clone(), first.clone()),
+            (second_id.clone(), second.clone()),
+            (orphan_id.clone(), orphan.clone()),
+        ],
+        &[
+            (alpha_id.clone(), alpha.clone()),
+            (beta_id.clone(), beta.clone()),
+        ],
+        &written,
+        endpoints().fixture_wait,
+    )
+    .await?;
     let writer = source.as_ref();
     quota::phase(onetaskgraph_github_live::quota::Phase::Capabilities)?;
     budget::recheck_remaining(
