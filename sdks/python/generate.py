@@ -797,7 +797,6 @@ REQUIRED_OPTIONS: dict[tuple[str, ...], tuple[str, ...]] = {
     ("project", "create"): ("id", "title"),
     # A reconcile has no source to bring in line without `--source`.
     ("task", "status", "reconcile"): ("source",),
-    # `task assets` has nowhere to write the assets it reads without `--output-dir`.
     ("task", "assets"): ("output_dir",),
 }
 

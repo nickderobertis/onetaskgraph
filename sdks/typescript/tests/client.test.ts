@@ -1907,3 +1907,23 @@ test("a copy with comments carries them, and a repeat by query skips the unchang
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("taskAssets rejects a partial exit even beside valid asset names", async () => {
+  const fixtures = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-assets-partial-"));
+  try {
+    const partial = new OnetaskgraphClient({
+      binaryPath: executableFixture(
+        fixtures,
+        "assets-partial",
+        '["diagram.png"]',
+        "store failed",
+        4,
+      ),
+    });
+    const refused = partial.taskAssets("notes:T-1", resolve(fixtures, "out"));
+    await expect(refused).rejects.toBeInstanceOf(OnetaskgraphExecutionError);
+    await expect(refused).rejects.toMatchObject({ exitCode: 4, stderr: "store failed" });
+  } finally {
+    rmSync(fixtures, { recursive: true, force: true });
+  }
+});
