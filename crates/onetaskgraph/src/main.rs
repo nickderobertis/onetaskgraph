@@ -1814,7 +1814,6 @@ fn dependency_request(
     })
 }
 
-/// One value as pretty-printed JSON.
 /// `task assets`: every image asset the task holds, written into `--output-dir` under its
 /// name, and the names written printed — one a line, or under `--json` as one list.
 async fn task_assets(
@@ -1856,6 +1855,7 @@ async fn task_assets(
     Ok(EXIT_OK)
 }
 
+/// One value as pretty-printed JSON.
 fn json(value: &impl Serialize, what: &str) -> Result<String, Failure> {
     serde_json::to_string_pretty(value)
         .map_err(|error| Failure::decided("render", format!("could not render {what}: {error}")))

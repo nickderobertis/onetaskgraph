@@ -157,6 +157,8 @@ fn every_verb() -> Vec<Vec<String>> {
         owned(&["task", "copy", &task, "--to", DESTINATION]),
         owned(&["task", "copy", &task, "--to", DESTINATION]),
         owned(&["task", "copy", &task, "--to", DESTINATION, "--dry-run"]),
+        // A task holding no assets writes no files, even when asked to export them.
+        owned(&["task", "assets", &task, "--output-dir", "."]),
         owned(&[
             "project",
             "copy",
