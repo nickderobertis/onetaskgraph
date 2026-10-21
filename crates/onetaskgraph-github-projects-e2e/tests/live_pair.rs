@@ -263,6 +263,12 @@ fn run_pair(scenario: &str) {
             1,
             "only the one task the search left out is named: {said}"
         );
+        // When each item it did report first appeared, for the bound to be read against.
+        assert!(
+            said.contains("the last search it answered, attempt ")
+                && said.contains("each item reported was first reported at \"onetaskgraph live cleanup ci-37616803489-2-"),
+            "{said}"
+        );
         let main: SessionRecord =
             serde_json::from_slice(&std::fs::read(records.join("main.json")).unwrap()).unwrap();
         assert!(!main.complete);

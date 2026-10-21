@@ -148,7 +148,7 @@ impl GitHubProjectsSource {
                         accounting::Outcome::Refused,
                         accounting::RateLimit::default(),
                     ));
-                return Err(unreadable(crate::transport_error(&error)));
+                return Err(unreadable(error.to_string()));
             }
         };
         let status = response.status();
@@ -169,7 +169,7 @@ impl GitHubProjectsSource {
                 },
                 limits,
             ));
-        let body = body.map_err(|error| unreadable(crate::transport_error(&error)))?;
+        let body = body.map_err(|error| unreadable(error.to_string()))?;
         if !status.is_success() {
             return Err(unreadable(format!("GitHub answered HTTP {status}")));
         }

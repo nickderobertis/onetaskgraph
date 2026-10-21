@@ -5,6 +5,7 @@
 
 use std::process::Output;
 
+use onetaskgraph_e2e_support::loopback;
 use serde_json::{Value, json};
 
 use crate::common::{Sandbox, stderr, stdout};
@@ -129,6 +130,23 @@ fn a_change_made_part_way_through_a_copy_sees_the_connection_the_copy_holds() {
     );
 }
 
+/// A board configured in `sandbox` at a loopback server answering every request with
+/// `answer`.
+fn board_answering(
+    sandbox: &Sandbox,
+    answer: impl FnMut(&loopback::Request, &mut std::net::TcpStream) -> loopback::After + Send + 'static,
+) -> Value {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback listener");
+    let endpoint = format!(
+        "http://{}/graphql",
+        listener.local_addr().expect("an address")
+    );
+    loopback::serve_with(listener, answer);
+    let mut board = crate::fixtures::github_projects_unreachable(sandbox);
+    board["endpoint"] = Value::String(endpoint);
+    board
+}
+
 /// What a command reading `board`, configured in `sandbox`, said on standard error, having had
 /// to fail.
 fn unreached(sandbox: &Sandbox, board: &Value) -> String {
@@ -143,24 +161,38 @@ fn unreached(sandbox: &Sandbox, board: &Value) -> String {
 #[test]
 fn a_connection_closed_before_its_answer_is_named_beneath_the_failed_send() {
     let sandbox = Sandbox::new();
-    let said = unreached(
-        &sandbox,
-        &crate::fixtures::github_projects_hanging_up(&sandbox),
-    );
+    let board = board_answering(&sandbox, |_, _| loopback::After::Close);
+    let said = unreached(&sandbox, &board);
     assert!(
-        said.contains("error sending request for url")
+        said.contains("GitHub GraphQL request failed: error sending request for url")
             && said.contains("connection closed before message completed"),
         "the failure names the client's error and the cause beneath it: {said}"
     );
 }
 
 #[test]
+fn an_answer_cut_short_is_named_beneath_the_failed_read() {
+    let sandbox = Sandbox::new();
+    let board = board_answering(&sandbox, |_, stream| {
+        use std::io::Write;
+        // Ten bytes of the hundred it declares, and then the connection ends.
+        let _ = stream.write_all(
+            b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{\"data\":{",
+        );
+        loopback::After::Close
+    });
+    let said = unreached(&sandbox, &board);
+    assert!(
+        said.contains("GitHub GraphQL response could not be read: error decoding response body:"),
+        "the failure names the cause beneath the client's error: {said}"
+    );
+}
+
+#[test]
 fn a_refused_connection_carries_the_operating_systems_own_error() {
     let sandbox = Sandbox::new();
-    let said = unreached(
-        &sandbox,
-        &crate::fixtures::github_projects_unreachable(&sandbox),
-    );
+    let board = crate::fixtures::github_projects_unreachable(&sandbox);
+    let said = unreached(&sandbox, &board);
     assert!(
         said.contains("error sending request for url") && said.contains("(os error "),
         "the failure names the socket error the operating system gave: {said}"

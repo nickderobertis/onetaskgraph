@@ -3725,16 +3725,6 @@ pub fn github_projects_unreachable(sandbox: &Sandbox) -> Value {
     github_projects_block_at(&format!("http://{address}/graphql"))
 }
 
-/// A board that reads every request it is sent and closes the connection without answering
-/// it: the client sees its request go and the connection end before any reply.
-pub fn github_projects_hanging_up(sandbox: &Sandbox) -> Value {
-    sandbox.secrets_file("GITHUB_PROJECTS_FIXTURE_TOKEN=test-token\n");
-    let listener = TcpListener::bind("127.0.0.1:0").expect("GitHub fixture listener");
-    let address = listener.local_addr().expect("fixture address");
-    loopback::serve_with(listener, |_, _| loopback::After::Close);
-    github_projects_block_at(&format!("http://{address}/graphql"))
-}
-
 /// The option list a whole-list `singleSelectOptions` input leaves a field holding: each
 /// option sent with its id keeps it, and one sent without is minted a new one.
 fn github_replaced_options(_old: &[Value], input: &Value, minted: &str) -> Vec<Value> {
