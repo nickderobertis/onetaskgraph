@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.3](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.9.2...onetaskgraph-core-v0.9.3) - 2026-10-21
+
+### Performance
+
+- *(github-projects)* list a project's members and write metadata in one request each ([#3711](https://github.com/nickderobertis/onetaskgraph/pull/3711))
+
 ## [0.9.2](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.9.1...onetaskgraph-core-v0.9.2) - 2026-10-20
 
 ### Added
