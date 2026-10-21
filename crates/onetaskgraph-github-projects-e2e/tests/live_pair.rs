@@ -236,7 +236,7 @@ fn run_pair(scenario: &str) {
         assert!(!outputs[0].status.success());
         let said = String::from_utf8_lossy(&outputs[0].stderr);
         // How long the wait really took is the stand-in's to measure, against
-        // `journey::STAND_IN_FIXTURE_WAIT`'s 1.5-second deadline, so its verdict comes first.
+        // `journey::STAND_IN_FIXTURE_WAIT`'s 3-second deadline, so its verdict comes first.
         assert!(
             fixture_status.success(),
             "{}",
@@ -245,7 +245,7 @@ fn run_pair(scenario: &str) {
         assert!(
             said.contains("the live fixture never became readable: after waiting ")
                 && said.contains(
-                    "s against a deadline of 1.5s, GitHub's issue search for titles \
+                    "s against a deadline of 3s, GitHub's issue search for titles \
                      onetaskgraph live cleanup ci-37616803489-2-*"
                 )
                 && said.contains("a search still unanswered at the deadline was abandoned"),

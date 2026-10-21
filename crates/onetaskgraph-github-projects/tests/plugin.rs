@@ -1165,6 +1165,15 @@ impl Fixture {
     fn search_withholds(&self, withheld: SearchWithheld) {
         self.state.lock().unwrap().search_withheld = Some(withheld);
     }
+    /// When this board created the issue its search withholds, if it did.
+    fn search_withheld_created(&self) -> Option<Instant> {
+        let state = self.state.lock().unwrap();
+        state
+            .search_withheld
+            .as_ref()
+            .expect("an issue withheld")
+            .created_at
+    }
     /// When this board's search began leaving its withheld issue out, when a search first
     /// reported it after all, and when it was first read by its own id since.
     fn search_withheld_timeline(&self) -> (Option<Instant>, Option<Instant>, Option<Instant>) {
@@ -2379,13 +2388,13 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         if let Some(withheld) = state
             .search_withheld
             .as_mut()
-            .filter(|withheld| withheld.searches > 0)
+            .filter(|withheld| withheld.withholding())
             && let Some(at) = matched
                 .iter()
                 .position(|item| withheld.content_id.as_deref() == Some(item.content_id.as_str()))
         {
             matched.remove(at);
-            withheld.searches -= 1;
+            withheld.searches = withheld.searches.saturating_sub(1);
         } else if let Some(withheld) = state.search_withheld.as_mut()
             && matched
                 .iter()
@@ -2993,6 +3002,10 @@ struct SearchWithheld {
     offset: u64,
     /// How many more searches that would have listed it leave it out.
     searches: usize,
+    /// How long after it was created every search leaves it out, whatever their count.
+    withheld_for: Option<Duration>,
+    /// When this board created it.
+    created_at: Option<Instant>,
     /// The stamp of the first artifact this board created.
     first_stamp: Option<u64>,
     content_id: Option<String>,
@@ -3014,6 +3027,8 @@ impl SearchWithheld {
         Self {
             offset,
             searches,
+            withheld_for: None,
+            created_at: None,
             first_stamp: None,
             content_id: None,
             search_answers_in: Duration::ZERO,
@@ -3022,6 +3037,22 @@ impl SearchWithheld {
             reported_at: None,
             read_by_id_at: Vec::new(),
         }
+    }
+    /// The issue a live run titles with its stamp plus `offset`, left out of every search until
+    /// `delay` after this board created it.
+    fn run_artifact_for(offset: u64, delay: Duration) -> Self {
+        Self {
+            withheld_for: Some(delay),
+            ..Self::run_artifact(offset, 0)
+        }
+    }
+    /// Whether a search arriving now leaves the issue out.
+    fn withholding(&self) -> bool {
+        self.searches > 0
+            || matches!(
+                (self.withheld_for, self.created_at),
+                (Some(delay), Some(created)) if created.elapsed() < delay
+            )
     }
     /// The issue this board already holds as `content_id`, left out the same way.
     fn item(content_id: &str, searches: usize) -> Self {
@@ -3047,7 +3078,7 @@ impl SearchWithheld {
         let Some(content_id) = self.content_id.as_deref() else {
             return Duration::ZERO;
         };
-        if self.searches > 0 && query.contains("search(query:$search") {
+        if self.withholding() && query.contains("search(query:$search") {
             self.searched_at.push(Instant::now());
             self.search_answers_in
         } else if !self.searched_at.is_empty() && variables["id"] == content_id {
@@ -3069,6 +3100,7 @@ impl SearchWithheld {
         let first = *self.first_stamp.get_or_insert(stamp);
         if stamp == first + self.offset {
             self.content_id = Some(content_id.to_owned());
+            self.created_at = Some(Instant::now());
         }
     }
 }
@@ -11210,6 +11242,10 @@ fn fixture_run(prefix: &str, extra: &[(&str, &str)]) -> (Fixture, Created, Creat
     let projects = vec![named("P_alpha", title(1)), named("P_beta", title(2))];
     (fixture, tasks, projects)
 }
+
+/// The two minutes the live fixture wait was held to before a run outlasted them: a stand-in
+/// search lagging longer than this, scaled, proves what the longer bound buys.
+const OLD_FIXTURE_BOUND: Duration = Duration::from_secs(120);
 
 /// The short wait the give-up journeys below are held to.
 const GIVE_UP: journey::FixtureWait = journey::FixtureWait {
@@ -21096,11 +21132,13 @@ fn live_pair_fixture_child() {
     };
     fixture.items_connection_falls_behind();
     // Each attempt of the fixture wait is two searches, tasks then projects: behind, the task is
-    // left out of the first attempt only; never, every search takes long enough that the
-    // stand-in deadline falls inside the second attempt.
+    // left out of every search until twice the old two-minute bound after it was created, scaled
+    // as the stand-in's wait is; never, every search takes long enough that the stand-in
+    // deadline falls inside an attempt.
     match scenario.as_str() {
         "search-behind" => fixture.search_withholds(
-            SearchWithheld::run_artifact(3, 2).answering_searches_in(Duration::from_millis(300)),
+            SearchWithheld::run_artifact_for(3, 2 * OLD_FIXTURE_BOUND / journey::STAND_IN_SCALE)
+                .answering_searches_in(Duration::from_millis(100)),
         ),
         "search-never" => fixture.search_withholds(
             SearchWithheld::run_artifact(3, usize::MAX)
@@ -21248,8 +21286,18 @@ fn live_pair_fixture_child() {
         let (began, reported, read_by_id) = fixture.search_withheld_timeline();
         let began = began.expect("the board's search never left the run's second task out");
         if scenario == "search-behind" {
-            let took = reported.expect("the board's search never reported the task") - began;
-            println!("the search reported the withheld task {took:?} after it first left it out");
+            let reported = reported.expect("the board's search never reported the task");
+            let created = fixture
+                .search_withheld_created()
+                .expect("the board created the withheld task");
+            let lag = reported - created;
+            let old = OLD_FIXTURE_BOUND / journey::STAND_IN_SCALE;
+            println!("the search reported the withheld task {lag:?} after the board created it");
+            assert!(
+                lag > old,
+                "lagged {lag:?}, inside the old bound's {old:?}, which proves nothing new"
+            );
+            let took = reported - began;
             assert!(
                 took < bound,
                 "converged in {took:?}, past the {bound:?} deadline"
@@ -21264,8 +21312,7 @@ fn live_pair_fixture_child() {
             println!(
                 "the wait read the missing task by id {took:?} after the search first left it out"
             );
-            // Its first attempt answers whole by a second in; its second would run to two: the
-            // deadline, half a second before that, cuts it off.
+            // Each attempt takes a second, so the deadline falls inside one and cuts it off.
             assert!(
                 took >= bound - Duration::from_millis(200)
                     && took <= bound + Duration::from_millis(300),

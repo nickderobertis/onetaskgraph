@@ -83,8 +83,8 @@ pub struct Endpoints {
     /// server's `Date`. Nothing for a stand-in whose `Date` is already well past every change.
     pub settle: std::time::Duration,
     /// How long the journey waits for GitHub's issue search to report the fixture it wrote:
-    /// [`FIXTURE_WAIT`] for GitHub, and the same shape in milliseconds for a stand-in, whose
-    /// search is behind for as many reads as the stand-in says and not for any length of time.
+    /// [`FIXTURE_WAIT`] for GitHub, and [`STAND_IN_FIXTURE_WAIT`], the same wait scaled down,
+    /// for a stand-in.
     pub fixture_wait: FixtureWait,
 }
 
@@ -2572,7 +2572,7 @@ pub struct Settled {
 ///
 /// Between attempts it sleeps `first` while less than `steady_for` has elapsed, and after that
 /// twice the sleep before, up to `longest`. The journey waits [`FIXTURE_WAIT`]; a stand-in
-/// board waits [`STAND_IN_FIXTURE_WAIT`], the same shape in milliseconds.
+/// board waits [`STAND_IN_FIXTURE_WAIT`], the same wait scaled down.
 #[derive(Clone, Copy, Debug)]
 pub struct FixtureWait {
     pub bound: std::time::Duration,
@@ -2583,6 +2583,17 @@ pub struct FixtureWait {
 }
 
 impl FixtureWait {
+    /// This wait with every duration `by` times shorter.
+    pub const fn scaled(self, by: u32) -> Self {
+        Self {
+            bound: self.bound.checked_div(by).expect("a nonzero scale"),
+            first: self.first.checked_div(by).expect("a nonzero scale"),
+            steady_for: self.steady_for.checked_div(by).expect("a nonzero scale"),
+            longest: self.longest.checked_div(by).expect("a nonzero scale"),
+            diagnosis: self.diagnosis.checked_div(by).expect("a nonzero scale"),
+        }
+    }
+
     /// The sleep after an attempt that ended `elapsed` into the wait, `previous` being the
     /// sleep before it, if there was one — before the deadline caps it.
     pub fn sleep_after(
@@ -2632,15 +2643,12 @@ pub const FIXTURE_WAIT: FixtureWait = FixtureWait {
     diagnosis: std::time::Duration::from_secs(30),
 };
 
-/// [`FIXTURE_WAIT`]'s shape in milliseconds, for a stand-in board, whose search is behind for
-/// as many reads as the stand-in says and answers in as long as it says.
-pub const STAND_IN_FIXTURE_WAIT: FixtureWait = FixtureWait {
-    bound: std::time::Duration::from_millis(1_500),
-    first: std::time::Duration::from_millis(20),
-    steady_for: std::time::Duration::from_millis(300),
-    longest: std::time::Duration::from_millis(300),
-    diagnosis: std::time::Duration::from_millis(500),
-};
+/// How many times faster a stand-in board's fixture wait runs than [`FIXTURE_WAIT`].
+pub const STAND_IN_SCALE: u32 = 200;
+
+/// [`FIXTURE_WAIT`], every duration of it [`STAND_IN_SCALE`] times shorter, for a stand-in
+/// board: a search lag of `d` on GitHub is one of `d / STAND_IN_SCALE` there.
+pub const STAND_IN_FIXTURE_WAIT: FixtureWait = FIXTURE_WAIT.scaled(STAND_IN_SCALE);
 
 /// Waits until one source reports every item of a run's fixture, and hands that source back.
 ///
