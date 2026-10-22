@@ -29,6 +29,7 @@ import {
   OnetaskgraphValidationError,
   projectCopyFlags,
   projectGraphDirections,
+  statusPolicies,
   taskCopyFlags,
   taskUpdateFlags,
   taskUpdateOptionFlags,
@@ -938,6 +939,7 @@ test("taskCopy sends exactly the flags the binary's task copy reports, no more a
         statuses: ["backlog"],
         termScope: ["github.com/example-org/widget"],
         expect: "gh2|v",
+        statusPolicy: "preserve-destination",
       }),
       ...taskCopyFlags({ termScope: [] }),
     ].filter((argument) => argument.startsWith("--")),
@@ -1951,6 +1953,7 @@ test("projectCopy flags agree with the binary help and validate membersOnly", ()
     members: ["from:T-1"],
     membersOnly: true,
     termScope: ["github.com/example/project"],
+    statusPolicy: "preserve-destination",
   });
   const all = new Set(
     [...sent, ...projectCopyFlags({ termScope: [] })].filter((flag) => flag.startsWith("--")),
@@ -1983,5 +1986,84 @@ test("taskAssets rejects a partial exit even beside valid asset names", async ()
     await expect(refused).rejects.toMatchObject({ exitCode: 4, stderr: "store failed" });
   } finally {
     rmSync(fixtures, { recursive: true, force: true });
+  }
+});
+
+test("both SDK copy verbs preserve destination status on updates and default to source", async () => {
+  const policyRoot = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-policy-"));
+  try {
+    for (const folder of ["from/tasks", "from/projects", "into"]) {
+      mkdirSync(resolve(policyRoot, folder), { recursive: true });
+    }
+    for (const kind of ["task", "project"]) {
+      writeFileSync(
+        resolve(policyRoot, `from/${kind}s/one.md`),
+        "---\ntitle: One\nstatus: todo\n---\noriginal body\n",
+      );
+    }
+    writeFileSync(
+      resolve(policyRoot, "onetaskgraph.yaml"),
+      JSON.stringify({
+        sources: {
+          from: { plugin: "local-md", config: { root: "from" } },
+          into: { plugin: "local-md", config: { root: "into" } },
+        },
+      }),
+    );
+    const policyClient = new OnetaskgraphClient({
+      binaryPath: binary,
+      cwd: policyRoot,
+      env: { ...process.env, HOME: policyRoot, XDG_CONFIG_HOME: policyRoot },
+    });
+    for (const kind of ["task", "project"] as const) {
+      const copy = (statusPolicy?: "source" | "preserve-destination") =>
+        kind === "task"
+          ? policyClient.taskCopy(
+              ["from:one"],
+              "into",
+              statusPolicy === undefined ? {} : { statusPolicy },
+            )
+          : policyClient.projectCopy(
+              "from:one",
+              "into",
+              statusPolicy === undefined ? {} : { statusPolicy },
+            );
+      await copy("preserve-destination");
+      const destination = resolve(policyRoot, `into/${kind}s/one.md`);
+      expect(readFileSync(destination, "utf8")).toContain("status: todo");
+      writeFileSync(
+        destination,
+        readFileSync(destination, "utf8").replace("status: todo", "status: done"),
+      );
+      const source = resolve(policyRoot, `from/${kind}s/one.md`);
+      writeFileSync(source, `${readFileSync(source, "utf8")}\nrevised body\n`);
+      await copy("preserve-destination");
+      expect(readFileSync(destination, "utf8")).toContain("status: done");
+      expect(readFileSync(destination, "utf8")).toContain("revised body");
+      await copy();
+      expect(readFileSync(destination, "utf8")).toContain("status: todo");
+    }
+    await expect(
+      policyClient.taskCopy(["from:missing"], "into", { statusPolicy: "preserve-destination" }),
+    ).rejects.toThrow();
+    // A runtime caller can arrive without TypeScript's union check.
+    expect(() => taskCopyFlags({ statusPolicy: "guess" as "source" })).toThrow("statusPolicy");
+  } finally {
+    rmSync(policyRoot, { recursive: true, force: true });
+  }
+});
+
+test("copy status policy choices agree with both CLI verbs", () => {
+  for (const verb of ["task", "project"]) {
+    const help = spawnSync(binary, [verb, "copy", "--help"], { encoding: "utf8" });
+    expect(help.status, help.stderr).toBe(0);
+    const block = help.stdout.split("--status-policy <STATUS_POLICY>")[1]?.split(/\n +--/)[0];
+    expect(block).toBeDefined();
+    const choices = [...(block ?? "").matchAll(/^ +- ([a-z-]+):/gm)].map((match) => match[1]);
+    expect(choices).toEqual([...statusPolicies]);
+    for (const statusPolicy of statusPolicies) {
+      expect(taskCopyFlags({ statusPolicy })).toEqual(["--status-policy", statusPolicy]);
+      expect(projectCopyFlags({ statusPolicy })).toEqual(["--status-policy", statusPolicy]);
+    }
   }
 });

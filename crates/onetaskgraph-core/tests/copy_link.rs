@@ -441,6 +441,7 @@ fn copy_of(items: &[&str], scope: CopyScope) -> CopyRequest {
         comments: false,
         no_link: false,
         expect: None,
+        status_policy: onetaskgraph_core::StatusPolicy::Source,
         statuses: Vec::new(),
     }
 }

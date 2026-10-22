@@ -71,7 +71,7 @@ pub use comment::{
 pub(crate) use copy::spent_between;
 pub use copy::{
     BudgetSpent, CommentCounts, CopyAction, CopyItems, CopyLink, CopyLookup, CopyOutcome,
-    CopyReport, CopyRequest, CopyScope, CopyVia, MatchBy, NoCounterpart, Spent,
+    CopyReport, CopyRequest, CopyScope, CopyVia, MatchBy, NoCounterpart, Spent, StatusPolicy,
 };
 pub(crate) use copy::{malformed_links, malformed_locations};
 pub use delivery::{Delivered, DeliveryOutcome, ProjectStatusSet, TaskStatusSet, settled};

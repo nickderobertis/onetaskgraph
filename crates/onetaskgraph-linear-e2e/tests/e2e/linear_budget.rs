@@ -506,6 +506,7 @@ fn measure_linear_requests_per_status_write_warm() {
                     comments: false,
                     no_link: false,
                     expect: None,
+                    status_policy: onetaskgraph_core::StatusPolicy::Source,
                     statuses: Vec::new(),
                 })
                 .await
@@ -926,6 +927,7 @@ fn task_and_project_reads_status_listings_and_copy_discovery_cost_no_more_than_o
                     comments: false,
                     no_link: false,
                     expect: None,
+                    status_policy: onetaskgraph_core::StatusPolicy::Source,
                     statuses: Vec::new(),
                 })
                 .await

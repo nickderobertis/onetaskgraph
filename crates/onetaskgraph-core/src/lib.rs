@@ -65,9 +65,9 @@ pub use engine::{
     LeftBehind, MatchBy, MetadataSet, NoCounterpart, PROJECT_GRAPH_SCHEMA_VERSION, Paging,
     ProjectGraph, ProjectGraphRequest, ProjectRequest, ProjectSelector, ProjectStatusSet,
     Qualified, QualifiedEdge, QualifiedEndpoint, ReconcileOutcome, SearchHit, SearchKind,
-    SearchRequest, SourceListing, SourceState, Spent, StatusReconciled, StatusesReconciled,
-    TaskAssetNames, TaskAssetsError, TaskContentSet, TaskDetail, TaskDetails, TaskPrioritySet,
-    TaskRequest, TaskStatusSet, TaskUpdated, graph_label, settled,
+    SearchRequest, SourceListing, SourceState, Spent, StatusPolicy, StatusReconciled,
+    StatusesReconciled, TaskAssetNames, TaskAssetsError, TaskContentSet, TaskDetail, TaskDetails,
+    TaskPrioritySet, TaskRequest, TaskStatusSet, TaskUpdated, graph_label, settled,
 };
 pub use engine::{
     DocumentCreate, ProjectCreate, Regenerated, Regeneration, RenderRequest, RenderTemplate,

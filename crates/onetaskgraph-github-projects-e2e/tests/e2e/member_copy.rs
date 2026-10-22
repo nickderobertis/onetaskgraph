@@ -455,3 +455,101 @@ fn a_members_only_copy_rolls_back_created_members_when_a_later_write_fails() {
         before
     );
 }
+
+#[test]
+fn preserving_status_writes_bodies_without_board_status_or_issue_state_mutations() {
+    for scope in [
+        vec![],
+        vec!["--no-tasks"],
+        vec!["--member", "plans:T"],
+        vec!["--member", "plans:T", "--members-only"],
+    ] {
+        let plan = Plan::new();
+        plan.write(
+            "projects/P.md",
+            "---\ntitle: Plan\nstatus: Todo\n---\noriginal project body\n",
+        );
+        plan.write(
+            "tasks/T.md",
+            "---\ntitle: Step\nstatus: Todo\nproject: P\n---\noriginal task body\n",
+        );
+        let report = plan.json(&["project", "copy", "plans:P", "--to", "board", "--json"]);
+        let ids = landed(&report);
+        let destination = |source: &str| {
+            ids.iter()
+                .find(|(from, _)| from == source)
+                .unwrap()
+                .1
+                .as_str()
+        };
+        for (kind, source) in [("project", "plans:P"), ("task", "plans:T")] {
+            plan.run(&[kind, "status", "set", destination(source), "done"], 0);
+        }
+        for relative in ["projects/P.md", "tasks/T.md"] {
+            let path = plan.root.join(relative);
+            let text = std::fs::read_to_string(&path).unwrap();
+            std::fs::write(path, text.replace("original", "revised")).unwrap();
+        }
+        let mut args = vec![
+            "project",
+            "copy",
+            "plans:P",
+            "--to",
+            "board",
+            "--status-policy",
+            "preserve-destination",
+        ];
+        args.extend(&scope);
+        let (_, _, served) = plan.run(&args, 0);
+        let fields = served
+            .iter()
+            .filter(|(document, _)| {
+                [
+                    graphql::UPDATE_FIELD,
+                    graphql::UPDATE_FIELDS,
+                    graphql::WRITE_FIELD_VALUES,
+                    graphql::CLEAR_FIELD,
+                ]
+                .contains(&document.as_str())
+            })
+            .count();
+        assert_eq!(
+            fields, 0,
+            "body-only copy sent board field mutations: {served:#?}"
+        );
+        let states = served
+            .iter()
+            .filter(|(document, variables)| {
+                document.starts_with("mutation")
+                    && (names(variables, "OPEN")
+                        || names(variables, "CLOSED")
+                        || variables.to_string().contains("stateInput"))
+            })
+            .count();
+        assert_eq!(states, 0, "copy wrote issue state: {served:#?}");
+        assert!(
+            served
+                .iter()
+                .any(|(document, _)| document == graphql::UPDATE_ISSUE),
+            "body changes must land"
+        );
+        for (kind, source) in [("project", "plans:P"), ("task", "plans:T")] {
+            let item =
+                &plan.json(&[kind, "show", destination(source), "--json"])["items"][0]["item"];
+            assert_eq!(item["status"]["category"], "done", "{item:#}");
+            let changed = if kind == "project" {
+                !scope.contains(&"--members-only")
+            } else {
+                !scope.contains(&"--no-tasks")
+            };
+            assert!(
+                item["content"].as_str().unwrap().contains(if changed {
+                    "revised"
+                } else {
+                    "original"
+                }),
+                "{item:#}"
+            );
+        }
+    }
+}

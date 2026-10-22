@@ -213,6 +213,7 @@ OPTION_TYPES = {
     "source": "list[str] | tuple[str, ...]",
     "status": "choice_list",
     "status_name": "str",
+    "status_policy": "choices",
     "template": "str",
     "template_loader": "str",
     # The repositories a write's public-boundary check derives private terms from: a list
@@ -279,6 +280,7 @@ OPTION_PLACEHOLDERS = {
     "source": "S",
     "status": "S",
     "status_name": "NAME",
+    "status_policy": "STATUS_POLICY",
     "template": "FILE",
     "template_loader": "FILE",
     "term_scope": "REPOSITORY",

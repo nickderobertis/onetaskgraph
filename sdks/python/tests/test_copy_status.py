@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from pathlib import Path
 from typing import Literal
 
@@ -136,3 +137,40 @@ def test_a_category_the_binary_does_not_know_is_refused_naming_the_flag(
     assert "--status" in str(refused.value)
     assert refused.value.exit_code == 2
     assert copied(store) == []
+
+
+@pytest.mark.parametrize("kind", ["task", "project"])
+def test_status_policy_preserves_updates_and_defaults_to_source(
+    binary: Path, store: Path, kind: str
+) -> None:
+    """Both SDK methods preserve destination decisions while carrying revised content."""
+    environment = {**os.environ, "HOME": str(store), "XDG_CONFIG_HOME": str(store)}
+    client = Client(binary, cwd=store, environment=environment)
+    if kind == "project":
+        projects = store / "plan" / "projects"
+        projects.mkdir()
+        source = projects / "ready.md"
+        source.write_text("---\ntitle: Ready\nstatus: todo\n---\nold body\n")
+    else:
+        source = store / "plan" / "tasks" / "ready.md"
+    destination = store / "snap" / f"{kind}s" / "ready.md"
+
+    async def copy(policy: Literal["source", "preserve-destination"] | None) -> None:
+        if kind == "task":
+            await client.task_copy(["plan:ready"], to="snap", status_policy=policy)
+        else:
+            await client.project_copy("plan:ready", to="snap", status_policy=policy)
+
+    asyncio.run(copy("preserve-destination"))
+    assert "status: todo" in destination.read_text()
+    destination.write_text(destination.read_text().replace("status: todo", "status: done"))
+    source.write_text(source.read_text() + "\nrevised body\n")
+    asyncio.run(copy("preserve-destination"))
+    assert "status: done" in destination.read_text()
+    assert "revised body" in destination.read_text()
+    asyncio.run(copy(None))
+    assert "status: todo" in destination.read_text()
+    with pytest.raises(OnetaskgraphError):
+        asyncio.run(
+            client.task_copy(["plan:missing"], to="snap", status_policy="preserve-destination")
+        )

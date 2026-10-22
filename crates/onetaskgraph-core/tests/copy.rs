@@ -91,6 +91,7 @@ fn many(items: &[&str], scope: CopyScope) -> CopyRequest {
         comments: false,
         no_link: false,
         expect: None,
+        status_policy: onetaskgraph_core::StatusPolicy::Source,
         statuses: Vec::new(),
     }
 }
@@ -5227,4 +5228,48 @@ async fn a_members_only_task_without_repositories_follows_its_project_into_a_rou
         Some(NativeId::from("HOME"))
     );
     assert!(listed(&engine, "into").await.is_empty());
+}
+
+#[tokio::test]
+async fn a_rust_caller_preserves_status_then_intentionally_copies_it_with_the_same_source_token() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::create_dir(directory.path().join("tasks")).unwrap();
+    std::fs::write(
+        directory.path().join("tasks/T-1.md"),
+        "---\ntitle: Step\nstatus: todo\n---\noriginal body\n",
+    )
+    .unwrap();
+    let engine = engine_over(json!({
+        "from": {"plugin": "local-md", "config": {"root": directory.path()}},
+        "into": {"plugin": "in-memory", "config": {"capabilities": {"comments": "native"}}},
+    }));
+    let mut request = one("from:T-1");
+    request.comments = true;
+    request.no_link = true;
+    request.status_policy = onetaskgraph_core::StatusPolicy::PreserveDestination;
+    engine.copy(&request).await.unwrap();
+    engine
+        .set_task_status(&id("into:T-1"), StatusCategory::Done)
+        .await
+        .unwrap();
+    engine
+        .set_task_content(&id("from:T-1"), "a revised body")
+        .await
+        .unwrap();
+    engine.copy(&request).await.unwrap();
+    let held = engine.task(&id("into:T-1")).await.unwrap();
+    assert_eq!(held.items[0].item.status.category, StatusCategory::Done);
+    assert_eq!(
+        held.items[0].item.content.as_deref(),
+        Some("a revised body")
+    );
+    assert!(
+        engine.copy(&request).await.unwrap().items[0]
+            .action
+            .skipped()
+    );
+    request.status_policy = onetaskgraph_core::StatusPolicy::default();
+    engine.copy(&request).await.unwrap();
+    let held = engine.task(&id("into:T-1")).await.unwrap();
+    assert_eq!(held.items[0].item.status.category, StatusCategory::Todo);
 }

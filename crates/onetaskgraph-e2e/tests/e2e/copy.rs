@@ -4386,3 +4386,141 @@ fn a_members_only_copy_refuses_an_unrecorded_edge_before_writing() {
     );
     assert_eq!(files(&notes), before);
 }
+
+#[test]
+fn status_policy_keeps_destination_decisions_and_creates_with_source_status() {
+    for policy in ["source", "preserve-destination"] {
+        let sandbox = Sandbox::new();
+        let root = folders(&sandbox);
+        let args = [
+            "task",
+            "copy",
+            "remote:ENG-1",
+            "--to",
+            NOTES,
+            "--status-policy",
+            policy,
+        ];
+        ok(&sandbox, &args);
+        assert_eq!(
+            shown(&sandbox, "task", "notes:ENG-1")["status"]["category"],
+            "in-progress"
+        );
+        ok(&sandbox, &["task", "status", "set", "notes:ENG-1", "done"]);
+        if policy == "preserve-destination" {
+            let before = files(&sandbox.project());
+            let mut preview = args.to_vec();
+            preview.extend(["--dry-run", "--json"]);
+            assert_eq!(reported(&ok(&sandbox, &preview))[0].2, "unchanged");
+            assert_eq!(files(&sandbox.project()), before);
+        }
+        // Keep the source's correspondence written by the first copy while editing its body.
+        let path = root.join("tasks/ENG-1.md");
+        let text = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(
+            &path,
+            text.replace("status: doing", "status: todo")
+                .replace("the body", "the revised body"),
+        )
+        .unwrap();
+        if policy == "preserve-destination" {
+            let before = files(&sandbox.project());
+            let mut preview = args.to_vec();
+            preview.extend(["--dry-run", "--json"]);
+            assert_eq!(reported(&ok(&sandbox, &preview))[0].2, "updated");
+            assert_eq!(files(&sandbox.project()), before);
+        }
+        ok(&sandbox, &args);
+        let held = shown(&sandbox, "task", "notes:ENG-1");
+        assert_eq!(
+            held["status"]["category"],
+            if policy == "source" { "todo" } else { "done" }
+        );
+        assert!(
+            held["content"]
+                .as_str()
+                .unwrap()
+                .contains("the revised body")
+        );
+        // Omitting the policy still intentionally carries the source's status.
+        ok(&sandbox, &["task", "copy", "remote:ENG-1", "--to", NOTES]);
+        assert_eq!(
+            shown(&sandbox, "task", "notes:ENG-1")["status"]["category"],
+            "todo"
+        );
+    }
+}
+
+#[test]
+fn both_copy_verbs_refuse_an_unknown_status_policy_at_parse() {
+    let sandbox = Sandbox::new();
+    for verb in ["task", "project"] {
+        let error = refused(
+            &sandbox,
+            &[
+                verb,
+                "copy",
+                "remote:one",
+                "--to",
+                NOTES,
+                "--status-policy",
+                "guess",
+            ],
+            2,
+        );
+        assert!(error.contains("invalid value 'guess'"), "{error}");
+        assert!(error.contains("preserve-destination"), "{error}");
+    }
+}
+
+#[test]
+fn status_policy_preserves_items_even_when_the_source_category_has_no_destination_mapping() {
+    for kind in ["task", "project"] {
+        let sandbox = Sandbox::new();
+        let root = sandbox.subdirectory("authored");
+        std::fs::create_dir_all(root.join(format!("{kind}s"))).unwrap();
+        let path = root.join(format!("{kind}s/A.md"));
+        std::fs::write(
+            &path,
+            "---\ntitle: A step\nstatus: Done\n---\noriginal body\n",
+        )
+        .unwrap();
+        let mut config = linear_empty_workspace(&sandbox);
+        config["status_mapping"] = json!({"done":"Shipped"});
+        sandbox.project_document(&document(&json!({
+            "authored": {"plugin":"local-md","config":{"root":root,"status_mapping":{"Done":"done","Todo":"todo"}}},
+            "linear": {"plugin":"linear","config":config},
+        })));
+        let mut args = vec![kind, "copy", "authored:A", "--to", "linear", "--json"];
+        if kind == "project" {
+            args.push("--no-tasks");
+        }
+        let first = reported(&ok(&sandbox, &args));
+        let destination = first[0].1.as_str().unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(
+            &path,
+            text.replace("status: Done", "status: Todo")
+                .replace("original body", "revised body"),
+        )
+        .unwrap();
+        let mut preserve = args.clone();
+        preserve.extend(["--status-policy", "preserve-destination"]);
+        ok(&sandbox, &preserve);
+        let held = shown(&sandbox, kind, destination);
+        assert_eq!(held["status"]["category"], "done", "{held:#}");
+        assert_eq!(held["content"], "revised body");
+        // Source policy and creates still require the source category's mapping.
+        let error = refused(&sandbox, &args, 1);
+        assert!(error.contains("status_mapping.todo"), "{error}");
+        std::fs::write(
+            root.join(format!("{kind}s/B.md")),
+            "---\ntitle: Another step\nstatus: Todo\n---\nnew body\n",
+        )
+        .unwrap();
+        preserve[2] = "authored:B";
+        let error = refused(&sandbox, &preserve, 1);
+        assert!(error.contains("status_mapping.todo"), "{error}");
+        assert_eq!(shown(&sandbox, kind, destination), held);
+    }
+}
