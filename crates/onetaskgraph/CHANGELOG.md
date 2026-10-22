@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0](https://github.com/nickderobertis/onetaskgraph/compare/v0.10.0...v0.11.0) - 2026-10-22
+
+### Added
+
+- *(copy)* [**breaking**] bind a copy to an existing destination task the caller names ([#3721](https://github.com/nickderobertis/onetaskgraph/pull/3721))
+- *(copy)* [**breaking**] keep a destination item's status on update when the caller asks ([#3718](https://github.com/nickderobertis/onetaskgraph/pull/3718))
+
 ## [0.10.0](https://github.com/nickderobertis/onetaskgraph/compare/v0.9.4...v0.10.0) - 2026-10-22
 
 ### Added
