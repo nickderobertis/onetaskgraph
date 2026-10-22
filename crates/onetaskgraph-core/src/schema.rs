@@ -36,8 +36,9 @@ use crate::{
     FailureDocument, GlobalId, IssueCompleted, IssuesCompleted, MetadataSet, PageToken, Predicate,
     ProjectGraph, ProjectStatusSet, Qualified, QualifiedEdge, QualifiedEndpoint, QueryPlan,
     QueryResponse, ReconcileOutcome, Regenerated, SearchHit, SearchKind, SourceFailure,
-    SourceListing, SourcePlan, StatusReconciled, StatusesReconciled, TaskContentSet, TaskDetail,
-    TaskDetails, TaskPrioritySet, TaskStatusSet, TaskUpdated, TemplateAnswers,
+    SourceListing, SourcePlan, StatusReconciled, StatusesReconciled, TaskAssetNames,
+    TaskContentSet, TaskDetail, TaskDetails, TaskPrioritySet, TaskStatusSet, TaskUpdated,
+    TemplateAnswers,
 };
 
 /// The bundle's own version, bumped whenever any root's schema changes — added, removed,
@@ -53,7 +54,7 @@ use crate::{
 /// that it moves whenever [`schema_bundle`] below emits a different document. The golden
 /// that holds it to that is `PUBLISHED_BUNDLES` in `tests/engine.rs`, which records every
 /// root's schema by digest from this version on.
-pub const SCHEMA_BUNDLE_VERSION: u32 = 42;
+pub const SCHEMA_BUNDLE_VERSION: u32 = 43;
 
 /// Every contract root, keyed by name, plus each registered plugin's config schema.
 #[must_use]
@@ -255,6 +256,8 @@ pub fn schema_bundle() -> Value {
     roots.insert("TemplateAnswers", schema_for!(TemplateAnswers));
     roots.insert("TemplateProvenance", schema_for!(TemplateProvenance));
     // llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] Every CLI response registers here for both SDK generators; the type lives in engine/assets.rs, and the versioned golden tracks this registration beside the other roots.
+    roots.insert("TaskAssetNames", schema_for!(TaskAssetNames));
 
     roots.insert("EffectiveConfig", schema_for!(EffectiveConfig));
     // What `sources route` answers with, and the placement a routed copy's report names for

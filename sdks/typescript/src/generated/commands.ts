@@ -26,6 +26,7 @@ export const binaryCommands = [
   "task create",
   "task render",
   "task answers",
+  "task assets",
   "project list",
   "project show",
   "project deps",

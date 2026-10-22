@@ -48,6 +48,7 @@ from .status_mapping import StatusMapping as StatusMapping
 from .status_names_report import StatusNamesReport as StatusNamesReport
 from .status_options_report import StatusOptionsReport as StatusOptionsReport
 from .statuses_reconciled import StatusesReconciled as StatusesReconciled
+from .task_asset_names import TaskAssetNames as TaskAssetNames
 from .task_content_set import TaskContentSet as TaskContentSet
 from .task_detail import TaskDetail as TaskDetail
 from .task_details import TaskDetails as TaskDetails
@@ -119,6 +120,7 @@ __all__ = [
     "StatusNamesReport",
     "StatusOptionsReport",
     "StatusesReconciled",
+    "TaskAssetNames",
     "TaskContentSet",
     "TaskDetail",
     "TaskDetails",

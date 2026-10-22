@@ -181,6 +181,10 @@ const SURFACE: &[(&[&str], &[&str])] = &[
         ],
     ),
     (&["help", "task", "answers"], &["<ID>", "--json"]),
+    (
+        &["help", "task", "assets"],
+        &["<SOURCE:ID>", "--output-dir", "--json"],
+    ),
     (&["help", "document"], &["create", "render", "answers"]),
     (
         &["help", "document", "create"],
@@ -297,7 +301,7 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 42);
+    assert_eq!(bundle["version"], 43);
     // Version 42: each closure item's `kind`, the project item a holding or a contradiction can
     // carry, and what `project status set` answers with.
     for root in ["IssueCompleted", "StatusReconciled"] {
@@ -397,6 +401,7 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
             "task create",
             "task render",
             "task answers",
+            "task assets",
             "project list",
             "project show",
             "project deps",
