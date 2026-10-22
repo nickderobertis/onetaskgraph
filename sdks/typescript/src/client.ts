@@ -33,6 +33,7 @@ import type {
   StatusesReconciled,
   StatusNamesReport,
   StatusOptionsReport,
+  TaskAssetNames,
   TaskContentSet,
   TaskDetail,
   TaskDetails,
@@ -279,6 +280,7 @@ export const commandResponseRoots: Readonly<Record<string, keyof typeof runtimeS
   "task create": "TaskDetail",
   "task render": "Regenerated",
   "task answers": "TemplateAnswers",
+  "task assets": "TaskAssetNames",
   "document create": "DocumentDetail",
   "document render": "Regenerated",
   "document answers": "TemplateAnswers",
@@ -305,7 +307,8 @@ export const commandAlternateRoots: Readonly<
 // set`, for the same reason. `sources fields` sets up one board and answers for it whole, or
 // fails, and `sources route` reads configuration alone. `project graph` prints a graph or
 // nothing, and a graph lacking a private source it could not ask names it in `unanswered` and
-// exits 0, so it never exits 4. A template verb reads no source at all. Of the verbs that create and regenerate from
+// exits 0, so it never exits 4. `task assets` reads one task from one source and
+// writes its assets whole or fails. A template verb reads no source at all. Of the verbs that create and regenerate from
 // one, `task create` alone keeps what it delivers in step, so it alone can exit 4.
 const partialResponseCommands = new Set(
   Object.keys(commandResponseRoots).filter(
@@ -323,6 +326,7 @@ const partialResponseCommands = new Set(
       !command.startsWith("template ") &&
       !command.endsWith(" render") &&
       !command.endsWith(" answers") &&
+      command !== "task assets" &&
       command !== "project create" &&
       command !== "document create",
   ),
@@ -1330,6 +1334,11 @@ export class OnetaskgraphClient {
   }
   taskAnswers(id: string): Promise<TemplateAnswers> {
     return this.run("task answers", [id]);
+  }
+  // Write every image asset one task holds into `outputDir`, each under the name its content
+  // references it by, and answer with the names written.
+  taskAssets(id: string, outputDir: string): Promise<TaskAssetNames> {
+    return this.run("task assets", [id, "--output-dir", outputDir]);
   }
   // Create — or, with `id` naming one the source holds, replace — a project, its description
   // rendered from a template or given as it is; it answers as `projectShow` does.

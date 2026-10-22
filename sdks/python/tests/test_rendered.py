@@ -68,7 +68,9 @@ def plan(binary: Path, tmp_path: Path) -> tuple[Client, Path]:
     template.write_text(TASK, encoding="utf-8", newline="\n")
     environment = dict(os.environ)
     environment["ONETASKGRAPH_INTERACTIVE"] = "true"
-    return Client(binary, cwd=tmp_path, environment=environment), template
+    client = Client(binary, cwd=tmp_path, environment=environment)
+    run(client.project_create("notes", "P-1", "Plan"))
+    return client, template
 
 
 def provenance(detail: TaskDetail) -> TemplateProvenance:
@@ -253,6 +255,7 @@ def test_image_assets_are_stored_with_a_created_task_and_document_and_listed_on_
 ) -> None:
     """`asset` names the files a create stores; `assets` lists them on what it answers."""
     client, _ = plan(binary, tmp_path)
+    run(client.project_create("notes", "asset-plan", "Asset plan"))
     (tmp_path / "inputs").mkdir()
     pixel = tmp_path / "inputs" / "pixel.gif"
     data = gif(5)
@@ -278,6 +281,35 @@ def test_image_assets_are_stored_with_a_created_task_and_document_and_listed_on_
         run(client.task_create("notes", "P-1", "Refused", body="none", asset=[str(pixel)]))
     assert refused.value.exit_code == 1
     assert "pixel.gif" in str(refused.value)
+
+
+def test_task_assets_writes_every_image_a_task_holds_and_names_each(
+    binary: Path, tmp_path: Path
+) -> None:
+    """`task_assets` writes a task's images under their reference names and answers with them."""
+    client, _ = plan(binary, tmp_path)
+    run(client.project_create("notes", "asset-plan", "Asset plan"))
+    (tmp_path / "inputs").mkdir()
+    first, second = tmp_path / "inputs" / "first.gif", tmp_path / "inputs" / "second.gif"
+    first.write_bytes(gif(21))
+    second.write_bytes(gif(22))
+    body = "![b](./second.gif)\n![a](./first.gif)\n"
+    task = run(
+        client.task_create(
+            "notes", "asset-plan", "Two pictures", body=body, asset=[str(first), str(second)]
+        )
+    )
+    out = tmp_path / "out"
+
+    names = run(client.task_assets(task.items[0].id.root, str(out)))
+    assert [name.root for name in names.root] == ["second.gif", "first.gif"]
+    assert (out / "first.gif").read_bytes() == gif(21)
+    assert (out / "second.gif").read_bytes() == gif(22)
+
+    with pytest.raises(OnetaskgraphError) as missing:
+        run(client.task_assets("notes:nowhere", str(out)))
+    assert missing.value.exit_code == 1
+    assert "notes:nowhere" in str(missing.value)
 
 
 PICTURED = """---

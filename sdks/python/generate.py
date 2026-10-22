@@ -72,6 +72,7 @@ RESPONSE_ROOTS = {
     "task_create": "TaskDetail",
     "task_render": "Regenerated",
     "task_answers": "TemplateAnswers",
+    "task_assets": "TaskAssetNames",
     # A created project as `project show` answers with it.
     "project_create": "QueryResponseOfQualifiedProject",
     "project_render": "Regenerated",
@@ -195,6 +196,7 @@ OPTION_TYPES = {
     "no_tasks": "bool",
     "not_label": "list[str] | tuple[str, ...]",
     "page": "str",
+    "output_dir": "str",
     "page_size": "int",
     # A version of the task a read is pinned to, as a read of it reported.
     "pin": "VersionToken",
@@ -260,6 +262,7 @@ OPTION_PLACEHOLDERS = {
     "no_tasks": None,
     "not_label": "L",
     "page": "TOKEN",
+    "output_dir": "DIR",
     "page_size": "N",
     "pin": "VERSION",
     "priority": "PRIORITY",
@@ -774,6 +777,8 @@ def operands(command: tuple[str, ...]) -> tuple[str, ...]:
             return ("source",)
         case ("task" | "project" | "document", "render" | "answers"):
             return ("id",)
+        case ("task", "assets"):
+            return ("id",)
         case _:
             return ()
 
@@ -791,6 +796,7 @@ REQUIRED_OPTIONS: dict[tuple[str, ...], tuple[str, ...]] = {
     ("project", "create"): ("id", "title"),
     # A reconcile has no source to bring in line without `--source`.
     ("task", "status", "reconcile"): ("source",),
+    ("task", "assets"): ("output_dir",),
 }
 
 # The commands that read a body from standard input when `--body-file` is absent, which

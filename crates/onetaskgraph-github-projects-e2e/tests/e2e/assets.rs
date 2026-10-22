@@ -1939,3 +1939,69 @@ fn attachment_retry_records_both_http_outcomes_and_the_recovered_attempt() {
         == "GET /user-attachments/assets/{asset}"
         && request.response_outcome() == ResponseOutcome::Success));
 }
+
+#[test]
+fn task_assets_writes_each_uploaded_image_a_board_task_holds_under_its_reference_name() {
+    let clock = SimulatedClock::start(1);
+    let plan = Plan::new(&clock, 0, None);
+    let bytes = plan.author("task", "T", false, &[60_000, 120_000], 70);
+    plan.author("task", "U", false, &[], 0);
+    let landed = |report: &Value| {
+        report["items"][0]["destination"]
+            .as_str()
+            .expect("a copied task")
+            .to_owned()
+    };
+    let pictured = landed(&plan.copy("task", "T"));
+    let plain = landed(&plan.copy("task", "U"));
+    let assets = |id: &str, out: &std::path::Path| {
+        plan.sandbox
+            .command()
+            .args(["task", "assets", id, "--output-dir"])
+            .arg(out)
+            .arg("--json")
+            .envs(plan.clock.client_env(plan.client))
+            .assert()
+            .get_output()
+            .clone()
+    };
+    let written = |out: &std::path::Path| {
+        let mut names: Vec<String> = std::fs::read_dir(out)
+            .expect("the output directory")
+            .map(|entry| {
+                entry
+                    .expect("an entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        names.sort();
+        names
+    };
+
+    let out = plan.sandbox.subdirectory("out");
+    let listed = success(&assets(&pictured, &out));
+    assert_eq!(listed, json!(["shot-0.png", "shot-1.png"]));
+    assert_eq!(written(&out), ["shot-0.png", "shot-1.png"]);
+    for (index, expected) in bytes.iter().enumerate() {
+        let read = std::fs::read(out.join(format!("shot-{index}.png"))).expect("written");
+        assert!(
+            &read == expected,
+            "shot-{index}.png is not the uploaded image byte for byte"
+        );
+    }
+
+    let empty = plan.sandbox.subdirectory("empty");
+    assert_eq!(success(&assets(&plain, &empty)), json!([]));
+    assert!(written(&empty).is_empty());
+
+    let missing = assets("board:no-such-item", &empty);
+    assert_eq!(missing.status.code(), Some(1), "{}", stderr(&missing));
+    assert!(
+        stderr(&missing).contains("board:no-such-item"),
+        "{}",
+        stderr(&missing)
+    );
+    assert!(written(&empty).is_empty());
+}
