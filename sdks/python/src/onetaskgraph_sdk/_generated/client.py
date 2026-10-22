@@ -1130,6 +1130,7 @@ class GeneratedClient:
         ]
         | None = None,
         status_policy: Literal["source", "preserve-destination"] | None = None,
+        target_task: GlobalId | str | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
         to: str | None = None,
     ) -> CopyReport:
@@ -1153,6 +1154,7 @@ class GeneratedClient:
             source=source,
             status=status,
             status_policy=status_policy,
+            target_task=target_task,
             term_scope=_strings("task_copy", "term_scope", term_scope),
             to=to,
         )

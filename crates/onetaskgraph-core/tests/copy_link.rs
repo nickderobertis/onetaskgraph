@@ -434,6 +434,7 @@ fn copy_of(items: &[&str], scope: CopyScope) -> CopyRequest {
             .expect("a copy names at least one item"),
         scope,
         destination: name("into"),
+        target_task: None,
         match_by: None,
         recreate: false,
         create: false,
@@ -1372,4 +1373,55 @@ async fn a_location_the_source_will_not_take_back_is_named_as_left_behind() {
         json!({"elsewhere": "elsewhere:E"}),
         "and its link, which it would take back, is put back"
     );
+}
+
+#[tokio::test]
+async fn a_rust_caller_selects_a_verified_target_before_a_stale_link_without_scanning() {
+    let (engine, pages) = engine(
+        &json!({"tasks": [task("T-1", "Alpha", &json!({"onetaskgraph.copies": {"into": "into:withdrawn"}}))]}),
+        &json!({"tasks": [
+            task("first", "First duplicate", &json!({"onetaskgraph.origin": "from:T-1"})),
+            task("second", "Second duplicate", &json!({"onetaskgraph.origin": "from:T-1"})),
+        ]}),
+    );
+    let mut request = one("from:T-1");
+    request.target_task = Some(id("into:second"));
+    let report = copied(&engine, &request).await;
+    assert_eq!(
+        said(&report.items[0]),
+        landed("into:second", "updated", "target-task", CopyLink::Recorded)
+    );
+    assert_eq!(
+        links_of(&engine, "from:T-1").await,
+        json!({"into": "into:second"})
+    );
+    let next = copied(&engine, &one("from:T-1")).await;
+    assert_eq!(
+        said(&next.items[0]),
+        landed("into:second", "unchanged", "link", CopyLink::Unchanged)
+    );
+    assert_eq!(pages.load(Ordering::Relaxed), 0);
+
+    request.target_task = Some(id("into:missing"));
+    assert!(matches!(
+        engine.copy(&request).await,
+        Err(EngineError::TargetTaskMissing { .. })
+    ));
+    assert_eq!(
+        links_of(&engine, "from:T-1").await,
+        json!({"into": "into:second"})
+    );
+}
+
+#[tokio::test]
+async fn an_explicit_target_refuses_non_task_scopes_before_reading() {
+    let engine = Engine::new(Vec::new(), Vec::new());
+    for scope in [CopyScope::Documents, CopyScope::Projects { tasks: false }] {
+        let mut request = copy_of(&["from:T-1"], scope);
+        request.target_task = Some(id("into:second"));
+        assert!(matches!(
+            engine.copy(&request).await,
+            Err(EngineError::TargetTaskNeedsOne)
+        ));
+    }
 }

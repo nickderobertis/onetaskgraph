@@ -543,6 +543,7 @@ fn copy(items: &[&str], scope: CopyScope, into: &str) -> CopyRequest {
         items: CopyItems::new(items.iter().map(|item| id(item)).collect()).expect("an item"),
         scope,
         destination: SourceName::new(into).expect("a name"),
+        target_task: None,
         match_by: None,
         recreate: false,
         create: false,

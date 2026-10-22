@@ -40,6 +40,7 @@ fn copy_to(destination: &str, items: &[&str]) -> CopyRequest {
         items: CopyItems::new(items.iter().map(|item| id(item)).collect()).expect("items"),
         scope: CopyScope::Tasks,
         destination: SourceName::new(destination).expect("a name"),
+        target_task: None,
         match_by: None,
         recreate: false,
         create: false,

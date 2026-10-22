@@ -8,6 +8,9 @@
 //! so nothing here is written down outside the plugin that owns the item, and the invariant
 //! this engine is built around is untouched.
 //!
+//! An explicit `target_task` is verified by destination and origin before these rules.
+//! It is updated and its link replaces any prior destination entry.
+//!
 //! 0. **Follow the link.** An item whose `onetaskgraph.copies` names an item at the
 //!    destination has that item read by id, and when that item's own origin names this one
 //!    back it is the target: one read, and no scan. A link naming nothing there any more is
@@ -101,6 +104,9 @@ pub struct CopyRequest {
     pub destination: SourceName,
     /// How to re-establish a correspondence the two origin rules cannot find.
     pub match_by: Option<MatchBy>,
+    /// The existing destination task to verify and update before following stored links.
+    // llmlint: ignore[invalid_states_unrepresentable] The public CopyRequest contract requires an optional target_task beside the existing flag-for-flag fields; replacing them with a selection enum would depart from that agreed interface. Engine::copy rejects conflicting modes, queries, multiple ids and non-task scopes before reading, and the CLI and Rust copy_link journeys prove those refusals.
+    pub target_task: Option<GlobalId>,
     /// Whether an origin naming nothing at the destination falls through to the search
     /// rule instead of refusing.
     pub recreate: bool,
@@ -164,10 +170,11 @@ pub struct CopyRequest {
     pub statuses: Vec<StatusCategory>,
 }
 
-/// A way of looking for a counterpart that [`CopyRequest::create`] says not to take, named as
-/// the command line spells it.
+/// A copy selection option, named as the command line spells it in a conflict refusal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CopyLookup {
+    /// [`CopyRequest::create`], `--create`.
+    Create,
     /// [`CopyRequest::match_by`], `--match-by`.
     MatchBy,
     /// [`CopyRequest::recreate`], `--recreate`.
@@ -177,6 +184,7 @@ pub enum CopyLookup {
 impl std::fmt::Display for CopyLookup {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
+            Self::Create => "--create",
             Self::MatchBy => "--match-by",
             Self::Recreate => "--recreate",
         })
@@ -506,13 +514,15 @@ pub struct CommentCounts {
 /// Which rule found the destination counterpart an item was updated at, or found already
 /// reading as it does.
 ///
-/// Tried in this order, and the first that answers is the one reported: the link the item
-/// records, its own origin, a search of the destination for an item recording it as its
-/// origin, and the caller's `--match-by`. When none answers, the item is created and says
+/// Tried in this order, and the first that answers is the one reported: the explicit target
+/// task, the link the item records, its own origin, a search of the destination for an item
+/// recording it as its origin, and the caller's `--match-by`. When none answers, the item is created and says
 /// so as [`NoCounterpart`] instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum CopyVia {
+    /// The destination task explicitly named by the caller and verified by origin.
+    TargetTask,
     /// The item's `onetaskgraph.copies` entry for the destination named an item whose own
     /// origin names this one back. Found by one read by id, and no scan.
     Link,
@@ -526,7 +536,7 @@ pub enum CopyVia {
 
 /// What a created item reports as its `via`: no rule found a counterpart.
 ///
-/// One word, and a type of its own rather than a fifth [`CopyVia`], so an item updated at a
+/// One word, and a type of its own rather than another [`CopyVia`], so an item updated at a
 /// counterpart cannot say none was found and a created one cannot name a rule that found
 /// one.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -793,6 +803,8 @@ enum Target {
 /// what decides whether the copied item's link is written.
 #[derive(Clone, PartialEq, Eq)]
 enum Found {
+    /// The caller named this task, whose origin was verified.
+    TargetTask,
     /// The item's own link named it, and it names the item back.
     Link,
     /// Rule 1: the item being copied already named it, so this copy is a copy-back.
@@ -818,6 +830,7 @@ impl Found {
     /// value in every consumer's schema for a distinction none of them acts on.
     fn via(&self) -> CopyVia {
         match self {
+            Self::TargetTask => CopyVia::TargetTask,
             Self::Link => CopyVia::Link,
             Self::Origin => CopyVia::Origin,
             Self::Scan | Self::Member { .. } => CopyVia::Scan,
@@ -1754,6 +1767,26 @@ impl Engine {
                 if given {
                     return Err(EngineError::CreateWith { flag });
                 }
+            }
+        }
+        if let Some(target) = &request.target_task {
+            for (given, flag) in [
+                (request.create, CopyLookup::Create),
+                (request.match_by.is_some(), CopyLookup::MatchBy),
+                (request.recreate, CopyLookup::Recreate),
+            ] {
+                if given {
+                    return Err(EngineError::TargetTaskWith { flag });
+                }
+            }
+            if request.scope != CopyScope::Tasks || request.items.as_slice().len() != 1 {
+                return Err(EngineError::TargetTaskNeedsOne);
+            }
+            if target.source != request.destination {
+                return Err(EngineError::TargetTaskSource {
+                    target: target.clone(),
+                    destination: request.destination.clone(),
+                });
             }
         }
         if request.items.query().is_some() && request.scope != CopyScope::Tasks {
@@ -5783,6 +5816,33 @@ impl Engine {
                 });
             }
             return Ok((Target::Create, None));
+        }
+        if let Some(target) = &request.target_task {
+            if &target.source != destination.name() {
+                return Err(EngineError::TargetTaskSource {
+                    target: target.clone(),
+                    destination: destination.name().clone(),
+                });
+            }
+            let held = self
+                .prior_reading(destination, item.level(), &target.native, request.comments)
+                .await?
+                .ok_or_else(|| EngineError::TargetTaskMissing {
+                    target: target.clone(),
+                })?;
+            if origin_of(described(&held.item).1).as_ref() != Some(id) {
+                return Err(EngineError::TargetTaskOrigin {
+                    target: target.clone(),
+                    item: id.clone(),
+                });
+            }
+            return Ok((
+                Target::Update {
+                    id: target.native.clone(),
+                    found: Found::TargetTask,
+                },
+                Some(held),
+            ));
         }
         // The link first, and it is believed only when the item it names still names this
         // one back: a person who re-pointed that item's origin has said it is not this

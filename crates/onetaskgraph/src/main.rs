@@ -682,6 +682,7 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
             let mut request = copy_request(items, CopyScope::Tasks, &args.copy)?;
             request.statuses = args.query.statuses();
             request.create = args.create;
+            request.target_task = args.target_task.as_deref().map(qualified).transpose()?;
             request.comments = args.comments;
             request.status_policy = args.status_policy.into();
             request.expect.clone_from(&args.expect.expect);
@@ -1638,6 +1639,7 @@ fn copy_request(
                 ),
             )
         })?,
+        target_task: None,
         match_by: args.match_by.as_deref().map(MatchBy::parse),
         recreate: args.recreate,
         // Only `task copy` takes `--create`; it sets this on the request it builds.

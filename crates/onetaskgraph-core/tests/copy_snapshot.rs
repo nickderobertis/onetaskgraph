@@ -289,6 +289,7 @@ fn copy() -> CopyRequest {
         items: CopyItems::new(vec![id("from:T-1")]).expect("one item"),
         scope: CopyScope::Tasks,
         destination: name("into"),
+        target_task: None,
         match_by: None,
         recreate: false,
         create: false,

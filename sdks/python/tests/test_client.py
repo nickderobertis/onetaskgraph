@@ -43,6 +43,7 @@ from onetaskgraph_sdk._generated.copy_report import (
     CopyOutcomeFailed,
     CopyOutcomeSkipped,
     CopyOutcomeUnchanged,
+    CopyOutcomeUpdated,
 )
 from onetaskgraph_sdk._generated.copy_report import GlobalId as LandedAt
 from onetaskgraph_sdk._generated.models import QueryResponseOfQualifiedTask
@@ -1831,3 +1832,51 @@ def test_copy_with_comments_carries_them_and_a_repeat_by_query_skips(
     assert isinstance(skipped, CopyOutcomeUnchanged)
     assert skipped.skipped is True
     assert skipped.link == "skipped"
+
+
+def test_task_copy_target_task_selects_a_duplicate_and_records_its_link(
+    binary: Path, tmp_path: Path
+) -> None:
+    """A typed explicit target wins over the first duplicate; a missing target writes nothing."""
+    client = Client(binary, cwd=folders(tmp_path))
+    source = tmp_path / "from" / "tasks" / "T-1.md"
+    source.write_text(
+        "---\ntitle: Alpha engine\nstatus: todo\nmetadata:\n  caller.count: 3\n---\nthe core\n",
+        encoding="utf-8",
+    )
+    tasks = tmp_path / "into" / "tasks"
+    tasks.mkdir()
+    carrier = (
+        "---\ntitle: Duplicate\nstatus: todo\nmetadata:\n"
+        "  onetaskgraph.origin: from:T-1\n---\nold body\n"
+    )
+    first = tasks / "first.md"
+    second = tasks / "second.md"
+    first.write_text(carrier, encoding="utf-8")
+    second.write_text(carrier, encoding="utf-8")
+
+    report = run(client.task_copy(["from:T-1"], to="into", target_task=GlobalId("into:second")))
+    [selected] = report.items
+    assert isinstance(selected.root, CopyOutcomeUpdated)
+    assert landed(selected) == "into:second"
+    assert selected.root.via == "target-task"
+    assert selected.root.link == "recorded"
+    assert first.read_text(encoding="utf-8") == carrier
+    assert "Alpha engine" in second.read_text(encoding="utf-8")
+    assert run(client.task_show("from:T-1")).items[0].item.metadata["onetaskgraph.copies"] == {
+        "into": "into:second"
+    }
+
+    linked = source.read_bytes()
+    survivor = second.read_bytes()
+    with pytest.raises(OnetaskgraphError) as missing:
+        run(client.task_copy(["from:T-1"], to="into", target_task="into:missing"))
+    assert missing.value.exit_code == 1
+    assert "target task into:missing does not exist" in str(missing.value)
+    assert source.read_bytes() == linked
+    assert second.read_bytes() == survivor
+
+    [again] = run(client.task_copy(["from:T-1"], to="into")).items
+    assert isinstance(again.root, CopyOutcomeUnchanged)
+    assert landed(again) == "into:second"
+    assert again.root.via == "link"

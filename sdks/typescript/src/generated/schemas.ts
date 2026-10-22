@@ -1936,8 +1936,13 @@ export const runtimeSchemas = {
         ]
       },
       "CopyVia": {
-        "description": "Which rule found the destination counterpart an item was updated at, or found already\nreading as it does.\n\nTried in this order, and the first that answers is the one reported: the link the item\nrecords, its own origin, a search of the destination for an item recording it as its\norigin, and the caller's `--match-by`. When none answers, the item is created and says\nso as [`NoCounterpart`] instead.",
+        "description": "Which rule found the destination counterpart an item was updated at, or found already\nreading as it does.\n\nTried in this order, and the first that answers is the one reported: the explicit target\ntask, the link the item records, its own origin, a search of the destination for an item\nrecording it as its origin, and the caller's `--match-by`. When none answers, the item is created and says\nso as [`NoCounterpart`] instead.",
         "oneOf": [
+          {
+            "const": "target-task",
+            "description": "The destination task explicitly named by the caller and verified by origin.",
+            "type": "string"
+          },
           {
             "const": "link",
             "description": "The item's `onetaskgraph.copies` entry for the destination named an item whose own\norigin names this one back. Found by one read by id, and no scan.",
@@ -2025,7 +2030,7 @@ export const runtimeSchemas = {
         "type": "string"
       },
       "NoCounterpart": {
-        "description": "What a created item reports as its `via`: no rule found a counterpart.\n\nOne word, and a type of its own rather than a fifth [`CopyVia`], so an item updated at a\ncounterpart cannot say none was found and a created one cannot name a rule that found\none.",
+        "description": "What a created item reports as its `via`: no rule found a counterpart.\n\nOne word, and a type of its own rather than another [`CopyVia`], so an item updated at a\ncounterpart cannot say none was found and a created one cannot name a rule that found\none.",
         "oneOf": [
           {
             "const": "created",
@@ -2367,8 +2372,13 @@ export const runtimeSchemas = {
         ]
       },
       "CopyVia": {
-        "description": "Which rule found the destination counterpart an item was updated at, or found already\nreading as it does.\n\nTried in this order, and the first that answers is the one reported: the link the item\nrecords, its own origin, a search of the destination for an item recording it as its\norigin, and the caller's `--match-by`. When none answers, the item is created and says\nso as [`NoCounterpart`] instead.",
+        "description": "Which rule found the destination counterpart an item was updated at, or found already\nreading as it does.\n\nTried in this order, and the first that answers is the one reported: the explicit target\ntask, the link the item records, its own origin, a search of the destination for an item\nrecording it as its origin, and the caller's `--match-by`. When none answers, the item is created and says\nso as [`NoCounterpart`] instead.",
         "oneOf": [
+          {
+            "const": "target-task",
+            "description": "The destination task explicitly named by the caller and verified by origin.",
+            "type": "string"
+          },
           {
             "const": "link",
             "description": "The item's `onetaskgraph.copies` entry for the destination named an item whose own\norigin names this one back. Found by one read by id, and no scan.",
@@ -2456,7 +2466,7 @@ export const runtimeSchemas = {
         "type": "string"
       },
       "NoCounterpart": {
-        "description": "What a created item reports as its `via`: no rule found a counterpart.\n\nOne word, and a type of its own rather than a fifth [`CopyVia`], so an item updated at a\ncounterpart cannot say none was found and a created one cannot name a rule that found\none.",
+        "description": "What a created item reports as its `via`: no rule found a counterpart.\n\nOne word, and a type of its own rather than another [`CopyVia`], so an item updated at a\ncounterpart cannot say none was found and a created one cannot name a rule that found\none.",
         "oneOf": [
           {
             "const": "created",
@@ -3245,8 +3255,13 @@ export const runtimeSchemas = {
         "type": "object"
       },
       "CopyVia": {
-        "description": "Which rule found the destination counterpart an item was updated at, or found already\nreading as it does.\n\nTried in this order, and the first that answers is the one reported: the link the item\nrecords, its own origin, a search of the destination for an item recording it as its\norigin, and the caller's `--match-by`. When none answers, the item is created and says\nso as [`NoCounterpart`] instead.",
+        "description": "Which rule found the destination counterpart an item was updated at, or found already\nreading as it does.\n\nTried in this order, and the first that answers is the one reported: the explicit target\ntask, the link the item records, its own origin, a search of the destination for an item\nrecording it as its origin, and the caller's `--match-by`. When none answers, the item is created and says\nso as [`NoCounterpart`] instead.",
         "oneOf": [
+          {
+            "const": "target-task",
+            "description": "The destination task explicitly named by the caller and verified by origin.",
+            "type": "string"
+          },
           {
             "const": "link",
             "description": "The item's `onetaskgraph.copies` entry for the destination named an item whose own\norigin names this one back. Found by one read by id, and no scan.",
@@ -3450,7 +3465,7 @@ export const runtimeSchemas = {
         "type": "string"
       },
       "NoCounterpart": {
-        "description": "What a created item reports as its `via`: no rule found a counterpart.\n\nOne word, and a type of its own rather than a fifth [`CopyVia`], so an item updated at a\ncounterpart cannot say none was found and a created one cannot name a rule that found\none.",
+        "description": "What a created item reports as its `via`: no rule found a counterpart.\n\nOne word, and a type of its own rather than another [`CopyVia`], so an item updated at a\ncounterpart cannot say none was found and a created one cannot name a rule that found\none.",
         "oneOf": [
           {
             "const": "created",
@@ -3737,8 +3752,13 @@ export const runtimeSchemas = {
   },
   "CopyVia": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "description": "Which rule found the destination counterpart an item was updated at, or found already\nreading as it does.\n\nTried in this order, and the first that answers is the one reported: the link the item\nrecords, its own origin, a search of the destination for an item recording it as its\norigin, and the caller's `--match-by`. When none answers, the item is created and says\nso as [`NoCounterpart`] instead.",
+    "description": "Which rule found the destination counterpart an item was updated at, or found already\nreading as it does.\n\nTried in this order, and the first that answers is the one reported: the explicit target\ntask, the link the item records, its own origin, a search of the destination for an item\nrecording it as its origin, and the caller's `--match-by`. When none answers, the item is created and says\nso as [`NoCounterpart`] instead.",
     "oneOf": [
+      {
+        "const": "target-task",
+        "description": "The destination task explicitly named by the caller and verified by origin.",
+        "type": "string"
+      },
       {
         "const": "link",
         "description": "The item's `onetaskgraph.copies` entry for the destination named an item whose own\norigin names this one back. Found by one read by id, and no scan.",

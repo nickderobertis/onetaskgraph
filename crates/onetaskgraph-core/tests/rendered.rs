@@ -879,6 +879,7 @@ async fn copy_into_back(
             items: CopyItems::new(vec![item.parse().unwrap()]).unwrap(),
             scope,
             destination: name("back"),
+            target_task: None,
             match_by: None,
             recreate: false,
             create: false,
