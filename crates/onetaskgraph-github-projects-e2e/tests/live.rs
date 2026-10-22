@@ -362,6 +362,7 @@ async fn disposable_task_and_document_asset_copies() {
                 comments: false,
                 no_link: false,
                 expect: None,
+                status_policy: onetaskgraph_core::StatusPolicy::Source,
                 statuses: Vec::new(),
             };
             let report = engine
@@ -739,6 +740,7 @@ async fn a_reconcile_dry_run_reads_the_live_board_through_its_closed_filter_alon
             comments: false,
             no_link: true,
             expect: None,
+            status_policy: onetaskgraph_core::StatusPolicy::Source,
             statuses: Vec::new(),
         };
         let report = engine

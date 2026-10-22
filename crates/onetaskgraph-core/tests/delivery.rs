@@ -550,6 +550,7 @@ fn copy(items: &[&str], scope: CopyScope, into: &str) -> CopyRequest {
         comments: false,
         no_link: false,
         expect: None,
+        status_policy: onetaskgraph_core::StatusPolicy::Source,
         statuses: Vec::new(),
     }
 }

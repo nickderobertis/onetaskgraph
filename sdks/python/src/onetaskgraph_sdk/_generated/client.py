@@ -538,6 +538,7 @@ class GeneratedClient:
         page_size: int | None = None,
         recreate: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
+        status_policy: Literal["source", "preserve-destination"] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
         to: str | None = None,
     ) -> CopyReport:
@@ -557,6 +558,7 @@ class GeneratedClient:
             page_size=page_size,
             recreate=recreate,
             set=set,
+            status_policy=status_policy,
             term_scope=_strings("project_copy", "term_scope", term_scope),
             to=to,
         )
@@ -1127,6 +1129,7 @@ class GeneratedClient:
             ...,
         ]
         | None = None,
+        status_policy: Literal["source", "preserve-destination"] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
         to: str | None = None,
     ) -> CopyReport:
@@ -1149,6 +1152,7 @@ class GeneratedClient:
             set=set,
             source=source,
             status=status,
+            status_policy=status_policy,
             term_scope=_strings("task_copy", "term_scope", term_scope),
             to=to,
         )

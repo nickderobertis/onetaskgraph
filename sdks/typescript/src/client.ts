@@ -84,6 +84,10 @@ export type WriteOptions = { termScope?: string[] };
 // task's ids and current values from the source's local cache instead of reading it. Not a
 // precondition — see `docs/plugin-protocol.md`.
 export type ExpectOptions = { expect?: string };
+/** Status ownership on copy updates. Creates always carry the source status. */
+export const statusPolicies = ["source", "preserve-destination"] as const;
+export type StatusPolicy = (typeof statusPolicies)[number];
+export type StatusCopyOptions = { statusPolicy?: StatusPolicy };
 export type CopyOptions = WriteOptions & {
   matchBy?: string;
   recreate?: boolean;
@@ -110,7 +114,10 @@ export type CopyQueryOptions = {
 };
 // `create` asserts the destination holds no counterpart of any task named, so each is created
 // without the correspondence lookup. Only `task copy` takes it, and the query narrowing.
-export type TaskCopyOptions = CopyOptions & CopyQueryOptions & ExpectOptions & { create?: boolean };
+export type TaskCopyOptions = StatusCopyOptions &
+  CopyOptions &
+  CopyQueryOptions &
+  ExpectOptions & { create?: boolean };
 // A comment's body, given as text the client writes to the binary's standard input or as a
 // file the binary reads byte for byte — never as a word of the command line.
 export type CommentBodyOptions = ({ body: string } | { bodyFile: string }) &
@@ -840,7 +847,8 @@ export function taskCopyFlags(options: TaskCopyOptions): string[] {
 }
 
 export function projectCopyFlags(
-  options: CopyOptions & { noTasks?: boolean; members?: string[]; membersOnly?: boolean },
+  options: CopyOptions &
+    StatusCopyOptions & { noTasks?: boolean; members?: string[]; membersOnly?: boolean },
 ): string[] {
   const args = copyFlags("projectCopy", options);
   if (options.noTasks) args.push("--no-tasks");
@@ -852,12 +860,21 @@ export function projectCopyFlags(
   return args;
 }
 
-function copyFlags(method: string, options: CopyOptions & CopyQueryOptions): string[] {
+function copyFlags(
+  method: string,
+  options: CopyOptions & CopyQueryOptions & StatusCopyOptions,
+): string[] {
   const args: string[] = [...termScopeFlags(method, options)];
   for (const flag of ["noLink", "comments"] as const) {
     if (options[flag] !== undefined && typeof options[flag] !== "boolean") {
       throw new TypeError(`${method}: ${flag} must be a boolean`);
     }
+  }
+  if (options.statusPolicy !== undefined) {
+    if (!statusPolicies.some((policy) => policy === options.statusPolicy)) {
+      throw new TypeError(`${method}: statusPolicy must be ${statusPolicies.join(" or ")}`);
+    }
+    args.push("--status-policy", options.statusPolicy);
   }
   if (options.matchBy !== undefined) args.push("--match-by", options.matchBy);
   if (options.recreate) args.push("--recreate");
@@ -1197,7 +1214,8 @@ export class OnetaskgraphClient {
     to: string,
     // `membersOnly` copies the named `members` into the project the destination already holds,
     // leaving that project unread and unwritten; it is refused without a member.
-    options: CopyOptions & { noTasks?: boolean; members?: string[]; membersOnly?: boolean } = {},
+    options: CopyOptions &
+      StatusCopyOptions & { noTasks?: boolean; members?: string[]; membersOnly?: boolean } = {},
   ): Promise<CopyReport> {
     const args = [id, "--to", to, ...projectCopyFlags(options)];
     return this.run("project copy", args);

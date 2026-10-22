@@ -78,6 +78,16 @@ use super::{
     TaskRequest,
 };
 
+/// Which status a copy writes when its destination already holds the item.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum StatusPolicy {
+    /// Carry the source status, including on updates.
+    #[default]
+    Source,
+    /// Keep an existing destination item's status; creates carry the source status.
+    PreserveDestination,
+}
+
 /// A request to copy work into one configured destination.
 #[derive(Debug, Clone)]
 pub struct CopyRequest {
@@ -85,6 +95,8 @@ pub struct CopyRequest {
     pub items: CopyItems,
     /// What those ids name, and what comes with them.
     pub scope: CopyScope,
+    /// How an existing destination item's status is treated.
+    pub status_policy: StatusPolicy,
     /// The configured source to copy into — a source name, never a qualified id.
     pub destination: SourceName,
     /// How to re-establish a correspondence the two origin rules cannot find.
@@ -1419,6 +1431,8 @@ struct Deliverer {
 
 /// One item, read and resolved, on its way into the destination.
 struct Planned {
+    /// The caller's status policy, applied at comparison and write.
+    status_policy: StatusPolicy,
     /// Where it came from.
     source: GlobalId,
     /// The item as its source reported it.
@@ -4037,21 +4051,27 @@ impl Engine {
     async fn store_forms(&self, planned: &mut [Planned]) -> Result<(), EngineError> {
         for item in planned {
             let destination = self.writable(&item.to)?;
+            let preserve_status =
+                item.status_policy == StatusPolicy::PreserveDestination && item.held.is_some();
             let (content, metadata) = match &mut item.item {
                 Item::Task(task) => {
-                    task.status = destination
-                        .source()
-                        .stored_status(ItemKind::Task, &task.status)
-                        .await
-                        .map_err(|error| refused(destination, error))?;
+                    if !preserve_status {
+                        task.status = destination
+                            .source()
+                            .stored_status(ItemKind::Task, &task.status)
+                            .await
+                            .map_err(|error| refused(destination, error))?;
+                    }
                     (&mut task.content, &mut task.metadata)
                 }
                 Item::Project(project) => {
-                    project.status = destination
-                        .source()
-                        .stored_status(ItemKind::Project, &project.status)
-                        .await
-                        .map_err(|error| refused(destination, error))?;
+                    if !preserve_status {
+                        project.status = destination
+                            .source()
+                            .stored_status(ItemKind::Project, &project.status)
+                            .await
+                            .map_err(|error| refused(destination, error))?;
+                    }
                     (&mut project.content, &mut project.metadata)
                 }
                 Item::Document(document) => (&mut document.content, &mut document.metadata),
@@ -4171,7 +4191,16 @@ impl Engine {
             let as_written = same_edges(&held.edges, &resolved(&edges))
                 && targets(&held_task.delivers, &item.to)
                     == targets(&resolved_entries(&delivers), &item.to);
-            item.skipped = self.token_covers_a_copy(&item.source.source, item.carried.is_some())
+            // A previous preserve-destination copy can record the same source token while
+            // retaining a different status. Switching back to source must still write it.
+            let status_matches = item.status_policy == StatusPolicy::PreserveDestination
+                || self
+                    .writable(&item.to)?
+                    .source()
+                    .status_as_written(ItemKind::Task, &task.status)
+                    == held_task.status;
+            item.skipped = status_matches
+                && self.token_covers_a_copy(&item.source.source, item.carried.is_some())
                 && as_written
                 && skips(task, held, item.carried.is_some(), &item.to);
         }
@@ -4477,6 +4506,7 @@ impl Engine {
                     let project = filed[*index].clone();
                     let landing = as_written(
                         destination,
+                        item,
                         outgoing(
                             item,
                             created_id(&item.item, project.as_ref()),
@@ -5547,6 +5577,7 @@ impl Engine {
             held = prior;
         }
         Ok(Planned {
+            status_policy: request.status_policy,
             source: id,
             item,
             edges,
@@ -6991,6 +7022,7 @@ impl Engine {
         let origin = recorded(item, prior.as_ref());
         let mut landing = as_written(
             destination,
+            item,
             outgoing(
                 item,
                 suggested,
@@ -7318,6 +7350,7 @@ fn changes(
     };
     let mut outgoing = as_written(
         destination,
+        item,
         outgoing(
             item,
             target.clone(),
@@ -7342,7 +7375,10 @@ fn changes(
 /// what the destination will hold: a board that writes a category to an option of its own
 /// reads `todo` back as `Todo`, and comparing the spelling the source gave would call every
 /// such item changed on every copy, and record a digest no later read of it could match.
-fn as_written(destination: &ResolvedSource, mut item: Item) -> Item {
+fn as_written(destination: &ResolvedSource, planned: &Planned, mut item: Item) -> Item {
+    if planned.status_policy == StatusPolicy::PreserveDestination && planned.held.is_some() {
+        return item;
+    }
     let source = destination.source();
     match &mut item {
         Item::Task(task) => task.status = source.status_as_written(ItemKind::Task, &task.status),
@@ -8161,6 +8197,10 @@ fn outgoing(
                 Some(Item::Task(held)) => held.delivered_by.clone(),
                 _ => Vec::new(),
             },
+            status: match (item.status_policy, held.map(|held| &held.item)) {
+                (StatusPolicy::PreserveDestination, Some(Item::Task(held))) => held.status.clone(),
+                _ => task.status.clone(),
+            },
             classification,
             ..(**task).clone()
         })),
@@ -8177,6 +8217,12 @@ fn outgoing(
                 created_at: None,
                 updated_at: None,
                 metadata,
+                status: match (item.status_policy, held.map(|held| &held.item)) {
+                    (StatusPolicy::PreserveDestination, Some(Item::Project(held))) => {
+                        held.status.clone()
+                    }
+                    _ => project.status.clone(),
+                },
                 classification,
                 ..(**project).clone()
             }))
@@ -8521,6 +8567,7 @@ fn stale_record(
 ) -> bool {
     let landing = as_written(
         destination,
+        item,
         outgoing(
             item,
             target.clone(),

@@ -1850,9 +1850,31 @@ pub struct CopyArgs {
     pub term_scope: TermScopeArgs,
 }
 
+/// How a copy treats the status of an existing destination item.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum StatusPolicyArgs {
+    /// Copy the source status.
+    Source,
+    /// Keep the destination status on updates; creates use the source status.
+    PreserveDestination,
+}
+
+impl From<StatusPolicyArgs> for onetaskgraph_core::StatusPolicy {
+    fn from(value: StatusPolicyArgs) -> Self {
+        match value {
+            StatusPolicyArgs::Source => Self::Source,
+            StatusPolicyArgs::PreserveDestination => Self::PreserveDestination,
+        }
+    }
+}
+
 /// `onetaskgraph task copy`.
 #[derive(Debug, Args)]
 pub struct TaskCopyArgs {
+    /// Which status to use for existing destination items. Creates use the source status.
+    #[arg(long, value_enum, default_value = "source")]
+    pub status_policy: StatusPolicyArgs,
+
     /// The qualified ids to copy, `<source>:<native-id>` — or none, and the narrowing below
     /// names the tasks instead.
     ///
@@ -1967,6 +1989,10 @@ impl CopyQueryArgs {
 /// `onetaskgraph project copy`.
 #[derive(Debug, Args)]
 pub struct ProjectCopyArgs {
+    /// Which status to use for existing destination items. Creates use the source status.
+    #[arg(long, value_enum, default_value = "source")]
+    pub status_policy: StatusPolicyArgs,
+
     /// The qualified id to copy, `<source>:<native-id>`.
     ///
     /// llmlint: ignore[invalid_states_unrepresentable] — as `TaskCopyArgs::id`.

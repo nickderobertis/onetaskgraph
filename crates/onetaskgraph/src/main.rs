@@ -683,6 +683,7 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
             request.statuses = args.query.statuses();
             request.create = args.create;
             request.comments = args.comments;
+            request.status_policy = args.status_policy.into();
             request.expect.clone_from(&args.expect.expect);
             copy(out, loaded, &request).await
         }
@@ -705,6 +706,7 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
             let mut request =
                 copy_request(named(std::iter::once(args.id.as_str()))?, scope, &args.copy)?;
             request.comments = args.comments;
+            request.status_policy = args.status_policy.into();
             copy(out, loaded, &request).await
         }
 
@@ -1646,6 +1648,7 @@ fn copy_request(
         comments: false,
         no_link: args.no_link,
         expect: None,
+        status_policy: onetaskgraph_core::StatusPolicy::Source,
         statuses: Vec::new(),
     })
 }
