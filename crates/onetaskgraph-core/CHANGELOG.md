@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.4](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.9.3...onetaskgraph-core-v0.9.4) - 2026-10-22
+
+### Added
+
+- *(engine)* read the image assets a task holds ([#3713](https://github.com/nickderobertis/onetaskgraph/pull/3713))
+
 ## [0.9.3](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.9.2...onetaskgraph-core-v0.9.3) - 2026-10-21
 
 ### Performance
