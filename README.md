@@ -1265,6 +1265,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         status_policy: StatusPolicy::Source,
         destination: SourceName::new("work")?,
         match_by: None,
+        target_task: None,
         recreate: false,
         create: false,
         dry_run: false,

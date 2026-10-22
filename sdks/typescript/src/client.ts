@@ -117,7 +117,7 @@ export type CopyQueryOptions = {
 export type TaskCopyOptions = StatusCopyOptions &
   CopyOptions &
   CopyQueryOptions &
-  ExpectOptions & { create?: boolean };
+  ExpectOptions & { create?: boolean; targetTask?: string };
 // A comment's body, given as text the client writes to the binary's standard input or as a
 // file the binary reads byte for byte — never as a word of the command line.
 export type CommentBodyOptions = ({ body: string } | { bodyFile: string }) &
@@ -842,6 +842,9 @@ export function taskCopyFlags(options: TaskCopyOptions): string[] {
   return [
     ...copyFlags("taskCopy", options),
     ...(options.create ? ["--create"] : []),
+    ...(options.targetTask === undefined
+      ? []
+      : ["--target-task", stringOption("taskCopy", "targetTask", options.targetTask)]),
     ...expectFlags("taskCopy", options),
   ];
 }
