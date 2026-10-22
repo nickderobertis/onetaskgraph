@@ -534,8 +534,7 @@ reads the entry first: when the item it names still records this item as its ori
 the counterpart, found by one read by id and no search — see the copy section of the README
 for the order the rules are tried in and the `stale-link` refusal.
 
-To select a survivor and replace a stale link, use `task copy --target-task`; the
-[README copy rules](../README.md#writing-tasks-markdown-in-ticket-out) specify its validation and precedence.
+To select a survivor and replace a stale link, use `task copy --target-task`.
 
 It lives in the `onetaskgraph.` namespace like the origin: `metadata set` refuses to write it,
 and a copy never carries it onto a destination — a destination item keeps the entry it holds,

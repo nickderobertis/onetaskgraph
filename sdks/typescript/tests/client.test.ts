@@ -349,6 +349,7 @@ test("copy drives the real binary and reports what it did to each item", async (
       copyClient.taskCopy(["from:T-1"], "into", { targetTask: "into:missing" }),
     ).rejects.toThrow("into:missing");
     expect((await copyClient.taskShow("into:T-1")).items[0]?.item.title).toBe("Alpha engine");
+    // Deliberately bypass the static type to prove validation of an invalid runtime value.
     expect(() => taskCopyFlags({ targetTask: 7 } as unknown as { targetTask: string })).toThrow(
       "targetTask",
     );
