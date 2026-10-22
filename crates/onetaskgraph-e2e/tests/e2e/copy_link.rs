@@ -666,6 +666,25 @@ fn an_explicit_target_selects_the_second_origin_carrier_and_replaces_a_stale_lin
                 copy(&sandbox, "task", &from, &["--target-task", "notes:first"]);
                 std::fs::remove_file(&first).unwrap();
             }
+            let source = source_file(&sandbox, "task", "T-1");
+            let before = std::fs::read(&source).unwrap();
+            assert_eq!(
+                copy(
+                    &sandbox,
+                    "task",
+                    &from,
+                    &["--target-task", "notes:second", "--dry-run"]
+                ),
+                (
+                    json!("notes:second"),
+                    json!("updated"),
+                    json!("target-task"),
+                    Value::Null
+                ),
+            );
+            assert_eq!(std::fs::read(&source).unwrap(), before);
+            assert_eq!(std::fs::read_to_string(&second).unwrap(), carrier);
+            assert_eq!(first.exists(), !stale);
             let selected = copy(&sandbox, "task", &from, &["--target-task", "notes:second"]);
             let mode = selected.2.as_str().expect("the selection mode");
             assert!(readme().contains(&format!("every item found by `--{mode}`")));
@@ -698,6 +717,19 @@ fn an_explicit_target_selects_the_second_origin_carrier_and_replaces_a_stale_lin
             );
             let (destination, _, via, _) = copy(&sandbox, "task", &from, &[]);
             assert_eq!((destination, via), (json!("notes:second"), json!("link")));
+            let settled_source = std::fs::read(&source).unwrap();
+            let settled_target = std::fs::read(&second).unwrap();
+            assert_eq!(
+                copy(&sandbox, "task", &from, &["--target-task", "notes:second"]),
+                (
+                    json!("notes:second"),
+                    json!("unchanged"),
+                    json!("target-task"),
+                    json!("unchanged")
+                ),
+            );
+            assert_eq!(std::fs::read(&source).unwrap(), settled_source);
+            assert_eq!(std::fs::read(&second).unwrap(), settled_target);
         }
     }
 }
