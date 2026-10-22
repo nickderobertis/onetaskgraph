@@ -1192,7 +1192,11 @@ them do; this is the inventory of what is owed, not a status board.
     public member whose refused write takes the whole copy back. A copy that would create a
     second project of a plan in a source takes over the member already there, found by either
     link alone.
-116. Approving a plan on a board — `project show`, `task list --project`, `document list
+116. `project copy --member … --members-only` lands the named tasks under the project a folder of
+    Markdown or a GitHub board already holds, reported as `--member` reports them, sending
+    nothing that compares or rewrites that project; one with no counterpart is refused before
+    any write, naming the `project copy` that creates it.
+117. Approving a plan on a board — `project show`, `task list --project`, `document list
     --project`, then `document metadata set --expect` the version that listing reported — lists
     each kind in one request of one point with every record and its order intact, carries the
     document whole as `document show` would, writes the approval behind one read and waits on the

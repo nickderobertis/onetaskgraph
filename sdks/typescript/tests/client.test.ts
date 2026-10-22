@@ -27,6 +27,7 @@ import {
   OnetaskgraphClient,
   OnetaskgraphExecutionError,
   OnetaskgraphValidationError,
+  projectCopyFlags,
   projectGraphDirections,
   taskCopyFlags,
   taskUpdateFlags,
@@ -396,6 +397,24 @@ test("copy drives the real binary and reports what it did to each item", async (
     await expect(
       copyClient.projectCopy("from:P-1", "into", { members: ["from:T-9"] }),
     ).rejects.toThrow("from:T-9 is not a task of from:P-1");
+    // Members only: the project already there is left exactly as it is, though its source moved.
+    const projectFile = resolve(copyRoot, "from/projects/P-1.md");
+    writeFileSync(
+      projectFile,
+      readFileSync(projectFile, "utf8").replace("title: Engine", "title: Engine, renamed"),
+    );
+    const held = readFileSync(resolve(copyRoot, "into/projects/P-1.md"), "utf8");
+    const only = await copyClient.projectCopy("from:P-1", "into", {
+      members: ["from:T-1"],
+      membersOnly: true,
+    });
+    expect(only.items.map((item) => [item.source, item.action])).toEqual([
+      ["from:T-1", "unchanged"],
+    ]);
+    expect(readFileSync(resolve(copyRoot, "into/projects/P-1.md"), "utf8")).toBe(held);
+    await expect(copyClient.projectCopy("from:P-1", "into", { membersOnly: true })).rejects.toThrow(
+      "--member",
+    );
 
     // A destination with no write side is refused, naming the source and its plugin.
     writeFileSync(
@@ -1906,6 +1925,45 @@ test("a copy with comments carries them, and a repeat by query skips the unchang
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("projectCopy flags agree with the binary help and validate membersOnly", () => {
+  const flags = (verb: string[]) => {
+    const help = spawnSync(binary, [...verb, "--help"], { encoding: "utf8" });
+    expect(help.status, help.stderr).toBe(0);
+    return new Set(
+      [...help.stdout.matchAll(/^\s+(?:-[a-zA-Z], )?(--[a-z][a-z-]*)/gm)].flatMap((found) =>
+        found[1] === undefined ? [] : [found[1]],
+      ),
+    );
+  };
+  const global = flags(["config", "show"]);
+  const own = [...flags(["project", "copy"])]
+    .filter((flag) => !global.has(flag) && flag !== "--to")
+    .sort();
+  const sent = projectCopyFlags({
+    matchBy: "title",
+    recreate: true,
+    dryRun: true,
+    noLink: true,
+    comments: true,
+    noTasks: true,
+    members: ["from:T-1"],
+    membersOnly: true,
+    termScope: ["github.com/example/project"],
+  });
+  const all = new Set(
+    [...sent, ...projectCopyFlags({ termScope: [] })].filter((flag) => flag.startsWith("--")),
+  );
+  expect([...all].sort()).toEqual(own);
+  expect(projectCopyFlags({ membersOnly: false })).not.toContain("--members-only");
+  // Untyped JavaScript callers can pass a string despite this TypeScript declaration.
+  expect(() =>
+    client.projectCopy("from:P-1", "into", {
+      members: ["from:T-1"],
+      membersOnly: "false" as unknown as boolean,
+    }),
+  ).toThrow("membersOnly must be a boolean");
 });
 
 test("taskAssets rejects a partial exit even beside valid asset names", async () => {

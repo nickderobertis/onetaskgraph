@@ -1236,6 +1236,26 @@ pub enum EngineError {
         projects: Vec<GlobalId>,
     },
 
+    /// A members-only copy named a project with no counterpart where its members would land.
+    ///
+    /// Refused before anything is written, because a members-only copy leaves the project
+    /// alone: it is the whole project copy this names that creates one.
+    #[error(
+        "{project} has no counterpart in {missing} to copy its members into, and a \
+         members-only copy never creates or writes a project\n\
+         next: create it with `onetaskgraph project copy {project} --to {destination}`, then \
+         copy members into it with --members-only."
+    )]
+    NoProjectCounterpart {
+        /// The project the copy named.
+        project: GlobalId,
+        /// The destination the copy was asked to write.
+        destination: SourceName,
+        /// The source holding no counterpart: the destination, or one its routes send a
+        /// member to.
+        missing: SourceName,
+    },
+
     /// A member copy's item depends on a member it was not told to carry, and that member
     /// records no origin naming the destination.
     ///

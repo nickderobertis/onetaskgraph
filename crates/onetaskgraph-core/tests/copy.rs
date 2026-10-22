@@ -5133,3 +5133,98 @@ async fn a_malformed_create_whose_undo_is_refused_names_both_what_it_left_and_wh
         vec!["into:P-1 Engine".to_owned(), "into:T-2 Beta".to_owned()]
     );
 }
+
+#[tokio::test]
+async fn members_only_routes_into_an_existing_member_project_and_refuses_a_missing_one() {
+    for present in [false, true] {
+        let mut filed = task("T-1", "Routed task");
+        filed["project"] = json!("P-1");
+        let project = |native: &str, metadata: Value| {
+            json!({
+                "id": native, "title": "Project", "labels": [],
+                "status": {"category": "todo", "name": "Todo"}, "metadata": metadata
+            })
+        };
+        let member_projects = if present {
+            vec![project(
+                "MEMBER",
+                json!({"onetaskgraph.member_of": "into:HOME"}),
+            )]
+        } else {
+            vec![]
+        };
+        let engine = engine_over(json!({
+            "from": {"plugin": "in-memory", "config": {
+                "projects": [project("P-1", json!({"onetaskgraph.copies": {"into": "into:HOME"}}))],
+                "tasks": [filed]
+            }},
+            "into": {"plugin": "in-memory", "config": {"projects": [project("HOME", json!({}))]}},
+            "team": {"plugin": "in-memory", "config": {"projects": member_projects}}
+        }))
+        .with_routes(
+            onetaskgraph_core::config::Routes::new(
+                std::collections::BTreeMap::from([(
+                    name("into"),
+                    vec![(vec!["github.com/nickderobertis/*".to_owned()], name("team"))],
+                )]),
+                &[name("from"), name("into"), name("team")],
+            )
+            .expect("valid routes"),
+        );
+        let mut request = one("from:P-1");
+        request.scope =
+            CopyScope::MembersOnly(CopyItems::new(vec![id("from:T-1")]).expect("one member"));
+        let result = engine.copy(&request).await;
+        if present {
+            let report = result.expect("the routed member lands");
+            assert_eq!(report.items.len(), 1);
+            assert_eq!(report.items[0].destination(), Some(&id("team:T-1")));
+            let shown = engine.task(&id("team:T-1")).await.expect("the copied task");
+            assert_eq!(shown.items[0].item.project, Some(NativeId::from("MEMBER")));
+        } else {
+            assert!(
+                matches!(result, Err(EngineError::NoProjectCounterpart { missing, .. }) if missing == name("team"))
+            );
+            assert!(listed(&engine, "team").await.is_empty());
+        }
+        assert!(listed(&engine, "into").await.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn a_members_only_task_without_repositories_follows_its_project_into_a_routed_source() {
+    let project = |native: &str, metadata: Value| {
+        json!({"id": native, "title": "Project", "labels": [],
+        "status": {"category": "todo", "name": "Todo"}, "metadata": metadata})
+    };
+    let mut filed = task("T-1", "No repository");
+    filed["project"] = json!("P-1");
+    filed["repositories"] = json!([]);
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "config": {"tasks": [filed],
+            "projects": [project("P-1", json!({"onetaskgraph.copies": {"team": "team:HOME"}}))]}},
+        "into": {"plugin": "in-memory", "config": {}},
+        "team": {"plugin": "in-memory", "config": {"projects": [project("HOME", json!({}))]}}
+    }))
+    .with_routes(
+        onetaskgraph_core::config::Routes::new(
+            std::collections::BTreeMap::from([(
+                name("into"),
+                vec![(vec!["github.com/nickderobertis/*".to_owned()], name("team"))],
+            )]),
+            &[name("from"), name("into"), name("team")],
+        )
+        .expect("routes"),
+    );
+    let mut request = one("from:P-1");
+    request.scope = CopyScope::MembersOnly(CopyItems::new(vec![id("from:T-1")]).expect("member"));
+    let report = engine.copy(&request).await.expect("copy lands");
+    assert_eq!(report.items[0].destination(), Some(&id("team:T-1")));
+    assert_eq!(
+        engine.task(&id("team:T-1")).await.expect("task").items[0]
+            .item
+            .project,
+        Some(NativeId::from("HOME"))
+    );
+    assert!(listed(&engine, "into").await.is_empty());
+}

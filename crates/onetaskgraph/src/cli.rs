@@ -1985,6 +1985,14 @@ pub struct ProjectCopyArgs {
     #[arg(long = "member", value_name = "TASK-ID", conflicts_with = "no_tasks")]
     pub member: Vec<String>,
 
+    /// Copy the named members into the project the destination already holds, leaving that
+    /// project as it is: it is found by the link or origin it records, or by a lookup of its
+    /// origin, and is never read for comparison, written or reported. A project the
+    /// destination does not hold yet is refused, naming the `project copy` that creates it.
+    // llmlint: ignore[invalid_states_unrepresentable] Clap rejects this flag without a member at parse; the command conversion then constructs MembersOnly with nonempty CopyItems. Keeping the clap argument beside member follows this boundary's existing flag representation.
+    #[arg(long = "members-only", requires = "member")]
+    pub members_only: bool,
+
     /// Keep the destination's copies of each copied task's comments in step with the
     /// source's, as `task copy --comments` does.
     #[arg(long, conflicts_with = "no_tasks")]

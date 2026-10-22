@@ -2915,6 +2915,250 @@ fn a_member_copy_it_cannot_finish_is_refused_before_it_writes_anything() {
     assert_eq!(files(&notes), before);
 }
 
+/// [`shadowed`], then changed at the source the way a write-back changes it between two
+/// member copies: the project renamed, `T-2` moved to `doing` and made the deliverer of a
+/// ticket the destination keeps, and a new task `T-5` — while the destination holds a task
+/// filed under the project that the source no longer has, which a whole copy reports
+/// orphaned. Answers the source root.
+fn shadowed_and_changed(sandbox: &Sandbox) -> std::path::PathBuf {
+    let root = shadowed(sandbox);
+    let notes = sandbox.project().join(NOTES);
+    for (path, from, to) in [
+        ("projects/P-1.md", "title: Engine", "title: Engine, renamed"),
+        (
+            "tasks/T-2.md",
+            "status: todo",
+            "status: doing\ndelivers: [\"notes:TICKET\"]",
+        ),
+    ] {
+        let path = root.join(path);
+        let text = std::fs::read_to_string(&path).expect("the source item");
+        std::fs::write(&path, text.replace(from, to)).expect("the change");
+    }
+    std::fs::write(
+        root.join("tasks/T-5.md"),
+        "---\ntitle: Epsilon\nstatus: todo\nproject: P-1\n---\nnew work\n",
+    )
+    .expect("a new task");
+    std::fs::write(
+        notes.join("tasks/TICKET.md"),
+        "---\ntitle: The ticket the plan delivers\nstatus: todo\n---\nfiled by a person\n",
+    )
+    .expect("the ticket");
+    std::fs::write(
+        notes.join("tasks/GONE.md"),
+        "---\ntitle: Gone at the source\nstatus: todo\nproject: P-1\n\
+         metadata: {onetaskgraph.origin: \"remote:T-9\"}\n---\nleft behind\n",
+    )
+    .expect("an orphan");
+    root
+}
+
+#[test]
+fn a_members_only_copy_carries_the_named_members_and_leaves_the_project_alone() {
+    let member_copy = |only: bool| {
+        let sandbox = Sandbox::new();
+        shadowed_and_changed(&sandbox);
+        let mut arguments = vec![
+            "project",
+            "copy",
+            "remote:P-1",
+            "--to",
+            NOTES,
+            "--member",
+            "remote:T-5",
+            "--member",
+            "remote:T-2",
+            "--json",
+        ];
+        if only {
+            arguments.push("--members-only");
+        }
+        let notes = sandbox.project().join(NOTES);
+        let before = files(&notes);
+        if only {
+            let source = sandbox.project().join("remote");
+            let source_before = files(&source);
+            let mut preview = arguments.clone();
+            preview.push("--dry-run");
+            let preview: Value =
+                serde_json::from_str(&ok(&sandbox, &preview)).expect("preview JSON");
+            assert_eq!(preview["items"].as_array().expect("preview items").len(), 2);
+            assert_eq!(
+                files(&source),
+                source_before,
+                "dry-run leaves source links unchanged"
+            );
+            assert_eq!(
+                files(&notes),
+                before,
+                "dry-run leaves the destination unchanged"
+            );
+        }
+        let report: Value =
+            serde_json::from_str(&ok(&sandbox, &arguments)).expect("a copy emits JSON");
+        (sandbox, before, report)
+    };
+    let (_, _, members) = member_copy(false);
+    let (sandbox, before, only) = member_copy(true);
+    let notes = sandbox.project().join(NOTES);
+
+    // The tasks, their `via` and what they delivered are exactly what the same copy with
+    // `--member` alone reports — less the project, which it neither compares nor reports.
+    let items = members["items"]
+        .as_array()
+        .expect("a copy report carries items");
+    assert_eq!(items[0]["source"], json!("remote:P-1"), "{members:#}");
+    assert_eq!(items[0]["action"], json!("updated"), "{members:#}");
+    assert_eq!(only["items"], json!(items[1..]), "{only:#}");
+    assert_eq!(only["delivered"], members["delivered"], "{only:#}");
+    assert_eq!(
+        reported(&only.to_string()),
+        vec![
+            (
+                "remote:T-5".to_owned(),
+                json!("notes:T-5"),
+                "created".to_owned()
+            ),
+            (
+                "remote:T-2".to_owned(),
+                json!("notes:T-2"),
+                "updated".to_owned()
+            ),
+        ],
+        "nothing is reported orphaned: {only:#}"
+    );
+    assert_eq!(only["items"][1]["via"], json!("origin"), "{only:#}");
+    assert_eq!(
+        only["delivered"][0]["ticket"],
+        json!("notes:TICKET"),
+        "{only:#}"
+    );
+    assert_eq!(
+        shown(&sandbox, "task", "notes:TICKET")["status"]["category"],
+        json!("in-progress"),
+        "the ticket the copied member delivers is kept in step"
+    );
+
+    assert_eq!(
+        shown(&sandbox, "task", "notes:T-5")["project"],
+        json!("P-1"),
+        "a named member with no counterpart is created under the project already there"
+    );
+    let dependencies: Value =
+        serde_json::from_str(&ok(&sandbox, &["task", "deps", "notes:T-2", "--json"]))
+            .expect("task dependencies emit JSON");
+    assert_eq!(
+        dependencies["items"]
+            .as_array()
+            .expect("dependency items")
+            .iter()
+            .map(|edge| edge["to"]["id"].clone())
+            .collect::<Vec<_>>(),
+        vec![json!("notes:T-3")],
+        "an edge to an unnamed member resolves as a member copy resolves it: {dependencies:#}"
+    );
+    let untouched = |files: Vec<(std::path::PathBuf, Vec<u8>)>| {
+        files
+            .into_iter()
+            .filter(|(path, _)| {
+                path.ends_with("projects/P-1.md")
+                    || ["T-1.md", "T-3.md", "T-4.md", "GONE.md"]
+                        .iter()
+                        .any(|name| path.ends_with(format!("tasks/{name}")))
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(untouched(before.clone()).len(), 5);
+    assert_eq!(
+        untouched(files(&notes)),
+        untouched(before),
+        "the project, the unnamed members and the orphan are byte-for-byte what they were"
+    );
+}
+
+#[test]
+fn a_members_only_copy_of_a_project_the_destination_lacks_is_refused_before_any_write() {
+    let sandbox = Sandbox::new();
+    let root = shadowed(&sandbox);
+    let notes = sandbox.project().join(NOTES);
+    std::fs::write(
+        root.join("projects/P-2.md"),
+        "---\ntitle: Not yet copied\nstatus: doing\n---\nnew plan\n",
+    )
+    .expect("a project");
+    std::fs::write(
+        root.join("tasks/T-6.md"),
+        "---\ntitle: Zeta\nstatus: todo\nproject: P-2\n---\nnew work\n",
+    )
+    .expect("its task");
+    let before = files(&notes);
+
+    let output = sandbox
+        .command()
+        .args([
+            "project",
+            "copy",
+            "remote:P-2",
+            "--to",
+            NOTES,
+            "--member",
+            "remote:T-6",
+            "--members-only",
+            "--json",
+        ])
+        .assert()
+        .code(1)
+        .get_output()
+        .clone();
+    let failure: Value = serde_json::from_slice(&output.stdout).expect("a failure document");
+    assert_eq!(
+        failure["failure"]["kind"], "no-project-counterpart",
+        "{failure:#}"
+    );
+
+    let said = refused(
+        &sandbox,
+        &[
+            "project",
+            "copy",
+            "remote:P-2",
+            "--to",
+            NOTES,
+            "--member",
+            "remote:T-6",
+            "--members-only",
+        ],
+        1,
+    );
+    assert!(
+        said.contains("remote:P-2 has no counterpart in notes")
+            && said.contains("`onetaskgraph project copy remote:P-2 --to notes`")
+            && said.contains("next:"),
+        "{said}"
+    );
+    assert_eq!(
+        files(&notes),
+        before,
+        "a refused members-only copy wrote something"
+    );
+
+    let said = refused(
+        &sandbox,
+        &[
+            "project",
+            "copy",
+            "remote:P-1",
+            "--to",
+            NOTES,
+            "--members-only",
+        ],
+        2,
+    );
+    assert!(said.contains("--member"), "{said}");
+    assert_eq!(files(&notes), before);
+}
+
 #[test]
 fn a_copy_that_cannot_run_at_all_exits_non_zero_with_a_suggested_next_action() {
     let sandbox = Sandbox::new();
@@ -4111,4 +4355,34 @@ fn a_copy_by_id_beside_a_status_refuses_an_id_it_cannot_read_and_writes_nothing(
         "---\ntitle: A proposal\nstatus: backlog\n---\nAsked for.\n",
         "the source records no link to a copy that never happened"
     );
+}
+
+#[test]
+fn a_members_only_copy_refuses_an_unrecorded_edge_before_writing() {
+    let sandbox = Sandbox::new();
+    shadowed(&sandbox);
+    let notes = sandbox.project().join(NOTES);
+    let before = files(&notes);
+    let said = refused(
+        &sandbox,
+        &[
+            "project",
+            "copy",
+            "remote:P-1",
+            "--to",
+            NOTES,
+            "--member",
+            "remote:T-2",
+            "--member",
+            "remote:T-4",
+            "--members-only",
+        ],
+        1,
+    );
+    assert!(
+        said.contains("remote:T-4 depends on remote:T-1")
+            && said.contains("records no origin in notes"),
+        "{said}"
+    );
+    assert_eq!(files(&notes), before);
 }
