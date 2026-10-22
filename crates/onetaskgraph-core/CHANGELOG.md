@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.9.4...onetaskgraph-core-v0.10.0) - 2026-10-22
+
+### Added
+
+- *(copy)* [**breaking**] copy named members into an existing project without reading or writing the project ([#3714](https://github.com/nickderobertis/onetaskgraph/pull/3714))
+
 ## [0.9.4](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.9.3...onetaskgraph-core-v0.9.4) - 2026-10-22
 
 ### Added
