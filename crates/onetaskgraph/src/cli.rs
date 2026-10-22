@@ -1914,6 +1914,10 @@ pub struct TaskCopyArgs {
     #[arg(long)]
     pub create: bool,
     // llmlint: ignore-end[invalid_states_unrepresentable]
+    /// Update this existing destination task after verifying its origin names the source task.
+    #[arg(long, value_name = "QUALIFIED-ID")]
+    // llmlint: ignore[invalid_states_unrepresentable] As TaskCopyArgs::id, parse through qualified in main so a malformed target receives the product's exit-1 failure and next action; a GlobalId field here would instead make clap report an exit-2 invocation error. Engine::copy validates the destination and origin before writing.
+    pub target_task: Option<String>,
     /// The version of the destination task this copy is bound to that the caller knows, as
     /// `--expect` on every task write: the copy of one task then sends only the fields whose
     /// value differs from that version, and no read of it.

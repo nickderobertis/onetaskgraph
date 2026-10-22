@@ -71,6 +71,7 @@ fn copy_of(items: &[GlobalId], scope: CopyScope) -> CopyRequest {
         items: CopyItems::new(items.to_vec()).expect("at least one item"),
         scope,
         destination: SourceName::new("into").expect("a name"),
+        target_task: None,
         match_by: None,
         recreate: false,
         create: false,

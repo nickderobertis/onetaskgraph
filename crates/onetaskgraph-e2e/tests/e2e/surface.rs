@@ -47,7 +47,7 @@ const SURFACE: &[(&[&str], &[&str])] = &[
     (&["help", "project", "deps"], &["--pin", "--direction"]),
     (&["help", "task", "comment", "add"], &["--expect"]),
     (&["help", "task", "priority", "set"], &["--expect"]),
-    (&["help", "task", "copy"], &["--expect"]),
+    (&["help", "task", "copy"], &["--expect", "--target-task"]),
     (
         &["help", "sources", "route"],
         &["<SOURCE>", "--repository", "--json"],
@@ -301,7 +301,7 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 43);
+    assert_eq!(bundle["version"], 44);
     // Version 42: each closure item's `kind`, the project item a holding or a contradiction can
     // carry, and what `project status set` answers with.
     for root in ["IssueCompleted", "StatusReconciled"] {
@@ -1326,7 +1326,7 @@ fn the_readme_names_every_word_of_the_copy_reports_via_and_link() {
                 .to_owned()
         })
         .collect();
-    assert_eq!(via.len(), 5, "{via:?}");
+    assert_eq!(via.len(), 6, "{via:?}");
     assert_eq!(link.len(), 4, "{link:?}");
 
     let readme = std::fs::read_to_string(
@@ -1334,7 +1334,7 @@ fn the_readme_names_every_word_of_the_copy_reports_via_and_link() {
     )
     .expect("README.md is readable");
     let start = readme
-        .find("`via` is one field with five words")
+        .find("`via` is one field with six words")
         .expect("the README's paragraph on `via` and `link`");
     let paragraph = &readme[start..start + readme[start..].find("\n<!--").unwrap()];
     let named: std::collections::BTreeSet<&str> = paragraph.split('`').skip(1).step_by(2).collect();

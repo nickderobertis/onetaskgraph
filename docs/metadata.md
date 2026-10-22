@@ -522,7 +522,7 @@ most one entry per destination:
 <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
 A copy that is not a dry run records or refreshes the entry for its destination on every item
-whose counterpart it found by this link, by searching the destination, or by `--match-by`,
+whose counterpart it found by `--target-task`, by this link, by searching the destination, or by `--match-by`,
 and on every item it created — once the whole copy has landed, through the item's own
 source's narrow metadata write (the one `metadata set` uses), and undone with the rest of the
 copy if the copy cannot finish. Every other destination's entry is left as it is, so long as
@@ -533,6 +533,8 @@ correspondence is already written down, on the destination item. The next copy o
 reads the entry first: when the item it names still records this item as its origin, it is
 the counterpart, found by one read by id and no search — see the copy section of the README
 for the order the rules are tried in and the `stale-link` refusal.
+
+To select a survivor and replace a stale link, use `task copy --target-task`.
 
 It lives in the `onetaskgraph.` namespace like the origin: `metadata set` refuses to write it,
 and a copy never carries it onto a destination — a destination item keeps the entry it holds,

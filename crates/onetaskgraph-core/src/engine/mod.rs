@@ -1096,6 +1096,48 @@ pub enum EngineError {
         link: String,
     },
 
+    /// An explicit target cannot be combined with another target selection mode.
+    #[error(
+        "--target-task cannot be given with {flag}\nnext: choose one way to select the destination task."
+    )]
+    TargetTaskWith {
+        /// The incompatible option.
+        flag: CopyLookup,
+    },
+    /// An explicit target binds exactly one named source task.
+    #[error(
+        "--target-task requires exactly one source task id\nnext: name one task, without query selection."
+    )]
+    TargetTaskNeedsOne,
+    /// The target must belong to the configured destination.
+    #[error(
+        "target task {target} is not in destination {destination}\nnext: name a task in the destination source."
+    )]
+    TargetTaskSource {
+        /// The named task.
+        target: GlobalId,
+        /// The requested destination.
+        destination: SourceName,
+    },
+    /// The destination no longer holds the named task.
+    #[error(
+        "target task {target} does not exist\nnext: name an existing destination task whose origin names the source task."
+    )]
+    TargetTaskMissing {
+        /// The missing task.
+        target: GlobalId,
+    },
+    /// The named task does not record the source task as its origin.
+    #[error(
+        "target task {target} has no origin naming {item}\nnext: choose a destination task whose origin names {item}."
+    )]
+    TargetTaskOrigin {
+        /// The named destination task.
+        target: GlobalId,
+        /// The source task being copied.
+        item: GlobalId,
+    },
+
     /// `--create` was given beside a flag that says how to look for a counterpart, when
     /// `--create` says there is none to look for.
     #[error(

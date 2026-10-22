@@ -337,6 +337,23 @@ test("copy drives the real binary and reports what it did to each item", async (
     const again = await copyClient.taskCopy(["from:T-1"], "into");
     expect(again.items[0]?.action).toBe("unchanged");
 
+    const targeted = await copyClient.taskCopy(["from:T-1"], "into", {
+      targetTask: "into:T-1",
+    });
+    expect(targeted.items[0]).toMatchObject({
+      action: "unchanged",
+      destination: "into:T-1",
+      via: "target-task",
+    });
+    await expect(
+      copyClient.taskCopy(["from:T-1"], "into", { targetTask: "into:missing" }),
+    ).rejects.toThrow("into:missing");
+    expect((await copyClient.taskShow("into:T-1")).items[0]?.item.title).toBe("Alpha engine");
+    // Deliberately bypass the static type to prove validation of an invalid runtime value.
+    expect(() => taskCopyFlags({ targetTask: 7 } as unknown as { targetTask: string })).toThrow(
+      "targetTask",
+    );
+
     // A person deletes the origin key, so neither rule can find the counterpart; the
     // caller-named escape re-establishes it rather than creating a second item.
     writeFileSync(
@@ -940,6 +957,7 @@ test("taskCopy sends exactly the flags the binary's task copy reports, no more a
         termScope: ["github.com/example-org/widget"],
         expect: "gh2|v",
         statusPolicy: "preserve-destination",
+        targetTask: "work:T-2",
       }),
       ...taskCopyFlags({ termScope: [] }),
     ].filter((argument) => argument.startsWith("--")),

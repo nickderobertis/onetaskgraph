@@ -593,5 +593,345 @@ fn a_board_item_copied_out_records_its_link_on_the_board_and_the_next_copy_follo
             (&json!(landed), &json!("link"), &json!("unchanged")),
             "{boundary:?}: {second:#}"
         );
+
+        // Replace a withdrawn copy with a survivor and persist that choice on the board.
+        let old_path = sandbox.subdirectory(NOTES).join("tasks").join(format!(
+            "{}.md",
+            landed.strip_prefix("notes:").expect("notes id")
+        ));
+        let survivor = sandbox.subdirectory(NOTES).join("tasks/survivor.md");
+        let held = std::fs::read_to_string(&old_path).expect("the first copy");
+        std::fs::write(
+            &survivor,
+            held.replace("Board-born task", "Surviving duplicate"),
+        )
+        .unwrap();
+        std::fs::remove_file(&old_path).unwrap();
+        let writes_before = board
+            .served()
+            .iter()
+            .filter(|(document, _)| document.contains("updateIssue"))
+            .count();
+        let selected = parsed(&exits(
+            &sandbox,
+            &[
+                "task",
+                "copy",
+                &issue,
+                "--to",
+                NOTES,
+                "--target-task",
+                "notes:survivor",
+                "--json",
+            ],
+            0,
+        ));
+        assert_eq!(selected["items"][0]["via"], json!("target-task"));
+        assert_eq!(selected["items"][0]["action"], json!("updated"));
+        assert_eq!(selected["items"][0]["link"], json!("recorded"));
+        assert!(
+            board
+                .served()
+                .iter()
+                .filter(|(document, _)| document.contains("updateIssue"))
+                .count()
+                > writes_before
+        );
+        assert_eq!(
+            metadata(&sandbox, "task", &issue)["onetaskgraph.copies"],
+            json!({NOTES: "notes:survivor"})
+        );
+        let next = parsed(&exits(&sandbox, &copy_out, 0));
+        assert_eq!(next["items"][0]["destination"], json!("notes:survivor"));
+        assert_eq!(next["items"][0]["via"], json!("link"));
+    }
+}
+
+#[test]
+fn an_explicit_target_selects_the_second_origin_carrier_and_replaces_a_stale_link() {
+    for boundary in SOURCE_BOUNDARIES {
+        for stale in [false, true] {
+            let sandbox = Sandbox::new();
+            markdown_pair(&sandbox, boundary);
+            let from = qualified(SOURCE, "T-1");
+            let first = sandbox.subdirectory(NOTES).join("tasks/first.md");
+            let second = sandbox.subdirectory(NOTES).join("tasks/second.md");
+            std::fs::create_dir_all(first.parent().expect("tasks directory")).unwrap();
+            let carrier = format!(
+                "---\ntitle: Old title\nstatus: todo\nmetadata:\n  onetaskgraph.origin: {from}\n---\nold body\n"
+            );
+            std::fs::write(&first, &carrier).unwrap();
+            std::fs::write(&second, &carrier).unwrap();
+            if stale {
+                copy(&sandbox, "task", &from, &["--target-task", "notes:first"]);
+                std::fs::remove_file(&first).unwrap();
+            }
+            let source = source_file(&sandbox, "task", "T-1");
+            let before = std::fs::read(&source).unwrap();
+            assert_eq!(
+                copy(
+                    &sandbox,
+                    "task",
+                    &from,
+                    &["--target-task", "notes:second", "--dry-run"]
+                ),
+                (
+                    json!("notes:second"),
+                    json!("updated"),
+                    json!("target-task"),
+                    Value::Null
+                ),
+            );
+            assert_eq!(std::fs::read(&source).unwrap(), before);
+            assert_eq!(std::fs::read_to_string(&second).unwrap(), carrier);
+            assert_eq!(first.exists(), !stale);
+            let selected = copy(&sandbox, "task", &from, &["--target-task", "notes:second"]);
+            let mode = selected.2.as_str().expect("the selection mode");
+            assert!(readme().contains(&format!("every item found by `--{mode}`")));
+            let metadata_rules = std::fs::read_to_string(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/metadata.md"),
+            )
+            .unwrap();
+            assert!(metadata_rules.contains(&format!("whose counterpart it found by `--{mode}`")));
+            assert_eq!(
+                selected,
+                (
+                    json!("notes:second"),
+                    json!("updated"),
+                    json!("target-task"),
+                    json!("recorded")
+                ),
+                "{boundary:?}, stale={stale}"
+            );
+            assert!(
+                std::fs::read_to_string(&second)
+                    .unwrap()
+                    .contains("Alpha engine")
+            );
+            if !stale {
+                assert_eq!(std::fs::read_to_string(&first).unwrap(), carrier);
+            }
+            assert_eq!(
+                metadata(&sandbox, "task", &from)["onetaskgraph.copies"],
+                json!({NOTES: "notes:second"})
+            );
+            let (destination, _, via, _) = copy(&sandbox, "task", &from, &[]);
+            assert_eq!((destination, via), (json!("notes:second"), json!("link")));
+            let settled_source = std::fs::read(&source).unwrap();
+            let settled_target = std::fs::read(&second).unwrap();
+            assert_eq!(
+                copy(&sandbox, "task", &from, &["--target-task", "notes:second"]),
+                (
+                    json!("notes:second"),
+                    json!("unchanged"),
+                    json!("target-task"),
+                    json!("unchanged")
+                ),
+            );
+            assert_eq!(std::fs::read(&source).unwrap(), settled_source);
+            assert_eq!(std::fs::read(&second).unwrap(), settled_target);
+        }
+    }
+}
+
+#[test]
+fn an_explicit_target_refuses_a_foreign_missing_or_unrelated_task_without_writing() {
+    let sandbox = Sandbox::new();
+    markdown_pair(&sandbox, SOURCE_BOUNDARIES[0]);
+    let from = qualified(SOURCE, "T-1");
+    let path = sandbox.subdirectory(NOTES).join("tasks/other.md");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let other = "---\ntitle: Other\nstatus: todo\nmetadata:\n  onetaskgraph.origin: work:T-9\n---\nunchanged\n";
+    std::fs::write(&path, other).unwrap();
+    let source = source_file(&sandbox, "task", "T-1");
+    let before = std::fs::read_to_string(&source).unwrap();
+    for (target, kind) in [
+        (from.as_str(), "target-task-source"),
+        ("notes:missing", "target-task-missing"),
+        ("notes:other", "target-task-origin"),
+        ("unqualified", "invalid-id"),
+    ] {
+        let report = parsed(&exits(
+            &sandbox,
+            &[
+                "task",
+                "copy",
+                &from,
+                "--to",
+                NOTES,
+                "--target-task",
+                target,
+                "--json",
+            ],
+            1,
+        ));
+        assert_eq!(report["failure"]["kind"], json!(kind), "{report:#}");
+        if kind == "invalid-id" {
+            assert!(
+                report["failure"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("next: qualify the id with the source it belongs to",)
+            );
+            let diagnostic = exits(
+                &sandbox,
+                &[
+                    "task",
+                    "copy",
+                    &from,
+                    "--to",
+                    NOTES,
+                    "--target-task",
+                    target,
+                ],
+                1,
+            );
+            assert!(
+                stderr(&diagnostic).contains("next: qualify the id with the source it belongs to")
+            );
+        }
+        assert_eq!(std::fs::read_to_string(&source).unwrap(), before);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), other);
+        assert_eq!(
+            std::fs::read_dir(path.parent().unwrap()).unwrap().count(),
+            1
+        );
+    }
+}
+
+#[test]
+fn incompatible_target_options_and_multiple_ids_never_contact_the_board() {
+    let sandbox = Sandbox::new();
+    let (config, board) = github_projects_with_board(&sandbox);
+    sandbox.project_document(&document(
+        &json!({"board": {"plugin": "github-projects", "config": config}}),
+    ));
+    for extra in [
+        vec!["--create"],
+        vec!["--match-by", "title"],
+        vec!["--recreate"],
+        vec!["board:second"],
+    ] {
+        let mut args = vec![
+            "task",
+            "copy",
+            "board:first",
+            "--to",
+            "board",
+            "--target-task",
+            "board:survivor",
+            "--json",
+        ];
+        args.extend(extra.iter().copied());
+        let report = parsed(&exits(&sandbox, &args, 1));
+        let kind = if extra[0] == "board:second" {
+            "target-task-needs-one"
+        } else {
+            "target-task-with"
+        };
+        assert_eq!(report["failure"]["kind"], json!(kind), "{report:#}");
+        assert!(
+            board.served().is_empty(),
+            "a refusal reached the store: {:?}",
+            board.served()
+        );
+    }
+}
+
+#[test]
+fn a_target_task_cannot_bind_a_query_or_a_project_or_document() {
+    let sandbox = Sandbox::new();
+    let (config, board) = github_projects_with_board(&sandbox);
+    sandbox.project_document(&document(
+        &json!({"board": {"plugin": "github-projects", "config": config}}),
+    ));
+    let refused = parsed(&exits(
+        &sandbox,
+        &[
+            "task",
+            "copy",
+            "--source",
+            "board",
+            "--to",
+            "board",
+            "--target-task",
+            "board:survivor",
+            "--json",
+        ],
+        1,
+    ));
+    assert_eq!(refused["failure"]["kind"], json!("target-task-needs-one"));
+    assert!(board.served().is_empty());
+    for verb in ["project", "document"] {
+        exits(
+            &sandbox,
+            &[
+                verb,
+                "copy",
+                "board:first",
+                "--to",
+                "board",
+                "--target-task",
+                "board:survivor",
+            ],
+            2,
+        );
+        assert!(board.served().is_empty());
+    }
+}
+
+#[test]
+fn an_explicit_target_is_not_reinterpreted_in_a_routed_source() {
+    let sandbox = Sandbox::new();
+    markdown_pair(&sandbox, SOURCE_BOUNDARIES[0]);
+    let from = qualified(SOURCE, "T-1");
+    let source = source_file(&sandbox, "task", "T-1");
+    let authored = std::fs::read_to_string(&source).unwrap().replace(
+        "status: todo",
+        "status: todo\nrepositories: [github.com/acme/widget]",
+    );
+    std::fs::write(&source, &authored).unwrap();
+    sandbox.project_document(&document(&json!({
+        SOURCE: {"plugin": "local-md", "config": empty_folder(&sandbox, "local-md")},
+        NOTES: {"plugin": "local-md", "config": empty_folder(&sandbox, NOTES),
+            "routes": [{"repositories": ["github.com/acme/*"], "to": "routed"}]},
+        "routed": {"plugin": "local-md", "config": empty_folder(&sandbox, "routed")},
+    })));
+    let carrier = format!(
+        "---\ntitle: Duplicate\nstatus: todo\nmetadata:\n  onetaskgraph.origin: {from}\n---\nunchanged\n"
+    );
+    let paths: Vec<_> = [NOTES, "routed"]
+        .iter()
+        .map(|name| {
+            let path = sandbox.subdirectory(name).join("tasks/survivor.md");
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, &carrier).unwrap();
+            path
+        })
+        .collect();
+    let report = parsed(&exits(
+        &sandbox,
+        &[
+            "task",
+            "copy",
+            &from,
+            "--to",
+            NOTES,
+            "--target-task",
+            "notes:survivor",
+            "--json",
+        ],
+        1,
+    ));
+    assert_eq!(report["failure"]["kind"], json!("target-task-source"));
+    assert!(
+        report["failure"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("destination routed")
+    );
+    assert_eq!(std::fs::read_to_string(source).unwrap(), authored);
+    for path in paths {
+        assert_eq!(std::fs::read_to_string(path).unwrap(), carrier);
     }
 }

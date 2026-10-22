@@ -355,6 +355,7 @@ async fn disposable_task_and_document_asset_copies() {
                     CopyScope::Documents
                 },
                 destination: name("board"),
+                target_task: None,
                 match_by: None,
                 recreate: false,
                 create: true,
@@ -733,6 +734,7 @@ async fn a_reconcile_dry_run_reads_the_live_board_through_its_closed_filter_alon
             .unwrap(),
             scope: CopyScope::Tasks,
             destination: name("board"),
+            target_task: None,
             match_by: None,
             recreate: false,
             create: true,

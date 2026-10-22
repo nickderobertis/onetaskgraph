@@ -572,6 +572,11 @@ two items, inside the plugins that own them.
 
 These rules find the counterpart, in this order:
 
+0. **The explicit task.** For `task copy` with one source id, `--target-task <QUALIFIED-ID>`
+   selects an existing task in the destination whose origin names the source task. A missing
+   task, a task in another source, or a different origin is refused without writing. The
+   report says `via: target-task`. This option is refused beside `--create`, `--match-by`
+   or `--recreate`, or with several source ids, before any store request.
 1. **The link.** If the item's `onetaskgraph.copies` names an item at the destination, that
    item is read by id, and when its own origin names the item being copied it is the
    counterpart and the copy updates it — one read, and no search of the destination. If it
@@ -587,7 +592,7 @@ These rules find the counterpart, in this order:
    created carrying that origin.
 <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
-Once the whole copy has landed, every item found by the link, the search or `--match-by`, or
+Once the whole copy has landed, every item found by `--target-task`, the link, the search or `--match-by`, or
 created, has its link for that destination recorded or refreshed — one metadata write at its
 own source, undone with everything else if the copy cannot finish. An item found by its own
 origin records nothing: that correspondence is already written down, on the destination
@@ -695,14 +700,14 @@ what the journeys validate this output against.
      `the_readme_names_every_word_of_the_copy_reports_via_and_link` in
      `crates/onetaskgraph-e2e/tests/e2e/surface.rs` reads this paragraph and fails unless the words
      it names are exactly the ones `onetaskgraph schema` emits for these two fields. -->
-`via` is one field with five words, on every `created`, `updated` and `unchanged` item. On
-`updated` and `unchanged` it names the rule above that found the counterpart: `link`,
-`origin`, `scan`, or `match` for `--match-by`. On `created` it is always `created`, because
+`via` is one field with six words, on every `created`, `updated` and `unchanged` item. On
+`updated` and `unchanged` it names the rule above that found the counterpart: `target-task`,
+`link`, `origin`, `scan`, or `match` for `--match-by`. On `created` it is always `created`, because
 none did. `link` says what became of the item's own link, on those same three actions of a
 copy that writes: `recorded`, `unchanged`, `unrecorded` where its source could not hold
 one, or `skipped` under `--no-link`, which writes nothing at all to the source. A dry run
 reports `via` and leaves `link` out, and an `orphaned` item and a `failed` one carry neither.
-In the generated SDKs the four rule words are the type `CopyVia` and `created` is
+In the generated SDKs the five rule words are the type `CopyVia` and `created` is
 `NoCounterpart`, and the link words are `CopyLink`.
 <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
@@ -1260,6 +1265,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         status_policy: StatusPolicy::Source,
         destination: SourceName::new("work")?,
         match_by: None,
+        target_task: None,
         recreate: false,
         create: false,
         dry_run: false,

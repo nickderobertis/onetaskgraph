@@ -84,6 +84,7 @@ fn many(items: &[&str], scope: CopyScope) -> CopyRequest {
             .expect("a copy names at least one item"),
         scope,
         destination: name("into"),
+        target_task: None,
         match_by: None,
         recreate: false,
         create: false,
