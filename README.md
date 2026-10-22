@@ -1226,7 +1226,7 @@ This complete example constructs an engine over two in-memory sources, copies a 
 
 ```rust
 use onetaskgraph_core::{
-    Config, CopyItems, CopyRequest, CopyScope, Engine, Environment, GlobalId, Secrets,
+    Config, CopyItems, CopyRequest, CopyScope, Engine, Environment, GlobalId, Secrets, StatusPolicy,
 };
 use onetaskgraph_plugin_api::SourceName;
 use serde_json::json;
@@ -1257,6 +1257,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         items: CopyItems::new(vec!["drafts:T-1".parse::<GlobalId>()?])
             .expect("a copy names at least one item"),
         scope: CopyScope::Tasks,
+        status_policy: StatusPolicy::Source,
         destination: SourceName::new("work")?,
         match_by: None,
         recreate: false,
