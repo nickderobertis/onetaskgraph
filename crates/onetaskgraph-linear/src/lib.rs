@@ -3166,6 +3166,12 @@ impl TaskSource for LinearSource {
                 })?,
             "id",
         )?;
+        // An empty id names no workspace, and its digest would name one all the same.
+        if organization.trim().is_empty() {
+            return Err(SourceError::Malformed {
+                message: "Linear answered an organization with an empty id".into(),
+            });
+        }
         Designator::of_backend(KIND, organization)
             .map(Some)
             .map_err(|message| SourceError::Malformed { message })

@@ -37,7 +37,7 @@ pub(crate) struct Designators {
     known: Mutex<BTreeMap<SourceName, Option<Designator>>>,
     /// Each private far end a copy read and found is not named by its native id, by its
     /// qualified id: an edge to it is withheld rather than written opaquely.
-    unconfirmed: Mutex<std::collections::BTreeSet<String>>,
+    unconfirmed: Mutex<std::collections::HashSet<crate::GlobalId>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -79,7 +79,7 @@ impl Designators {
                 })
                 .collect(),
             known: Mutex::new(BTreeMap::new()),
-            unconfirmed: Mutex::new(std::collections::BTreeSet::new()),
+            unconfirmed: Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -183,7 +183,7 @@ impl Engine {
             .unconfirmed
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(far.to_string());
+            .insert(far.clone());
     }
 
     /// The designator a copy writes an edge to `far` under, opaquely: its source's, when this
@@ -195,7 +195,7 @@ impl Engine {
             .unconfirmed
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .contains(&far.to_string());
+            .contains(far);
         if unconfirmed || super::boundary::plainly_not_native(far.native.as_str()).is_some() {
             return None;
         }
@@ -249,9 +249,16 @@ impl Engine {
 #[derive(Debug, Default)]
 pub(crate) struct Resolving {
     found: BTreeMap<Designator, Option<SourceName>>,
-    /// Each far end read — by its source, its id and its kind's marker, since a task and a
-    /// project may share an id — and whether its read let it stand as an edge.
-    read: BTreeMap<(SourceName, String, &'static str), bool>,
+    /// Each far end read — by its source, its id and its kind, since a task and a project may
+    /// share an id — and whether its read let it stand as an edge.
+    read: std::collections::HashMap<
+        (
+            SourceName,
+            onetaskgraph_plugin_api::NativeId,
+            onetaskgraph_plugin_api::ItemKind,
+        ),
+        bool,
+    >,
     /// Each designator no configured source is, and each candidate or far end that could not be
     /// asked.
     pub(crate) unanswered: Vec<crate::plan::Unanswered>,
@@ -388,7 +395,11 @@ impl Engine {
             }
         }?;
         let id = endpoint.id().to_owned();
-        let key = (source.clone(), id.clone(), endpoint.kind.marker());
+        let key = (
+            source.clone(),
+            onetaskgraph_plugin_api::NativeId(id.clone()),
+            endpoint.kind,
+        );
         let named = match resolving.read.get(&key) {
             Some(named) => *named,
             None => {

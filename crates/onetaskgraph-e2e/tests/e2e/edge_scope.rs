@@ -22,14 +22,21 @@ use crate::fixtures::{
     linear_workspace,
 };
 
-/// A configuration of `sources`, with a `write_policy` whose check passes every write: a store
-/// declaring a visibility is held to the public boundary, and what is under test here is the
-/// store's own rule for a private reference, which it applies before any policy is asked.
+/// A configuration of `sources`, with a `write_policy` whose check passes every write and which
+/// answers every repository public: a store declaring a visibility is held to the public
+/// boundary, and what is under test here is the store's own rule for a private reference, which
+/// it applies before any policy is asked.
 fn configured(sources: &Value) -> String {
     let mut written: Value = serde_json::from_str(&document(sources)).expect("a document");
-    written["write_policy"] = json!({"check_command": [
-        interpreter(), "-c", "import sys; sys.stdin.read(); print('{\"verdict\": \"pass\"}')"
-    ]});
+    written["write_policy"] = json!({
+        "check_command": [
+            interpreter(), "-c", "import sys; sys.stdin.read(); print('{\"verdict\": \"pass\"}')"
+        ],
+        "visibility_command": [
+            interpreter(), "-c",
+            "import sys; sys.stdin.read(); print('{\"visibility\": \"public\"}')"
+        ],
+    });
     serde_json::to_string_pretty(&written).expect("a document renders")
 }
 
@@ -728,6 +735,17 @@ fn a_public_alias_names_a_folder_alike_under_every_name() {
         [("notes:T-1".to_owned(), "strongbox:approve-plan".to_owned())]
     );
 
+    let mut numbered = sources("strongbox", ALIAS);
+    numbered["strongbox"]["public_alias"] = json!(1_234_567_890_123_456_u64);
+    sandbox.project_document(&configured(&numbered));
+    let output = run(&sandbox, &["task", "deps", "notes:T-1"]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("public_alias is a string")
+            && !stderr(&output).contains("1234567890123456"),
+        "{}",
+        stderr(&output)
+    );
     for refused in [
         "too-short",
         "has spaces in it, ok",
@@ -1591,4 +1609,162 @@ fn an_item_answered_under_another_native_id_is_not_confirmed() {
     let read = answered(&sandbox, &["task", "deps", "notes:T-1", "--json"], 4);
     assert_eq!(edges(&read), Vec::<(String, String)>::new());
     assert_eq!(read["errors"][0]["source"], PRIVATE_SOURCE, "{read}");
+}
+
+/// A Linear workspace answering an empty organization id has said nothing of which tracker it
+/// is: it is named unanswered, and an opaque far end only it could have been stays unresolved.
+#[test]
+fn a_workspace_answering_an_empty_organization_id_designates_nothing() {
+    let sandbox = Sandbox::new();
+    let far = designator("linear", "");
+    let notes = folder(
+        &sandbox,
+        "notes",
+        &[(
+            "T-1",
+            &format!("title: Ship\ndepends_on:\n  - {{designator: {far}, id: L-9, item: task}}\n"),
+        )],
+    );
+    let (blank, blank_workspace) =
+        workspace(&sandbox, "", json!([issue("L-9", "Review", json!({}))]));
+    sandbox.project_document(&configured(&json!({
+        "notes": {"plugin": "local-md", "config": {"root": notes}},
+        "blank": {"plugin": "linear", "config": blank},
+    })));
+
+    let read = answered(&sandbox, &["task", "deps", "notes:T-1", "--json"], 0);
+    assert_eq!(edges(&read), Vec::<(String, String)>::new());
+    let unanswered = read["unanswered"].as_array().expect("unanswered");
+    assert!(
+        unanswered
+            .iter()
+            .any(|entry| entry["source"] == "blank" && entry["error"]["kind"] == "malformed"),
+        "{read}"
+    );
+    assert!(
+        unanswered.iter().any(|entry| entry["designator"] == far),
+        "{read}"
+    );
+    assert_eq!(
+        sent(&blank_workspace, 0),
+        ["organization"],
+        "no far end read"
+    );
+}
+
+/// A copy carries an opaque far end as it was recorded — designator, id and kind — and a recopy
+/// after the far end is recorded under another designator, with the same id, writes the change
+/// rather than reading it as unchanged.
+#[test]
+fn a_copy_carries_an_opaque_far_end_and_a_recopy_follows_its_designator() {
+    let sandbox = Sandbox::new();
+    let first = designator("linear", "org-first");
+    let second = designator("linear", "org-second");
+    let notes = folder(
+        &sandbox,
+        "notes",
+        &[(
+            "T-1",
+            &format!(
+                "title: Ship\ndepends_on:\n  - {{designator: {first}, id: L-9, item: project}}\n"
+            ),
+        )],
+    );
+    let site = folder(&sandbox, "site", &[]);
+    sandbox.project_document(&configured(&json!({
+        "notes": {"plugin": "local-md", "config": {"root": notes}},
+        "site": {"plugin": "local-md", "config": {"root": site}},
+    })));
+    let landed = |report: &Value| {
+        let id = report["items"][0]["destination"]
+            .as_str()
+            .expect("a destination")
+            .strip_prefix("site:")
+            .expect("a site id")
+            .to_owned();
+        std::fs::read_to_string(site.join("tasks").join(format!("{id}.md"))).expect("the copy")
+    };
+
+    let report = answered(
+        &sandbox,
+        &["task", "copy", "notes:T-1", "--to", "site", "--json"],
+        0,
+    );
+    let copy = landed(&report);
+    assert!(
+        copy.contains(&first) && copy.contains("L-9") && copy.contains("project"),
+        "{copy}"
+    );
+
+    let source = notes.join("tasks/T-1.md");
+    let text = std::fs::read_to_string(&source).expect("the source task");
+    std::fs::write(&source, text.replace(&first, &second)).expect("the source rewritten");
+    let again = answered(
+        &sandbox,
+        &["task", "copy", "notes:T-1", "--to", "site", "--json"],
+        0,
+    );
+    assert_eq!(again["items"][0]["action"], "updated", "{again}");
+    let copy = landed(&again);
+    assert!(copy.contains(&second) && !copy.contains(&first), "{copy}");
+}
+
+/// Onto a GitHub board declared public, a dependency on a private Linear item is written into
+/// the issue's own record opaquely, and reads back as that item.
+#[test]
+fn a_github_board_holds_a_private_prerequisite_opaquely_and_reads_it_back() {
+    let (sandbox, _board, _vault) = boundary();
+    let (block, fields) = github_projects_with_board(&sandbox);
+    // Each fixture writes the one credential it needs; this store needs both.
+    sandbox.secrets_file("GITHUB_PROJECTS_FIXTURE_TOKEN=test-token\nLINEAR_API_KEY=fixture-key\n");
+    let mut document: Value = serde_json::from_str(
+        &std::fs::read_to_string(sandbox.project().join("onetaskgraph.yaml"))
+            .expect("the document"),
+    )
+    .expect("JSON");
+    document["sources"]["github"] =
+        json!({"plugin": "github-projects", "config": block, "visibility": "public"});
+    sandbox.project_document(&document.to_string());
+    let listed = answered(
+        &sandbox,
+        &["task", "list", "--source", "github", "--json"],
+        0,
+    );
+    let item = listed["items"][0]["id"]
+        .as_str()
+        .expect("a board task")
+        .to_owned();
+
+    let updated = answered(
+        &sandbox,
+        &[
+            "task",
+            "update",
+            &item,
+            "--depends-on",
+            &format!("{PRIVATE_SOURCE}:{NATIVE}"),
+            "--json",
+        ],
+        0,
+    );
+    conveys_nothing("the update's answer", &updated.to_string());
+    // The issue's body, read as a person reads the issue on GitHub: its record holds the far end
+    // as exactly the three keys, and nothing of the private item.
+    let body = fields
+        .body(item.strip_prefix("github:").expect("a board id"))
+        .as_str()
+        .expect("an issue body")
+        .to_owned();
+    let far = designator("linear", "org-zephyr");
+    let slot = body
+        .split("onetaskgraph.depends_on")
+        .nth(1)
+        .expect("the far end is recorded in the issue's own record");
+    assert!(slot.contains(&far) && slot.contains(NATIVE), "{body}");
+    conveys_nothing("the board's issue", &body);
+    let read = answered(&sandbox, &["task", "deps", &item, "--json"], 0);
+    assert!(
+        edges(&read).contains(&(item.clone(), format!("{PRIVATE_SOURCE}:{NATIVE}"))),
+        "{read}"
+    );
 }
