@@ -511,12 +511,8 @@ declares, and treats it as public for everything else. Its writes still cross on
 engine has applied the same classification and term checks it applies to every source, so a
 hosted plugin cannot be a way around them.
 
-`designator` — the opaque name of the tracker a source reads, which a public task's edge to
-a private item is written under — is not carried either. A source hosted over this protocol
-answers none, so the engine asks it nothing: its configuration's `public_alias`, when it
-declares one, is its designator, and without one an edge to a private item it holds is
-withheld from a public write and recorded on the private side, as it is for any source with
-no designator.
+`designator` is not carried either: a source hosted over this protocol answers as the trait's
+default does, and the engine asks it nothing.
 
 `stored_content` — the content a write's own answer says the backend stores — is not a
 method: it crosses as the `stored_content` member of a content write's result (§4.9, §4.9a,
@@ -849,14 +845,10 @@ back for a far end its own relationship can name. The fallback is the near item'
 naming a task or `{"id": "<source>:<native>", "kind": "project"}`, and each read as one
 `"blocks"` edge from the near item to that endpoint.
 
-An entry may also take a third, **opaque** form, which the engine writes when a public item
-depends on a private one: `{"designator": "<plugin>/<64 lowercase hex>", "id": "<native id>",
-"kind": "task"}` (or `"project"`), with exactly those three keys. `designator` names the
-tracker holding the far end without conveying anything about it, and `id` is the item's
-native id there. A plugin reads it back as an edge whose `to` endpoint carries the same three
-members, and never resolves the designator itself: the engine finds the configured source it
-names. An entry naming a `designator` beside any member other than `id` and `kind` does not
-parse as an endpoint at all, rather than being read with the extra member ignored.
+An entry may also take the **opaque** form, which carries a `designator` member beside `id`
+and `kind`; its shape is the `DependencyEndpoint` definition in the schema the binary emits.
+The engine writes it and resolves it, so a plugin reads it back unchanged and never resolves
+the `designator` itself.
 
 Only the forward direction is ever recorded. The reverse of a recorded edge is derived
 from the far end, exactly as a `"forward-only"` plugin's reverse is, so a plugin never
