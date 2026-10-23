@@ -496,6 +496,11 @@ fn a_public_task_naming_private_material_is_refused_before_anything_is_written()
         (
             "path",
             format!("title: Add retry\nstatus: todo\nproject: rollout\nrepositories: [{OPEN}]"),
+            "<script>\nfetch('../notes/e.json');\n</script>\n".to_owned(),
+        ),
+        (
+            "path",
+            format!("title: Add retry\nstatus: todo\nproject: rollout\nrepositories: [{OPEN}]"),
             "As drawn: ![the retry](./never-attached.png)".to_owned(),
         ),
     ] {
@@ -2072,4 +2077,60 @@ fn a_linear_view_whose_create_answer_was_lost_is_found_again_rather_than_made_tw
     let view = view_of(&store, &landed, &again["plan:tune"]);
     assert!(view.starts_with("tracker:"), "{view}");
     assert_eq!(shown(&store, "task", &view)["title"], "Tune the retry");
+}
+
+#[test]
+fn links_and_html_written_as_code_reach_the_view_byte_for_byte() {
+    let store = projecting_store();
+    private_rollout(&store);
+    let content = "Write `[the notes](../notes/x.md)` to link them, or:\n\n\
+                   ```html\n<a href=\"../notes/x.md\">the notes</a>\n<script>run()</script>\n```\n";
+    store.record(
+        "plan",
+        "tasks",
+        "teach",
+        &format!("title: Teach linking\nstatus: todo\nproject: rollout\nrepositories: [{OPEN}]"),
+        content,
+    );
+    let landed = copy_rollout(&store);
+    let view = view_of(&store, &landed, &landed["plan:teach"]);
+    assert_eq!(
+        shown(&store, "task", &view)["content"],
+        shown(&store, "task", "plan:teach")["content"],
+        "code is carried as written"
+    );
+}
+
+/// A check passing every write but one naming the status `cancelled`.
+const CANCELLED_REFUSED: &str = "import json, sys\n\
+    if 'cancelled' in sys.stdin.read():\n\
+    \x20   print(json.dumps({'verdict': 'refuse', 'surface': 'metadata'}))\n\
+    \x20   sys.exit(1)\n\
+    print(json.dumps({'verdict': 'pass'}))\n";
+
+#[test]
+fn a_status_the_check_refuses_for_the_view_lands_canonically_and_says_it_reached_no_view() {
+    let sandbox = Sandbox::new();
+    let store = Store::configured(
+        sandbox,
+        None,
+        Some(json!({
+            "visibility_command": ["python3", "-c", OPENCO_PUBLIC],
+            "check_command": ["python3", "-c", CANCELLED_REFUSED],
+        })),
+        json!({"vault": {"routes": [{"repositories": ["github.com/openco/*"], "to": "site"}]}}),
+    );
+    private_rollout(&store);
+    let landed = copy_rollout(&store);
+    let widget = &landed["plan:widget"];
+    let view = view_of(&store, &landed, widget);
+    let site = tree(&store.folder("site"));
+    let (kind, said) = store.refused(&["task", "status", "set", widget, "cancelled"]);
+    assert_eq!(kind, "projection-not-mirrored", "{said}");
+    assert!(said.contains(&view), "{said}");
+    assert_eq!(
+        shown(&store, "task", widget)["status"]["category"],
+        "cancelled"
+    );
+    assert_eq!(tree(&store.folder("site")), site, "the view is as it was");
 }

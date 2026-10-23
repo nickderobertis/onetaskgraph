@@ -256,7 +256,7 @@ pub const PUBLIC_PROJECT_TITLE: &str = "Public work";
 /// and blocks hold neither, so nothing in them is one.
 #[must_use]
 pub fn unresolved_references(content: &str, assets: &[String]) -> Vec<String> {
-    use pulldown_cmark::{Event, Options, Parser, Tag};
+    use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
     let mut unresolved: Vec<String> = Vec::new();
     let mut note = |found: String| {
         if !unresolved.contains(&found) {
@@ -266,10 +266,18 @@ pub fn unresolved_references(content: &str, assets: &[String]) -> Vec<String> {
     // Text too, each run of it whole — the parser hands it over in pieces split at `<` — since
     // what CommonMark reads as text, `<img/src=…>`, another renderer may read as a tag.
     let mut text = String::new();
+    // A code block's text is code, shown as written, however it reads.
+    let mut in_code = false;
     for event in Parser::new_ext(content, Options::empty()) {
-        if let Event::Text(piece) = &event {
-            text.push_str(piece);
-            continue;
+        match &event {
+            Event::Start(Tag::CodeBlock(_)) => in_code = true,
+            Event::End(TagEnd::CodeBlock) => in_code = false,
+            Event::Text(_) if in_code => continue,
+            Event::Text(piece) => {
+                text.push_str(piece);
+                continue;
+            }
+            _ => {}
         }
         if let Some(tag) = opaque_html(&std::mem::take(&mut text)) {
             note(tag);
@@ -1342,7 +1350,7 @@ mod tests {
                        ![shot](./shot.png), [mail](mailto:a@b.c), \
                        [local](../plans/secret.md), [abs](/home/me/x.md), \
                        [file](file:///etc/x) and `[code](./not-a-link.md)` and \
-                       `<a href=\"../code.md\">`.\n\n\
+                       `<a href=\"../code.md\">`.\n\n```\n<img src=\"../block.png\">\n```\n\n\
                        <details>\n<summary>More</summary>\n\nText<br/>\n\n</details>\n";
         assert_eq!(
             unresolved_references(content, &["shot.png".to_owned()]),
