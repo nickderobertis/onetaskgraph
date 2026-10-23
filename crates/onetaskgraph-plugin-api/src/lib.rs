@@ -63,8 +63,8 @@ pub use status_mapping::{StatusMapping, StatusName, StatusNames, UnmappedStatus}
 pub use update::{TaskUpdate, TaskUpdateOutcome, UpdatedField};
 pub use visibility::{Visibility, WriteTarget};
 pub use work::{
-    Classification, DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Document,
-    ItemKind, Label, Location, Priority, Project, Repository, Status, StatusCategory, Task,
-    TaskRef,
+    Classification, DependencyEdge, DependencyEndpoint, DependencyKind, Designator, Direction,
+    Document, EndpointRefusal, ItemKind, Label, Location, Priority, Project, Repository, Status,
+    StatusCategory, Task, TaskRef,
 };
 pub use write::{ItemWrite, WriteSupport, documentless, unwritable, unwritable_field};

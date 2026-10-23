@@ -124,6 +124,14 @@ impl MetadataKey {
     pub const COPIED_DESTINATION_VERSION_KEY: &'static str =
         "onetaskgraph.copied_destination_version";
 
+    /// The reserved key a copy onto a destination not declared private marks a task it lands
+    /// with, as the integer `1`, once every edge that task depends on is on its own record —
+    /// none withheld and kept on a private source's side instead.
+    ///
+    /// A dependency read of a task carrying it never asks a private source what it records
+    /// of that task. Nothing but a copy writes it.
+    pub const EDGES_ON_RECORD_KEY: &'static str = "onetaskgraph.edges_on_record";
+
     /// [`Self::COPIES_KEY`], as the one reserved key a narrow metadata write may carry.
     ///
     /// Not a way round [`Self::new`] for a caller: nothing a person types reaches this, and
