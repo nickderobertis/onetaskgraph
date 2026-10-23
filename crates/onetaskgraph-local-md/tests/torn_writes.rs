@@ -440,6 +440,10 @@ fn stopped(case: &str, root: &Path, stop: Stop, blocks: u32) -> Result<(), Strin
         Stop::Killed => "",
         Stop::Failed => "trap '' XFSZ; ",
     };
+    // An instrumented writer that lives to exit writes its coverage profile under the same
+    // limit, which cuts it short; one left among the coverage run's profiles makes the whole
+    // report refuse to merge. So the writer's profile goes here and is discarded with it.
+    let profiles = tempfile::tempdir().expect("a directory for the writer's profile");
     let output = Command::new("sh")
         .arg("-c")
         .arg(format!(
@@ -449,6 +453,7 @@ fn stopped(case: &str, root: &Path, stop: Stop, blocks: u32) -> Result<(), Strin
         .args(["--exact", WRITER, "--test-threads=1", "--nocapture"])
         .env(CASE, case)
         .env(ROOT, root)
+        .env("LLVM_PROFILE_FILE", profiles.path().join("writer-%p.profraw"))
         .stdin(Stdio::null())
         .output()
         .expect("the writer process starts");
