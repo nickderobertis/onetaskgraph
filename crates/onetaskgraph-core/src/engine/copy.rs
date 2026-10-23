@@ -42,9 +42,11 @@
 //! read back to answer a query. That is what makes it a write and not a cache.
 
 mod comments;
+mod projections;
 mod query;
 mod record;
 mod snapshot;
+pub use projections::{PublicProjection, PublicProjections};
 pub(super) use snapshot::single as single_detail;
 
 use query::{Slot, failed};
@@ -2597,6 +2599,10 @@ impl Engine {
                     .home_placement(request, &project, &reads, class)
                     .await?;
                 let home = homing.home;
+                // A private plan homed somewhere declared private lands whole there, every task
+                // of it canonically beside its home; its public tasks are seen publicly only
+                // through views made where their repositories route them (see `projections`).
+                let projects = self.makes_projections(&home.destination, class);
                 let project = self
                     .aim(
                         request,
@@ -2610,6 +2616,10 @@ impl Engine {
                 let mut tasks = Vec::new();
                 for read in reads {
                     let (placement, classification) = match &read.item {
+                        Item::Task(task) if projects => (
+                            home.clone(),
+                            self.classify(task.classification, &task.repositories).await,
+                        ),
                         // A task naming no repository has no say in where it goes: it follows
                         // its home, wherever that went.
                         Item::Task(task)
@@ -2649,7 +2659,17 @@ impl Engine {
                         .await?,
                     );
                 }
-                plans.push((project, tasks, changed));
+                let mut projecting = projections::Projecting::default();
+                if projects {
+                    for task in &tasks {
+                        if let Some(to) =
+                            self.projection_target(&request.destination, &home.destination, task)
+                        {
+                            projecting.add(task, to);
+                        }
+                    }
+                }
+                plans.push((project, tasks, changed, projecting));
             } else {
                 let project = self
                     .read_for_copy(request, Level::Project, id, running)
@@ -2692,10 +2712,10 @@ impl Engine {
                     );
                 }
                 project.classification = class;
-                plans.push((project, tasks, changed));
+                plans.push((project, tasks, changed, projections::Projecting::default()));
             }
         }
-        for (project, tasks, _) in &plans {
+        for (project, tasks, _, _) in &plans {
             for item in std::iter::once(project).chain(tasks) {
                 unrecorded_far_end(item, unrecorded)?;
             }
@@ -2706,23 +2726,30 @@ impl Engine {
             request,
             plans
                 .iter()
-                .flat_map(|(project, tasks, _)| std::iter::once(project).chain(tasks))
+                .flat_map(|(project, tasks, _, _)| std::iter::once(project).chain(tasks))
                 .filter(|item| !item.skipped),
             running,
         )
         .await?;
+        // Every public view too, before anything of any plan is written.
+        for (_, _, _, projecting) in &plans {
+            self.preflight_projections(projecting).await?;
+        }
         running.preflighted = true;
-        for (project, tasks, _) in &plans {
+        for (project, tasks, _, _) in &plans {
             for item in std::iter::once(project).chain(tasks) {
                 note_private(running, item);
             }
         }
         let mut outcomes = Vec::new();
-        for (project, tasks, changed) in plans {
-            outcomes.extend(
-                self.copy_project(request, project, tasks, &changed, running, journal)
-                    .await?,
-            );
+        for (project, tasks, changed, projecting) in plans {
+            let landed = self
+                .copy_project(request, project, tasks, &changed, running, journal)
+                .await?;
+            if !projecting.is_empty() && !request.dry_run {
+                self.land_projections(&projecting, &landed, journal).await?;
+            }
+            outcomes.extend(landed);
             // A task that would not hold still is reported where its project's tasks are,
             // having written nothing.
             outcomes.extend(changed);
@@ -8446,6 +8473,7 @@ fn carried(
         MetadataKey::MEMBER_OF_KEY,
         MetadataKey::ASSETS_KEY,
         dependents::DEPENDED_ON_BY_KEY,
+        PublicProjections::KEY,
     ]
     .into_iter()
     .chain(record::KEYS)

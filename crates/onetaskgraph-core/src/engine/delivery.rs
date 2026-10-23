@@ -50,6 +50,10 @@ pub struct TaskStatusSet {
     /// fallback read included — absent for a write made without `--expect`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spent: Option<Spent>,
+    /// The public projection the new status category was mirrored to — absent for a task
+    /// with none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub projection: Option<GlobalId>,
 }
 
 /// What `project status set` and [`Engine::set_project_status`] answer with.
@@ -172,6 +176,10 @@ impl Engine {
                 &delivers,
             )
             .await;
+        // A canonical task with a public projection hands it the category alone.
+        let projection = self
+            .mirror_status(id, task.project.as_ref(), status.category)
+            .await?;
         Ok(TaskStatusSet {
             id: id.clone(),
             status,
@@ -179,6 +187,7 @@ impl Engine {
             result,
             fallback,
             spent,
+            projection,
         })
     }
 

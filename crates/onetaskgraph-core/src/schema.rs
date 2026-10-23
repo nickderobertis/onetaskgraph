@@ -34,8 +34,8 @@ use crate::{
     CommentList, CommentWritten, CompleteAction, CopyAction, CopyLink, CopyOutcome, CopyReport,
     CopyVia, DeletedComment, Delivered, DeliveryOutcome, DocumentDetail, Failure, FailureClass,
     FailureDocument, GlobalId, IssueCompleted, IssuesCompleted, MetadataSet, PageToken, Predicate,
-    ProjectGraph, ProjectStatusSet, Qualified, QualifiedEdge, QualifiedEndpoint, QueryPlan,
-    QueryResponse, ReconcileOutcome, Regenerated, SearchHit, SearchKind, SourceFailure,
+    ProjectGraph, ProjectStatusSet, PublicProjections, Qualified, QualifiedEdge, QualifiedEndpoint,
+    QueryPlan, QueryResponse, ReconcileOutcome, Regenerated, SearchHit, SearchKind, SourceFailure,
     SourceListing, SourcePlan, StatusReconciled, StatusesReconciled, TaskAssetNames,
     TaskContentSet, TaskDetail, TaskDetails, TaskPrioritySet, TaskStatusSet, TaskUpdated,
     TemplateAnswers,
@@ -54,7 +54,7 @@ use crate::{
 /// that it moves whenever [`schema_bundle`] below emits a different document. The golden
 /// that holds it to that is `PUBLISHED_BUNDLES` in `tests/engine.rs`, which records every
 /// root's schema by digest from this version on.
-pub const SCHEMA_BUNDLE_VERSION: u32 = 44;
+pub const SCHEMA_BUNDLE_VERSION: u32 = 45;
 
 /// Every contract root, keyed by name, plus each registered plugin's config schema.
 #[must_use]
@@ -278,6 +278,10 @@ pub fn schema_bundle() -> Value {
     roots.insert("WritePolicyConfig", schema_for!(WritePolicyConfig));
     roots.insert("RepositoryVisibility", schema_for!(RepositoryVisibility));
     roots.insert("PublicWriteInput", schema_for!(PublicWriteInput));
+    // The map a private destination project records from each canonical task to its public
+    // projection: the copy domain's one definition of it, a root so both SDKs model it by
+    // name and their serialization tests round-trip what the binary records.
+    roots.insert("PublicProjections", schema_for!(PublicProjections));
     roots.insert("WriteVerdict", schema_for!(WriteVerdict));
 
     // The local cache of a remote source: how a source is configured with one, what `cache

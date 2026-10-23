@@ -23,6 +23,10 @@ use serde_json::{Value, json};
 
 use crate::common::{Sandbox, stderr, stdout};
 
+// Public projections of a private coordination project: the canonical plan in a private
+// destination, neutral views of its public work where its routes send them.
+mod projections;
+
 /// A private repository, its owner and name as a term check matches them.
 const A: &str = "github.com/hiddenco/quietharbor";
 const A_TEXT: &str = "Mirror the retry loop hiddenco/quietharbor uses.";
@@ -776,7 +780,16 @@ fn a_mixed_project_and_everything_in_it_goes_wholly_to_the_private_source_its_ro
         assert_eq!(outcome["placed"]["route"], 1, "{report:#}");
     }
     assert!(files_under(&store, "site").is_empty());
-    assert!(tree(&store.folder("elsewhere")).is_empty());
+    // The public half is seen in public only through a neutral view where its repository
+    // routes it: one `Public work` project and one task, naming nothing of the private plan.
+    let elsewhere = tree(&store.folder("elsewhere"));
+    assert_eq!(elsewhere.len(), 2, "{:?}", elsewhere.keys());
+    for (path, bytes) in &elsewhere {
+        let text = String::from_utf8_lossy(bytes);
+        for named in ["goal", "Private half", "plan:", "vault", "onetaskgraph."] {
+            assert!(!text.contains(named), "{path} names {named}:\n{text}");
+        }
+    }
     let project = one_file(&store, "vault", "projects");
     assert!(project.contains("classification: private"), "{project}");
     // The document follows its project's home.
@@ -841,7 +854,20 @@ fn a_private_document_alone_takes_its_project_and_every_public_task_in_it_to_the
     for outcome in items {
         assert_eq!(outcome["placed"]["destination"], "vault", "{report:#}");
     }
-    assert!(files_under(&store, "site").is_empty());
+    // `site`, where the public task's own placement is, holds a neutral view of it alone.
+    let on_site = tree(&store.folder("site"));
+    assert_eq!(
+        on_site.len(),
+        2,
+        "a project and one view: {:?}",
+        on_site.keys()
+    );
+    for (path, bytes) in &on_site {
+        let text = String::from_utf8_lossy(bytes);
+        for named in ["goal", "Design", "plan:", "vault", "onetaskgraph."] {
+            assert!(!text.contains(named), "{path} names {named}:\n{text}");
+        }
+    }
     let project = one_file(&store, "vault", "projects");
     assert!(project.contains("classification: private"), "{project}");
     // The task lands beside its private project as public as its own record says: a private
@@ -1069,7 +1095,7 @@ fn routing_store(extra: impl FnOnce(&Sandbox) -> Value) -> Store {
 }
 
 #[test]
-fn a_mixed_plan_homes_in_the_private_source_and_its_public_work_lands_in_a_public_member() {
+fn a_mixed_plan_homes_whole_in_the_private_source_and_its_public_work_is_seen_through_a_view() {
     let store = routing_store(|_| json!({}));
     private_plan(&store, "One goal");
     let report: Value = serde_json::from_str(&store.ok(&[
@@ -1081,12 +1107,11 @@ fn a_mixed_plan_homes_in_the_private_source_and_its_public_work_lands_in_a_publi
         "--json",
     ]))
     .expect("a copy report");
+    // Every task lands canonically beside the private home, the public one included.
     let landed = landed_ids(&report.to_string());
-    for item in ["draft:goal", "draft:quiet", "draft:review"] {
+    for item in ["draft:goal", "draft:open", "draft:quiet", "draft:review"] {
         assert!(landed[item].starts_with("vault:"), "{item}: {report:#}");
     }
-    let open = &landed["draft:open"];
-    assert!(open.starts_with("site:"), "{report:#}");
     // The document goes with its home.
     let document =
         landed_ids(&store.ok(&["document", "copy", "draft:design", "--to", "site", "--json"]));
@@ -1095,29 +1120,31 @@ fn a_mixed_plan_homes_in_the_private_source_and_its_public_work_lands_in_a_publi
         "{document:?}"
     );
 
-    // `site` holds the public task and the member project it is filed under, and nothing else.
+    // `site` holds a neutral project and one view of the public task, and nothing else.
     let home = &landed["draft:goal"];
-    let members = members_of_home(&store, home);
-    assert_eq!(members.len(), 1, "{members:?}");
-    let member = &members[0];
-    assert!(member.starts_with("site:"), "{members:?}");
-    let shown: Value = serde_json::from_str(&store.ok(&["task", "show", open, "--json"]))
-        .expect("the public task");
-    assert_eq!(
-        format!(
-            "site:{}",
-            shown["items"][0]["item"]["project"]
-                .as_str()
-                .expect("filed")
-        ),
-        *member
+    assert!(
+        shown_project(&store, home)["metadata"]
+            .get("onetaskgraph.members")
+            .is_none(),
+        "a view is no member"
     );
-    let mut on_site = files_under(&store, "site");
-    on_site.sort();
+    let map = shown_project(&store, home)["metadata"]["onetaskgraph.public_projections"].clone();
+    let entries = map["tasks"].as_array().expect("the map's entries");
+    assert_eq!(entries.len(), 1, "{map:#}");
+    assert_eq!(entries[0]["task"], landed["draft:open"].as_str(), "{map:#}");
+    let view = entries[0]["projection"]
+        .as_str()
+        .expect("a view")
+        .to_owned();
+    assert!(view.starts_with("site:"), "{map:#}");
+    let shown: Value =
+        serde_json::from_str(&store.ok(&["task", "show", &view, "--json"])).expect("the view");
+    assert_eq!(shown["items"][0]["item"]["title"], "Open work");
+    let on_site = files_under(&store, "site");
     assert_eq!(
         on_site.len(),
         2,
-        "the member and the public task: {on_site:?}"
+        "the view's project and the view: {on_site:?}"
     );
     // Nothing there names the private source, its work or where its home is.
     for (path, bytes) in tree(&store.folder("site")) {
@@ -1125,8 +1152,10 @@ fn a_mixed_plan_homes_in_the_private_source_and_its_public_work_lands_in_a_publi
         for named in [
             "vault",
             "Quiet work",
+            "One goal",
             "hiddenco",
-            "draft:quiet",
+            "draft:",
+            "onetaskgraph.",
             "classification: private",
         ] {
             assert!(!text.contains(named), "{path} names {named}:\n{text}");
@@ -1142,6 +1171,13 @@ fn a_mixed_plan_homes_in_the_private_source_and_its_public_work_lands_in_a_publi
         before,
         "a repeat leaves every folder as it was"
     );
+}
+
+/// One project read through the binary.
+fn shown_project(store: &Store, id: &str) -> Value {
+    let answer: Value =
+        serde_json::from_str(&store.ok(&["project", "show", id, "--json"])).expect("a project");
+    answer["items"][0]["item"].clone()
 }
 
 #[test]
@@ -1244,11 +1280,12 @@ fn an_existing_private_home_stays_the_home_when_its_private_work_later_routes_tw
     let site = tree(&store.folder("site"));
 
     // A second private repository's work now routes to `archive`: a new home would have no one
-    // private source, but this plan has a home, and it stays where it is.
+    // private source, but this plan has a home, and it stays where it is — with every task of
+    // the plan canonically beside it.
     add_bright(&store);
     let again = landed_ids(&store.ok(&["project", "copy", "draft:goal", "--to", "site", "--json"]));
     assert_eq!(again["draft:goal"], home, "{again:?}");
-    assert!(again["draft:bright"].starts_with("archive:"), "{again:?}");
+    assert!(again["draft:bright"].starts_with("vault:"), "{again:?}");
     let projects: Value =
         serde_json::from_str(&store.ok(&["project", "list", "--source", "vault", "--json"]))
             .expect("a listing");
@@ -1316,11 +1353,18 @@ fn a_project_s_own_private_repository_votes_its_home_into_the_private_source() {
         landed_ids(&store.ok(&["project", "copy", "draft:goal", "--to", "site", "--json"]));
     assert!(landed["draft:goal"].starts_with("vault:"), "{landed:?}");
     assert!(landed["draft:review"].starts_with("vault:"), "{landed:?}");
-    assert!(landed["draft:open"].starts_with("site:"), "{landed:?}");
+    // The public task lands canonically beside its private home, and is seen on `site` through
+    // a neutral view filed under no member of it.
+    assert!(landed["draft:open"].starts_with("vault:"), "{landed:?}");
+    assert!(
+        shown_project(&store, &landed["draft:goal"])["metadata"]
+            .get("onetaskgraph.members")
+            .is_none()
+    );
     assert_eq!(
-        members_of_home(&store, &landed["draft:goal"]).len(),
-        1,
-        "the public task is filed under a member on site"
+        files_under(&store, "site").len(),
+        2,
+        "a neutral project and the public task's view"
     );
 }
 
@@ -1368,29 +1412,49 @@ const MARKER_REFUSED: &str = "import json, sys\n\
     print(json.dumps({'verdict': 'pass'}))\n";
 
 #[test]
-fn a_public_member_its_check_refuses_takes_the_whole_copy_back() {
-    let sandbox = Sandbox::new();
-    let extra = json!({
-        "draft": folder(&sandbox, "draft", "public"),
-        "site": {"routes": [{"repositories": ["github.com/hiddenco/*"], "to": "vault"}]},
-    });
-    let store = Store::configured(
-        sandbox,
-        None,
-        Some(json!({
-            "visibility_command": ["python3", "-c", OPENCO_PUBLIC],
-            "check_command": ["python3", "-c", MARKER_REFUSED],
-        })),
-        extra,
-    );
-    // The home carries the marker in its title, so the member made for it on `site` does too;
-    // the public task the member files does not.
+fn a_public_view_its_check_refuses_is_refused_before_anything_of_the_plan_is_written() {
+    let marker_store = || {
+        let sandbox = Sandbox::new();
+        let extra = json!({
+            "draft": folder(&sandbox, "draft", "public"),
+            "site": {"routes": [{"repositories": ["github.com/hiddenco/*"], "to": "vault"}]},
+        });
+        Store::configured(
+            sandbox,
+            None,
+            Some(json!({
+                "visibility_command": ["python3", "-c", OPENCO_PUBLIC],
+                "check_command": ["python3", "-c", MARKER_REFUSED],
+            })),
+            extra,
+        )
+    };
+    // The home carries the marker in its title, which no public view ever does: the plan lands,
+    // its public task seen on `site` through a neutral view.
+    let store = marker_store();
     private_plan(&store, "Plan marker");
+    store.ok(&["project", "copy", "draft:goal", "--to", "site"]);
+    assert_eq!(
+        files_under(&store, "site").len(),
+        2,
+        "a project and one view"
+    );
+
+    // A public task whose own title carries it is refused before anything is written anywhere.
+    let store = marker_store();
+    private_plan(&store, "One goal");
+    store.record(
+        "draft",
+        "tasks",
+        "open",
+        &format!("title: Plan marker work\nstatus: todo\nproject: goal\nrepositories: [{OPEN}]"),
+        PLAIN,
+    );
     let (kind, said) = store.refused(&["project", "copy", "draft:goal", "--to", "site"]);
     assert_eq!(kind, "boundary-refused", "{said}");
     assert!(
-        said.contains("member project") && said.contains("in site, for draft:open"),
-        "the refusal names the member and the task it files: {said}"
+        said.contains("public projection of draft:open"),
+        "the refusal names the view and the task it is of: {said}"
     );
     assert!(
         files_under(&store, "site").is_empty(),
@@ -1398,7 +1462,7 @@ fn a_public_member_its_check_refuses_takes_the_whole_copy_back() {
     );
     assert!(
         files_under(&store, "vault").is_empty(),
-        "and the home landed first is taken back"
+        "and nothing of the plan reached its home either"
     );
 }
 

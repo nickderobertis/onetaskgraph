@@ -264,7 +264,7 @@ class Task(BaseModel):
     classification: Annotated[
         Classification,
         Field(
-            description="Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's\nrepositories and its project before it decides where the task may be written, and\nnothing written here can loosen either."
+            description="Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification, and the task owns it: the engine tightens it\nby the task's own repositories alone — any private or unknown one makes it private —\nbefore it decides where the task may be written, and never by the project it is filed\nunder, so a public task in a private project stays public. A task already recorded\nprivate stays private: nothing a copy or an update writes loosens it."
         ),
     ] = Classification.ClassificationPublic
     content: Annotated[

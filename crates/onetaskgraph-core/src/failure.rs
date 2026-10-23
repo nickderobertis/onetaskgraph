@@ -326,6 +326,13 @@ fn cause(error: &EngineError) -> (String, Option<SourceName>, Option<&SourceErro
         EngineError::PrivateMemberOfPublicProject { .. } => {
             ("private-member".to_owned(), None, None)
         }
+        EngineError::ProjectionReference { .. } => ("projection-reference".to_owned(), None, None),
+        EngineError::ProjectionsMalformed { .. } => {
+            ("projections-malformed".to_owned(), None, None)
+        }
+        EngineError::ProjectionNotMirrored { .. } => {
+            ("projection-not-mirrored".to_owned(), None, None)
+        }
         EngineError::DestinationUnavailable { name, error }
         | EngineError::SourceRefused { name, error }
         | EngineError::SourceUnavailable { name, error }

@@ -133,6 +133,9 @@ CONTRACT_ROOTS = {
     "RepositoryVisibility",
     "PublicWriteInput",
     "WriteVerdict",
+    # The map a private destination project records from each canonical task to its public
+    # projection, which a caller reading a coordination project models by name.
+    "PublicProjections",
     # The local cache of a remote source: a source's `cache` setting, how a read used the
     # cache, and what a write made with `expect` came to — named, because a caller branches on
     # each.

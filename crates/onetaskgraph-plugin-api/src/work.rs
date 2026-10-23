@@ -178,8 +178,7 @@ pub struct Project {
     pub version: Option<String>,
     /// Who may read this project, as it was declared, on the terms of
     /// [`Task::classification`]. A project holding a private task or document is private
-    /// however this reads, and the engine records it so when it writes the project; that
-    /// tightens the project alone, never the public tasks it holds.
+    /// however this reads, and the engine records it so when it writes the project.
     #[serde(default, skip_serializing_if = "Classification::is_public")]
     #[schemars(!skip_serializing_if)]
     pub classification: Classification,
@@ -235,8 +234,7 @@ pub struct Document {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     /// Who may read this document, as it was declared, on the terms of
-    /// [`Task::classification`] — and, unlike a task, as private as the project it is filed
-    /// under, because a project's documents are its own prose.
+    /// [`Task::classification`].
     #[serde(default, skip_serializing_if = "Classification::is_public")]
     #[schemars(!skip_serializing_if)]
     pub classification: Classification,

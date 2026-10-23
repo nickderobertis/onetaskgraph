@@ -71,7 +71,8 @@ pub use comment::{
 pub(crate) use copy::spent_between;
 pub use copy::{
     BudgetSpent, CommentCounts, CopyAction, CopyItems, CopyLink, CopyLookup, CopyOutcome,
-    CopyReport, CopyRequest, CopyScope, CopyVia, MatchBy, NoCounterpart, Spent, StatusPolicy,
+    CopyReport, CopyRequest, CopyScope, CopyVia, MatchBy, NoCounterpart, PublicProjection,
+    PublicProjections, Spent, StatusPolicy,
 };
 pub(crate) use copy::{malformed_links, malformed_locations};
 pub use delivery::{Delivered, DeliveryOutcome, ProjectStatusSet, TaskStatusSet, settled};
@@ -536,6 +537,52 @@ pub enum EngineError {
         /// The project, qualified.
         project: String,
         /// Why its classification could not be established.
+        why: String,
+    },
+
+    /// A public projection's content links to a local path the view could not carry.
+    #[error(
+        "{task} is public, and its content links to {reference:?}, a local path its public \
+         projection could not resolve; a projection never carries a path of the private \
+         store, so nothing was written\n\
+         next: link to a URL instead, attach the file as an image asset referenced as \
+         `./<name>`, or take the link out of the task."
+    )]
+    ProjectionReference {
+        /// The canonical task, qualified.
+        task: String,
+        /// The link's destination, as the content spells it.
+        reference: String,
+    },
+
+    /// A private project's `onetaskgraph.public_projections` map is not the shape this engine
+    /// reads.
+    #[error(
+        "the public projection map of {project} cannot be read ({why}), so nothing was \
+         written\n\
+         next: put that project's `onetaskgraph.public_projections` back as a copy wrote it, \
+         or remove it to let the next copy record it afresh."
+    )]
+    ProjectionsMalformed {
+        /// The private project, qualified.
+        project: String,
+        /// What is wrong with it.
+        why: String,
+    },
+
+    /// A canonical task's status was set, and its public projection's could not be.
+    #[error(
+        "the status of {task} was set, but its public projection {projection} could not be \
+         given it ({why})\n\
+         next: set the status of {task} again once {projection}'s source answers, or copy its \
+         project again, which brings every projection in step."
+    )]
+    ProjectionNotMirrored {
+        /// The canonical task, qualified.
+        task: String,
+        /// The projection, qualified.
+        projection: String,
+        /// Why its write failed.
         why: String,
     },
 

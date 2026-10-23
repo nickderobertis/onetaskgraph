@@ -1702,7 +1702,7 @@ export const runtimeSchemas = {
           "classification": {
             "$ref": "#/$defs/Classification",
             "default": "public",
-            "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's\nrepositories and its project before it decides where the task may be written, and\nnothing written here can loosen either."
+            "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification, and the task owns it: the engine tightens it\nby the task's own repositories alone — any private or unknown one makes it private —\nbefore it decides where the task may be written, and never by the project it is filed\nunder, so a public task in a private project stays public. A task already recorded\nprivate stays private: nothing a copy or an update writes loosens it."
           },
           "content": {
             "description": "The long-form body, when the source has one.",
@@ -9419,7 +9419,7 @@ export const runtimeSchemas = {
           "classification": {
             "$ref": "#/$defs/Classification",
             "default": "public",
-            "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's\nrepositories and its project before it decides where the task may be written, and\nnothing written here can loosen either."
+            "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification, and the task owns it: the engine tightens it\nby the task's own repositories alone — any private or unknown one makes it private —\nbefore it decides where the task may be written, and never by the project it is filed\nunder, so a public task in a private project stays public. A task already recorded\nprivate stays private: nothing a copy or an update writes loosens it."
           },
           "content": {
             "description": "The long-form body, when the source has one.",
@@ -10543,6 +10543,57 @@ export const runtimeSchemas = {
     "title": "ProjectStatusSet",
     "type": "object"
   },
+  "PublicProjections": {
+    "$defs": {
+      "GlobalId": {
+        "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
+        "type": "string"
+      },
+      "PublicProjection": {
+        "additionalProperties": false,
+        "description": "One canonical task and its public projection.",
+        "properties": {
+          "projection": {
+            "$ref": "#/$defs/GlobalId",
+            "description": "Its public counterpart, qualified: a view in a source not declared private."
+          },
+          "task": {
+            "$ref": "#/$defs/GlobalId",
+            "description": "The canonical task, qualified: the one the private destination holds."
+          }
+        },
+        "required": [
+          "task",
+          "projection"
+        ],
+        "type": "object"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "description": "The private destination project's map from each canonical task to its public projection.\n\nRead with [`PublicProjections::read`], which holds a stored value to every rule of the\nshape, and written back with [`PublicProjections::to_value`].",
+    "properties": {
+      "schema_version": {
+        "description": "The version of this shape; [`PublicProjections::SCHEMA_VERSION`] is the only one.",
+        "format": "uint32",
+        "minimum": 0,
+        "type": "integer"
+      },
+      "tasks": {
+        "description": "One entry per canonical task that has a public projection, unique by both ids.",
+        "items": {
+          "$ref": "#/$defs/PublicProjection"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "schema_version",
+      "tasks"
+    ],
+    "title": "PublicProjections",
+    "type": "object"
+  },
   "PublicWriteInput": {
     "$defs": {
       "RepositoryVisibility": {
@@ -11451,7 +11502,7 @@ export const runtimeSchemas = {
           "classification": {
             "$ref": "#/$defs/Classification",
             "default": "public",
-            "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's\nrepositories and its project before it decides where the task may be written, and\nnothing written here can loosen either."
+            "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification, and the task owns it: the engine tightens it\nby the task's own repositories alone — any private or unknown one makes it private —\nbefore it decides where the task may be written, and never by the project it is filed\nunder, so a public task in a private project stays public. A task already recorded\nprivate stays private: nothing a copy or an update writes loosens it."
           },
           "content": {
             "description": "The long-form body, when the source has one.",
@@ -14275,7 +14326,7 @@ export const runtimeSchemas = {
           "classification": {
             "$ref": "#/$defs/Classification",
             "default": "public",
-            "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's\nrepositories and its project before it decides where the task may be written, and\nnothing written here can loosen either."
+            "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification, and the task owns it: the engine tightens it\nby the task's own repositories alone — any private or unknown one makes it private —\nbefore it decides where the task may be written, and never by the project it is filed\nunder, so a public task in a private project stays public. A task already recorded\nprivate stays private: nothing a copy or an update writes loosens it."
           },
           "content": {
             "description": "The long-form body, when the source has one.",
@@ -15118,7 +15169,7 @@ export const runtimeSchemas = {
           "classification": {
             "$ref": "#/$defs/Classification",
             "default": "public",
-            "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's\nrepositories and its project before it decides where the task may be written, and\nnothing written here can loosen either."
+            "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification, and the task owns it: the engine tightens it\nby the task's own repositories alone — any private or unknown one makes it private —\nbefore it decides where the task may be written, and never by the project it is filed\nunder, so a public task in a private project stays public. A task already recorded\nprivate stays private: nothing a copy or an update writes loosens it."
           },
           "content": {
             "description": "The long-form body, when the source has one.",
@@ -15883,7 +15934,7 @@ export const runtimeSchemas = {
           "classification": {
             "$ref": "#/$defs/Classification",
             "default": "public",
-            "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's\nrepositories and its project before it decides where the task may be written, and\nnothing written here can loosen either."
+            "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification, and the task owns it: the engine tightens it\nby the task's own repositories alone — any private or unknown one makes it private —\nbefore it decides where the task may be written, and never by the project it is filed\nunder, so a public task in a private project stays public. A task already recorded\nprivate stays private: nothing a copy or an update writes loosens it."
           },
           "content": {
             "description": "The long-form body, when the source has one.",
@@ -17814,7 +17865,7 @@ export const runtimeSchemas = {
           "classification": {
             "$ref": "#/$defs/Classification",
             "default": "public",
-            "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's\nrepositories and its project before it decides where the task may be written, and\nnothing written here can loosen either."
+            "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification, and the task owns it: the engine tightens it\nby the task's own repositories alone — any private or unknown one makes it private —\nbefore it decides where the task may be written, and never by the project it is filed\nunder, so a public task in a private project stays public. A task already recorded\nprivate stays private: nothing a copy or an update writes loosens it."
           },
           "content": {
             "description": "The long-form body, when the source has one.",
@@ -19111,7 +19162,7 @@ export const runtimeSchemas = {
       "classification": {
         "$ref": "#/$defs/Classification",
         "default": "public",
-        "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's\nrepositories and its project before it decides where the task may be written, and\nnothing written here can loosen either."
+        "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification, and the task owns it: the engine tightens it\nby the task's own repositories alone — any private or unknown one makes it private —\nbefore it decides where the task may be written, and never by the project it is filed\nunder, so a public task in a private project stays public. A task already recorded\nprivate stays private: nothing a copy or an update writes loosens it."
       },
       "content": {
         "description": "The long-form body, when the source has one.",
@@ -20190,7 +20241,7 @@ export const runtimeSchemas = {
           "classification": {
             "$ref": "#/$defs/Classification",
             "default": "public",
-            "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's\nrepositories and its project before it decides where the task may be written, and\nnothing written here can loosen either."
+            "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification, and the task owns it: the engine tightens it\nby the task's own repositories alone — any private or unknown one makes it private —\nbefore it decides where the task may be written, and never by the project it is filed\nunder, so a public task in a private project stays public. A task already recorded\nprivate stays private: nothing a copy or an update writes loosens it."
           },
           "content": {
             "description": "The long-form body, when the source has one.",
@@ -21115,7 +21166,7 @@ export const runtimeSchemas = {
           "classification": {
             "$ref": "#/$defs/Classification",
             "default": "public",
-            "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's\nrepositories and its project before it decides where the task may be written, and\nnothing written here can loosen either."
+            "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification, and the task owns it: the engine tightens it\nby the task's own repositories alone — any private or unknown one makes it private —\nbefore it decides where the task may be written, and never by the project it is filed\nunder, so a public task in a private project stays public. A task already recorded\nprivate stays private: nothing a copy or an update writes loosens it."
           },
           "content": {
             "description": "The long-form body, when the source has one.",
@@ -22333,6 +22384,17 @@ export const runtimeSchemas = {
         "$ref": "#/$defs/GlobalId",
         "description": "The task whose status was set."
       },
+      "projection": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/GlobalId"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "The public projection the new status category was mirrored to — absent for a task\nwith none."
+      },
       "result": {
         "anyOf": [
           {
@@ -22798,7 +22860,7 @@ export const runtimeSchemas = {
           "classification": {
             "$ref": "#/$defs/Classification",
             "default": "public",
-            "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's\nrepositories and its project before it decides where the task may be written, and\nnothing written here can loosen either."
+            "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification, and the task owns it: the engine tightens it\nby the task's own repositories alone — any private or unknown one makes it private —\nbefore it decides where the task may be written, and never by the project it is filed\nunder, so a public task in a private project stays public. A task already recorded\nprivate stays private: nothing a copy or an update writes loosens it."
           },
           "content": {
             "description": "The long-form body, when the source has one.",
@@ -23425,7 +23487,7 @@ export const runtimeSchemas = {
           "classification": {
             "$ref": "#/$defs/Classification",
             "default": "public",
-            "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's\nrepositories and its project before it decides where the task may be written, and\nnothing written here can loosen either."
+            "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification, and the task owns it: the engine tightens it\nby the task's own repositories alone — any private or unknown one makes it private —\nbefore it decides where the task may be written, and never by the project it is filed\nunder, so a public task in a private project stays public. A task already recorded\nprivate stays private: nothing a copy or an update writes loosens it."
           },
           "content": {
             "description": "The long-form body, when the source has one.",

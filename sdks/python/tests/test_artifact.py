@@ -271,7 +271,12 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # read from the raw document and the roots from the validated one.
     bundle = generate.validate_schema_bundle(emitted_bundle)
 
-    assert emitted_bundle["version"] == 44
+    assert emitted_bundle["version"] == 45
+    # Version 45 publishes `PublicProjections`, the map a private destination project records
+    # from each canonical task to its public view, and `TaskStatusSet.projection`.
+    assert "PublicProjections" in bundle["roots"]
+    assert "projection" in emitted_bundle["roots"]["TaskStatusSet"]["properties"]
+    assert "projection" not in emitted_bundle["roots"]["TaskStatusSet"].get("required", [])
     # Version 44 lets copy report an explicitly selected destination task.
     assert "target-task" in {
         variant["const"]
