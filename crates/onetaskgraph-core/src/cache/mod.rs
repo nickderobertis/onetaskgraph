@@ -56,11 +56,7 @@ pub(crate) use source::CachedSource;
 /// A reader that meets any other value treats the entry as a miss: this directory is shared by
 /// every release on a host, so an entry a later release wrote in a shape this one does not know
 /// must cost a read, never a failure or a misreading.
-///
-/// Version 2 states that a task's classification is its own, never tightened by its project:
-/// what an entry holds is unchanged, and the number moves because the shape it publishes says
-/// so.
-pub const ENTRY_SCHEMA: u32 = 2;
+pub const ENTRY_SCHEMA: u32 = 1;
 
 /// Where a source's cache lives, and what names the remote it caches.
 #[derive(Debug, Clone, PartialEq, Eq)]

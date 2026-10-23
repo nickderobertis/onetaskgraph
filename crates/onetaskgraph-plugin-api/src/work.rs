@@ -126,11 +126,9 @@ pub struct Task {
     ///
     /// Defaulted and left out of the wire while `public`, so a task written before this
     /// field existed reads as public and a reader written before it reads what it always
-    /// read. It is the *declared* classification, and the task owns it: the engine tightens it
-    /// by the task's own repositories alone — any private or unknown one makes it private —
-    /// before it decides where the task may be written, and never by the project it is filed
-    /// under, so a public task in a private project stays public. A task already recorded
-    /// private stays private: nothing a copy or an update writes loosens it.
+    /// read. It is the *declared* classification: the engine tightens it by the task's
+    /// repositories and its project before it decides where the task may be written, and
+    /// nothing written here can loosen either.
     #[serde(default, skip_serializing_if = "Classification::is_public")]
     #[schemars(!skip_serializing_if)]
     pub classification: Classification,

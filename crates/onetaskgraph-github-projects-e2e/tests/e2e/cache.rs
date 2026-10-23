@@ -2402,7 +2402,7 @@ fn cache_clear_leaves_another_remotes_entries_another_releases_and_their_staging
         .find(|path| !path.ends_with("other.json"))
         .unwrap();
     let mut later: Value = serde_json::from_slice(&std::fs::read(&ours).unwrap()).unwrap();
-    later["schema"] = json!(onetaskgraph_core::cache::ENTRY_SCHEMA + 1);
+    later["schema"] = json!(2);
     std::fs::write(
         tasks.join("later.json"),
         serde_json::to_vec(&later).unwrap(),

@@ -2014,3 +2014,62 @@ fn a_project_holding_a_projection_map_copied_onward_never_carries_the_map() {
     copy_rollout(&store);
     assert!(projection_map(&store, home).is_object());
 }
+
+#[test]
+fn a_linear_view_whose_create_answer_was_lost_is_found_again_rather_than_made_twice() {
+    // Linear issues its own ids too: the issue it stored, whose answer the copy could not read,
+    // is found by what it says on the next copy.
+    let mut handle = None;
+    let store = Store::laid(Some(registered), |sandbox| {
+        let (mut config, workspace) =
+            crate::fixtures::linear_workspace(sandbox, crate::fixtures::dataset());
+        config["status_mapping"] = crate::fixtures::linear_default_mapping();
+        handle = Some(workspace);
+        sandbox.secrets_file("LINEAR_API_KEY=fixture-key\n");
+        json!({
+            "tracker": {"plugin": "linear", "config": config, "visibility": "public"},
+            "vault": {"routes": [{"repositories": ["github.com/openco/*"], "to": "tracker"}]},
+        })
+    });
+    let workspace = handle.expect("the workspace");
+    private_rollout(&store);
+    let landed = copy_rollout(&store);
+    assert!(
+        view_of(&store, &landed, &landed["plan:widget"]).starts_with("tracker:"),
+        "the views are in Linear"
+    );
+    store.record(
+        "plan",
+        "tasks",
+        "tune",
+        &format!("title: Tune the retry\nstatus: todo\nproject: rollout\nrepositories: [{OPEN}]"),
+        PLAIN,
+    );
+    let creates = |workspace: &crate::fixtures::LinearWorkspace| {
+        workspace
+            .served()
+            .iter()
+            .filter(|(document, variables)| {
+                document.contains("issueCreate") && variables.to_string().contains("Tune the retry")
+            })
+            .count()
+    };
+    // Linear stores the issue and its answer comes back with no issue in it.
+    workspace.bend_answers(
+        |document, variables| {
+            document.contains("issueCreate") && variables.to_string().contains("Tune the retry")
+        },
+        1,
+        |_, data| *data = json!({"issueCreate": null}),
+    );
+    let output = store.run(&["project", "copy", "plan:rollout", "--to", "vault"]);
+    assert_ne!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(creates(&workspace), 1, "Linear was asked once");
+
+    let again =
+        landed_ids(&store.ok(&["project", "copy", "plan:rollout", "--to", "vault", "--json"]));
+    assert_eq!(creates(&workspace), 1, "and no copy asked it a second time");
+    let view = view_of(&store, &landed, &again["plan:tune"]);
+    assert!(view.starts_with("tracker:"), "{view}");
+    assert_eq!(shown(&store, "task", &view)["title"], "Tune the retry");
+}
