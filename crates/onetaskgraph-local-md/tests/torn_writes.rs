@@ -38,9 +38,7 @@ impl SecretResolver for NoSecrets {
     }
 }
 
-/// The variable naming the write the writer process makes.
 const CASE: &str = "ONETASKGRAPH_LOCAL_MD_TORN_CASE";
-/// The variable naming the folder the writer process writes in.
 const ROOT: &str = "ONETASKGRAPH_LOCAL_MD_TORN_ROOT";
 /// The test that is the writer when [`CASE`] is set, and does nothing otherwise.
 const WRITER: &str = "torn_writer";
@@ -53,12 +51,10 @@ const SIGXFSZ: i32 = 25;
 /// under bash, so 4 or 8 KiB — far below every record, far above every front matter.
 const LIMIT_BLOCKS: u32 = 8;
 
-/// One record's content as it is before every write.
 fn previous() -> String {
     filler("previous")
 }
 
-/// One record's content as a write that replaces it means it to be.
 fn replacement() -> String {
     filler("replacement")
 }
