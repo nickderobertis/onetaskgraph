@@ -2167,7 +2167,8 @@ impl TaskFile {
     ///
     /// The one blank line that separates a section from the content is added with the section
     /// and removed with it, so a task that gains and then loses its only comment reads back
-    /// with the content it had.
+    /// with the content it had. The file is replaced through a staging file and a rename, so a
+    /// reader sees the section as it was or as it is now and never part of either.
     fn rewrite(&self) -> Result<(), SourceError> {
         let above = &self.text[self.body_at..self.section_at];
         let had_section = self.section_at < self.text.len();
@@ -2182,9 +2183,7 @@ impl TaskFile {
             written.push_str(&framed(content, true));
             written.push_str(&rendered_section(&self.comments));
         }
-        fs::write(&self.path, written).map_err(|e| SourceError::Unavailable {
-            message: format!("cannot write {}: {e}", self.path.display()),
-        })
+        write_atomically(&self.path, &written)
     }
 }
 
@@ -3262,9 +3261,9 @@ impl LocalMdSource {
     /// The content is written exactly as it is, with or without `answers`, and the answers
     /// are stored after it, so a read answers exactly that content and those answers — none,
     /// for a plain write; the whole file is read back before anything is written and refused,
-    /// naming the field, when it would not. A rendering write then goes through a staging
-    /// file and a rename, so a failed write leaves the file that was there — or none — and no
-    /// staging file behind.
+    /// naming the field, when it would not. Every write then goes through a staging file and
+    /// a rename, so a reader sees the file that was there — or none — or the whole new one,
+    /// and a failed write leaves the first and no staging file behind.
     fn write_entry(
         &self,
         target: Option<&NativeId>,
@@ -3345,12 +3344,6 @@ impl LocalMdSource {
         }
         let content = outgoing.fields().content.unwrap_or_default();
         self.reads_back(kind, &path, &document, content, answers)?;
-        if answers.is_none() {
-            fs::write(&path, document).map_err(|e| SourceError::Unavailable {
-                message: format!("cannot write {}: {e}", path.display()),
-            })?;
-            return Ok(id);
-        }
         write_atomically(&path, &document)?;
         Ok(id)
     }
