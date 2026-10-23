@@ -577,7 +577,21 @@ fn every_case(
 
 #[test]
 fn a_writer_stopped_part_way_shows_a_reader_only_whole_records() {
-    every_case(Stop::Killed, |case, root, _| whole(root, case));
+    every_case(Stop::Killed, |case, root, _| {
+        whole(root, case)?;
+        // The writer died inside its staging file, which is still there for the listing above
+        // to have passed over; one with none was killed somewhere that holds no reader to this.
+        if files(root)
+            .keys()
+            .any(|path| path.to_string_lossy().ends_with(STAGING_SUFFIX))
+        {
+            Ok(())
+        } else {
+            Err(format!(
+                "{case}: the writer left no staging file part-written"
+            ))
+        }
+    });
 }
 
 #[test]
