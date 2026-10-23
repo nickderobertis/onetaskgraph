@@ -1797,3 +1797,57 @@ fn an_unrecorded_task_is_taken_as_a_view_only_when_it_alone_says_what_the_view_s
         );
     }
 }
+
+#[test]
+fn a_view_whose_task_drops_its_last_image_drops_it_too() {
+    let store = projecting_store();
+    private_rollout(&store);
+    let image = store.sandbox.project().join("shot.png");
+    std::fs::write(&image, [3_u8; 64]).expect("the image");
+    let body = store.body("As drawn: ![the retry](./shot.png)");
+    let image = image.display().to_string();
+    store.ok(&[
+        "task",
+        "create",
+        "plan",
+        "--project",
+        "rollout",
+        "--title",
+        "Draw it",
+        "--body-file",
+        &body,
+        "--repository",
+        OPEN,
+        "--asset",
+        &image,
+    ]);
+    let landed = copy_rollout(&store);
+    let view = view_of(&store, &landed, &landed["plan:draw-it"]);
+    let illustrated: Value =
+        serde_json::from_str(&store.ok(&["task", "show", &view, "--json"])).expect("the view");
+    let held = illustrated["assets"][0]["path"]
+        .as_str()
+        .expect("its image")
+        .to_owned();
+    assert!(std::path::Path::new(&held).exists());
+    // The task's prose no longer draws it.
+    store.record(
+        "plan",
+        "tasks",
+        "draw-it",
+        &format!("title: Draw it\nstatus: todo\nproject: rollout\nrepositories: [{OPEN}]"),
+        "Described in words instead.",
+    );
+    copy_rollout(&store);
+    let plain: Value =
+        serde_json::from_str(&store.ok(&["task", "show", &view, "--json"])).expect("the view");
+    assert_eq!(
+        plain["items"][0]["item"]["content"],
+        "Described in words instead."
+    );
+    assert_eq!(plain["assets"], json!([]), "{plain:#}");
+    assert!(
+        !std::path::Path::new(&held).exists(),
+        "its image is gone: {held}"
+    );
+}

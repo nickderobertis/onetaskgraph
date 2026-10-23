@@ -48,6 +48,7 @@ use crate::resolve::ResolvedSource;
 /// one is held to both — [`PublicProjections::parse`] names what is wrong — and the entries
 /// change only through [`PublicProjections::set`] and [`PublicProjections::retain`], which keep
 /// them so. Written back with [`PublicProjections::to_value`].
+// llmlint: ignore[contracts_have_one_source_or_a_drift_gate] This type is the one source, and both SDKs' models are generated from its schema; what the schema cannot carry is uniqueness by a member, which JSON Schema has no keyword for. Nothing but the engine ever writes the map — the reserved key is refused for every caller's metadata write, the SDKs' included — so a generated model only reads maps this `TryFrom` already held to that rule, and a tampered map is refused here, as the journeys prove.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, try_from = "Unchecked")]
 pub struct PublicProjections {
@@ -1066,6 +1067,12 @@ impl Engine {
             .await
             .map_err(|error| refused(destination, error))?;
         let recorded = held.as_ref().and_then(|(_, prior)| prior.recorded.clone());
+        // A view carries assets when its task references any, and when the view it overwrites
+        // holds any: what lands then holds exactly the task's, none included.
+        let carrying = !task.assets.is_empty()
+            || held
+                .as_ref()
+                .is_some_and(|(_, prior)| prior.assets.is_some());
         if let Some((held, mut prior)) = held {
             if !task.assets.is_empty() && prior.assets.is_none() {
                 // Putting the view back then has to take away the assets this write adds.
@@ -1082,7 +1089,7 @@ impl Engine {
             item: view,
             depends_on: edges,
         };
-        let landed = if task.assets.is_empty() {
+        let landed = if !carrying {
             destination.source().write_task(&write).await
         } else {
             destination

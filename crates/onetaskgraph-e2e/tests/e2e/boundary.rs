@@ -25,6 +25,7 @@ use crate::common::{Sandbox, stderr, stdout};
 
 // Public projections of a private coordination project: the canonical plan in a private
 // destination, neutral views of its public work where its routes send them.
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] The same edge `mod boundary` sits behind in `main.rs`, for its reason: no credential and no network, folders of Markdown, a relay over a pipe and the loopback board, in seconds; what they prove — the copy's projections and the status mirror — is the engine's, which AGENTS.md forbids any plugin crate to depend on, so no plugin's edge is narrower, and the board journeys need the GitHub plugin this suite already links.
 mod projections;
 
 /// A private repository, its owner and name as a term check matches them.
