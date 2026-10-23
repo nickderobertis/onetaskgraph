@@ -436,6 +436,16 @@ fn a_public_task_naming_private_material_is_refused_before_anything_is_written()
         (
             "path",
             format!("title: Add retry\nstatus: todo\nproject: rollout\nrepositories: [{OPEN}]"),
+            "See <a href=\"https://example.org/faq\">the FAQ</a>.".to_owned(),
+        ),
+        (
+            "path",
+            format!("title: Add retry\nstatus: todo\nproject: rollout\nrepositories: [{OPEN}]"),
+            "Read <img/src=\"../notes/d.png\"> first.".to_owned(),
+        ),
+        (
+            "path",
+            format!("title: Add retry\nstatus: todo\nproject: rollout\nrepositories: [{OPEN}]"),
             "As drawn: ![the retry](./never-attached.png)".to_owned(),
         ),
     ] {
@@ -458,7 +468,7 @@ fn a_public_task_naming_private_material_is_refused_before_anything_is_written()
             "{field}: nothing was written anywhere"
         );
     }
-    // A URL, a mail link and a fragment are carried, in Markdown and in HTML alike.
+    // A URL, a mail link and a fragment are carried in Markdown, and so is HTML of bare tags.
     let store = projecting_store();
     private_rollout(&store);
     store.record(
@@ -466,8 +476,8 @@ fn a_public_task_naming_private_material_is_refused_before_anything_is_written()
         "tasks",
         "linked",
         &format!("title: Link the docs\nstatus: todo\nproject: rollout\nrepositories: [{OPEN}]"),
-        "See [the spec](https://example.org/spec), <a href=\"https://example.org/faq\">the FAQ</a>, \
-         [mail us](mailto:team@example.org) and [below](#below).",
+        "See [the spec](https://example.org/spec), [mail us](mailto:team@example.org) and \
+         [below](#below).\n\n<details>\n<summary>More</summary>\n\nCompare a < b.<br/>\n\n</details>\n",
     );
     copy_rollout(&store);
     assert_eq!(

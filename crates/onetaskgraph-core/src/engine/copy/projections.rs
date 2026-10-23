@@ -249,30 +249,48 @@ pub fn opaque_id(prefix: &str, of: &GlobalId) -> NativeId {
 /// The neutral title every public projection project carries.
 pub const PUBLIC_PROJECT_TITLE: &str = "Public work";
 
-/// The local references in `content` a public projection could not carry: every Markdown
-/// link or image, and every `href` or `src` of raw HTML, whose destination is neither a URL, a
-/// bare fragment nor one of `assets` as `./<name>`. Code spans and blocks hold no link, so
-/// nothing in them is one.
+/// What in `content` a public projection could not carry: every Markdown link or image whose
+/// destination is neither a URL, a bare fragment nor one of `assets` as `./<name>`, and every
+/// piece of raw HTML that could name a destination at all — a tag with any attribute, or a
+/// `style` or `script` element — since a view cannot tell what such HTML points at. Code spans
+/// and blocks hold neither, so nothing in them is one.
 #[must_use]
 pub fn unresolved_references(content: &str, assets: &[String]) -> Vec<String> {
     use pulldown_cmark::{Event, Options, Parser, Tag};
-    let mut destinations: Vec<String> = Vec::new();
+    let mut unresolved: Vec<String> = Vec::new();
+    let mut note = |found: String| {
+        if !unresolved.contains(&found) {
+            unresolved.push(found);
+        }
+    };
+    // Text too, each run of it whole — the parser hands it over in pieces split at `<` — since
+    // what CommonMark reads as text, `<img/src=…>`, another renderer may read as a tag.
+    let mut text = String::new();
     for event in Parser::new_ext(content, Options::empty()) {
+        if let Event::Text(piece) = &event {
+            text.push_str(piece);
+            continue;
+        }
+        if let Some(tag) = opaque_html(&std::mem::take(&mut text)) {
+            note(tag);
+        }
         match event {
             Event::Start(Tag::Link { dest_url, .. } | Tag::Image { dest_url, .. }) => {
-                destinations.push(dest_url.trim().to_owned());
+                let destination = dest_url.trim();
+                if !carried(destination, assets) {
+                    note(destination.to_owned());
+                }
             }
             Event::Html(html) | Event::InlineHtml(html) => {
-                destinations.extend(html_destinations(&html));
+                if let Some(tag) = opaque_html(&html) {
+                    note(tag);
+                }
             }
             _ => {}
         }
     }
-    let mut unresolved: Vec<String> = Vec::new();
-    for destination in destinations {
-        if !carried(&destination, assets) && !unresolved.contains(&destination) {
-            unresolved.push(destination);
-        }
+    if let Some(tag) = opaque_html(&text) {
+        note(tag);
     }
     unresolved
 }
@@ -302,134 +320,33 @@ fn carried(destination: &str, assets: &[String]) -> bool {
         && (rest.starts_with("//") || scheme.eq_ignore_ascii_case("mailto"))
 }
 
-/// The attributes of raw HTML whose value is one URL.
-const URL_ATTRIBUTES: &[&str] = &[
-    "href",
-    "src",
-    "xlink:href",
-    "poster",
-    "data",
-    "action",
-    "formaction",
-    "cite",
-    "background",
-    "longdesc",
-    "manifest",
-    "codebase",
-    "usemap",
-    "lowsrc",
-    "dynsrc",
-    "profile",
-    "icon",
-];
-
-/// The attributes of raw HTML whose value is several URLs: `srcset`'s comma-separated
-/// candidates, each a URL and a descriptor, and `ping`'s and `archive`'s whitespace-separated
-/// list.
-const URL_LIST_ATTRIBUTES: &[&str] = &["srcset", "imagesrcset", "ping", "archive"];
-
-/// Every URL a fragment of raw HTML names: each URL-bearing attribute of every tag, quoted or
-/// not, and every `url(…)` in a `style` attribute.
-fn html_destinations(html: &str) -> Vec<String> {
-    let mut found = Vec::new();
+/// The first tag of raw HTML that could name a destination — one carrying anything past its
+/// name, or opening a `style` or `script` element — as written; `None` when every tag is a bare
+/// name, which names nowhere.
+fn opaque_html(html: &str) -> Option<String> {
     let mut rest = html;
     while let Some(open) = rest.find('<') {
-        rest = &rest[open + 1..];
-        let close = rest.find('>').unwrap_or(rest.len());
-        let tag = &rest[..close];
-        rest = &rest[close.min(rest.len())..];
-        for (name, value) in attributes(tag) {
-            let name = name.to_ascii_lowercase();
-            if URL_ATTRIBUTES.contains(&name.as_str()) {
-                found.push(value.trim().to_owned());
-            } else if name == "srcset" || name == "imagesrcset" {
-                found.extend(value.split(',').filter_map(|candidate| {
-                    candidate.split_whitespace().next().map(str::to_owned)
-                }));
-            } else if URL_LIST_ATTRIBUTES.contains(&name.as_str()) {
-                found.extend(value.split_whitespace().map(str::to_owned));
-            } else if name == "style" {
-                found.extend(css_urls(&value));
-            }
-        }
-    }
-    found
-}
-
-/// The `name=value` attributes of one tag's inside, after its name; an attribute with no value
-/// names no URL and is left out.
-fn attributes(tag: &str) -> Vec<(String, String)> {
-    let mut found = Vec::new();
-    let characters: Vec<char> = tag.chars().collect();
-    let mut at = characters
-        .iter()
-        .position(|character| character.is_whitespace())
-        .unwrap_or(characters.len());
-    let is_name = |character: char| {
-        !character.is_whitespace() && !matches!(character, '=' | '>' | '/' | '"' | '\'')
-    };
-    while at < characters.len() {
-        while at < characters.len() && !is_name(characters[at]) {
-            at += 1;
-        }
-        let start = at;
-        while at < characters.len() && is_name(characters[at]) {
-            at += 1;
-        }
-        let name: String = characters[start..at].iter().collect();
-        while at < characters.len() && characters[at].is_whitespace() {
-            at += 1;
-        }
-        if name.is_empty() || characters.get(at) != Some(&'=') {
+        let tag = &rest[open..];
+        let end = tag.find('>').map_or(tag.len(), |end| end + 1);
+        let inside = tag[1..end]
+            .trim_end_matches('>')
+            .trim_start_matches(['/', '!', '?']);
+        // Only `<` straight before a name opens a tag: `a < b` is prose.
+        if !inside.starts_with(|character: char| character.is_ascii_alphabetic()) {
+            rest = &tag[1..];
             continue;
         }
-        at += 1;
-        while at < characters.len() && characters[at].is_whitespace() {
-            at += 1;
+        let name_end = inside
+            .find(|character: char| !character.is_ascii_alphanumeric() && character != '-')
+            .unwrap_or(inside.len());
+        let (name, after) = inside.split_at(name_end);
+        let bare = after.trim().trim_end_matches('/').trim().is_empty();
+        if !bare || name.eq_ignore_ascii_case("style") || name.eq_ignore_ascii_case("script") {
+            return Some(tag[..end].to_owned());
         }
-        let value: String = match characters.get(at) {
-            Some(&quote @ ('"' | '\'')) => {
-                let start = at + 1;
-                at = start;
-                while at < characters.len() && characters[at] != quote {
-                    at += 1;
-                }
-                let value = characters[start..at].iter().collect();
-                at += 1;
-                value
-            }
-            _ => {
-                let start = at;
-                while at < characters.len() && !characters[at].is_whitespace() {
-                    at += 1;
-                }
-                characters[start..at].iter().collect()
-            }
-        };
-        found.push((name, value));
+        rest = &tag[end..];
     }
-    found
-}
-
-/// Every `url(…)` a CSS declaration list names, its quotes taken off.
-fn css_urls(style: &str) -> Vec<String> {
-    let lower = style.to_ascii_lowercase();
-    let mut found = Vec::new();
-    let mut from = 0;
-    while let Some(at) = lower[from..].find("url(") {
-        let start = from + at + 4;
-        let end = style[start..]
-            .find(')')
-            .map_or(style.len(), |end| start + end);
-        found.push(
-            style[start..end]
-                .trim()
-                .trim_matches(|character| character == '"' || character == '\'')
-                .to_owned(),
-        );
-        from = end;
-    }
-    found
+    None
 }
 
 /// One public task of a private plan a project copy projects, as its canonical record read.
@@ -1420,32 +1337,36 @@ mod tests {
     }
 
     #[test]
-    fn only_urls_fragments_and_held_assets_are_carried() {
+    fn only_urls_fragments_held_assets_and_bare_html_are_carried() {
         let content = "See [docs](https://example.org/x), [here](#part), \
                        ![shot](./shot.png), [mail](mailto:a@b.c), \
                        [local](../plans/secret.md), [abs](/home/me/x.md), \
-                       [file](file:///etc/x) and `[code](./not-a-link.md)`, \
-                       <a href=\"https://example.org/y\">y</a>, \
-                       <a data-href=\"x\" HREF='../notes/x.md'>x</a> and <img src=/srv/z.png>, \
-                       <img srcset=\"https://example.org/a.png 1x, ../private/b.png 2x\">, \
-                       <video poster=\"/srv/poster.png\"></video> and \
-                       <div style=\"background: url('../private/c.png')\">c</div>.";
+                       [file](file:///etc/x) and `[code](./not-a-link.md)` and \
+                       `<a href=\"../code.md\">`.\n\n\
+                       <details>\n<summary>More</summary>\n\nText<br/>\n\n</details>\n";
         assert_eq!(
             unresolved_references(content, &["shot.png".to_owned()]),
-            vec![
-                "../plans/secret.md",
-                "/home/me/x.md",
-                "file:///etc/x",
-                "../notes/x.md",
-                "/srv/z.png",
-                "../private/b.png",
-                "/srv/poster.png",
-                "../private/c.png"
-            ]
+            vec!["../plans/secret.md", "/home/me/x.md", "file:///etc/x"]
         );
         assert_eq!(
             unresolved_references("![other](./other.png)", &[]),
             vec!["./other.png"]
         );
+        for html in [
+            "<a href=\"https://example.org/y\">y</a>",
+            "<a title=\">\" href=\"../private.md\">x</a>",
+            "<img/src=\"../private.png\">",
+            "<img srcset=\"a.png 1x, ../b.png 2x\">",
+            "<div style=\"background: u\\72l('../c.png')\">c</div>",
+            "<style>body { background: url(../d.png) }</style>",
+            "<a ping=\"../e\">e</a>",
+        ] {
+            // Prose comparing two things is no tag.
+            assert!(unresolved_references("Keep a < b and c > d.", &[]).is_empty());
+            assert!(
+                !unresolved_references(&format!("Text {html} text."), &[]).is_empty(),
+                "{html}"
+            );
+        }
     }
 }

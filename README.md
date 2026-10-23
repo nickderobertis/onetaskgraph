@@ -2009,9 +2009,11 @@ source its repositories route it to as public, when that is a source not declare
   content, repositories and status, and depending only on the views of other public tasks — no
   labels, priority, metadata, origin, copy link, delivery, member list, count or path of the
   private plan;
-- every view put to the caller's check, and every link in its content held to being a URL, a
-  fragment or one of its own image assets, **before the copy writes anything**: a view naming
-  private material, or linking a local path it could not carry, refuses the whole copy.
+- every view put to the caller's check, every Markdown link in its content held to being a URL,
+  a fragment or one of its own image assets, and any raw HTML tag carrying an attribute — or a
+  `style` or `script` element — refused, since a view cannot read where such HTML points,
+  **before the copy writes anything**: a view naming private material, or carrying a link it
+  could not, refuses the whole copy.
 
 A view is a view, never another executable task: the engine reads and writes the canonical
 records, a view never enters its task enumeration, and a person's edit of a view changes nothing

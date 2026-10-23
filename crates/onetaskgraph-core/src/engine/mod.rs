@@ -541,13 +541,14 @@ pub enum EngineError {
         why: String,
     },
 
-    /// A public projection's content links to a local path the view could not carry.
+    /// A public projection's content links to a local path, or carries raw HTML that could
+    /// name one, which the view could not carry.
     #[error(
-        "{task} is public, and its content links to {reference:?}, a local path its public \
-         projection could not resolve; a projection never carries a path of the private \
-         store, so nothing was written\n\
-         next: link to a URL instead, attach the file as an image asset referenced as \
-         `./<name>`, or take the link out of the task."
+        "{task} is public, and its content carries {reference:?}, a local link or raw HTML its \
+         public projection cannot carry; a projection never carries a path of the private \
+         store, nor HTML whose destination it cannot read, so nothing was written\n\
+         next: link to a URL in Markdown instead, attach the file as an image asset referenced \
+         as `./<name>`, or take it out of the task."
     )]
     ProjectionReference {
         /// The canonical task, qualified.
