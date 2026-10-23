@@ -247,8 +247,11 @@ carries `onetaskgraph.copied_destination_version` — a copy landed it — and T
 `onetaskgraph.edges_on_record: 1` on every task it lands whose edges are all on its own record:
 it writes a private prerequisite whose source has a designator in the opaque form instead of
 withholding it, and takes the legacy `onetaskgraph.depended_on_by` entry naming that task off the
-prerequisite. A task whose prerequisite's source has no designator keeps the withhold-and-record
-path and is not marked. Nothing but a copy writes the key, and `project graph` holds each task
+prerequisite. A prerequisite whose source has a designator but which the task records by a
+prefixed human key, a URL, a slug, or an id its source holds no item under is refused before the
+copy writes anything, with kind `private-reference-content` naming the form and never its value,
+exactly as a direct write refuses it. A task whose prerequisite's source has no designator keeps
+the withhold-and-record path and is not marked. Nothing but a copy writes the key, and `project graph` holds each task
 of the project to the same rule.
 
 An edge is always oriented `from` **depends on** `to`, whichever way the backend spells it.

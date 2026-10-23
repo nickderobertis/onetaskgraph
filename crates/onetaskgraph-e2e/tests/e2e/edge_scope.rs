@@ -1329,10 +1329,11 @@ fn a_github_board_is_designated_by_its_project_node_id() {
     );
 }
 
-/// A copy writes a private prerequisite opaquely only when its id is that item's native id: one
-/// named by what reads as a prefixed key, and one its source holds nothing under, are withheld
-/// as a source with no designator's are, and the dependent is not marked; one named by its
-/// native id is written opaquely and the dependent is.
+/// A copy writes a private prerequisite opaquely only when its id is that item's native id, and
+/// refuses — before anything is written, exactly as a direct write does — one its task records by
+/// a prefixed key, a URL, a slug or an id its source holds nothing under, as
+/// `private-reference-content` naming the form and never its value. One named by its native id
+/// is written opaquely and the dependent is marked.
 #[test]
 fn a_copy_writes_opaquely_only_a_prerequisite_named_by_its_native_id() {
     const ALIAS: &str = "planning_vault-2026";
@@ -1344,8 +1345,16 @@ fn a_copy_writes_opaquely_only_a_prerequisite_named_by_its_native_id() {
         &[
             ("keyed", "title: Keyed\ndepends_on: [ABC-12]\n"),
             (
+                "addressed",
+                "title: Addressed\ndepends_on: ['https://tracker.example/covert-launch']\n",
+            ),
+            (
+                "slugged",
+                "title: Slugged\ndepends_on: [covert-launch-plan]\n",
+            ),
+            (
                 "ghostly",
-                "title: Ghostly\ndepends_on: [{id: vault:ghost, item: task}]\n",
+                "title: Ghostly\ndepends_on: [{id: vault:spectre9, item: task}]\n",
             ),
             ("native", "title: Native\ndepends_on: [approve-plan]\n"),
             ("ABC-12", "title: Covert keyed item\n"),
@@ -1357,38 +1366,95 @@ fn a_copy_writes_opaquely_only_a_prerequisite_named_by_its_native_id() {
         "vault": {"plugin": "local-md", "config": {"root": vault}, "visibility": "private",
                   "public_alias": ALIAS},
     })));
-    for (task, opaque) in [("keyed", false), ("ghostly", false), ("native", true)] {
-        let report = answered(
-            &sandbox,
-            &[
-                "task",
-                "copy",
-                &format!("vault:{task}"),
-                "--to",
-                "site",
-                "--json",
-            ],
-            0,
-        );
-        let landed = report["items"][0]["destination"]
-            .as_str()
-            .expect("a destination")
-            .strip_prefix("site:")
-            .expect("a site id")
-            .to_owned();
-        let file = std::fs::read_to_string(site.join("tasks").join(format!("{landed}.md")))
-            .expect("the copy");
-        assert_eq!(
-            file.contains(&format!("alias/{ALIAS}")),
-            opaque,
-            "{task}:\n{file}"
-        );
-        assert_eq!(file.contains("edges_on_record"), opaque, "{task}:\n{file}");
+    let snapshot = |root: &Path| -> Vec<(PathBuf, Vec<u8>)> {
+        let mut files: Vec<(PathBuf, Vec<u8>)> = walkdir(root)
+            .into_iter()
+            .map(|path| {
+                let bytes = std::fs::read(&path).expect("a file");
+                (path, bytes)
+            })
+            .collect();
+        files.sort();
+        files
+    };
+    let vault_before = snapshot(&vault);
+    for (task, form, secret) in [
+        ("keyed", "a prefixed key", "ABC-12"),
+        ("addressed", "a URL", "tracker.example"),
+        ("slugged", "a slug", "covert-launch-plan"),
+        (
+            "ghostly",
+            "an id that is not the item's native id",
+            "spectre9",
+        ),
+    ] {
+        for dry_run in [false, true] {
+            let mut arguments = vec!["task", "copy", task, "--to", "site", "--json"];
+            let qualified = format!("vault:{task}");
+            arguments[2] = &qualified;
+            if dry_run {
+                arguments.push("--dry-run");
+            }
+            let output = run(&sandbox, &arguments);
+            assert_ne!(output.status.code(), Some(0), "{task} was refused");
+            let failure: Value = serde_json::from_str(&stdout(&output))
+                .or_else(|_| serde_json::from_str(&stderr(&output)))
+                .unwrap_or_else(|_| panic!("a failure document for {task}:\n{}", stderr(&output)));
+            assert_eq!(
+                failure["failure"]["kind"], "private-reference-content",
+                "{task}: {failure}"
+            );
+            let message = format!("{}{}", stdout(&output), stderr(&output));
+            assert!(message.contains(form), "{task}: names {form}:\n{message}");
+            assert!(
+                !message.contains(secret),
+                "{task}: the refusal carries {secret:?}:\n{message}"
+            );
+        }
         assert!(
-            !file.contains("ABC-12") && !file.contains("ghost"),
-            "{task}:\n{file}"
+            snapshot(&site).is_empty(),
+            "{task}: nothing was written to the destination"
+        );
+        assert_eq!(
+            snapshot(&vault),
+            vault_before,
+            "{task}: nothing was written back to the source"
         );
     }
+
+    let report = answered(
+        &sandbox,
+        &["task", "copy", "vault:native", "--to", "site", "--json"],
+        0,
+    );
+    let landed = report["items"][0]["destination"]
+        .as_str()
+        .expect("a destination")
+        .strip_prefix("site:")
+        .expect("a site id")
+        .to_owned();
+    let file =
+        std::fs::read_to_string(site.join("tasks").join(format!("{landed}.md"))).expect("the copy");
+    assert!(file.contains(&format!("alias/{ALIAS}")), "{file}");
+    assert!(file.contains("approve-plan"), "{file}");
+    assert!(file.contains("edges_on_record"), "{file}");
+}
+
+/// Every file under `root`, recursively; none when it does not exist.
+fn walkdir(root: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return found;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            found.extend(walkdir(&path));
+        } else {
+            found.push(path);
+        }
+    }
+    found
 }
 
 /// Asked for every edge, a read whose opaque far end no configured source is is refused naming

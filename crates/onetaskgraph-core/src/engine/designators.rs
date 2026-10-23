@@ -35,9 +35,6 @@ const FILE_SCHEMA: u32 = 1;
 pub(crate) struct Designators {
     configured: BTreeMap<SourceName, Configured>,
     known: Mutex<BTreeMap<SourceName, Option<Designator>>>,
-    /// Each private far end a copy read and found is not named by its native id, by its
-    /// qualified id: an edge to it is withheld rather than written opaquely.
-    unconfirmed: Mutex<std::collections::HashSet<crate::GlobalId>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -79,7 +76,6 @@ impl Designators {
                 })
                 .collect(),
             known: Mutex::new(BTreeMap::new()),
-            unconfirmed: Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -177,26 +173,11 @@ impl Engine {
         Ok(designator)
     }
 
-    /// Note that `far` is a far end a copy may not write opaquely: its id is not its native id.
-    pub(crate) fn unconfirm(&self, far: &crate::GlobalId) {
-        self.designators
-            .unconfirmed
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(far.clone());
-    }
-
     /// The designator a copy writes an edge to `far` under, opaquely: its source's, when this
-    /// engine has learned it and `far`'s id is not plainly, or by a read a copy made, other than
-    /// the item's native id.
+    /// engine has learned it and `far`'s id is not plainly other than the item's native id. A
+    /// copy has already refused, before writing, a far end its read found named otherwise.
     pub(crate) fn opaque_designator(&self, far: &crate::GlobalId) -> Option<Designator> {
-        let unconfirmed = self
-            .designators
-            .unconfirmed
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .contains(far);
-        if unconfirmed || super::boundary::plainly_not_native(far.native.as_str()).is_some() {
+        if super::boundary::plainly_not_native(far.native.as_str()).is_some() {
             return None;
         }
         self.known_designator(&far.source)
@@ -318,9 +299,10 @@ impl Engine {
         };
         let native = onetaskgraph_plugin_api::NativeId(id.to_owned());
         let read = match kind {
-            onetaskgraph_plugin_api::ItemKind::Task => {
-                far.get_task(&native).await.map(|task| task.map(|task| task.id))
-            }
+            onetaskgraph_plugin_api::ItemKind::Task => far
+                .get_task(&native)
+                .await
+                .map(|task| task.map(|task| task.id)),
             onetaskgraph_plugin_api::ItemKind::Project => far
                 .get_project(&native)
                 .await

@@ -4989,7 +4989,7 @@ impl Engine {
         for item in &planned {
             note_private(running, item);
         }
-        self.learn_designators(&planned).await;
+        self.learn_designators(&planned).await?;
         if self.boundary_active() {
             for item in &planned {
                 self.classify_references(item, running).await?;
@@ -5031,7 +5031,17 @@ impl Engine {
     /// source is asked, so a copy no such edge crosses sends no request for one. A source that
     /// cannot say is left unknown, and an edge to it is withheld as it is for a source with no
     /// designator.
-    async fn learn_designators(&self, planned: &[&Planned]) {
+    ///
+    /// A far end of a source that can say, and that the copy does not carry, is read once there
+    /// to confirm its recorded id is the item's native id; one that is not — a prefixed human
+    /// key, a URL, a slug, or an id the source holds no item under — is refused before anything
+    /// is written, exactly as a direct write refuses it (see [`Engine::publicly_named`]), naming
+    /// its form and never its value.
+    ///
+    /// # Errors
+    ///
+    /// [`EngineError::PrivateReferenceContent`], and a far end's source failing that read.
+    async fn learn_designators(&self, planned: &[&Planned]) -> Result<(), EngineError> {
         let private =
             |name: &SourceName| self.declared(name) == crate::config::SourceVisibility::Private;
         let mut asked: BTreeSet<SourceName> = BTreeSet::new();
@@ -5058,12 +5068,17 @@ impl Engine {
                         .iter()
                         .find(|edge| far_end(&edge.to, &item.source.source).as_ref() == Some(&far))
                         .map_or(ItemKind::Task, |edge| edge.to.kind);
-                    if !matches!(self.native_form(&far, kind).await, Ok(None)) {
-                        self.unconfirm(&far);
+                    if let Some(form) = self.native_form(&far, kind).await? {
+                        return Err(EngineError::PrivateReferenceContent {
+                            item: item.source.to_string(),
+                            destination: item.to.to_string(),
+                            form,
+                        });
                     }
                 }
             }
         }
+        Ok(())
     }
 
     /// Learn who may read each item outside the copy that `item`'s dependencies and deliveries
