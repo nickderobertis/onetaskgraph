@@ -506,8 +506,24 @@ pub enum EngineError {
         item: String,
         /// The configured name of the destination.
         destination: String,
-        /// The form of the reference: which key, or which kind of id — never its value.
-        form: String,
+        /// The form of the reference — never its value.
+        form: boundary::ReferenceForm,
+    },
+
+    /// A dependency read asked for every edge, and one is recorded under a designator no source
+    /// this host configures is.
+    #[error(
+        "{id} depends on an item recorded under designator {designator}, and no source this host \
+         configures is that tracker, so the answer would lack it; the read was refused as \
+         --complete asks\n\
+         next: configure the tracker that designator names — its plugin and, for a folder, the \
+         same public_alias — or read without --complete to have it named in `unanswered`."
+    )]
+    DesignatorNotConfigured {
+        /// The item read.
+        id: String,
+        /// The designator no configured source is.
+        designator: onetaskgraph_plugin_api::Designator,
     },
 
     /// A write to a source not declared private would name an item classified private, though
@@ -2568,8 +2584,12 @@ impl Engine {
             response.errors = failed;
             response.unanswered = unasked.into_iter().map(Unanswered::Source).collect();
         }
-        response.errors.extend(resolving.failed);
-        response.unanswered.extend(resolving.unanswered);
+        if request.completeness == Completeness::Required {
+            resolving.required(&request.id.to_string(), &mut response.errors)?;
+        } else {
+            response.errors.extend(resolving.failed);
+            response.unanswered.extend(resolving.unanswered);
+        }
         Ok(response)
     }
 

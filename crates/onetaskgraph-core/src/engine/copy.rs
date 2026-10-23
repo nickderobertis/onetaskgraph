@@ -4920,8 +4920,9 @@ impl Engine {
     /// (see [`Engine::withholds`]) — an item of a source declared private, or one of `private`,
     /// the items this copy carries classified private — written in the opaque form, its
     /// source's designator and its native id, when [`preflight_copy`](Self::preflight_copy)
-    /// learned that source's designator, and left out when it has none. One not resolvable yet
-    /// stays `None`.
+    /// learned that source's designator and its id is the item's native id (see
+    /// [`Engine::opaque_designator`]), and left out otherwise. One not resolvable yet stays
+    /// `None`.
     fn shown_edges(
         &self,
         destination: &SourceName,
@@ -4939,7 +4940,7 @@ impl Engine {
                 else {
                     return Some(Some(edge));
                 };
-                let designator = self.known_designator(&far.source)?;
+                let designator = self.opaque_designator(&far)?;
                 edge.to = DependencyEndpoint::opaque(designator, far.native.0, edge.to.kind)
                     .expect("a far end's native id is not empty");
                 Some(Some(edge))
@@ -5040,12 +5041,26 @@ impl Engine {
                 .iter()
                 .filter_map(|edge| far_end(&edge.to, &item.source.source))
             {
-                let lands = planned
-                    .iter()
-                    .find(|other| other.source == far)
-                    .map_or(far.source, |other| other.to.clone());
-                if private(&lands) && asked.insert(lands.clone()) {
+                let carried = planned.iter().find(|other| other.source == far);
+                let lands = carried.map_or(far.source.clone(), |other| other.to.clone());
+                if !private(&lands) {
+                    continue;
+                }
+                if asked.insert(lands.clone()) {
                     let _ = self.designator(&lands).await;
+                }
+                // A far end the copy does not carry is named by the id its near item recorded,
+                // which is read once at its source to confirm it is that item's native id; one
+                // the copy carries is named by the id its own write is answered with.
+                if carried.is_none() && self.known_designator(&lands).is_some() {
+                    let kind = item
+                        .edges
+                        .iter()
+                        .find(|edge| far_end(&edge.to, &item.source.source).as_ref() == Some(&far))
+                        .map_or(ItemKind::Task, |edge| edge.to.kind);
+                    if !matches!(self.native_form(&far, kind).await, Ok(None)) {
+                        self.unconfirm(&far);
+                    }
                 }
             }
         }
@@ -6755,14 +6770,14 @@ impl Engine {
                 let Some(far) = far_end(&end.to, near) else {
                     continue;
                 };
-                // A far end whose source has a designator was written on the dependent itself,
-                // opaquely, so nothing is kept of it on the private side — and the entry an
-                // earlier copy kept there is taken off below, the dependent being decided.
+                // A far end written on the dependent itself, opaquely, is kept of nothing on the
+                // private side — and the entry an earlier copy kept there is taken off below,
+                // the dependent being decided.
                 if end.kind != DependencyKind::Blocks
                     || end.to.kind != ItemKind::Task
                     || self.declared(&far.source) != crate::config::SourceVisibility::Private
                     || !self.withholds(near, &far, &[])
-                    || self.known_designator(&far.source).is_some()
+                    || self.opaque_designator(&far).is_some()
                 {
                     continue;
                 }

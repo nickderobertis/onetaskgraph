@@ -754,8 +754,7 @@ impl Engine {
                     return Err(EngineError::PrivateReferenceContent {
                         item: item.to_owned(),
                         destination: destination.to_string(),
-                        form: "an opaque id that no source this host configures can confirm"
-                            .to_owned(),
+                        form: ReferenceForm::Unconfirmed,
                     });
                 };
                 let far = crate::GlobalId::new(
@@ -835,9 +834,8 @@ impl Engine {
         Ok(held)
     }
 
-    /// Refuse `far` unless it names a private item by its own native id: a URL and a prefixed
-    /// human key by their form alone, and anything else unless one read of it at its source
-    /// answers an item whose id is exactly that.
+    /// Refuse `far` unless it names a private item by its own native id, naming the form
+    /// [`native_form`](Self::native_form) found instead.
     async fn native_or_refused(
         &self,
         destination: &onetaskgraph_plugin_api::SourceName,
@@ -845,17 +843,31 @@ impl Engine {
         far: &crate::GlobalId,
         kind: onetaskgraph_plugin_api::ItemKind,
     ) -> Result<(), EngineError> {
-        let id = far.native.as_str();
-        let refused = |form: &str| EngineError::PrivateReferenceContent {
-            item: item.to_owned(),
-            destination: destination.to_string(),
-            form: form.to_owned(),
-        };
-        if id.contains("://") || id.starts_with("www.") {
-            return Err(refused("a URL"));
+        match self.native_form(far, kind).await? {
+            None => Ok(()),
+            Some(form) => Err(EngineError::PrivateReferenceContent {
+                item: item.to_owned(),
+                destination: destination.to_string(),
+                form,
+            }),
         }
-        if prefixed_key(id) {
-            return Err(refused("a prefixed key"));
+    }
+
+    /// `None` when `far` names a private item by its own native id, and otherwise the form it
+    /// names it by instead: a URL and a prefixed human key by their form alone, and anything
+    /// else unless one read of it at its source answers an item whose id is exactly that.
+    ///
+    /// # Errors
+    ///
+    /// A source that is not configured, or that failed the read.
+    pub(crate) async fn native_form(
+        &self,
+        far: &crate::GlobalId,
+        kind: onetaskgraph_plugin_api::ItemKind,
+    ) -> Result<Option<ReferenceForm>, EngineError> {
+        let id = far.native.as_str();
+        if let Some(form) = plainly_not_native(id) {
+            return Ok(Some(form));
         }
         let failed = |error| EngineError::SourceFailed {
             name: far.source.to_string(),
@@ -876,11 +888,11 @@ impl Engine {
                 .map_err(failed)?
                 .map(|project| project.id),
         };
-        match read {
-            Some(native) if native == far.native => Ok(()),
-            _ if slug(id) => Err(refused("a slug")),
-            _ => Err(refused("an id that is not the item's native id")),
-        }
+        Ok(match read {
+            Some(native) if native == far.native => None,
+            _ if slug(id) => Some(ReferenceForm::Slug),
+            _ => Some(ReferenceForm::NotNative),
+        })
     }
 
     /// Whether a write to `destination` withholds an id naming `far`: an item of another source
@@ -1243,6 +1255,18 @@ pub(crate) enum Absent {
     Carried,
 }
 
+/// The form `id` names an item by when that form alone says it is no native id — an address,
+/// or a human key with a prefix — and `None` when only a read of it can say.
+pub(crate) fn plainly_not_native(id: &str) -> Option<ReferenceForm> {
+    if id.contains("://") || id.starts_with("www.") {
+        Some(ReferenceForm::Url)
+    } else if prefixed_key(id) {
+        Some(ReferenceForm::PrefixedKey)
+    } else {
+        None
+    }
+}
+
 /// Whether `id` reads as a human key with a team or project prefix: letters and digits, a
 /// dash, and a number — `ABC-123`.
 fn prefixed_key(id: &str) -> bool {
@@ -1266,4 +1290,32 @@ fn slug(id: &str) -> bool {
                     .chars()
                     .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
         })
+}
+
+/// How a reference names a private item when it is not by the item's own native id — the whole
+/// of what a refusal says about it, never what it held.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReferenceForm {
+    /// A human key with a team or project prefix: `ABC-123`.
+    PrefixedKey,
+    /// An address.
+    Url,
+    /// Words joined by dashes that name no item by its native id.
+    Slug,
+    /// Something else its source holds no item under as its native id.
+    NotNative,
+    /// An opaque id whose tracker no source this host configures is, so nothing can confirm it.
+    Unconfirmed,
+}
+
+impl std::fmt::Display for ReferenceForm {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::PrefixedKey => "a prefixed key",
+            Self::Url => "a URL",
+            Self::Slug => "a slug",
+            Self::NotNative => "an id that is not the item's native id",
+            Self::Unconfirmed => "an opaque id that no source this host configures can confirm",
+        })
+    }
 }

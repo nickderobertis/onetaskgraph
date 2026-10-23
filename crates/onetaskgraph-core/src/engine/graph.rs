@@ -481,7 +481,20 @@ impl Engine {
                 edges.insert((prerequisite, task.id.clone()));
             }
         }
-        if let Some(failure) = resolving.failed.into_iter().next() {
+        // A far end that could not be confirmed fails the graph as any failed read does, and so,
+        // when every edge is asked for, does one that could not be asked.
+        if request.completeness == Completeness::Required {
+            let mut failed = Vec::new();
+            resolving.required(&request.project.to_string(), &mut failed)?;
+            resolving = super::designators::Resolving::default();
+            if let Some(failure) = failed.into_iter().next() {
+                return Err(EngineError::SourceFailed {
+                    name: failure.source.to_string(),
+                    error: failure.error,
+                });
+            }
+        }
+        if let Some(failure) = std::mem::take(&mut resolving.failed).into_iter().next() {
             return Err(EngineError::SourceFailed {
                 name: failure.source.to_string(),
                 error: failure.error,

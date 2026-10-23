@@ -35,6 +35,9 @@ const FILE_SCHEMA: u32 = 1;
 pub(crate) struct Designators {
     configured: BTreeMap<SourceName, Configured>,
     known: Mutex<BTreeMap<SourceName, Option<Designator>>>,
+    /// Each private far end a copy read and found is not named by its native id, by its
+    /// qualified id: an edge to it is withheld rather than written opaquely.
+    unconfirmed: Mutex<std::collections::BTreeSet<String>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -76,6 +79,7 @@ impl Designators {
                 })
                 .collect(),
             known: Mutex::new(BTreeMap::new()),
+            unconfirmed: Mutex::new(std::collections::BTreeSet::new()),
         }
     }
 
@@ -173,6 +177,31 @@ impl Engine {
         Ok(designator)
     }
 
+    /// Note that `far` is a far end a copy may not write opaquely: its id is not its native id.
+    pub(crate) fn unconfirm(&self, far: &crate::GlobalId) {
+        self.designators
+            .unconfirmed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(far.to_string());
+    }
+
+    /// The designator a copy writes an edge to `far` under, opaquely: its source's, when this
+    /// engine has learned it and `far`'s id is not plainly, or by a read a copy made, other than
+    /// the item's native id.
+    pub(crate) fn opaque_designator(&self, far: &crate::GlobalId) -> Option<Designator> {
+        let unconfirmed = self
+            .designators
+            .unconfirmed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(&far.to_string());
+        if unconfirmed || super::boundary::plainly_not_native(far.native.as_str()).is_some() {
+            return None;
+        }
+        self.known_designator(&far.source)
+    }
+
     /// The designator of `name` when this engine has already learned it, without asking.
     pub(crate) fn known_designator(&self, name: &SourceName) -> Option<Designator> {
         self.designators.known(name).flatten()
@@ -220,8 +249,9 @@ impl Engine {
 #[derive(Debug, Default)]
 pub(crate) struct Resolving {
     found: BTreeMap<Designator, Option<SourceName>>,
-    /// Each far end read, and whether its read let it stand as an edge.
-    read: BTreeMap<(SourceName, String), bool>,
+    /// Each far end read — by its source, its id and its kind's marker, since a task and a
+    /// project may share an id — and whether its read let it stand as an edge.
+    read: BTreeMap<(SourceName, String, &'static str), bool>,
     /// Each designator no configured source is, and each candidate or far end that could not be
     /// asked.
     pub(crate) unanswered: Vec<crate::plan::Unanswered>,
@@ -230,6 +260,29 @@ pub(crate) struct Resolving {
 }
 
 impl Resolving {
+    /// What this read could not ask, as a read asking for every edge is answered: each source
+    /// that could not be asked moved to `errors`, or the refusal of the first designator no
+    /// configured source is.
+    pub(crate) fn required(
+        self,
+        id: &str,
+        errors: &mut Vec<SourceFailure>,
+    ) -> Result<(), super::EngineError> {
+        errors.extend(self.failed);
+        for entry in self.unanswered {
+            match entry {
+                crate::plan::Unanswered::Source(failure) => errors.push(failure),
+                crate::plan::Unanswered::Designator(unresolved) => {
+                    return Err(super::EngineError::DesignatorNotConfigured {
+                        id: id.to_owned(),
+                        designator: unresolved.designator,
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn unasked(&mut self, failure: SourceFailure) {
         let entry = crate::plan::Unanswered::Source(failure);
         if !self.unanswered.contains(&entry) {
@@ -335,7 +388,7 @@ impl Engine {
             }
         }?;
         let id = endpoint.id().to_owned();
-        let key = (source.clone(), id.clone());
+        let key = (source.clone(), id.clone(), endpoint.kind.marker());
         let named = match resolving.read.get(&key) {
             Some(named) => *named,
             None => {

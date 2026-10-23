@@ -750,6 +750,10 @@ fn a_public_alias_names_a_folder_alike_under_every_name() {
     }
 }
 
+/// The private Linear issues of the copy journey, by native ids as Linear spells them.
+const DEPENDENT: &str = "1c7e5a90-3d2b-4f6e-8a11-5b9d0e2c4f73";
+const PREREQUISITE: &str = "6a0f2d18-9b4c-4e57-a3d2-7e1b8c5f9a06";
+
 /// A copy from a private Linear source onto a public folder writes the dependent's private
 /// prerequisite on the dependent itself, opaquely; takes the legacy `depended_on_by` entry an
 /// earlier copy left on the prerequisite off; and marks the dependent — whose next dependency
@@ -762,17 +766,19 @@ fn a_copy_moves_a_legacy_private_record_onto_the_dependent_opaquely() {
         "site",
         &[(
             "D-1",
-            "title: Draft the plan\nmetadata:\n  onetaskgraph.origin: vault:D-1\n  \
-             onetaskgraph.copied_destination_version: sha256:00\n",
+            &format!(
+                "title: Draft the plan\nmetadata:\n  onetaskgraph.origin: vault:{DEPENDENT}\n  \
+                 onetaskgraph.copied_destination_version: sha256:00\n"
+            ),
         )],
     );
     let (vault, vault_workspace) = workspace(
         &sandbox,
         "org-vault",
         json!([
-            issue("D-1", "Draft the plan", json!({})),
+            issue(DEPENDENT, "Draft the plan", json!({})),
             issue(
-                "P-1",
+                PREREQUISITE,
                 "Approve the budget",
                 json!({"metadata": {
                     "onetaskgraph.depended_on_by": {"site:D-1": {"id": "site:D-1", "kind": "task"}}
@@ -780,33 +786,41 @@ fn a_copy_moves_a_legacy_private_record_onto_the_dependent_opaquely() {
             ),
         ]),
     );
-    vault_workspace.relate("D-1", "P-1", "blocks");
+    vault_workspace.relate(DEPENDENT, PREREQUISITE, "blocks");
     sandbox.project_document(&configured(&json!({
         "site": {"plugin": "local-md", "config": {"root": site}, "visibility": "public"},
         "vault": {"plugin": "linear", "config": vault, "visibility": "private"},
     })));
+    let prerequisite_id = format!("vault:{PREREQUISITE}");
     let before = answered(&sandbox, &["task", "deps", "site:D-1", "--json"], 0);
     assert_eq!(
         edges(&before),
-        [("site:D-1".to_owned(), "vault:P-1".to_owned())],
+        [("site:D-1".to_owned(), prerequisite_id.clone())],
         "the legacy record is read"
     );
 
     answered(
         &sandbox,
-        &["task", "copy", "vault:D-1", "--to", "site", "--json"],
+        &[
+            "task",
+            "copy",
+            &format!("vault:{DEPENDENT}"),
+            "--to",
+            "site",
+            "--json",
+        ],
         0,
     );
 
     let file = std::fs::read_to_string(site.join("tasks/D-1.md")).expect("the dependent");
     let far = designator("linear", "org-vault");
     assert!(
-        file.contains(&format!("designator: {far}")) && file.contains("id: P-1"),
+        file.contains(&far) && file.contains(PREREQUISITE),
         "the prerequisite is on the dependent, opaquely:\n{file}"
     );
     assert!(file.contains("onetaskgraph.edges_on_record: 1"), "{file}");
     let prerequisite = vault_workspace
-        .long_form("tasks", "P-1")
+        .long_form("tasks", PREREQUISITE)
         .expect("the prerequisite");
     assert!(
         !prerequisite.contains("depended_on_by"),
@@ -815,13 +829,10 @@ fn a_copy_moves_a_legacy_private_record_onto_the_dependent_opaquely() {
 
     let from = vault_workspace.served().len();
     let after = answered(&sandbox, &["task", "deps", "site:D-1", "--json"], 0);
-    assert_eq!(
-        edges(&after),
-        [("site:D-1".to_owned(), "vault:P-1".to_owned())]
-    );
+    assert_eq!(edges(&after), [("site:D-1".to_owned(), prerequisite_id)]);
     assert_eq!(
         sent(&vault_workspace, from),
-        ["issue P-1"],
+        [format!("issue {PREREQUISITE}")],
         "the far end read, and no reverse-record query"
     );
 }
@@ -1295,4 +1306,152 @@ fn a_github_board_is_designated_by_its_project_node_id() {
         fields_reads, 1,
         "the designator costs the one read of the board's fields"
     );
+}
+
+/// A copy writes a private prerequisite opaquely only when its id is that item's native id: one
+/// named by what reads as a prefixed key, and one its source holds nothing under, are withheld
+/// as a source with no designator's are, and the dependent is not marked; one named by its
+/// native id is written opaquely and the dependent is.
+#[test]
+fn a_copy_writes_opaquely_only_a_prerequisite_named_by_its_native_id() {
+    const ALIAS: &str = "planning_vault-2026";
+    let sandbox = Sandbox::new();
+    let site = folder(&sandbox, "site", &[]);
+    let vault = folder(
+        &sandbox,
+        "vault",
+        &[
+            ("keyed", "title: Keyed\ndepends_on: [ABC-12]\n"),
+            (
+                "ghostly",
+                "title: Ghostly\ndepends_on: [{id: vault:ghost, item: task}]\n",
+            ),
+            ("native", "title: Native\ndepends_on: [approve-plan]\n"),
+            ("ABC-12", "title: Covert keyed item\n"),
+            ("approve-plan", "title: Approve the plan\n"),
+        ],
+    );
+    sandbox.project_document(&configured(&json!({
+        "site": {"plugin": "local-md", "config": {"root": site}, "visibility": "public"},
+        "vault": {"plugin": "local-md", "config": {"root": vault}, "visibility": "private",
+                  "public_alias": ALIAS},
+    })));
+    for (task, opaque) in [("keyed", false), ("ghostly", false), ("native", true)] {
+        let report = answered(
+            &sandbox,
+            &[
+                "task",
+                "copy",
+                &format!("vault:{task}"),
+                "--to",
+                "site",
+                "--json",
+            ],
+            0,
+        );
+        let landed = report["items"][0]["destination"]
+            .as_str()
+            .expect("a destination")
+            .strip_prefix("site:")
+            .expect("a site id")
+            .to_owned();
+        let file = std::fs::read_to_string(site.join("tasks").join(format!("{landed}.md")))
+            .expect("the copy");
+        assert_eq!(
+            file.contains(&format!("alias/{ALIAS}")),
+            opaque,
+            "{task}:\n{file}"
+        );
+        assert_eq!(file.contains("edges_on_record"), opaque, "{task}:\n{file}");
+        assert!(
+            !file.contains("ABC-12") && !file.contains("ghost"),
+            "{task}:\n{file}"
+        );
+    }
+}
+
+/// Asked for every edge, a read whose opaque far end no configured source is is refused naming
+/// the designator — `task deps` and `project graph` alike — rather than answered short.
+#[test]
+fn a_complete_read_refuses_an_opaque_far_end_no_source_is() {
+    let sandbox = Sandbox::new();
+    let nowhere = designator("linear", "org-nowhere");
+    let notes = folder(
+        &sandbox,
+        "notes",
+        &[(
+            "T-1",
+            &format!(
+                "title: Ship\nproject: P-1\ndepends_on:\n  - {{designator: {nowhere}, id: L-1, item: task}}\n"
+            ),
+        )],
+    );
+    std::fs::create_dir_all(notes.join("projects")).expect("the projects folder");
+    std::fs::write(notes.join("projects/P-1.md"), "---\ntitle: Launch\n---\n").expect("a project");
+    sandbox.project_document(&configured(&json!({
+        "notes": {"plugin": "local-md", "config": {"root": notes}},
+    })));
+    for arguments in [
+        vec!["task", "deps", "notes:T-1", "--complete", "--json"],
+        vec![
+            "project",
+            "graph",
+            "notes:P-1",
+            "--complete",
+            "--format",
+            "json",
+        ],
+    ] {
+        let output = run(&sandbox, &arguments);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{arguments:?}: {}",
+            stderr(&output)
+        );
+        assert!(
+            stderr(&output).contains(&nowhere) && stderr(&output).contains("--complete"),
+            "{arguments:?}: {}",
+            stderr(&output)
+        );
+    }
+}
+
+/// A task and a project sharing one native id are two far ends: a source holding the project
+/// alone confirms the opaque edge to it and fails the one to a task of that id.
+#[test]
+fn a_task_and_a_project_sharing_an_id_are_confirmed_apart() {
+    let sandbox = Sandbox::new();
+    let far = designator("linear", "org-plans");
+    let notes = folder(
+        &sandbox,
+        "notes",
+        &[(
+            "T-1",
+            &format!(
+                "title: Ship\ndepends_on:\n  - {{designator: {far}, id: X-0, item: project}}\n  \
+                 - {{designator: {far}, id: X-0, item: task}}\n"
+            ),
+        )],
+    );
+    let mut held = dataset();
+    for (_, kept) in held.as_object_mut().expect("the dataset is an object") {
+        *kept = json!([]);
+    }
+    held["projects"] = json!([{"id": "X-0", "title": "Roadmap",
+                               "status": {"category": "todo", "name": "Planned"}, "labels": []}]);
+    held["organization"] = json!("org-plans");
+    let (plans, _) = linear_workspace(&sandbox, held);
+    sandbox.project_document(&configured(&json!({
+        "notes": {"plugin": "local-md", "config": {"root": notes}},
+        "plans": {"plugin": "linear", "config": plans},
+    })));
+
+    let read = answered(&sandbox, &["task", "deps", "notes:T-1", "--json"], 4);
+    assert_eq!(
+        edges(&read),
+        [("notes:T-1".to_owned(), "plans:X-0".to_owned())]
+    );
+    assert_eq!(read["items"][0]["to"]["kind"], "project");
+    assert_eq!(read["errors"][0]["source"], "plans", "{read}");
 }
