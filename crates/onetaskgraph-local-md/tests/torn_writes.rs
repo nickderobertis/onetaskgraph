@@ -178,7 +178,6 @@ fn asset_record(case: &str) -> Option<(&'static str, &'static str)> {
     }
 }
 
-/// The content the record `asset_record` names reads with, through the source.
 fn record_content(root: &Path, (kind, record): (&str, &str)) -> Result<Option<String>, String> {
     let reader = source(root);
     runtime()
@@ -381,7 +380,6 @@ fn write(case: &str, root: &Path) -> Result<(), String> {
     outcome.map_err(|error| format!("{error:?}"))
 }
 
-/// The writer process: make the write [`CASE`] names, exiting [`LANDED`] when it landed whole.
 #[test]
 fn torn_writer() {
     let (Some(case), Some(root)) = (std::env::var(CASE).ok(), std::env::var_os(ROOT)) else {
@@ -642,7 +640,7 @@ fn a_writer_stopped_part_way_shows_a_reader_only_whole_records() {
 }
 
 #[test]
-fn a_write_failing_part_way_leaves_the_previous_record_and_no_staging_file() {
+fn a_write_failing_part_way_leaves_the_record_it_found_and_no_staging_file() {
     every_case(Stop::Failed, |case, root, before| {
         whole(root, case)?;
         let after = files(root);
