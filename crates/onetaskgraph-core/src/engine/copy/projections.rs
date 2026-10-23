@@ -302,34 +302,132 @@ fn carried(destination: &str, assets: &[String]) -> bool {
         && (rest.starts_with("//") || scheme.eq_ignore_ascii_case("mailto"))
 }
 
-/// Every `href` and `src` value in a fragment of raw HTML, quoted or not.
+/// The attributes of raw HTML whose value is one URL.
+const URL_ATTRIBUTES: &[&str] = &[
+    "href",
+    "src",
+    "xlink:href",
+    "poster",
+    "data",
+    "action",
+    "formaction",
+    "cite",
+    "background",
+    "longdesc",
+    "manifest",
+    "codebase",
+    "usemap",
+    "lowsrc",
+    "dynsrc",
+    "profile",
+    "icon",
+];
+
+/// The attributes of raw HTML whose value is several URLs: `srcset`'s comma-separated
+/// candidates, each a URL and a descriptor, and `ping`'s and `archive`'s whitespace-separated
+/// list.
+const URL_LIST_ATTRIBUTES: &[&str] = &["srcset", "imagesrcset", "ping", "archive"];
+
+/// Every URL a fragment of raw HTML names: each URL-bearing attribute of every tag, quoted or
+/// not, and every `url(…)` in a `style` attribute.
 fn html_destinations(html: &str) -> Vec<String> {
-    let lower = html.to_ascii_lowercase();
     let mut found = Vec::new();
-    for attribute in ["href", "src"] {
-        let mut from = 0;
-        while let Some(at) = lower[from..].find(attribute) {
-            let start = from + at;
-            from = start + attribute.len();
-            let before = lower[..start].chars().next_back();
-            if before.is_some_and(|character| character.is_ascii_alphanumeric() || character == '-')
-            {
-                continue;
+    let mut rest = html;
+    while let Some(open) = rest.find('<') {
+        rest = &rest[open + 1..];
+        let close = rest.find('>').unwrap_or(rest.len());
+        let tag = &rest[..close];
+        rest = &rest[close.min(rest.len())..];
+        for (name, value) in attributes(tag) {
+            let name = name.to_ascii_lowercase();
+            if URL_ATTRIBUTES.contains(&name.as_str()) {
+                found.push(value.trim().to_owned());
+            } else if name == "srcset" || name == "imagesrcset" {
+                found.extend(value.split(',').filter_map(|candidate| {
+                    candidate.split_whitespace().next().map(str::to_owned)
+                }));
+            } else if URL_LIST_ATTRIBUTES.contains(&name.as_str()) {
+                found.extend(value.split_whitespace().map(str::to_owned));
+            } else if name == "style" {
+                found.extend(css_urls(&value));
             }
-            let rest = html[from..].trim_start();
-            let Some(value) = rest.strip_prefix('=') else {
-                continue;
-            };
-            let value = value.trim_start();
-            let value = match value.chars().next() {
-                Some(quote @ ('"' | '\'')) => value[1..].split(quote).next().unwrap_or_default(),
-                _ => value
-                    .split(|character: char| character.is_whitespace() || character == '>')
-                    .next()
-                    .unwrap_or_default(),
-            };
-            found.push(value.trim().to_owned());
         }
+    }
+    found
+}
+
+/// The `name=value` attributes of one tag's inside, after its name; an attribute with no value
+/// names no URL and is left out.
+fn attributes(tag: &str) -> Vec<(String, String)> {
+    let mut found = Vec::new();
+    let characters: Vec<char> = tag.chars().collect();
+    let mut at = characters
+        .iter()
+        .position(|character| character.is_whitespace())
+        .unwrap_or(characters.len());
+    let is_name = |character: char| {
+        !character.is_whitespace() && !matches!(character, '=' | '>' | '/' | '"' | '\'')
+    };
+    while at < characters.len() {
+        while at < characters.len() && !is_name(characters[at]) {
+            at += 1;
+        }
+        let start = at;
+        while at < characters.len() && is_name(characters[at]) {
+            at += 1;
+        }
+        let name: String = characters[start..at].iter().collect();
+        while at < characters.len() && characters[at].is_whitespace() {
+            at += 1;
+        }
+        if name.is_empty() || characters.get(at) != Some(&'=') {
+            continue;
+        }
+        at += 1;
+        while at < characters.len() && characters[at].is_whitespace() {
+            at += 1;
+        }
+        let value: String = match characters.get(at) {
+            Some(&quote @ ('"' | '\'')) => {
+                let start = at + 1;
+                at = start;
+                while at < characters.len() && characters[at] != quote {
+                    at += 1;
+                }
+                let value = characters[start..at].iter().collect();
+                at += 1;
+                value
+            }
+            _ => {
+                let start = at;
+                while at < characters.len() && !characters[at].is_whitespace() {
+                    at += 1;
+                }
+                characters[start..at].iter().collect()
+            }
+        };
+        found.push((name, value));
+    }
+    found
+}
+
+/// Every `url(…)` a CSS declaration list names, its quotes taken off.
+fn css_urls(style: &str) -> Vec<String> {
+    let lower = style.to_ascii_lowercase();
+    let mut found = Vec::new();
+    let mut from = 0;
+    while let Some(at) = lower[from..].find("url(") {
+        let start = from + at + 4;
+        let end = style[start..]
+            .find(')')
+            .map_or(style.len(), |end| start + end);
+        found.push(
+            style[start..end]
+                .trim()
+                .trim_matches(|character| character == '"' || character == '\'')
+                .to_owned(),
+        );
+        from = end;
     }
     found
 }
@@ -1328,7 +1426,10 @@ mod tests {
                        [local](../plans/secret.md), [abs](/home/me/x.md), \
                        [file](file:///etc/x) and `[code](./not-a-link.md)`, \
                        <a href=\"https://example.org/y\">y</a>, \
-                       <a data-href=\"x\" HREF='../notes/x.md'>x</a> and <img src=/srv/z.png>.";
+                       <a data-href=\"x\" HREF='../notes/x.md'>x</a> and <img src=/srv/z.png>, \
+                       <img srcset=\"https://example.org/a.png 1x, ../private/b.png 2x\">, \
+                       <video poster=\"/srv/poster.png\"></video> and \
+                       <div style=\"background: url('../private/c.png')\">c</div>.";
         assert_eq!(
             unresolved_references(content, &["shot.png".to_owned()]),
             vec![
@@ -1336,7 +1437,10 @@ mod tests {
                 "/home/me/x.md",
                 "file:///etc/x",
                 "../notes/x.md",
-                "/srv/z.png"
+                "/srv/z.png",
+                "../private/b.png",
+                "/srv/poster.png",
+                "../private/c.png"
             ]
         );
         assert_eq!(

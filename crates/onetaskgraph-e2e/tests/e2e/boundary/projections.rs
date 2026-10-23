@@ -426,6 +426,16 @@ fn a_public_task_naming_private_material_is_refused_before_anything_is_written()
         (
             "path",
             format!("title: Add retry\nstatus: todo\nproject: rollout\nrepositories: [{OPEN}]"),
+            "<img srcset=\"https://example.org/a.png 1x, ../notes/b.png 2x\">".to_owned(),
+        ),
+        (
+            "path",
+            format!("title: Add retry\nstatus: todo\nproject: rollout\nrepositories: [{OPEN}]"),
+            "<div style=\"background: url('../notes/c.png')\">c</div>".to_owned(),
+        ),
+        (
+            "path",
+            format!("title: Add retry\nstatus: todo\nproject: rollout\nrepositories: [{OPEN}]"),
             "As drawn: ![the retry](./never-attached.png)".to_owned(),
         ),
     ] {
