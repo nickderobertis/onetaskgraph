@@ -301,7 +301,16 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 44);
+    assert_eq!(bundle["version"], 45);
+    // Version 45: the opaque dependency endpoint, and a dependency read's `unanswered` naming a
+    // designator no configured source is.
+    assert!(
+        bundle["roots"]["QueryResponseOfQualifiedEdge"]["$defs"]
+            .get("UnresolvedDesignator")
+            .is_some(),
+        "{:#}",
+        bundle["roots"]["QueryResponseOfQualifiedEdge"]["$defs"]
+    );
     // Version 42: each closure item's `kind`, the project item a holding or a contradiction can
     // carry, and what `project status set` answers with.
     for root in ["IssueCompleted", "StatusReconciled"] {
