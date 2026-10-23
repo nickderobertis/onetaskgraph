@@ -4297,7 +4297,7 @@ fn a_task_s_classification_never_waits_on_its_project_however_that_project_chang
 }
 
 #[test]
-fn a_create_under_a_project_held_private_by_its_members_or_not_held_at_all_writes_nothing() {
+fn a_create_under_a_project_private_by_its_members_takes_a_public_task_and_refuses_the_rest() {
     // `mixed` reads public by its own record and is private by the task it holds; `gone` is not
     // there to read. Neither may take a new document on `site`, which is as private as the
     // project it is filed under; `gone` may not take a task either, because whether that project

@@ -467,6 +467,28 @@ fn a_malformed_projection_map_is_refused_by_a_copy_and_a_status_write_rather_tha
                 first, {"task": first["task"], "projection": "site:pt-other"}]}),
             "twice",
         ),
+        (
+            "one projection twice",
+            json!({"schema_version": 1, "tasks": [
+                first, {"task": "vault:other", "projection": first["projection"]}]}),
+            "twice",
+        ),
+        (
+            "an id that is not qualified",
+            json!({"schema_version": 1, "tasks": [
+                {"task": first["task"], "projection": "pt-unqualified"}]}),
+            "not a qualified id",
+        ),
+        (
+            "an entry missing its projection",
+            json!({"schema_version": 1, "tasks": [{"task": first["task"]}]}),
+            "missing field",
+        ),
+        (
+            "a field nobody defined",
+            json!({"schema_version": 1, "tasks": entries, "owner": "someone"}),
+            "unknown field",
+        ),
     ] {
         let tampered: String = held
             .lines()
@@ -1212,6 +1234,12 @@ fn a_view_a_person_took_out_of_its_project_is_left_and_a_new_view_is_recorded() 
         .map(|line| format!("{line}\n"))
         .collect();
     std::fs::write(&file, &taken_out).expect("taken out of its project");
+    // A mirror will not write to a view filed under no project.
+    let (kind, said) = store.refused(&["task", "status", "set", widget, "done"]);
+    assert_eq!(kind, "projection-not-mirrored", "{said}");
+    assert!(said.contains("no project"), "{said}");
+    // Set back on the canonical task, and again reported as reaching no view.
+    let _ = store.run(&["task", "status", "set", widget, "todo"]);
     copy_rollout(&store);
     let recorded = view_of(&store, &landed, widget);
     assert_ne!(recorded, view, "a new view is recorded");
@@ -1250,4 +1278,161 @@ fn a_status_whose_view_s_source_is_unavailable_says_it_reached_no_view() {
     assert_eq!(kind, "projection-not-mirrored", "{said}");
     assert!(said.contains(widget) && said.contains(&view), "{said}");
     assert_eq!(shown(&store, "task", widget)["status"]["category"], "done");
+}
+
+#[test]
+fn a_plan_projects_into_each_public_source_its_tasks_route_to_and_follows_a_task_that_moves() {
+    // `vault` routes `openco` work to `site` and `shopco` work to `shop`, both public.
+    let store = Store::laid(Some(registered), |sandbox| {
+        json!({
+            "shop": folder(sandbox, "shop", "public"),
+            "vault": {"routes": [
+                {"repositories": ["github.com/openco/*"], "to": "site"},
+                {"repositories": ["github.com/shopco/*"], "to": "shop"},
+            ]},
+        })
+    });
+    for folder in ["site", "shop"] {
+        std::fs::create_dir_all(store.folder(folder)).expect("a public folder");
+    }
+    private_rollout(&store);
+    store.record(
+        "plan",
+        "tasks",
+        "storefront",
+        &format!(
+            "title: Retry the checkout\nstatus: todo\nproject: rollout\nrepositories: [{SHOP}]"
+        ),
+        PLAIN,
+    );
+    let landed = copy_rollout(&store);
+    let in_shop = view_of(&store, &landed, &landed["plan:storefront"]);
+    assert!(in_shop.starts_with("shop:pt-"), "{in_shop}");
+    for (folder, views) in [("site", 2), ("shop", 1)] {
+        let files = files_under(&store, folder);
+        assert_eq!(
+            files.iter().filter(|path| path.contains("pw-")).count(),
+            1,
+            "{folder} holds its own neutral project: {files:?}"
+        );
+        assert_eq!(
+            files.iter().filter(|path| path.contains("pt-")).count(),
+            views,
+            "{folder}: {files:?}"
+        );
+    }
+    // The guide moves to `shopco`: its view is made in `shop` and recorded there, and the one
+    // in `site` is left standing.
+    let in_site = view_of(&store, &landed, &landed["plan:guide"]);
+    store.record(
+        "plan",
+        "tasks",
+        "guide",
+        &format!(
+            "title: Document the retry\nstatus: todo\nproject: rollout\n\
+             repositories: [{SHOP}]\ndepends_on: [widget]"
+        ),
+        PLAIN,
+    );
+    copy_rollout(&store);
+    let moved = view_of(&store, &landed, &landed["plan:guide"]);
+    assert!(moved.starts_with("shop:pt-"), "{moved}");
+    assert!(
+        record_file(&store, "tasks", &in_site).exists(),
+        "the old view is left"
+    );
+    // A view in `shop` depends on no view in `site`: an edge never crosses public sources.
+    assert!(edges_of(&store, &moved, "depends-on").is_empty());
+}
+
+#[test]
+fn a_copy_that_fails_after_changing_a_view_s_image_puts_its_bytes_back() {
+    let store = projecting_store();
+    private_rollout(&store);
+    let image = store.sandbox.project().join("shot.png");
+    std::fs::write(&image, [1_u8; 64]).expect("the image");
+    let body = store.body("As drawn: ![the retry](./shot.png)");
+    let image = image.display().to_string();
+    store.ok(&[
+        "task",
+        "create",
+        "plan",
+        "--project",
+        "rollout",
+        "--title",
+        "Draw it",
+        "--body-file",
+        &body,
+        "--repository",
+        OPEN,
+        "--asset",
+        &image,
+    ]);
+    // The guide is written after the drawing, which it depends on.
+    store.record(
+        "plan",
+        "tasks",
+        "guide",
+        &format!(
+            "title: Document the retry\nstatus: todo\nproject: rollout\n\
+             repositories: [{OPEN}]\ndepends_on: [draw-it]"
+        ),
+        PLAIN,
+    );
+    let landed = copy_rollout(&store);
+    let guide_view = view_of(&store, &landed, &landed["plan:guide"]);
+    let source: Value =
+        serde_json::from_str(&store.ok(&["task", "show", "plan:draw-it", "--json"]))
+            .expect("the task");
+    let held = source["assets"][0]["path"]
+        .as_str()
+        .expect("its image")
+        .to_owned();
+    std::fs::write(&held, [2_u8; 64]).expect("redrawn");
+    let guide_file = record_file(&store, "tasks", &guide_view);
+    let guide_held = std::fs::read(&guide_file).expect("the guide's view");
+    std::fs::remove_file(&guide_file).expect("moved aside");
+    std::fs::create_dir_all(guide_file.join("in-the-way")).expect("a folder in its place");
+    let site_before = tree(&store.folder("site"));
+    let output = store.run(&["project", "copy", "plan:rollout", "--to", "vault"]);
+    assert_ne!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(
+        tree(&store.folder("site")),
+        site_before,
+        "the drawing's view holds its old bytes again"
+    );
+    std::fs::remove_dir_all(&guide_file).expect("the folder taken away");
+    std::fs::write(&guide_file, guide_held).expect("the guide's view put back");
+}
+
+#[test]
+fn a_status_its_view_s_source_cannot_name_or_reach_says_it_reached_no_view() {
+    // `site` names only `todo` and `done`.
+    let store = Store::laid(Some(registered), |sandbox| {
+        json!({
+            "vault": {"routes": [{"repositories": ["github.com/openco/*"], "to": "site"}]},
+            "site": {"config": {
+                "root": sandbox.subdirectory("site"),
+                "status_mapping": {"todo": "todo", "done": "done"},
+            }},
+        })
+    });
+    std::fs::create_dir_all(store.folder("site")).expect("the site folder");
+    private_rollout(&store);
+    let landed = copy_rollout(&store);
+    let widget = &landed["plan:widget"];
+    let (kind, said) = store.refused(&["task", "status", "set", widget, "in-progress"]);
+    assert_eq!(kind, "projection-not-mirrored", "{said}");
+    assert_eq!(
+        shown(&store, "task", widget)["status"]["category"],
+        "in-progress"
+    );
+    // A view whose source nothing configures cannot be reached at all.
+    let home = record_file(&store, "projects", &landed["plan:rollout"]);
+    let held = std::fs::read_to_string(&home).expect("the private project");
+    let view = view_of(&store, &landed, widget);
+    std::fs::write(&home, held.replace(&view, "nowhere:pt-gone")).expect("re-pointed");
+    let (kind, said) = store.refused(&["task", "status", "set", widget, "done"]);
+    assert_eq!(kind, "projection-not-mirrored", "{said}");
+    assert!(said.contains("nowhere"), "{said}");
 }
