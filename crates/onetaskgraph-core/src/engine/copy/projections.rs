@@ -21,8 +21,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use onetaskgraph_plugin_api::{
     AssetPayload, Classification, DependencyEdge, DependencyEndpoint, DependencyKind, ItemKind,
-    ItemWrite, MetadataKey, NativeId, Priority, Project, Repository, SourceName, Status,
-    StatusCategory, Task, WriteTarget,
+    ItemWrite, LabelFilter, MetadataKey, NativeId, Priority, Project, Repository, SourceName,
+    Status, StatusCategory, Task, TextFields, TextQuery, WriteTarget,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -31,12 +31,12 @@ use sha2::{Digest, Sha256};
 
 use super::super::assets;
 use super::super::boundary::{Exposure, Outbound};
-use super::super::{Engine, EngineError};
+use super::super::{Engine, EngineError, Filters, Paging, ProjectRequest};
 use super::{
     CopyOutcome, Creating, Item, Journal, Level, Planned, Undo, classification_of, create_refused,
     described, far_end,
 };
-use super::{Prior, refused};
+use super::{PROJECT_PAGE, Prior, refused};
 use crate::GlobalId;
 use crate::config::SourceVisibility;
 use crate::resolve::ResolvedSource;
@@ -893,6 +893,12 @@ impl Engine {
             return Ok(id);
         }
         let project = public_project(id, ordered);
+        if let Some(found) = self
+            .unrecorded_public_project(destination, &project.repositories)
+            .await?
+        {
+            return Ok(found);
+        }
         let item = "the public projection project";
         self.at_write(
             destination,
@@ -923,6 +929,75 @@ impl Engine {
             id: landed.clone(),
         });
         Ok(landed)
+    }
+
+    /// The public projection project a copy made in `destination` and never learned the id
+    /// of — its create's answer lost, or the copy ended before it filed a view there, at a
+    /// destination that issues ids of its own and so ignores the opaque one — found by what it
+    /// says: the one neutral project there naming exactly `repositories` and holding no task.
+    /// Two such projects are ambiguous, and neither is taken.
+    ///
+    /// Asked only when no view of the plan is recorded in `destination` and nothing is held
+    /// under the opaque id, so a plan with views there never lists its projects.
+    async fn unrecorded_public_project(
+        &self,
+        destination: &ResolvedSource,
+        repositories: &[Repository],
+    ) -> Result<Option<NativeId>, EngineError> {
+        let mut request = ProjectRequest {
+            sources: vec![destination.name().clone()],
+            filters: Filters {
+                text: Some(TextQuery {
+                    terms: PUBLIC_PROJECT_TITLE.to_owned(),
+                    fields: TextFields::Title,
+                }),
+                labels: LabelFilter::default(),
+                statuses: Vec::new(),
+            },
+            paging: Paging {
+                limit: PROJECT_PAGE,
+                token: None,
+            },
+        };
+        let mut neutral = Vec::new();
+        loop {
+            let response = self.projects(&request).await?;
+            if let Some(failure) = response.errors.first() {
+                return Err(EngineError::SourceRefused {
+                    name: failure.source.to_string(),
+                    error: failure.error.clone(),
+                });
+            }
+            neutral.extend(
+                response
+                    .items
+                    .into_iter()
+                    .map(|project| project.item)
+                    .filter(|project| is_neutral(project) && project.repositories == repositories)
+                    .map(|project| project.id),
+            );
+            match response.next {
+                Some(token) if request.paging.token.as_ref() != Some(&token) => {
+                    request.paging.token = Some(token);
+                }
+                _ => break,
+            }
+        }
+        let mut empty = Vec::new();
+        for id in neutral {
+            let held = GlobalId::new(destination.name().clone(), id.clone());
+            if self
+                .project_member_tasks(&held, "for a public projection project")
+                .await?
+                .is_empty()
+            {
+                empty.push(id);
+            }
+        }
+        Ok(match <[NativeId; 1]>::try_from(empty) {
+            Ok([found]) => Some(found),
+            Err(_) => None,
+        })
     }
 
     /// Why a view `projection` filed under `project`, of `destination`, may not be written —

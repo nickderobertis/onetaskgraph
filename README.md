@@ -2032,7 +2032,11 @@ is refused rather than trusted. A copy never carries the map anywhere, and recor
 it the moment the view is created, so a copy interrupted part way and run again finds every view
 it made — by the map, by its opaque id, or, at a destination that issues ids of its own, as the
 one task under the public project no map entry names with the view's title and repositories —
-rather than making a second. A view recorded private is refused rather than written public again,
+rather than making a second. The public project is found the same way: under a view the map
+names, by its opaque id, or, at a destination that issues ids of its own, as the one `Public work`
+project there naming exactly the views' repositories and holding no task, so a copy ended after
+it made that project and before any view under it makes neither twice. Two such projects are
+ambiguous, and neither is taken. A view recorded private is refused rather than written public again,
 and every field a person adds to a view in public is taken off by the next copy. A canonical task
 with a view hands it every new status category — `task status set` and a `task update` naming a
 status each answer the view as `projection`, and a ticket the delivery rule moves moves its view —

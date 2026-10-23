@@ -1795,6 +1795,141 @@ fn a_board_view_whose_create_answer_was_lost_is_found_again_rather_than_made_twi
     assert_eq!(shown(&store, "task", &view)["title"], "Tune the retry");
 }
 
+/// The one public project every view in `source` is filed under, read through the binary.
+fn public_project_of_views(
+    store: &Store,
+    landed: &BTreeMap<String, String>,
+    source: &str,
+) -> String {
+    let projects: std::collections::BTreeSet<String> = ["plan:widget", "plan:guide"]
+        .iter()
+        .map(|canonical| view_of(store, landed, &landed[*canonical]))
+        .map(|view| {
+            assert!(view.starts_with(&format!("{source}:")), "{view}");
+            let project = shown(store, "task", &view)["project"]
+                .as_str()
+                .unwrap_or_else(|| panic!("view {view} is filed under no project"))
+                .to_owned();
+            format!("{source}:{project}")
+        })
+        .collect();
+    assert_eq!(
+        projects.len(),
+        1,
+        "every view is under one project: {projects:?}"
+    );
+    projects.into_iter().next().expect("the project")
+}
+
+#[test]
+fn a_board_copy_interrupted_after_its_public_project_and_before_its_views_makes_neither_twice() {
+    // A board issues its own ids, so the public project's opaque id finds nothing there. The
+    // board stores the project and drops the connection before answering: the copy ends with
+    // the project made and no view under it, and the next copy finds that project again.
+    let mut handle = None;
+    let store = Store::laid(Some(registered_with_board), |sandbox| {
+        let (config, board) = crate::fixtures::github_projects_with_items(sandbox, Vec::new());
+        handle = Some(board);
+        json!({
+            "board": {"plugin": "github-projects", "config": config, "visibility": "public"},
+            "vault": {"routes": [{"repositories": [BOARD_REPOSITORY], "to": "board"}]},
+        })
+    });
+    let board = handle.expect("the board");
+    private_rollout_of(&store, BOARD_REPOSITORY);
+    let creates = |board: &crate::fixtures::GitHubBoardFields, title: &str| {
+        board
+            .served()
+            .iter()
+            .filter(|(document, variables)| {
+                document.contains("createIssue(input:$input)")
+                    && variables["input"]["title"] == title
+            })
+            .count()
+    };
+    // The first issue the copy creates is the public project, before any view.
+    board.drop_response_once("createIssue(input:$input)");
+    let output = store.run(&["project", "copy", "plan:rollout", "--to", "vault"]);
+    assert_ne!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(
+        creates(&board, "Public work"),
+        1,
+        "the board stored the project"
+    );
+    assert_eq!(
+        creates(&board, "Add retry to the widget") + creates(&board, "Document the retry"),
+        0,
+        "and the copy ended before any view"
+    );
+
+    let landed = copy_rollout(&store);
+    assert_eq!(
+        creates(&board, "Public work"),
+        1,
+        "no copy made the project twice"
+    );
+    assert_eq!(creates(&board, "Add retry to the widget"), 1);
+    assert_eq!(creates(&board, "Document the retry"), 1);
+    let project = public_project_of_views(&store, &landed, "board");
+    assert_eq!(shown(&store, "project", &project)["title"], "Public work");
+    let again = copy_rollout(&store);
+    assert_eq!(creates(&board, "Public work"), 1, "nor did a repeat");
+    assert_eq!(public_project_of_views(&store, &again, "board"), project);
+}
+
+#[test]
+fn a_linear_copy_interrupted_after_its_public_project_and_before_its_views_makes_neither_twice() {
+    // Linear issues its own ids too: the project it stored, whose answer came back empty, is
+    // found again by the next copy rather than made a second time.
+    let mut handle = None;
+    let store = Store::laid(Some(registered), |sandbox| {
+        let (mut config, workspace) =
+            crate::fixtures::linear_workspace(sandbox, crate::fixtures::dataset());
+        config["status_mapping"] = crate::fixtures::linear_default_mapping();
+        handle = Some(workspace);
+        sandbox.secrets_file("LINEAR_API_KEY=fixture-key\n");
+        json!({
+            "tracker": {"plugin": "linear", "config": config, "visibility": "public"},
+            "vault": {"routes": [{"repositories": ["github.com/openco/*"], "to": "tracker"}]},
+        })
+    });
+    let workspace = handle.expect("the workspace");
+    private_rollout(&store);
+    let count = |workspace: &crate::fixtures::LinearWorkspace, operation: &str| {
+        workspace
+            .served()
+            .iter()
+            .filter(|(document, _)| document.contains(operation))
+            .count()
+    };
+    workspace.bend_answers(
+        |document, _| document.contains("projectCreate"),
+        1,
+        |_, data| *data = json!({"projectCreate": null}),
+    );
+    let output = store.run(&["project", "copy", "plan:rollout", "--to", "vault"]);
+    assert_ne!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(
+        count(&workspace, "projectCreate"),
+        1,
+        "Linear stored the project"
+    );
+    assert_eq!(count(&workspace, "issueCreate"), 0, "and no view");
+
+    let landed = copy_rollout(&store);
+    assert_eq!(
+        count(&workspace, "projectCreate"),
+        1,
+        "no copy made it twice"
+    );
+    assert_eq!(count(&workspace, "issueCreate"), 2, "one create per view");
+    let project = public_project_of_views(&store, &landed, "tracker");
+    assert_eq!(shown(&store, "project", &project)["title"], "Public work");
+    copy_rollout(&store);
+    assert_eq!(count(&workspace, "projectCreate"), 1, "nor did a repeat");
+    assert_eq!(count(&workspace, "issueCreate"), 2);
+}
+
 #[test]
 fn an_unrecorded_task_is_taken_as_a_view_only_when_it_alone_says_what_the_view_says() {
     for strays in [1_usize, 2] {

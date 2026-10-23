@@ -1210,7 +1210,9 @@ them do; this is the inventory of what is owed, not a status board.
     content, repositories, status and edges to other views — with the map at
     `onetaskgraph.public_projections` on the private project alone; no request, file, link or
     metadata at the public side names the private plan; a repeat writes nothing, a copy
-    interrupted before it recorded a view finds it again by its opaque id, a view edited by hand
+    interrupted before it recorded a view finds it again by its opaque id — and on a board or in
+    Linear, which issue their own ids, finds by what it says a view or the public project made
+    before the copy ended — a view edited by hand
     is put back and changes nothing of the plan, and `task status set` mirrors the category alone.
 119. A view naming private material in its title or content, or linking a local path, a private
     plan copied to a public home, and a projection map naming a private source are each refused,
