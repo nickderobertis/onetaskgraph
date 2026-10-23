@@ -1042,7 +1042,7 @@ fn cache_clear_reclaims_reverse_and_project_edge_entries_and_counts_them() {
         ),
         (1, 1, 1)
     );
-    let foreign = dir.join("reverse-edges-v2/not-ours.json");
+    let foreign = dir.join("reverse-edges-v3/not-ours.json");
     std::fs::write(&foreign, b"{\"kind\": \"something else\"}").expect("a foreign file");
     let (cleared, _) = cached.ok(&["cache", "clear", "linear", "--json"]);
     assert!(
