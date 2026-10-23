@@ -2012,13 +2012,28 @@ source read as private, with what it inherits, or one it cannot classify — is 
 for it to be written, so that write is refused before anything is written rather than quietly
 answering something else.
 
-**A public task's dependency on a private task is kept on the private side.** A copy that
+**A public task names a private prerequisite opaquely.** Onto a source not declared private, a
+dependency on a private item — a `--depends-on <private source>:<native id>`, or an edge a copy
+carries — is written as `{"designator", "id", "kind"}`: the private tracker's designator, which
+conveys nothing about it, and the item's native id, read once at its source to confirm it is
+one. A prefixed human key (`ABC-123`), a URL, a slug, and an endpoint object carrying any key
+beyond those three are refused before anything is written, with `--json` kind
+`private-reference-content`, naming the form or the key and never its value. A private source
+whose backend has no identifier of its own is named by its `public_alias` — a source key, 16 to
+64 of `A-Z a-z 0-9 _ -`, declared identically on every host configuring that tracker. A source
+with neither keeps the rule below. `docs/metadata.md`, under "The opaque far end" and "Which
+sources a dependency read asks", states the form and the rule.
+
+**A public task's dependency on a private task is kept on the private side**, when the private
+task's source has no designator. A copy that
 withholds an edge from a task it lands somewhere not declared private to a task of the copied
 set that lands in a source declared private records that edge on the private task instead,
 under the reserved key `onetaskgraph.depended_on_by`, one entry per dependent's qualified id.
 So a plan whose home is on a public board and whose member project is in a private source keeps
 its order both ways. `task deps` of the public task also asks every source declared private
-which of its tasks record it, a copy of a task filed under a home naming a member in such a
+which of its tasks record it — only while the public task carries a copy's record and not
+`onetaskgraph.edges_on_record`, the mark a copy leaves on a task whose every edge is its own,
+so a task no copy landed never costs a private source a request — a copy of a task filed under a home naming a member in such a
 source asks that source and carries the edge to the private task's counterpart, `task deps
 --direction depended-on-by` of the private task reads what it records, and `project graph`
 draws the edge. A source declared private that could not be asked — its credential absent or
