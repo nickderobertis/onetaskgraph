@@ -32,7 +32,10 @@ use sha2::{Digest, Sha256};
 use super::super::assets;
 use super::super::boundary::{Exposure, Outbound};
 use super::super::{Engine, EngineError};
-use super::{CopyOutcome, Creating, Item, Journal, Level, Planned, Undo, create_refused, far_end};
+use super::{
+    CopyOutcome, Creating, Item, Journal, Level, Planned, Undo, classification_of, create_refused,
+    far_end,
+};
 use super::{forward_edges, refused};
 use crate::GlobalId;
 use crate::config::SourceVisibility;
@@ -305,13 +308,24 @@ fn public_project(id: NativeId, views: &[&Projected]) -> Project {
 /// The public tasks of one private plan that a project copy makes views of.
 #[derive(Default)]
 pub(super) struct Projecting {
+    /// Whether the plan is one a copy makes views of at all — even of none this time, when the
+    /// map it recorded before still has to forget a task that has no view any more.
+    active: bool,
     tasks: Vec<Projected>,
 }
 
 impl Projecting {
-    /// Whether the plan holds no task with a public view to make.
-    pub(super) fn is_empty(&self) -> bool {
-        self.tasks.is_empty()
+    /// A plan whose public tasks this copy makes views of, none noted yet.
+    pub(super) fn active() -> Self {
+        Self {
+            active: true,
+            tasks: Vec::new(),
+        }
+    }
+
+    /// Whether this copy has views to land, or a recorded map to bring in step.
+    pub(super) fn lands(&self) -> bool {
+        self.active
     }
 
     /// Note `task`, landing canonically in the private home, as projected into `to`.
@@ -399,7 +413,15 @@ impl Engine {
         let Item::Task(read) = &task.item else {
             return None;
         };
-        if task.classification != Classification::Public || read.repositories.is_empty() {
+        // A canonical task its destination already records private — an earlier copy's, an
+        // earlier release's by inheritance — stays private, and has no view.
+        let recorded = task
+            .held
+            .as_ref()
+            .map_or(Classification::Public, |held| classification_of(&held.item));
+        if task.classification.strictest(recorded) != Classification::Public
+            || read.repositories.is_empty()
+        {
             return None;
         }
         let placed =
@@ -509,6 +531,22 @@ impl Engine {
             return Ok(());
         };
         let mut map = self.recorded_projections(&home, &held.metadata)?;
+        // A canonical task of this plan with no view this time — recorded private since, or no
+        // longer routed anywhere public — is no longer named; its old view is left as a person
+        // finds it, never deleted.
+        let projected: Vec<&GlobalId> = projecting
+            .tasks
+            .iter()
+            .filter_map(|task| canonical.get(&task.source.to_string()))
+            .collect();
+        let before = map.tasks.len();
+        map.tasks.retain(|entry| {
+            !canonical.values().any(|landed| landed == &entry.task)
+                || projected.contains(&&entry.task)
+        });
+        if map.tasks.len() != before {
+            self.record_projections(at, &home, &map, journal).await?;
+        }
         for to in projecting.destinations() {
             let destination = self.writable(&to)?;
             let ordered = projecting.ordered(&to);
@@ -839,15 +877,18 @@ impl Engine {
     pub(in crate::engine) async fn mirror_status(
         &self,
         task: &GlobalId,
-        project: Option<&NativeId>,
+        held: &Task,
         category: StatusCategory,
     ) -> Result<Option<GlobalId>, EngineError> {
+        // A task recorded private has no view to hand anything to, whatever a map says.
         if !self.boundary_active()
             || !self.routes.any()
             || self.declared(&task.source) != SourceVisibility::Private
+            || held.classification == Classification::Private
         {
             return Ok(None);
         }
+        let project = held.project.as_ref();
         let Some(project) = project else {
             return Ok(None);
         };

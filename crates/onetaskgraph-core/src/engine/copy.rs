@@ -2661,6 +2661,7 @@ impl Engine {
                 }
                 let mut projecting = projections::Projecting::default();
                 if projects {
+                    projecting = projections::Projecting::active();
                     for task in &tasks {
                         if let Some(to) =
                             self.projection_target(&request.destination, &home.destination, task)
@@ -2746,7 +2747,7 @@ impl Engine {
             let landed = self
                 .copy_project(request, project, tasks, &changed, running, journal)
                 .await?;
-            if !projecting.is_empty() && !request.dry_run {
+            if projecting.lands() && !request.dry_run {
                 self.land_projections(&projecting, &landed, journal).await?;
             }
             outcomes.extend(landed);

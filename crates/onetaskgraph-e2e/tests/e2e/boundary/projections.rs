@@ -536,3 +536,60 @@ fn a_public_board_is_sent_the_neutral_views_and_nothing_of_the_private_plan() {
         }
     }
 }
+
+#[test]
+fn a_task_already_recorded_private_stays_private_and_unprojected_on_every_recopy() {
+    // An earlier release copied `widget` private because its project was: its canonical record
+    // says so, though its own source record does not. A re-copy and a status write keep it
+    // private, and it never gains a view.
+    let store = projecting_store();
+    private_rollout(&store);
+    let landed = copy_rollout(&store);
+    let widget = &landed["plan:widget"];
+    let record = store
+        .folder("vault")
+        .join("tasks")
+        .join(format!("{}.md", widget.trim_start_matches("vault:")));
+    let held = std::fs::read_to_string(&record).expect("the canonical widget");
+    let legacy = held.replacen("---\n", "---\nclassification: private\n", 1);
+    assert_ne!(held, legacy);
+    std::fs::write(&record, legacy).expect("recorded private");
+    // Its view, made before it was recorded private, is the one a person removes by hand.
+    let map = projection_map(&store, &landed["plan:rollout"]);
+    let view = map["tasks"]
+        .as_array()
+        .expect("entries")
+        .iter()
+        .find(|entry| entry["task"] == widget.as_str())
+        .and_then(|entry| entry["projection"].as_str())
+        .expect("the widget's view")
+        .to_owned();
+    std::fs::remove_file(
+        store
+            .folder("site")
+            .join("tasks")
+            .join(format!("{}.md", view.trim_start_matches("site:"))),
+    )
+    .expect("the view removed");
+
+    copy_rollout(&store);
+    assert_eq!(shown(&store, "task", widget)["classification"], "private");
+    let map = projection_map(&store, &landed["plan:rollout"]);
+    assert!(
+        !map["tasks"]
+            .as_array()
+            .expect("entries")
+            .iter()
+            .any(|entry| entry["task"] == widget.as_str()),
+        "the map no longer names a task recorded private: {map:#}"
+    );
+    assert!(
+        !files_under(&store, "site")
+            .iter()
+            .any(|path| path.ends_with(&format!("{}.md", view.trim_start_matches("site:")))),
+        "no view is made of a task recorded private"
+    );
+    store.ok(&["task", "status", "set", widget, "done"]);
+    assert_eq!(shown(&store, "task", widget)["classification"], "private");
+    assert_site_neutral(&store);
+}
