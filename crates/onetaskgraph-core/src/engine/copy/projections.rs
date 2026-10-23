@@ -21,8 +21,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use onetaskgraph_plugin_api::{
     AssetPayload, Classification, DependencyEdge, DependencyEndpoint, DependencyKind, ItemKind,
-    ItemWrite, NativeId, Priority, Project, Repository, SourceName, Status, StatusCategory, Task,
-    WriteTarget,
+    ItemWrite, MetadataKey, NativeId, Priority, Project, Repository, SourceName, Status,
+    StatusCategory, Task, WriteTarget,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -532,6 +532,7 @@ impl Projecting {
 /// What every view of one plan in one public source lands against: the project they are
 /// filed under, the map as recorded so far, and the views already landed by source task id.
 struct Landing<'a> {
+    home: &'a GlobalId,
     project: &'a NativeId,
     map: &'a PublicProjections,
     views: &'a HashMap<GlobalId, NativeId>,
@@ -702,6 +703,9 @@ impl Engine {
                 .land_public_project(destination, &home, &ordered, &canonical, &map, journal)
                 .await?;
             let mut views: HashMap<GlobalId, NativeId> = HashMap::new();
+            // The tasks under the public project no map entry names, listed once when a view is
+            // looked for by what it says.
+            let mut unrecorded: Option<Vec<Task>> = None;
             let mut incomplete = Vec::new();
             for task in &ordered {
                 let Some(canonical_task) = canonical.get(&task.source) else {
@@ -711,12 +715,20 @@ impl Engine {
                     !ordered.iter().any(|other| &other.source == far) || views.contains_key(far)
                 });
                 let landing = Landing {
+                    home: &home,
                     project: &project,
                     map: &map,
                     views: &views,
                 };
                 let id = self
-                    .land_view(destination, task, canonical_task, &landing, journal)
+                    .land_view(
+                        destination,
+                        task,
+                        canonical_task,
+                        &landing,
+                        &mut unrecorded,
+                        journal,
+                    )
                     .await?;
                 views.insert(task.source.clone(), id.clone());
                 if map.set(canonical_task, &GlobalId::new(to.clone(), id)) {
@@ -731,12 +743,20 @@ impl Engine {
             for task in incomplete {
                 let canonical_task = &canonical[&task.source];
                 let landing = Landing {
+                    home: &home,
                     project: &project,
                     map: &map,
                     views: &views,
                 };
-                self.land_view(destination, task, canonical_task, &landing, journal)
-                    .await?;
+                self.land_view(
+                    destination,
+                    task,
+                    canonical_task,
+                    &landing,
+                    &mut unrecorded,
+                    journal,
+                )
+                .await?;
             }
         }
         Ok(())
@@ -899,12 +919,18 @@ impl Engine {
     /// Land one view: over the one the map names, or the one its opaque id names, when either
     /// is there — written only when it differs from what the canonical task now says — and
     /// created otherwise. Answers the id it is held under.
+    ///
+    /// A view this copy made and never learned the id of — its create's answer lost, at a
+    /// destination that issues ids of its own and so ignores the opaque one — is found by what
+    /// it says instead: the one task under the public project no map entry names that has the
+    /// view's title and repositories. Two such tasks are ambiguous, and neither is taken.
     async fn land_view(
         &self,
         destination: &ResolvedSource,
         task: &Projected,
         canonical: &GlobalId,
         landing: &Landing<'_>,
+        unrecorded: &mut Option<Vec<Task>>,
         journal: &mut Journal,
     ) -> Result<NativeId, EngineError> {
         let opaque = opaque_id("pt", canonical);
@@ -927,6 +953,52 @@ impl Engine {
                 break;
             }
         }
+        if held.is_none() {
+            let listed = match unrecorded {
+                Some(listed) => listed,
+                None => unrecorded.insert(
+                    self.project_member_tasks(
+                        &GlobalId::new(destination.name().clone(), landing.project.clone()),
+                        "for a public projection",
+                    )
+                    .await?
+                    .into_iter()
+                    .map(|task| task.item)
+                    .filter(|view| {
+                        !landing.map.tasks().iter().any(|entry| {
+                            &entry.projection.source == destination.name()
+                                && entry.projection.native == view.id
+                        }) && !landing.views.values().any(|landed| landed == &view.id)
+                    })
+                    .collect(),
+                ),
+            };
+            let mut matching = listed.iter().filter(|view| {
+                view.title == task.task.title && view.repositories == task.task.repositories
+            });
+            if let (Some(found), None) = (matching.next(), matching.next()) {
+                let found = found.id.clone();
+                listed.retain(|view| view.id != found);
+                if let Some(prior) = self.prior(destination, Level::Task, &found).await?
+                    && let Item::Task(view) = &prior.item
+                {
+                    held = Some(((**view).clone(), prior));
+                }
+            }
+        }
+        if let Some((view, _)) = &held
+            && view.classification == Classification::Private
+        {
+            return Err(EngineError::ProjectionsMalformed {
+                project: landing.home.clone(),
+                why: format!(
+                    "view {}:{} is recorded private, and a view is public; nothing loosens a \
+                     private record",
+                    destination.name(),
+                    view.id
+                ),
+            });
+        }
         let id = held.as_ref().map_or(opaque, |(view, _)| view.id.clone());
         let view = task.view(id.clone(), Some(landing.project.clone()));
         let edges: Vec<DependencyEdge> = task
@@ -945,10 +1017,22 @@ impl Engine {
             let mut are: Vec<&str> = edges.iter().map(|edge| edge.to.id()).collect();
             were.sort_unstable();
             are.sort_unstable();
+            // Every member a view is written with — what a person may have edited in public
+            // included — so the next copy puts back whatever differs. A destination's own
+            // reserved keys are its bookkeeping, never a field of the view.
+            let own_keys = held
+                .metadata
+                .keys()
+                .any(|key| !key.starts_with(&format!("{}.", MetadataKey::RESERVED_NAMESPACE)));
             if held.title == view.title
                 && held.content == view.content
                 && held.status.category == view.status.category
                 && held.repositories == view.repositories
+                && held.labels.is_empty()
+                && held.priority == Priority::None
+                && held.delivers.is_empty()
+                && held.delivered_by.is_empty()
+                && !own_keys
                 && were == are
                 && digests(prior.assets.as_deref().unwrap_or_default()) == digests(&task.assets)
             {

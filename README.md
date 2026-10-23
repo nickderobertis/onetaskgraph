@@ -2027,7 +2027,10 @@ canonical task's, at `onetaskgraph.public_projections`:
 either id, and a projection is never in a source declared private; a map that breaks any of that
 is refused rather than trusted. A copy never carries the map anywhere, and records each view in
 it the moment the view is created, so a copy interrupted part way and run again finds every view
-it made — by the map, or by its opaque id — rather than making a second. `task status set` of a
+it made — by the map, by its opaque id, or, at a destination that issues ids of its own, as the
+one task under the public project no map entry names with the view's title and repositories —
+rather than making a second. A view recorded private is refused rather than written public again,
+and every field a person adds to a view in public is taken off by the next copy. `task status set` of a
 canonical task with a view sets the view's status category too, through the view's own screened
 status write, and answers it as `projection`; nothing but the category crosses. `sources route <SOURCE>
 --classification private` answers where such an item would go.

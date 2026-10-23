@@ -1596,3 +1596,126 @@ fn a_neutral_project_status_the_public_side_cannot_name_refuses_before_anything_
     assert!(said.contains("site") && said.contains("todo"), "{said}");
     assert_eq!(store.tree(), before, "nothing was written anywhere");
 }
+
+#[test]
+fn every_field_a_person_adds_to_a_view_is_taken_off_by_the_next_copy() {
+    let store = projecting_store();
+    private_rollout(&store);
+    let landed = copy_rollout(&store);
+    let view = view_of(&store, &landed, &landed["plan:widget"]);
+    let file = record_file(&store, "tasks", &view);
+    let held = std::fs::read_to_string(&file).expect("the view");
+    let edited = held.replacen(
+        "---\n",
+        "---\nlabels: [hot]\npriority: urgent\nmetadata: {team.note: edited in public}\n",
+        1,
+    );
+    std::fs::write(&file, edited).expect("edited in public");
+    let edited_view = shown(&store, "task", &view);
+    assert_eq!(edited_view["priority"], "urgent", "{edited_view:#}");
+    let plan_before = tree(&store.folder("plan"));
+    let vault_before = tree(&store.folder("vault"));
+    copy_rollout(&store);
+    let restored = shown(&store, "task", &view);
+    assert_eq!(restored["labels"], json!([]), "{restored:#}");
+    assert_eq!(restored["priority"], "none", "{restored:#}");
+    assert_eq!(restored["metadata"], json!({}), "{restored:#}");
+    assert_eq!(
+        tree(&store.folder("plan")),
+        plan_before,
+        "the plan is untouched"
+    );
+    assert_eq!(
+        tree(&store.folder("vault")),
+        vault_before,
+        "the canonical copy is untouched"
+    );
+}
+
+#[test]
+fn a_view_recorded_private_is_never_written_public_again() {
+    let store = projecting_store();
+    private_rollout(&store);
+    let landed = copy_rollout(&store);
+    let view = view_of(&store, &landed, &landed["plan:widget"]);
+    let file = record_file(&store, "tasks", &view);
+    let held = std::fs::read_to_string(&file).expect("the view");
+    std::fs::write(
+        &file,
+        held.replacen("---\n", "---\nclassification: private\n", 1),
+    )
+    .expect("recorded private");
+    // The widget changes, so its view would be written.
+    store.record(
+        "plan",
+        "tasks",
+        "widget",
+        &format!(
+            "title: Add jittered retry to the widget\nstatus: todo\nproject: rollout\n\
+             repositories: [{OPEN}]\ndepends_on: [producer]"
+        ),
+        PLAIN,
+    );
+    let before = store.tree();
+    let (kind, said) = store.refused(&["project", "copy", "plan:rollout", "--to", "vault"]);
+    assert_eq!(kind, "projections-malformed", "{said}");
+    assert!(said.contains("recorded private"), "{said}");
+    assert_eq!(store.tree(), before, "nothing more was written");
+}
+
+#[test]
+fn a_board_view_whose_create_answer_was_lost_is_found_again_rather_than_made_twice() {
+    // A board issues its own ids, so the opaque one a copy asks for finds nothing there: the
+    // view the board stored, whose answer the copy never read, is found by what it says.
+    let mut handle = None;
+    let store = Store::laid(Some(registered_with_board), |sandbox| {
+        let (config, board) = crate::fixtures::github_projects_with_items(sandbox, Vec::new());
+        handle = Some(board);
+        json!({
+            "board": {"plugin": "github-projects", "config": config, "visibility": "public"},
+            "vault": {"routes": [{"repositories": [BOARD_REPOSITORY], "to": "board"}]},
+        })
+    });
+    let board = handle.expect("the board");
+    private_rollout_of(&store, BOARD_REPOSITORY);
+    let landed = copy_rollout(&store);
+    // A new public task: the board stores its view and drops the connection before answering.
+    store.record(
+        "plan",
+        "tasks",
+        "tune",
+        &format!(
+            "title: Tune the retry\nstatus: todo\nproject: rollout\nrepositories: [{BOARD_REPOSITORY}]"
+        ),
+        PLAIN,
+    );
+    let creates = |board: &crate::fixtures::GitHubBoardFields| {
+        board
+            .served()
+            .iter()
+            .filter(|(document, variables)| {
+                document.contains("createIssue(input:$input)")
+                    && variables.to_string().contains("Tune the retry")
+            })
+            .count()
+    };
+    board.drop_response_once("createIssue(input:$input)");
+    let output = store.run(&["project", "copy", "plan:rollout", "--to", "vault"]);
+    assert_ne!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(creates(&board), 1, "the board stored the view once");
+
+    copy_rollout(&store);
+    assert_eq!(creates(&board), 1, "and no copy made it a second time");
+    let tune = landed_ids(&store.ok(&[
+        "project",
+        "copy",
+        "plan:rollout",
+        "--to",
+        "vault",
+        "--json",
+    ]))["plan:tune"]
+        .clone();
+    let view = view_of(&store, &landed, &tune);
+    assert!(view.starts_with("board:"), "{view}");
+    assert_eq!(shown(&store, "task", &view)["title"], "Tune the retry");
+}
