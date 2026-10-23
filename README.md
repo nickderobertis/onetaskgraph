@@ -1815,13 +1815,15 @@ engine's write-back uses.
     that the plan's private voters place at, by their own repositories and the placement a
     private item takes. When those voters place at two different private sources and the
     plan has no home yet, the copy is refused before anything is written, naming each source
-    and the qualified ids of the items placing there. The public voters stay where their own repositories place them —
-    under the home's member project in each other source, whose write is screened like any
-    other.
+    and the qualified ids of the items placing there. Every task of the plan then lands
+    canonically beside that private home, and each public voter is seen where its own
+    repositories place it only through a neutral **public projection** — see [Public
+    projections of a private plan](#public-projections-of-a-private-plan).
   - With no voter at all, the home is the named destination. With `--no-tasks` only the
     project's own repositories can vote.
   - A `{classification: private, to: <source>}` entry keeps its precedence: a project holding
-    anything private goes there whole, with every task and document in it.
+    anything private goes there whole, with every task and document in it, its public tasks
+    projected where their own placement is.
   - **A home that already exists stays where it is**, found by the project's link or origin
     and naming it back: a task added later that routes elsewhere goes into a member project
     there. A private plan whose existing home sits in a source not declared private is refused
@@ -1990,9 +1992,44 @@ private, classification entries are tried before repository entries, and otherwi
 is the one written. A project holding anything private goes, with every task and document in
 it, wholly to the private source a classification entry names, whatever its tasks'
 repositories would say. Without one, its home goes where its private tasks' repositories route
-it, and its public tasks into a member project where theirs do — see [Which writes route, and
-where each item lands](#which-writes-route-and-where-each-item-lands); with no private source
-reachable, the whole copy is refused before anything is written. `sources route <SOURCE>
+it — see [Which writes route, and where each item lands](#which-writes-route-and-where-each-item-lands);
+with no private source reachable, the whole copy is refused before anything is written. Either
+way every task of the plan lands canonically beside that private home, and its public tasks are
+seen publicly only through the views below.
+
+**Public projections of a private plan.** A private coordination project copied, while the
+boundary is active, to a home declared private — `project copy PRIVATE_HOME --to
+PRIVATE_DESTINATION` — keeps every canonical task, edge, description, design document, approval
+and rendering provenance in that destination, and makes one **view** of each public task in the
+source its repositories route it to as public, when that is a source not declared private:
+
+- one project per such source, created under an opaque id (`pw-…`) and titled `Public work`,
+  naming the views' own public repositories and nothing else;
+- one task per public task, created under an opaque id (`pt-…`), carrying its screened title,
+  content, repositories and status, and depending only on the views of other public tasks — no
+  labels, priority, metadata, origin, copy link, delivery, member list, count or path of the
+  private plan;
+- every view put to the caller's check, and every link in its content held to being a URL, a
+  fragment or one of its own image assets, **before the copy writes anything**: a view naming
+  private material, or linking a local path it could not carry, refuses the whole copy.
+
+A view is a view, never another executable task: the engine reads and writes the canonical
+records, a view never enters its task enumeration, and a person's edit of a view changes nothing
+of the plan and is overwritten by the next copy, which takes every view's content from the
+canonical records again. The private destination project alone records which view is each
+canonical task's, at `onetaskgraph.public_projections`:
+
+```json
+{"schema_version": 1, "tasks": [{"task": "vault:widget", "projection": "site:pt-57c4c9592576a5b1"}]}
+```
+
+`task` is the canonical destination task and `projection` its view, both qualified, unique by
+either id, and a projection is never in a source declared private; a map that breaks any of that
+is refused rather than trusted. A copy never carries the map anywhere, and records each view in
+it the moment the view is created, so a copy interrupted part way and run again finds every view
+it made — by the map, or by its opaque id — rather than making a second. `task status set` of a
+canonical task with a view sets the view's status category too, through the view's own screened
+status write, and answers it as `projection`; nothing but the category crosses. `sources route <SOURCE>
 --classification private` answers where such an item would go.
 
 **Every check runs before the first write.** A copy holds every item of every project to the

@@ -1031,9 +1031,9 @@ them do; this is the inventory of what is owed, not a status board.
     terms are derived, a malformed third identity making only an unscoped check unavailable.
 88. A mixed project goes, with every task and document in it, wholly to the private source a
     `classification: private` route names, over any repository route; with none reachable it is
-    refused whole; a private member is refused by a project held public; an explicit `public`
-    never loosens an inherited classification; and a project stays private after its private
-    members are removed.
+    refused whole; a private member is refused by a project held public; a task's classification
+    is its own, never tightened by its project, while a project and its documents stay private
+    by what they hold; and a project stays private after its private members are removed.
 89. A copy out of a private source into a public one records no origin naming it, and keeps
     its correspondence on the private side; a copy's dependency edges and `delivers` entries,
     and a delivered task's `delivered_by`, leave out every id naming an item of a private
@@ -1188,10 +1188,11 @@ them do; this is the inventory of what is owed, not a status board.
     own: a task naming none follows the home; voters that disagree keep it in the named source,
     or, while the boundary is active and the plan holds private work, send it to the one
     private source its private voters route to — refused naming each when they route to two,
-    and refused when an existing home sits somewhere not private — with the public work in a
-    public member whose refused write takes the whole copy back. A copy that would create a
-    second project of a plan in a source takes over the member already there, found by either
-    link alone.
+    and refused when an existing home sits somewhere not private — with every task canonically
+    beside that private home and the public work seen only through journey 118's views, a view
+    the check refuses refusing the whole copy before anything is written. A copy that would
+    create a second project of a plan in a source takes over the member already there, found by
+    either link alone.
 116. `project copy --member … --members-only` lands the named tasks under the project a folder of
     Markdown or a GitHub board already holds, reported as `--member` reports them, sending
     nothing that compares or rewrites that project; one with no counterpart is refused before
@@ -1202,6 +1203,18 @@ them do; this is the inventory of what is owed, not a status board.
     document whole as `document show` would, writes the approval behind one read and waits on the
     clock for nothing; a document write expecting a version the board has moved past — a person's
     edit nothing has read included, with the cache on or off — is refused, writing nothing.
+
+118. A private plan copied to a private destination routing its public work to a public folder
+    or a GitHub board stand-in lands every task and edge there, and one neutral view per public
+    task where it routes — an opaque `Public work` project, each view only its screened title,
+    content, repositories, status and edges to other views — with the map at
+    `onetaskgraph.public_projections` on the private project alone; no request, file, link or
+    metadata at the public side names the private plan; a repeat writes nothing, a copy
+    interrupted before it recorded a view finds it again by its opaque id, a view edited by hand
+    is put back and changes nothing of the plan, and `task status set` mirrors the category alone.
+119. A view naming private material in its title or content, or linking a local path, a private
+    plan copied to a public home, and a projection map naming a private source are each refused,
+    writing nothing.
 
 ## The public boundary
 
@@ -1218,6 +1231,10 @@ store opts in.
   journeys drive is pinned once, as `ONEVCS_CLI` in `crates/onetaskgraph-e2e/tests/e2e/onevcs.rs`,
   and provided by `uv`. Moving it means re-pinning that schema, which the reconciliation journey
   refuses to let drift.
+- **A task owns its classification; projections are the copy domain's.** A task is classified
+  by its own declaration and repositories, never its project (`boundary.rs`); the
+  `onetaskgraph.public_projections` map has one definition, `PublicProjections` in
+  `engine/copy/projections.rs`, published as a schema root both SDKs generate from.
 - **Destination reality is the plugin's own read** (`TaskSource::visibility`), never the
   policy's. A GitHub source reads twice per write and holds nothing between writes; the
   `visibility-write-requests` budget holds a 102-write plan copy to 204. A Linear source is
