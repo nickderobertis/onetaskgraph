@@ -453,7 +453,10 @@ fn stopped(case: &str, root: &Path, stop: Stop, blocks: u32) -> Result<(), Strin
         .args(["--exact", WRITER, "--test-threads=1", "--nocapture"])
         .env(CASE, case)
         .env(ROOT, root)
-        .env("LLVM_PROFILE_FILE", profiles.path().join("writer-%p.profraw"))
+        .env(
+            "LLVM_PROFILE_FILE",
+            profiles.path().join("writer-%p.profraw"),
+        )
         .stdin(Stdio::null())
         .output()
         .expect("the writer process starts");
