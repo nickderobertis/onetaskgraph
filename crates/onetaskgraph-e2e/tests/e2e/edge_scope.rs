@@ -438,7 +438,7 @@ const PRIVATE_SOURCE: &str = "zephyr-vault";
 const NATIVE: &str = "9f2c41d0-5b1e-4d7a-9a63-0c7f2e3b8d11";
 
 /// A public Linear board holding `B-1`, and a private Linear workspace holding the item
-/// [`NATIVE`] whose particulars are the constants above.
+/// [`NATIVE`] whose particulars are the constants above, beside a decoy record `covert`.
 fn boundary() -> (Sandbox, LinearWorkspace, LinearWorkspace) {
     let sandbox = Sandbox::new();
     let (board, board_workspace) = workspace(
@@ -449,14 +449,17 @@ fn boundary() -> (Sandbox, LinearWorkspace, LinearWorkspace) {
     let (vault, vault_workspace) = workspace(
         &sandbox,
         "org-zephyr",
-        json!([issue(
-            NATIVE,
-            TITLE,
-            json!({
-                "_identifier": KEY, "url": ADDRESS,
-                "content": format!("{TEAM} — {PROJECT}"),
-            })
-        )]),
+        json!([
+            issue(
+                NATIVE,
+                TITLE,
+                json!({
+                    "_identifier": KEY, "url": ADDRESS,
+                    "content": format!("{TEAM} — {PROJECT}"),
+                })
+            ),
+            issue("covert", "Decoy record", json!({}))
+        ]),
     );
     sandbox.project_document(&configured(&json!({
         "board": {"plugin": "linear", "config": board, "visibility": "public"},
@@ -1454,4 +1457,138 @@ fn a_task_and_a_project_sharing_an_id_are_confirmed_apart() {
     );
     assert_eq!(read["items"][0]["to"]["kind"], "project");
     assert_eq!(read["errors"][0]["source"], "plans", "{read}");
+}
+
+/// A source whose designator this host keeps but which cannot be asked: `task deps --complete`
+/// counts it a failure — exit 4, named in `errors` — rather than answering short.
+#[test]
+fn a_complete_read_counts_an_opaque_far_end_s_unanswering_source_a_failure() {
+    let sandbox = Sandbox::new();
+    let far = designator("linear", "org-plans");
+    let notes = folder(
+        &sandbox,
+        "notes",
+        &[(
+            "T-1",
+            &format!("title: Ship\ndepends_on:\n  - {{designator: {far}, id: L-9, item: task}}\n"),
+        )],
+    );
+    let (mute, _) = linear_rate_limited(&sandbox);
+    let kept = sandbox.subdirectory("kept");
+    let identity = format!("{}\nFIX", mute["endpoint"].as_str().expect("an endpoint"));
+    std::fs::write(
+        kept.join("designator.json"),
+        json!({"schema": 1, "remote": remote("linear", &identity), "designator": far}).to_string(),
+    )
+    .expect("a kept designator");
+    sandbox.project_document(&configured(&json!({
+        "notes": {"plugin": "local-md", "config": {"root": notes}},
+        "plans": {"plugin": "linear", "config": mute, "cache": {"dir": kept}},
+    })));
+
+    let read = answered(
+        &sandbox,
+        &["task", "deps", "notes:T-1", "--complete", "--json"],
+        4,
+    );
+    assert_eq!(read["errors"][0]["source"], "plans", "{read}");
+    assert!(read.get("unanswered").is_none(), "{read}");
+}
+
+/// A project graph whose task records an opaque far end its source holds no item by fails, as
+/// any failed read of the graph does, naming the source and the designator.
+#[test]
+fn a_project_graph_fails_on_an_opaque_far_end_its_source_does_not_hold() {
+    let sandbox = Sandbox::new();
+    let far = designator("linear", "org-plans");
+    let notes = folder(
+        &sandbox,
+        "notes",
+        &[(
+            "T-1",
+            &format!(
+                "title: Ship\nproject: P-1\ndepends_on:\n  - {{designator: {far}, id: L-404, item: task}}\n"
+            ),
+        )],
+    );
+    std::fs::create_dir_all(notes.join("projects")).expect("the projects folder");
+    std::fs::write(notes.join("projects/P-1.md"), "---\ntitle: Launch\n---\n").expect("a project");
+    let (plans, _) = workspace(
+        &sandbox,
+        "org-plans",
+        json!([issue("L-9", "Review", json!({}))]),
+    );
+    sandbox.project_document(&configured(&json!({
+        "notes": {"plugin": "local-md", "config": {"root": notes}},
+        "plans": {"plugin": "linear", "config": plans},
+    })));
+
+    let output = run(
+        &sandbox,
+        &["project", "graph", "notes:P-1", "--format", "json"],
+    );
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("plans") && stderr(&output).contains(&far),
+        "{}",
+        stderr(&output)
+    );
+}
+
+/// A backend that answers a lookup with an item under another native id — as Linear answers an
+/// issue looked up by its key — has not confirmed the id: a read drops and fails that far end,
+/// and a write naming the item by that id is refused as not its native id.
+#[test]
+fn an_item_answered_under_another_native_id_is_not_confirmed() {
+    let (sandbox, _board, vault) = boundary();
+    let alias_of = "covert";
+    let rewrite = |workspace: &LinearWorkspace| {
+        workspace.bend_answers(
+            move |query, variables| query == graphql::ISSUE && variables["id"] == alias_of,
+            usize::MAX,
+            |_, data| {
+                data["issue"]["id"] = json!(NATIVE);
+            },
+        );
+    };
+    rewrite(&vault);
+    let far = designator("linear", "org-zephyr");
+
+    let given = json!({"designator": far, "id": alias_of, "kind": "task"}).to_string();
+    let refused = run(
+        &sandbox,
+        &[
+            "task",
+            "update",
+            "board:B-1",
+            "--depends-on",
+            &given,
+            "--json",
+        ],
+    );
+    assert_ne!(refused.status.code(), Some(0));
+    let said = format!("{}{}", stdout(&refused), stderr(&refused));
+    assert!(said.contains("not the item's native id"), "{said}");
+    conveys_nothing("a refusal", &said);
+
+    let notes = folder(
+        &sandbox,
+        "notes",
+        &[(
+            "T-1",
+            &format!(
+                "title: Ship\ndepends_on:\n  - {{designator: {far}, id: {alias_of}, item: task}}\n"
+            ),
+        )],
+    );
+    let mut document: Value = serde_json::from_str(
+        &std::fs::read_to_string(sandbox.project().join("onetaskgraph.yaml"))
+            .expect("the document"),
+    )
+    .expect("JSON");
+    document["sources"]["notes"] = json!({"plugin": "local-md", "config": {"root": notes}});
+    sandbox.project_document(&document.to_string());
+    let read = answered(&sandbox, &["task", "deps", "notes:T-1", "--json"], 4);
+    assert_eq!(edges(&read), Vec::<(String, String)>::new());
+    assert_eq!(read["errors"][0]["source"], PRIVATE_SOURCE, "{read}");
 }
