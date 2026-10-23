@@ -725,8 +725,9 @@ impl Engine {
     /// carry what the item is called, and is refused with
     /// [`EngineError::PrivateReferenceContent`] naming the form and never its value. One whose
     /// source has no designator is refused as [`refuse_private_references`] refuses it. An end
-    /// already opaque, one in `destination` itself and every one written somewhere declared
-    /// private are held as given.
+    /// given opaque already is held to the same test at the source its designator resolves to,
+    /// and refused when none does. One in `destination` itself and every one written somewhere
+    /// declared private are held as given.
     ///
     /// [`refuse_private_references`]: Self::refuse_private_references
     pub(crate) async fn publicly_named(
@@ -741,7 +742,28 @@ impl Engine {
         let mut known = std::collections::HashMap::new();
         let mut held = Vec::with_capacity(edges.len());
         for mut edge in edges {
-            if edge.to.designator().is_some() || edge.to.is_native() {
+            if edge.to.is_native() {
+                held.push(edge);
+                continue;
+            }
+            // Given opaque already, it is held to the same test as one this write makes opaque:
+            // its id the native id of an item the tracker its designator names really holds.
+            if let Some(designator) = edge.to.designator().cloned() {
+                let (found, _) = self.designated(&designator).await;
+                let Some(source) = found else {
+                    return Err(EngineError::PrivateReferenceContent {
+                        item: item.to_owned(),
+                        destination: destination.to_string(),
+                        form: "an opaque id that no source this host configures can confirm"
+                            .to_owned(),
+                    });
+                };
+                let far = crate::GlobalId::new(
+                    source,
+                    onetaskgraph_plugin_api::NativeId(edge.to.id().to_owned()),
+                );
+                self.native_or_refused(destination, item, &far, edge.to.kind)
+                    .await?;
                 held.push(edge);
                 continue;
             }

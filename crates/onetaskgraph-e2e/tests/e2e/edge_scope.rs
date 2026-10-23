@@ -17,7 +17,10 @@ use sha2::{Digest, Sha256};
 
 use crate::common::{Sandbox, stderr, stdout};
 use crate::document_store::interpreter;
-use crate::fixtures::{LinearWorkspace, dataset, document, linear_rate_limited, linear_workspace};
+use crate::fixtures::{
+    LinearWorkspace, dataset, document, github_projects_with_board, linear_rate_limited,
+    linear_workspace,
+};
 
 /// A configuration of `sources`, with a `write_policy` whose check passes every write: a store
 /// declaring a visibility is held to the public boundary, and what is under test here is the
@@ -820,5 +823,476 @@ fn a_copy_moves_a_legacy_private_record_onto_the_dependent_opaquely() {
         sent(&vault_workspace, from),
         ["issue P-1"],
         "the far end read, and no reverse-record query"
+    );
+}
+
+/// The digest the store names a remote by: SHA-256 hex of `<plugin>\n<identity>`.
+fn remote(plugin: &str, identity: &str) -> String {
+    Sha256::digest(format!("{plugin}\n{identity}").as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// A kept designator that is unreadable, in another schema or about another remote is a miss:
+/// the next read asks the source once more, and keeps its answer whole in its place.
+#[test]
+fn a_kept_designator_that_cannot_be_believed_costs_one_request_and_is_replaced() {
+    let world = resolution();
+    answered(&world.sandbox, &["task", "deps", "notes:T-1", "--json"], 0);
+    let kept: Vec<PathBuf> = kept_paths(&world.sandbox.subdirectory("cache"));
+    assert_eq!(kept.len(), 2, "one per source asked: {kept:?}");
+    let good = std::fs::read_to_string(&kept[0]).expect("a kept designator");
+    let mut other_remote: Value = serde_json::from_str(&good).expect("JSON");
+    other_remote["remote"] = json!("another remote");
+    let mut other_schema: Value = serde_json::from_str(&good).expect("JSON");
+    other_schema["schema"] = json!(99);
+    for (case, planted) in [
+        ("unreadable", "not json at all".to_owned()),
+        ("another remote's", other_remote.to_string()),
+        ("another schema's", other_schema.to_string()),
+    ] {
+        for path in &kept {
+            std::fs::write(path, &planted).expect("a planted file");
+        }
+        let (first, second) = (world.first.served().len(), world.second.served().len());
+        let read = answered(&world.sandbox, &["task", "deps", "notes:T-1", "--json"], 0);
+        assert_eq!(
+            edges(&read),
+            [("notes:T-1".to_owned(), "bb-plans:L-9".to_owned())],
+            "{case}"
+        );
+        assert_eq!(
+            discovered(&sent(&world.first, first)),
+            1,
+            "{case}: asked once more"
+        );
+        assert_eq!(
+            discovered(&sent(&world.second, second)),
+            1,
+            "{case}: asked once more"
+        );
+        for path in &kept {
+            let replaced: Value =
+                serde_json::from_str(&std::fs::read_to_string(path).expect("kept again"))
+                    .expect("{case}: replaced whole");
+            assert_eq!(replaced["schema"], 1, "{case}");
+        }
+    }
+}
+
+/// Every `designator.json` under `cache`.
+fn kept_paths(cache: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let mut pending = vec![cache.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if path
+                .file_name()
+                .is_some_and(|name| name == "designator.json")
+            {
+                found.push(path);
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
+/// A designator that cannot be kept — its directory is under a file — still resolves the edge,
+/// and the next process asks the source again rather than failing.
+#[test]
+fn a_designator_that_cannot_be_kept_is_asked_again_and_never_fails_the_read() {
+    let sandbox = Sandbox::new();
+    let far = designator("linear", "org-plans");
+    let notes = folder(
+        &sandbox,
+        "notes",
+        &[(
+            "T-1",
+            &format!("title: Ship\ndepends_on:\n  - {{designator: {far}, id: L-9, item: task}}\n"),
+        )],
+    );
+    let blocker = sandbox.subdirectory("blocked").join("a-file");
+    std::fs::write(&blocker, b"in the way").expect("a file");
+    let (plans, plans_workspace) = workspace(
+        &sandbox,
+        "org-plans",
+        json!([issue("L-9", "Review", json!({}))]),
+    );
+    sandbox.project_document(&configured(&json!({
+        "notes": {"plugin": "local-md", "config": {"root": notes}},
+        "plans": {"plugin": "linear", "config": plans, "cache": {"dir": blocker.join("cache")}},
+    })));
+    for _ in 0..2 {
+        let read = answered(&sandbox, &["task", "deps", "notes:T-1", "--json"], 0);
+        assert_eq!(
+            edges(&read),
+            [("notes:T-1".to_owned(), "plans:L-9".to_owned())]
+        );
+    }
+    assert_eq!(
+        discovered(&sent(&plans_workspace, 0)),
+        2,
+        "asked by each process"
+    );
+}
+
+/// An opaque far end naming a project resolves through the project read; one the source holds
+/// no item by fails the read naming the designator rather than being drawn; and a candidate
+/// that cannot say which tracker it is is named unanswered while discovery goes on to the next.
+#[test]
+fn an_opaque_project_resolves_a_missing_far_end_fails_and_a_mute_candidate_is_named() {
+    let sandbox = Sandbox::new();
+    let far = designator("linear", "org-plans");
+    let notes = folder(
+        &sandbox,
+        "notes",
+        &[
+            (
+                "T-1",
+                &format!(
+                    "title: Ship\ndepends_on:\n  - {{designator: {far}, id: P-9, item: project}}\n"
+                ),
+            ),
+            (
+                "T-2",
+                &format!(
+                    "title: Land\ndepends_on:\n  - {{designator: {far}, id: L-404, item: task}}\n"
+                ),
+            ),
+        ],
+    );
+    let (mute, mute_sent) = linear_rate_limited(&sandbox);
+    let mut held = dataset();
+    for (_, kept) in held.as_object_mut().expect("the dataset is an object") {
+        *kept = json!([]);
+    }
+    held["projects"] = json!([{"id": "P-9", "title": "Roadmap",
+                               "status": {"category": "todo", "name": "Planned"}, "labels": []}]);
+    held["organization"] = json!("org-plans");
+    let (plans, plans_workspace) = linear_workspace(&sandbox, held);
+    sandbox.project_document(&configured(&json!({
+        "notes": {"plugin": "local-md", "config": {"root": notes}},
+        "aa-mute": {"plugin": "linear", "config": mute},
+        "bb-plans": {"plugin": "linear", "config": plans},
+    })));
+
+    let project = answered(&sandbox, &["task", "deps", "notes:T-1", "--json"], 0);
+    assert_eq!(
+        edges(&project),
+        [("notes:T-1".to_owned(), "bb-plans:P-9".to_owned())]
+    );
+    assert_eq!(project["items"][0]["to"]["kind"], "project");
+    assert_eq!(project["unanswered"][0]["source"], "aa-mute", "{project}");
+    assert!(
+        *mute_sent.lock().unwrap() >= 1,
+        "the mute candidate was asked"
+    );
+    assert!(
+        plans_workspace
+            .served()
+            .iter()
+            .any(|(query, variables)| query == graphql::PROJECT && variables["id"] == "P-9"),
+        "the far end read as a project"
+    );
+
+    let missing = answered(&sandbox, &["task", "deps", "notes:T-2", "--json"], 4);
+    assert_eq!(edges(&missing), Vec::<(String, String)>::new());
+    assert_eq!(missing["errors"][0]["source"], "bb-plans", "{missing}");
+    assert!(
+        missing["errors"][0]["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains(&far) && message.contains("L-404")),
+        "{missing}"
+    );
+}
+
+/// A far end on a source whose designator this host keeps, but which cannot be asked, stays an
+/// edge — its qualified id is known — and the source is named unanswered.
+#[test]
+fn a_far_end_whose_source_cannot_be_asked_stays_an_edge_and_names_the_source() {
+    let sandbox = Sandbox::new();
+    let far = designator("linear", "org-plans");
+    let notes = folder(
+        &sandbox,
+        "notes",
+        &[(
+            "T-1",
+            &format!("title: Ship\ndepends_on:\n  - {{designator: {far}, id: L-9, item: task}}\n"),
+        )],
+    );
+    let (mute, _) = linear_rate_limited(&sandbox);
+    let kept = sandbox.subdirectory("kept");
+    let identity = format!("{}\nFIX", mute["endpoint"].as_str().expect("an endpoint"));
+    std::fs::write(
+        kept.join("designator.json"),
+        json!({"schema": 1, "remote": remote("linear", &identity), "designator": far}).to_string(),
+    )
+    .expect("a kept designator");
+    sandbox.project_document(&configured(&json!({
+        "notes": {"plugin": "local-md", "config": {"root": notes}},
+        "plans": {"plugin": "linear", "config": mute, "cache": {"dir": kept}},
+    })));
+
+    let read = answered(&sandbox, &["task", "deps", "notes:T-1", "--json"], 0);
+    assert_eq!(
+        edges(&read),
+        [("notes:T-1".to_owned(), "plans:L-9".to_owned())]
+    );
+    assert_eq!(read["unanswered"][0]["source"], "plans", "{read}");
+    assert_eq!(
+        read["unanswered"][0]["error"]["kind"], "rate-limited",
+        "{read}"
+    );
+}
+
+/// `project graph` draws an opaque far end as the source its designator is, and names one no
+/// source is in its `unanswered`.
+#[test]
+fn a_project_graph_draws_a_resolved_opaque_far_end_and_names_an_unresolved_one() {
+    let sandbox = Sandbox::new();
+    let far = designator("linear", "org-plans");
+    let nowhere = designator("linear", "org-nowhere");
+    let notes = folder(
+        &sandbox,
+        "notes",
+        &[(
+            "T-1",
+            &format!(
+                "title: Ship\nproject: P-1\ndepends_on:\n  - {{designator: {far}, id: L-9, item: task}}\n  \
+                 - {{designator: {nowhere}, id: L-1, item: task}}\n"
+            ),
+        )],
+    );
+    std::fs::create_dir_all(notes.join("projects")).expect("the projects folder");
+    std::fs::write(notes.join("projects/P-1.md"), "---\ntitle: Launch\n---\n").expect("a project");
+    let (plans, _) = workspace(
+        &sandbox,
+        "org-plans",
+        json!([issue("L-9", "Review", json!({}))]),
+    );
+    sandbox.project_document(&configured(&json!({
+        "notes": {"plugin": "local-md", "config": {"root": notes}},
+        "plans": {"plugin": "linear", "config": plans},
+    })));
+
+    let graph = answered(
+        &sandbox,
+        &["project", "graph", "notes:P-1", "--format", "json"],
+        0,
+    );
+    assert!(
+        graph["edges"]
+            .as_array()
+            .expect("the edges")
+            .contains(&json!({"from": "plans:L-9", "to": "notes:T-1"})),
+        "{graph:#}"
+    );
+    assert_eq!(
+        graph["unanswered"],
+        json!([{"designator": nowhere, "reason": "not configured on this host"}]),
+        "{graph:#}"
+    );
+}
+
+/// `task create --depends-on` onto a public folder writes a private prerequisite opaquely, and
+/// refuses one named by a prefixed key before anything is created.
+#[test]
+fn a_create_names_its_private_prerequisite_opaquely_or_not_at_all() {
+    let (sandbox, _board, _vault) = boundary();
+    let notes = folder(&sandbox, "notes", &[]);
+    std::fs::create_dir_all(notes.join("projects")).expect("the projects folder");
+    std::fs::write(notes.join("projects/P-1.md"), "---\ntitle: Launch\n---\n").expect("a project");
+    let body = sandbox.subdirectory("bodies").join("body.md");
+    std::fs::write(&body, "the release notes").expect("a body");
+    let mut sources: Value = serde_json::from_str(
+        &std::fs::read_to_string(sandbox.project().join("onetaskgraph.yaml"))
+            .expect("the document"),
+    )
+    .expect("JSON");
+    sources["sources"]["notes"] =
+        json!({"plugin": "local-md", "config": {"root": notes}, "visibility": "public"});
+    sandbox.project_document(&sources.to_string());
+    let create = |far: &str| {
+        run(
+            &sandbox,
+            &[
+                "task",
+                "create",
+                "notes",
+                "--project",
+                "P-1",
+                "--title",
+                "Publish notes",
+                "--body-file",
+                body.to_str().expect("a path"),
+                "--depends-on",
+                far,
+            ],
+        )
+    };
+
+    let refused = create(&format!("{PRIVATE_SOURCE}:{KEY}"));
+    assert_ne!(refused.status.code(), Some(0));
+    conveys_nothing("a refusal", &stderr(&refused));
+    assert!(
+        stderr(&refused).contains("a prefixed key"),
+        "{}",
+        stderr(&refused)
+    );
+    assert!(
+        std::fs::read_dir(notes.join("tasks")).map_or(true, |mut entries| entries.next().is_none()),
+        "nothing was created"
+    );
+
+    let created = create(&format!("{PRIVATE_SOURCE}:{NATIVE}"));
+    assert_eq!(created.status.code(), Some(0), "{}", stderr(&created));
+    let id = stdout(&created).trim().to_owned();
+    let native = id.strip_prefix("notes:").expect("a notes id");
+    let file = std::fs::read_to_string(notes.join("tasks").join(format!("{native}.md")))
+        .expect("the created task");
+    assert!(
+        file.contains(&designator("linear", "org-zephyr")) && file.contains(NATIVE),
+        "{file}"
+    );
+    conveys_nothing("the created task", &file);
+}
+
+/// What the command line refuses of an endpoint object before anything is asked: one that is
+/// not JSON, one that is no endpoint, and one whose id is not qualified.
+#[test]
+fn an_endpoint_object_that_is_no_endpoint_is_refused_by_the_command_line() {
+    let (sandbox, board, _vault) = boundary();
+    let before = board.served().len();
+    for (given, kind) in [
+        ("{not json", "invalid-dependency"),
+        (r#"{"id": 7, "kind": "task"}"#, "invalid-dependency"),
+        (r#"{"id": "B-2", "kind": "task"}"#, "invalid-dependency"),
+    ] {
+        let output = run(
+            &sandbox,
+            &[
+                "task",
+                "update",
+                "board:B-1",
+                "--depends-on",
+                given,
+                "--json",
+            ],
+        );
+        assert_ne!(output.status.code(), Some(0), "{given}");
+        let failure: Value = serde_json::from_str(&stdout(&output))
+            .or_else(|_| serde_json::from_str(&stderr(&output)))
+            .unwrap_or_else(|_| panic!("a failure document for {given}:\n{}", stderr(&output)));
+        assert_eq!(failure["failure"]["kind"], kind, "{given}: {failure}");
+    }
+    assert_eq!(
+        board.served().len(),
+        before,
+        "nothing was asked of the board"
+    );
+}
+
+/// An opaque endpoint a caller gives is held to the test a qualified one is: accepted when its
+/// tracker is configured and holds the item by that native id, refused when its id is a key,
+/// and refused when no configured source is its tracker.
+#[test]
+fn a_caller_s_opaque_endpoint_is_confirmed_before_it_is_written() {
+    let (sandbox, board, _vault) = boundary();
+    let far = designator("linear", "org-zephyr");
+    for (id, designated, refused) in [
+        (KEY, far.as_str(), Some("a prefixed key")),
+        (
+            NATIVE,
+            &designator("linear", "org-unknown") as &str,
+            Some("no source this host"),
+        ),
+        (NATIVE, far.as_str(), None),
+    ] {
+        let given = json!({"designator": designated, "id": id, "kind": "task"}).to_string();
+        let output = run(
+            &sandbox,
+            &[
+                "task",
+                "update",
+                "board:B-1",
+                "--depends-on",
+                &given,
+                "--json",
+            ],
+        );
+        match refused {
+            Some(form) => {
+                assert_ne!(output.status.code(), Some(0), "{given}");
+                assert!(
+                    stdout(&output).contains(form) || stderr(&output).contains(form),
+                    "{given}"
+                );
+                conveys_nothing(
+                    "a refusal",
+                    &format!("{}{}", stdout(&output), stderr(&output)),
+                );
+            }
+            None => assert_eq!(output.status.code(), Some(0), "{}", stderr(&output)),
+        }
+    }
+    let stored = board.long_form("tasks", "B-1").expect("the board's task");
+    assert!(stored.contains(&far) && stored.contains(NATIVE), "{stored}");
+}
+
+/// A GitHub board's designator is the digest of its Project's node id, found with the one read
+/// of the board's fields, and an opaque edge naming it resolves to the board's item.
+#[test]
+fn a_github_board_is_designated_by_its_project_node_id() {
+    let sandbox = Sandbox::new();
+    let (block, board) = github_projects_with_board(&sandbox);
+    let far = designator("github-projects", "PVT-board");
+    sandbox.project_document(&configured(&json!({
+        "board": {"plugin": "github-projects", "config": block},
+    })));
+    let listed = answered(
+        &sandbox,
+        &["task", "list", "--source", "board", "--json"],
+        0,
+    );
+    let item = listed["items"][0]["id"]
+        .as_str()
+        .expect("a board task")
+        .strip_prefix("board:")
+        .expect("a board id")
+        .to_owned();
+    let notes = folder(
+        &sandbox,
+        "notes",
+        &[(
+            "T-1",
+            &format!(
+                "title: Ship\ndepends_on:\n  - {{designator: {far}, id: {item}, item: task}}\n"
+            ),
+        )],
+    );
+    sandbox.project_document(&configured(&json!({
+        "board": {"plugin": "github-projects", "config": block},
+        "notes": {"plugin": "local-md", "config": {"root": notes}},
+    })));
+    let before = board.served().len();
+    let read = answered(&sandbox, &["task", "deps", "notes:T-1", "--json"], 0);
+    assert_eq!(
+        edges(&read),
+        [("notes:T-1".to_owned(), format!("board:{item}"))]
+    );
+    let fields_reads = board
+        .served()
+        .into_iter()
+        .skip(before)
+        .filter(|(query, _)| query.contains("boardFields:repositoryOwner"))
+        .count();
+    assert_eq!(
+        fields_reads, 1,
+        "the designator costs the one read of the board's fields"
     );
 }

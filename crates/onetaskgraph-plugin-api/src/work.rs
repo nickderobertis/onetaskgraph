@@ -921,7 +921,9 @@ pub(crate) const OPAQUE_ENDPOINT_KEYS: [&str; 3] = ["designator", "id", "kind"];
 #[serde(transparent)]
 pub struct Designator(String);
 
-/// The pattern every [`Designator`] matches.
+/// The pattern every [`Designator`] matches, as the schema publishes it. What
+/// [`Designator::try_from`] accepts is reconciled with it by `tests/designator_pattern.rs` in
+/// `onetaskgraph-core`, over the schema the bundle emits.
 pub(crate) const DESIGNATOR_PATTERN: &str =
     "^(alias/[A-Za-z0-9_-]{16,64}|[a-z0-9][a-z0-9-]*/[0-9a-f]{64})$";
 
@@ -945,15 +947,26 @@ impl Designator {
 
     /// The designator of a backend `plugin` identifies by `identifier`, its own opaque
     /// identifier of itself.
-    #[must_use]
-    pub fn of_backend(plugin: &str, identifier: &str) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// A message when `plugin` is not a plugin kind's spelling — the pattern a source name
+    /// matches — or is [`Self::ALIAS_PREFIX`], which an alias designator's prefix is.
+    pub fn of_backend(plugin: &str, identifier: &str) -> Result<Self, String> {
         use sha2::{Digest, Sha256};
         use std::fmt::Write as _;
+        if plugin == Self::ALIAS_PREFIX || SourceName::new(plugin).is_err() {
+            return Err(format!(
+                "{plugin:?} cannot prefix a designator: a plugin kind is lower-case letters, \
+                 digits and dashes, and not {:?}",
+                Self::ALIAS_PREFIX
+            ));
+        }
         let mut hex = String::with_capacity(64);
         for byte in Sha256::digest(format!("{plugin}\n{identifier}").as_bytes()) {
             write!(hex, "{byte:02x}").expect("writing to a String cannot fail");
         }
-        Self(format!("{plugin}/{hex}"))
+        Ok(Self(format!("{plugin}/{hex}")))
     }
 
     /// The designator of a tracker whose configuration declares `alias` as its

@@ -220,7 +220,8 @@ impl Engine {
 #[derive(Debug, Default)]
 pub(crate) struct Resolving {
     found: BTreeMap<Designator, Option<SourceName>>,
-    read: std::collections::BTreeSet<(SourceName, String)>,
+    /// Each far end read, and whether its read let it stand as an edge.
+    read: BTreeMap<(SourceName, String), bool>,
     /// Each designator no configured source is, and each candidate or far end that could not be
     /// asked.
     pub(crate) unanswered: Vec<crate::plan::Unanswered>,
@@ -238,10 +239,72 @@ impl Resolving {
 }
 
 impl Engine {
+    /// Read the far end `id` of `source` an opaque edge under `designator` names, and say whether
+    /// it stands as an edge: an item answered under exactly that id does; one answered under
+    /// another — a human key a backend also resolves — or no item at all is a far end this
+    /// source does not hold by that native id, failed in `resolving.failed` rather than drawn.
+    /// A source that could not be asked leaves the edge standing, its qualified id known, and
+    /// is named in `resolving.unanswered`; one that answered with a failure fails the read.
+    async fn names_natively(
+        &self,
+        source: &SourceName,
+        id: &str,
+        kind: onetaskgraph_plugin_api::ItemKind,
+        designator: &Designator,
+        resolving: &mut Resolving,
+    ) -> bool {
+        let Some(far) = self.ready_source(source) else {
+            return true;
+        };
+        let native = onetaskgraph_plugin_api::NativeId(id.to_owned());
+        let read = match kind {
+            onetaskgraph_plugin_api::ItemKind::Task => {
+                far.get_task(&native).await.map(|task| task.map(|task| task.id))
+            }
+            onetaskgraph_plugin_api::ItemKind::Project => far
+                .get_project(&native)
+                .await
+                .map(|project| project.map(|project| project.id)),
+        };
+        let held = match read {
+            Ok(held) => held,
+            Err(error) => {
+                let failure = SourceFailure {
+                    source: source.clone(),
+                    error,
+                };
+                if super::dependents::could_not_answer(&failure.error) {
+                    resolving.unasked(failure);
+                    return true;
+                }
+                resolving.failed.push(failure);
+                return false;
+            }
+        };
+        if held.as_ref() == Some(&native) {
+            return true;
+        }
+        let noun = match kind {
+            onetaskgraph_plugin_api::ItemKind::Task => "task",
+            onetaskgraph_plugin_api::ItemKind::Project => "project",
+        };
+        resolving.failed.push(SourceFailure {
+            source: source.clone(),
+            error: SourceError::Malformed {
+                message: format!(
+                    "a dependency recorded under designator {designator} names {noun} {id}, and \
+                     this source holds no {noun} whose native id that is"
+                ),
+            },
+        });
+        false
+    }
+
     /// `endpoint` as this configuration names it: an opaque one qualified to the source its
-    /// designator is, once the far end has been read there by its id, and `None` when no
-    /// configured source is that tracker — named in `resolving.unanswered`, never dropped
-    /// silently. Every other endpoint is answered as it is.
+    /// designator is, once the far end has been read there by its id and found under exactly
+    /// that id, and `None` when no configured source is that tracker — named in
+    /// `resolving.unanswered` — or that source holds no item by that native id — failed in
+    /// `resolving.failed`; never dropped silently. Every other endpoint is answered as it is.
     pub(crate) async fn resolve_endpoint(
         &self,
         endpoint: onetaskgraph_plugin_api::DependencyEndpoint,
@@ -267,32 +330,24 @@ impl Engine {
                             },
                         ));
                 }
-                resolving.found.insert(designator, found.clone());
+                resolving.found.insert(designator.clone(), found.clone());
                 found
             }
         }?;
         let id = endpoint.id().to_owned();
-        if resolving.read.insert((source.clone(), id.clone()))
-            && let Some(far) = self.ready_source(&source)
-        {
-            let native = onetaskgraph_plugin_api::NativeId(id.clone());
-            let read = match endpoint.kind {
-                onetaskgraph_plugin_api::ItemKind::Task => far.get_task(&native).await.map(drop),
-                onetaskgraph_plugin_api::ItemKind::Project => {
-                    far.get_project(&native).await.map(drop)
-                }
-            };
-            if let Err(error) = read {
-                let failure = SourceFailure {
-                    source: source.clone(),
-                    error,
-                };
-                if super::dependents::could_not_answer(&failure.error) {
-                    resolving.unasked(failure);
-                } else {
-                    resolving.failed.push(failure);
-                }
+        let key = (source.clone(), id.clone());
+        let named = match resolving.read.get(&key) {
+            Some(named) => *named,
+            None => {
+                let named = self
+                    .names_natively(&source, &id, endpoint.kind, &designator, resolving)
+                    .await;
+                resolving.read.insert(key, named);
+                named
             }
+        };
+        if !named {
+            return None;
         }
         onetaskgraph_plugin_api::DependencyEndpoint::new(format!("{source}:{id}"), endpoint.kind)
             .ok()

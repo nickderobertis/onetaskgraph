@@ -3166,7 +3166,9 @@ impl TaskSource for LinearSource {
                 })?,
             "id",
         )?;
-        Ok(Some(Designator::of_backend(KIND, organization)))
+        Designator::of_backend(KIND, organization)
+            .map(Some)
+            .map_err(|message| SourceError::Malformed { message })
     }
     async fn get_task(&self, id: &NativeId) -> Result<Option<Task>, SourceError> {
         Ok(self.issue_held(id, Read::Load).await?.map(|(task, _)| task))

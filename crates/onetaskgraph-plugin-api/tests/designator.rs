@@ -11,7 +11,7 @@ use serde_json::json;
 /// `<plugin>\n<identifier>`, which never contains the identifier.
 #[test]
 fn a_backend_designator_is_the_digest_of_plugin_and_identifier() {
-    let designator = Designator::of_backend("linear", "0b6c1d6e-org");
+    let designator = Designator::of_backend("linear", "0b6c1d6e-org").expect("a plugin kind");
     assert_eq!(
         designator.as_str(),
         format!("linear/{}", sha256_hex(b"linear\n0b6c1d6e-org"))
@@ -19,14 +19,20 @@ fn a_backend_designator_is_the_digest_of_plugin_and_identifier() {
     assert_eq!(designator.prefix(), "linear");
     assert!(!designator.as_str().contains("0b6c1d6e-org"));
     assert_eq!(
-        Designator::of_backend("linear", "0b6c1d6e-org"),
+        Designator::of_backend("linear", "0b6c1d6e-org").expect("a plugin kind"),
         designator,
         "the same backend designates the same way every time"
     );
     assert_ne!(
-        Designator::of_backend("github-projects", "0b6c1d6e-org"),
+        Designator::of_backend("github-projects", "0b6c1d6e-org").expect("a plugin kind"),
         designator
     );
+    for refused in ["alias", "Linear", "", "two/parts"] {
+        assert!(
+            Designator::of_backend(refused, "org").is_err(),
+            "{refused:?} cannot prefix a designator"
+        );
+    }
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -59,7 +65,7 @@ fn an_alias_designator_holds_the_pattern() {
 /// The opaque form round-trips as exactly its three keys, and a malformed designator is refused.
 #[test]
 fn the_opaque_form_round_trips_as_exactly_three_keys() {
-    let designator = Designator::of_backend("linear", "org");
+    let designator = Designator::of_backend("linear", "org").expect("a plugin kind");
     let endpoint =
         DependencyEndpoint::opaque(designator.clone(), "uuid-1".to_owned(), ItemKind::Task)
             .expect("an opaque endpoint");
@@ -90,7 +96,7 @@ fn the_opaque_form_round_trips_as_exactly_three_keys() {
 /// What a caller asks to be written is refused naming a key beyond the three, never its value.
 #[test]
 fn a_caller_endpoint_with_another_key_is_refused_naming_the_key() {
-    let designator = Designator::of_backend("linear", "org");
+    let designator = Designator::of_backend("linear", "org").expect("a plugin kind");
     for key in [
         "title", "team", "project", "labels", "status", "url", "anything",
     ] {
@@ -115,7 +121,7 @@ fn a_caller_endpoint_with_another_key_is_refused_naming_the_key() {
 /// backend could relate natively.
 #[test]
 fn a_recorded_opaque_far_end_is_never_a_native_relation() {
-    let designator = Designator::of_backend("linear", "org");
+    let designator = Designator::of_backend("linear", "org").expect("a plugin kind");
     let metadata = BTreeMap::from([(
         DependencyEdge::RECORDED_KEY.to_owned(),
         json!([{"designator": designator.as_str(), "id": "uuid-1", "kind": "task"}]),

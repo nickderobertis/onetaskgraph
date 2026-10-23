@@ -12445,7 +12445,9 @@ impl TaskSource for GitHubProjectsSource {
     /// this command has read them already.
     async fn designator(&self) -> Result<Option<Designator>, SourceError> {
         let board = self.board_fields().await?;
-        Ok(Some(Designator::of_backend(KIND, board.id.as_str())))
+        Designator::of_backend(KIND, board.id.as_str())
+            .map(Some)
+            .map_err(|message| SourceError::Malformed { message })
     }
     async fn get_task(&self, id: &NativeId) -> Result<Option<Task>, SourceError> {
         self.item_by_id(id)
