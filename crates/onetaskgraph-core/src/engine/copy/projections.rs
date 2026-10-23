@@ -431,46 +431,58 @@ fn digests(assets: &[AssetPayload]) -> Vec<(String, String)> {
     digests
 }
 
-/// The public tasks of one private plan that a project copy makes views of.
+/// Whether one private plan's copy makes public views, and of which of its tasks.
+///
+/// Only an active plan holds tasks: a copy that makes no views has nowhere to note one.
 #[derive(Default)]
-pub(super) struct Projecting {
-    /// Whether the plan is one a copy makes views of at all — even of none this time, when the
-    /// map it recorded before still has to forget a task that has no view any more.
-    active: bool,
-    tasks: Vec<Projected>,
+pub(super) enum Projecting {
+    /// The plan makes no view: it is not private, its home is not declared private, or it
+    /// neither has a public task to show nor a map recorded before to bring in step.
+    #[default]
+    Inactive,
+    /// The plan's public tasks to make views of — none, when the map recorded before still has
+    /// to forget a task that has no view any more.
+    Active(Vec<Projected>),
 }
 
 impl Projecting {
     /// A plan whose public tasks this copy makes views of, none noted yet.
     pub(super) fn active() -> Self {
-        Self {
-            active: true,
-            tasks: Vec::new(),
-        }
+        Self::Active(Vec::new())
     }
 
     /// Whether this copy has views to land, or a recorded map to bring in step.
     pub(super) fn lands(&self) -> bool {
-        self.active
+        matches!(self, Self::Active(_))
     }
 
     /// This plan, active only when it has a view to land or `project`'s destination already
     /// records a map to bring in step — so a private plan with neither reads nothing more.
-    pub(super) fn settled(mut self, project: &Planned) -> Self {
+    pub(super) fn settled(self, project: &Planned) -> Self {
         let recorded = project
             .held
             .as_ref()
             .is_some_and(|held| described(&held.item).1.contains_key(PublicProjections::KEY));
-        self.active = self.active && (!self.tasks.is_empty() || recorded);
-        self
+        match self {
+            Self::Active(tasks) if !tasks.is_empty() || recorded => Self::Active(tasks),
+            Self::Active(_) | Self::Inactive => Self::Inactive,
+        }
+    }
+
+    /// Every task this plan makes a view of.
+    fn tasks(&self) -> &[Projected] {
+        match self {
+            Self::Active(tasks) => tasks,
+            Self::Inactive => &[],
+        }
     }
 
     /// Note `task`, landing canonically in the private home, as projected into `to`.
     pub(super) fn add(&mut self, task: &Planned, to: SourceName) {
-        let Item::Task(read) = &task.item else {
+        let (Self::Active(tasks), Item::Task(read)) = (self, &task.item) else {
             return;
         };
-        self.tasks.push(Projected {
+        tasks.push(Projected {
             source: task.source.clone(),
             to,
             task: (**read).clone(),
@@ -489,7 +501,7 @@ impl Projecting {
     /// The public sources the views land in, each once, in the order the plan reaches them.
     fn destinations(&self) -> Vec<SourceName> {
         let mut destinations: Vec<SourceName> = Vec::new();
-        for task in &self.tasks {
+        for task in self.tasks() {
             if !destinations.contains(&task.to) {
                 destinations.push(task.to.clone());
             }
@@ -499,7 +511,7 @@ impl Projecting {
 
     /// The views landing in `to`, every one after the views it depends on where they can be.
     fn ordered(&self, to: &SourceName) -> Vec<&Projected> {
-        let here: Vec<&Projected> = self.tasks.iter().filter(|task| &task.to == to).collect();
+        let here: Vec<&Projected> = self.tasks().iter().filter(|task| &task.to == to).collect();
         let mut ordered: Vec<&Projected> = Vec::new();
         let mut visiting: Vec<&GlobalId> = Vec::new();
         fn visit<'a>(
@@ -611,7 +623,7 @@ impl Engine {
                 .await
                 .map_err(|error| refused(destination, error))?;
         }
-        for task in &projecting.tasks {
+        for task in projecting.tasks() {
             let names: Vec<String> = task
                 .assets
                 .iter()
@@ -686,7 +698,7 @@ impl Engine {
         // longer routed anywhere public — is no longer named; its old view is left as a person
         // finds it, never deleted.
         let projected: Vec<&GlobalId> = projecting
-            .tasks
+            .tasks()
             .iter()
             .filter_map(|task| canonical.get(&task.source))
             .collect();

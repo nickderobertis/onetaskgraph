@@ -1719,3 +1719,81 @@ fn a_board_view_whose_create_answer_was_lost_is_found_again_rather_than_made_twi
     assert!(view.starts_with("board:"), "{view}");
     assert_eq!(shown(&store, "task", &view)["title"], "Tune the retry");
 }
+
+#[test]
+fn an_unrecorded_task_is_taken_as_a_view_only_when_it_alone_says_what_the_view_says() {
+    for strays in [1_usize, 2] {
+        let store = projecting_store();
+        private_rollout(&store);
+        let landed = copy_rollout(&store);
+        let neutral = shown(
+            &store,
+            "task",
+            &view_of(&store, &landed, &landed["plan:widget"]),
+        )["project"]
+            .as_str()
+            .expect("the neutral project")
+            .to_owned();
+        // A new public task, and under the neutral project tasks no map names that read as
+        // its view would: one is the view a lost answer left behind, two are ambiguous.
+        store.record(
+            "plan",
+            "tasks",
+            "tune",
+            &format!(
+                "title: Tune the retry\nstatus: todo\nproject: rollout\nrepositories: [{OPEN}]"
+            ),
+            PLAIN,
+        );
+        let stray_ids: Vec<String> = (1..=strays).map(|n| format!("stray-{n}")).collect();
+        for stray in &stray_ids {
+            store.record(
+                "site",
+                "tasks",
+                stray,
+                &format!(
+                    "title: Tune the retry\nstatus: todo\nproject: {neutral}\nrepositories: [{OPEN}]"
+                ),
+                PLAIN,
+            );
+        }
+        let held: Vec<Vec<u8>> = stray_ids
+            .iter()
+            .map(|stray| {
+                std::fs::read(record_file(&store, "tasks", &format!("site:{stray}")))
+                    .expect("a stray")
+            })
+            .collect();
+        let tune =
+            landed_ids(&store.ok(&["project", "copy", "plan:rollout", "--to", "vault", "--json"]))
+                ["plan:tune"]
+                .clone();
+        let view = view_of(&store, &landed, &tune);
+        if strays == 1 {
+            assert_eq!(
+                view, "site:stray-1",
+                "the one that says what the view says is taken"
+            );
+        } else {
+            assert!(
+                view.starts_with("site:pt-"),
+                "neither of two is taken: {view}"
+            );
+            for (stray, bytes) in stray_ids.iter().zip(&held) {
+                assert_eq!(
+                    &std::fs::read(record_file(&store, "tasks", &format!("site:{stray}")))
+                        .expect("still there"),
+                    bytes,
+                    "{stray} is left as it was"
+                );
+            }
+        }
+        let before = store.tree();
+        copy_rollout(&store);
+        assert_eq!(
+            store.tree(),
+            before,
+            "{strays}: the next copy writes nothing"
+        );
+    }
+}
