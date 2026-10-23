@@ -6200,7 +6200,9 @@ struct CommentPageVariables {
 fn validate_linear_variables(operation: &str, variables: &Value) -> Result<(), &'static str> {
     use onetaskgraph_linear::graphql;
     let valid = match operation {
-        graphql::VIEWER => serde_json::from_value::<NoVariables>(variables.clone()).is_ok(),
+        graphql::VIEWER | graphql::ORGANIZATION => {
+            serde_json::from_value::<NoVariables>(variables.clone()).is_ok()
+        }
         graphql::ISSUE | graphql::PROJECT | graphql::DOCUMENT | graphql::COMMENT => {
             serde_json::from_value::<ItemVariables>(variables.clone())
                 .is_ok_and(|variables| !variables.id.is_empty())
@@ -6586,6 +6588,7 @@ fn linear_response(
     let operation = request.query.as_str();
     if ![
         graphql::VIEWER,
+        graphql::ORGANIZATION,
         graphql::ISSUE,
         graphql::PROJECT,
         graphql::ISSUES,
@@ -6632,6 +6635,13 @@ fn linear_response(
         return Err("unknown GraphQL operation");
     }
     let vars = Value::Object(request.variables);
+    // The workspace's own id, which a fixture names under `organization` — two fixtures naming
+    // one are two loopback servers over the same workspace.
+    if operation == graphql::ORGANIZATION {
+        return Ok(json!({"organization":{
+            "id": data.get("organization").and_then(Value::as_str).unwrap_or("fixture-organization")
+        }}));
+    }
     // What the store's cache sends in place of seven documents: the plain one's answer, with
     // exactly what the cache's document adds to it.
     if let Some(plain) = linear_uncached(operation) {

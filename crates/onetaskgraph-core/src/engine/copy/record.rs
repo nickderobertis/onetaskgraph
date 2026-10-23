@@ -110,7 +110,7 @@ pub(super) fn digest(
         .iter()
         .map(|edge| {
             Value::Array(vec![
-                Value::String(edge.to.id().to_owned()),
+                Value::String(edge.to.to_string()),
                 as_json(serde_json::to_value(edge.to.kind)),
                 as_json(serde_json::to_value(edge.kind)),
             ])

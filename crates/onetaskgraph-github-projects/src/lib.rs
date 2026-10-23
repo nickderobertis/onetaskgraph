@@ -633,8 +633,8 @@ use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
     Capabilities, Classification, ClosedAs, Comment, CommentBody, CommentOrigin, Completion,
     ContradictedItem, Coverage, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind,
-    DependencySupport, Direction, Document, DocumentQuery, DocumentVersionCoverage, Health,
-    HeldTask, IssueHolding, IssueRef, ItemKind, ItemWrite, Label, LabelFilter, Location,
+    DependencySupport, Designator, Direction, Document, DocumentQuery, DocumentVersionCoverage,
+    Health, HeldTask, IssueHolding, IssueRef, ItemKind, ItemWrite, Label, LabelFilter, Location,
     MetadataKey, Metering, NativeId, NewComment, Page, PageRequest, Priority, Project,
     ProjectFilter, ProjectQuery, ProjectVersionCoverage, Repository, SecretResolver, SharedClock,
     SourceError, SourceName, SourcePlugin, Status, StatusCategory, StatusContradiction,
@@ -10386,10 +10386,12 @@ impl GitHubProjectsSource {
         let far_ends: Vec<(&DependencyEdge, &str, bool, Option<&Value>)> = depends_on
             .iter()
             .map(|edge| {
-                let same_source = edge
-                    .to
-                    .source()
-                    .is_none_or(|source| source == self.name.as_str());
+                // An opaque far end names another tracker, so it is never this board's own.
+                let same_source = edge.to.designator().is_none()
+                    && edge
+                        .to
+                        .source()
+                        .is_none_or(|source| source == self.name.as_str());
                 // A qualified id's source segment runs to its *first* colon — `GlobalId` and
                 // `DependencyEndpoint::source` both read it that way — and a native id may hold
                 // colons of its own, so the far end is everything after that one separator.
@@ -12439,6 +12441,12 @@ impl TaskSource for GitHubProjectsSource {
             )),
         })
     }
+    /// The board's own node id, digested: the one request reading its fields, or none when
+    /// this command has read them already.
+    async fn designator(&self) -> Result<Option<Designator>, SourceError> {
+        let board = self.board_fields().await?;
+        Ok(Some(Designator::of_backend(KIND, board.id.as_str())))
+    }
     async fn get_task(&self, id: &NativeId) -> Result<Option<Task>, SourceError> {
         self.item_by_id(id)
             .await?
@@ -13848,7 +13856,9 @@ fn record_edges(metadata: &mut BTreeMap<String, Value>, fallback: &[DependencyEd
             Value::Array(
                 fallback
                     .iter()
-                    .map(|edge| json!({"id":edge.to.id(),"kind":edge.to.kind}))
+                    .map(|edge| {
+                        serde_json::to_value(&edge.to).expect("an endpoint renders as JSON")
+                    })
                     .collect(),
             ),
         );

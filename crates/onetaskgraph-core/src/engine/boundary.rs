@@ -714,6 +714,153 @@ impl Engine {
         Ok(())
     }
 
+    /// `edges`, as a write to `destination` at the caller's own request holds them: each far
+    /// end naming a private item rewritten to the opaque form — its source's designator and its
+    /// native id — and every other refused before anything is written.
+    ///
+    /// A far end is private when its source is declared private, or — while the boundary is
+    /// active — when it reads as classified private (see [`Engine::reference_class`]). One
+    /// whose source has a designator is written opaque, once the id it names is confirmed as the
+    /// item's own native id by one read of it there: a prefixed human key, a URL or a slug would
+    /// carry what the item is called, and is refused with
+    /// [`EngineError::PrivateReferenceContent`] naming the form and never its value. One whose
+    /// source has no designator is refused as [`refuse_private_references`] refuses it. An end
+    /// already opaque, one in `destination` itself and every one written somewhere declared
+    /// private are held as given.
+    ///
+    /// [`refuse_private_references`]: Self::refuse_private_references
+    pub(crate) async fn publicly_named(
+        &self,
+        destination: &onetaskgraph_plugin_api::SourceName,
+        item: &str,
+        edges: Vec<onetaskgraph_plugin_api::DependencyEdge>,
+    ) -> Result<Vec<onetaskgraph_plugin_api::DependencyEdge>, EngineError> {
+        if self.declared(destination) == SourceVisibility::Private {
+            return Ok(edges);
+        }
+        let mut known = std::collections::HashMap::new();
+        let mut held = Vec::with_capacity(edges.len());
+        for mut edge in edges {
+            if edge.to.designator().is_some() || edge.to.is_native() {
+                held.push(edge);
+                continue;
+            }
+            let far: crate::GlobalId =
+                edge.to
+                    .id()
+                    .parse()
+                    .map_err(|_| EngineError::ReferenceUnclassified {
+                        item: item.to_owned(),
+                        reference: edge.to.id().to_owned(),
+                        destination: destination.to_string(),
+                        why: "it is not a qualified id".to_owned(),
+                    })?;
+            if &far.source == destination {
+                held.push(edge);
+                continue;
+            }
+            let declared = self.declared(&far.source) == SourceVisibility::Private;
+            let private = declared
+                || (self.boundary.active
+                    && match self.reference_class(&far, edge.to.kind, &mut known).await {
+                        Ok(class) => class == Classification::Private,
+                        Err(why) => {
+                            return Err(EngineError::ReferenceUnclassified {
+                                item: item.to_owned(),
+                                reference: far.to_string(),
+                                destination: destination.to_string(),
+                                why,
+                            });
+                        }
+                    });
+            if !private {
+                held.push(edge);
+                continue;
+            }
+            let designator = self.designator(&far.source).await.map_err(|error| {
+                EngineError::ReferenceUnclassified {
+                    item: item.to_owned(),
+                    reference: far.to_string(),
+                    destination: destination.to_string(),
+                    why: format!("its source could not say which tracker it is: {error}"),
+                }
+            })?;
+            let Some(designator) = designator else {
+                return Err(if declared {
+                    EngineError::PrivateReference {
+                        item: item.to_owned(),
+                        destination: destination.to_string(),
+                        named: far.source.to_string(),
+                    }
+                } else {
+                    EngineError::PrivateItemReference {
+                        item: item.to_owned(),
+                        destination: destination.to_string(),
+                        reference: far.to_string(),
+                    }
+                });
+            };
+            self.native_or_refused(destination, item, &far, edge.to.kind)
+                .await?;
+            edge.to = onetaskgraph_plugin_api::DependencyEndpoint::opaque(
+                designator,
+                far.native.0,
+                edge.to.kind,
+            )
+            .expect("a qualified id names a native id that is not empty");
+            held.push(edge);
+        }
+        Ok(held)
+    }
+
+    /// Refuse `far` unless it names a private item by its own native id: a URL and a prefixed
+    /// human key by their form alone, and anything else unless one read of it at its source
+    /// answers an item whose id is exactly that.
+    async fn native_or_refused(
+        &self,
+        destination: &onetaskgraph_plugin_api::SourceName,
+        item: &str,
+        far: &crate::GlobalId,
+        kind: onetaskgraph_plugin_api::ItemKind,
+    ) -> Result<(), EngineError> {
+        let id = far.native.as_str();
+        let refused = |form: &str| EngineError::PrivateReferenceContent {
+            item: item.to_owned(),
+            destination: destination.to_string(),
+            form: form.to_owned(),
+        };
+        if id.contains("://") || id.starts_with("www.") {
+            return Err(refused("a URL"));
+        }
+        if prefixed_key(id) {
+            return Err(refused("a prefixed key"));
+        }
+        let failed = |error| EngineError::SourceFailed {
+            name: far.source.to_string(),
+            error,
+        };
+        let source = self.readable(&far.source)?;
+        let read = match kind {
+            onetaskgraph_plugin_api::ItemKind::Task => source
+                .source()
+                .get_task(&far.native)
+                .await
+                .map_err(failed)?
+                .map(|task| task.id),
+            onetaskgraph_plugin_api::ItemKind::Project => source
+                .source()
+                .get_project(&far.native)
+                .await
+                .map_err(failed)?
+                .map(|project| project.id),
+        };
+        match read {
+            Some(native) if native == far.native => Ok(()),
+            _ if slug(id) => Err(refused("a slug")),
+            _ => Err(refused("an id that is not the item's native id")),
+        }
+    }
+
     /// Whether a write to `destination` withholds an id naming `far`: an item of another source
     /// declared private, or one of the items in `private` — those this command knows are
     /// classified private — while `destination` is not itself declared private.
@@ -1072,4 +1219,29 @@ pub(crate) enum Absent {
     /// A copy carries it as its source's opaque project id, and the item was already
     /// classified at its source.
     Carried,
+}
+
+/// Whether `id` reads as a human key with a team or project prefix: letters and digits, a
+/// dash, and a number — `ABC-123`.
+fn prefixed_key(id: &str) -> bool {
+    id.split_once('-').is_some_and(|(prefix, number)| {
+        prefix
+            .chars()
+            .next()
+            .is_some_and(|first| first.is_ascii_alphabetic())
+            && prefix.chars().all(|c| c.is_ascii_alphanumeric())
+            && !number.is_empty()
+            && number.chars().all(|c| c.is_ascii_digit())
+    })
+}
+
+/// Whether `id` reads as a slug: words of lower-case letters and digits joined by dashes.
+fn slug(id: &str) -> bool {
+    id.contains('-')
+        && id.split('-').all(|word| {
+            !word.is_empty()
+                && word
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        })
 }

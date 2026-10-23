@@ -85,12 +85,12 @@ use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
     Asset, AssetName, AssetWrite, AssetsWritten, Capabilities, Classification, Comment,
     CommentBody, CommentCopy, CommentOrigin, Cursor, DependencyEdge, DependencyEndpoint,
-    DependencyKind, DependencySupport, Direction, Document, DocumentQuery, Health, ItemKind,
-    ItemWrite, Label, LabelFilter, Location, MetadataKey, NativeId, NewComment, Page, PageRequest,
-    Priority, Project, ProjectFilter, ProjectQuery, Repository, SecretResolver, SourceError,
-    SourceName, SourcePlugin, Status, StatusCategory, Support, Task, TaskDetailRead, TaskQuery,
-    TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome, TextFields, TextQuery, UpdatedField,
-    Visibility, WriteSupport, WriteTarget,
+    DependencyKind, DependencySupport, Designator, Direction, Document, DocumentQuery, Health,
+    ItemKind, ItemWrite, Label, LabelFilter, Location, MetadataKey, NativeId, NewComment, Page,
+    PageRequest, Priority, Project, ProjectFilter, ProjectQuery, Repository, SecretResolver,
+    SourceError, SourceName, SourcePlugin, Status, StatusCategory, Support, Task, TaskDetailRead,
+    TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome, TextFields, TextQuery,
+    UpdatedField, Visibility, WriteSupport, WriteTarget,
 };
 use schemars::{Schema, schema_for};
 use serde::{Deserialize, Serialize};
@@ -348,6 +348,10 @@ enum Dependency {
         kind: EdgeKind,
         /// What the far end is, when it is not the same kind of item as the near one.
         item: Option<EndpointKind>,
+        /// The tracker an opaque far end is in, when it is one: `id` is then that tracker's
+        /// native id, and names nothing of this folder.
+        #[serde(default)]
+        designator: Option<Designator>,
     },
 }
 /// What an expanded dependency endpoint names.
@@ -838,13 +842,24 @@ impl LocalMdSource {
                     to: DependencyEndpoint::from_native(NativeId(id), item_kind),
                     kind: DependencyKind::Blocks,
                 }),
-                Dependency::Detailed { id, kind, item } => Ok(DependencyEdge {
+                Dependency::Detailed {
+                    id,
+                    kind,
+                    item,
+                    designator,
+                } => Ok(DependencyEdge {
                     from: DependencyEndpoint::from_native(from.clone(), item_kind),
-                    to: DependencyEndpoint::new(id, item.map_or(item_kind, Into::into)).map_err(
-                        |message| SourceError::Malformed {
-                            message: format!("{}: {message}", path.display()),
-                        },
-                    )?,
+                    to: match designator {
+                        Some(designator) => DependencyEndpoint::opaque(
+                            designator,
+                            id,
+                            item.map_or(item_kind, Into::into),
+                        ),
+                        None => DependencyEndpoint::new(id, item.map_or(item_kind, Into::into)),
+                    }
+                    .map_err(|message| SourceError::Malformed {
+                        message: format!("{}: {message}", path.display()),
+                    })?,
                     kind: match kind {
                         EdgeKind::Blocks => DependencyKind::Blocks,
                         EdgeKind::Related => DependencyKind::Related,
@@ -3185,6 +3200,10 @@ struct WrittenLabel {
 /// rather than left to the shorthand's defaults.
 #[derive(Serialize)]
 struct WrittenDependency {
+    /// First for an opaque far end, and absent for every other, so one is written exactly as
+    /// it was before this source held any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    designator: Option<Designator>,
     id: String,
     kind: &'static str,
     item: &'static str,
@@ -3194,6 +3213,7 @@ impl WrittenDependency {
     /// The far end of `edge`, as a front matter writes it.
     fn of(edge: &DependencyEdge) -> Self {
         Self {
+            designator: edge.to.designator().cloned(),
             id: edge.to.id().to_owned(),
             kind: match edge.kind {
                 DependencyKind::Blocks => "blocks",

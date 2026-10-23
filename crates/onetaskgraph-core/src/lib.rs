@@ -81,7 +81,10 @@ pub use global_id::GlobalId;
 ///
 /// [`TaskSource::update_task`]: onetaskgraph_plugin_api::TaskSource::update_task
 pub use onetaskgraph_plugin_api::UpdatedField;
-pub use plan::{PageToken, Predicate, QueryPlan, QueryResponse, SourceFailure, SourcePlan};
+pub use plan::{
+    PageToken, Predicate, QueryPlan, QueryResponse, SourceFailure, SourcePlan, Unanswered,
+    UnresolvedDesignator, UnresolvedReason,
+};
 pub use registry::{PluginKind, plugin_for, plugin_kinds, registry};
 pub use resolve::{
     ResolvedSource, UnavailableSource, resolve, resolve_available, resolve_available_with_clock,

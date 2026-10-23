@@ -4232,7 +4232,15 @@ impl Engine {
                     .source()
                     .status_as_written(ItemKind::Task, &task.status)
                     == held_task.status;
+            // A counterpart an earlier release landed lacks the mark a copy now leaves on a task
+            // whose edges are all on its record, and is written once more to carry it.
+            let marked = self.declared(&item.to) == crate::config::SourceVisibility::Private
+                || edges.len() != item.edges.len()
+                || held_task
+                    .metadata
+                    .contains_key(MetadataKey::EDGES_ON_RECORD_KEY);
             item.skipped = status_matches
+                && marked
                 && self.token_covers_a_copy(&item.source.source, item.carried.is_some())
                 && as_written
                 && skips(task, held, item.carried.is_some(), &item.to);
@@ -4908,10 +4916,12 @@ impl Engine {
         Ok(class)
     }
 
-    /// `edges` as a write to `destination` carries them: without one whose far end that write
-    /// withholds (see [`Engine::withholds`]) — an item of a source declared private, or one of
-    /// `private`, the items this copy carries classified private. One not resolvable yet stays
-    /// `None`.
+    /// `edges` as a write to `destination` carries them: one whose far end that write withholds
+    /// (see [`Engine::withholds`]) — an item of a source declared private, or one of `private`,
+    /// the items this copy carries classified private — written in the opaque form, its
+    /// source's designator and its native id, when [`preflight_copy`](Self::preflight_copy)
+    /// learned that source's designator, and left out when it has none. One not resolvable yet
+    /// stays `None`.
     fn shown_edges(
         &self,
         destination: &SourceName,
@@ -4920,11 +4930,19 @@ impl Engine {
     ) -> Vec<Option<DependencyEdge>> {
         edges
             .into_iter()
-            .filter(|edge| {
-                !edge.as_ref().is_some_and(|edge| {
-                    far_end(&edge.to, destination)
-                        .is_some_and(|far| self.withholds(destination, &far, private))
-                })
+            .filter_map(|edge| {
+                let Some(mut edge) = edge else {
+                    return Some(None);
+                };
+                let Some(far) = far_end(&edge.to, destination)
+                    .filter(|far| self.withholds(destination, far, private))
+                else {
+                    return Some(Some(edge));
+                };
+                let designator = self.known_designator(&far.source)?;
+                edge.to = DependencyEndpoint::opaque(designator, far.native.0, edge.to.kind)
+                    .expect("a far end's native id is not empty");
+                Some(Some(edge))
             })
             .collect()
     }
@@ -4970,6 +4988,7 @@ impl Engine {
         for item in &planned {
             note_private(running, item);
         }
+        self.learn_designators(&request.destination, &planned).await;
         if self.boundary_active() {
             for item in &planned {
                 self.classify_references(item, running).await?;
@@ -5003,6 +5022,32 @@ impl Engine {
             }
         }
         Ok(())
+    }
+
+    /// Ask, once, which tracker each source is that an edge of `planned` may be written to name
+    /// opaquely: every source declared private that one of their far ends is in, and every one
+    /// `destination` routes to. A source that cannot say is left unknown, and an edge to it is
+    /// withheld as it is for a source with no designator.
+    async fn learn_designators(&self, destination: &SourceName, planned: &[&Planned]) {
+        let mut asked: BTreeSet<SourceName> = BTreeSet::new();
+        let named = planned
+            .iter()
+            .filter(|item| self.declared(&item.to) != crate::config::SourceVisibility::Private)
+            .flat_map(|item| {
+                item.edges
+                    .iter()
+                    .filter_map(|edge| far_end(&edge.to, &item.source.source))
+                    .map(|far| far.source)
+            })
+            .chain(self.routes.reachable(destination))
+            .collect::<Vec<_>>();
+        for source in named {
+            if self.declared(&source) == crate::config::SourceVisibility::Private
+                && asked.insert(source.clone())
+            {
+                let _ = self.designator(&source).await;
+            }
+        }
     }
 
     /// Learn who may read each item outside the copy that `item`'s dependencies and deliveries
@@ -6039,6 +6084,27 @@ impl Engine {
         }
     }
 
+    /// Whether `held`, the counterpart of `item` at `destination`, is a task an earlier copy
+    /// recorded that lacks the mark a copy now leaves on one whose every edge — `edges`, as this
+    /// copy writes them — is on its own record.
+    fn unmarked(
+        &self,
+        destination: &ResolvedSource,
+        item: &Planned,
+        held: &Prior,
+        edges: &[DependencyEdge],
+    ) -> bool {
+        let Item::Task(held) = &held.item else {
+            return false;
+        };
+        self.declared(destination.name()) != crate::config::SourceVisibility::Private
+            && edges.len() == item.edges.len()
+            && held
+                .metadata
+                .contains_key(MetadataKey::COPIED_DESTINATION_VERSION_KEY)
+            && !held.metadata.contains_key(MetadataKey::EDGES_ON_RECORD_KEY)
+    }
+
     /// Write one planned item, or say what a dry run would have done.
     ///
     /// Answers with what the destination held there beforehand as well, which is what
@@ -6138,6 +6204,7 @@ impl Engine {
             && match (&target, prior.as_ref()) {
                 (Some(id), Some(held)) => {
                     stale_record(item, held, id, &project, &edges, delivers, destination)
+                        || self.unmarked(destination, item, held, &edges)
                 }
                 _ => false,
             };
@@ -6687,10 +6754,14 @@ impl Engine {
                 let Some(far) = far_end(&end.to, near) else {
                     continue;
                 };
+                // A far end whose source has a designator was written on the dependent itself,
+                // opaquely, so nothing is kept of it on the private side — and the entry an
+                // earlier copy kept there is taken off below, the dependent being decided.
                 if end.kind != DependencyKind::Blocks
                     || end.to.kind != ItemKind::Task
                     || self.declared(&far.source) != crate::config::SourceVisibility::Private
                     || !self.withholds(near, &far, &[])
+                    || self.known_designator(&far.source).is_some()
                 {
                     continue;
                 }
@@ -7096,6 +7167,25 @@ impl Engine {
         // carried the comments, and the digest of what it leaves here — when `stamping` says
         // this write records it; otherwise with whatever record the destination already holds,
         // which `outgoing` carried.
+        // Onto a destination not declared private, a task whose every edge is on its own record
+        // — none withheld and kept on a private source's side — says so, so a dependency read
+        // of it never asks a private source what it records of it.
+        if let Item::Task(task) = &mut landing
+            && self.declared(destination.name()) != crate::config::SourceVisibility::Private
+        {
+            // Only a task carrying a copy's record is ever read for what a private source keeps
+            // of it, so only one is marked.
+            let recorded = stamping.stamps(task, prior.as_ref())
+                || task
+                    .metadata
+                    .contains_key(MetadataKey::COPIED_DESTINATION_VERSION_KEY);
+            if edges.len() != item.edges.len() {
+                task.metadata.remove(MetadataKey::EDGES_ON_RECORD_KEY);
+            } else if recorded {
+                task.metadata
+                    .insert(MetadataKey::EDGES_ON_RECORD_KEY.to_owned(), Value::from(1));
+            }
+        }
         if let Item::Task(task) = &mut landing
             && stamping.stamps(task, prior.as_ref())
         {
@@ -7247,7 +7337,7 @@ impl Engine {
     }
 
     /// A configured source that built, for reading an item out of.
-    fn readable(&self, name: &SourceName) -> Result<&ResolvedSource, EngineError> {
+    pub(super) fn readable(&self, name: &SourceName) -> Result<&ResolvedSource, EngineError> {
         let name = self.known(name)?;
         if let Some(unavailable) = self.unavailable().find(|source| source.name() == &name) {
             return Err(EngineError::SourceRefused {
@@ -8429,6 +8519,7 @@ fn carried(
         MetadataKey::MEMBERS_KEY,
         MetadataKey::MEMBER_OF_KEY,
         MetadataKey::ASSETS_KEY,
+        MetadataKey::EDGES_ON_RECORD_KEY,
         dependents::DEPENDED_ON_BY_KEY,
     ]
     .into_iter()
@@ -8696,7 +8787,7 @@ fn same_edges(held: &[DependencyEdge], outgoing: &[DependencyEdge]) -> bool {
     let ends = |edges: &[DependencyEdge]| {
         let mut ends: Vec<(String, ItemKind, DependencyKind)> = edges
             .iter()
-            .map(|edge| (edge.to.id().to_owned(), edge.to.kind, edge.kind))
+            .map(|edge| (edge.to.to_string(), edge.to.kind, edge.kind))
             .collect();
         ends.sort_by(|left, right| left.0.cmp(&right.0));
         ends
@@ -8720,6 +8811,11 @@ fn mapped_edges(
     edges
         .iter()
         .map(|edge| {
+            // An opaque far end names a tracker rather than a source, and is carried as it was
+            // read: nothing this copy lands is what it names.
+            if edge.to.designator().is_some() {
+                return Some(edge.clone());
+            }
             let far = GlobalId::new(origin.clone(), NativeId(edge.to.id().to_owned()));
             let qualified = edge
                 .to
@@ -8872,8 +8968,11 @@ fn note_private(running: &mut Running, item: &Planned) {
 }
 
 /// The item `endpoint` names, read from an item of `origin`: a native id names one of
-/// `origin`'s own.
+/// `origin`'s own, and an opaque one names none this configuration can say.
 fn far_end(endpoint: &DependencyEndpoint, origin: &SourceName) -> Option<GlobalId> {
+    if endpoint.designator().is_some() {
+        return None;
+    }
     if endpoint.is_qualified() {
         endpoint.id().parse().ok()
     } else {
@@ -8913,7 +9012,7 @@ fn unrecorded_far_end(item: &Planned, unrecorded: &[GlobalId]) -> Result<(), Eng
         return Ok(());
     }
     for edge in &item.edges {
-        if edge.to.is_qualified() {
+        if !edge.to.is_native() {
             continue;
         }
         let far = GlobalId::new(

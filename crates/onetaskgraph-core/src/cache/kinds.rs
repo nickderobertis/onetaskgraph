@@ -35,8 +35,9 @@ use super::{SourceCache, digest};
 ///
 /// Version 2 added a task's reverse edges and a project's forward and reverse edges as kinds of
 /// their own; what version 1 kept is left in its own directories, unread, for
-/// `cache clear` of that release.
-pub const KIND_ENTRY_SCHEMA: u32 = 2;
+/// `cache clear` of that release. Version 3 admits the opaque form of a dependency endpoint
+/// among the edges they keep, which an earlier release would misread as a native id.
+pub const KIND_ENTRY_SCHEMA: u32 = 3;
 
 /// Which kind an entry is: written into it and held to the directory it is read from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

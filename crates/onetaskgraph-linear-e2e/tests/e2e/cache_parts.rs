@@ -281,7 +281,7 @@ fn a_comment_or_edge_read_its_token_cannot_vouch_for_is_never_kept_or_served() {
                 }
             }),
             REVERSE_EDGES,
-            "reverse-edges-v2",
+            "reverse-edges-v3",
             "/inverseRelations/pageInfo/hasNextPage",
         ),
         (
@@ -292,7 +292,7 @@ fn a_comment_or_edge_read_its_token_cannot_vouch_for_is_never_kept_or_served() {
                 }
             }),
             PROJECT_EDGES,
-            "project-edges-v2",
+            "project-edges-v3",
             "/relations/pageInfo/hasNextPage",
         ),
         (
@@ -303,7 +303,7 @@ fn a_comment_or_edge_read_its_token_cannot_vouch_for_is_never_kept_or_served() {
                 }
             }),
             PROJECT_REVERSE_EDGES,
-            "project-reverse-edges-v2",
+            "project-reverse-edges-v3",
             "/inverseRelations/pageInfo/hasNextPage",
         ),
     ];
@@ -720,10 +720,10 @@ fn every_relation_write_takes_the_edges_entries_it_can_change_out_of_service() {
         let cached = Cached::new(held());
         let pin = filled(&cached, &REVERSE_EDGES);
         let dir = cached.dir().expect("a cache");
-        assert!(entry(&dir, "reverse-edges-v2", "L-2").exists());
+        assert!(entry(&dir, "reverse-edges-v3", "L-2").exists());
         cached.ok(&write);
         assert!(
-            !entry(&dir, "reverse-edges-v2", "L-2").exists(),
+            !entry(&dir, "reverse-edges-v3", "L-2").exists(),
             "`{}` takes L-2's reverse edges out of service",
             write.join(" ")
         );
@@ -783,8 +783,8 @@ fn every_relation_write_takes_the_edges_entries_it_can_change_out_of_service() {
     let pin = filled(&cached, &PROJECT_EDGES);
     let reverse_pin = filled(&cached, &PROJECT_REVERSE_EDGES);
     let dir = cached.dir().expect("a cache");
-    assert!(entry(&dir, "project-edges-v2", "P-1").exists());
-    assert!(entry(&dir, "project-reverse-edges-v2", "P-2").exists());
+    assert!(entry(&dir, "project-edges-v3", "P-1").exists());
+    assert!(entry(&dir, "project-reverse-edges-v3", "P-2").exists());
     let (back, _) = cached.ok(&[
         "project",
         "copy",
@@ -796,14 +796,14 @@ fn every_relation_write_takes_the_edges_entries_it_can_change_out_of_service() {
     ]);
     assert_eq!(back["items"][0]["destination"], "linear:P-1", "{back}");
     assert!(
-        !entry(&dir, "project-edges-v2", "P-1").exists(),
+        !entry(&dir, "project-edges-v3", "P-1").exists(),
         "the project write takes P-1's forward edges out of service"
     );
     let (edges, sent) = cached.ok(&strs(&PROJECT_EDGES.with(&pin)));
     assert_eq!(sent.len(), 1, "the read after the write is Linear's");
     assert_eq!(edges["items"], json!([]), "{edges}");
     assert!(
-        !entry(&dir, "project-reverse-edges-v2", "P-2").exists(),
+        !entry(&dir, "project-reverse-edges-v3", "P-2").exists(),
         "and the far project's reverse edges, which that relation was recorded on too"
     );
     let (depended, sent) = cached.ok(&strs(&PROJECT_REVERSE_EDGES.with(&reverse_pin)));
@@ -849,10 +849,10 @@ fn a_copy_taken_back_takes_every_edges_entry_its_deletes_can_change_out_of_servi
     filled(&cached, &REVERSE_EDGES);
     let project_pin = filled(&cached, &PROJECT_EDGES);
     let dir = cached.dir().expect("a cache");
-    assert!(entry(&dir, "reverse-edges-v2", "L-2").exists());
-    assert!(entry(&dir, "project-edges-v2", "P-1").exists());
+    assert!(entry(&dir, "reverse-edges-v3", "L-2").exists());
+    assert!(entry(&dir, "project-edges-v3", "P-1").exists());
     filled(&cached, &PROJECT_REVERSE_EDGES);
-    assert!(entry(&dir, "project-reverse-edges-v2", "P-2").exists());
+    assert!(entry(&dir, "project-reverse-edges-v3", "P-2").exists());
 
     let output = cached.run(&["project", "copy", "notes:NP", "--to", "linear", "--json"]);
     assert_ne!(
@@ -873,16 +873,16 @@ fn a_copy_taken_back_takes_every_edges_entry_its_deletes_can_change_out_of_servi
         );
     }
     assert!(
-        !entry(&dir, "project-edges-v2", "P-1").exists(),
+        !entry(&dir, "project-edges-v3", "P-1").exists(),
         "a project deleted can be another project's far end, so every project's forward edges \
          are taken out of service"
     );
     assert!(
-        !entry(&dir, "reverse-edges-v2", "L-2").exists(),
+        !entry(&dir, "reverse-edges-v3", "L-2").exists(),
         "and every task's reverse edges"
     );
     assert!(
-        !entry(&dir, "project-reverse-edges-v2", "P-2").exists(),
+        !entry(&dir, "project-reverse-edges-v3", "P-2").exists(),
         "and every project's reverse edges"
     );
     let (_, sent) = cached.ok(&strs(&PROJECT_EDGES.with(&project_pin)));
@@ -932,8 +932,8 @@ fn a_relation_write_whose_far_edges_entry_cannot_be_retired_is_refused_unsent() 
     use std::os::unix::fs::PermissionsExt as _;
     let cached = Cached::new(held());
     filled(&cached, &REVERSE_EDGES);
-    let dir = cached.dir().expect("a cache").join("reverse-edges-v2");
-    let path = entry(&cached.dir().expect("a cache"), "reverse-edges-v2", "L-2");
+    let dir = cached.dir().expect("a cache").join("reverse-edges-v3");
+    let path = entry(&cached.dir().expect("a cache"), "reverse-edges-v3", "L-2");
     // The entry as a symlink to its own bytes, in a directory that will not let it go: it can be
     // neither removed nor emptied, and every process still reads it.
     let held_bytes = dir.join("held-elsewhere");
@@ -1016,7 +1016,7 @@ fn a_project_edge_walk_is_kept_only_when_read_whole_in_one_command() {
     assert!(rest.to_string().contains("notes:NP-1"), "{rest}");
     let kept = cached
         .dir()
-        .map(|dir| walk(&dir.join("project-edges-v2")))
+        .map(|dir| walk(&dir.join("project-edges-v3")))
         .unwrap_or_default();
     assert!(
         kept.is_empty(),
@@ -1036,9 +1036,9 @@ fn cache_clear_reclaims_reverse_and_project_edge_entries_and_counts_them() {
     let entries = |directory: &str| walk(&dir.join(directory)).len();
     assert_eq!(
         (
-            entries("reverse-edges-v2"),
-            entries("project-edges-v2"),
-            entries("project-reverse-edges-v2")
+            entries("reverse-edges-v3"),
+            entries("project-edges-v3"),
+            entries("project-reverse-edges-v3")
         ),
         (1, 1, 1)
     );
@@ -1049,10 +1049,10 @@ fn cache_clear_reclaims_reverse_and_project_edge_entries_and_counts_them() {
         cleared["cleared"][0]["entries"].as_u64() >= Some(3),
         "all three are counted: {cleared}"
     );
-    assert_eq!(entries("project-edges-v2"), 0);
-    assert_eq!(entries("project-reverse-edges-v2"), 0);
+    assert_eq!(entries("project-edges-v3"), 0);
+    assert_eq!(entries("project-reverse-edges-v3"), 0);
     assert_eq!(
-        walk(&dir.join("reverse-edges-v2")),
+        walk(&dir.join("reverse-edges-v3")),
         [foreign],
         "only this store's entries are removed"
     );
@@ -1116,7 +1116,7 @@ fn a_task_created_from_a_template_retires_the_far_ends_reverse_edges() {
     let cached = Cached::new(held());
     let pin = filled(&cached, &REVERSE_EDGES);
     let dir = cached.dir().expect("a cache");
-    assert!(entry(&dir, "reverse-edges-v2", "L-2").exists());
+    assert!(entry(&dir, "reverse-edges-v3", "L-2").exists());
     let template = cached.sandbox.subdirectory("inputs").join("note.md");
     std::fs::write(&template, "A rendered body.\n").expect("a template");
     let template = template.display().to_string();
@@ -1136,7 +1136,7 @@ fn a_task_created_from_a_template_retires_the_far_ends_reverse_edges() {
         "--json",
     ]);
     assert!(
-        !entry(&dir, "reverse-edges-v2", "L-2").exists(),
+        !entry(&dir, "reverse-edges-v3", "L-2").exists(),
         "the rendered create takes L-2's reverse edges out of service: {created}"
     );
     let (edges, sent) = cached.ok(&strs(&REVERSE_EDGES.with(&pin)));
@@ -1178,7 +1178,7 @@ fn a_project_edge_walk_read_across_a_change_between_its_pages_is_never_kept() {
     );
     let kept = cached
         .dir()
-        .map(|dir| walk(&dir.join("project-edges-v2")))
+        .map(|dir| walk(&dir.join("project-edges-v3")))
         .unwrap_or_default();
     assert!(
         !kept.iter().any(|path| holds(path, "P-1")),
@@ -1406,7 +1406,7 @@ fn a_relation_write_retires_only_this_stores_edges_entries_and_is_refused_when_i
     // A file in the directory that is not one of this store's entries stays where it is.
     let cached = Cached::new(held());
     filled(&cached, &REVERSE_EDGES);
-    let directory = cached.dir().expect("a cache").join("reverse-edges-v2");
+    let directory = cached.dir().expect("a cache").join("reverse-edges-v3");
     let foreign = directory.join("not-ours.json");
     std::fs::write(&foreign, b"{\"kind\": \"something else\"}").expect("a foreign file");
     cached.ok(&write);
@@ -1423,7 +1423,7 @@ fn a_relation_write_retires_only_this_stores_edges_entries_and_is_refused_when_i
         use std::os::unix::fs::PermissionsExt as _;
         let cached = Cached::new(held());
         filled(&cached, &REVERSE_EDGES);
-        let directory = cached.dir().expect("a cache").join("reverse-edges-v2");
+        let directory = cached.dir().expect("a cache").join("reverse-edges-v3");
         let held = walk(&directory);
         assert!(!held.is_empty(), "the read filled an entry: {held:?}");
         for path in &held {
@@ -1446,7 +1446,7 @@ fn a_relation_write_retires_only_this_stores_edges_entries_and_is_refused_when_i
         use std::os::unix::fs::PermissionsExt as _;
         let cached = Cached::new(held());
         filled(&cached, &REVERSE_EDGES);
-        let directory = cached.dir().expect("a cache").join("reverse-edges-v2");
+        let directory = cached.dir().expect("a cache").join("reverse-edges-v3");
         std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o000))
             .expect("unlistable");
         if std::fs::read_dir(&directory).is_ok() {
@@ -1477,10 +1477,10 @@ fn an_edges_entry_under_another_kinds_path_is_never_served() {
     let pin = filled(&cached, &PROJECT_EDGES);
     let dir = cached.dir().expect("a cache");
     // P-1's forward edges, put where P-1's reverse edges would be kept.
-    std::fs::create_dir_all(dir.join("project-reverse-edges-v2")).expect("a directory");
+    std::fs::create_dir_all(dir.join("project-reverse-edges-v3")).expect("a directory");
     std::fs::copy(
-        entry(&dir, "project-edges-v2", "P-1"),
-        entry(&dir, "project-reverse-edges-v2", "P-1"),
+        entry(&dir, "project-edges-v3", "P-1"),
+        entry(&dir, "project-reverse-edges-v3", "P-1"),
     )
     .expect("copied");
     let reverse = words("project deps linear:P-1 --direction depended-on-by", &pin);

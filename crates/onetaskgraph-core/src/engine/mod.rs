@@ -23,6 +23,7 @@ mod comment;
 mod copy;
 mod delivery;
 mod dependents;
+mod designators;
 pub use dependents::Completeness;
 mod fetch;
 mod graph;
@@ -51,7 +52,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::GlobalId;
 use crate::config::{Config, Placement, Routes};
-use crate::plan::{PageToken, Predicate, QueryPlan, QueryResponse, SourceFailure, SourcePlan};
+use crate::plan::{
+    PageToken, Predicate, QueryPlan, QueryResponse, SourceFailure, SourcePlan, Unanswered,
+};
 use crate::resolve::{ResolvedSource, UnavailableSource, resolve_available_with_clock};
 
 use fetch::{Fetched, Stream, fits, merge, unrepeated, walk};
@@ -484,6 +487,27 @@ pub enum EngineError {
         destination: String,
         /// The private source a reference names.
         named: String,
+    },
+
+    /// A write to a source not declared private would name a private item by something other
+    /// than its native id: a prefixed human key, a URL or a slug, or an endpoint object
+    /// carrying a key beyond `designator`, `id` and `kind`. Only a native id can be written
+    /// where a private item must not be named, in the opaque form, because only it conveys
+    /// nothing; this refusal names the form, never what it held.
+    #[error(
+        "{item} cannot be written to source {destination}: it names a private item by {form}, \
+         which would carry what that item is called where it must not be named, so nothing was \
+         written\n\
+         next: name the item by its qualified native id, `<source>:<native id>`, which is \
+         written as an opaque designator and id, or take the dependency off."
+    )]
+    PrivateReferenceContent {
+        /// How the write named the item being written.
+        item: String,
+        /// The configured name of the destination.
+        destination: String,
+        /// The form of the reference: which key, or which kind of id — never its value.
+        form: String,
     },
 
     /// A write to a source not declared private would name an item classified private, though
@@ -1555,6 +1579,8 @@ pub struct Engine {
     caches: BTreeMap<SourceName, std::sync::Arc<crate::cache::SourceCache>>,
     /// The destination version a running `task copy --expect` names, while it runs.
     copy_expect: std::sync::Mutex<Option<String>>,
+    /// Which tracker each source reads, as its configuration declares and its plugin answers.
+    designators: designators::Designators,
 }
 
 impl Engine {
@@ -1613,6 +1639,7 @@ impl Engine {
             &config.visibilities(),
         ));
         engine.caches = caches;
+        engine.designators = designators::Designators::configured(config);
         engine
     }
 
@@ -1628,6 +1655,7 @@ impl Engine {
             boundary: boundary::Boundary::default(),
             caches: BTreeMap::new(),
             copy_expect: std::sync::Mutex::new(None),
+            designators: designators::Designators::default(),
         }
     }
 
@@ -2400,7 +2428,9 @@ impl Engine {
     ) -> Result<QueryResponse<QualifiedEdge>, EngineError> {
         let name = self.known(&request.id.source)?;
         let recording = match (entity, request.direction) {
-            (Entity::Task, Direction::DependsOn) => self.recording_sources(&name),
+            (Entity::Task, Direction::DependsOn) => {
+                self.recording_sources_for(&name, &request.id.native).await
+            }
             _ => Vec::new(),
         };
         let records_its_own = entity == Entity::Task
@@ -2498,6 +2528,22 @@ impl Engine {
                 Outcomes::default()
             });
         }
+        // An opaque far end is answered as the source its designator is, and one no configured
+        // source is leaves the page and is named instead.
+        let mut resolving = designators::Resolving::default();
+        for fetched in walked.iter_mut().flatten() {
+            let mut kept = Vec::with_capacity(fetched.rows.len());
+            for mut row in std::mem::take(&mut fetched.rows) {
+                if let Some(to) = self
+                    .resolve_endpoint(row.item.to.clone(), &mut resolving)
+                    .await
+                {
+                    row.item.to = to;
+                    kept.push(row);
+                }
+            }
+            fetched.rows = kept;
+        }
         let ready: Vec<&ResolvedSource> = streams.iter().map(|(stream, _, _)| *stream).collect();
         let kinds: Vec<StreamKind> = streams.iter().map(|(_, kind, _)| *kind).collect();
 
@@ -2520,8 +2566,10 @@ impl Engine {
                 .into_iter()
                 .partition(|failure| self.records_unasked(&name, failure));
             response.errors = failed;
-            response.unanswered = unasked;
+            response.unanswered = unasked.into_iter().map(Unanswered::Source).collect();
         }
+        response.errors.extend(resolving.failed);
+        response.unanswered.extend(resolving.unanswered);
         Ok(response)
     }
 

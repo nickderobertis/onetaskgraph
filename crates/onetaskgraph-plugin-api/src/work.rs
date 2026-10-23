@@ -1290,9 +1290,11 @@ impl std::fmt::Display for DependencyEndpoint {
     }
 }
 
+/// An opaque endpoint names an item of another tracker, so it never equals a native id of the
+/// source comparing it, whatever id it holds.
 impl PartialEq<NativeId> for DependencyEndpoint {
     fn eq(&self, other: &NativeId) -> bool {
-        self.id() == other.0
+        self.designator().is_none() && self.id() == other.0
     }
 }
 

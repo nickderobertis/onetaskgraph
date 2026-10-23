@@ -83,9 +83,19 @@ pub struct SourceConfig {
     routes: Vec<Route>,
     visibility: SourceVisibility,
     cache: SourceCacheConfig,
+    public_alias: Option<onetaskgraph_plugin_api::Designator>,
 }
 
 impl SourceConfig {
+    /// The designator `public_alias` declares, `alias/<public_alias>`, for a source whose
+    /// backend has no opaque identifier of its own: every host's configuration of the same
+    /// tracker declares the same alias, so an opaque edge written under one host's name for
+    /// it resolves under another's. `None` when the key is left off.
+    #[must_use]
+    pub fn public_alias(&self) -> Option<&onetaskgraph_plugin_api::Designator> {
+        self.public_alias.as_ref()
+    }
+
     /// Whether, and where, the store keeps a local cache of this source's tasks.
     #[must_use]
     pub fn cache(&self) -> &SourceCacheConfig {
@@ -165,6 +175,35 @@ struct SourceShape {
     visibility: SourceVisibility,
     #[serde(default)]
     cache: SourceCacheConfig,
+    /// Read by [`public_alias`] rather than by serde, so a refusal names the pattern and never
+    /// repeats the value.
+    #[serde(default)]
+    public_alias: Option<Value>,
+}
+
+/// The designator a source's `public_alias` declares, refused when it is not a string matching
+/// `^[A-Za-z0-9_-]{16,64}$`.
+fn public_alias(
+    key: &str,
+    alias: Option<&Value>,
+) -> Result<Option<onetaskgraph_plugin_api::Designator>, ConfigError> {
+    let Some(alias) = alias else {
+        return Ok(None);
+    };
+    let refused = |why: String| {
+        ConfigError::setting(
+            format!("{key}.public_alias"),
+            why,
+            "give it 16 to 64 of A-Z, a-z, 0-9, `_` and `-`, the same on every host that \
+             configures this tracker, or remove it.",
+        )
+    };
+    let Some(alias) = alias.as_str() else {
+        return Err(refused("a public_alias is a string".to_owned()));
+    };
+    onetaskgraph_plugin_api::Designator::of_alias(alias)
+        .map(Some)
+        .map_err(refused)
 }
 
 /// Whether the store keeps a local cache of one source's tasks, and where: `cache` beside
@@ -419,6 +458,7 @@ impl Config {
                 continue;
             };
             let routes = routes::parse(&name, &source.routes)?;
+            let public_alias = public_alias(&key, source.public_alias.as_ref())?;
             sources.insert(
                 name,
                 SourceConfig {
@@ -428,6 +468,7 @@ impl Config {
                     routes,
                     visibility: source.visibility,
                     cache: source.cache,
+                    public_alias,
                 },
             );
         }
