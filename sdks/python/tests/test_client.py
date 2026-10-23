@@ -662,15 +662,14 @@ def test_a_dependency_read_answers_without_a_private_source_it_cannot_authentica
     assert [(edge.from_.root, edge.to.root) for edge in graph.edges] == [("vault:V-1", "work:T-1")]
     assert graph.unanswered is not None
     # Each entry is a source not asked, or a designator no source is: here, a source.
-    assert [(entry.root.source.root, entry.root.error.root.kind) for entry in graph.unanswered] == [
-        ("ledger", "auth")
-    ]
+    unasked = [entry.model_dump(mode="json") for entry in graph.unanswered]
+    assert [(entry["source"], entry["error"]["kind"]) for entry in unasked] == [("ledger", "auth")]
     deps = run(client.task_deps(id="work:T-1"))
     assert [(edge.from_.id.root, edge.to.id.root) for edge in deps.items] == [
         ("work:T-1", "vault:V-1")
     ]
     assert deps.errors == []
-    assert [entry.root.source.root for entry in deps.unanswered] == ["ledger"]
+    assert [entry.model_dump(mode="json")["source"] for entry in deps.unanswered] == ["ledger"]
 
     with pytest.raises(OnetaskgraphError) as refused:
         run(client.project_graph(id="work:P-1", complete=True))
