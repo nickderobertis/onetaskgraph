@@ -50,6 +50,10 @@ const SIGXFSZ: i32 = 25;
 /// The writer's file size limit, in `ulimit -f` blocks: 512 bytes under a POSIX `sh`, 1024
 /// under bash, so 4 or 8 KiB — far below every record, far above every front matter.
 const LIMIT_BLOCKS: u32 = 8;
+/// A limit, in the same blocks, of 32 or 64 KiB: above every record, below [`ASSET_BYTES`].
+const ROOMY_BLOCKS: u32 = 64;
+/// The size of the asset a write carrying assets stores: past either limit.
+const ASSET_BYTES: usize = 128 * 1024;
 
 fn previous() -> String {
     filler("previous")
@@ -162,7 +166,43 @@ const CASES: &[&str] = &[
     "write_comment_copy",
     // `install`: a record put back after its assets would not land.
     "write_task_with_assets",
+    "write_document_with_assets",
 ];
+
+/// The record a case writing assets writes, by its kind and id; `None` for every other case.
+fn asset_record(case: &str) -> Option<(&'static str, &'static str)> {
+    match case {
+        "write_task_with_assets" => Some(("task", "alpha")),
+        "write_document_with_assets" => Some(("document", "brief")),
+        _ => None,
+    }
+}
+
+/// The content the record `asset_record` names reads with, through the source.
+fn record_content(root: &Path, (kind, record): (&str, &str)) -> Result<Option<String>, String> {
+    let reader = source(root);
+    runtime()
+        .block_on(async {
+            Ok(match kind {
+                "task" => reader.get_task(&id(record)).await?.and_then(|t| t.content),
+                _ => reader
+                    .get_document(&id(record))
+                    .await?
+                    .and_then(|d| d.content),
+            })
+        })
+        .map_err(|error: onetaskgraph_plugin_api::SourceError| format!("{error:?}"))
+}
+
+fn big_asset() -> AssetWrite {
+    AssetWrite {
+        assets: vec![AssetPayload::of(
+            AssetName::new("big.png").unwrap(),
+            vec![7; ASSET_BYTES],
+        )],
+        recorded_assets: None,
+    }
+}
 
 fn write(case: &str, root: &Path) -> Result<(), String> {
     let source = source(root);
@@ -200,15 +240,8 @@ fn write(case: &str, root: &Path) -> Result<(), String> {
                     source.write_task_rendered(&write(item), &answers()).await?;
                 } else if case == "write_task_with_assets" {
                     item.content = Some(SMALL.to_owned());
-                    let assets = AssetWrite {
-                        assets: vec![AssetPayload::of(
-                            AssetName::new("big.png").unwrap(),
-                            vec![7; 64 * 1024],
-                        )],
-                        recorded_assets: None,
-                    };
                     source
-                        .write_task_with_assets(&write(item), None, &assets)
+                        .write_task_with_assets(&write(item), None, &big_asset())
                         .await?;
                 } else {
                     source.write_task(&write(item)).await?;
@@ -235,9 +268,12 @@ fn write(case: &str, root: &Path) -> Result<(), String> {
                     source.write_project(&write).await?;
                 }
             }
-            "write_document" | "write_document_rendered" => {
+            "write_document" | "write_document_rendered" | "write_document_with_assets" => {
                 let mut item = document().await?;
                 item.content = Some(new.clone());
+                if case == "write_document_with_assets" {
+                    item.content = Some(SMALL.to_owned());
+                }
                 let mut write = ItemWrite {
                     target: Some(id("brief")),
                     item,
@@ -246,6 +282,10 @@ fn write(case: &str, root: &Path) -> Result<(), String> {
                 if case == "write_document_rendered" {
                     rendered(&mut write.item.metadata);
                     source.write_document_rendered(&write, &answers()).await?;
+                } else if case == "write_document_with_assets" {
+                    source
+                        .write_document_with_assets(&write, None, &big_asset())
+                        .await?;
                 } else {
                     source.write_document(&write).await?;
                 }
@@ -397,7 +437,7 @@ enum Stop {
 
 /// Run the writer of `case` over `root` under the limit, stopped as `stop` says, and answer
 /// with a refusal when it was not stopped that way.
-fn stopped(case: &str, root: &Path, stop: Stop) -> Result<(), String> {
+fn stopped(case: &str, root: &Path, stop: Stop, blocks: u32) -> Result<(), String> {
     let trap = match stop {
         Stop::Killed => "",
         Stop::Failed => "trap '' XFSZ; ",
@@ -405,7 +445,7 @@ fn stopped(case: &str, root: &Path, stop: Stop) -> Result<(), String> {
     let output = Command::new("sh")
         .arg("-c")
         .arg(format!(
-            "ulimit -c 0; ulimit -f {LIMIT_BLOCKS}; {trap}exec \"$0\" \"$@\""
+            "ulimit -c 0; ulimit -f {blocks}; {trap}exec \"$0\" \"$@\""
         ))
         .arg(std::env::current_exe().expect("this test binary"))
         .args(["--exact", WRITER, "--test-threads=1", "--nocapture"])
@@ -557,7 +597,7 @@ fn every_case(
         .filter_map(|case| {
             let root = folder();
             let before = files(root.path());
-            stopped(case, root.path(), stop)
+            stopped(case, root.path(), stop, LIMIT_BLOCKS)
                 .and_then(|()| then(case, root.path(), &before))
                 .err()
         })
@@ -571,10 +611,27 @@ fn a_writer_stopped_part_way_shows_a_reader_only_whole_records() {
         whole(root, case)?;
         // The writer died inside its staging file, which is still there for the listing above
         // to have passed over; one with none was killed somewhere that holds no reader to this.
-        if files(root)
-            .keys()
-            .any(|path| path.to_string_lossy().ends_with(STAGING_SUFFIX))
-        {
+        let staging: Vec<PathBuf> = files(root)
+            .into_keys()
+            .filter(|path| path.to_string_lossy().ends_with(STAGING_SUFFIX))
+            .collect();
+        // A write carrying assets lands its small record whole and dies staging the asset,
+        // before `install` could put the record back: this mode holds the asset write, not the
+        // record's restoration, which the failing test below is what stops part-way.
+        if let Some(record) = asset_record(case) {
+            if record_content(root, record)?.as_deref() != Some(SMALL) {
+                return Err(format!("{case}: the record did not land before its asset"));
+            }
+            if !staging.iter().all(|path| {
+                path.parent()
+                    .is_some_and(|parent| parent.extension() == Some("assets".as_ref()))
+            }) {
+                return Err(format!(
+                    "{case}: the writer died outside its asset: {staging:?}"
+                ));
+            }
+        }
+        if !staging.is_empty() {
             Ok(())
         } else {
             Err(format!(
@@ -597,11 +654,11 @@ fn a_write_failing_part_way_leaves_the_previous_record_and_no_staging_file() {
                 "{case}: a staging file is left behind: {staging:?}"
             ));
         }
-        // A write carrying assets lands its record, small, before its asset fails; the record
-        // put back is then the write the limit stops, so the record it leaves is the one that
-        // write found — the small one — and the asset directory it made is taken back.
-        let leaves_previous = case != "write_task_with_assets";
-        if leaves_previous && &after != before {
+        // A write carrying assets lands its record, small, before its asset fails; putting back
+        // the record it replaced is then the write the limit stops, so the record left is the
+        // complete one that restoration found — the small one.
+        let restored = asset_record(case);
+        if restored.is_none() && &after != before {
             let changed: Vec<_> = after
                 .keys()
                 .chain(before.keys())
@@ -611,15 +668,41 @@ fn a_write_failing_part_way_leaves_the_previous_record_and_no_staging_file() {
                 "{case}: the failed write did not leave the folder as it was: {changed:?} changed"
             ));
         }
-        if !leaves_previous {
-            let task = runtime()
-                .block_on(source(root).get_task(&id("alpha")))
-                .map_err(|error| format!("{case}: {error:?}"))?
-                .ok_or_else(|| format!("{case}: the task is gone"))?;
-            if task.content.as_deref() != Some(SMALL) {
-                return Err(format!("{case}: the record is not the one the write found"));
-            }
+        if let Some(record) = restored
+            && record_content(root, record)?.as_deref() != Some(SMALL)
+        {
+            return Err(format!(
+                "{case}: the record is not the one the restoration found"
+            ));
         }
         Ok(())
     });
+}
+
+/// The control for the restoration the test above stops: under a limit the record fits and the
+/// asset does not, the same write puts the previous record back whole — so the small record
+/// left under the tighter limit is the restoration stopped part-way, not one never tried.
+#[test]
+fn an_asset_that_fails_alone_has_its_record_put_back() {
+    let refused: Vec<String> = CASES
+        .iter()
+        .filter_map(|case| Some((case, asset_record(case)?)))
+        .filter_map(|(case, record)| {
+            let root = folder();
+            stopped(case, root.path(), Stop::Failed, ROOMY_BLOCKS)
+                .and_then(|()| whole(root.path(), case))
+                .and_then(|()| {
+                    let content = record_content(root.path(), record)?;
+                    if content.as_deref().map(|c| c.trim_end_matches('\n'))
+                        == Some(previous().trim_end_matches('\n'))
+                    {
+                        Ok(())
+                    } else {
+                        Err(format!("{case}: the previous record was not put back"))
+                    }
+                })
+                .err()
+        })
+        .collect();
+    assert!(refused.is_empty(), "{}", refused.join("\n"));
 }
