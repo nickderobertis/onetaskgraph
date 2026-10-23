@@ -100,6 +100,13 @@ mod document_store;
 // cannot sit behind a plugin crate's edge, which AGENTS.md forbids depending on the engine at
 // any depth; the protocol's half is proven in `onetaskgraph-core`'s own `tests/subprocess.rs`.
 mod end_command;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
+// narrower edge for it: every journey here drives the binary against folders of Markdown and
+// loopback Linear workspaces, with no credential and no network, in a few seconds. Which sources
+// a dependency read asks, and how a public write names a private prerequisite, are the engine's
+// rules, so they cannot sit behind a plugin crate's edge, which AGENTS.md forbids depending on
+// the engine at any depth.
+mod edge_scope;
 mod failures;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
 // narrower edge for it: every journey here drives the binary against folders of Markdown, with

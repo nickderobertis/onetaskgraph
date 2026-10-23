@@ -4988,7 +4988,7 @@ impl Engine {
         for item in &planned {
             note_private(running, item);
         }
-        self.learn_designators(&request.destination, &planned).await;
+        self.learn_designators(&planned).await;
         if self.boundary_active() {
             for item in &planned {
                 self.classify_references(item, running).await?;
@@ -5024,28 +5024,29 @@ impl Engine {
         Ok(())
     }
 
-    /// Ask, once, which tracker each source is that an edge of `planned` may be written to name
-    /// opaquely: every source declared private that one of their far ends is in, and every one
-    /// `destination` routes to. A source that cannot say is left unknown, and an edge to it is
-    /// withheld as it is for a source with no designator.
-    async fn learn_designators(&self, destination: &SourceName, planned: &[&Planned]) {
+    /// Ask, once, which tracker each source declared private is that an edge of `planned`,
+    /// landing somewhere not declared private, is withheld into: the source its far end is in,
+    /// or — for a far end this copy carries — the source that far end lands in. No other
+    /// source is asked, so a copy no such edge crosses sends no request for one. A source that
+    /// cannot say is left unknown, and an edge to it is withheld as it is for a source with no
+    /// designator.
+    async fn learn_designators(&self, planned: &[&Planned]) {
+        let private =
+            |name: &SourceName| self.declared(name) == crate::config::SourceVisibility::Private;
         let mut asked: BTreeSet<SourceName> = BTreeSet::new();
-        let named = planned
-            .iter()
-            .filter(|item| self.declared(&item.to) != crate::config::SourceVisibility::Private)
-            .flat_map(|item| {
-                item.edges
-                    .iter()
-                    .filter_map(|edge| far_end(&edge.to, &item.source.source))
-                    .map(|far| far.source)
-            })
-            .chain(self.routes.reachable(destination))
-            .collect::<Vec<_>>();
-        for source in named {
-            if self.declared(&source) == crate::config::SourceVisibility::Private
-                && asked.insert(source.clone())
+        for item in planned.iter().filter(|item| !private(&item.to)) {
+            for far in item
+                .edges
+                .iter()
+                .filter_map(|edge| far_end(&edge.to, &item.source.source))
             {
-                let _ = self.designator(&source).await;
+                let lands = planned
+                    .iter()
+                    .find(|other| other.source == far)
+                    .map_or(far.source, |other| other.to.clone());
+                if private(&lands) && asked.insert(lands.clone()) {
+                    let _ = self.designator(&lands).await;
+                }
             }
         }
     }

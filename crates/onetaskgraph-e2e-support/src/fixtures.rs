@@ -5248,6 +5248,37 @@ pub fn linear_failing_a_relation_write_once(sandbox: &Sandbox) -> Value {
     )
 }
 
+/// A Linear workspace whose rate limiter refuses every request with `429 Too Many Requests`,
+/// and a count of the requests it was sent — so a journey can say a source that would answer
+/// rate limited was never asked at all.
+// llmlint: ignore[code_lands_in_the_domain_that_owns_it] As `linear_workspace` below: the shared e2e harness is where the agreed e2e layout puts every loopback server, and the engine's own suite drives this one.
+pub fn linear_rate_limited(sandbox: &Sandbox) -> (Value, Arc<Mutex<usize>>) {
+    sandbox.secrets_file("LINEAR_API_KEY=fixture-key\n");
+    let listener = TcpListener::bind("127.0.0.1:0").expect("fixture listener");
+    let endpoint = format!("http://{}/graphql", listener.local_addr().unwrap());
+    let sent = Arc::new(Mutex::new(0_usize));
+    let counted = Arc::clone(&sent);
+    thread::spawn(move || {
+        for mut stream in listener.incoming().flatten() {
+            if loopback::read_request(&mut std::io::BufReader::new(&mut stream)).is_none() {
+                continue;
+            }
+            *counted.lock().unwrap() += 1;
+            let body =
+                r#"{"errors":[{"message":"rate limited","extensions":{"code":"RATELIMITED"}}]}"#;
+            let _ = write!(
+                stream,
+                "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+    });
+    (
+        json!({"endpoint":endpoint,"team":"FIX","status_mapping":linear_default_mapping()}),
+        sent,
+    )
+}
+
 /// An empty Linear workspace, ready to be copied into.
 ///
 /// The same responder over an empty table rather than a second implementation, so what a
