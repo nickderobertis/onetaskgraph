@@ -4899,7 +4899,7 @@ team?: (LinearTeam | null)
  * configuration is read.
  */
 export interface StatusMapping {
-[k: string]: StatusNames | null
+[k: string]: (StatusNames | null)
 }
 
 }
@@ -10844,7 +10844,7 @@ export type StatusName = string
  * Which name each status category is, for each item kind. Keyed by status category; each value is one name for every kind, null to disable the category for every kind, or an object naming it for a task, a project or each.
  */
 export interface StatusMapping {
-[k: string]: StatusNames | null
+[k: string]: (StatusNames | null)
 }
 
 }
