@@ -2624,17 +2624,15 @@ impl Engine {
                                 own,
                                 &task.repositories,
                             );
-                            // A task landing beside its home is the plan's, and lands as the
-                            // plan does; one its own repositories send elsewhere is held to
-                            // who may read it alone, in a member project of its own source.
-                            let landing = if placement.destination == home.destination {
-                                class
-                            } else {
-                                own
-                            };
-                            (placement, landing)
+                            // A task lands as private as its own record and repositories
+                            // say, beside its home or in a member project elsewhere: the
+                            // plan's classification never tightens it.
+                            (placement, own)
                         }
-                        Item::Task(_) => (home.clone(), class),
+                        Item::Task(task) => (
+                            home.clone(),
+                            self.classify(task.classification, &task.repositories).await,
+                        ),
                         Item::Project(_) | Item::Document(_) => {
                             (self.placed_at(request, &request.destination), class)
                         }
@@ -2682,6 +2680,8 @@ impl Engine {
                 for read in reads {
                     tasks.push(self.plan_read(request, read, running).await?);
                 }
+                // The project is as private as anything it holds; each task stays as private as
+                // its own record says, which a private project does not tighten.
                 let mut class = tasks.iter().fold(project.classification, |class, task| {
                     class.strictest(task.classification)
                 });
@@ -2691,9 +2691,7 @@ impl Engine {
                             .await?,
                     );
                 }
-                for item in std::iter::once(&mut project).chain(&mut tasks) {
-                    item.classification = class;
-                }
+                project.classification = class;
                 plans.push((project, tasks, changed));
             }
         }
@@ -4306,6 +4304,11 @@ impl Engine {
                             filed,
                             &item.source.to_string(),
                             item.classification,
+                            match item.item {
+                                Item::Task(_) => super::boundary::Held::Task,
+                                Item::Project(_) => super::boundary::Held::Project,
+                                Item::Document(_) => super::boundary::Held::Document,
+                            },
                             super::boundary::Absent::Carried,
                         )
                         .await?;
@@ -4709,8 +4712,9 @@ impl Engine {
     }
 
     /// Who may read one item read for a copy: its own declaration, tightened by its
-    /// repositories and — for a task or a document filed under a project, while the boundary
-    /// is active — by everything that project holds at its source.
+    /// repositories and — for a document filed under a project, while the boundary is active —
+    /// by everything that project holds at its source. A task is its own: it inherits nothing
+    /// from its project.
     async fn copied_classification(
         &self,
         request: &CopyRequest,
@@ -4718,11 +4722,7 @@ impl Engine {
         running: &mut Running,
     ) -> Result<Classification, EngineError> {
         let (declared, repositories, filed) = match &read.item {
-            Item::Task(task) => (
-                task.classification,
-                &task.repositories,
-                task.project.as_ref(),
-            ),
+            Item::Task(task) => (task.classification, &task.repositories, None),
             Item::Document(document) => (
                 document.classification,
                 &document.repositories,
@@ -4834,8 +4834,8 @@ impl Engine {
     }
 
     /// Who may read the item `far` names, as a write naming it has to know: its own record and
-    /// repositories, tightened — a task's by the project it is filed under, a project's by every
-    /// task and document it holds. `known` holds the project classifications this command has
+    /// repositories — a task's alone, and a project's tightened by every task and document it
+    /// holds. `known` holds the project classifications this command has
     /// already worked out, each confirmed by [`Engine::source_project_class`] before it is
     /// trusted. `Err` says why it could not be established: its source is not configured, a
     /// read failed, or no such item is held.
@@ -4858,21 +4858,9 @@ impl Engine {
                     .await
                     .map_err(unread)?
                     .ok_or_else(missing)?;
-                let own = self.classify(task.classification, &task.repositories).await;
-                let Some(filed) = &task.project else {
-                    return Ok(own);
-                };
-                // A task that names a project inherits from it, so that project has to be there
-                // to read: one its source cannot read or does not hold leaves the task
-                // unclassified, never classified as though it named none.
-                let project = GlobalId::new(far.source.clone(), filed.clone());
-                match self.source_project_class(&project, known).await {
-                    Ok(inherited) => Ok(own.strictest(inherited)),
-                    Err(EngineError::ProjectUnclassified { project, why }) => {
-                        Err(format!("it is filed under project {project}, and {why}"))
-                    }
-                    Err(error) => Err(error.to_string()),
-                }
+                // A task is as private as its own record and repositories say, whatever the
+                // project it is filed under is.
+                Ok(self.classify(task.classification, &task.repositories).await)
             }
             ItemKind::Project => match self.source_project_class(far, known).await {
                 Ok(class) => Ok(class),
@@ -6316,7 +6304,8 @@ impl Engine {
     ///
     /// A task copied on its own keeps its source's project id when the destination holds
     /// no counterpart: the field is opaque to this engine, and dropping it would lose
-    /// what the source said.
+    /// what the source said — unless that project is private, or cannot be classified, and the
+    /// destination is not declared private (see [`Engine::withholds_project`]).
     ///
     /// Looked for once per source project and landing source per command. A project this
     /// command itself copied is already known, and one an earlier task of this command was
@@ -6353,10 +6342,37 @@ impl Engine {
                 self.member_in(request.dry_run, &home, &item.to, None, running, journal)
                     .await?
             }
+            None if self.withholds_project(&qualified, &item.to, running).await => None,
             None => Some(project.clone()),
         };
         running.filings.insert(key, filed.clone());
         Ok(filed)
+    }
+
+    /// Whether an item copied on its own to `destination` leaves out the id of its source
+    /// project `project`, which the destination holds no counterpart of: while the boundary is
+    /// active and `destination` is not declared private, when that project is private — or
+    /// cannot be classified at all — since a public task under a private project is public by its
+    /// own record, and the id of the project it is filed under is not.
+    async fn withholds_project(
+        &self,
+        project: &GlobalId,
+        destination: &SourceName,
+        running: &mut Running,
+    ) -> bool {
+        if !self.boundary_active()
+            || self.declared(destination) == crate::config::SourceVisibility::Private
+        {
+            return false;
+        }
+        if self.declared(&project.source) == crate::config::SourceVisibility::Private {
+            return true;
+        }
+        !matches!(
+            self.source_project_class(project, &mut running.project_classes)
+                .await,
+            Ok(Classification::Public)
+        )
     }
 
     /// The project a document's counterpart already sits under, when that is exactly the project

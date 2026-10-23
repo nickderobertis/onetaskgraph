@@ -356,31 +356,9 @@ impl Engine {
             .iter()
             .filter(|other| !self.withholds(&ticket.source, other, private))
             .collect();
-        // The ticket is held to what it inherits as well as its record: while the boundary is
-        // active, the project it is filed under.
-        let ticket_class = match &task.project {
-            Some(filed) if self.boundary_active() => {
-                match self
-                    .source_project_class(
-                        &GlobalId::new(ticket.source.clone(), filed.clone()),
-                        &mut std::collections::HashMap::new(),
-                    )
-                    .await
-                {
-                    Ok(inherited) => task.classification.strictest(inherited),
-                    // Unclassified is held private where the ticket's source is, and refused
-                    // anywhere else.
-                    Err(EngineError::ProjectUnclassified { .. })
-                        if self.declared(&ticket.source)
-                            == crate::config::SourceVisibility::Private =>
-                    {
-                        Classification::Private
-                    }
-                    Err(error) => return entry(failed(Some(from), &error), Vec::new()),
-                }
-            }
-            _ => task.classification,
-        };
+        // The ticket is held to its own record alone: a task inherits nothing from the project
+        // it is filed under.
+        let ticket_class = task.classification;
         if !written.iter().copied().eq(&held) {
             let list: Vec<TaskRef> = written
                 .iter()

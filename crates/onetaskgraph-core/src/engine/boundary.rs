@@ -622,7 +622,8 @@ fn strings(value: &Value, exposure: &mut Exposure) {
 pub(crate) struct Outbound<'a> {
     /// How the write names the item, for a refusal: a qualified id, or "the new task".
     pub(crate) item: String,
-    /// The item's classification, already tightened by its repositories and its project.
+    /// The item's classification, already tightened by its repositories — and, for a document
+    /// or a project, by what it inherits. A task's is its own.
     pub(crate) classification: Classification,
     /// Where in the destination it lands.
     pub(crate) target: WriteTarget<'a>,
@@ -882,9 +883,15 @@ impl Engine {
         }
     }
 
-    /// `classification`, tightened by the project `project` of `source` it is filed under —
+    /// `classification`, held against the project `project` of `source` it is filed under —
     /// refused when it is private and the project is held public, because a public project
-    /// never holds a private member.
+    /// never holds a private member — and, for a document (`held` [`Held::Document`]),
+    /// tightened by that project.
+    ///
+    /// **A task is never tightened by its project**: who may read a task is its own
+    /// declaration and its own repositories, so a public task stays public under a private
+    /// project and makes that project private by nothing. A document is the project's own
+    /// prose, and is as private as the project it is filed under.
     ///
     /// The project is read always while the boundary is active, and for a private item while it
     /// is not, which is refused under a public project either way. A public item in an inactive
@@ -905,11 +912,19 @@ impl Engine {
         project: &NativeId,
         item: &str,
         classification: Classification,
+        held: Held,
         absent: Absent,
     ) -> Result<Classification, EngineError> {
         if !self.boundary.active && classification.is_public() {
             return Ok(classification);
         }
+        let inherited = |filed: Classification| {
+            if held == Held::Task {
+                classification
+            } else {
+                classification.strictest(filed)
+            }
+        };
         if self.boundary.active && self.declared(source.name()) != SourceVisibility::Private {
             let filed = match self
                 .source_project_class(
@@ -929,9 +944,9 @@ impl Engine {
                     project: format!("{}:{}", source.name(), project),
                 });
             }
-            return Ok(classification.strictest(filed));
+            return Ok(inherited(filed));
         }
-        let Some(held) = source
+        let Some(record) = source
             .source()
             .get_project(project)
             .await
@@ -942,14 +957,16 @@ impl Engine {
         else {
             return Ok(classification);
         };
-        let filed = self.classify(held.classification, &held.repositories).await;
+        let filed = self
+            .classify(record.classification, &record.repositories)
+            .await;
         if classification == Classification::Private && filed.is_public() {
             return Err(EngineError::PrivateMemberOfPublicProject {
                 item: item.to_owned(),
                 project: format!("{}:{}", source.name(), project),
             });
         }
-        Ok(classification.strictest(filed))
+        Ok(inherited(filed))
     }
 
     /// Admit one narrow write to an item `destination` already holds.
@@ -999,10 +1016,11 @@ impl Engine {
         let Some((declared, repositories, filed)) = stored else {
             return Ok(());
         };
-        // What it inherits tightens it too: a task's or a document's project, and a project's
-        // own tasks and documents.
+        // What it inherits tightens it too: a document's project, and a project's own tasks
+        // and documents. A task inherits nothing: it is as private as its own record says.
         let mut known = std::collections::HashMap::new();
         let inherited = match (held, filed) {
+            (Held::Task, _) => Classification::Public,
             (Held::Project, _) => {
                 self.source_project_class(
                     &crate::GlobalId::new(destination.name().clone(), id.clone()),

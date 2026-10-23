@@ -1954,13 +1954,23 @@ references among `paths` — and **passes it only by exiting 0 with `{"verdict":
 refusal names where the check stopped and never what it found; no command, a failure, or any
 other answer is unavailable, which never passes.
 
+**A task owns its classification.** Who may read a task is its own declaration and every
+repository it names, and nothing else: all-public repositories leave it public unless it says
+`private`, and any private or unknown one makes it private. The project it is filed under never
+tightens it, so a public task in a private coordination project is public — read, depended on,
+narrowly written and copied on its own as the public task it is, a copy on its own naming no
+private project it is filed under. The tightening runs the other way: a project holding any
+private task or document is private, and so is every document filed under a private project. A
+classification already recorded private — declared, or written by an earlier copy — stays
+private: no copy, re-copy or update loosens it.
+
 **When the boundary is active.** It is active when the configuration names a `write_policy`,
 when any source declares a `visibility`, or when a program linking the engine supplies its own
 policy. An inactive store still persists, copies and routes classification, and still refuses
 an explicitly private item anywhere not declared private — at a create, a copy, a route and a
 render — but it consults no repository's visibility, reads nothing extra before a narrow
-write, and does not read a project to learn whether an item filed under it inherits a private
-classification, so a store that has not opted in answers and spends exactly what it did before. **A
+write, and does not read a project to learn whether a document filed under it inherits a
+private classification, so a store that has not opted in answers and spends exactly what it did before. **A
 store that wants repositories screened has to configure `write_policy` or declare a
 visibility.** Active:
 
@@ -1969,8 +1979,8 @@ visibility.** Active:
   missing or failed check refuses it;
 - a narrow write (`task status set`, `project status set`, `priority set`, `content set`,
   `metadata set`, `update`, `comment add` and `edit`, `render`) to an item of a source not verified private reads the
-  item for its classification, with what it inherits — a task's or a document's project, a
-  project's tasks and documents — and refuses a private one; to a source verified private it
+  item for its classification, with what it inherits — a document's project, a project's
+  tasks and documents; a task inherits nothing — and refuses a private one; to a source verified private it
   reads nothing more.
 
 **Routing by classification.** A route entry may match on `classification` instead of
@@ -2003,10 +2013,9 @@ own record. Between public items nothing is left out. While the boundary is acti
 into a source not declared private first reads, once per command, every item outside the copy
 that a carried dependency or delivery names in a source not declared private, and withholds
 its id when that item is private by its own record, its repositories, or what it inherits —
-a task the project it is filed under, a project every task and document it holds — whatever
-its source declares; a reference whose classification cannot be read — its source not
-configured, any of those reads failing, no such item, or a task filed under a project its
-source does not hold or cannot read — is refused before anything is written. A `--depends-on` or
+a project every task and document it holds, a document its project — whatever its source
+declares; a reference whose classification cannot be read — its source not configured, any of
+those reads failing, or no such item — is refused before anything is written. A `--depends-on` or
 `--delivers` naming such an item — or, while the boundary is active, an item of any other
 source read as private, with what it inherits, or one it cannot classify — is the caller asking
 for it to be written, so that write is refused before anything is written rather than quietly
