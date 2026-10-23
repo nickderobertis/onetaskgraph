@@ -3055,6 +3055,7 @@ const FORTY_THIRD_BUNDLE_SHAPE: [(&str, u64); 132] = [
     ("WriteVerdict", 0xfe9f3b7541b8efb0),
 ];
 
+// llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the version-45 row of the one append-only golden of the whole bundle both SDKs are generated from, and every row before it lists the same roots, `LinearConfig` among them, because `schema.rs` registers that plugin configuration as a root: split per owner, no table could tell whether a version republishes an earlier shape. The row is pasted from what the test prints and is verified against what the binary emits.
 /// Version 45 adds `PublicProjections`, the map a private destination project records from
 /// each canonical task to its public view, and `TaskStatusSet.projection`, and states that a
 /// task's classification is its own.
@@ -3193,6 +3194,7 @@ const FORTY_FIFTH_BUNDLE_SHAPE: [(&str, u64); 133] = [
     ("WritePolicyConfig", 0x99a987f6423fdb8a),
     ("WriteVerdict", 0xfe9f3b7541b8efb0),
 ];
+// llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 
 /// Version 44 adds the explicit target-task copy report value.
 const FORTY_FOURTH_BUNDLE_SHAPE: [(&str, u64); 132] = [
@@ -3486,8 +3488,6 @@ const THIRTY_EIGHTH_BUNDLE_BESIDE: [(&str, u64); 8] = [
     ("plugin_config/local-md", 0x73e221b1e7df9de3),
     ("plugin_config/subprocess", 0x9be55eaf44b8f5aa),
 ];
-// llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
-
 /// What version 45 publishes beside the engine's roots: the in-memory configuration's seeded
 /// tasks carry `Task`'s own schema, whose classification now says the task owns it.
 const FORTY_FIFTH_BUNDLE_BESIDE: [(&str, u64); 8] = [
@@ -3500,6 +3500,7 @@ const FORTY_FIFTH_BUNDLE_BESIDE: [(&str, u64); 8] = [
     ("plugin_config/local-md", 0x73e221b1e7df9de3),
     ("plugin_config/subprocess", 0x9be55eaf44b8f5aa),
 ];
+// llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 
 include!("support/bundle_digest.rs");
 

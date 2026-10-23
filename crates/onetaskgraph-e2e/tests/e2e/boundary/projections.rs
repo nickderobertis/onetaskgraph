@@ -359,16 +359,38 @@ fn a_public_task_naming_private_material_is_refused_before_anything_is_written()
             format!("title: Add retry\nstatus: todo\nproject: rollout\nrepositories: [{OPEN}]"),
             "Read [the notes](../notes/rollout.md) first.".to_owned(),
         ),
+        (
+            "path",
+            format!("title: Add retry\nstatus: todo\nproject: rollout\nrepositories: [{OPEN}]"),
+            "Read [the notes](/srv/notes/retry.md) first.".to_owned(),
+        ),
+        (
+            "path",
+            format!("title: Add retry\nstatus: todo\nproject: rollout\nrepositories: [{OPEN}]"),
+            "See <a href=\"../notes/retry.md\">the notes</a> first.".to_owned(),
+        ),
+        (
+            "path",
+            format!("title: Add retry\nstatus: todo\nproject: rollout\nrepositories: [{OPEN}]"),
+            "<img src='file:///srv/notes/retry.png'>".to_owned(),
+        ),
+        (
+            "path",
+            format!("title: Add retry\nstatus: todo\nproject: rollout\nrepositories: [{OPEN}]"),
+            "As drawn: ![the retry](./never-attached.png)".to_owned(),
+        ),
     ] {
         let store = projecting_store();
         private_rollout(&store);
         store.record("plan", "tasks", "leaky", &front, &body);
         let before = store.tree();
         let (kind, said) = store.refused(&["project", "copy", "plan:rollout", "--to", "vault"]);
-        let expected = if field == "path" {
-            "projection-reference"
-        } else {
-            "boundary-refused"
+        // An image reference the task holds no asset for is refused by the asset rule every
+        // copy keeps, before a view is considered.
+        let expected = match field {
+            "path" if body.contains("never-attached") => "asset-not-held",
+            "path" => "projection-reference",
+            _ => "boundary-refused",
         };
         assert_eq!(kind, expected, "{field}: {said}");
         assert_eq!(
@@ -377,6 +399,26 @@ fn a_public_task_naming_private_material_is_refused_before_anything_is_written()
             "{field}: nothing was written anywhere"
         );
     }
+    // A URL, a mail link and a fragment are carried, in Markdown and in HTML alike.
+    let store = projecting_store();
+    private_rollout(&store);
+    store.record(
+        "plan",
+        "tasks",
+        "linked",
+        &format!("title: Link the docs\nstatus: todo\nproject: rollout\nrepositories: [{OPEN}]"),
+        "See [the spec](https://example.org/spec), <a href=\"https://example.org/faq\">the FAQ</a>, \
+         [mail us](mailto:team@example.org) and [below](#below).",
+    );
+    copy_rollout(&store);
+    assert_eq!(
+        files_under(&store, "site")
+            .iter()
+            .filter(|path| path.contains("pt-"))
+            .count(),
+        3,
+        "the linked task has its view beside the other two"
+    );
 }
 
 #[test]
@@ -874,4 +916,194 @@ fn a_task_already_recorded_private_stays_private_and_unprojected_on_every_recopy
     store.ok(&["task", "status", "set", widget, "done"]);
     assert_eq!(shown(&store, "task", widget)["classification"], "private");
     assert_site_neutral(&store);
+}
+
+#[test]
+fn a_view_s_image_is_brought_in_step_when_only_its_bytes_change() {
+    let store = projecting_store();
+    private_rollout(&store);
+    let image = store.sandbox.project().join("shot.png");
+    std::fs::write(&image, [1_u8; 64]).expect("the image");
+    let body = store.body("As drawn: ![the retry](./shot.png)");
+    let image = image.display().to_string();
+    store.ok(&[
+        "task",
+        "create",
+        "plan",
+        "--project",
+        "rollout",
+        "--title",
+        "Draw it",
+        "--body-file",
+        &body,
+        "--repository",
+        OPEN,
+        "--asset",
+        &image,
+    ]);
+    let landed = copy_rollout(&store);
+    let drawn = &landed["plan:draw-it"];
+    let view = projection_map(&store, &landed["plan:rollout"])["tasks"]
+        .as_array()
+        .expect("entries")
+        .iter()
+        .find(|entry| entry["task"] == drawn.as_str())
+        .and_then(|entry| entry["projection"].as_str())
+        .expect("its view")
+        .to_owned();
+    // The image is redrawn at the source and nothing else of the task changes.
+    let source: Value =
+        serde_json::from_str(&store.ok(&["task", "show", "plan:draw-it", "--json"]))
+            .expect("the task");
+    let held = source["assets"][0]["path"]
+        .as_str()
+        .expect("its image's path")
+        .to_owned();
+    std::fs::write(&held, [2_u8; 64]).expect("redrawn");
+    copy_rollout(&store);
+    let shown_view: Value =
+        serde_json::from_str(&store.ok(&["task", "show", &view, "--json"])).expect("the view");
+    let path = shown_view["assets"][0]["path"]
+        .as_str()
+        .expect("its image's path");
+    assert_eq!(std::fs::read(path).expect("the bytes"), vec![2_u8; 64]);
+}
+
+#[test]
+fn a_copy_that_fails_after_updating_a_view_puts_the_view_and_the_plan_back() {
+    let store = projecting_store();
+    private_rollout(&store);
+    let landed = copy_rollout(&store);
+    let map = projection_map(&store, &landed["plan:rollout"]);
+    let view_of = |canonical: &str| {
+        map["tasks"]
+            .as_array()
+            .expect("entries")
+            .iter()
+            .find(|entry| entry["task"] == canonical)
+            .and_then(|entry| entry["projection"].as_str())
+            .expect("a view")
+            .to_owned()
+    };
+    let widget_view = view_of(&landed["plan:widget"]);
+    let guide_view = view_of(&landed["plan:guide"]);
+    // The widget is renamed, so its view is rewritten first; the guide's view then cannot be
+    // read, because a folder stands where its file was.
+    store.record(
+        "plan",
+        "tasks",
+        "widget",
+        &format!(
+            "title: Add jittered retry to the widget\nstatus: todo\nproject: rollout\n\
+             repositories: [{OPEN}]\ndepends_on: [producer]"
+        ),
+        "Retry with a capped exponential backoff. See [the spec](https://example.org/retry).",
+    );
+    let guide_file = store
+        .folder("site")
+        .join("tasks")
+        .join(format!("{}.md", guide_view.trim_start_matches("site:")));
+    let guide_held = std::fs::read(&guide_file).expect("the guide's view");
+    std::fs::remove_file(&guide_file).expect("moved aside");
+    std::fs::create_dir_all(guide_file.join("in-the-way")).expect("a folder in its place");
+    let vault_before = tree(&store.folder("vault"));
+    let site_before = tree(&store.folder("site"));
+    let output = store.run(&["project", "copy", "plan:rollout", "--to", "vault"]);
+    assert_ne!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(
+        tree(&store.folder("vault")),
+        vault_before,
+        "the plan is put back"
+    );
+    assert_eq!(
+        tree(&store.folder("site")),
+        site_before,
+        "every view is put back"
+    );
+    std::fs::remove_dir_all(&guide_file).expect("the folder taken away");
+    std::fs::write(&guide_file, guide_held).expect("the guide's view put back");
+    assert_eq!(
+        shown(&store, "task", &widget_view)["title"],
+        "Add retry to the widget"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_projection_map_the_private_project_will_not_take_takes_the_new_view_back() {
+    use std::os::unix::fs::PermissionsExt;
+    let store = projecting_store();
+    private_rollout(&store);
+    copy_rollout(&store);
+    // A new public task: its view is made, and recording it on the private project is refused.
+    store.record(
+        "plan",
+        "tasks",
+        "extra",
+        &format!("title: Tune the retry\nstatus: todo\nproject: rollout\nrepositories: [{OPEN}]"),
+        PLAIN,
+    );
+    let projects = store.folder("vault").join("projects");
+    let before = store.tree();
+    std::fs::set_permissions(&projects, std::fs::Permissions::from_mode(0o555))
+        .expect("the private project's folder made read-only");
+    let output = store.run(&["project", "copy", "plan:rollout", "--to", "vault"]);
+    std::fs::set_permissions(&projects, std::fs::Permissions::from_mode(0o755))
+        .expect("the folder made writable again");
+    assert_ne!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(
+        store.tree(),
+        before,
+        "the new view and the new canonical task are taken back"
+    );
+}
+
+#[test]
+fn a_status_whose_private_project_cannot_be_read_says_it_reached_no_view() {
+    let store = projecting_store();
+    private_rollout(&store);
+    let landed = copy_rollout(&store);
+    let home = store.folder("vault").join("projects").join(format!(
+        "{}.md",
+        landed["plan:rollout"].trim_start_matches("vault:")
+    ));
+    std::fs::write(&home, "---\ntitle: [unclosed\n---\n").expect("the project made unreadable");
+    let widget = &landed["plan:widget"];
+    let (kind, said) = store.refused(&["task", "status", "set", widget, "done"]);
+    assert_eq!(kind, "projection-not-mirrored", "{said}");
+    assert!(said.contains(widget), "{said}");
+    assert_eq!(shown(&store, "task", widget)["status"]["category"], "done");
+}
+
+#[test]
+fn a_dry_run_of_a_private_plan_with_views_writes_nothing_anywhere() {
+    let store = projecting_store();
+    private_rollout(&store);
+    let before = store.tree();
+    store.ok(&[
+        "project",
+        "copy",
+        "plan:rollout",
+        "--to",
+        "vault",
+        "--dry-run",
+    ]);
+    assert_eq!(store.tree(), before, "nothing was written anywhere");
+    // A view a dry run would refuse, it refuses.
+    store.record(
+        "plan",
+        "tasks",
+        "leaky",
+        &format!("title: Port the quietharbor retry\nstatus: todo\nproject: rollout\nrepositories: [{OPEN}]"),
+        PLAIN,
+    );
+    let (kind, said) = store.refused(&[
+        "project",
+        "copy",
+        "plan:rollout",
+        "--to",
+        "vault",
+        "--dry-run",
+    ]);
+    assert_eq!(kind, "boundary-refused", "{said}");
 }

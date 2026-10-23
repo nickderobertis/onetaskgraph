@@ -394,6 +394,24 @@ fn public_project(id: NativeId, views: &[&Projected]) -> Project {
     }
 }
 
+/// Whether `project` reads as a public projection project: public, titled
+/// [`PUBLIC_PROJECT_TITLE`], with no prose of its own.
+fn is_neutral(project: &Project) -> bool {
+    project.title == PUBLIC_PROJECT_TITLE
+        && project.classification == Classification::Public
+        && project.content.as_deref().is_none_or(str::is_empty)
+}
+
+/// The `(name, sha256)` of every asset in `assets`, in name order.
+fn digests(assets: &[AssetPayload]) -> Vec<(String, String)> {
+    let mut digests: Vec<(String, String)> = assets
+        .iter()
+        .map(|asset| (asset.name.as_str().to_owned(), asset.sha256.clone()))
+        .collect();
+    digests.sort_unstable();
+    digests
+}
+
 /// The public tasks of one private plan that a project copy makes views of.
 #[derive(Default)]
 pub(super) struct Projecting {
@@ -765,17 +783,29 @@ impl Engine {
                 .map_err(|error| refused(destination, error))?
                 .and_then(|view| view.project)
             {
-                return Ok(project);
+                return self
+                    .neutral_project(destination, home, projection, &project)
+                    .await
+                    .map(|()| project);
             }
         }
         let id = opaque_id("pw", home);
-        if destination
+        if let Some(held) = destination
             .source()
             .get_project(&id)
             .await
             .map_err(|error| refused(destination, error))?
-            .is_some()
         {
+            if !is_neutral(&held) {
+                return Err(EngineError::ProjectionsMalformed {
+                    project: home.to_string(),
+                    why: format!(
+                        "{}:{id} holds the id its public projection project is made under, and is \
+                         not one",
+                        destination.name()
+                    ),
+                });
+            }
             return Ok(id);
         }
         let project = public_project(id, ordered);
@@ -809,6 +839,34 @@ impl Engine {
             id: landed.clone(),
         });
         Ok(landed)
+    }
+
+    /// Refuse a view `projection` filed under `project`, of `destination`, unless that project
+    /// is a public projection project — so a view a person moved, or a map naming somebody
+    /// else's task, never redirects a write into a project that is not one.
+    async fn neutral_project(
+        &self,
+        destination: &ResolvedSource,
+        home: &GlobalId,
+        projection: &GlobalId,
+        project: &NativeId,
+    ) -> Result<(), EngineError> {
+        let held = destination
+            .source()
+            .get_project(project)
+            .await
+            .map_err(|error| refused(destination, error))?;
+        if held.as_ref().is_some_and(is_neutral) {
+            return Ok(());
+        }
+        Err(EngineError::ProjectionsMalformed {
+            project: home.to_string(),
+            why: format!(
+                "projection {projection} is filed under {}:{project}, which is not a public \
+                 projection project",
+                destination.name()
+            ),
+        })
     }
 
     /// Land one view: over the one the map names, or the one its opaque id names, when either
@@ -865,6 +923,7 @@ impl Engine {
                 && held.status.category == view.status.category
                 && held.repositories == view.repositories
                 && were == are
+                && digests(prior.assets.as_deref().unwrap_or_default()) == digests(&task.assets)
             {
                 return Ok(held.id.clone());
             }
@@ -883,7 +942,12 @@ impl Engine {
             .check_status_write(ItemKind::Task, view.status.category, target.as_ref())
             .await
             .map_err(|error| refused(destination, error))?;
-        if let Some((held, prior)) = held {
+        let recorded = held.as_ref().and_then(|(_, prior)| prior.recorded.clone());
+        if let Some((held, mut prior)) = held {
+            if !task.assets.is_empty() && prior.assets.is_none() {
+                // Putting the view back then has to take away the assets this write adds.
+                prior.assets = Some(Vec::new());
+            }
             journal.record(Undo::Updated {
                 at: destination.name().clone(),
                 id: held.id,
@@ -900,7 +964,11 @@ impl Engine {
         } else {
             destination
                 .source()
-                .write_task_with_assets(&write, None, &assets::write_of(task.assets.clone(), None))
+                .write_task_with_assets(
+                    &write,
+                    None,
+                    &assets::write_of(task.assets.clone(), recorded),
+                )
                 .await
                 .map(|written| written.id)
         }
@@ -981,47 +1049,77 @@ impl Engine {
         held: &Task,
         category: StatusCategory,
     ) -> Result<Option<GlobalId>, EngineError> {
-        // A task recorded private has no view to hand anything to, whatever a map says.
         if !self.boundary_active()
             || !self.routes.any()
             || self.declared(&task.source) != SourceVisibility::Private
-            || held.classification == Classification::Private
         {
             return Ok(None);
         }
+        // A task private by its record or any of its repositories has no view to hand anything
+        // to, whatever a map says.
+        if self.classify(held.classification, &held.repositories).await == Classification::Private {
+            return Ok(None);
+        }
         let project = held.project.as_ref();
+        // The canonical status has landed by now, so anything that keeps it from reaching the
+        // view is reported as a mirror that did not happen, never as a write that did not.
+        let not_mirrored =
+            |projection: String, error: EngineError| EngineError::ProjectionNotMirrored {
+                task: task.to_string(),
+                projection,
+                why: error.to_string(),
+            };
         let Some(project) = project else {
             return Ok(None);
         };
+        let home = GlobalId::new(task.source.clone(), project.clone());
+        let recorded_on = || format!("recorded on {home}");
         let source = self.readable(&task.source)?;
         let Some(held) = source
             .source()
             .get_project(project)
             .await
-            .map_err(|error| refused(source, error))?
+            .map_err(|error| not_mirrored(recorded_on(), refused(source, error)))?
         else {
             return Ok(None);
         };
-        let home = GlobalId::new(task.source.clone(), project.clone());
-        // The canonical status has landed by now, so a map that cannot be read is reported as a
-        // mirror that did not happen, never as a write that did not.
         let map = self
             .recorded_projections(&home, &held.metadata)
-            .map_err(|error| EngineError::ProjectionNotMirrored {
-                task: task.to_string(),
-                projection: format!("recorded on {home}"),
-                why: error.to_string(),
-            })?;
+            .map_err(|error| not_mirrored(recorded_on(), error))?;
         let Some(projection) = map.projection_of(task).cloned() else {
             return Ok(None);
         };
+        // The view has to be one: a task filed under a public projection project.
+        let public = self.writable(&projection.source)?;
+        let filed = public
+            .source()
+            .get_task(&projection.native)
+            .await
+            .map_err(|error| not_mirrored(projection.to_string(), refused(public, error)))?
+            .ok_or_else(|| {
+                not_mirrored(
+                    projection.to_string(),
+                    EngineError::NoSuchTask {
+                        id: projection.to_string(),
+                    },
+                )
+            })?
+            .project
+            .ok_or_else(|| {
+                not_mirrored(
+                    projection.to_string(),
+                    EngineError::ProjectionsMalformed {
+                        project: home.to_string(),
+                        why: format!("projection {projection} is filed under no project"),
+                    },
+                )
+            })?;
+        self.neutral_project(public, &home, &projection, &filed)
+            .await
+            .map_err(|error| not_mirrored(projection.to_string(), error))?;
         Box::pin(self.set_task_status(&projection, category))
             .await
-            .map_err(|error| EngineError::ProjectionNotMirrored {
-                task: task.to_string(),
-                projection: projection.to_string(),
-                why: error.to_string(),
-            })?;
+            .map_err(|error| not_mirrored(projection.to_string(), error))?;
         Ok(Some(projection))
     }
 }
