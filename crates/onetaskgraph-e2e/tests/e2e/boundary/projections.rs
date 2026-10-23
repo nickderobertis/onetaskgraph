@@ -1921,3 +1921,96 @@ fn a_view_whose_task_drops_its_last_image_drops_it_too() {
         "its image is gone: {held}"
     );
 }
+
+#[test]
+fn an_update_or_a_delivery_whose_view_is_gone_says_it_reached_no_view_and_recovers() {
+    let store = projecting_store();
+    private_rollout(&store);
+    let landed = copy_rollout(&store);
+    let widget = &landed["plan:widget"];
+    let guide = &landed["plan:guide"];
+    let widget_view = view_of(&store, &landed, widget);
+    let guide_view = view_of(&store, &landed, guide);
+    for view in [&widget_view, &guide_view] {
+        std::fs::remove_file(record_file(&store, "tasks", view)).expect("a view deleted in public");
+    }
+    // An update naming the status writes the canonical task and says the view was not reached.
+    let (kind, said) = store.refused(&["task", "update", widget, "--status", "done"]);
+    assert_eq!(kind, "projection-not-mirrored", "{said}");
+    assert!(said.contains(&widget_view), "{said}");
+    assert_eq!(shown(&store, "task", widget)["status"]["category"], "done");
+    // The delivery rule moves the guide, and reports that ticket failed for its view alone.
+    store.ok(&[
+        "task",
+        "update",
+        &landed["plan:producer"],
+        "--delivers",
+        guide,
+    ]);
+    let output = store.run(&[
+        "task",
+        "status",
+        "set",
+        &landed["plan:producer"],
+        "in-progress",
+        "--json",
+    ]);
+    assert_eq!(output.status.code(), Some(4), "{}", stderr(&output));
+    let set: Value = serde_json::from_str(&stdout(&output)).expect("a status answer");
+    let delivered = &set["delivered"][0];
+    assert_eq!(delivered["outcome"], "failed", "{set:#}");
+    assert_eq!(
+        delivered["failure"]["kind"], "projection-not-mirrored",
+        "{set:#}"
+    );
+    assert_ne!(shown(&store, "task", guide)["status"]["category"], "todo");
+    // The next copy makes both views again, and the next status reaches them.
+    copy_rollout(&store);
+    let updated: Value = serde_json::from_str(&store.ok(&[
+        "task",
+        "update",
+        widget,
+        "--status",
+        "in-progress",
+        "--json",
+    ]))
+    .expect("an update answer");
+    assert_eq!(updated["projection"], widget_view.as_str(), "{updated:#}");
+    assert_eq!(
+        shown(&store, "task", &widget_view)["status"]["category"],
+        "in-progress"
+    );
+    assert!(
+        record_file(&store, "tasks", &guide_view).exists(),
+        "the guide's view is back"
+    );
+}
+
+#[test]
+fn a_project_holding_a_projection_map_copied_onward_never_carries_the_map() {
+    let store = Store::laid(Some(registered), |sandbox| {
+        json!({
+            "archive": folder(sandbox, "archive", "private"),
+            "vault": {"routes": [{"repositories": ["github.com/openco/*"], "to": "site"}]},
+        })
+    });
+    std::fs::create_dir_all(store.folder("archive")).expect("the archive folder");
+    private_rollout(&store);
+    let landed = copy_rollout(&store);
+    let home = &landed["plan:rollout"];
+    assert!(
+        projection_map(&store, home).is_object(),
+        "the private project records a map"
+    );
+    let onward = landed_ids(&store.ok(&["project", "copy", home, "--to", "archive", "--json"]));
+    let copied = shown(&store, "project", &onward[home.as_str()]);
+    assert!(
+        copied["metadata"]
+            .get("onetaskgraph.public_projections")
+            .is_none(),
+        "the map stays with the project it was recorded on: {copied:#}"
+    );
+    // And a copy onward again over what it wrote leaves the map where it was.
+    copy_rollout(&store);
+    assert!(projection_map(&store, home).is_object());
+}
