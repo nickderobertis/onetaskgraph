@@ -76,7 +76,8 @@ fn private_rollout_of(store: &Store, public: &str) {
         "widget",
         &format!(
             "title: Add retry to the widget\nstatus: todo\nproject: rollout\n\
-             repositories: [{public}]\ndepends_on: [producer]"
+             repositories: [{public}]\ndepends_on: [producer]\nlabels: [urgent]\n\
+             priority: high\nmetadata: {{team.owner: rollout-lead}}"
         ),
         "Retry with a capped exponential backoff. See [the spec](https://example.org/retry).",
     );
@@ -236,7 +237,28 @@ fn a_private_plan_lands_whole_in_its_private_destination_with_neutral_views_of_i
     assert_eq!(shown_widget["title"], "Add retry to the widget");
     assert_eq!(shown_widget["repositories"], json!([OPEN]));
     assert_eq!(shown_widget["project"], public_project_id);
+    // Nothing of the canonical record but its title, content, repositories and status: not its
+    // labels, priority, metadata or where the private store keeps it.
     assert_eq!(shown_widget["metadata"], json!({}), "{shown_widget:#}");
+    assert_eq!(shown_widget["labels"], json!([]), "{shown_widget:#}");
+    assert_eq!(shown_widget["priority"], "none", "{shown_widget:#}");
+    assert!(
+        shown_widget
+            .get("delivers")
+            .is_none_or(|delivers| delivers == &json!([])),
+        "{shown_widget:#}"
+    );
+    let canonical_widget = shown(&store, "task", widget);
+    assert_eq!(
+        canonical_widget["labels"][0]["name"], "urgent",
+        "{canonical_widget:#}"
+    );
+    assert_eq!(canonical_widget["priority"], "high", "{canonical_widget:#}");
+    let located = shown_widget["location"]["path"].as_str().expect("a path");
+    assert!(
+        std::path::Path::new(located).starts_with(store.folder("site")),
+        "the view's place is its own source's: {located}"
+    );
     // A view depends only on another view: the widget's dependency on the private producer is
     // not there, and the guide's on the widget is, between their views.
     assert!(edges_of(&store, &widget_view, "depends-on").is_empty());
@@ -297,6 +319,33 @@ fn a_repeat_copy_refreshes_the_views_without_a_duplicate_or_a_change_to_the_plan
         shown(&store, "task", &widget_view)["title"],
         "Add retry to the widget"
     );
+    assert_eq!(site_files(), first, "still one view per public task");
+
+    // The guide's content changes and it stops depending on the widget: its view follows both.
+    let guide_view = map["tasks"]
+        .as_array()
+        .expect("entries")
+        .iter()
+        .find(|entry| entry["task"] == landed["plan:guide"])
+        .and_then(|entry| entry["projection"].as_str())
+        .expect("the guide's view")
+        .to_owned();
+    assert_eq!(edges_of(&store, &guide_view, "depends-on").len(), 1);
+    store.record(
+        "plan",
+        "tasks",
+        "guide",
+        &format!(
+            "title: Document the retry\nstatus: todo\nproject: rollout\nrepositories: [{OPEN}]"
+        ),
+        "Explain the jitter.",
+    );
+    copy_rollout(&store);
+    assert_eq!(
+        shown(&store, "task", &guide_view)["content"],
+        "Explain the jitter."
+    );
+    assert!(edges_of(&store, &guide_view, "depends-on").is_empty());
     assert_eq!(site_files(), first, "still one view per public task");
     assert_site_neutral(&store);
 }
@@ -1435,4 +1484,115 @@ fn a_status_its_view_s_source_cannot_name_or_reach_says_it_reached_no_view() {
     let (kind, said) = store.refused(&["task", "status", "set", widget, "done"]);
     assert_eq!(kind, "projection-not-mirrored", "{said}");
     assert!(said.contains("nowhere"), "{said}");
+}
+
+#[test]
+fn a_copy_that_fails_after_giving_a_view_its_first_image_takes_the_image_away_again() {
+    let store = projecting_store();
+    private_rollout(&store);
+    // Where a folder of Markdown keeps a task's images, learned from a task holding one.
+    let image = store.sandbox.project().join("shot.png");
+    std::fs::write(&image, [7_u8; 64]).expect("the image");
+    let body = store.body("![probe](./shot.png)");
+    let image = image.display().to_string();
+    // Filed under a project of its own, so the plan's copy never carries it.
+    store.ok(&[
+        "task",
+        "create",
+        "plan",
+        "--project",
+        "scratch",
+        "--title",
+        "Probe",
+        "--body-file",
+        &body,
+        "--asset",
+        &image,
+    ]);
+    let probe: Value = serde_json::from_str(&store.ok(&["task", "show", "plan:probe", "--json"]))
+        .expect("the probe");
+    let probe_path = probe["assets"][0]["path"]
+        .as_str()
+        .expect("its image")
+        .to_owned();
+    let landed = copy_rollout(&store);
+    let guide_view = view_of(&store, &landed, &landed["plan:guide"]);
+    // The widget, whose view holds no image, now references one, and the guide's view, written
+    // after it, cannot be read.
+    let widget_image = probe_path.replace("probe", "widget");
+    std::fs::create_dir_all(
+        std::path::Path::new(&widget_image)
+            .parent()
+            .expect("a folder"),
+    )
+    .expect("the widget's image folder");
+    std::fs::write(&widget_image, [9_u8; 64]).expect("the widget's image");
+    store.record(
+        "plan",
+        "tasks",
+        "widget",
+        &format!(
+            "title: Add retry to the widget\nstatus: todo\nproject: rollout\n\
+             repositories: [{OPEN}]\ndepends_on: [producer]"
+        ),
+        "As drawn: ![the retry](./shot.png)",
+    );
+    let shown_widget: Value =
+        serde_json::from_str(&store.ok(&["task", "show", "plan:widget", "--json"]))
+            .expect("the widget");
+    assert_eq!(
+        shown_widget["assets"][0]["name"], "shot.png",
+        "{shown_widget:#}"
+    );
+    let guide_file = record_file(&store, "tasks", &guide_view);
+    let guide_held = std::fs::read(&guide_file).expect("the guide's view");
+    std::fs::remove_file(&guide_file).expect("moved aside");
+    std::fs::create_dir_all(guide_file.join("in-the-way")).expect("a folder in its place");
+    let site_before = tree(&store.folder("site"));
+    let output = store.run(&["project", "copy", "plan:rollout", "--to", "vault"]);
+    assert_ne!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(
+        tree(&store.folder("site")),
+        site_before,
+        "the widget's view holds no image again"
+    );
+    std::fs::remove_dir_all(&guide_file).expect("the folder taken away");
+    std::fs::write(&guide_file, guide_held).expect("the guide's view put back");
+}
+
+#[test]
+fn a_neutral_project_status_the_public_side_cannot_name_refuses_before_anything_is_written() {
+    // `site` names `done` alone: every public task is done, and the neutral project, which is
+    // made at `todo`, is what it cannot name.
+    let store = Store::laid(Some(registered), |sandbox| {
+        json!({
+            "vault": {"routes": [{"repositories": ["github.com/openco/*"], "to": "site"}]},
+            "site": {"config": {
+                "root": sandbox.subdirectory("site"),
+                "status_mapping": {"done": "done"},
+            }},
+        })
+    });
+    std::fs::create_dir_all(store.folder("site")).expect("the site folder");
+    private_rollout(&store);
+    for (id, title, depends) in [
+        ("widget", "Add retry to the widget", "producer"),
+        ("guide", "Document the retry", "widget"),
+    ] {
+        store.record(
+            "plan",
+            "tasks",
+            id,
+            &format!(
+                "title: {title}\nstatus: done\nproject: rollout\nrepositories: [{OPEN}]\n\
+                 depends_on: [{depends}]"
+            ),
+            PLAIN,
+        );
+    }
+    let before = store.tree();
+    let (kind, said) = store.refused(&["project", "copy", "plan:rollout", "--to", "vault"]);
+    assert_eq!(kind, "refused", "{said}");
+    assert!(said.contains("site") && said.contains("todo"), "{said}");
+    assert_eq!(store.tree(), before, "nothing was written anywhere");
 }

@@ -68,6 +68,7 @@ pub use closure::{
 pub use comment::{
     CommentList, CommentWritten, DeletedComment, DocumentDetail, TaskDetail, TaskDetails,
 };
+pub use copy::MirrorTarget;
 pub(crate) use copy::spent_between;
 pub use copy::{
     BudgetSpent, CommentCounts, CopyAction, CopyItems, CopyLink, CopyLookup, CopyOutcome,
@@ -550,7 +551,7 @@ pub enum EngineError {
     )]
     ProjectionReference {
         /// The canonical task, qualified.
-        task: String,
+        task: crate::GlobalId,
         /// The link's destination, as the content spells it.
         reference: String,
     },
@@ -565,7 +566,7 @@ pub enum EngineError {
     )]
     ProjectionsMalformed {
         /// The private project, qualified.
-        project: String,
+        project: crate::GlobalId,
         /// What is wrong with it.
         why: String,
     },
@@ -579,9 +580,10 @@ pub enum EngineError {
     )]
     ProjectionNotMirrored {
         /// The canonical task, qualified.
-        task: String,
-        /// The projection, qualified.
-        projection: String,
+        task: crate::GlobalId,
+        /// The view it has, or the map naming it when that could not be read — boxed, so every
+        /// other error is not as large as this one.
+        projection: Box<copy::MirrorTarget>,
         /// Why its write failed.
         why: String,
     },

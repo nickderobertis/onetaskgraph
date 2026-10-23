@@ -46,7 +46,7 @@ mod projections;
 mod query;
 mod record;
 mod snapshot;
-pub use projections::{PublicProjection, PublicProjections};
+pub use projections::{MirrorTarget, PublicProjection, PublicProjections};
 pub(super) use snapshot::single as single_detail;
 
 use query::{Slot, failed};

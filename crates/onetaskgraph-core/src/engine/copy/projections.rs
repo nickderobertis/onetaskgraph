@@ -17,7 +17,7 @@
 //! copy, so an edit made to a view is overwritten by the next copy and never reaches the
 //! canonical graph.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use onetaskgraph_plugin_api::{
     AssetPayload, Classification, DependencyEdge, DependencyEndpoint, DependencyKind, ItemKind,
@@ -201,6 +201,25 @@ impl PublicProjections {
         let before = self.tasks.len();
         self.tasks.retain(keep);
         self.tasks.len() != before
+    }
+}
+
+/// Which view a status mirror could not reach: the one the map names, or — when the map itself
+/// could not be read — whichever the map on the private project would have named.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MirrorTarget {
+    /// The view the map names.
+    View(GlobalId),
+    /// The map recorded on this private project, which could not be read.
+    MapOn(GlobalId),
+}
+
+impl std::fmt::Display for MirrorTarget {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::View(view) => write!(formatter, "{view}"),
+            Self::MapOn(project) => write!(formatter, "recorded on {project}"),
+        }
     }
 }
 
@@ -515,7 +534,7 @@ impl Projecting {
 struct Landing<'a> {
     project: &'a NativeId,
     map: &'a PublicProjections,
-    views: &'a BTreeMap<String, NativeId>,
+    views: &'a HashMap<GlobalId, NativeId>,
 }
 
 impl Engine {
@@ -558,10 +577,10 @@ impl Engine {
             .then_some(placed.destination)
     }
 
-    /// Hold every view `projecting` would write to the public boundary before anything of the
-    /// copy is written: a local link its content could not carry, a status its destination has
-    /// no name for, and the caller's check of everything the view and its project put in front
-    /// of a reader.
+    /// Hold every view `projecting` would write, and the neutral project each is filed under, to
+    /// the public boundary before anything of the copy is written: a local link its content
+    /// could not carry, a status its destination has no name for, and the caller's check of
+    /// everything the view and its project put in front of a reader.
     pub(super) async fn preflight_projections(
         &self,
         projecting: &Projecting,
@@ -585,6 +604,11 @@ impl Engine {
                 },
             )
             .await?;
+            destination
+                .source()
+                .check_status_write(ItemKind::Project, project.status.category, None)
+                .await
+                .map_err(|error| refused(destination, error))?;
         }
         for task in &projecting.tasks {
             let names: Vec<String> = task
@@ -598,7 +622,7 @@ impl Engine {
                     .next()
             {
                 return Err(EngineError::ProjectionReference {
-                    task: task.source.to_string(),
+                    task: task.source.clone(),
                     reference,
                 });
             }
@@ -641,12 +665,12 @@ impl Engine {
         let Some(home) = outcomes.first().and_then(CopyOutcome::destination).cloned() else {
             return Ok(());
         };
-        let canonical: BTreeMap<String, GlobalId> = outcomes
+        let canonical: HashMap<GlobalId, GlobalId> = outcomes
             .iter()
             .filter_map(|outcome| {
                 outcome
                     .destination()
-                    .map(|landed| (outcome.source.to_string(), landed.clone()))
+                    .map(|landed| (outcome.source.clone(), landed.clone()))
             })
             .collect();
         let at = self.writable(&home.source)?;
@@ -663,7 +687,7 @@ impl Engine {
         let projected: Vec<&GlobalId> = projecting
             .tasks
             .iter()
-            .filter_map(|task| canonical.get(&task.source.to_string()))
+            .filter_map(|task| canonical.get(&task.source))
             .collect();
         if map.retain(|entry| {
             !canonical.values().any(|landed| landed == &entry.task)
@@ -677,15 +701,14 @@ impl Engine {
             let project = self
                 .land_public_project(destination, &home, &ordered, &canonical, &map, journal)
                 .await?;
-            let mut views: BTreeMap<String, NativeId> = BTreeMap::new();
+            let mut views: HashMap<GlobalId, NativeId> = HashMap::new();
             let mut incomplete = Vec::new();
             for task in &ordered {
-                let Some(canonical_task) = canonical.get(&task.source.to_string()) else {
+                let Some(canonical_task) = canonical.get(&task.source) else {
                     continue;
                 };
                 let complete = task.depends_on.iter().all(|far| {
-                    !ordered.iter().any(|other| &other.source == far)
-                        || views.contains_key(&far.to_string())
+                    !ordered.iter().any(|other| &other.source == far) || views.contains_key(far)
                 });
                 let landing = Landing {
                     project: &project,
@@ -695,7 +718,7 @@ impl Engine {
                 let id = self
                     .land_view(destination, task, canonical_task, &landing, journal)
                     .await?;
-                views.insert(task.source.to_string(), id.clone());
+                views.insert(task.source.clone(), id.clone());
                 if map.set(canonical_task, &GlobalId::new(to.clone(), id)) {
                     self.record_projections(at, &home, &map, journal).await?;
                 }
@@ -706,7 +729,7 @@ impl Engine {
             // A view that depends on one landed after it — a cycle — is written again now that
             // every view it names is there.
             for task in incomplete {
-                let canonical_task = &canonical[&task.source.to_string()];
+                let canonical_task = &canonical[&task.source];
                 let landing = Landing {
                     project: &project,
                     map: &map,
@@ -728,7 +751,7 @@ impl Engine {
         PublicProjections::read(metadata)
             .and_then(|map| self.held_to_home(home, map))
             .map_err(|why| EngineError::ProjectionsMalformed {
-                project: home.to_string(),
+                project: home.clone(),
                 why,
             })
     }
@@ -766,13 +789,13 @@ impl Engine {
         destination: &ResolvedSource,
         home: &GlobalId,
         ordered: &[&Projected],
-        canonical: &BTreeMap<String, GlobalId>,
+        canonical: &HashMap<GlobalId, GlobalId>,
         map: &PublicProjections,
         journal: &mut Journal,
     ) -> Result<NativeId, EngineError> {
         for task in ordered {
             let Some(projection) = canonical
-                .get(&task.source.to_string())
+                .get(&task.source)
                 .and_then(|canonical| map.projection_of(canonical))
                 .filter(|projection| &projection.source == destination.name())
             else {
@@ -788,7 +811,7 @@ impl Engine {
                 return match self.not_neutral(destination, projection, &project).await? {
                     None => Ok(project),
                     Some(why) => Err(EngineError::ProjectionsMalformed {
-                        project: home.to_string(),
+                        project: home.clone(),
                         why,
                     }),
                 };
@@ -803,7 +826,7 @@ impl Engine {
         {
             if !is_neutral(&held) {
                 return Err(EngineError::ProjectionsMalformed {
-                    project: home.to_string(),
+                    project: home.clone(),
                     why: format!(
                         "{}:{id} holds the id its public projection project is made under, and is \
                          not one",
@@ -909,7 +932,7 @@ impl Engine {
         let edges: Vec<DependencyEdge> = task
             .depends_on
             .iter()
-            .filter_map(|far| landing.views.get(&far.to_string()))
+            .filter_map(|far| landing.views.get(far))
             .map(|far| DependencyEdge {
                 from: DependencyEndpoint::from_native(id.clone(), ItemKind::Task),
                 to: DependencyEndpoint::from_native(far.clone(), ItemKind::Task),
@@ -1069,13 +1092,14 @@ impl Engine {
         };
         // The canonical status has landed by now, so anything that keeps it from reaching the
         // view is reported as a mirror that did not happen, never as a write that did not.
-        let not_mirrored = |projection: String, why: String| EngineError::ProjectionNotMirrored {
-            task: task.to_string(),
-            projection,
-            why,
-        };
+        let not_mirrored =
+            |projection: MirrorTarget, why: String| EngineError::ProjectionNotMirrored {
+                task: task.clone(),
+                projection: Box::new(projection),
+                why,
+            };
         let home = GlobalId::new(task.source.clone(), project.clone());
-        let recorded_on = format!("recorded on {home}");
+        let recorded_on = MirrorTarget::MapOn(home.clone());
         let source = self.readable(&task.source)?;
         let Some(record) = source
             .source()
@@ -1095,29 +1119,30 @@ impl Engine {
         };
         // The view has to be one: a task filed under a public projection project.
         let named = projection.to_string();
+        let view = MirrorTarget::View(projection.clone());
         let public = self
             .writable(&projection.source)
-            .map_err(|error| not_mirrored(named.clone(), error.to_string()))?;
+            .map_err(|error| not_mirrored(view.clone(), error.to_string()))?;
         let filed = public
             .source()
             .get_task(&projection.native)
             .await
-            .map_err(|error| not_mirrored(named.clone(), refused(public, error).to_string()))?
-            .ok_or_else(|| not_mirrored(named.clone(), format!("no task {named} is there")))?
+            .map_err(|error| not_mirrored(view.clone(), refused(public, error).to_string()))?
+            .ok_or_else(|| not_mirrored(view.clone(), format!("no task {named} is there")))?
             .project
             .ok_or_else(|| {
-                not_mirrored(named.clone(), format!("{named} is filed under no project"))
+                not_mirrored(view.clone(), format!("{named} is filed under no project"))
             })?;
         if let Some(why) = self
             .not_neutral(public, &projection, &filed)
             .await
-            .map_err(|error| not_mirrored(named.clone(), error.to_string()))?
+            .map_err(|error| not_mirrored(view.clone(), error.to_string()))?
         {
-            return Err(not_mirrored(named, why));
+            return Err(not_mirrored(view, why));
         }
         Box::pin(self.set_task_status(&projection, category))
             .await
-            .map_err(|error| not_mirrored(named.clone(), error.to_string()))?;
+            .map_err(|error| not_mirrored(view.clone(), error.to_string()))?;
         Ok(Some(projection))
     }
 }
