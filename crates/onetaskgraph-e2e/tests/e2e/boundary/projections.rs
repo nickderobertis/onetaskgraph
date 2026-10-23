@@ -51,6 +51,11 @@ fn projecting_store() -> Store {
 /// public repository but private by its own record, `unknown` naming a repository nobody
 /// answers for, and the plan's design document.
 fn private_rollout(store: &Store) {
+    private_rollout_of(store, OPEN);
+}
+
+/// [`private_rollout`], its public work naming the public repository `public` instead.
+fn private_rollout_of(store: &Store, public: &str) {
     store.record(
         "plan",
         "projects",
@@ -71,7 +76,7 @@ fn private_rollout(store: &Store) {
         "widget",
         &format!(
             "title: Add retry to the widget\nstatus: todo\nproject: rollout\n\
-             repositories: [{OPEN}]\ndepends_on: [producer]"
+             repositories: [{public}]\ndepends_on: [producer]"
         ),
         "Retry with a capped exponential backoff. See [the spec](https://example.org/retry).",
     );
@@ -81,7 +86,7 @@ fn private_rollout(store: &Store) {
         "guide",
         &format!(
             "title: Document the retry\nstatus: todo\nproject: rollout\n\
-             repositories: [{OPEN}]\ndepends_on: [widget]"
+             repositories: [{public}]\ndepends_on: [widget]"
         ),
         PLAIN,
     );
@@ -91,7 +96,7 @@ fn private_rollout(store: &Store) {
         "embargoed",
         &format!(
             "title: Embargoed widget work\nstatus: todo\nproject: rollout\n\
-             repositories: [{OPEN}]\nclassification: private"
+             repositories: [{public}]\nclassification: private"
         ),
         PLAIN,
     );
@@ -443,4 +448,91 @@ fn a_tampered_projection_map_is_refused_rather_than_trusted() {
     let (kind, said) = store.refused(&["project", "copy", "plan:rollout", "--to", "vault"]);
     assert_eq!(kind, "projections-malformed", "{said}");
     assert_eq!(store.tree(), before, "nothing more was written");
+}
+
+/// The repository the loopback board files every issue in.
+const BOARD_REPOSITORY: &str = "github.com/nickderobertis/onetaskgraph";
+
+/// [`registered`], with the board's own repository answered public.
+fn registered_with_board(home: &mut OnevcsHome) {
+    registered(home);
+    home.public("nickderobertis", "onetaskgraph");
+}
+
+#[test]
+fn a_public_board_is_sent_the_neutral_views_and_nothing_of_the_private_plan() {
+    // The public side is a GitHub board, stood in for at its HTTP transport alone: every request
+    // the plugin sends it is recorded, and none may carry anything of the private plan.
+    let mut handle = None;
+    // The board files issues in its own repository, so the public work names that one, which
+    // the policy answers public.
+    let store = Store::laid(Some(registered_with_board), |sandbox| {
+        let (config, board) = crate::fixtures::github_projects_with_items(sandbox, Vec::new());
+        handle = Some(board);
+        json!({
+            "board": {"plugin": "github-projects", "config": config, "visibility": "public"},
+            "vault": {"routes": [{"repositories": [BOARD_REPOSITORY], "to": "board"}]},
+        })
+    });
+    let board = handle.expect("the board");
+    private_rollout_of(&store, BOARD_REPOSITORY);
+    let landed = copy_rollout(&store);
+    let sent = board.served();
+    let mutations: Vec<&(String, Value)> = sent
+        .iter()
+        .filter(|(document, _)| document.trim_start().starts_with("mutation"))
+        .collect();
+    assert!(!mutations.is_empty(), "the views were written to the board");
+    for (document, variables) in &sent {
+        let request = format!("{document}\n{variables}");
+        for named in NEVER_PUBLIC {
+            assert!(
+                !variables.to_string().contains(named),
+                "a request to the board carries {named:?}:\n{request}"
+            );
+        }
+    }
+    let map = projection_map(&store, &landed["plan:rollout"]);
+    let entries = map["tasks"].as_array().expect("the entries");
+    assert_eq!(entries.len(), 2, "{map:#}");
+    for entry in entries {
+        let view = entry["projection"].as_str().expect("a view");
+        assert!(view.starts_with("board:"), "{map:#}");
+        let shown_view = shown(&store, "task", view);
+        assert!(
+            ["Add retry to the widget", "Document the retry"]
+                .contains(&shown_view["title"].as_str().unwrap_or_default()),
+            "{shown_view:#}"
+        );
+    }
+
+    // A repeat sends the board no mutation, and a canonical status change sends it the
+    // category alone.
+    let before = board.served().len();
+    copy_rollout(&store);
+    assert!(
+        !board.served()[before..]
+            .iter()
+            .any(|(document, _)| document.trim_start().starts_with("mutation")),
+        "a repeat writes nothing to the board"
+    );
+    let set: Value = serde_json::from_str(&store.ok(&[
+        "task",
+        "status",
+        "set",
+        &landed["plan:widget"],
+        "done",
+        "--json",
+    ]))
+    .expect("a status answer");
+    let view = set["projection"].as_str().expect("mirrored to the view");
+    assert_eq!(shown(&store, "task", view)["status"]["category"], "done");
+    for (document, variables) in board.served() {
+        for named in NEVER_PUBLIC {
+            assert!(
+                !variables.to_string().contains(named),
+                "a request to the board carries {named:?}:\n{document}\n{variables}"
+            );
+        }
+    }
 }

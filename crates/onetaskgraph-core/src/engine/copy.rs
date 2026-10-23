@@ -5241,8 +5241,17 @@ impl Engine {
             // An item naming nothing at a destination is looked for there by its own origin, so
             // every such question is asked together, before the first of them would be — but for
             // a task whose priority that destination cannot hold, which is refused before the
-            // destination is asked anything.
+            // destination is asked anything, and for an item of a source declared private at a
+            // destination that is not: no copy records that origin there, and asking for it
+            // would send the private item's id to a destination that is not private.
+            let private_source =
+                self.declared(&read.source.source) == crate::config::SourceVisibility::Private;
             for there in &reachable {
+                if private_source
+                    && self.declared(there) != crate::config::SourceVisibility::Private
+                {
+                    continue;
+                }
                 let refused = match (&read.item, self.writable(there)) {
                     (Item::Task(task), Ok(destination)) => {
                         holds_priority(destination, &read.source.to_string(), task.priority)

@@ -21,7 +21,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use onetaskgraph_plugin_api::{
     AssetPayload, Classification, DependencyEdge, DependencyEndpoint, DependencyKind, ItemKind,
-    ItemWrite, NativeId, Priority, Project, SourceName, Status, StatusCategory, Task, WriteTarget,
+    ItemWrite, NativeId, Priority, Project, Repository, SourceName, Status, StatusCategory, Task,
+    WriteTarget,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -269,8 +270,18 @@ impl Projected {
     }
 }
 
-/// The neutral project every view of one plan in one public source is filed under.
-fn public_project(id: NativeId) -> Project {
+/// The neutral project every view of one plan in one public source is filed under, naming the
+/// views' own public repositories — a board files a view only under a project issue of its
+/// repository's owner — and nothing else.
+fn public_project(id: NativeId, views: &[&Projected]) -> Project {
+    let mut repositories: Vec<Repository> = Vec::new();
+    for view in views {
+        for repository in &view.task.repositories {
+            if !repositories.contains(repository) {
+                repositories.push(repository.clone());
+            }
+        }
+    }
     Project {
         id,
         title: PUBLIC_PROJECT_TITLE.to_owned(),
@@ -285,7 +296,7 @@ fn public_project(id: NativeId) -> Project {
         created_at: None,
         updated_at: None,
         metadata: BTreeMap::new(),
-        repositories: Vec::new(),
+        repositories,
         version: None,
         classification: Classification::Public,
     }
@@ -409,14 +420,17 @@ impl Engine {
     ) -> Result<(), EngineError> {
         for to in projecting.destinations() {
             let destination = self.writable(&to)?;
-            let project = public_project(NativeId(String::new()));
+            let project = public_project(NativeId(String::new()), &projecting.ordered(&to));
+            let classification = self
+                .classify(Classification::Public, &project.repositories)
+                .await;
             self.preflight(
                 destination,
                 &Outbound {
                     item: "the public projection project".to_owned(),
-                    classification: Classification::Public,
+                    classification,
                     target: WriteTarget::New {
-                        repositories: &[],
+                        repositories: &project.repositories,
                         project: None,
                     },
                     exposure: &Exposure::of_project(&project),
@@ -617,13 +631,13 @@ impl Engine {
         {
             return Ok(id);
         }
-        let project = public_project(id);
+        let project = public_project(id, ordered);
         let item = "the public projection project";
         self.at_write(
             destination,
             item,
             &WriteTarget::New {
-                repositories: &[],
+                repositories: &project.repositories,
                 project: None,
             },
         )
