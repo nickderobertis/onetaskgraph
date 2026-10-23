@@ -2670,6 +2670,7 @@ impl Engine {
                         }
                     }
                 }
+                let projecting = projecting.settled(&project);
                 plans.push((project, tasks, changed, projecting));
             } else {
                 let project = self
@@ -2713,7 +2714,14 @@ impl Engine {
                     );
                 }
                 project.classification = class;
-                plans.push((project, tasks, changed, projections::Projecting::default()));
+                // A plan its destination no longer routes anywhere public makes no view, and the
+                // map it recorded while it did forgets each one.
+                let projecting = if self.makes_projections(&request.destination, class) {
+                    projections::Projecting::active().settled(&project)
+                } else {
+                    projections::Projecting::default()
+                };
+                plans.push((project, tasks, changed, projecting));
             }
         }
         for (project, tasks, _, _) in &plans {

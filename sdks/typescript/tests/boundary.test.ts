@@ -252,6 +252,7 @@ test("a project copy records its public projections in the shape the generated m
     expect(view.startsWith("site:pt-")).toBe(true);
     // A shape the engine refuses, the declared schema refuses too.
     expect(validate({ ...recorded, extra: true })).toBe(false);
+    expect(validate({ ...recorded, schema_version: 2 })).toBe(false);
     // The store owns each task's visibility; a canonical status reaches the view alone.
     const producer = await projecting.taskShow(String(landed.get("plan:producer")));
     expect(producer.items[0]?.item.classification).toBe("private");

@@ -235,3 +235,5 @@ def test_a_project_copy_records_its_public_projections_in_the_shape_the_sdk_mode
     # A malformed map is refused by the model exactly as the engine refuses it.
     with pytest.raises(ValueError):
         PublicProjections.model_validate({"schema_version": 1, "tasks": [], "extra": True})
+    with pytest.raises(ValueError):
+        PublicProjections.model_validate({"schema_version": 2, "tasks": []})

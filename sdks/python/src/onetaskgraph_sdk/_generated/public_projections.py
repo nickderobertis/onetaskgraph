@@ -40,10 +40,7 @@ class PublicProjections(BaseModel):
     )
     schema_version: Annotated[
         int,
-        Field(
-            description="The version of this shape; [`PublicProjections::SCHEMA_VERSION`] is the only one.",
-            ge=0,
-        ),
+        Field(description="The version of this shape; 1 is the only one.", ge=1, le=1),
     ]
     tasks: Annotated[
         list[PublicProjection],

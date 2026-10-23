@@ -176,7 +176,6 @@ impl Engine {
                 &delivers,
             )
             .await;
-        // A canonical task with a public projection hands it the category alone.
         let projection = self.mirror_status(id, &task, status.category).await?;
         Ok(TaskStatusSet {
             id: id.clone(),

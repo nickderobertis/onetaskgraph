@@ -6316,12 +6316,15 @@ export namespace GeneratedPublicProjections {
 /**
  * The private destination project's map from each canonical task to its public projection.
  *
- * Read with [`PublicProjections::read`], which holds a stored value to every rule of the
- * shape, and written back with [`PublicProjections::to_value`].
+ * Every value of it holds to the shape: its `schema_version` is
+ * [`PublicProjections::SCHEMA_VERSION`] and its entries are unique by both ids. Deserializing
+ * one is held to both — [`PublicProjections::parse`] names what is wrong — and the entries
+ * change only through [`PublicProjections::set`] and [`PublicProjections::retain`], which keep
+ * them so. Written back with [`PublicProjections::to_value`].
  */
 export interface PublicProjections {
 /**
- * The version of this shape; [`PublicProjections::SCHEMA_VERSION`] is the only one.
+ * The version of this shape; 1 is the only one.
  */
 schema_version: number
 /**

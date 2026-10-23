@@ -10571,12 +10571,13 @@ export const runtimeSchemas = {
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "additionalProperties": false,
-    "description": "The private destination project's map from each canonical task to its public projection.\n\nRead with [`PublicProjections::read`], which holds a stored value to every rule of the\nshape, and written back with [`PublicProjections::to_value`].",
+    "description": "The private destination project's map from each canonical task to its public projection.\n\nEvery value of it holds to the shape: its `schema_version` is\n[`PublicProjections::SCHEMA_VERSION`] and its entries are unique by both ids. Deserializing\none is held to both — [`PublicProjections::parse`] names what is wrong — and the entries\nchange only through [`PublicProjections::set`] and [`PublicProjections::retain`], which keep\nthem so. Written back with [`PublicProjections::to_value`].",
     "properties": {
       "schema_version": {
-        "description": "The version of this shape; [`PublicProjections::SCHEMA_VERSION`] is the only one.",
+        "description": "The version of this shape; 1 is the only one.",
         "format": "uint32",
-        "minimum": 0,
+        "maximum": 1,
+        "minimum": 1,
         "type": "integer"
       },
       "tasks": {
