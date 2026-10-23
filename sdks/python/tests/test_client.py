@@ -397,6 +397,7 @@ def test_copy_drives_the_binary_and_reports_each_item(binary: Path, tmp_path: Pa
     # The destination really holds it, read back through the same binary.
     assert without_record(run(client.task_show(id="into:T-1")).items[0].item.metadata) == {
         "caller.count": 3,
+        "onetaskgraph.edges_on_record": 1,
         "onetaskgraph.origin": "from:T-1",
     }
 
@@ -488,7 +489,8 @@ def test_task_copy_create_drives_the_binary(binary: Path, tmp_path: Path) -> Non
         ("from:T-2", "into:T-2", "created")
     ]
     assert without_record(run(client.task_show(id="into:T-2")).items[0].item.metadata) == {
-        "onetaskgraph.origin": "from:T-2"
+        "onetaskgraph.edges_on_record": 1,
+        "onetaskgraph.origin": "from:T-2",
     }
 
     # The copy recorded its link on the source task, so asserting there is no counterpart
@@ -628,7 +630,11 @@ def test_a_dependency_read_answers_without_a_private_source_it_cannot_authentica
         "---\ntitle: Engine\n---\n", encoding="utf-8"
     )
     (tmp_path / "work" / "tasks" / "T-1.md").write_text(
-        "---\ntitle: Ship\nproject: P-1\n---\n", encoding="utf-8"
+        # Landed by a copy that kept its edge on the private side: only such a task's read asks
+        # the private source what it records of it.
+        "---\ntitle: Ship\nproject: P-1\nmetadata:\n"
+        "  onetaskgraph.copied_destination_version: sha256:00\n---\n",
+        encoding="utf-8",
     )
     (tmp_path / "vault" / "tasks" / "V-1.md").write_text(
         "---\ntitle: Approve\nmetadata:\n  onetaskgraph.depended_on_by:\n"
@@ -655,7 +661,8 @@ def test_a_dependency_read_answers_without_a_private_source_it_cannot_authentica
     graph = run(client.project_graph(id="work:P-1"))
     assert [(edge.from_.root, edge.to.root) for edge in graph.edges] == [("vault:V-1", "work:T-1")]
     assert graph.unanswered is not None
-    assert [(failure.source.root, failure.error.root.kind) for failure in graph.unanswered] == [
+    # Each entry is a source not asked, or a designator no source is: here, a source.
+    assert [(entry.root.source.root, entry.root.error.root.kind) for entry in graph.unanswered] == [
         ("ledger", "auth")
     ]
     deps = run(client.task_deps(id="work:T-1"))
@@ -663,7 +670,7 @@ def test_a_dependency_read_answers_without_a_private_source_it_cannot_authentica
         ("work:T-1", "vault:V-1")
     ]
     assert deps.errors == []
-    assert [failure.source.root for failure in deps.unanswered] == ["ledger"]
+    assert [entry.root.source.root for entry in deps.unanswered] == ["ledger"]
 
     with pytest.raises(OnetaskgraphError) as refused:
         run(client.project_graph(id="work:P-1", complete=True))

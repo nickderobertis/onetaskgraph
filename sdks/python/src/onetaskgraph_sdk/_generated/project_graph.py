@@ -10,6 +10,16 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, Field, RootModel
 
 
+class Designator(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="A tracker, named without conveying anything about it: `<plugin>/` and the hex SHA-256 of `<plugin>\n<backend identifier>`, or `alias/<public_alias>`.",
+            pattern="^(alias/[A-Za-z0-9_-]{16,64}|[a-z0-9][a-z0-9-]*/[0-9a-f]{64})$",
+        ),
+    ]
+
+
 class FailureClass(StrEnum):
     FailureClassRefused = "refused"
     FailureClassTransient = "transient"
@@ -150,6 +160,10 @@ class SourceName(RootModel[str]):
     ]
 
 
+class UnresolvedReason(StrEnum):
+    UnresolvedReasonNot_Configured_On_This_Host = "not configured on this host"
+
+
 class SourceFailure(BaseModel):
     class_: Annotated[
         FailureClass,
@@ -160,6 +174,20 @@ class SourceFailure(BaseModel):
     ]
     error: Annotated[SourceError, Field(description="Why.")]
     source: Annotated[SourceName, Field(description="The source that failed.")]
+
+
+class UnresolvedDesignator(BaseModel):
+    designator: Annotated[
+        Designator, Field(description="The designator the far end was recorded under.")
+    ]
+    reason: Annotated[UnresolvedReason, Field(description="Why it was not resolved.")]
+
+
+class Unanswered(RootModel[SourceFailure | UnresolvedDesignator]):
+    root: Annotated[
+        SourceFailure | UnresolvedDesignator,
+        Field(description="One thing a dependency read could not ask."),
+    ]
 
 
 class ProjectGraph(BaseModel):
@@ -188,7 +216,7 @@ class ProjectGraph(BaseModel):
         int, Field(description="The version of this document's shape; `1`.", ge=0)
     ]
     unanswered: Annotated[
-        list[SourceFailure],
+        list[Unanswered],
         Field(
             description="Each source declared private that could not be asked what it records of the project's\ntasks, and why — so `edges` lacks whatever it records. Absent when every source\nanswered, which is the one case the graph is complete.",
             validate_default=True,
