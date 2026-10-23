@@ -1090,7 +1090,9 @@ impl Engine {
             return Ok(None);
         };
         // The view has to be one: a task filed under a public projection project.
-        let public = self.writable(&projection.source)?;
+        let public = self
+            .writable(&projection.source)
+            .map_err(|error| not_mirrored(projection.to_string(), error))?;
         let filed = public
             .source()
             .get_task(&projection.native)

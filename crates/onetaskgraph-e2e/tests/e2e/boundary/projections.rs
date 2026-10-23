@@ -1107,3 +1107,147 @@ fn a_dry_run_of_a_private_plan_with_views_writes_nothing_anywhere() {
     ]);
     assert_eq!(kind, "boundary-refused", "{said}");
 }
+
+/// The view the map of `landed`'s private project records for the canonical task `canonical`.
+fn view_of(store: &Store, landed: &BTreeMap<String, String>, canonical: &str) -> String {
+    projection_map(store, &landed["plan:rollout"])["tasks"]
+        .as_array()
+        .expect("entries")
+        .iter()
+        .find(|entry| entry["task"] == canonical)
+        .and_then(|entry| entry["projection"].as_str())
+        .unwrap_or_else(|| panic!("a view of {canonical}"))
+        .to_owned()
+}
+
+/// The file a folder of Markdown keeps the item `id` of `kind` in.
+fn record_file(store: &Store, kind: &str, id: &str) -> std::path::PathBuf {
+    let (folder, native) = id.split_once(':').expect("a qualified id");
+    store.folder(folder).join(kind).join(format!("{native}.md"))
+}
+
+#[test]
+fn an_opaque_project_id_another_project_already_holds_is_refused_and_the_copy_taken_back() {
+    // The neutral project's id is derived from the private project's, so a first store tells
+    // a second which id its copy would make it under.
+    let first = projecting_store();
+    private_rollout(&first);
+    let landed = copy_rollout(&first);
+    let neutral = shown(
+        &first,
+        "task",
+        &view_of(&first, &landed, &landed["plan:widget"]),
+    )["project"]
+        .as_str()
+        .expect("filed under the neutral project")
+        .to_owned();
+
+    let store = projecting_store();
+    private_rollout(&store);
+    store.record(
+        "site",
+        "projects",
+        &neutral,
+        "title: Somebody's roadmap\nstatus: todo",
+        "Their own plans.",
+    );
+    let before = store.tree();
+    let (kind, said) = store.refused(&["project", "copy", "plan:rollout", "--to", "vault"]);
+    assert_eq!(kind, "projections-malformed", "{said}");
+    assert!(said.contains(&neutral), "{said}");
+    assert_eq!(store.tree(), before, "the canonical plan is taken back too");
+}
+
+#[test]
+fn a_view_filed_under_a_project_that_is_not_neutral_is_refused_by_a_copy_and_a_mirror() {
+    let store = projecting_store();
+    private_rollout(&store);
+    let landed = copy_rollout(&store);
+    let widget = &landed["plan:widget"];
+    let view = view_of(&store, &landed, widget);
+    store.record(
+        "site",
+        "projects",
+        "roadmap",
+        "title: Roadmap\nstatus: todo",
+        "Prose.",
+    );
+    let file = record_file(&store, "tasks", &view);
+    let moved = std::fs::read_to_string(&file)
+        .expect("the view")
+        .lines()
+        .map(|line| {
+            if line.starts_with("project:") {
+                "project: roadmap\n".to_owned()
+            } else {
+                format!("{line}\n")
+            }
+        })
+        .collect::<String>();
+    std::fs::write(&file, moved).expect("the view moved");
+    let before = store.tree();
+    let (kind, said) = store.refused(&["project", "copy", "plan:rollout", "--to", "vault"]);
+    assert_eq!(kind, "projections-malformed", "{said}");
+    assert!(said.contains("roadmap"), "{said}");
+    assert_eq!(store.tree(), before, "nothing more was written");
+    let (kind, said) = store.refused(&["task", "status", "set", widget, "done"]);
+    assert_eq!(kind, "projection-not-mirrored", "{said}");
+    assert!(said.contains("roadmap"), "{said}");
+    assert_eq!(shown(&store, "task", widget)["status"]["category"], "done");
+    assert_eq!(shown(&store, "task", &view)["status"]["category"], "todo");
+}
+
+#[test]
+fn a_view_a_person_took_out_of_its_project_is_left_and_a_new_view_is_recorded() {
+    let store = projecting_store();
+    private_rollout(&store);
+    let landed = copy_rollout(&store);
+    let widget = &landed["plan:widget"];
+    let view = view_of(&store, &landed, widget);
+    let file = record_file(&store, "tasks", &view);
+    let taken_out: String = std::fs::read_to_string(&file)
+        .expect("the view")
+        .lines()
+        .filter(|line| !line.starts_with("project:"))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    std::fs::write(&file, &taken_out).expect("taken out of its project");
+    copy_rollout(&store);
+    let recorded = view_of(&store, &landed, widget);
+    assert_ne!(recorded, view, "a new view is recorded");
+    assert_eq!(
+        std::fs::read_to_string(&file).expect("the old one"),
+        taken_out,
+        "the one a person took out is left as they left it"
+    );
+    let fresh = shown(&store, "task", &recorded);
+    assert_eq!(fresh["title"], "Add retry to the widget");
+    assert_eq!(
+        fresh["project"],
+        shown(
+            &store,
+            "task",
+            &view_of(&store, &landed, &landed["plan:guide"])
+        )["project"]
+    );
+    let before = store.tree();
+    copy_rollout(&store);
+    assert_eq!(store.tree(), before, "and the next copy writes nothing");
+}
+
+#[test]
+fn a_status_whose_view_s_source_is_unavailable_says_it_reached_no_view() {
+    let store = projecting_store();
+    private_rollout(&store);
+    let landed = copy_rollout(&store);
+    let widget = &landed["plan:widget"];
+    let view = view_of(&store, &landed, widget);
+    let site = store.folder("site");
+    let aside = store.sandbox.project().join("site-aside");
+    std::fs::rename(&site, &aside).expect("the public folder taken away");
+    let (kind, said) = store.refused(&["task", "status", "set", widget, "done"]);
+    std::fs::rename(&aside, &site).expect("the public folder put back");
+    assert_eq!(kind, "projection-not-mirrored", "{said}");
+    assert!(said.contains(widget) && said.contains(&view), "{said}");
+    assert_eq!(shown(&store, "task", widget)["status"]["category"], "done");
+}
