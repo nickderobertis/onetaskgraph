@@ -141,11 +141,9 @@ const CASES: &[&str] = &[
     "write_task_rendered",
     "write_project_rendered",
     "write_document_rendered",
-    // `set_rendering`.
     "set_task_rendering",
     "set_project_rendering",
     "set_document_rendering",
-    // `update_task`.
     "update_task",
     // `rewrite_front_entry`.
     "set_task_status",
@@ -154,7 +152,6 @@ const CASES: &[&str] = &[
     "set_delivered_by",
     // `replace_content`.
     "set_task_content",
-    // `set_metadata`.
     "set_task_metadata",
     "set_project_metadata",
     "set_document_metadata",
@@ -167,7 +164,6 @@ const CASES: &[&str] = &[
     "write_task_with_assets",
 ];
 
-/// Make the write `case` names in `root`, as the writer process.
 fn write(case: &str, root: &Path) -> Result<(), String> {
     let source = source(root);
     let runtime = runtime();
@@ -391,7 +387,6 @@ fn folder() -> tempfile::TempDir {
     root
 }
 
-/// How the writer is stopped part-way.
 #[derive(Clone, Copy, PartialEq)]
 enum Stop {
     /// Killed by the limit's signal in the middle of its `write`, so held there for good.
@@ -534,7 +529,6 @@ fn whole(root: &Path, case: &str) -> Result<(), String> {
     })
 }
 
-/// Every file under `root`, by its path there.
 fn files(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     let mut found = BTreeMap::new();
     let mut pending = vec![root.to_path_buf()];
