@@ -1995,7 +1995,8 @@ repositories would say. Without one, its home goes where its private tasks' repo
 it — see [Which writes route, and where each item lands](#which-writes-route-and-where-each-item-lands);
 with no private source reachable, the whole copy is refused before anything is written. Either
 way every task of the plan lands canonically beside that private home, and its public tasks are
-seen publicly only through the views below.
+seen publicly only through the views below. `sources route <SOURCE> --classification private`
+answers where such an item would go.
 
 **Public projections of a private plan.** A private coordination project copied, while the
 boundary is active, to a home declared private — `project copy PRIVATE_HOME --to
@@ -2032,10 +2033,11 @@ it the moment the view is created, so a copy interrupted part way and run again 
 it made — by the map, by its opaque id, or, at a destination that issues ids of its own, as the
 one task under the public project no map entry names with the view's title and repositories —
 rather than making a second. A view recorded private is refused rather than written public again,
-and every field a person adds to a view in public is taken off by the next copy. `task status set` of a
-canonical task with a view sets the view's status category too, through the view's own screened
-status write, and answers it as `projection`; nothing but the category crosses. `sources route <SOURCE>
---classification private` answers where such an item would go.
+and every field a person adds to a view in public is taken off by the next copy. A canonical task
+with a view hands it every new status category — `task status set` and a `task update` naming a
+status each answer the view as `projection`, and a ticket the delivery rule moves moves its view —
+through the view's own screened status write; nothing but the category crosses, and a view's other
+fields change only with the next copy.
 
 **Every check runs before the first write.** A copy holds every item of every project to the
 boundary before it writes any, and each write reads its destination's reality immediately

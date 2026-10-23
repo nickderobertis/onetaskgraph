@@ -3057,8 +3057,8 @@ const FORTY_THIRD_BUNDLE_SHAPE: [(&str, u64); 132] = [
 
 // llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This is the version-45 row of the one append-only golden of the whole bundle both SDKs are generated from, and every row before it lists the same roots, `LinearConfig` among them, because `schema.rs` registers that plugin configuration as a root: split per owner, no table could tell whether a version republishes an earlier shape. The row is pasted from what the test prints and is verified against what the binary emits.
 /// Version 45 adds `PublicProjections`, the map a private destination project records from
-/// each canonical task to its public view, and `TaskStatusSet.projection`, and states that a
-/// task's classification is its own.
+/// each canonical task to its public view, `TaskStatusSet.projection` and
+/// `TaskUpdated.projection`, and states that a task's classification is its own.
 const FORTY_FIFTH_BUNDLE_SHAPE: [(&str, u64); 133] = [
     ("Asset", 0x3861b2a394973652),
     ("AssetContentType", 0x045a0ea0dface7ec),
@@ -3183,7 +3183,7 @@ const FORTY_FIFTH_BUNDLE_SHAPE: [(&str, u64); 133] = [
     ("TaskStatusSet", 0x93f775d84ce36557),
     ("TaskUpdate", 0xea0b0cb53c32ab8f),
     ("TaskUpdateOutcome", 0x04326a9eb1945018),
-    ("TaskUpdated", 0xcf19a7c7bd77b38c),
+    ("TaskUpdated", 0xa8c474f48273fccb),
     ("TemplateAnswers", 0xbeb56ff5ed8f5ebc),
     ("TemplateProvenance", 0x297651a29bb44a49),
     ("TemplateVariable", 0x482dac5032a65dec),

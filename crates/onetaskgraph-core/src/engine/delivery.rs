@@ -421,13 +421,20 @@ impl Engine {
             return entry(failed(Some(from), &error), pruned);
         }
         match source.source().set_task_status(&ticket.native, to).await {
-            Ok(Some(status)) => entry(
-                DeliveryOutcome::Written {
-                    from,
-                    to: status.category,
-                },
-                pruned,
-            ),
+            // A ticket with a public projection hands it the category too; a mirror that could
+            // not be made is this ticket's failure, its own status written.
+            Ok(Some(status)) => {
+                match Box::pin(self.mirror_status(ticket, &task, status.category)).await {
+                    Ok(_) => entry(
+                        DeliveryOutcome::Written {
+                            from,
+                            to: status.category,
+                        },
+                        pruned,
+                    ),
+                    Err(error) => entry(failed(Some(from), &error), pruned),
+                }
+            }
             Ok(None) => entry(failed(Some(from), &no_such_task()), pruned),
             Err(error) => entry(failed(Some(from), &source_failed(source, error)), pruned),
         }

@@ -23807,6 +23807,17 @@ export const runtimeSchemas = {
         "$ref": "#/$defs/GlobalId",
         "description": "The task updated."
       },
+      "projection": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/GlobalId"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "The public projection a written status category was mirrored to — absent when the\nupdate wrote no status, and for a task with no projection."
+      },
       "result": {
         "anyOf": [
           {

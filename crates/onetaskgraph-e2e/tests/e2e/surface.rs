@@ -308,7 +308,12 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
         bundle["roots"]["PublicProjections"]["required"],
         serde_json::json!(["schema_version", "tasks"])
     );
-    assert!(bundle["roots"]["TaskStatusSet"]["properties"]["projection"].is_object());
+    for root in ["TaskStatusSet", "TaskUpdated"] {
+        assert!(
+            bundle["roots"][root]["properties"]["projection"].is_object(),
+            "{root}"
+        );
+    }
     // Version 42: each closure item's `kind`, the project item a holding or a contradiction can
     // carry, and what `project status set` answers with.
     for root in ["IssueCompleted", "StatusReconciled"] {

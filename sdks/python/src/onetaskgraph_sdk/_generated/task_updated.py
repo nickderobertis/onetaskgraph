@@ -467,6 +467,12 @@ class TaskUpdated(BaseModel):
         ),
     ] = None
     id: Annotated[GlobalId, Field(description="The task updated.")]
+    projection: Annotated[
+        GlobalId | None,
+        Field(
+            description="The public projection a written status category was mirrored to — absent when the\nupdate wrote no status, and for a task with no projection."
+        ),
+    ] = None
     result: Annotated[
         WriteResult | None,
         Field(

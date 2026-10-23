@@ -374,6 +374,56 @@ fn a_canonical_status_change_mirrors_its_category_alone_to_the_view() {
         shown(&store, "task", widget)["status"]["category"],
         "in-progress"
     );
+    // A targeted update naming the status mirrors it the same way, and answers the view.
+    let updated: Value =
+        serde_json::from_str(&store.ok(&["task", "update", widget, "--status", "done", "--json"]))
+            .expect("an update answer");
+    assert_eq!(updated["projection"], view, "{updated:#}");
+    assert_eq!(shown(&store, "task", view)["status"]["category"], "done");
+    // One naming no status hands the view nothing.
+    let renamed: Value = serde_json::from_str(&store.ok(&[
+        "task",
+        "update",
+        widget,
+        "--title",
+        "Add retry to the widget, again",
+        "--json",
+    ]))
+    .expect("an update answer");
+    assert!(renamed.get("projection").is_none(), "{renamed:#}");
+    assert_eq!(
+        shown(&store, "task", view)["title"],
+        "Add retry to the widget",
+        "a view takes its content from the next copy, never from a narrow write"
+    );
+    // A status the delivery rule writes to a canonical ticket reaches its view too: the guide
+    // is delivered by the private producer, which starts.
+    let guide = &landed["plan:guide"];
+    let guide_view = view_of(&store, &landed, guide);
+    store.ok(&[
+        "task",
+        "update",
+        &landed["plan:producer"],
+        "--delivers",
+        guide,
+    ]);
+    let started: Value = serde_json::from_str(&store.ok(&[
+        "task",
+        "status",
+        "set",
+        &landed["plan:producer"],
+        "in-progress",
+        "--json",
+    ]))
+    .expect("a status answer");
+    let delivered = &started["delivered"][0];
+    assert_eq!(delivered["outcome"], "written", "{started:#}");
+    let moved = shown(&store, "task", guide)["status"]["category"].clone();
+    assert_ne!(moved, "todo", "{started:#}");
+    assert_eq!(
+        shown(&store, "task", &guide_view)["status"]["category"],
+        moved
+    );
     // A private task has no view, and its status stays where it is.
     let producer: Value = serde_json::from_str(&store.ok(&[
         "task",

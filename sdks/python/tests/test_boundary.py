@@ -232,6 +232,11 @@ def test_a_project_copy_records_its_public_projections_in_the_shape_the_sdk_mode
     assert status.projection is not None
     assert status.projection.root == view
     assert run(client.task_show(view)).items[0].item.status.category == "done"
+    # So does a targeted update naming the status, which answers the view too.
+    updated = run(client.task_update(landed["plan:widget"], status="in-progress"))
+    assert updated.projection is not None
+    assert updated.projection.root == view
+    assert run(client.task_show(view)).items[0].item.status.category == "in-progress"
     # A malformed map is refused by the model exactly as the engine refuses it.
     with pytest.raises(ValueError):
         PublicProjections.model_validate({"schema_version": 1, "tasks": [], "extra": True})

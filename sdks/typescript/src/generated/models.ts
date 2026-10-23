@@ -13271,6 +13271,11 @@ fallback?: (WriteFallback | null)
  */
 id: string
 /**
+ * The public projection a written status category was mirrored to — absent when the
+ * update wrote no status, and for a task with no projection.
+ */
+projection?: (GlobalId | null)
+/**
  * What each mutation an expected write sent came to — present when the write was made
  * with `--expect` on a source that reports its writes' parts.
  */

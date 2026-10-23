@@ -260,6 +260,11 @@ test("a project copy records its public projections in the shape the generated m
     expect(String(status.projection)).toBe(view);
     const mirrored = await projecting.taskShow(view);
     expect(mirrored.items[0]?.item.status.category).toBe("done");
+    // So does a targeted update naming the status, which answers the view too.
+    const updated = await projecting.taskUpdate(widget, { status: "in-progress" });
+    expect(String(updated.projection)).toBe(view);
+    const again = await projecting.taskShow(view);
+    expect(again.items[0]?.item.status.category).toBe("in-progress");
   } finally {
     rmSync(at, { recursive: true, force: true });
   }
