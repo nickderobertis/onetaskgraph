@@ -542,8 +542,23 @@ impl Engine {
             .map(|(prerequisite, _)| prerequisite)
             .filter(|prerequisite| !own.contains_key(prerequisite))
             .collect();
+        // A far end whose source could not be asked is already named in `unanswered`: it is
+        // drawn under its qualified id rather than asked again, so the graph answers as a
+        // dependency read does.
+        let unasked: HashSet<&str> = unanswered
+            .iter()
+            .filter_map(|entry| match entry {
+                Unanswered::Source(failure) => Some(failure.source.as_str()),
+                Unanswered::Designator(_) => None,
+            })
+            .collect();
         for id in outside {
-            externals.push((self.graph_title(id).await?, id.clone()));
+            let title = if unasked.contains(id.source.as_str()) {
+                id.to_string()
+            } else {
+                self.graph_title(id).await?
+            };
+            externals.push((title, id.clone()));
         }
         externals.sort_by_key(|(title, id)| tie(title, id));
 

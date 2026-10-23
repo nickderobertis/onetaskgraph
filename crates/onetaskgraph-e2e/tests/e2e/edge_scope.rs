@@ -1834,3 +1834,213 @@ fn a_github_board_holds_a_private_prerequisite_opaquely_and_reads_it_back() {
         "{read}"
     );
 }
+
+/// While the boundary is active, an item classified private in a source not declared private is
+/// a private far end too: onto a public destination its qualified native id is written in the
+/// opaque form under its source's `public_alias`, and its prefixed key refused, while an item of
+/// that source not classified private is written as it was given.
+#[test]
+fn an_item_classified_private_in_an_undeclared_source_is_named_opaquely() {
+    const ALIAS: &str = "shared_notes-2026-q4";
+    let sandbox = Sandbox::new();
+    let site = folder(&sandbox, "site", &[("S-1", "title: Publish\n")]);
+    let shared = folder(
+        &sandbox,
+        "shared",
+        &[
+            ("covert", "title: Covert step\nclassification: private\n"),
+            (
+                "CVT-7",
+                "title: Covert keyed step\nclassification: private\n",
+            ),
+            ("open", "title: Open step\n"),
+        ],
+    );
+    sandbox.project_document(&configured(&json!({
+        "site": {"plugin": "local-md", "config": {"root": site}, "visibility": "public"},
+        "shared": {"plugin": "local-md", "config": {"root": shared}, "public_alias": ALIAS},
+    })));
+    let record = || std::fs::read_to_string(site.join("tasks/S-1.md")).expect("the task");
+
+    let before = record();
+    let output = run(
+        &sandbox,
+        &[
+            "task",
+            "update",
+            "site:S-1",
+            "--depends-on",
+            "shared:CVT-7",
+            "--json",
+        ],
+    );
+    assert_ne!(output.status.code(), Some(0), "{}", stderr(&output));
+    let message = format!("{}{}", stdout(&output), stderr(&output));
+    assert!(
+        message.contains("private-reference-content") && message.contains("a prefixed key"),
+        "{message}"
+    );
+    assert!(!message.contains("CVT-7"), "{message}");
+    assert_eq!(record(), before, "the refusal wrote nothing");
+
+    answered(
+        &sandbox,
+        &[
+            "task",
+            "update",
+            "site:S-1",
+            "--depends-on",
+            "shared:covert",
+            "--depends-on",
+            "shared:open",
+            "--json",
+        ],
+        0,
+    );
+    let stored = record();
+    assert!(stored.contains(&format!("alias/{ALIAS}")), "{stored}");
+    assert!(!stored.contains("shared:covert"), "{stored}");
+    assert!(stored.contains("shared:open"), "{stored}");
+    let read = answered(&sandbox, &["task", "deps", "site:S-1", "--json"], 0);
+    let mut found = edges(&read);
+    found.sort();
+    assert_eq!(
+        found,
+        [
+            ("site:S-1".to_owned(), "shared:covert".to_owned()),
+            ("site:S-1".to_owned(), "shared:open".to_owned()),
+        ]
+    );
+}
+
+/// `project graph` draws an opaque far end whose source cannot be asked as an edge to that
+/// source, exiting 0 and naming it in `unanswered`; `--complete` refuses that answer.
+#[test]
+fn a_project_graph_names_an_opaque_far_end_s_unanswering_source_and_complete_refuses_it() {
+    let sandbox = Sandbox::new();
+    let far = designator("linear", "org-plans");
+    let notes = folder(
+        &sandbox,
+        "notes",
+        &[(
+            "T-1",
+            &format!(
+                "title: Ship\nproject: P-1\ndepends_on:\n  - {{designator: {far}, id: L-9, item: task}}\n"
+            ),
+        )],
+    );
+    std::fs::create_dir_all(notes.join("projects")).expect("the projects folder");
+    std::fs::write(notes.join("projects/P-1.md"), "---\ntitle: Launch\n---\n").expect("a project");
+    let (mute, _) = linear_rate_limited(&sandbox);
+    let kept = sandbox.subdirectory("kept");
+    let identity = format!("{}\nFIX", mute["endpoint"].as_str().expect("an endpoint"));
+    std::fs::write(
+        kept.join("designator.json"),
+        json!({"schema": 1, "remote": remote("linear", &identity), "designator": far}).to_string(),
+    )
+    .expect("a kept designator");
+    sandbox.project_document(&configured(&json!({
+        "notes": {"plugin": "local-md", "config": {"root": notes}},
+        "plans": {"plugin": "linear", "config": mute, "cache": {"dir": kept}},
+    })));
+
+    let graph = answered(
+        &sandbox,
+        &["project", "graph", "notes:P-1", "--format", "json"],
+        0,
+    );
+    assert!(
+        graph["edges"]
+            .as_array()
+            .expect("the edges")
+            .contains(&json!({"from": "plans:L-9", "to": "notes:T-1"})),
+        "{graph:#}"
+    );
+    assert!(
+        graph["unanswered"]
+            .as_array()
+            .expect("the unanswered")
+            .iter()
+            .any(|entry| entry["source"] == "plans"),
+        "{graph:#}"
+    );
+
+    let refused = run(
+        &sandbox,
+        &[
+            "project",
+            "graph",
+            "notes:P-1",
+            "--format",
+            "json",
+            "--complete",
+        ],
+    );
+    assert_ne!(refused.status.code(), Some(0), "{}", stdout(&refused));
+    assert!(stderr(&refused).contains("plans"), "{}", stderr(&refused));
+}
+
+/// A copy onto a public destination whose private prerequisite's source cannot say which tracker
+/// it is — its one designator request answered without the organization — withholds that edge
+/// as it does for a source with no designator: the copy lands, carries neither the edge nor the
+/// `edges_on_record` mark, and the source task still reads its edge.
+#[test]
+fn a_copy_whose_private_source_cannot_be_designated_withholds_the_edge() {
+    let sandbox = Sandbox::new();
+    let site = folder(&sandbox, "site", &[]);
+    let notes = folder(
+        &sandbox,
+        "notes",
+        &[(
+            "T-1",
+            "title: Ship\ndepends_on: [{id: plans:L-9, item: task}]\n",
+        )],
+    );
+    let (plans, workspace) = workspace(
+        &sandbox,
+        "org-plans",
+        json!([issue("L-9", "Review", json!({}))]),
+    );
+    workspace.bend_answers(
+        |query, _| query == graphql::ORGANIZATION,
+        usize::MAX,
+        |_, data| {
+            data.as_object_mut()
+                .expect("an answer")
+                .remove("organization");
+        },
+    );
+    sandbox.project_document(&configured(&json!({
+        "site": {"plugin": "local-md", "config": {"root": site}, "visibility": "public"},
+        "notes": {"plugin": "local-md", "config": {"root": notes}, "visibility": "public"},
+        "plans": {"plugin": "linear", "config": plans, "visibility": "private"},
+    })));
+
+    let report = answered(
+        &sandbox,
+        &["task", "copy", "notes:T-1", "--to", "site", "--json"],
+        0,
+    );
+    assert_eq!(
+        discovered(&sent(&workspace, 0)),
+        1,
+        "the designator was asked for once"
+    );
+    let landed = report["items"][0]["destination"]
+        .as_str()
+        .expect("a destination")
+        .strip_prefix("site:")
+        .expect("a site id")
+        .to_owned();
+    let file =
+        std::fs::read_to_string(site.join("tasks").join(format!("{landed}.md"))).expect("the copy");
+    assert!(!file.contains("L-9") && !file.contains("plans"), "{file}");
+    assert!(!file.contains("linear/"), "{file}");
+    assert!(!file.contains("edges_on_record"), "{file}");
+
+    let read = answered(&sandbox, &["task", "deps", "notes:T-1", "--json"], 0);
+    assert_eq!(
+        edges(&read),
+        [("notes:T-1".to_owned(), "plans:L-9".to_owned())]
+    );
+}
