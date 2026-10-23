@@ -832,16 +832,20 @@ impl Engine {
     /// projection's own screened status write, answering the projection when there is one.
     ///
     /// Only the category crosses: nothing of why it moved, who moved it or what ran. A task
-    /// has a projection only in a source declared private while the boundary is active, filed
-    /// under a project whose [`PublicProjections`] names it, so nothing else is read for any
-    /// other task.
+    /// has a projection only in a source declared private while the boundary is active, in a
+    /// store where some source routes — a projection is made only by a routed copy — filed
+    /// under a project whose [`PublicProjections`] names it; so nothing is read for any other
+    /// task, and a store with no route spends what it did before.
     pub(in crate::engine) async fn mirror_status(
         &self,
         task: &GlobalId,
         project: Option<&NativeId>,
         category: StatusCategory,
     ) -> Result<Option<GlobalId>, EngineError> {
-        if !self.boundary_active() || self.declared(&task.source) != SourceVisibility::Private {
+        if !self.boundary_active()
+            || !self.routes.any()
+            || self.declared(&task.source) != SourceVisibility::Private
+        {
             return Ok(None);
         }
         let Some(project) = project else {

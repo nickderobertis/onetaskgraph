@@ -262,6 +262,12 @@ impl Routes {
         self.0.get(source).is_some_and(|routes| !routes.is_empty())
     }
 
+    /// Whether any source declares any route.
+    #[must_use]
+    pub fn any(&self) -> bool {
+        self.0.values().any(|routes| !routes.is_empty())
+    }
+
     /// Every source an item written to `source` could land in: the source itself first,
     /// then each distinct route target in the order its entries are written.
     #[must_use]
