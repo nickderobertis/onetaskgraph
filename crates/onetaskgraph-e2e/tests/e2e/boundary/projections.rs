@@ -1930,6 +1930,86 @@ fn a_linear_copy_interrupted_after_its_public_project_and_before_its_views_makes
     assert_eq!(count(&workspace, "issueCreate"), 2);
 }
 
+/// Record on `site` a `Public work` project `id` naming `repository`, as a copy that ended
+/// before filing a view under it leaves one.
+fn planted_public_project(store: &Store, id: &str, repository: &str) {
+    store.record(
+        "site",
+        "projects",
+        id,
+        &format!("title: Public work\nstatus: todo\nrepositories: [{repository}]"),
+        "",
+    );
+}
+
+/// The project every view of the plan is filed under, by its id on `site`.
+fn views_project_on_site(store: &Store, landed: &BTreeMap<String, String>) -> String {
+    public_project_of_views(store, landed, "site")
+        .trim_start_matches("site:")
+        .to_owned()
+}
+
+#[test]
+fn an_unrecorded_public_project_past_the_first_page_is_found_rather_than_made_again() {
+    // Sixty `Public work` projects of another repository come first; the one this plan's copy
+    // made and never filed a view under is on the next page, and is the one taken.
+    let store = projecting_store();
+    for n in 0..60 {
+        planted_public_project(&store, &format!("a{n:02}"), SHOP);
+    }
+    planted_public_project(&store, "zz", OPEN);
+    private_rollout(&store);
+    let landed = copy_rollout(&store);
+    assert_eq!(views_project_on_site(&store, &landed), "zz");
+    let made: Vec<String> = files_under(&store, "site")
+        .into_iter()
+        .filter(|path| path.contains("pw-"))
+        .collect();
+    assert!(
+        made.is_empty(),
+        "no second public project was made: {made:?}"
+    );
+}
+
+#[test]
+fn a_public_project_holding_a_task_or_matched_twice_is_never_taken_and_left_as_it_was() {
+    // A matching project somebody's task sits under is not one a copy made and lost; two empty
+    // matching projects are ambiguous. Either way the copy makes its own and touches neither.
+    for occupied in [true, false] {
+        let store = projecting_store();
+        planted_public_project(&store, "held-a", OPEN);
+        if occupied {
+            store.record(
+                "site",
+                "tasks",
+                "theirs",
+                &format!(
+                    "title: Their own work\nstatus: todo\nproject: held-a\nrepositories: [{OPEN}]"
+                ),
+                PLAIN,
+            );
+        } else {
+            planted_public_project(&store, "held-b", OPEN);
+        }
+        let before = tree(&store.folder("site"));
+        private_rollout(&store);
+        let landed = copy_rollout(&store);
+        let project = views_project_on_site(&store, &landed);
+        assert!(
+            project.starts_with("pw-"),
+            "occupied {occupied}: filed under {project}"
+        );
+        let after = tree(&store.folder("site"));
+        for (path, bytes) in &before {
+            assert_eq!(
+                after.get(path),
+                Some(bytes),
+                "occupied {occupied}: {path} was changed"
+            );
+        }
+    }
+}
+
 #[test]
 fn an_unrecorded_task_is_taken_as_a_view_only_when_it_alone_says_what_the_view_says() {
     for strays in [1_usize, 2] {
