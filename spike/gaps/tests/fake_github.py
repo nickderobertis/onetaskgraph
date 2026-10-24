@@ -55,6 +55,7 @@ class Board:
     placement_reads: int = 1
     refuse_present_adds: bool = False
     fail_deletes: bool = False
+    null_deletes: bool = False
     fail_ownership_read: bool = False
     answer_creates: int | None = None
     malformed_create: int | None = None
@@ -221,6 +222,8 @@ class Board:
                 "data": None,
                 "errors": [{"type": "FORBIDDEN", "path": ["d0"], "message": "no"}],
             }
+        if self.null_deletes:
+            return {"data": dict.fromkeys(variables)}
         for value in variables.values():
             self.issues.pop(str(value), None)
         return {"data": {alias: {"repository": {"id": REPOSITORY}} for alias in variables}}

@@ -388,3 +388,15 @@ def test_the_gate_reads_the_last_graphql_headers_of_the_latest_run_that_recorded
     chosen = cli.last_headers(runs)
     assert chosen is not None and chosen.remaining == 2500
     assert cli.last_headers(tmp_path / "none") is None
+
+
+def test_a_delete_answered_null_keeps_the_issue_recorded_for_the_next_probe(
+    tmp_path: Path, github: tuple[fake_github.Board, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A delete answered null, with no error, keeps the issue recorded for the next probe."""
+    stand_in, url = github
+    monkeypatch.setattr(placement, "RACE_SETTLE", 0.1)
+    stand_in.null_deletes = True
+    result, state, _ = asyncio.run(probe(url, tmp_path))
+    assert isinstance(result, placement.LeftBehind)
+    assert len(state.ids) == 11

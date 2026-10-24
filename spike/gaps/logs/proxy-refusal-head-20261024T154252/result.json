@@ -74,6 +74,24 @@
    "status": 200
   },
   {
+   "case": "the mutation operationName selects, naming another repository",
+   "expected": 403,
+   "reached_upstream": 0,
+   "status": 403
+  },
+  {
+   "case": "two operations and no operationName to choose between them",
+   "expected": 403,
+   "reached_upstream": 0,
+   "status": 403
+  },
+  {
+   "case": "a variable defaulting to another repository",
+   "expected": 403,
+   "reached_upstream": 0,
+   "status": 403
+  },
+  {
    "case": "deleteIssue of an issue a read answered",
    "expected": 403,
    "reached_upstream": 0,

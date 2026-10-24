@@ -7,12 +7,14 @@ project's `build` target, which `test` depends on).
 
 from __future__ import annotations
 
+import asyncio
 import os
 from pathlib import Path
 
 import pytest
 
-from gaps import proc
+from gaps import cli, proc, reach, refusal, union
+from gaps.boundary import Verdict
 from gaps.json_shape import decode, load
 from gaps.reach import ReachResult
 from gaps.refusal import RefusalResult
@@ -130,3 +132,47 @@ def test_with_the_closure_a_recopy_over_unmarked_tasks_asks_and_fails_closed(
     assert reach.tasks_unmarked == 8
     assert [s.returncode for s in reach.steps] == [0, 0, 1]
     assert [q.operation for q in reach.steps[2].recorder_requests] == ["query <search>"]
+
+
+def test_a_copy_that_screens_nothing_fails_the_union_experiment_with_exit_1(tmp_path: Path) -> None:
+    """A copy that screens nothing gives the union nothing to replay, and exits 1."""
+    stub = tmp_path / "onetaskgraph"
+    stub.write_text(
+        "#!/bin/sh\n[ \"$1\" = --version ] && echo 'onetaskgraph 0.0.0' && exit 0\nexit 1\n"
+    )
+    stub.chmod(0o755)
+    done = run_case(tmp_path, "screen-union", "closure", SPIKE_CLOSURE_BINARY=str(stub))
+    assert done.returncode == 1 and "screened nothing" in done.err
+
+
+def test_a_disagreeing_union_or_an_unexpected_refusal_fails_its_scenario(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A disagreeing union, or a refusal not as expected, fails its scenario.
+
+    Asserted by handing `offline` each experiment's failing result rather than end to end:
+    producing one for real needs a guard that lets a refused write through, or an onevcs whose
+    union disagrees with itself, and both are what these experiments exist to catch.
+    """
+    where = cli.paths()
+    copy = reach.ReachResult(
+        reach.Case.PUBLIC, "", "", (), 0, False, 0, False, 0, reach.Screens(0, 0, 0, 0.0, ())
+    )
+    way = union.Way(1, 0, 1, Verdict.PASS, (), 0.0)
+    refused = union.Way(1, 0, 1, Verdict.REFUSE, (), 0.0)
+    disagreeing = union.UnionResult(
+        copy, {"project-copy": (union.Variant(union.Plant.NONE, way, refused),)}
+    )
+    unexpected = refusal.RefusalResult((refusal.Outcome("a write", 200, 403, 1),))
+
+    async def fake_union(*_: object) -> union.UnionResult:
+        return disagreeing
+
+    async def fake_refusal(*_: object) -> refusal.RefusalResult:
+        return unexpected
+
+    monkeypatch.setattr(union, "run", fake_union)
+    monkeypatch.setattr(refusal, "run", fake_refusal)
+    for scenario in (cli.Scenario.SCREEN_UNION, cli.Scenario.PROXY_REFUSAL):
+        with pytest.raises(cli.MeasurementFailed):
+            asyncio.run(cli.offline(scenario, cli.Build.HEAD, where, tmp_path, tmp_path / scenario))

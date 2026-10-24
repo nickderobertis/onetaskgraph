@@ -16,8 +16,10 @@ from enum import StrEnum
 from pathlib import Path
 from urllib.parse import urlsplit
 
+import graphql
+
 from gaps.github import Client, Token, split_reply
-from gaps.json_shape import Json, encode, obj
+from gaps.json_shape import Json, ShapeError, encode, obj, parse, text
 from gaps.relay import relay
 
 REPO_ID, PROJECT_ID = "R_test_board_repository", "PVT_test_board_project"
@@ -47,6 +49,14 @@ UNSENT = (
 DELETE = "mutation($i: ID!) { deleteIssue(input: {issueId: $i}) { repository { id } } }"
 READ = "query { viewer { login } }"
 READ_AN_ISSUE = 'query { x: node(id: "I_returned_by_a_read") { id } }'
+TWO_OPERATIONS = (
+    "query Q { viewer { login } } mutation M($i: CreateIssueInput!) {"
+    " createIssue(input: $i) { issue { id } } }"
+)
+DEFAULTED = (
+    f'mutation($r: ID = "{ELSEWHERE_REPO}") {{ createIssue(input: {{repositoryId: $r,'
+    ' title: "x"}) { issue { id } } }'
+)
 RETURNED = "I_returned_by_a_read"
 COMMENTED = "# a comment first\n" + DELETE
 FIELD = (
@@ -71,6 +81,7 @@ class Case:
     variables: dict[str, Json]
     expected_status: int
     allowed: Allowed = Allowed.TEST_BOARD
+    operation_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -143,6 +154,20 @@ CASES = (
         403,
     ),
     Case("a read answering an issue", READ_AN_ISSUE, {}, 200),
+    Case(
+        "the mutation operationName selects, naming another repository",
+        TWO_OPERATIONS,
+        {"i": {"repositoryId": ELSEWHERE_REPO, "title": "x"}},
+        403,
+        operation_name="M",
+    ),
+    Case(
+        "two operations and no operationName to choose between them",
+        TWO_OPERATIONS,
+        {"i": {"repositoryId": REPO_ID, "title": "x"}},
+        403,
+    ),
+    Case("a variable defaulting to another repository", DEFAULTED, {}, 403),
     Case("deleteIssue of an issue a read answered", DELETE, {"i": RETURNED}, 403),
     Case(
         "createIssue naming only the test board",
@@ -214,6 +239,36 @@ class RefusalResult:
         return obj(encode(self), "refusal") | {"all_as_expected": self.all_as_expected}
 
 
+def answer_for(body: bytes) -> dict[str, object]:
+    """The stand-in's answer, shaped by the request's own selection.
+
+    Every `createIssue` answers `MADE` as its issue, and every other top-level field that
+    selects `id` answers `RETURNED` as its `id`: the shape GitHub gives a node read.
+    """
+    try:
+        document = graphql.parse(text(obj(parse(body.decode(), "request"), "r").get("query"), "q"))
+    except (ShapeError, graphql.GraphQLError):
+        return {}
+    data: dict[str, object] = {}
+    for definition in document.definitions:
+        if not isinstance(definition, graphql.OperationDefinitionNode):
+            continue
+        for selection in definition.selection_set.selections:
+            if not isinstance(selection, graphql.FieldNode):
+                continue
+            alias = (selection.alias or selection.name).value
+            selected = {
+                s.name.value
+                for s in (selection.selection_set.selections if selection.selection_set else ())
+                if isinstance(s, graphql.FieldNode)
+            }
+            if selection.name.value == "createIssue":
+                data[alias] = {"issue": {"id": MADE}}
+            elif "id" in selected:
+                data[alias] = {"id": RETURNED}
+    return data
+
+
 @dataclass
 class StandIn:
     """The upstream: answers every request, a `createIssue` with an issue, counting them."""
@@ -231,12 +286,7 @@ class StandIn:
             )
             body = await reader.readexactly(length)
             self.seen.append(lines[0])
-            made: dict[str, object] = {}
-            if b"createIssue" in body:
-                made = {"createIssue": {"issue": {"id": MADE}}}
-            elif RETURNED.encode() in body:
-                made = {"x": {"issue": {"id": RETURNED}}}
-            payload = json.dumps({"data": made}).encode()
+            payload = json.dumps({"data": answer_for(body)}).encode()
             writer.write(
                 b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n"
                 + f"Content-Length: {len(payload)}\r\n\r\n".encode()
@@ -274,7 +324,12 @@ async def run(run_dir: Path) -> RefusalResult:
                 client = Client(proxy.endpoint, Token("placeholder"))
                 for case in (c for c in CASES if c.allowed is allowed):
                     before = len(stand_in.seen)
-                    answer = await client.graphql(case.label, case.document, case.variables)
+                    answer = await client.graphql(
+                        case.label,
+                        case.document,
+                        case.variables,
+                        operation_name=case.operation_name,
+                    )
                     reached = len(stand_in.seen) - before
                     status = answer.record.status
                     outcomes.append(Outcome(case.label, status, case.expected_status, reached))

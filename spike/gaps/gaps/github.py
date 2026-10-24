@@ -19,6 +19,8 @@ from pathlib import Path
 from typing import NewType
 from urllib.parse import urlsplit
 
+import graphql
+
 from gaps.json_shape import Json, ShapeError, arr, decode, encode, obj, parse, text
 
 Token = NewType("Token", str)
@@ -193,11 +195,19 @@ class Client:
         )
 
     async def graphql(
-        self, op: str, document: str, variables: dict[str, Json], aliases: int = 1
+        self,
+        op: str,
+        document: str,
+        variables: dict[str, Json],
+        aliases: int = 1,
+        operation_name: str | None = None,
     ) -> Answer:
         """Send one GraphQL document; `op` names it in the log, `aliases` counts its fields."""
-        kind = Kind.MUTATION if document.lstrip().startswith("mutation") else Kind.QUERY
-        payload = json.dumps({"query": document, "variables": variables}).encode()
+        kind = kind_of(document, operation_name)
+        request: dict[str, Json] = {"query": document, "variables": variables}
+        if operation_name is not None:
+            request["operationName"] = operation_name
+        payload = json.dumps(request).encode()
         start = time.time()
         reply = await self._send("POST", "/graphql", payload)
         end = time.time()
@@ -248,6 +258,25 @@ class Client:
         if reply.status != 200:
             raise GitHubError(f"{op}: HTTP {reply.status}")
         return obj(parse(reply.body.decode(errors="replace"), op), op)
+
+
+def kind_of(document: str, operation_name: str | None) -> Kind:
+    """Whether the operation a document executes is a mutation, read by GraphQL's grammar.
+
+    A document the grammar refuses is recorded as a query: GitHub refuses it before running it.
+    """
+    try:
+        parsed = graphql.parse(document)
+    except graphql.GraphQLError:
+        return Kind.QUERY
+    for definition in parsed.definitions:
+        if not isinstance(definition, graphql.OperationDefinitionNode):
+            continue
+        named = definition.name.value if definition.name else None
+        chosen = operation_name is None or named == operation_name
+        if chosen and definition.operation is graphql.OperationType.MUTATION:
+            return Kind.MUTATION
+    return Kind.QUERY
 
 
 def split_reply(raw: bytes) -> HttpReply:

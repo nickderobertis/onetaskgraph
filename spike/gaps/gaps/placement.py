@@ -425,6 +425,12 @@ async def references(client: Client, parent: IssueId) -> tuple[int, int]:
     return cost, len(arr(sub.get("nodes"), "subIssues.nodes"))
 
 
+def confirmed(payload: Json) -> bool:
+    """Whether a `deleteIssue` payload confirms the delete: it names the repository."""
+    repository = payload.get("repository") if isinstance(payload, dict) else None
+    return isinstance(repository, dict) and isinstance(repository.get("id"), str)
+
+
 async def delete(client: Client, state: State, ids: BoardIds) -> Cleanup:
     """Delete every recorded issue that reads back as this probe's, `DELETE_BATCH` a request."""
     recorded = list(dict.fromkeys(state.ids))
@@ -461,8 +467,12 @@ async def delete(client: Client, state: State, ids: BoardIds) -> Cleanup:
         )
         failed = {e.path[0] for e in result.errors if e.path}
         errors += [e.type for e in result.errors]
+        # A delete counts only when its payload names the repository it left; anything else,
+        # a null included, keeps the issue recorded for the next probe to delete.
         deleted += [
-            v for k, v in enumerate(batch) if f"d{k}" not in failed and f"d{k}" in result.data
+            v
+            for k, v in enumerate(batch)
+            if f"d{k}" not in failed and confirmed(result.data.get(f"d{k}"))
         ]
     state.ids = [i for i in recorded if i not in deleted and i not in gone]
     state.save()
