@@ -290,7 +290,7 @@ impl InMemoryConfig {
                     // which this one cannot hold and must not be asked to. A native id
                     // containing a colon is still this source's own, so it is checked.
                     let native = NativeId(endpoint.id().to_owned());
-                    if !endpoint.is_qualified() && !known.contains(&native) {
+                    if endpoint.is_native() && !known.contains(&native) {
                         problems.push(format!(
                             "a {noun} dependency edge's `{end}` names {endpoint}, which this source \
                              does not hold"

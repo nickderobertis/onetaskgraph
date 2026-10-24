@@ -4335,8 +4335,14 @@ fn routed_plan() -> Store {
 /// keeps the links a copy records — beside a second private folder, `archive`, and a second
 /// public one, `mirror`, routing the same work to it.
 fn routed_plan_in(author: &str) -> Store {
+    routed_plan_laid(author, json!({}))
+}
+
+/// [`routed_plan_in`], with `vault`'s entry carrying `vault` beside what it has.
+fn routed_plan_laid(author: &str, vault: Value) -> Store {
     let store = Store::laid(Some(registered), |sandbox| {
         json!({
+            "vault": vault,
             "draft": folder(sandbox, "draft", "public"),
             "archive": folder(sandbox, "archive", "private"),
             "site": {"routes": [{"repositories": ["github.com/openco/*"], "to": "vault"}]},
@@ -4420,6 +4426,53 @@ fn edges_of(store: &Store, id: &str, direction: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+/// The same routed plan with `vault` declaring a `public_alias`: the public task holds its
+/// dependency on the private member itself, as the alias and the member's native id, is marked
+/// as holding every edge of its own, and nothing is recorded on the private side — and the edge
+/// still reads from the public end, resolved to `vault` by the alias.
+#[test]
+fn a_public_task_names_an_aliased_private_member_task_opaquely() {
+    const ALIAS: &str = "quiet-tracker-2026-alias";
+    let store = routed_plan_laid("draft", json!({"public_alias": ALIAS}));
+    let landed =
+        landed_ids(&store.ok(&["project", "copy", "draft:goal", "--to", "site", "--json"]));
+    let (rollout, consumer) = (&landed["draft:rollout"], &landed["draft:consumer"]);
+    assert!(consumer.starts_with("vault:"), "{landed:?}");
+    let consumer_native = consumer.strip_prefix("vault:").expect("a vault id");
+    let task_file = |id: &str| {
+        let (folder, native) = id.split_once(':').expect("a qualified id");
+        std::fs::read_to_string(
+            store
+                .folder(folder)
+                .join("tasks")
+                .join(format!("{native}.md")),
+        )
+        .expect("a task file")
+    };
+
+    let public = task_file(rollout);
+    assert!(
+        public.contains(&format!("alias/{ALIAS}")) && public.contains(consumer_native),
+        "the dependency is on the public task, opaquely:\n{public}"
+    );
+    assert!(
+        public.contains("onetaskgraph.edges_on_record: 1"),
+        "{public}"
+    );
+    for named in ["vault", "Quiet consumer", "draft:consumer"] {
+        assert!(!public.contains(named), "names {named}:\n{public}");
+    }
+    assert!(
+        !task_file(consumer).contains("depended_on_by"),
+        "{}",
+        task_file(consumer)
+    );
+    assert_eq!(
+        edges_of(&store, rollout, "depends-on"),
+        vec![(rollout.clone(), consumer.clone())]
+    );
+}
+
 #[test]
 fn a_public_task_s_dependency_on_a_private_member_task_is_kept_on_the_private_side() {
     let store = routed_plan();
@@ -4438,6 +4491,30 @@ fn a_public_task_s_dependency_on_a_private_member_task_is_kept_on_the_private_si
     assert!(
         consumer.starts_with("vault:"),
         "the openco task is routed: {landed:?}"
+    );
+
+    // `vault` has neither an identifier of its own nor a `public_alias`, so the edge is
+    // withheld from the public task and recorded on the private one, and the public task is not
+    // marked as holding every edge of its own.
+    let task_file = |id: &str| {
+        let (folder, native) = id.split_once(':').expect("a qualified id");
+        std::fs::read_to_string(
+            store
+                .folder(folder)
+                .join("tasks")
+                .join(format!("{native}.md")),
+        )
+        .expect("a task file")
+    };
+    assert!(
+        !task_file(rollout).contains("edges_on_record"),
+        "{}",
+        task_file(rollout)
+    );
+    assert!(
+        task_file(consumer).contains("depended_on_by"),
+        "{}",
+        task_file(consumer)
     );
 
     // The edge reads from either end, and the private task's own edge to a public one is
@@ -4960,6 +5037,7 @@ async fn a_linked_engine_loads_a_plan_without_a_private_source_it_cannot_authent
     let unanswered: Vec<&str> = graph
         .unanswered()
         .iter()
+        .filter_map(|entry| entry.source())
         .map(|failure| failure.source.as_str())
         .collect();
     assert_eq!(unanswered, ["ledger"]);
@@ -4997,6 +5075,7 @@ async fn a_linked_engine_loads_a_plan_without_a_private_source_it_cannot_authent
     let unasked: Vec<&str> = answer
         .unanswered
         .iter()
+        .filter_map(|entry| entry.source())
         .map(|failure| failure.source.as_str())
         .collect();
     assert_eq!(unasked, ["ledger"]);
@@ -5094,7 +5173,9 @@ fn a_public_task_s_edges_page_with_what_every_private_source_records_of_it() {
         "site",
         "tasks",
         "rollout",
-        "title: Rollout\nstatus: todo\ndepends_on: [library]",
+        // Landed by a copy that kept its edges on the private side, which is the one task a
+        // dependency read asks a private source about.
+        "title: Rollout\nstatus: todo\ndepends_on: [library]\nmetadata:\n  onetaskgraph.copied_destination_version: sha256:00",
         PLAIN,
     );
     store.record(
@@ -5438,7 +5519,9 @@ fn a_project_graph_draws_every_page_of_what_a_private_source_records_of_its_task
         "site",
         "tasks",
         "rollout",
-        "title: Rollout\nstatus: todo\nproject: p\ndepends_on: [library]",
+        // Landed by a copy that kept its edges on the private side, which is the one task a
+        // graph asks a private source about.
+        "title: Rollout\nstatus: todo\nproject: p\ndepends_on: [library]\nmetadata:\n  onetaskgraph.copied_destination_version: sha256:00",
         PLAIN,
     );
 

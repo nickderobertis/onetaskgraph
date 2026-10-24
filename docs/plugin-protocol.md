@@ -511,6 +511,9 @@ declares, and treats it as public for everything else. Its writes still cross on
 engine has applied the same classification and term checks it applies to every source, so a
 hosted plugin cannot be a way around them.
 
+`designator` is not carried either: a source hosted over this protocol answers as the trait's
+default does, and the engine asks it nothing.
+
 `stored_content` — the content a write's own answer says the backend stores — is not a
 method: it crosses as the `stored_content` member of a content write's result (§4.9, §4.9a,
 §4.12), from a plugin that declared `stored_forms` (§3.16), and the engine compares it with
@@ -841,6 +844,11 @@ back for a far end its own relationship can name. The fallback is the near item'
 `onetaskgraph.depends_on` metadata: a list of endpoints, each either a bare native id
 naming a task or `{"id": "<source>:<native>", "kind": "project"}`, and each read as one
 `"blocks"` edge from the near item to that endpoint.
+
+An entry may also take the **opaque** form, which carries a `designator` member beside `id`
+and `kind`; its shape is the `DependencyEndpoint` definition in the schema the binary emits.
+The engine writes it and resolves it, so a plugin reads it back unchanged and never resolves
+the `designator` itself.
 
 Only the forward direction is ever recorded. The reverse of a recorded edge is derived
 from the far end, exactly as a `"forward-only"` plugin's reverse is, so a plugin never

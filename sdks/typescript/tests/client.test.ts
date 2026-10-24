@@ -1423,7 +1423,13 @@ test("a project graph answers without a private source it cannot authenticate to
       mkdirSync(resolve(root, folder), { recursive: true });
     }
     writeFileSync(resolve(root, "work/projects/P-1.md"), "---\ntitle: Engine\n---\n");
-    writeFileSync(resolve(root, "work/tasks/T-1.md"), "---\ntitle: Ship\nproject: P-1\n---\n");
+    // Landed by a copy that kept its edge on the private side: only such a task's read asks the
+    // private source what it records of it.
+    writeFileSync(
+      resolve(root, "work/tasks/T-1.md"),
+      "---\ntitle: Ship\nproject: P-1\nmetadata:\n" +
+        "  onetaskgraph.copied_destination_version: sha256:00\n---\n",
+    );
     writeFileSync(
       resolve(root, "vault/tasks/V-1.md"),
       "---\ntitle: Approve\nmetadata:\n  onetaskgraph.depended_on_by:\n" +

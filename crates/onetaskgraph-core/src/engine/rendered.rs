@@ -590,10 +590,25 @@ impl Engine {
                 .place_classified(&request.source, classification, &request.repositories);
         let near = &placement.destination;
         let source = self.creatable(near, MetadataRecord::Task)?;
+        let id = NativeId::from(slug(&request.title, "task").as_str());
+        let depends_on = self
+            .publicly_named(
+                near,
+                "the new task",
+                request
+                    .depends_on
+                    .iter()
+                    .map(|far| DependencyEdge {
+                        from: DependencyEndpoint::from_native(id.clone(), ItemKind::Task),
+                        to: endpoint(far, near),
+                        kind: DependencyKind::Blocks,
+                    })
+                    .collect(),
+            )
+            .await?;
         let references: Vec<(GlobalId, ItemKind)> = request
-            .depends_on
+            .delivers
             .iter()
-            .chain(&request.delivers)
             .map(|far| (far.clone(), ItemKind::Task))
             .collect();
         self.refuse_private_references(near, "the new task", &references)
@@ -615,16 +630,6 @@ impl Engine {
                 error,
             })?;
         let category = request.status.unwrap_or(StatusCategory::Todo);
-        let id = NativeId::from(slug(&request.title, "task").as_str());
-        let depends_on = request
-            .depends_on
-            .iter()
-            .map(|far| DependencyEdge {
-                from: DependencyEndpoint::from_native(id.clone(), ItemKind::Task),
-                to: endpoint(far, near),
-                kind: DependencyKind::Blocks,
-            })
-            .collect();
         let mut write = ItemWrite {
             target: None,
             item: Task {

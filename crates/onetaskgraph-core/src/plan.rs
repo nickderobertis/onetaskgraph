@@ -23,16 +23,80 @@ pub struct QueryResponse<T> {
     pub plan: QueryPlan,
     /// Sources that failed. One failure never fails the whole query.
     pub errors: Vec<SourceFailure>,
-    /// Each source declared private that a task's dependency read could not ask what it
-    /// records of that task — its credential absent or refused, or it unreachable or
-    /// rate-limited — and why. Not a failure of the read: the task lives elsewhere and every
-    /// source holding it answered, so `items` is every edge this reader can be shown. Only
-    /// that read fills it, and only while it does not ask for
+    /// What a task's dependency read could not ask, and why: each source declared private it
+    /// could not ask what that source records of the task — its credential absent or refused,
+    /// or it unreachable or rate-limited — and each opaque far end whose designator no
+    /// configured source is. Not a failure of the read: every source holding the task
+    /// answered, so `items` is every edge this reader can be shown. Only that read fills it,
+    /// and only while it does not ask for
     /// [`Completeness::Required`](crate::Completeness::Required), which reports such a source
     /// in `errors` instead. Left out when empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[schemars(!skip_serializing_if)]
-    pub unanswered: Vec<SourceFailure>,
+    pub unanswered: Vec<Unanswered>,
+}
+
+/// One thing a dependency read could not ask.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum Unanswered {
+    /// A source that could not be asked, and why.
+    Source(SourceFailure),
+    /// A far end recorded under a designator no source this host configures is.
+    Designator(UnresolvedDesignator),
+}
+
+impl Unanswered {
+    /// The source that could not be asked, when this is one.
+    #[must_use]
+    pub fn source(&self) -> Option<&SourceFailure> {
+        match self {
+            Self::Source(failure) => Some(failure),
+            Self::Designator(_) => None,
+        }
+    }
+}
+
+impl std::fmt::Display for Unanswered {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Source(failure) => write!(formatter, "{}: {}", failure.source, failure.error),
+            Self::Designator(unresolved) => write!(
+                formatter,
+                "{}: {}",
+                unresolved.designator,
+                unresolved.reason.as_str()
+            ),
+        }
+    }
+}
+
+/// A far end recorded under a designator no configured source is: the edge is not in `items`,
+/// because nothing on this host can say which item it names.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct UnresolvedDesignator {
+    /// The designator the far end was recorded under.
+    pub designator: onetaskgraph_plugin_api::Designator,
+    /// Why it was not resolved.
+    pub reason: UnresolvedReason,
+}
+
+/// Why a designator was not resolved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub enum UnresolvedReason {
+    /// No source this host configures is the tracker it names.
+    #[serde(rename = "not configured on this host")]
+    NotConfigured,
+}
+
+impl UnresolvedReason {
+    /// The reason as it is written.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::NotConfigured => "not configured on this host",
+        }
+    }
 }
 
 /// What the engine did, per source.

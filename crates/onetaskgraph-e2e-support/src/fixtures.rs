@@ -5248,6 +5248,37 @@ pub fn linear_failing_a_relation_write_once(sandbox: &Sandbox) -> Value {
     )
 }
 
+/// A Linear workspace whose rate limiter refuses every request with `429 Too Many Requests`,
+/// and a count of the requests it was sent — so a journey can say a source that would answer
+/// rate limited was never asked at all.
+// llmlint: ignore[code_lands_in_the_domain_that_owns_it] As `linear_workspace` below: the shared e2e harness is where the agreed e2e layout puts every loopback server, and the engine's own suite drives this one.
+pub fn linear_rate_limited(sandbox: &Sandbox) -> (Value, Arc<Mutex<usize>>) {
+    sandbox.secrets_file("LINEAR_API_KEY=fixture-key\n");
+    let listener = TcpListener::bind("127.0.0.1:0").expect("fixture listener");
+    let endpoint = format!("http://{}/graphql", listener.local_addr().unwrap());
+    let sent = Arc::new(Mutex::new(0_usize));
+    let counted = Arc::clone(&sent);
+    thread::spawn(move || {
+        for mut stream in listener.incoming().flatten() {
+            if loopback::read_request(&mut std::io::BufReader::new(&mut stream)).is_none() {
+                continue;
+            }
+            *counted.lock().unwrap() += 1;
+            let body =
+                r#"{"errors":[{"message":"rate limited","extensions":{"code":"RATELIMITED"}}]}"#;
+            let _ = write!(
+                stream,
+                "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+    });
+    (
+        json!({"endpoint":endpoint,"team":"FIX","status_mapping":linear_default_mapping()}),
+        sent,
+    )
+}
+
 /// An empty Linear workspace, ready to be copied into.
 ///
 /// The same responder over an empty table rather than a second implementation, so what a
@@ -6200,7 +6231,9 @@ struct CommentPageVariables {
 fn validate_linear_variables(operation: &str, variables: &Value) -> Result<(), &'static str> {
     use onetaskgraph_linear::graphql;
     let valid = match operation {
-        graphql::VIEWER => serde_json::from_value::<NoVariables>(variables.clone()).is_ok(),
+        graphql::VIEWER | graphql::ORGANIZATION => {
+            serde_json::from_value::<NoVariables>(variables.clone()).is_ok()
+        }
         graphql::ISSUE | graphql::PROJECT | graphql::DOCUMENT | graphql::COMMENT => {
             serde_json::from_value::<ItemVariables>(variables.clone())
                 .is_ok_and(|variables| !variables.id.is_empty())
@@ -6586,6 +6619,7 @@ fn linear_response(
     let operation = request.query.as_str();
     if ![
         graphql::VIEWER,
+        graphql::ORGANIZATION,
         graphql::ISSUE,
         graphql::PROJECT,
         graphql::ISSUES,
@@ -6632,6 +6666,13 @@ fn linear_response(
         return Err("unknown GraphQL operation");
     }
     let vars = Value::Object(request.variables);
+    // The workspace's own id, which a fixture names under `organization` — two fixtures naming
+    // one are two loopback servers over the same workspace.
+    if operation == graphql::ORGANIZATION {
+        return Ok(json!({"organization":{
+            "id": data.get("organization").and_then(Value::as_str).unwrap_or("fixture-organization")
+        }}));
+    }
     // What the store's cache sends in place of seven documents: the plain one's answer, with
     // exactly what the cache's document adds to it.
     if let Some(plain) = linear_uncached(operation) {

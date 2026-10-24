@@ -1123,15 +1123,22 @@ fn respond<T: Serialize>(
 
 /// Name each source declared private that could not be asked what it records, on standard
 /// error, as a notice: the answer above is whole for the item it was asked about.
-fn unanswered(unasked: &[SourceFailure]) {
+fn unanswered(unasked: &[onetaskgraph_core::Unanswered]) {
     if unasked.is_empty() {
         return;
     }
-    for failure in unasked {
-        eprintln!(
-            "onetaskgraph: note: private source {} was not asked what it records: {}",
-            failure.source, failure.error
-        );
+    for entry in unasked {
+        match entry {
+            onetaskgraph_core::Unanswered::Source(failure) => eprintln!(
+                "onetaskgraph: note: private source {} was not asked what it records: {}",
+                failure.source, failure.error
+            ),
+            onetaskgraph_core::Unanswered::Designator(unresolved) => eprintln!(
+                "onetaskgraph: note: a dependency recorded under designator {} was not read: {}",
+                unresolved.designator,
+                unresolved.reason.as_str()
+            ),
+        }
     }
     eprintln!(
         "onetaskgraph: note: the answer above leaves out only what the source(s) named above \

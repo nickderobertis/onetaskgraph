@@ -410,13 +410,14 @@ fn a_bound_recopy_applies_each_change_alone_and_all_together_in_three_requests()
         let item = setup.item(&a);
         let mut held = item[check.0].clone();
         if let Some(metadata) = held.as_object_mut().filter(|_| check.0 == "metadata") {
-            // The copy's record of itself rides along in the same write; what this row changes
-            // is the caller's key.
+            // The copy's record of itself — every edge of the task on its own record included —
+            // rides along in the same write; what this row changes is the caller's key.
             assert!(
                 metadata.remove("onetaskgraph.copied_version").is_some()
                     && metadata
                         .remove("onetaskgraph.copied_destination_version")
-                        .is_some(),
+                        .is_some()
+                    && metadata.remove("onetaskgraph.edges_on_record") == Some(json!(1)),
                 "{what}: the copy records itself on the issue"
             );
         }

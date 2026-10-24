@@ -312,6 +312,14 @@ fn cause(error: &EngineError) -> (String, Option<SourceName>, Option<&SourceErro
             configured(destination),
             None,
         ),
+        EngineError::DesignatorNotConfigured { .. } => {
+            ("designator-not-configured".to_owned(), None, None)
+        }
+        EngineError::PrivateReferenceContent { destination, .. } => (
+            "private-reference-content".to_owned(),
+            configured(destination),
+            None,
+        ),
         EngineError::PrivateItemReference { destination, .. } => (
             "private-reference".to_owned(),
             configured(destination),

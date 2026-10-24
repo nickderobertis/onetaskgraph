@@ -19,7 +19,7 @@ Keys are free-form, with two prefixes reserved:
      in `crates/onetaskgraph-e2e/tests/e2e/surface.rs` reads this bullet, and fails when the keys it
      lists or the count it states in words differ from the constants each key is spelled once
      as — `MetadataKey::COPIES_KEY` among them. -->
-- `onetaskgraph.` belongs to this product. It defines exactly fourteen keys, each spelled
+- `onetaskgraph.` belongs to this product. It defines exactly fifteen keys, each spelled
   once so no source can invent its own: `onetaskgraph.repositories`
   (`Repository::METADATA_KEY`), `onetaskgraph.depends_on`
   (`DependencyEdge::RECORDED_KEY`), `onetaskgraph.delivers` (`TaskRef::DELIVERS_KEY`),
@@ -31,6 +31,7 @@ Keys are free-form, with two prefixes reserved:
   `onetaskgraph.copied_version` (`MetadataKey::COPIED_VERSION_KEY`),
   `onetaskgraph.copied_with_comments` (`MetadataKey::COPIED_WITH_COMMENTS_KEY`) and
   `onetaskgraph.copied_destination_version` (`MetadataKey::COPIED_DESTINATION_VERSION_KEY`)
+  and `onetaskgraph.edges_on_record` (`MetadataKey::EDGES_ON_RECORD_KEY`)
   in the contract crate, and
   `onetaskgraph.origin` (`GlobalId::ORIGIN_KEY`) in the engine —
   that last one carries a *qualified* id, whose contents no plugin ever constructs or
@@ -211,6 +212,47 @@ rather than a limit of this backend: a document is not work, so it takes part in
 dependency graph. A write naming a dependency for one is refused, and a board relationship
 this source finds pointing at a design issue is refused by name too — reporting it as a
 task or as a project would name an id no task or project read of that source can find.
+
+### The opaque far end
+
+An entry of `onetaskgraph.depends_on` takes a third form beside a native id and a qualified
+`<source>:<native>` id: `{"designator": "<plugin>/<64 lowercase hex>", "id": "<native id>",
+"kind": "task" | "project"}`, with exactly those three keys (`DependencyEndpoint` in the
+contract crate parses it, and the schema bundle and both SDKs carry it). The `designator` names
+a tracker without conveying anything about it: `<plugin>/` and the hex SHA-256 of
+`<plugin>\n<identifier>`, over the backend's own opaque identifier of itself — a Linear
+workspace's organization id, a GitHub Project's node id — or, for a backend with none (a folder
+of Markdown), `alias/<public_alias>`, where `public_alias` is a source key matching
+`^[A-Za-z0-9_-]{16,64}$` that every host's configuration of that tracker declares identically;
+one off the pattern is refused when the configuration loads. The `id` is the item's native id,
+never a human key, a URL or a slug.
+
+A source works its designator out with at most one request (`TaskSource::designator`), and the
+store keeps it per host in `designator.json` in the directory the source's cache lives in —
+`cache.dir`, or the directory named for its remote — whether or not the cache is on. A read
+resolves an opaque far end by asking the configured sources whose plugin is the designator's
+prefix (or whose `public_alias` it is), in name order, until one is it, and reads the far end
+there by its id; it is reported as that source's qualified id. A designator no configured
+source is leaves the edge out of the answer and names it in `unanswered`, with `not configured
+on this host` — never dropped silently.
+
+### Which sources a dependency read asks
+
+A forward read of task T asks T's own source — its native relations and T's recorded edges —
+and, for each recorded opaque edge, only the source that edge's designator resolves to. It also
+asks the sources declared private what they record of T under `onetaskgraph.depended_on_by`
+(the reverse lookup) only when all three hold: T's source is not declared private, T's record
+carries `onetaskgraph.copied_destination_version` — a copy landed it — and T's record lacks
+`onetaskgraph.edges_on_record`. A copy onto a destination not declared private writes
+`onetaskgraph.edges_on_record: 1` on every task it lands whose edges are all on its own record:
+it writes a private prerequisite whose source has a designator in the opaque form instead of
+withholding it, and takes the legacy `onetaskgraph.depended_on_by` entry naming that task off the
+prerequisite. A prerequisite whose source has a designator but which the task records by a
+prefixed human key, a URL, a slug, or an id its source holds no item under is refused before the
+copy writes anything, with kind `private-reference-content` naming the form and never its value,
+exactly as a direct write refuses it. A task whose prerequisite's source has no designator keeps
+the withhold-and-record path and is not marked. Nothing but a copy writes the key, and `project graph` holds each task
+of the project to the same rule.
 
 An edge is always oriented `from` **depends on** `to`, whichever way the backend spells it.
 GitHub's `blockedBy` and `blocking` are one relationship read from either end, so both

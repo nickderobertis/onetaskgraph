@@ -994,6 +994,10 @@ impl TaskSource for CachedSource {
         self.inner.health().await
     }
 
+    async fn designator(&self) -> Result<Option<onetaskgraph_plugin_api::Designator>, SourceError> {
+        self.inner.designator().await
+    }
+
     async fn get_task(&self, id: &NativeId) -> Result<Option<Task>, SourceError> {
         self.prime_expected(id);
         match self.servable(id, false) {
@@ -3041,12 +3045,14 @@ mod tests {
             repositories: Vec::new(),
             classification: Default::default(),
         });
-        let Some(_refusing) = refusing_in(&dir.path().join("projects-v2")) else {
+        let Some(_refusing) =
+            refusing_in(&dir.path().join(format!("projects-v{}", KIND_ENTRY_SCHEMA)))
+        else {
             return;
         };
         let _read_only = Mode::set(
             &dir.path()
-                .join("projects-v2")
+                .join(format!("projects-v{}", KIND_ENTRY_SCHEMA))
                 .join(format!("{}.json", super::super::digest("P-1"))),
             0o444,
         );
