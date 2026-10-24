@@ -108,6 +108,32 @@ def merge(*documents: str) -> str:
     )
 
 
+def through_parent(document: str, trimmed: bool = False) -> str:
+    """`SUB_ISSUES` asked of an item's parent rather than the item: one request answering a
+    document, the project it is filed under, and every other record filed there. `trimmed`
+    asks nothing of the item itself but its id, since the parent's listing answers it."""
+    defs, body, fragments = split(document)
+    if trimmed:
+        body = body.replace(
+            "node(id:$id){__typename ...BoardIssue", "node(id:$id){__typename id", 1
+        )
+    start = body.index("... on Issue{") + len("... on Issue{")
+    depth, end = 1, start
+    while depth:
+        depth += {"{": 1, "}": -1}.get(body[end], 0)
+        end += 1
+    nested = (
+        body[:start]
+        + "parent{__typename ...BoardIssue "
+        + body[start : end - 1]
+        + "}}"
+        + body[end:]
+    )
+    return (
+        "query(" + ",".join(defs) + "){" + nested + "} " + " ".join(fragments.values())
+    )
+
+
 def lookup_variables(
     owner: str, number: int, repo: str, asks: int, first: int = 3
 ) -> dict:
@@ -259,6 +285,14 @@ def alias_pricing(
     results.append(
         priced(
             client,
+            "ORIGIN_LOOKUPS asks=10 originFirst=2",
+            DOCS["ORIGIN_LOOKUPS"],
+            lookup_variables(owner, number, repo, 10, first=2),
+        )
+    )
+    results.append(
+        priced(
+            client,
             "ORIGIN_LOOKUP",
             DOCS["ORIGIN_LOOKUP"],
             lookup_one_variables(owner, number),
@@ -291,6 +325,18 @@ def alias_pricing(
         "SUB_ISSUES + ORIGIN_LOOKUPS asks=10": (
             merge(DOCS["SUB_ISSUES"], DOCS["ORIGIN_LOOKUPS"]),
             sub_issue_variables(anchor) | lookup_variables(owner, number, repo, 10),
+        ),
+        "SUB_ISSUES + ORIGIN_LOOKUP": (
+            merge(DOCS["SUB_ISSUES"], DOCS["ORIGIN_LOOKUP"]),
+            sub_issue_variables(anchor) | lookup_one_variables(owner, number),
+        ),
+        "SUB_ISSUES through the item's parent": (
+            through_parent(DOCS["SUB_ISSUES"]),
+            sub_issue_variables(anchor),
+        ),
+        "SUB_ISSUES through the item's parent, item trimmed": (
+            through_parent(DOCS["SUB_ISSUES"], trimmed=True),
+            sub_issue_variables(anchor),
         ),
         "SUB_ISSUES + CREATED_BOARD_ITEMS reads=1": (
             merge(DOCS["SUB_ISSUES"], DOCS["CREATED_BOARD_ITEMS"]),
@@ -559,6 +605,10 @@ def placement(
                 "limits": probes.limits(headers),
             }
         )
+        # 3b. What one request of 19 aliased mutations is charged: `rateLimit.used` read before
+        # and after it, against control pairs with nothing between. Other sessions share the
+        # bucket and only ever add, so the least rise of each kind bounds its price.
+        out["mutation_cost"] = mutation_cost(client, project, ids, item_ids)
         # 4. One subIssues read of the parent resolves every child's destination id and URL.
         read = charged(
             client,
@@ -571,6 +621,53 @@ def placement(
         out["cleanup"] = delete(client, record, ids["repo"])
     (run_dir / "feasibility.json").write_text(json.dumps(out, indent=1))
     return out
+
+
+RATE = "query ProbeRate { rateLimit { used resetAt } }"
+TRIALS = 3
+
+
+def used(client: probes.Client) -> tuple[int, str]:
+    body, _ = client.send(RATE, {})
+    rate = (body.get("data") or {}).get("rateLimit") or {}
+    return int(rate.get("used", -1)), str(rate.get("resetAt"))
+
+
+def mutation_cost(
+    client: probes.Client, project: str, ids: dict, item_ids: list[str]
+) -> dict:
+    """Least `rateLimit.used` rise across a 19-alias field-value request, and across nothing."""
+    aliases, variables = [], {"p": project, "f": ids["field"], "o": ids["option"]}
+    for k in range(19):
+        variables[f"i{k}"] = item_ids[k % len(item_ids)]
+        aliases.append(
+            f"v{k}: updateProjectV2ItemFieldValue(input: {{projectId: $p, itemId: $i{k}, fieldId: $f,"
+            " value: {singleSelectOptionId: $o}}) { projectV2Item { id } }"
+        )
+    defs = ["$p: ID!", "$f: ID!", "$o: String!"] + [f"$i{k}: ID!" for k in range(19)]
+    document = f"mutation ProbeNineteen({', '.join(defs)}) {{ {' '.join(aliases)} }}"
+    rises: dict[str, list[int]] = {"nothing between": [], "19 aliased mutations": []}
+    errors: list = []
+    for _ in range(TRIALS):
+        for kind, found in rises.items():
+            before, window = used(client)
+            if kind != "nothing between":
+                body, _ = client.send(document, variables, write=True)
+                errors += probes.errors(body)
+            after, window_after = used(client)
+            if window == window_after and before >= 0:
+                found.append(after - before)
+    least = {kind: min(values) if values else None for kind, values in rises.items()}
+    return {
+        "rises": rises,
+        "least": least,
+        "mutation_request_points": (
+            least["19 aliased mutations"] - least["nothing between"]
+            if None not in least.values()
+            else None
+        ),
+        "errors": errors,
+    }
 
 
 DELETE_BATCH = (
