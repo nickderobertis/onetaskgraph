@@ -4920,6 +4920,53 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         let page = GitHubBoard::membership_page(board.memberships(item), offset, first);
         return json!({"node":{"projectItems":page}});
     }
+    // A dependency read of one direction, answering exactly what its document selects: what
+    // an item is blocked by, with its body — a draft's body with the one board item it is,
+    // beside this board's own id — or what an issue blocks.
+    {
+        use onetaskgraph_github_projects::graphql::{ISSUE_DEPENDED_ON_BY, ISSUE_DEPENDS_ON};
+        if query == ISSUE_DEPENDS_ON || query == ISSUE_DEPENDED_ON_BY {
+            let forward = query == ISSUE_DEPENDS_ON;
+            let id = variables["id"].as_str().expect("dependency id").to_owned();
+            let first = variables["first"]
+                .as_u64()
+                .expect("dependency first must be an unsigned integer");
+            assert!(
+                (1..=100).contains(&first),
+                "dependency first is out of range"
+            );
+            let board_root = json!({"projectV2":{"id":"PVT-board"}});
+            let Some(near) = board.items.iter().find(|item| item["id"] == json!(id)) else {
+                return if forward {
+                    json!({"node":null,"board":board_root})
+                } else {
+                    json!({ "node": null })
+                };
+            };
+            if GitHubBoard::is_draft(near) {
+                if !forward {
+                    return json!({"node":{"__typename":"DraftIssue"}});
+                }
+                return json!({"node":{"__typename":"DraftIssue","id":id,"body":near["body"],
+                    "projectV2Items":{"nodes":[{"project":{"id":"PVT-board","number":7}}],
+                                      "pageInfo":{"hasNextPage":false}}},
+                    "board":board_root});
+            }
+            let (connection, blocking) = if forward {
+                ("blockedBy", false)
+            } else {
+                ("blocking", true)
+            };
+            let mut node = json!({"__typename":"Issue"});
+            node[connection] = json!({"nodes":board.related(&id, blocking),
+                                      "pageInfo":{"hasNextPage":false,"endCursor":null}});
+            if forward {
+                node["body"] = near["body"].clone();
+                return json!({"node":node,"board":board_root});
+            }
+            return json!({ "node": node });
+        }
+    }
     // One draft by its own id, with the one board item GitHub links it to.
     if query.contains("on DraftIssue{") && query.contains("projectV2Items(") {
         let id = variables["id"].as_str().expect("a node id").to_owned();

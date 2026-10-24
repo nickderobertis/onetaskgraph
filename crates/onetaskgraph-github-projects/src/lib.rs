@@ -1372,6 +1372,31 @@ pub mod graphql {
       }}}"#,
         related_issue!()
     );
+    /// What one item depends on: [`ISSUE_DEPENDENCIES`] narrowed to `blockedBy`, so a
+    /// dependency read asks GitHub for the one direction it answers. The issue's `body` rides
+    /// along because its metadata slot is where an edge to another source is recorded — and a
+    /// board draft's `body` too, with the one board item GitHub links a draft to and, aliased
+    /// `board`, this board's own id, so a draft's recorded edges are read off this same answer
+    /// and only when that item is this board's: no draft read and no board read follow it.
+    pub const ISSUE_DEPENDS_ON: &str = concat!(
+        r#"query($id:ID!,$first:Int!,$after:String,$owner:String!,$number:Int!,$boardItems:Int!){
+      node(id:$id){__typename
+      ... on Issue{body
+        blockedBy(first:$first,after:$after){nodes{...Related}pageInfo{hasNextPage endCursor}}
+      }
+      ... on DraftIssue{id body projectV2Items(first:$boardItems){nodes{project{id number}}pageInfo{hasNextPage}}}}
+      board:repositoryOwner(login:$owner){... on ProjectV2Owner{projectV2(number:$number){id}}}}"#,
+        related_issue!()
+    );
+    /// What depends on one issue: [`ISSUE_DEPENDENCIES`] with its `blocking` alone. No `body`:
+    /// the reverse of a recorded edge is derived from the far end, never written down here.
+    pub const ISSUE_DEPENDED_ON_BY: &str = concat!(
+        r#"query($id:ID!,$first:Int!,$after:String){node(id:$id){__typename
+      ... on Issue{
+        blocking(first:$first,after:$after){nodes{...Related}pageInfo{hasNextPage endCursor}}
+      }}}"#,
+        related_issue!()
+    );
     /// Creates one issue. Outside a copy it is created on no board, and [`ADD_TO_BOARD`] files
     /// it; inside one, its input names the board in `projectV2Ids` and its project in
     /// `parentIssueId`, so this one request files it under both — see
@@ -1954,7 +1979,7 @@ pub mod graphql {
     /// `documents_are_all_inventoried` reads this file back and fails naming any `pub
     /// const` here that this list omits, so the two cannot part — which is the same guard
     /// `CATEGORIES` carries, in the one shape available to a set of `&str` constants.
-    pub const DOCUMENTS: [(&str, &str); 48] = [
+    pub const DOCUMENTS: [(&str, &str); 50] = [
         (SEARCH_ISSUES, "searching this board's issues"),
         (ISSUE, "reading one issue"),
         (
@@ -1981,6 +2006,8 @@ pub mod graphql {
             "reading the board's fields and the destination repository",
         ),
         (ISSUE_DEPENDENCIES, "reading an issue's dependencies"),
+        (ISSUE_DEPENDS_ON, "reading what an item depends on"),
+        (ISSUE_DEPENDED_ON_BY, "reading what depends on an issue"),
         (CREATE_ISSUE, "creating an issue"),
         (
             ORIGIN_LOOKUPS,
@@ -8528,14 +8555,29 @@ impl GitHubProjectsSource {
             Some((nodes, body)) => json!({"node":{"__typename":"Issue","body":body,
                 "blockedBy":{"nodes":nodes,"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
             None => {
-                self.graphql(
-                    graphql::ISSUE_DEPENDENCIES,
-                    json!({"id":id.0,"first":page.limit.min(MAX_PAGE_SIZE),
-                           "after":if recorded.is_some() {None} else {cursor}}),
-                )
-                .await?
+                let after = if recorded.is_some() { None } else { cursor };
+                let first = page.limit.min(MAX_PAGE_SIZE);
+                match direction {
+                    Direction::DependsOn => {
+                        self.graphql(
+                            graphql::ISSUE_DEPENDS_ON,
+                            json!({"id":id.0,"first":first,"after":after,"owner":self.owner,
+                                   "number":self.project_number,
+                                   "boardItems":BOARD_ITEMS_PAGE_SIZE}),
+                        )
+                        .await?
+                    }
+                    Direction::DependedOnBy => {
+                        self.graphql(
+                            graphql::ISSUE_DEPENDED_ON_BY,
+                            json!({"id":id.0,"first":first,"after":after}),
+                        )
+                        .await?
+                    }
+                }
             }
         };
+        let draft_slot = draft_slot(&data, id, self.project_number)?;
         let node =
             data.get("node")
                 .filter(|v| !v.is_null())
@@ -8555,16 +8597,30 @@ impl GitHubProjectsSource {
         let natively_names = (required_str(node, "__typename")? == "Issue").then_some(near_kind);
         if let Some(offset) = recorded {
             return Ok(recorded_page(
-                self.recorded_edges(id, near_kind, direction, natively_names, node)
-                    .await?,
+                self.recorded_edges(
+                    id,
+                    near_kind,
+                    direction,
+                    natively_names,
+                    node,
+                    draft_slot.as_ref(),
+                )
+                .await?,
                 offset,
                 limit,
             ));
         }
         if natively_names.is_none() {
             return Ok(recorded_page(
-                self.recorded_edges(id, near_kind, direction, natively_names, node)
-                    .await?,
+                self.recorded_edges(
+                    id,
+                    near_kind,
+                    direction,
+                    natively_names,
+                    node,
+                    draft_slot.as_ref(),
+                )
+                .await?,
                 0,
                 limit,
             ));
@@ -8609,13 +8665,27 @@ impl GitHubProjectsSource {
         if let Some(next) = &next {
             validate_cursor_progress(cursor, &next.0)?;
         }
-        if next.is_none()
-            && !self
-                .recorded_edges(id, near_kind, direction, natively_names, node)
-                .await?
-                .is_empty()
-        {
-            next = Some(Cursor(format!("{RECORDED_CURSOR}0")));
+        // The recorded far ends ride on the last page of `blockedBy`, whose answer carried the
+        // body they are recorded in, as far as the page has room — so they cost no request of
+        // their own — and only what does not fit is resumed by a cursor.
+        let mut items = items;
+        if next.is_none() {
+            let recorded = self
+                .recorded_edges(
+                    id,
+                    near_kind,
+                    direction,
+                    natively_names,
+                    node,
+                    draft_slot.as_ref(),
+                )
+                .await?;
+            let room = limit.saturating_sub(items.len());
+            let total = recorded.len();
+            items.extend(recorded.into_iter().take(room));
+            if total > room {
+                next = Some(Cursor(format!("{RECORDED_CURSOR}{room}")));
+            }
         }
         Ok(Page { items, next })
     }
@@ -8639,14 +8709,18 @@ impl GitHubProjectsSource {
         direction: Direction,
         natively_names: Option<ItemKind>,
         node: &Value,
+        draft_slot: Option<&Option<BTreeMap<String, Value>>>,
     ) -> Result<Vec<DependencyEdge>, SourceError> {
         if direction != Direction::DependsOn {
             return Ok(Vec::new());
         }
-        let slot = match node.get("body") {
-            Some(body) if natively_names.is_some() => {
+        let slot = match (node.get("body"), draft_slot) {
+            (Some(body), _) if natively_names.is_some() => {
                 metadata_body(body.as_str().map(str::to_owned))?.1
             }
+            // A draft the dependency read itself answered: this board's, or none of its.
+            (_, Some(Some(slot))) => slot.clone(),
+            (_, Some(None)) => return Ok(Vec::new()),
             _ => {
                 let Some(item) = self.bound_item(id).await? else {
                     return Ok(Vec::new());
@@ -13709,6 +13783,63 @@ fn recorded_offset(
             })
         })
         .transpose()
+}
+
+/// What a dependency read's own answer says of a board draft: `None` when the item is not a
+/// draft, or the answer did not carry its board item; `Some(None)` for a draft whose one board
+/// item is not on this board, which this source does not hold; and `Some(Some(slot))`, the
+/// draft's metadata, for one it does — its board item naming this board by its number and by
+/// the id the same answer read of the board, as [`GitHubProjectsSource::draft_by_id`] decides.
+fn draft_slot(
+    data: &Value,
+    id: &NativeId,
+    project_number: u32,
+) -> Result<Option<Option<BTreeMap<String, Value>>>, SourceError> {
+    let Some(draft) = data
+        .get("node")
+        .filter(|node| node.get("__typename").and_then(Value::as_str) == Some("DraftIssue"))
+        .filter(|node| node.get("projectV2Items").is_some())
+    else {
+        return Ok(None);
+    };
+    if required_str(draft, "id")? != id.0 {
+        return Err(SourceError::Malformed {
+            message: format!("GitHub answered a different draft for {}", id.0),
+        });
+    }
+    let items = &draft["projectV2Items"];
+    let nodes = items
+        .get("nodes")
+        .and_then(Value::as_array)
+        .ok_or_else(|| SourceError::Malformed {
+            message: format!("GitHub draft {} projectV2Items.nodes is not an array", id.0),
+        })?;
+    let info = items
+        .get("pageInfo")
+        .ok_or_else(|| SourceError::Malformed {
+            message: format!("GitHub draft {} projectV2Items has no pageInfo", id.0),
+        })?;
+    if required_bool(info, "hasNextPage")? || nodes.len() > 1 {
+        return Err(SourceError::Malformed {
+            message: format!(
+                "GitHub draft {} reports more board items than the one GitHub links a draft to",
+                id.0
+            ),
+        });
+    }
+    let board = data.pointer("/board/projectV2/id").and_then(Value::as_str);
+    let held = board.is_some()
+        && nodes.iter().any(|node| {
+            node.pointer("/project/number").and_then(Value::as_u64)
+                == Some(u64::from(project_number))
+                && node.pointer("/project/id").and_then(Value::as_str) == board
+        });
+    if !held {
+        return Ok(Some(None));
+    }
+    Ok(Some(Some(
+        metadata_body(optional_str(draft, "body")?.map(str::to_owned))?.1,
+    )))
 }
 
 fn recorded_page(edges: Vec<DependencyEdge>, offset: usize, limit: usize) -> Page<DependencyEdge> {

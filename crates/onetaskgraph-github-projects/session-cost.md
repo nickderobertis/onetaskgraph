@@ -1267,3 +1267,19 @@ hundred-row page did. Nothing selected moves, so every record and its order are 
 document goes 25,653 → **6,095** and the two `reading a project's tasks` requests 51,306 →
 **12,190**. Nodes go 302,921 → **244,247**. Requests stay **212**: the live journey's projects
 hold fewer than twenty-three members, so each is still listed in one page.
+
+## A dependency read asks for the one direction it answers
+
+A task's dependency read sends `ISSUE_DEPENDS_ON` — `blockedBy` and the body its recorded far
+ends live in, and for a board draft its body, its one board item and this board's id — or
+`ISSUE_DEPENDED_ON_BY`, `blocking` alone, where it sent `ISSUE_DEPENDENCIES` with both
+connections. The recorded far ends ride on the last page of `blockedBy` as far as the page has
+room, so an item recording edges no longer pays a second request for them, and a draft's are
+read off that same answer rather than off a draft read and a board read after it.
+
+**`session-cost.txt`** moves on six lines: four of the seven `reading an issue's dependencies`
+requests are now two of each new document (1,000 → **600** nodes on the old one, **106** and
+**100** on the new), and the live journey reconciles each newly sent document's node count
+once (**103** and **100**). Requests go 212 → **214** — the two reconciliations, which the
+session pays once per document; the dependency reads themselves stay seven — and nodes go
+244,247 → **244,256**.

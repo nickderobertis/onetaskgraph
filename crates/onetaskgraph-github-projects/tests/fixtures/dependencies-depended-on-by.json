@@ -1,0 +1,14 @@
+{
+  "data": {
+    "node": {
+      "__typename": "Issue",
+      "blocking": {
+        "nodes": [],
+        "pageInfo": {
+          "hasNextPage": false,
+          "endCursor": null
+        }
+      }
+    }
+  }
+}

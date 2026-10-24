@@ -1771,6 +1771,53 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
     state
         .bindings
         .push((operation_name(query).to_owned(), variables.clone()));
+    // A dependency read of one direction answers exactly what its document selects: what an
+    // item is blocked by, with its body — and a draft's body with the one board item it is,
+    // beside this board's own id — or what an issue blocks, and nothing else.
+    {
+        use onetaskgraph_github_projects::graphql::{ISSUE_DEPENDED_ON_BY, ISSUE_DEPENDS_ON};
+        if query == ISSUE_DEPENDS_ON || query == ISSUE_DEPENDED_ON_BY {
+            let forward = query == ISSUE_DEPENDS_ON;
+            let id = variables["id"].as_str().expect("a node id").to_owned();
+            let board = json!({"projectV2":{"id":"PVT_board"}});
+            let Some(item) = state.items.iter().find(|item| item.content_id == id) else {
+                return if forward {
+                    json!({"node":null,"board":board})
+                } else {
+                    json!({ "node": null })
+                };
+            };
+            if item.typename != "Issue" {
+                if !forward {
+                    return json!({"node":{"__typename":item.typename}});
+                }
+                let boards: Vec<Value> = if item.on_this_board {
+                    vec![json!({"project":{"id":item.board_entry_id,"number":7}})]
+                } else {
+                    Vec::new()
+                };
+                return json!({"node":{"__typename":item.typename,"id":id,"body":item.body.clone(),
+                    "projectV2Items":{"nodes":boards,"pageInfo":{"hasNextPage":false}}},
+                    "board":board});
+            }
+            if forward {
+                let blocked = state.blocked_by.get(&id).cloned().unwrap_or_default();
+                return json!({"node":{"__typename":"Issue","body":item.body.clone(),
+                    "blockedBy":{"nodes":related_issues(&state, blocked),
+                                 "pageInfo":{"hasNextPage":false,"endCursor":null}}},
+                    "board":board});
+            }
+            let blocking = state
+                .blocked_by
+                .iter()
+                .filter(|(_, blockers)| blockers.contains(&id))
+                .map(|(issue, _)| issue.clone())
+                .collect::<Vec<_>>();
+            return json!({"node":{"__typename":"Issue",
+                "blocking":{"nodes":related_issues(&state, blocking),
+                            "pageInfo":{"hasNextPage":false,"endCursor":null}}}});
+        }
+    }
     // Which read this is, taken from the document itself: every label this board answers
     // with hangs on the content, and which path asked is what lets one case make a single
     // path disagree.

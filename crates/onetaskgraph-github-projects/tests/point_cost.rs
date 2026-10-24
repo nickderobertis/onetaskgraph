@@ -57,6 +57,8 @@ const PRICES: &[(&str, u64)] = &[
     (graphql::PROJECT_VISIBILITY, 1),
     (graphql::CREATION_CONTEXT, 1),
     (graphql::ISSUE_DEPENDENCIES, 1),
+    (graphql::ISSUE_DEPENDS_ON, 1),
+    (graphql::ISSUE_DEPENDED_ON_BY, 1),
     (graphql::CREATE_ISSUE, 1),
     // llmlint: ignore-block[tests_hold_no_nonfunctional_thresholds] As at `SUB_ISSUES` above: the price is the instrument, not a threshold. These are the documents a copy now reads its origins and writes its created items with, and the sweep below refuses any document in `graphql::DOCUMENTS` without a recorded price; what a plan copy spends is the `github-plan-copy-points-*` budgets', judged by onebudgetspec.
     (graphql::ORIGIN_LOOKUPS, 2),
