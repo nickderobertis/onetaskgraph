@@ -12,7 +12,10 @@ import dataclasses
 import json
 import os
 import re
+import shutil
 from pathlib import Path
+
+import pytest
 
 from gaps import analysis, budgets, report
 from gaps.budgets import Unit
@@ -181,3 +184,27 @@ def test_the_reported_pauses_and_leftovers_are_what_the_live_runs_recorded() -> 
     assert summary.consumed.issues_left_by_the_last_placement == left
     row = report.answers(summary, None, None).candidates[0]
     assert f"{left} left recorded after the last placement probe" in row["consumed"]
+
+
+def test_a_dry_run_price_disagreeing_with_the_charge_is_disclosed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A dry-run price disagreeing with what GitHub charged is stated by the analysis."""
+    logs = tmp_path / "logs"
+    shutil.copytree(analysis.LOGS, logs)
+    latest = sorted(logs.glob("probe-alias-pricing-*"))[-1] / "feasibility.json"
+    recorded = json.loads(latest.read_text())
+    recorded["executed"][0]["cost"] += 1
+    latest.write_text(json.dumps(recorded))
+    monkeypatch.setattr(analysis, "LOGS", logs)
+    summary = asyncio.run(report.build(PLAN_CHECKOUT, ONETASKGRAPH))
+    assert not summary.prices.dry_run_agrees_with_charge
+    assert "dry run and charge agree: False" in report.method(summary)
+
+
+def test_a_clean_lint_run_is_reported_as_one_with_nothing_failing() -> None:
+    """A lint run with no failing rule is stated as such."""
+    summary = asyncio.run(report.build(PLAN_CHECKOUT, ONETASKGRAPH))
+    clean = report.Lint("run-0", report.LintSummary(56, 56, 0), ())
+    finding = report.answers(summary, None, clean).findings[-1]
+    assert "56 rules passed and 0 failed of 56. None failed." in finding

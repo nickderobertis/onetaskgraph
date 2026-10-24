@@ -47,6 +47,11 @@ class RateLimit:
     reset: int
     resource: str
 
+    def __post_init__(self) -> None:
+        """Refuse figures no allowance could have."""
+        if self.limit <= 0 or self.used < 0 or not 0 <= self.remaining <= self.limit:
+            raise ShapeError(f"impossible rate-limit figures: {self}")
+
     @classmethod
     def from_headers(cls, headers: dict[str, str]) -> RateLimit | None:
         """The headers' reading, or `None` when an answer carried none."""

@@ -163,8 +163,9 @@ def _decode(kind: object, value: Json, where: str) -> object:
                 for k, v in obj(value, where).items()
             }
         case None if isinstance(kind, type) and issubclass(kind, Enum):
+            primitive = integer(value, where) if issubclass(kind, int) else text(value, where)
             try:
-                return kind(value)
+                return kind(primitive)
             except ValueError as error:
                 raise ShapeError(f"{where}: {error}") from error
         case None if isinstance(kind, type) and dataclasses.is_dataclass(kind):
