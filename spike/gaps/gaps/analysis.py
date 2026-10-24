@@ -180,7 +180,7 @@ class Consumed:
     dry_runs: int
     rate_limit_reads: int
     mutation_requests: int
-    issues_created: int
+    creations_sent: int
     points: int
     seconds: float
     remaining_before_and_after: dict[str, tuple[int, int]]
@@ -209,7 +209,7 @@ def latest(prefix: str) -> Path:
     """The newest run directory of `prefix`."""
     found = runs(prefix)
     if not found:
-        raise ShapeError(f"no run {prefix}* under {LOGS}; run spike/gaps.sh first")
+        raise ShapeError(f"no run {prefix}* under {LOGS}; run spike/gaps/gaps.sh first")
     return found[-1]
 
 
@@ -563,7 +563,7 @@ def consumed() -> Consumed:
         dry_runs=sum(1 for r in all_records if r.op == "dry run"),
         rate_limit_reads=sum(1 for r in all_records if r.op in ("rateLimit", "GET /rate_limit")),
         mutation_requests=sum(1 for r in all_records if r.kind is Kind.MUTATION),
-        issues_created=sum(r.aliases for r in all_records if r.op.startswith("ProbeCreate")),
+        creations_sent=sum(r.aliases for r in all_records if r.op.startswith("ProbeCreate")),
         points=points,
         seconds=round(sum(r.end - r.start for r in all_records), 1),
         remaining_before_and_after=remaining,

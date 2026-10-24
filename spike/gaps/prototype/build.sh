@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build the reachability-closure prototype: onetaskgraph at the commit this spike measured
 # (main at acd090b4) with reach-closure.patch applied, in a clone under the spike's cache, so
-# nothing in this checkout changes. `spike/gaps.sh reach-* --build closure` runs what it builds.
+# nothing in this checkout changes. `spike/gaps/gaps.sh reach-* --build closure` runs what it builds.
 #
 #   spike/gaps/prototype/build.sh [<base commit>]
 set -euo pipefail

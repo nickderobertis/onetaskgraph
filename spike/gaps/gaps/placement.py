@@ -318,10 +318,19 @@ def field_write(alias: str, item: str) -> str:
     )
 
 
+@dataclass(frozen=True)
+class CoalescedWrite:
+    """One request carrying every field value and every edge."""
+
+    answered: int
+    aliases: int
+    seconds: float
+
+
 async def coalesced_write(
     client: Client, ids: BoardIds, issues: list[IssueId], items: list[ItemId]
-) -> tuple[int, int, float]:
-    """Every field value and every edge as one request: answered aliases, aliases, seconds."""
+) -> CoalescedWrite:
+    """Every field value and every edge as one request."""
     used = sorted({k for edge in EDGES for k in edge})
     defs = ["$p: ID!", "$f: ID!", "$o: String!"]
     defs += [f"$i{k}: ID!" for k in range(len(items))] + [f"$x{k}: ID!" for k in used]
@@ -340,7 +349,8 @@ async def coalesced_write(
         aliases=len(writes),
     )
     data = require(answer, "ProbeCoalesced")
-    return sum(1 for value in data.values() if value), len(writes), answer.seconds
+    answered = sum(1 for value in data.values() if value)
+    return CoalescedWrite(answered=answered, aliases=len(writes), seconds=answer.seconds)
 
 
 async def nineteen(client: Client, ids: BoardIds, items: list[ItemId]) -> None:
@@ -456,7 +466,7 @@ async def _steps(client: Client, ids: BoardIds, state: State) -> PlacementResult
     issues = [parent.issue] + [c.issue for c in children]
     item_ids = [items[i][0] for i in issues]
     idempotence = await race(client, state, ids, parent.issue)
-    answered, aliases, seconds = await coalesced_write(client, ids, issues, item_ids)
+    write = await coalesced_write(client, ids, issues, item_ids)
     await nineteen(client, ids, item_ids)
     cost, members = await references(client, parent.issue)
     return PlacementResult(
@@ -464,9 +474,9 @@ async def _steps(client: Client, ids: BoardIds, state: State) -> PlacementResult
         children_with_parent=sum(1 for c in children if c.parent == parent.issue),
         placement=placement,
         idempotence=idempotence,
-        coalesced_write_answered=answered,
-        coalesced_write_aliases=aliases,
-        coalesced_write_seconds=round(seconds, 3),
+        coalesced_write_answered=write.answered,
+        coalesced_write_aliases=write.aliases,
+        coalesced_write_seconds=round(write.seconds, 3),
         reference_resolution_cost=cost,
         reference_resolution_children=members,
         cleanup=Cleanup(0, 0, 0, 0, ()),

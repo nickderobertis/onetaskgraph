@@ -73,8 +73,9 @@ class UnionResult:
 
     @property
     def all_agree(self) -> bool:
-        """Whether every variant of every command agrees."""
-        return all(v.agrees for variants in self.commands.values() for v in variants)
+        """Whether every variant of every command agrees; no command screened is no agreement."""
+        variants = [v for each in self.commands.values() for v in each]
+        return bool(variants) and all(v.agrees for v in variants)
 
     def to_json(self) -> Json:
         """The result as `result.json` holds it, its agreement stated beside it."""

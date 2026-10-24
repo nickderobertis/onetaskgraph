@@ -4,7 +4,7 @@
   "projectType": "application",
   "tags": ["lang:python", "layer:spike"],
   "implicitDependencies": ["onetaskgraph"],
-  "//": "The board-copy-gaps feasibility spike, preserved on its branch and never landed. Its tests drive target/debug/onetaskgraph and the prototype build, so `test` depends on both builds; the live probes are never a target, because they spend the test board's shared GitHub allowance and run only from spike/gaps.sh.",
+  "//": "The board-copy-gaps feasibility spike, preserved on its branch and never landed. Its tests drive target/debug/onetaskgraph and the prototype, so `test` depends on both builds. `build` builds the reachability-closure prototype the offline tests run; the live probes are never a target, because they spend the test board's shared GitHub allowance and run only from spike/gaps/gaps.sh.",
   "targets": {
     "format-check": {
       "executor": "nx:run-commands",
@@ -18,7 +18,7 @@
       "executor": "nx:run-commands",
       "options": { "command": "../../.venv/bin/ty check gaps tests", "cwd": "spike/gaps" }
     },
-    "prototype": {
+    "build": {
       "executor": "nx:run-commands",
       "options": { "command": "bash spike/gaps/prototype/build.sh" },
       "cache": false,
@@ -26,7 +26,7 @@
     },
     "test": {
       "executor": "nx:run-commands",
-      "dependsOn": ["onetaskgraph:build", "prototype"],
+      "dependsOn": ["onetaskgraph:build", "build"],
       "options": { "command": "../../.venv/bin/pytest -q", "cwd": "spike/gaps" }
     }
   }

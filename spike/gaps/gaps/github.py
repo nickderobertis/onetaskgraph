@@ -135,8 +135,8 @@ class Client:
         parts = urlsplit(self.endpoint)
         if parts.scheme != "http" or parts.hostname not in LOOPBACK or parts.port is None:
             raise ValueError(f"the client speaks only to the loopback proxy, not {self.endpoint}")
-        if not self.token or self.token.strip() != self.token:
-            raise ValueError("the credential is empty or carries whitespace")
+        if not self.token or any(c.isspace() or not c.isprintable() for c in self.token):
+            raise ValueError("the credential is empty or carries whitespace or control characters")
         self._host = parts.hostname
         self._port = parts.port
 
@@ -241,15 +241,19 @@ def split_reply(raw: bytes) -> HttpReply:
 
 
 def dechunk(body: bytes) -> bytes:
-    """A chunked body's payload."""
+    """A chunked body's payload, refusing framing that does not end in a terminating chunk."""
     out = b""
-    while body:
-        size_line, _, body = body.partition(b"\r\n")
-        size = int(size_line.split(b";")[0] or b"0", 16)
+    while True:
+        size_line, sep, body = body.partition(b"\r\n")
+        size_text = size_line.split(b";")[0].strip()
+        if not sep or not size_text or any(c not in b"0123456789abcdefABCDEF" for c in size_text):
+            raise GitHubError("a chunked answer with unreadable framing")
+        size = int(size_text, 16)
         if size == 0:
-            break
+            return out
+        if len(body) < size + 2 or body[size : size + 2] != b"\r\n":
+            raise GitHubError("a chunked answer cut short")
         out, body = out + body[:size], body[size + 2 :]
-    return out
 
 
 def graphql_error(value: Json, where: str) -> GraphQLError:

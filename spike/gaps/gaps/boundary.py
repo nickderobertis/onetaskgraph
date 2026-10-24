@@ -91,7 +91,7 @@ class CheckInput:
         """A recorded check input, validated against the pinned schema's array fields."""
         entry = obj(value, where)
         arrays = {
-            name: tuple(text(v, f"{where}.{name}[]") for v in arr(entry.get(name) or [], name))
+            name: tuple(text(v, f"{where}.{name}[]") for v in arr(entry.get(name, []), name))
             for name in merged_fields()
         }
         scope = entry.get("scope")

@@ -23,6 +23,7 @@ from gaps import analysis, budgets
 from gaps.analysis import Baseline, Candidate, Shape, Summary
 from gaps.budgets import Operation, Unit
 from gaps.json_shape import Json, ShapeError, decode, encode, load
+from gaps.placement import AddOutcome
 from gaps.pricing import Named
 from gaps.proc import ProcessFailed
 
@@ -63,7 +64,7 @@ class Rule:
 
     name: str
     outcome: str
-    violations: tuple[Violation, ...]
+    violations: tuple[Violation, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -127,9 +128,8 @@ def row(candidate: Candidate, summary: Summary) -> dict[str, str]:
             f"{consumed.requests} requests ({consumed.dry_runs} dry runs, "
             f"{consumed.rate_limit_reads} "
             f"quota reads, {consumed.mutation_requests} mutation requests, "
-            f"{consumed.issues_created} "
-            f"disposable issues created and deleted), {consumed.points} points by the prices "
-            "observed, "
+            f"{consumed.creations_sent} disposable issue creations sent, every issue deleted), "
+            f"{consumed.points} points by the prices observed, "
             f"in {consumed.seconds} s of request time. The baseline was not run again: it is the "
             "cached re-measurement."
         ),
@@ -215,6 +215,8 @@ def findings(summary: Summary, ruling: str | None, lint: Lint | None) -> list[st
         reach["reach-unresolvable-ref closure"],
     )
     private_ref = reach["reach-private-ref closure"]
+    recopy, unmarked = reach["reach-recopy closure"], reach["reach-recopy-unmarked closure"]
+    refused_adds = sum(1 for o in placed.add_outcomes if o is AddOutcome.REFUSED_ALREADY_EXISTS)
     unasked = [q.operation for s in head.steps for q in s.recorder_requests]
     asked = [q.operation for s in private_ref.steps for q in s.recorder_requests]
     calls = {
@@ -258,7 +260,12 @@ def findings(summary: Summary, ruling: str | None, lint: Lint | None) -> list[st
         "destination "
         f"changed: {unresolvable.destination_changed}). Redundant discovery that can be omitted: "
         "that "
-        "recording-source query for every dependent the copy created or that carries the mark.",
+        "recording-source query for every dependent the copy created or that carries the mark. "
+        f"A re-copy over the tasks the first copy marked asked {recopy.private_requests} private "
+        f"sources (exits {[s.returncode for s in recopy.steps]}); with the mark taken off all "
+        f"{unmarked.tasks_unmarked} tasks, as an earlier release left them, the re-copy asked "
+        "again and failed closed on the unavailable double (exits "
+        f"{[s.returncode for s in unmarked.steps]}).",
         "**Explicitly private reference: withheld, one request, not reported.** A task depending "
         "on "
         "an item of the declared-private Linear double still sends it "
@@ -303,7 +310,10 @@ def findings(summary: Summary, ruling: str | None, lint: Lint | None) -> list[st
         "after "
         "the bound, send `addProjectV2ItemById`: racing GitHub's placement and after it, it left "
         "one "
-        f"item with the same id (idempotent: {placed.idempotent}), but it costs a write an issue, "
+        f"item with the same id and never two (never duplicated: {placed.idempotent}) — "
+        f"of {len(placed.add_outcomes)} adds, {refused_adds} were refused as 'Content already "
+        "exists in this project' rather than answered with the item, so the fallback treats that "
+        "refusal as placed and reads the item — but it costs a write an issue, "
         "and "
         "for all 10 the first copy would be 46 writes, over the strict 40. (4) Send every field "
         "value "
@@ -344,12 +354,11 @@ def findings(summary: Summary, ruling: str | None, lint: Lint | None) -> list[st
         "of 5 "
         "succeeded. A copy's undo, or any coalesced delete, must stay under that.",
         "**Harness.** The timing spike's proxy guard missed an id passed through a variable of "
-        "another "
-        "name (`projectId: $p`) or an inline `projectV2Ids` list; this spike's guard reads both, "
-        "and "
-        "`proxy-refusal` shows every non-test write refused locally with nothing reaching "
-        "upstream "
-        f"(all as expected: {summary.offline.refusal.all_as_expected}).",
+        "another name (`projectId: $p`) or an inline `projectV2Ids` list. This spike's own async "
+        "guard reads both, lets through only the five mutation kinds the probes send, and only "
+        "for issues it saw this run create; `proxy-refusal` shows its "
+        f"{len(summary.offline.refusal.cases)} cases as expected, nothing refused reaching "
+        f"upstream (all as expected: {summary.offline.refusal.all_as_expected}).",
         "**Bars over, escalated.** Every strict points and writes bar is attainable on observed "
         "prices, "
         "under two unknown-API assumptions: alias-independent mutation pricing beyond 19 aliases, "
@@ -389,7 +398,7 @@ def answers(summary: Summary, ruling: str | None, lint: Lint | None) -> Answers:
             "spike's Nx project `spike-gaps` (`spike/gaps/`) extends it — its proxy, 40% quota "
             "rule and "
             "workload generator are imported, not copied. One measurement of one scenario is "
-            "`spike/gaps.sh <scenario> [--build stock|head|closure]`: the live "
+            "`spike/gaps/gaps.sh <scenario> [--build stock|head|closure]`: the live "
             "`probe-alias-pricing` and "
             "`probe-placement` (the test board's `GH_PROJECTS_TOKEN`, quota-gated) and the offline "
             "`reach-public`, `reach-private-item`, `reach-private-ref`, `reach-unresolvable-ref`, "

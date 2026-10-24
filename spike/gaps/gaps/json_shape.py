@@ -163,12 +163,17 @@ def _decode(kind: object, value: Json, where: str) -> object:
     if isinstance(kind, type) and dataclasses.is_dataclass(kind):
         mapping = obj(value, where)
         hints = typing.get_type_hints(kind)
-        return kind(
-            **{
-                f.name: _decode(hints[f.name], field(mapping, f.name, where), f"{where}.{f.name}")
-                for f in dataclasses.fields(kind)
-            }
-        )
+        values: dict[str, object] = {}
+        for f in dataclasses.fields(kind):
+            has_default = (
+                f.default is not dataclasses.MISSING or f.default_factory is not dataclasses.MISSING
+            )
+            if f.name not in mapping and has_default:
+                continue
+            values[f.name] = _decode(
+                hints[f.name], field(mapping, f.name, where), f"{where}.{f.name}"
+            )
+        return kind(**values)
     match kind:
         case type() if kind is bool:
             return flag(value, where)

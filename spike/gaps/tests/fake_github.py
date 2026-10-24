@@ -16,6 +16,8 @@ import threading
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from gaps.json_shape import Json, ShapeError, obj, parse, text
+
 REPOSITORY = "R_scratch_repository"
 PROJECT = "PVT_test_board"
 FIELD = "PVTSSF_status"
@@ -31,6 +33,7 @@ class Issue:
     parent: str | None
     reads: int = 0
     item: str | None = None
+    repository: str = REPOSITORY
 
 
 @dataclass
@@ -40,7 +43,12 @@ class Board:
     placement_reads: int = 1
     refuse_present_adds: bool = False
     fail_deletes: bool = False
+    fail_ownership_read: bool = False
+    answer_creates: int | None = None
+    create_error: str | None = None
     remaining: int = 4000
+    rest_remaining: int | None = None
+    tokens: list[str] = field(default_factory=list)
     issues: dict[str, Issue] = field(default_factory=dict)
     used: int = 1000
     seen: list[str] = field(default_factory=list)
@@ -65,7 +73,7 @@ class Board:
         nodes = [] if issue.item is None else [{"id": issue.item, "project": {"id": PROJECT}}]
         return {"nodes": nodes}
 
-    def answer(self, query: str, variables: dict[str, object]) -> dict[str, object]:
+    def answer(self, query: str, variables: dict[str, Json]) -> dict[str, object]:
         """The GraphQL answer to one request."""
         name = re.search(r"^\s*(?:query|mutation)\s+(\w+)", query)
         op = name.group(1) if name else ""
@@ -82,7 +90,11 @@ class Board:
             return {"data": {"repository": {"id": REPOSITORY}, "user": {"projectV2": project}}}
         if op.startswith("ProbeCreate"):
             data = {}
-            for alias, value in variables.items():
+            if self.create_error is not None:
+                error = {"type": "UNPROCESSABLE", "path": ["c0"], "message": self.create_error}
+                return {"data": None, "errors": [error]}
+            answered = list(variables.items())[: self.answer_creates]
+            for alias, value in answered:
                 created = value if isinstance(value, dict) else {}
                 parent_id = created.get("parentIssueId")
                 issue = Issue(
@@ -95,6 +107,9 @@ class Board:
                 data[alias] = {
                     "issue": {"id": issue.id, "parent": parent, "projectItems": {"nodes": []}}
                 }
+            if len(answered) < len(variables):
+                error = {"type": "UNPROCESSABLE", "path": ["cN"], "message": "not created"}
+                return {"data": data, "errors": [error]}
             return {"data": data}
         if op == "ProbePlaced":
             data: dict[str, object] = {"rateLimit": {"cost": 1}}
@@ -129,6 +144,8 @@ class Board:
             node = {"subIssues": {"nodes": children}}
             return {"data": {"rateLimit": {"cost": 1}, "node": node}}
         if op == "ProbeOwn":
+            if self.fail_ownership_read:
+                return {"data": None, "errors": [{"type": "FORBIDDEN", "message": "no"}]}
             data, errors = {}, []
             for key, value in variables.items():
                 alias = key
@@ -137,7 +154,7 @@ class Board:
                     data[alias] = None
                     errors.append({"type": "NOT_FOUND", "path": [alias], "message": "gone"})
                 else:
-                    repository = {"id": REPOSITORY}
+                    repository = {"id": issue.repository}
                     data[alias] = {"id": issue.id, "title": issue.title, "repository": repository}
             return {"data": data, "errors": errors} if errors else {"data": data}
         if op == "ProbeDelete":
@@ -177,20 +194,26 @@ def serve(board: Board) -> tuple[ThreadingHTTPServer, str]:
 
         def do_GET(self) -> None:
             with board.lock:
-                bucket = {
-                    "limit": 5000,
-                    "used": board.used,
-                    "remaining": board.remaining - board.used,
-                }
+                board.tokens.append(self.headers.get("Authorization", ""))
+                remaining = board.rest_remaining
+                if remaining is None:
+                    remaining = board.remaining - board.used
+                bucket = {"limit": 5000, "used": 5000 - remaining, "remaining": remaining}
                 bucket["reset"] = 4102444800
                 self._send(200, {"resources": {"core": bucket, "graphql": bucket}})
 
         def do_POST(self) -> None:
             length = int(self.headers.get("Content-Length") or 0)
-            request = json.loads(self.rfile.read(length) or b"{}")
+            try:
+                request = obj(parse(self.rfile.read(length).decode(), "request"), "request")
+                query = text(request.get("query"), "request.query")
+                variables = obj(request.get("variables") or {}, "request.variables")
+            except ShapeError as error:
+                self._send(400, {"errors": [{"type": "BAD_REQUEST", "message": str(error)}]})
+                return
             with board.lock:
-                answer = board.answer(str(request.get("query", "")), request.get("variables") or {})
-                self._send(200, answer)
+                board.tokens.append(self.headers.get("Authorization", ""))
+                self._send(200, board.answer(query, variables))
 
         def log_message(self, format: str, *args: object) -> None:
             pass

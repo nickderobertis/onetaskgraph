@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from gaps import allowance, board, placement
-from gaps.github import Client, GitHubError, Token
+from gaps.github import Client, GitHubError, RateLimit, Token
 from gaps.json_shape import decode, load, load_lines, obj
 from gaps.placement import AddOutcome, PlacementResult
 from gaps.pricing import Named, PricingResult
@@ -106,7 +106,8 @@ async def probe(
         board.FieldId(fake_github.FIELD),
         board.OptionId(fake_github.OPTION),
     )
-    async with relay(tmp_path, (ids.repository, ids.project), upstream=url) as proxy:
+    leftovers = tuple(state.ids)
+    async with relay(tmp_path, (ids.repository, ids.project), url, leftovers) as proxy:
         client = Client(proxy.endpoint, Token("t0ken"))
         try:
             return await placement.probe(client, ids, state), state, client
@@ -181,3 +182,111 @@ def test_the_gate_pauses_under_forty_percent_and_proceeds_once_the_bucket_recove
     log = tmp_path / "allowance.jsonl"
     events = [obj(line, "entry").get("event") for line in load_lines(log)]
     assert events == ["reading", "pause", "reading"]
+
+
+def test_a_failed_probe_publishes_its_log_and_quota_beside_the_failure_and_exits_1(
+    tmp_path: Path, github: tuple[fake_github.Board, str]
+) -> None:
+    """A failed probe publishes its log and quota beside the failure and exits 1."""
+    stand_in, url = github
+    stand_in.fail_deletes = True
+    done = run_gaps(tmp_path, "probe-placement", SPIKE_UPSTREAM=url, GH_PROJECTS_TOKEN="t0ken")
+    assert done.returncode == 1 and "probe issue(s) left" in done.stderr
+    [run] = (tmp_path / "logs").iterdir()
+    assert {p.name for p in run.iterdir()} == {"failed.json", "quota.json", "requests.jsonl"}
+    assert "left" in json.loads((run / "failed.json").read_text())["error"]
+
+
+def test_output_that_would_carry_identifying_text_is_refused_and_removed(
+    tmp_path: Path, github: tuple[fake_github.Board, str]
+) -> None:
+    """Output that would carry identifying text is refused and removed."""
+    stand_in, url = github
+    stand_in.create_error = "see https://github.com/someone/somewhere/issues/7"
+    done = run_gaps(tmp_path, "probe-placement", SPIKE_UPSTREAM=url, GH_PROJECTS_TOKEN="t0ken")
+    assert done.returncode == 1 and "identifying text" in done.stderr
+    assert not (tmp_path / "logs").exists() or not any((tmp_path / "logs").iterdir())
+
+
+def test_the_launcher_reads_the_credential_file_and_keeps_an_exported_credential(
+    tmp_path: Path, github: tuple[fake_github.Board, str]
+) -> None:
+    """The launcher reads the credential file and keeps an exported credential."""
+    stand_in, url = github
+    token_file = tmp_path / "secrets.env"
+    token_file.write_text('GH_PROJECTS_TOKEN="from-file"\n')
+    launcher = [str(Path(__file__).resolve().parents[1] / "gaps.sh"), "probe-alias-pricing"]
+    base = gaps_env(tmp_path, SPIKE_UPSTREAM=url, SPIKE_TOKEN_ENV=str(token_file))
+    first = subprocess.run(launcher, env=base, capture_output=True, text=True, check=False)
+    assert first.returncode == 0, first.stderr
+    assert set(stand_in.tokens) == {"Bearer from-file"}
+    stand_in.tokens.clear()
+    exported = base | {"GH_PROJECTS_TOKEN": "exported"}
+    second = subprocess.run(launcher, env=exported, capture_output=True, text=True, check=False)
+    assert second.returncode == 0, second.stderr
+    assert set(stand_in.tokens) == {"Bearer exported"}
+
+
+def test_a_create_answered_in_part_fails_and_every_issue_it_did_create_is_deleted(
+    tmp_path: Path, github: tuple[fake_github.Board, str]
+) -> None:
+    """A create answered in part fails, and every issue it did create is deleted."""
+    stand_in, url = github
+    stand_in.answer_creates = 4
+    result, state, _ = asyncio.run(probe(url, tmp_path))
+    assert isinstance(result, GitHubError) and "not created" in str(result)
+    assert stand_in.issues == {} and state.ids == []
+
+
+def test_cleanup_deletes_only_this_probes_issues_and_forgets_those_already_gone(
+    tmp_path: Path, github: tuple[fake_github.Board, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cleanup deletes only this probe's issues and forgets those already gone."""
+    stand_in, url = github
+    monkeypatch.setattr(placement, "RACE_SETTLE", 0.1)
+    stand_in.issues["I_foreign_title"] = fake_github.Issue("I_foreign_title", "a person's", None)
+    foreign = fake_github.Issue("I_foreign_repo", "bcg-probe x", None, repository="R_other")
+    stand_in.issues["I_foreign_repo"] = foreign
+    seeded = ["I_foreign_title", "I_foreign_repo", "I_gone"]
+    (tmp_path / "state.json").write_text(json.dumps(seeded))
+    result, state, _ = asyncio.run(probe(url, tmp_path))
+    assert isinstance(result, placement.LeftBehind)
+    assert set(stand_in.issues) == {"I_foreign_title", "I_foreign_repo"}
+    assert sorted(state.ids) == ["I_foreign_repo", "I_foreign_title"]
+
+
+def test_an_unreadable_ownership_read_deletes_nothing_and_keeps_every_recorded_id(
+    tmp_path: Path, github: tuple[fake_github.Board, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unreadable ownership read deletes nothing and keeps every recorded id."""
+    stand_in, url = github
+    monkeypatch.setattr(placement, "RACE_SETTLE", 0.1)
+    stand_in.fail_ownership_read = True
+    result, state, _ = asyncio.run(probe(url, tmp_path))
+    assert isinstance(result, GitHubError) and "FORBIDDEN" in str(result)
+    assert len(stand_in.issues) == 11 and len(state.ids) == 11
+
+
+def test_a_reading_is_the_least_of_its_figures_and_ignores_headers_of_a_closed_window(
+    tmp_path: Path, github: tuple[fake_github.Board, str]
+) -> None:
+    """A reading is the least of its figures, and ignores the headers of a closed window."""
+    stand_in, url = github
+    stand_in.rest_remaining = 4900
+
+    async def read(headers: RateLimit | None) -> allowance.Reading:
+        """One reading through the real relay."""
+        async with relay(tmp_path, (), upstream=url) as proxy:
+            return await allowance.read(Client(proxy.endpoint, Token("t0ken")), headers)
+
+    own = asyncio.run(read(None))
+    assert own.rest_endpoint.remaining == 4900
+    assert own.least.remaining == min(b.remaining for b in own.own) < 4900
+    lower = asyncio.run(
+        read(RateLimit(limit=5000, remaining=10, used=4990, reset=4102444800, resource="graphql"))
+    )
+    assert lower.least.remaining == 10
+    closed = asyncio.run(
+        read(RateLimit(limit=5000, remaining=10, used=4990, reset=1, resource="graphql"))
+    )
+    assert closed.least.remaining > 10

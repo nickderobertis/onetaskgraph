@@ -109,10 +109,30 @@ def test_the_proxy_refuses_every_write_to_another_destination(tmp_path: Path) ->
     """The proxy refuses every write to another destination."""
     refusal = decode(RefusalResult, load(result(run_case(tmp_path, "proxy-refusal", "head"))), "r")
     assert refusal.all_as_expected
-    assert [o.reached_upstream for o in refusal.cases].count(1) == 1
+    assert [o.reached_upstream for o in refusal.cases].count(1) == 3
 
 
 def test_a_missing_binary_exits_2_naming_it(tmp_path: Path) -> None:
     """A missing binary exits 2 naming it."""
     done = run_case(tmp_path, "reach-public", "head", SPIKE_HEAD_BINARY=str(tmp_path / "absent"))
     assert done.returncode == 2 and "no executable" in done.stderr
+
+
+def test_with_the_closure_a_recopy_over_marked_tasks_asks_no_private_source(
+    tmp_path: Path,
+) -> None:
+    """With the closure, a re-copy over marked tasks asks no private source."""
+    reach = decode(ReachResult, load(result(run_case(tmp_path, "reach-recopy", "closure"))), "r")
+    assert [s.returncode for s in reach.steps] == [0, 0, 0, 0]
+    assert reach.private_requests == 0 and reach.tasks_unmarked == 0
+
+
+def test_with_the_closure_a_recopy_over_unmarked_tasks_asks_and_fails_closed(
+    tmp_path: Path,
+) -> None:
+    """With the closure, a re-copy over unmarked tasks asks the private sources and fails closed."""
+    done = run_case(tmp_path, "reach-recopy-unmarked", "closure")
+    reach = decode(ReachResult, load(result(done)), "r")
+    assert reach.tasks_unmarked == 8
+    assert [s.returncode for s in reach.steps] == [0, 0, 1]
+    assert [q.operation for q in reach.steps[2].recorder_requests] == ["query <search>"]

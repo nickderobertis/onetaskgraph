@@ -2,8 +2,8 @@
 
 Live, on the test board only, quota-gated, needing `GH_PROJECTS_TOKEN`:
 `probe-alias-pricing`, `probe-placement`. Offline, needing no credential: `reach-public`,
-`reach-private-item`, `reach-private-ref`, `reach-unresolvable-ref`, `screen-union`,
-`proxy-refusal`.
+`reach-recopy`, `reach-recopy-unmarked`, `reach-private-item`, `reach-private-ref`,
+`reach-unresolvable-ref`, `screen-union`, `proxy-refusal`.
 
 Raw run directories go under `$XDG_CACHE_HOME/board-copy-gaps-2026-10-24/runs/` (default
 `~/.cache`); the sanitized form is written to `spike/gaps/logs/<scenario>-<build>-<time>/`
@@ -55,6 +55,8 @@ class Scenario(StrEnum):
     PRICING = "probe-alias-pricing"
     PLACEMENT = "probe-placement"
     REACH_PUBLIC = reach.Case.PUBLIC.value
+    REACH_RECOPY = reach.Case.RECOPY.value
+    REACH_RECOPY_UNMARKED = reach.Case.RECOPY_UNMARKED.value
     REACH_PRIVATE_ITEM = reach.Case.PRIVATE_ITEM.value
     REACH_PRIVATE_REF = reach.Case.PRIVATE_REF.value
     REACH_UNRESOLVABLE_REF = reach.Case.UNRESOLVABLE_REF.value
@@ -186,14 +188,18 @@ async def live(scenario: Scenario, where: Paths, run: Path, out: Path) -> Path:
         ids = board.board_ids(
             await client.graphql("ProbeIds", board.IDS_QUERY, board.ids_variables(scratch))
         )
-    async with relay(run, (ids.repository, ids.project), upstream=where.upstream) as writer:
+    # The read-only pricing probe is allowed no write; the placement probe the test board, the
+    # issues it creates and an interrupted run's recorded leftovers.
+    state = placement.State(where.cache / "state" / "probe-issues.json")
+    writes = (ids.repository, ids.project) if scenario is Scenario.PLACEMENT else ()
+    leftovers = tuple(state.ids) if scenario is Scenario.PLACEMENT else ()
+    async with relay(run, writes, upstream=where.upstream, issues=leftovers) as writer:
         client = Client(writer.endpoint, credential, log=log)
         try:
             match scenario:
                 case Scenario.PRICING:
                     result = (await pricing.probe(client, scratch, ids.repository)).to_json()
                 case _:
-                    state = placement.State(where.cache / "state" / "probe-issues.json")
                     result = (await placement.probe(client, ids, state)).to_json()
         except (GitHubError, ShapeError, placement.LeftBehind) as error:
             # A failed probe still spent requests: its log is published beside the failure.
@@ -220,6 +226,8 @@ async def offline(scenario: Scenario, build: Build, where: Paths, run: Path, out
     if scenario is Scenario.SCREEN_UNION:
         result = await union.run(run, exe, onevcs)
         published = publish(run, out, {"result.json": result.to_json()})
+        if not result.commands:
+            raise MeasurementFailed(f"the copy screened nothing to replay; read {published}")
         if not result.all_agree:
             raise MeasurementFailed(
                 f"the union disagreed with the per-item verdicts; read {published}"

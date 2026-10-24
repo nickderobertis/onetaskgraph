@@ -8,6 +8,9 @@ one loopback `Recorder` answering every request 503: a configured private servic
 unavailable. No real private source is configured or read.
 
 - `reach-public`: the plan, nothing naming the private sources.
+- `reach-recopy`: the same copy made twice, the second over what the first landed.
+- `reach-recopy-unmarked`: the same, every landed task's `onetaskgraph.edges_on_record` mark
+  taken off between the two, as a release before the mark existed left its tasks.
 - `reach-private-item`: one task declared `classification: private`.
 - `reach-private-ref`: one task depending on an item of the private Linear source.
 - `reach-unresolvable-ref`: one task depending on an item of a source nothing configures.
@@ -42,6 +45,8 @@ class Case(StrEnum):
     """The synthetic reachability cases."""
 
     PUBLIC = "reach-public"
+    RECOPY = "reach-recopy"
+    RECOPY_UNMARKED = "reach-recopy-unmarked"
     PRIVATE_ITEM = "reach-private-item"
     PRIVATE_REF = "reach-private-ref"
     UNRESOLVABLE_REF = "reach-unresolvable-ref"
@@ -139,7 +144,7 @@ def write_plan(root: Path, case: Case) -> None:
             far = "priv-linear:SYN-1" if case is Case.PRIVATE_REF else "ghost:G-1"
             edge = f'\ndepends_on: [{{"id": "{far}", "item": "task"}}]\nstatus:'
             content = content.replace("\nstatus:", edge, 1)
-        case Case.PUBLIC:
+        case Case.PUBLIC | Case.RECOPY | Case.RECOPY_UNMARKED:
             pass
     task.write_text(content)
 
@@ -187,6 +192,28 @@ def configuration(root: Path, recorder: str, shim: list[str]) -> dict[str, Json]
     }
 
 
+COPY = (
+    ("project-copy", ("project", "copy", f"src:{PLAN}", "--to", "dest", "--json")),
+    ("document-copy", ("document", "copy", f"src:{PLAN}-design", "--to", "dest", "--json")),
+)
+RECOPY = tuple((name.replace("copy", "recopy"), argv) for name, argv in COPY)
+EDGES_ON_RECORD = "onetaskgraph.edges_on_record"
+
+
+def unmark(dest: Path) -> int:
+    """Take the edges-on-record mark off every copied task; answer how many carried it.
+
+    This leaves the tasks as a release from before the mark existed left them.
+    """
+    marked = 0
+    for task in sorted((dest / "tasks").rglob("*.md")):
+        lines = task.read_text().splitlines(keepends=True)
+        kept = [line for line in lines if EDGES_ON_RECORD not in line]
+        marked += len(kept) != len(lines)
+        task.write_text("".join(kept))
+    return marked
+
+
 def tree(root: Path) -> dict[str, str]:
     """Every file under `root` by its digest."""
     return {
@@ -232,6 +259,7 @@ class ReachResult:
     private_requests: int
     destination_changed: bool
     destination_files: int
+    tasks_unmarked: int
     screens: Screens
 
     def to_json(self) -> Json:
@@ -285,10 +313,11 @@ async def run(run_dir: Path, case: Case, exe: Path, onevcs: Path) -> ReachResult
     before = tree(root / "dest")
     steps: list[Step] = []
     try:
-        for name, argv in (
-            ("project-copy", ("project", "copy", f"src:{PLAN}", "--to", "dest", "--json")),
-            ("document-copy", ("document", "copy", f"src:{PLAN}-design", "--to", "dest", "--json")),
-        ):
+        unmarked = 0
+        plan = COPY + (RECOPY if case in (Case.RECOPY, Case.RECOPY_UNMARKED) else ())
+        for name, argv in plan:
+            if name == RECOPY[0][0] and case is Case.RECOPY_UNMARKED:
+                unmarked = unmark(root / "dest")
             # Each command screens into its own log, so the union experiment reads which
             # command made each call from where it was written.
             shim = [sys.executable, "-m", "gaps.shim", str(screen_log(run_dir, name)), str(onevcs)]
@@ -324,6 +353,7 @@ async def run(run_dir: Path, case: Case, exe: Path, onevcs: Path) -> ReachResult
         private_requests=len(recorder.requests),
         destination_changed=before != after,
         destination_files=len(after),
+        tasks_unmarked=unmarked,
         screens=counted,
     )
     (run_dir / "result.json").write_text(json.dumps(result.to_json(), indent=1))

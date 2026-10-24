@@ -15,7 +15,8 @@ from pathlib import Path
 
 import pytest
 
-from gaps import analysis, board, boundary, documents, guard, pricing
+from gaps import analysis, board, boundary, documents, guard, pricing, reach, report, union
+from gaps.boundary import Verdict
 from gaps.budgets import Budget, Operation, Unit, from_tasks
 from gaps.documents import Doc
 from gaps.json_shape import Json, ShapeError, decode, encode
@@ -126,6 +127,8 @@ def test_every_baseline_run_is_one_the_measurement_document_draws_on() -> None:
         ),
         ("mutation($i: In!) { a(input: $i) { x } }", {"i": {"repositoryId": "R2"}}, {"R2"}),
         ("mutation { a(input: {projectId: P}) { x } }", {}, {"<unreadable>"}),
+        ("mutation($p: ID!) { a(input: {projectV2Ids: [$p]}) { x } }", {"p": "P3"}, {"P3"}),
+        ('mutation { a(input: {projectV2Ids: ["P1" }) { x } }', {}, {"<unreadable>"}),
     ],
 )
 def test_the_guard_reads_every_way_a_destination_can_be_named(
@@ -217,3 +220,42 @@ def test_a_budget_naming_no_measured_operation_is_refused() -> None:
     """A budget naming no measured operation is refused."""
     with pytest.raises(ShapeError, match="names no operation"):
         _ = Budget("plan-copy-spend", "n", 1, Unit.POINTS, "r").operation
+
+
+def test_the_visibilities_are_the_pinned_schemas_own() -> None:
+    """The visibilities are the pinned schema's own."""
+    schema = json.loads(boundary.PINNED_SCHEMA.read_text())
+    variants = schema["inspect"]["output"]["$defs"]["Visibility"]["oneOf"]
+    assert {v.value for v in boundary.Visibility} == {v["const"] for v in variants}
+
+
+def test_the_lint_record_model_reads_what_llmlint_itself_records() -> None:
+    """The lint record model reads what llmlint itself records."""
+    done = subprocess.run(
+        ["llmlint", "history", "latest", "--format", "json"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    lint = decode(report.Lint, json.loads(done.stdout), "llmlint history")
+    assert lint.summary.total >= lint.summary.passed + lint.summary.failed
+    assert all(rule.outcome for rule in lint.rules)
+
+
+def test_an_unavailable_check_stays_unavailable_after_the_union() -> None:
+    """An unavailable check stays unavailable after the union, and a refusal beside a pass refuses.
+
+    Asserted on the verdict arithmetic rather than end to end: the real onevcs has no input whose
+    check is unavailable while the same home's inspections answer, and a fake onevcs would
+    replace the very layer the union experiment exists to exercise.
+    """
+    verdicts = [Verdict.PASS, Verdict.REFUSE, Verdict.UNAVAILABLE]
+    assert union.strictest(verdicts) is Verdict.UNAVAILABLE
+    assert union.strictest([Verdict.PASS, Verdict.REFUSE]) is Verdict.REFUSE
+    assert union.strictest([]) is Verdict.PASS
+    way = union.Way(1, 0, 1, Verdict.UNAVAILABLE, (), 0.0)
+    disagreeing = union.Variant(union.Plant.NONE, way, union.Way(1, 0, 1, Verdict.PASS, (), 0.0))
+    assert not disagreeing.agrees
+    screens = reach.Screens(0, 0, 0, 0.0, ())
+    copy = reach.ReachResult(reach.Case.PUBLIC, "", "", (), 0, False, 0, 0, screens)
+    assert not union.UnionResult(copy=copy, commands={}).all_agree

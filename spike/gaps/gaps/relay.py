@@ -28,16 +28,23 @@ async def relay(
     run_dir: Path,
     allowed: tuple[str, ...],
     upstream: str | None = None,
+    issues: tuple[str, ...] = (),
 ) -> AsyncIterator[Relay]:
-    """A proxy allowing writes naming only `allowed` ids, stopped when the block ends."""
+    """The guard, stopped when the block ends.
+
+    It allows writes naming only `allowed` destinations and the issues it sees created, plus
+    `issues`, an interrupted probe's leftovers.
+    """
     port_file = run_dir / "proxy.port"
     port_file.unlink(missing_ok=True)
     log = run_dir / "proxy.jsonl"
     argv = [sys.executable, "-m", "gaps.guard", "--log", str(log), "--port-file", str(port_file)]
     for allowed_id in allowed:
         argv += ["--allow", allowed_id]
+    for issue in issues:
+        argv += ["--allow-issue", issue]
     if upstream is not None:
-        argv += ["--upstream", upstream, "--uploads", upstream]
+        argv += ["--upstream", upstream]
     env = dict(os.environ, PYTHONPATH=os.pathsep.join([str(PACKAGE_ROOT), str(HARNESS)]))
     process = await asyncio.create_subprocess_exec(*argv, env=env)
     try:

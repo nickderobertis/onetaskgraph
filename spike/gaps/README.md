@@ -4,12 +4,13 @@ Preserved on `nick/board-copy-gaps-2026-10-24/spike-feasibility`; nothing here l
 is `board-copy-gaps-2026-10-24-spike-feasibility-report` in `authoring:board-copy-gaps-2026-10-24`.
 
 It extends the timing spike's harness in `spike/harness/`, which stays exactly as that spike left
-it (`bc49f888`): the recording proxy, the 40% quota rule and the workload generator are imported
-through `gaps/harness.py`, never copied.
+it (`bc49f888`): the 40% quota rule, the workload generator and the leak scan are imported
+through `gaps/harness.py`, never copied. The live probes now leave through this project's own
+async guard (`gaps/guard.py`) rather than the timing spike's proxy.
 
 ## One measurement
 
-    spike/gaps.sh <scenario> [--build stock|head|closure]
+    spike/gaps/gaps.sh <scenario> [--build stock|head|closure]
 
 `gaps/cli.py` documents every scenario, the environment and the exit statuses. The live probes
 (`probe-alias-pricing`, `probe-placement`) write only to the scratch repository and board that
@@ -27,8 +28,9 @@ records, and the `spike-report` answers.
 
 ## Checks
 
-`nx run spike-gaps:test` runs every test: the probes end to end against a loopback stand-in for
-GitHub through the real proxy and guard, the offline cases against the real CLI and onevcs, the
-drift gates (plugin documents, test board, boundary schema, baseline runs, plan budgets) and the
-committed summary's freshness. `lint`, `format-check` and `typecheck` are the project's other
-targets.
+`just test`, `just lint`, `just format-check` and `just typecheck` reach this project whenever a
+change affects it. Its tests drive the probes end to end against a loopback stand-in for GitHub
+through the real guard, the offline cases against the real CLI and onevcs, the drift gates
+(plugin documents, test board, boundary schema, lint record, baseline runs, plan budgets) and the
+committed summary's freshness. Its `build` target builds the reachability-closure prototype the
+offline tests run.
