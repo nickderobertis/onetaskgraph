@@ -10,7 +10,8 @@
 //! since its answer fills no entry. Beside those, with the cache on or off, the eight mutations
 //! that write a long form each select what Linear stored in their own answer — `description`
 //! or `content` after the `id` 0.6.0 selected, and nothing else — which is what the store
-//! compares with what it sent.
+//! compares with what it sent. And a dependency read sends one of four documents each 0.6.0's
+//! `ISSUE_RELATIONS` or `PROJECT_RELATIONS` narrowed to the one direction it reads.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -54,7 +55,51 @@ fn released_or_widened() -> BTreeSet<String> {
         );
         allowed.insert(current.to_owned());
     }
+    for (name, current, removed) in narrowed_reads() {
+        assert_eq!(
+            released[name].replacen(&format!(" {removed}"), "", 1),
+            current,
+            "{name} narrowed to one direction is 0.6.0's without `{removed}`, and nothing else"
+        );
+        allowed.insert(current.to_owned());
+    }
     allowed
+}
+
+/// Each dependency read this build sends in place of 0.6.0's two-direction one, by the 0.6.0
+/// name it narrows, and the one selection it leaves out: the other direction's connection, and
+/// for a reverse read the long form, which only a forward read's recorded edges are read from.
+fn narrowed_reads() -> [(&'static str, &'static str, String); 4] {
+    let issue_forward = "inverseRelations(first:$first,after:$after){nodes{id type issue{id}} \
+                         pageInfo{hasNextPage endCursor}}";
+    let project_forward = "inverseRelations(first:$first,after:$after){nodes{id type project{id}} \
+                           pageInfo{hasNextPage endCursor}}";
+    [
+        (
+            "ISSUE_RELATIONS",
+            graphql::ISSUE_DEPENDS_ON,
+            issue_forward.to_owned(),
+        ),
+        (
+            "ISSUE_RELATIONS",
+            graphql::ISSUE_DEPENDED_ON_BY,
+            "description relations(first:$first,after:$after){nodes{id type relatedIssue{id}} \
+             pageInfo{hasNextPage endCursor}}"
+                .to_owned(),
+        ),
+        (
+            "PROJECT_RELATIONS",
+            graphql::PROJECT_DEPENDS_ON,
+            project_forward.to_owned(),
+        ),
+        (
+            "PROJECT_RELATIONS",
+            graphql::PROJECT_DEPENDED_ON_BY,
+            "content relations(first:$first,after:$after){nodes{id type relatedProject{id}} \
+             pageInfo{hasNextPage endCursor}}"
+                .to_owned(),
+        ),
+    ]
 }
 
 /// The read and write verbs the Linear journeys drive, in an order each can follow the last.
@@ -187,7 +232,7 @@ fn with_the_cache_off_every_document_is_one_0_6_0_sent_or_a_write_selecting_what
         graphql::ISSUES,
         graphql::ISSUE,
         graphql::ISSUE_DETAIL,
-        graphql::ISSUE_RELATIONS,
+        graphql::ISSUE_DEPENDS_ON,
     ] {
         assert!(sent.contains(document), "the verbs reach {document}");
     }

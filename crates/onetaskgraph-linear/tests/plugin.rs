@@ -341,6 +341,23 @@ fn pinned_schema_checks_selected_fields_arguments_and_fixture_keys() {
             graphql::PROJECT_RELATIONS,
             Some(include_str!("fixtures/project-relations.json")),
         ),
+        // What a dependency read sends: each of the two above narrowed to one direction.
+        (
+            graphql::ISSUE_DEPENDS_ON,
+            Some(include_str!("fixtures/issue-relations.json")),
+        ),
+        (
+            graphql::ISSUE_DEPENDED_ON_BY,
+            Some(include_str!("fixtures/issue-relations.json")),
+        ),
+        (
+            graphql::PROJECT_DEPENDS_ON,
+            Some(include_str!("fixtures/project-relations.json")),
+        ),
+        (
+            graphql::PROJECT_DEPENDED_ON_BY,
+            Some(include_str!("fixtures/project-relations.json")),
+        ),
         (graphql::DOCUMENT, None),
         (
             graphql::DOCUMENTS,
@@ -2836,18 +2853,47 @@ async fn a_far_end_in_another_source_is_read_from_the_reserved_key_at_both_level
             cursor: None,
             limit: 50,
         };
-        let (endpoint, _) = server("200 OK", "", fixture);
-        let native = if projects {
-            source(&endpoint)
-                .project_dependencies(&"p1".into(), Direction::DependsOn, &request)
-                .await
-                .unwrap()
-        } else {
-            source(&endpoint)
-                .task_dependencies(&"i1".into(), Direction::DependsOn, &request)
-                .await
-                .unwrap()
+        let read = |cursor: Option<Cursor>, limit: u32| {
+            let (endpoint, served) = server("200 OK", "", fixture);
+            async move {
+                let page = PageRequest { cursor, limit };
+                let answered = if projects {
+                    source(&endpoint)
+                        .project_dependencies(&"p1".into(), Direction::DependsOn, &page)
+                        .await
+                } else {
+                    source(&endpoint)
+                        .task_dependencies(&"i1".into(), Direction::DependsOn, &page)
+                        .await
+                };
+                (answered.unwrap(), served.try_iter().count())
+            }
         };
+        // A page with room answers the native relation and the recorded far end together, in
+        // the one request that read both.
+        let (whole, requests) = read(None, 50).await;
+        assert_eq!(requests, 1, "{root}: one request");
+        assert_eq!(
+            whole.items.len(),
+            2,
+            "{root}: the native relation and the recorded end"
+        );
+        assert!(
+            !whole.items[0].to.is_qualified(),
+            "{root}: the native relation is first"
+        );
+        assert!(whole.next.is_none(), "{root}: nothing is owed");
+        let recorded = &whole.items[1];
+        assert_eq!(recorded.to.id(), "elsewhere:P-9", "{root}");
+        assert_eq!(recorded.to.kind, ItemKind::Project, "{root}");
+        assert_eq!(
+            recorded.from.id(),
+            if projects { "p1" } else { "i1" },
+            "{root}"
+        );
+
+        // A page the native relations fill resumes the recorded far ends by a cursor.
+        let (native, _) = read(None, 1).await;
         assert_eq!(
             native.items.len(),
             1,
@@ -2855,43 +2901,10 @@ async fn a_far_end_in_another_source_is_read_from_the_reserved_key_at_both_level
         );
         let tail = native
             .next
-            .expect("a recorded far end still owes the walk a page");
-
-        let (endpoint, _) = server("200 OK", "", fixture);
-        let recorded = if projects {
-            source(&endpoint)
-                .project_dependencies(
-                    &"p1".into(),
-                    Direction::DependsOn,
-                    &PageRequest {
-                        cursor: Some(tail),
-                        limit: 50,
-                    },
-                )
-                .await
-                .unwrap()
-        } else {
-            source(&endpoint)
-                .task_dependencies(
-                    &"i1".into(),
-                    Direction::DependsOn,
-                    &PageRequest {
-                        cursor: Some(tail),
-                        limit: 50,
-                    },
-                )
-                .await
-                .unwrap()
-        };
-        assert_eq!(recorded.items.len(), 1, "{root}");
-        assert_eq!(recorded.items[0].to.id(), "elsewhere:P-9", "{root}");
-        assert_eq!(recorded.items[0].to.kind, ItemKind::Project, "{root}");
-        assert_eq!(
-            recorded.items[0].from.id(),
-            if projects { "p1" } else { "i1" },
-            "{root}"
-        );
-        assert!(recorded.next.is_none(), "{root}");
+            .expect("a recorded far end that did not fit still owes the walk a page");
+        let (rest, _) = read(Some(tail), 50).await;
+        assert_eq!(rest.items, vec![recorded.clone()], "{root}");
+        assert!(rest.next.is_none(), "{root}");
 
         // The reverse of a recorded edge is derived from the far end, never recorded here.
         let (endpoint, _) = server("200 OK", "", fixture);
@@ -3016,21 +3029,13 @@ async fn linear_records_the_far_end_no_relation_of_its_own_can_hold() {
                 },
             )
             .await
-            .expect("the native page is answered");
-        let tail = first.next.expect("a recorded far end still owes a page");
-
-        let (endpoint, _) = server("200 OK", "", relations_recording("issue", &recorded));
-        let recorded_page = source(&endpoint)
-            .task_dependencies(
-                &"i1".into(),
-                Direction::DependsOn,
-                &PageRequest {
-                    cursor: Some(tail),
-                    limit: 50,
-                },
-            )
-            .await
-            .expect("the recorded tail is answered");
+            .expect("the page is answered");
+        assert!(
+            first.next.is_none(),
+            "{recorded}: the recorded end rode the page"
+        );
+        // The issue holds no native relation, so the page is the recorded end alone.
+        let recorded_page = first;
         assert_eq!(recorded_page.items.len(), 1, "{recorded}");
         assert_eq!(recorded_page.items[0].from.id(), "i1", "{recorded}");
         assert_eq!(recorded_page.items[0].to.id(), expected, "{recorded}");

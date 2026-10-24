@@ -6660,8 +6660,10 @@ fn linear_response(
         graphql::COMMENT_DELETE,
     ]
     .contains(&operation)
-        // The documents an attached cache sends are the ones `linear_uncached` answers.
+        // The documents an attached cache sends are the ones `linear_uncached` answers, and a
+        // dependency read's are the ones `linear_narrowed` does.
         && linear_uncached(operation).is_none()
+        && linear_narrowed(operation).is_none()
     {
         return Err("unknown GraphQL operation");
     }
@@ -6679,6 +6681,16 @@ fn linear_response(
         let mut answer =
             linear_response(&json!({"query": plain, "variables": vars}), recorded, data)?;
         linear_widen(operation, &mut answer, data, &vars);
+        return Ok(answer);
+    }
+    // A dependency read of one direction: the two-direction read's answer, holding only the
+    // members that document selects, as Linear answers exactly what is selected.
+    if let Some((wide, root, selected)) = linear_narrowed(operation) {
+        let mut answer =
+            linear_response(&json!({"query": wide, "variables": vars}), recorded, data)?;
+        if let Some(item) = answer.get_mut(root).and_then(Value::as_object_mut) {
+            item.retain(|member, _| selected.contains(&member.as_str()));
+        }
         return Ok(answer);
     }
     validate_linear_variables(operation, &vars)?;
@@ -7020,6 +7032,33 @@ fn linear_uncached(operation: &str) -> Option<&'static str> {
         graphql::PROJECTS_CACHED => Some(graphql::PROJECTS),
         graphql::PROJECT_CACHED => Some(graphql::PROJECT),
         graphql::PROJECT_RELATIONS_CACHED => Some(graphql::PROJECT_RELATIONS),
+        _ => None,
+    }
+}
+
+/// The two-direction relations read a one-direction dependency read narrows, the root it
+/// reads, and the members of that root it selects.
+fn linear_narrowed(
+    operation: &str,
+) -> Option<(&'static str, &'static str, &'static [&'static str])> {
+    use onetaskgraph_linear::graphql;
+    match operation {
+        graphql::ISSUE_DEPENDS_ON => Some((
+            graphql::ISSUE_RELATIONS,
+            "issue",
+            &["description", "relations"],
+        )),
+        graphql::ISSUE_DEPENDED_ON_BY => {
+            Some((graphql::ISSUE_RELATIONS, "issue", &["inverseRelations"]))
+        }
+        graphql::PROJECT_DEPENDS_ON => Some((
+            graphql::PROJECT_RELATIONS,
+            "project",
+            &["content", "relations"],
+        )),
+        graphql::PROJECT_DEPENDED_ON_BY => {
+            Some((graphql::PROJECT_RELATIONS, "project", &["inverseRelations"]))
+        }
         _ => None,
     }
 }

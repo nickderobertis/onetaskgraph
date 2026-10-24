@@ -145,7 +145,13 @@ fn operation(query: &str, variables: &Value) -> String {
         "issue"
     } else if query == graphql::ISSUES {
         "issues"
-    } else if query == graphql::ISSUE_RELATIONS {
+    } else if [
+        graphql::ISSUE_RELATIONS,
+        graphql::ISSUE_DEPENDS_ON,
+        graphql::ISSUE_DEPENDED_ON_BY,
+    ]
+    .contains(&query)
+    {
         "issue-relations"
     } else if query == graphql::VIEWER {
         "viewer"

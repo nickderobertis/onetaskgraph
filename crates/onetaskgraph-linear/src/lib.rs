@@ -548,6 +548,19 @@ pub mod graphql {
     pub const ISSUE_RELATIONS: &str = "query($id:String!,$first:Int!,$after:String){ issue(id:$id){ description relations(first:$first,after:$after){nodes{id type relatedIssue{id}} pageInfo{hasNextPage endCursor}} inverseRelations(first:$first,after:$after){nodes{id type issue{id}} pageInfo{hasNextPage endCursor}} } }";
     /// Fetch project dependency relations.
     pub const PROJECT_RELATIONS: &str = "query($id:String!,$first:Int!,$after:String){ project(id:$id){ content relations(first:$first,after:$after){nodes{id type relatedProject{id}} pageInfo{hasNextPage endCursor}} inverseRelations(first:$first,after:$after){nodes{id type project{id}} pageInfo{hasNextPage endCursor}} } }";
+    /// What one issue depends on: [`ISSUE_RELATIONS`] without its `inverseRelations`, so a
+    /// dependency read asks Linear for the one direction it answers. The `description` rides
+    /// along because its metadata slot is where an edge to another source is recorded, so
+    /// those edges cost no second request.
+    pub const ISSUE_DEPENDS_ON: &str = "query($id:String!,$first:Int!,$after:String){ issue(id:$id){ description relations(first:$first,after:$after){nodes{id type relatedIssue{id}} pageInfo{hasNextPage endCursor}} } }";
+    /// What depends on one issue: [`ISSUE_RELATIONS`] with its `inverseRelations` alone. No
+    /// `description`: the reverse of a recorded edge is derived from the far end, never
+    /// written down on the near item.
+    pub const ISSUE_DEPENDED_ON_BY: &str = "query($id:String!,$first:Int!,$after:String){ issue(id:$id){ inverseRelations(first:$first,after:$after){nodes{id type issue{id}} pageInfo{hasNextPage endCursor}} } }";
+    /// What one project depends on, on the terms of [`ISSUE_DEPENDS_ON`].
+    pub const PROJECT_DEPENDS_ON: &str = "query($id:String!,$first:Int!,$after:String){ project(id:$id){ content relations(first:$first,after:$after){nodes{id type relatedProject{id}} pageInfo{hasNextPage endCursor}} } }";
+    /// What depends on one project, on the terms of [`ISSUE_DEPENDED_ON_BY`].
+    pub const PROJECT_DEPENDED_ON_BY: &str = "query($id:String!,$first:Int!,$after:String){ project(id:$id){ inverseRelations(first:$first,after:$after){nodes{id type project{id}} pageInfo{hasNextPage endCursor}} } }";
     /// Everything a status write resolves, in one request: the configured team's id, that
     /// team's workflow states, and the workspace's project statuses, each with its type.
     ///
@@ -2375,7 +2388,7 @@ impl LinearSource {
             // it replaces fills no entry.
             let page = self
                 .dependencies(
-                    ISSUE_RELATIONS,
+                    graphql::ISSUE_DEPENDS_ON,
                     DependencyRoot::Issue,
                     id,
                     Direction::DependsOn,
@@ -3267,8 +3280,12 @@ impl TaskSource for LinearSource {
         direction: Direction,
         page: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
+        let plain = match direction {
+            Direction::DependsOn => graphql::ISSUE_DEPENDS_ON,
+            Direction::DependedOnBy => graphql::ISSUE_DEPENDED_ON_BY,
+        };
         self.dependencies(
-            self.read_document(ISSUE_RELATIONS),
+            self.read_document(plain),
             DependencyRoot::Issue,
             id,
             direction,
@@ -3282,8 +3299,12 @@ impl TaskSource for LinearSource {
         direction: Direction,
         page: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
+        let plain = match direction {
+            Direction::DependsOn => graphql::PROJECT_DEPENDS_ON,
+            Direction::DependedOnBy => graphql::PROJECT_DEPENDED_ON_BY,
+        };
         self.dependencies(
-            self.read_document(PROJECT_RELATIONS),
+            self.read_document(plain),
             DependencyRoot::Project,
             id,
             direction,
@@ -4339,10 +4360,14 @@ impl LinearSource {
             ISSUES => graphql::ISSUES_CACHED,
             ISSUE => graphql::ISSUE_CACHED,
             graphql::ISSUE_DETAIL => graphql::ISSUE_DETAIL_CACHED,
-            ISSUE_RELATIONS => graphql::ISSUE_RELATIONS_CACHED,
+            ISSUE_RELATIONS | graphql::ISSUE_DEPENDS_ON | graphql::ISSUE_DEPENDED_ON_BY => {
+                graphql::ISSUE_RELATIONS_CACHED
+            }
             PROJECTS => graphql::PROJECTS_CACHED,
             PROJECT => graphql::PROJECT_CACHED,
-            PROJECT_RELATIONS => graphql::PROJECT_RELATIONS_CACHED,
+            PROJECT_RELATIONS | graphql::PROJECT_DEPENDS_ON | graphql::PROJECT_DEPENDED_ON_BY => {
+                graphql::PROJECT_RELATIONS_CACHED
+            }
             other => other,
         }
     }
@@ -4976,12 +5001,23 @@ impl LinearSource {
         self.note_edges_version(root, direction, id, &d, walked);
         let mut answered = relation_page(&d, root, id, direction)?;
         // Only forwards: the reverse of a recorded edge is derived from the far end, never
-        // written down on the near item.
-        if answered.next.is_none()
-            && direction == Direction::DependsOn
-            && !recorded(&d, root, id, &self.name)?.is_empty()
-        {
-            answered.next = Some(Cursor(format!("{RECORDED_CURSOR}0")));
+        // written down on the near item. They ride on the last page of relations, which read
+        // the long form they are recorded in, as far as the page has room — so they cost no
+        // request of their own — and only what does not fit is resumed by a cursor. With the
+        // store's cache attached they keep a page of their own, because that walk is kept only
+        // when each page of it reads at one token, and a hit on it costs no request at all.
+        if answered.next.is_none() && direction == Direction::DependsOn {
+            let recorded = recorded(&d, root, id, &self.name)?;
+            let room = if self.attached() {
+                0
+            } else {
+                (limit as usize).saturating_sub(answered.items.len())
+            };
+            let total = recorded.len();
+            answered.items.extend(recorded.into_iter().take(room));
+            if total > room {
+                answered.next = Some(Cursor(format!("{RECORDED_CURSOR}{room}")));
+            }
         }
         Ok(answered)
     }
