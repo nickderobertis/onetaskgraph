@@ -102,7 +102,7 @@ windows-sys = { version = "0.61.2", features = [
 # `sync` and `time` are for the engine's own concurrency test: it holds two sources at a
 # rendezvous, which only completes if they were consulted at once, under a timeout so a
 # sequential engine fails the test rather than hanging the suite.
-tokio = { version = "1.53.1", features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "1.54.1", features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
 
 assert_cmd = "2.2.2"
 # The prompting journeys' pseudo-terminal: already in this lockfile through tempfile, so
