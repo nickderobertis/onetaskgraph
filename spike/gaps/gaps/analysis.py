@@ -219,6 +219,105 @@ def measured_workload() -> Workload:
     )
 
 
+class Share(StrEnum):
+    """Where a host run's wall time went, in the order an overlapping instant is claimed."""
+
+    GITHUB = "GitHub API requests"
+    SCREENING = "onevcs screening, its GitHub refresh included"
+    TRANSFERS = "the store's tunnelled transfers outside any screen: an asset upload's"
+    COPY_PROCESS = "the copy's own store process, outside requests and screening"
+    STORE_CALLS = "the host's other store invocations: process start-up, loading, local reads"
+    HOST_STEPS = "the host program's own steps between store invocations"
+    BETWEEN = "inside the host program, between its recorded steps and invocations"
+    RECIPE = "the recipe outside the host program: just, interpreter start-up and exit"
+
+
+# What the measurement document calls unattributed time in a stock store process.
+STORE_PROCESS = frozenset({Share.TRANSFERS, Share.COPY_PROCESS, Share.STORE_CALLS})
+
+
+@dataclass(frozen=True)
+class Span:
+    """One timed record of a baseline host run: a request, a screen, a step or a store call."""
+
+    start: float
+    end: float
+    kind: str = ""
+
+
+@dataclass(frozen=True)
+class HostTime:
+    """One baseline host run's wall time, every millisecond given to one `Share`."""
+
+    operation: Operation
+    run: str
+    wall_seconds: float
+    shares: dict[Share, float]
+    store_calls: int
+    screens_in_copy: int
+
+    @property
+    def store_process(self) -> float:
+        """The seconds the measurement left unattributed inside a stock store process."""
+        return round(sum(v for k, v in self.shares.items() if k in STORE_PROCESS), 2)
+
+
+def spans(path: Path) -> list[Span]:
+    """Every timed record of one JSON-lines log of a baseline run."""
+    return [decode(Span, line, f"{path}:{n}") for n, line in enumerate(load_lines(path), 1)]
+
+
+def attribute(operation: Operation, run: str) -> HostTime:
+    """Give each millisecond of one host run to the first `Share` whose records cover it."""
+    where = BASELINE / run
+    recipe = spans(where / "steps.jsonl")
+    host = spans(where / "host.jsonl")
+    stores = [h for h in host if h.kind == "store"]
+    if len(recipe) != 1 or not stores:
+        raise ShapeError(f"{where}: expected one recipe step and at least one store invocation")
+    copy = max(stores, key=lambda h: h.end - h.start)
+    requests = spans(where / "requests.jsonl")
+    screens = spans(where / "screen.jsonl")
+    tunnels = [r for r in requests if r.kind == "tunnel"]
+    screened = [t for t in tunnels if any(s.start <= t.start and t.end <= s.end for s in screens)]
+    covered = {
+        Share.GITHUB: [r for r in requests if r.kind != "tunnel"],
+        Share.SCREENING: screens + screened,
+        Share.TRANSFERS: [t for t in tunnels if t not in screened],
+        Share.COPY_PROCESS: [copy],
+        Share.STORE_CALLS: [h for h in stores if h is not copy],
+        Share.HOST_STEPS: [h for h in host if h.kind == "step"],
+        Share.BETWEEN: [Span(min(h.start for h in host), max(h.end for h in host))],
+        Share.RECIPE: recipe,
+    }
+    origin = recipe[0].start
+    millis = round((recipe[0].end - origin) * 1000)
+    owner: list[Share | None] = [None] * millis
+    for share, records in covered.items():
+        for record in records:
+            first = max(0, round((record.start - origin) * 1000))
+            for i in range(first, min(millis, round((record.end - origin) * 1000))):
+                if owner[i] is None:
+                    owner[i] = share
+    return HostTime(
+        operation=operation,
+        run=run,
+        wall_seconds=round(millis / 1000, 1),
+        shares={share: round(owner.count(share) / 1000, 2) for share in Share},
+        store_calls=len(stores),
+        screens_in_copy=sum(1 for t in screens if copy.start <= t.start and t.end <= copy.end),
+    )
+
+
+def host_time() -> tuple[HostTime, ...]:
+    """Each baseline host run's wall time by `Share`."""
+    return tuple(
+        attribute(operation, run)
+        for operation, run in BASELINE_RUNS.items()
+        if operation.name.startswith("HOST_")
+    )
+
+
 @dataclass(frozen=True)
 class Summary:
     """Everything the report states."""
@@ -231,6 +330,7 @@ class Summary:
     consumed: Consumed
     workload: Workload
     onevcs_call_seconds: float
+    host_time: tuple[HostTime, ...]
 
 
 def runs(prefix: str) -> list[Path]:
@@ -683,4 +783,5 @@ def analyse(budgets: tuple[Budget, ...]) -> Summary:
         consumed=consumed(),
         workload=measured_workload(),
         onevcs_call_seconds=per_call,
+        host_time=host_time(),
     )

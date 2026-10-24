@@ -21,7 +21,7 @@ credential. `closure` is built by `prototype/build.sh` from `prototype/reach-clo
 ## The analysis and the report
 
     PYTHONPATH=spike/gaps:spike/harness python3 -m gaps.report --answers answers.json \
-        [--ruling ruling.md] [--lint llmlint-run.json]
+        [--ruling ruling.md]... [--lint llmlint-run.json]
 
 writes `logs/gaps-summary.json` from the committed logs under `logs/` and the plan's own budget
 records, and the `spike-report` answers.

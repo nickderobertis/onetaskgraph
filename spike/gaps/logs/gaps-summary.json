@@ -607,6 +607,76 @@
   "runs_recording_pauses": 5,
   "seconds": 627.9
  },
+ "host_time": [
+  {
+   "operation": "host first",
+   "run": "host-copy-stock-20261024T100745",
+   "screens_in_copy": 33,
+   "shares": {
+    "GitHub API requests": 20.43,
+    "inside the host program, between its recorded steps and invocations": 0.01,
+    "onevcs screening, its GitHub refresh included": 30.8,
+    "the copy's own store process, outside requests and screening": 5.8,
+    "the host program's own steps between store invocations": 0.2,
+    "the host's other store invocations: process start-up, loading, local reads": 3.13,
+    "the recipe outside the host program: just, interpreter start-up and exit": 1.92,
+    "the store's tunnelled transfers outside any screen: an asset upload's": 2.12
+   },
+   "store_calls": 13,
+   "wall_seconds": 64.4
+  },
+  {
+   "operation": "host changed",
+   "run": "host-changed1-stock-20261024T102149",
+   "screens_in_copy": 33,
+   "shares": {
+    "GitHub API requests": 6.81,
+    "inside the host program, between its recorded steps and invocations": 0.01,
+    "onevcs screening, its GitHub refresh included": 33.4,
+    "the copy's own store process, outside requests and screening": 6.13,
+    "the host program's own steps between store invocations": 0.29,
+    "the host's other store invocations: process start-up, loading, local reads": 3.85,
+    "the recipe outside the host program: just, interpreter start-up and exit": 1.75,
+    "the store's tunnelled transfers outside any screen: an asset upload's": 0.0
+   },
+   "store_calls": 13,
+   "wall_seconds": 52.2
+  },
+  {
+   "operation": "host unchanged",
+   "run": "host-recopy-stock-20261024T100859",
+   "screens_in_copy": 33,
+   "shares": {
+    "GitHub API requests": 3.89,
+    "inside the host program, between its recorded steps and invocations": 0.0,
+    "onevcs screening, its GitHub refresh included": 30.93,
+    "the copy's own store process, outside requests and screening": 4.54,
+    "the host program's own steps between store invocations": 0.19,
+    "the host's other store invocations: process start-up, loading, local reads": 3.17,
+    "the recipe outside the host program: just, interpreter start-up and exit": 1.98,
+    "the store's tunnelled transfers outside any screen: an asset upload's": 0.0
+   },
+   "store_calls": 13,
+   "wall_seconds": 44.7
+  },
+  {
+   "operation": "host approval",
+   "run": "host-approve-stock-20261024T100947",
+   "screens_in_copy": 9,
+   "shares": {
+    "GitHub API requests": 6.92,
+    "inside the host program, between its recorded steps and invocations": 0.0,
+    "onevcs screening, its GitHub refresh included": 6.03,
+    "the copy's own store process, outside requests and screening": 1.27,
+    "the host program's own steps between store invocations": 0.04,
+    "the host's other store invocations: process start-up, loading, local reads": 0.46,
+    "the recipe outside the host program: just, interpreter start-up and exit": 1.71,
+    "the store's tunnelled transfers outside any screen: an asset upload's": 0.0
+   },
+   "store_calls": 7,
+   "wall_seconds": 16.4
+  }
+ ],
  "offline": {
   "reach": {
    "reach-private-item closure": {

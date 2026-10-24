@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 
 from gaps import analysis, budgets, report
-from gaps.budgets import Unit
+from gaps.budgets import Operation, Unit
 from gaps.json_shape import encode
 from tests.conftest import PYTHON, gaps_env, spawn
 
@@ -45,17 +45,20 @@ def test_every_candidate_states_its_baseline_its_figure_and_its_arithmetic() -> 
     """Every candidate states its baseline its figure and its arithmetic."""
     summary = asyncio.run(report.build(PLAN_CHECKOUT, ONETASKGRAPH))
     lint = report.Lint("run-1", report.LintSummary(56, 50, 1), (report.Rule("r", "fail", ()),))
-    answers = report.answers(summary, "a ruling", lint)
+    answers = report.answers(summary, ("a ruling", "a later ruling"), lint)
     assert len(answers.candidates) == 16
     for row in answers.candidates:
         assert set(row) == {"budget", "measure", "workload", "achievable", "limits", "consumed"}
         assert "Baseline, observed" in row["achievable"] and "Arithmetic:" in row["achievable"]
-    assert answers.findings[-1] == "**Manager ruling, as received.** a ruling"
+    assert answers.findings[-2:] == (
+        "**Ruling, as received.** a ruling",
+        "**Ruling, as received.** a later ruling",
+    )
     assert (
-        "llmlint run `run-1`" in answers.findings[-2]
-        and "Still failing: r." in answers.findings[-2]
+        "llmlint run `run-1`" in answers.findings[-3]
+        and "Still failing: r." in answers.findings[-3]
         and "inherited, preserved and never-landing timing-spike harness: none"
-        in answers.findings[-2]
+        in answers.findings[-3]
     )
     for candidate in summary.candidates:
         if candidate.budget.unit is Unit.POINTS:
@@ -153,7 +156,7 @@ def test_the_report_command_quotes_a_ruling_and_states_a_recorded_lint_run(tmp_p
     done = spawn(command, gaps_env(tmp_path))
     assert done.returncode == 0, done.err
     findings = json.loads(out.read_text())["findings"]
-    assert findings[-1] == "**Manager ruling, as received.** Proceed, as planned."
+    assert findings[-1] == "**Ruling, as received.** Proceed, as planned."
     assert "`run-9`" in findings[-2] and "Still failing: a_rule." in findings[-2]
 
 
@@ -175,7 +178,7 @@ def test_the_answers_are_the_spike_report_templates_own_variables(tmp_path: Path
     assert set(variables) == {f.name for f in dataclasses.fields(report.Answers)}
     keys = set(re.findall(r"`(\w+)` \(", variables["candidates"]["description"]))
     summary = asyncio.run(report.build(PLAN_CHECKOUT, ONETASKGRAPH))
-    row = report.answers(summary, None, None).candidates[0]
+    row = report.answers(summary, (), None).candidates[0]
     assert set(row) == keys
 
 
@@ -192,7 +195,7 @@ def test_the_reported_pauses_and_leftovers_are_what_the_live_runs_recorded() -> 
     last = sorted(analysis.LOGS.glob("probe-placement-*"))[-1] / "feasibility.json"
     left = json.loads(last.read_text())["cleanup"]["left"]
     assert summary.consumed.issues_left_by_the_last_placement == left
-    row = report.answers(summary, None, None).candidates[0]
+    row = report.answers(summary, (), None).candidates[0]
     assert f"{left} left recorded after the last placement probe" in row["consumed"]
 
 
@@ -216,5 +219,32 @@ def test_a_clean_lint_run_is_reported_as_one_with_nothing_failing() -> None:
     """A lint run with no failing rule is stated as such."""
     summary = asyncio.run(report.build(PLAN_CHECKOUT, ONETASKGRAPH))
     clean = report.Lint("run-0", report.LintSummary(56, 56, 0), ())
-    finding = report.answers(summary, None, clean).findings[-1]
+    finding = report.answers(summary, (), clean).findings[-1]
     assert "56 rules passed and 0 failed of 56. None failed." in finding
+
+
+def test_each_host_run_is_attributed_whole_and_its_store_time_is_the_measurement_documents() -> (
+    None
+):
+    """Every host millisecond has one share; the store's is the measurement document's.
+
+    The store-process share is that document's 'unattributed (in a stock store process)' figure.
+    """
+    rows = {
+        Operation.HOST_FIRST: "host `copy-plan`: first copy",
+        Operation.HOST_CHANGED: "host `copy-plan`: one task's body changed",
+        Operation.HOST_UNCHANGED: "host `copy-plan`: unchanged re-copy",
+        Operation.HOST_APPROVAL: "host `approve-design`",
+    }
+    document = analysis.BASELINE_DOC.read_text()
+    times = analysis.host_time()
+    assert {t.operation for t in times} == set(rows)
+    for t in times:
+        row = next(
+            line for line in document.splitlines() if line.startswith(f"| {rows[t.operation]}")
+        )
+        stated = re.findall(r"→ ([0-9.]+) s \(([0-9.]+) s in a stock store process\)", row)
+        assert len(stated) == 1, row
+        assert abs(t.store_process - float(stated[0][0])) <= 0.02
+        assert abs(sum(t.shares.values()) - t.wall_seconds) <= 0.05
+        assert t.store_calls > 1 and t.shares[analysis.Share.STORE_CALLS] > 0

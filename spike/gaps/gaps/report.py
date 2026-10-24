@@ -1,11 +1,11 @@
 """The analysis and the spike report's answers, in one command.
 
-`python -m gaps.report --answers <out.json> [--ruling <file>] [--lint <llmlint.json>]`
+`python -m gaps.report --answers <out.json> [--ruling <file>]... [--lint <llmlint.json>]`
 
 Reads the plan's 16 budgets through the CLI configured in `--plan-checkout` (default: the
 host's ai-orchestrator checkout), analyses every committed log, writes
 `spike/gaps/logs/gaps-summary.json`, and writes the `spike-report` template's answers. Every
-figure in the answers comes from that analysis; a manager ruling is quoted as received, and
+figure in the answers comes from that analysis; each ruling is quoted as received, in order, and
 the judged-lint result as recorded. Exit statuses: 0 written; 1 a log, the plan or the lint
 record could not be read as expected; 2 the invocation is wrong.
 """
@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from gaps import analysis, budgets
-from gaps.analysis import Baseline, Candidate, Shape, Summary
+from gaps.analysis import Baseline, Candidate, HostTime, Shape, Share, Summary
 from gaps.budgets import Operation, Unit
 from gaps.json_shape import Json, ShapeError, decode, encode, load
 from gaps.placement import AddOutcome
@@ -218,7 +218,45 @@ def method(summary: Summary) -> str:
     )
 
 
-def findings(summary: Summary, ruling: str | None, lint: Lint | None) -> list[str]:
+def attribution(times: tuple[HostTime, ...], parent_listing: float, approval: float) -> str:
+    """Where each host run's seconds went, the store process's unattributed time named."""
+    parts = []
+    for t in times:
+        mean = t.shares[Share.STORE_CALLS] / max(1, t.store_calls - 1)
+        parts.append(
+            f"{t.operation.value} (`{t.run}`, {t.wall_seconds:g} s): "
+            f"{t.store_process:g} s in the store process — "
+            f"{t.shares[Share.COPY_PROCESS]:g} s in the copy's own process, which also made "
+            f"{t.screens_in_copy} screening calls, "
+            f"{t.shares[Share.STORE_CALLS]:g} s in {t.store_calls - 1} other store invocations "
+            f"({mean:.2f} s each)"
+            + (
+                f", {t.shares[Share.TRANSFERS]:g} s of tunnelled asset-upload transfer"
+                if t.shares[Share.TRANSFERS]
+                else ""
+            )
+            + f"; and {t.shares[Share.HOST_STEPS] + t.shares[Share.RECIPE]:.2f} s of host recipe "
+            f"steps, {t.shares[Share.RECIPE]:g} s of it outside the host program"
+        )
+    return (
+        "**Where the unattributed host seconds go.** Each millisecond of each baseline host run "
+        "is given to the first of these its records cover: GitHub requests, onevcs screening, "
+        "tunnelled transfers outside a screen, the copy's own store process, the host's other "
+        "store invocations, the host program's steps, and the recipe around it. The store-process "
+        "total is the measurement document's 'unattributed (in a stock store process)' column. "
+        + "; ".join(parts)
+        + ". A stock store process records no spans, so its start-up, plan loading, engine work "
+        "and the screening shim's own per-call overhead cannot be separated inside it; the other "
+        "invocations are short reads (`project show`, `task list`, `task deps`), so their mean "
+        "is mostly a store process's start-up and loading, paid once per invocation. The approval "
+        f"estimate on the finished evidence is {approval:g} s, above the approval figure the "
+        "later ruling quotes: it adds back a parent listing of "
+        f"{parent_listing:g} s, now taken from an executed read of a real parent, where the "
+        "figure that ruling quotes was estimated before that read existed."
+    )
+
+
+def findings(summary: Summary, rulings: tuple[str, ...], lint: Lint | None) -> list[str]:
     """One string per problem the spike found with the plan's design."""
     reach, union = summary.offline.reach, summary.offline.union
     prices, shape, dry = summary.prices, summary.prices.shape, summary.prices.dry_run
@@ -383,11 +421,18 @@ def findings(summary: Summary, ruling: str | None, lint: Lint | None) -> list[st
         "writes "
         "stay within 40 only while placement rides on `createIssue(projectV2Ids)`. The warn-only "
         "host "
-        f"seconds bars stay over: {over}. What remains is unattributed time in the plan store's "
-        "own "
-        "process and the host recipe's steps; the final measurement must attribute those seconds "
-        "to "
-        "named causes. No target was changed; all of this went to the manager before finalize.",
+        f"seconds bars stay over: {over}. What remains is time in the plan store's own process "
+        "and the host recipe's steps, attributed in the next finding; the rulings quoted below "
+        "decide what finalize does with these figures. No target was changed by this spike.",
+        attribution(
+            summary.host_time,
+            summary.prices.parent_listing_seconds,
+            next(
+                c.attainable
+                for c in summary.candidates
+                if c.budget.operation is Operation.HOST_APPROVAL and c.budget.unit is Unit.SECONDS
+            ),
+        ),
     ]
     if lint is not None:
         failed = sorted(r.name for r in lint.rules if r.outcome == "fail")
@@ -400,12 +445,11 @@ def findings(summary: Summary, ruling: str | None, lint: Lint | None) -> list[st
             "timing-spike harness: none, because that harness is unchanged from `bc49f888` and "
             "the run judged only files this dispatch wrote or changed."
         )
-    if ruling:
-        out.append(f"**Manager ruling, as received.** {ruling}")
+    out.extend(f"**Ruling, as received.** {ruling}" for ruling in rulings)
     return out
 
 
-def answers(summary: Summary, ruling: str | None, lint: Lint | None) -> Answers:
+def answers(summary: Summary, rulings: tuple[str, ...], lint: Lint | None) -> Answers:
     """The template's answers."""
     return Answers(
         spike="spike-feasibility",
@@ -431,7 +475,7 @@ def answers(summary: Summary, ruling: str | None, lint: Lint | None) -> Answers:
         ),
         method=method(summary),
         candidates=tuple(row(c, summary) for c in summary.candidates),
-        findings=tuple(findings(summary, ruling, lint)),
+        findings=tuple(findings(summary, rulings, lint)),
         visual_changes=(),
     )
 
@@ -445,7 +489,7 @@ def main() -> None:
     """Write the summary and the answers."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--answers", type=Path, required=True)
-    parser.add_argument("--ruling", type=Path)
+    parser.add_argument("--ruling", type=Path, action="append", default=[])
     parser.add_argument("--lint", type=Path)
     parser.add_argument("--plan-checkout", type=Path, default=Path.home() / "ai-orchestrator")
     args = parser.parse_args()
@@ -453,7 +497,7 @@ def main() -> None:
     try:
         summary = asyncio.run(build(args.plan_checkout, onetaskgraph))
         lint = None if args.lint is None else decode(Lint, load(args.lint), str(args.lint))
-        ruling = None if args.ruling is None else " ".join(args.ruling.read_text().split())
+        rulings = tuple(" ".join(path.read_text().split()) for path in args.ruling)
     except (ShapeError, ProcessFailed, OSError) as error:
         sys.stderr.write(f"gaps.report: {error}\n")
         sys.exit(1)
@@ -461,7 +505,7 @@ def main() -> None:
     (analysis.LOGS / "gaps-summary.json").write_text(
         json.dumps(rendered, indent=1, sort_keys=True) + "\n"
     )
-    args.answers.write_text(json.dumps(encode(answers(summary, ruling, lint)), indent=1) + "\n")
+    args.answers.write_text(json.dumps(encode(answers(summary, rulings, lint)), indent=1) + "\n")
 
 
 if __name__ == "__main__":
