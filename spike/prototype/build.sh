@@ -15,6 +15,9 @@ if [ ! -d "$cache/.git" ]; then
 fi
 git -C "$cache" fetch -q origin
 git -C "$cache" checkout -q --force "$base"
-git -C "$cache" apply "$here/reach-closure.patch"
+if ! git -C "$cache" apply "$here/reach-closure.patch"; then
+    echo "build.sh: reach-closure.patch does not apply to $base; pass the commit it was cut from (acd090b4) or re-cut the patch there" >&2
+    exit 1
+fi
 (cd "$cache" && cargo build --locked -q -p onetaskgraph --bin onetaskgraph)
 echo "built $cache/target/debug/onetaskgraph ($("$cache/target/debug/onetaskgraph" --version))"

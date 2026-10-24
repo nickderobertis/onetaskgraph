@@ -89,6 +89,9 @@ def replay(onevcs: Path, home: Path, inspects: list[dict], checks: list[dict]) -
     unioned.append(ask(onevcs, home, "check", union_of(checks)))
     item_refused = any(code != 0 for code, _, _ in per_item[len(inspects) :])
     union_refused = unioned[-1][0] != 0
+    # Deduplication agrees when every distinct inspection answers as its duplicates did.
+    item_answers = {a for _, _, a in per_item[: len(inspects)]}
+    union_answers = {a for _, _, a in unioned[:-1]}
     return {
         "per_item": {
             "calls": len(per_item),
@@ -110,7 +113,7 @@ def replay(onevcs: Path, home: Path, inspects: list[dict], checks: list[dict]) -
             "inspect_answers": sorted({answer for _, _, answer in unioned[:-1]}),
             "seconds": round(sum(s for _, s, _ in unioned), 3),
         },
-        "agrees": item_refused == union_refused,
+        "agrees": item_refused == union_refused and item_answers == union_answers,
     }
 
 

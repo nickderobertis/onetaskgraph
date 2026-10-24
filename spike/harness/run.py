@@ -643,6 +643,8 @@ def run_offline(scenario: str, build: str, stamp: str) -> None:
         result = reach.run(run, scenario, binary(build), ONEVCS, PYTHON)
     out = sanitize.write_offline(run, result, LOGS / f"{name}-{stamp}")
     print(f"{name}: sanitized result in {out}", flush=True)
+    if result.get("all_as_expected") is False or result.get("all_agree") is False:
+        sys.exit(f"run.py: {name} recorded an outcome other than the expected one; read {out}/result.json")
 
 
 def main() -> None:

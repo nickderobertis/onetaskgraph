@@ -27,6 +27,7 @@ TITLES = (
     "Design: bcs-",
     "DESIGN: Design: bcs-",
     "bcs-probe",
+    "bcg-probe",  # the feasibility spike's probe-placement issues
 )
 
 
