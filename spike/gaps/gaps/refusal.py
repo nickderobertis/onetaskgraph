@@ -51,7 +51,11 @@ READ = "query { viewer { login } }"
 READ_AN_ISSUE = 'query { x: node(id: "I_returned_by_a_read") { id } }'
 READ_ITEMS = (
     'query { x: node(id: "I_returned_by_a_read") { ... on Issue { id projectItems(first: 5)'
-    " { nodes { id } } } } }"
+    " { nodes { id project { id } } } } } }"
+)
+READ_OWN_ITEMS = (
+    'query { x: node(id: "I_made_by_this_run") { ... on Issue { id projectItems(first: 5)'
+    " { nodes { id project { id } } } } } }"
 )
 FOREIGN_ITEM = "PVTI_listed_under_a_foreign_issue"
 TWO_OPERATIONS = (
@@ -196,6 +200,19 @@ CASES = (
         200,
     ),
     Case("deleteIssue of the issue this run just created", DELETE, {"i": MADE}, 200),
+    Case("a read listing this run's issue on another board", READ_OWN_ITEMS, {}, 200),
+    Case(
+        "a field value on this run's issue's item on another board",
+        FIELD,
+        {"p": PROJECT_ID, "i": FOREIGN_ITEM},
+        403,
+    ),
+    Case(
+        "createIssue on the test board carrying an input the probes never send",
+        CREATE,
+        {"input": {"repositoryId": REPO_ID, "title": "x", "assigneeIds": ["U_someone"]}},
+        403,
+    ),
     Case(
         "createIssue naming only the test board, with no write allowed",
         CREATE,
@@ -289,8 +306,9 @@ def fields_of(selection_set: graphql.SelectionSetNode | None) -> set[str]:
 def answer_for(body: bytes) -> dict[str, object]:
     """The stand-in's answer, shaped by the request's own selection.
 
-    Every `createIssue` answers `MADE` as its issue, and every other top-level field that
-    selects `id` answers `RETURNED` as its `id`: the shape GitHub gives a node read.
+    Every `createIssue` answers `MADE` as its issue; every other top-level field that selects
+    `id` answers the issue it names (`MADE` when it names it, `RETURNED` otherwise) with, when
+    asked, one board item on another project: the shape GitHub gives a node read.
     """
     try:
         document = graphql.parse(text(obj(parse(body.decode(), "request"), "r").get("query"), "q"))
@@ -308,12 +326,10 @@ def answer_for(body: bytes) -> dict[str, object]:
             if selection.name.value == "createIssue":
                 data[alias] = {"issue": {"id": MADE}}
             elif "id" in selected:
-                data[alias] = {"id": RETURNED}
-                if "projectItems" in selected:
-                    data[alias] = {
-                        "id": RETURNED,
-                        "projectItems": {"nodes": [{"id": FOREIGN_ITEM}]},
-                    }
+                issue = MADE if f'"{MADE}"' in graphql.print_ast(selection) else RETURNED
+                node = {"id": FOREIGN_ITEM, "project": {"id": ELSEWHERE_PROJECT}}
+                listed = {"projectItems": {"nodes": [node]}} if "projectItems" in selected else {}
+                data[alias] = {"id": issue} | listed
     return data
 
 

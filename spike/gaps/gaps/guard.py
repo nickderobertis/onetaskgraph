@@ -28,20 +28,23 @@ import graphql
 from gaps.github import GitHubError, split_reply
 from gaps.json_shape import Json, ShapeError, obj, parse, text
 
+# Every mutation the probes send, and every input field each may carry: nothing else passes.
+# `tests/test_contracts.py` holds this table to the pinned schema's input types, and holds every
+# id-typed field it allows to one of the three ownership classes below or to `BOARD_SCOPED`.
+PROBE_INPUTS: dict[str, frozenset[str]] = {
+    "createIssue": frozenset({"repositoryId", "title", "projectV2Ids", "parentIssueId"}),
+    "addProjectV2ItemById": frozenset({"projectId", "contentId"}),
+    "updateProjectV2ItemFieldValue": frozenset({"projectId", "itemId", "fieldId", "value"}),
+    "addBlockedBy": frozenset({"issueId", "blockingIssueId"}),
+    "deleteIssue": frozenset({"issueId"}),
+}
+PROBE_MUTATIONS = frozenset(PROBE_INPUTS)
 DESTINATION_KEYS = frozenset({"repositoryId", "projectId", "projectV2Ids"})
-ISSUE_KEYS = frozenset(
-    {"issueId", "blockingIssueId", "contentId", "subIssueId", "parentIssueId", "id"}
-)
+ISSUE_KEYS = frozenset({"issueId", "blockingIssueId", "contentId", "parentIssueId"})
 ITEM_KEYS = frozenset({"itemId"})
-PROBE_MUTATIONS = frozenset(
-    {
-        "createIssue",
-        "addProjectV2ItemById",
-        "updateProjectV2ItemFieldValue",
-        "addBlockedBy",
-        "deleteIssue",
-    }
-)
+# A board field and its option: they only ever reach an item through a `projectId` the guard
+# has allowed, so they name nothing outside the test board.
+BOARD_SCOPED = frozenset({"fieldId", "singleSelectOptionId"})
 GITHUB = "https://api.github.com"
 LOOPBACK = frozenset({"127.0.0.1", "localhost"})
 MAX_BODY = 4 * 1024 * 1024
@@ -58,6 +61,7 @@ class Operation:
 
     mutation: bool
     fields: tuple[tuple[str, str], ...]  # (alias, field) of every top-level field
+    inputs: tuple[tuple[str, frozenset[str]], ...]  # (field, its argument and input keys)
     destinations: frozenset[str]
     issues: frozenset[str]
     items: frozenset[str]
@@ -106,17 +110,24 @@ def operation(query: str, variables: dict[str, Json], name: str | None) -> Opera
         elif definition.default_value is not None:
             resolved[variable] = graphql.value_from_ast_untyped(definition.default_value)
     fields: list[tuple[str, str]] = []
+    inputs: list[tuple[str, frozenset[str]]] = []
     arguments: list[object] = []
     for selection in chosen.selection_set.selections:
         if not isinstance(selection, graphql.FieldNode):
             raise Unreadable("a fragment at the root of an operation")
         alias = selection.alias.value if selection.alias else selection.name.value
         fields.append((alias, selection.name.value))
+        keys: set[str] = set()
         for argument in selection.arguments or ():
-            arguments.append(graphql.value_from_ast_untyped(argument.value, resolved))
+            value = graphql.value_from_ast_untyped(argument.value, resolved)
+            arguments.append(value)
+            is_input = argument.name.value == "input" and isinstance(value, dict)
+            keys |= set(value) if is_input else {f"argument {argument.name.value}"}
+        inputs.append((selection.name.value, frozenset(keys)))
     return Operation(
         mutation=chosen.operation is graphql.OperationType.MUTATION,
         fields=tuple(fields),
+        inputs=tuple(inputs),
         destinations=frozenset(_keyed(arguments, DESTINATION_KEYS)),
         issues=frozenset(_keyed(arguments, ISSUE_KEYS)),
         items=frozenset(_keyed(arguments, ITEM_KEYS)),
@@ -162,6 +173,8 @@ class Guard:
             return "this run sends no writes"
         if {f for _, f in executed.fields} - PROBE_MUTATIONS:
             return "a mutation this spike's probes never send"
+        if any(keys - PROBE_INPUTS[name] for name, keys in executed.inputs):
+            return "an input field this spike's probes never send"
         if executed.destinations - self.destinations:
             return "it names a repository or project outside the test board"
         if executed.issues - self.issues:
@@ -198,8 +211,22 @@ class Guard:
                 connection = value.get("projectItems")
                 nodes = connection.get("nodes") if isinstance(connection, dict) else None
                 for node in nodes if isinstance(nodes, list) else []:
-                    if isinstance(node, dict) and isinstance(node.get("id"), str):
-                        self.items.add(text(node.get("id"), "item.id"))
+                    self.items |= self.allowed_item(node)
+
+    def allowed_item(self, node: object) -> set[str]:
+        """A listed board item's id, when it sits on a project this guard allows."""
+        if not isinstance(node, dict):
+            return set()
+        project = node.get("project")
+        project_id = project.get("id") if isinstance(project, dict) else None
+        item = node.get("id")
+        if (
+            isinstance(item, str)
+            and isinstance(project_id, str)
+            and project_id in self.destinations
+        ):
+            return {item}
+        return set()
 
 
 @dataclass(frozen=True)

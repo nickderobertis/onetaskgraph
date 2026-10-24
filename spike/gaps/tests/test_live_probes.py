@@ -436,12 +436,12 @@ def test_a_request_lost_in_transport_is_still_recorded(tmp_path: Path) -> None:
     assert logged == [0]
 
 
-@pytest.mark.parametrize("odd", ["error", "other item", "malformed"])
+@pytest.mark.parametrize("odd", list(fake_github.OddAdd), ids=lambda o: o.name)
 def test_an_unexpected_add_is_recorded_as_such_and_every_issue_still_deleted(
     tmp_path: Path,
     github: tuple[fake_github.Board, str],
     monkeypatch: pytest.MonkeyPatch,
-    odd: str,
+    odd: fake_github.OddAdd,
 ) -> None:
     """An add refused otherwise, answering another item, or malformed is recorded, not fatal."""
     stand_in, url = github
@@ -474,3 +474,16 @@ def test_a_rest_request_lost_in_transport_is_still_recorded(tmp_path: Path) -> N
 
     records = asyncio.run(lose())
     assert [(r.kind, r.status) for r in records] == [(Kind.REST, 0)]
+
+
+def test_a_cleanup_failing_while_a_probe_fails_reports_both(
+    tmp_path: Path, github: tuple[fake_github.Board, str]
+) -> None:
+    """A cleanup that leaves issues while handling a probe's own failure says so, citing it."""
+    stand_in, url = github
+    stand_in.answer_creates = 4
+    stand_in.fail_deletes = True
+    result, state, _ = asyncio.run(probe(url, tmp_path))
+    assert isinstance(result, placement.LeftBehind) and "not created" in str(result)
+    assert isinstance(result.__cause__, GitHubError)
+    assert len(state.ids) == 4 and len(stand_in.issues) == 4

@@ -28,6 +28,14 @@ FIELD = "PVTSSF_status"
 OPTION = "option_todo"
 
 
+class OddAdd(Enum):
+    """How the stand-in answers the second aliased add, when told to answer it oddly."""
+
+    REFUSED_OTHERWISE = "refused for a reason other than present content"
+    OTHER_ITEM = "answered with an item the issue does not read"
+    MALFORMED = "answered with no item at all"
+
+
 class Chunking(Enum):
     """How the stand-in frames its answers."""
 
@@ -92,7 +100,7 @@ class Board:
     chunked: Chunking = Chunking.NONE
     placement_reads: int = 1
     refuse_present_adds: bool = False
-    odd_add: str | None = None  # "error", "other item" or "malformed", for alias b
+    odd_add: OddAdd | None = None
     fail_deletes: bool = False
     null_deletes: bool = False
     fail_ownership_read: bool = False
@@ -233,13 +241,13 @@ class Board:
             issue = self.issues[str(variables[alias])]
             if alias == "b" and self.odd_add is not None:
                 match self.odd_add:
-                    case "error":
+                    case OddAdd.REFUSED_OTHERWISE:
                         data[alias] = None
                         errors.append({"type": "FORBIDDEN", "path": [alias], "message": "no"})
-                    case "other item":
+                    case OddAdd.OTHER_ITEM:
                         issue.item = issue.item or f"PVTI_{issue.id}"
                         data[alias] = {"item": {"id": "PVTI_somewhere_else"}}
-                    case _:
+                    case OddAdd.MALFORMED:
                         issue.item = issue.item or f"PVTI_{issue.id}"
                         data[alias] = {"item": None}
                 continue

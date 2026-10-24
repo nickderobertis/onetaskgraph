@@ -88,7 +88,7 @@ def bucket_of(value: Json, where: str) -> Bucket:
 
 
 async def read(client: Client, last_headers: RateLimit | None) -> Reading:
-    """Take one reading through the proxy."""
+    """Take one reading: the REST bucket, `OWN_READS` GraphQL readings, and the last headers."""
     at = time.time()
     answer = await client.rest_get("GET /rate_limit", "/rate_limit")
     resources = obj(answer.get("resources"), "rate_limit.resources")

@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 
+import graphql
 import pytest
 
 from gaps import analysis, board, boundary, documents, guard, pricing, reach, report, union
@@ -154,7 +155,10 @@ def test_the_guard_reads_a_mutation_hidden_by_a_comment_or_a_string() -> None:
     executed = guard.operation(hidden, {}, "M")
     assert executed.mutation
     assert {f for _, f in executed.fields} == {"createIssue", "updateIssue"}
-    assert executed.issues == {"I"}
+    refusal = guard.Guard(frozenset({"R"})).refusal(
+        "POST", "/graphql", json.dumps({"query": hidden, "operationName": "M"}).encode()
+    )
+    assert refusal == "a mutation this spike's probes never send"
     with pytest.raises(guard.Unreadable, match="2 operations"):
         guard.operation(hidden, {}, None)
     with pytest.raises(guard.Unreadable, match="not a GraphQL document"):
@@ -303,3 +307,43 @@ def test_union_agreement_holds_each_repository_to_its_own_answer(tmp_path: Path)
         variant.unioned.seconds,
     )
     assert not union.Variant(variant.plant, variant.per_item, swapped).agrees
+
+
+def _named_type(kind: graphql.GraphQLType) -> graphql.GraphQLNamedType:
+    """A type with its list and non-null wrappers taken off."""
+    return graphql.get_named_type(kind)
+
+
+def _id_fields(kind: graphql.GraphQLInputObjectType, allowed: frozenset[str] | None) -> set[str]:
+    """Every id-typed field `kind` declares (of `allowed` only), at any depth of its inputs."""
+    found: set[str] = set()
+    for name, input_field in kind.fields.items():
+        if allowed is not None and name not in allowed:
+            continue
+        inner = _named_type(input_field.type)
+        if isinstance(inner, graphql.GraphQLScalarType) and inner.name == "ID":
+            found.add(name)
+        elif isinstance(inner, graphql.GraphQLInputObjectType):
+            found |= _id_fields(inner, None)
+    return found
+
+
+def test_the_guards_input_table_is_the_pinned_schemas_and_every_id_it_allows_is_classed() -> None:
+    """The guard's input table is the pinned schema's, and every id it lets through is classed.
+
+    Each allowed mutation exists, each allowed input field is one its input type declares, and
+    every id-typed field reachable through them is an owned destination, an owned issue, an
+    owned board item, or a board-scoped field and option.
+    """
+    pinned = graphql.build_schema(
+        (REPO / "crates/onetaskgraph-github-projects/tests/fixtures/schema.graphql").read_text()
+    )
+    mutation = pinned.mutation_type
+    assert mutation is not None
+    classed = guard.DESTINATION_KEYS | guard.ISSUE_KEYS | guard.ITEM_KEYS | guard.BOARD_SCOPED
+    for name, allowed in guard.PROBE_INPUTS.items():
+        assert name in mutation.fields, name
+        input_type = _named_type(mutation.fields[name].args["input"].type)
+        assert isinstance(input_type, graphql.GraphQLInputObjectType)
+        assert allowed <= set(input_type.fields), (name, allowed - set(input_type.fields))
+        assert _id_fields(input_type, allowed) <= classed, (name, _id_fields(input_type, allowed))

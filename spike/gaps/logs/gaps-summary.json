@@ -500,14 +500,14 @@
   }
  ],
  "consumed": {
-  "creations_sent": 121,
+  "creations_sent": 132,
   "dry_runs": 135,
   "issues_left_by_the_last_placement": 0,
   "least_share_before": 0.544,
-  "mutation_requests": 113,
+  "mutation_requests": 124,
   "pauses": 0,
-  "points": 238,
-  "rate_limit_reads": 120,
+  "points": 255,
+  "rate_limit_reads": 128,
   "remaining_before_and_after": {
    "probe-alias-pricing-head-20261024T140959": [
     3452,
@@ -560,12 +560,16 @@
    "probe-placement-head-20261024T155130": [
     3835,
     3769
+   ],
+   "probe-placement-head-20261024T163225": [
+    4776,
+    4771
    ]
   },
-  "requests": 463,
-  "runs": 16,
-  "runs_recording_pauses": 3,
-  "seconds": 544.6
+  "requests": 488,
+  "runs": 17,
+  "runs_recording_pauses": 4,
+  "seconds": 588.2
  },
  "offline": {
   "reach": {
@@ -1529,6 +1533,24 @@
      "status": 200
     },
     {
+     "case": "a read listing this run's issue on another board",
+     "expected": 200,
+     "reached_upstream": 1,
+     "status": 200
+    },
+    {
+     "case": "a field value on this run's issue's item on another board",
+     "expected": 403,
+     "reached_upstream": 0,
+     "status": 403
+    },
+    {
+     "case": "createIssue on the test board carrying an input the probes never send",
+     "expected": 403,
+     "reached_upstream": 0,
+     "status": 403
+    },
+    {
      "case": "an asset upload",
      "expected": 403,
      "reached_upstream": 0,
@@ -1578,7 +1600,7 @@
     }
    ]
   },
-  "refusal_run": "proxy-refusal-head-20261024T162002",
+  "refusal_run": "proxy-refusal-head-20261024T163321",
   "union": {
    "commands": {
     "document-copy": [
@@ -2580,6 +2602,9 @@
    "returned the issue's one item",
    "returned the issue's one item",
    "refused: content already exists in this project",
+   "returned the issue's one item",
+   "returned the issue's one item",
+   "returned the issue's one item",
    "returned the issue's one item"
   ],
   "children_seconds": [
@@ -2646,11 +2671,19 @@
    0.614,
    0.614,
    0.614,
-   0.614
+   0.614,
+   0.626,
+   0.626,
+   0.626,
+   0.626,
+   0.626,
+   0.626,
+   0.626,
+   1.692
   ],
   "idempotent": true,
   "in_create_answers": 0,
-  "issues": 72,
+  "issues": 81,
   "polls": [
    2,
    2,
@@ -2659,9 +2692,10 @@
    2,
    1,
    2,
-   1
+   1,
+   2
   ],
-  "samples": 8
+  "samples": 9
  },
  "prices": {
   "charged": {
@@ -2737,7 +2771,9 @@
     2,
     18,
     1,
-    3
+    3,
+    1,
+    1
    ],
    "19": [
     5,
@@ -2775,7 +2811,11 @@
     12,
     11,
     8,
-    3
+    3,
+    5,
+    2,
+    1,
+    1
    ],
    "2": [
     4,
@@ -2788,11 +2828,13 @@
     1,
     1,
     1,
-    2
+    2,
+    1
    ],
    "3": [
     1,
-    3
+    3,
+    1
    ],
    "5": [
     1,
@@ -2816,6 +2858,8 @@
     3,
     19,
     1,
+    1,
+    1,
     1
    ],
    "8": [
@@ -2829,6 +2873,7 @@
     2,
     1,
     4,
+    1,
     1
    ]
   },

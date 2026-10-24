@@ -69,6 +69,12 @@ class Identity:
         return f"github.com/{self.key}"
 
 
+def input_fields(schema: Path = PINNED_SCHEMA) -> tuple[str, ...]:
+    """Every field the pinned schema's check input declares."""
+    check = obj(obj(load(schema), str(schema)).get("check"), "check")
+    return tuple(obj(obj(check.get("input"), "check.input").get("properties"), "properties"))
+
+
 def merged_fields(schema: Path = PINNED_SCHEMA) -> tuple[str, ...]:
     """The check input's array fields, as the pinned schema declares them."""
     check = obj(obj(load(schema), str(schema)).get("check"), "check")
@@ -88,8 +94,16 @@ class CheckInput:
 
     @classmethod
     def parse(cls, value: Json, where: str) -> CheckInput:
-        """A recorded check input, validated against the pinned schema's array fields."""
+        """A recorded check input, validated against the pinned schema.
+
+        An unknown field is refused; an absent array is the schema's own default, empty.
+        """
         entry = obj(value, where)
+        unknown = set(entry) - set(input_fields())
+        if unknown:
+            raise ShapeError(
+                f"{where}: fields the pinned schema does not declare: {sorted(unknown)}"
+            )
         arrays = {
             name: tuple(text(v, f"{where}.{name}[]") for v in arr(entry.get(name, []), name))
             for name in merged_fields()

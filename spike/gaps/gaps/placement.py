@@ -488,8 +488,11 @@ async def probe(client: Client, ids: BoardIds, state: State) -> PlacementResult:
     """Run every step, deleting every probe issue whatever happens; refuse leftovers."""
     try:
         result = await _steps(client, ids, state)
-    except BaseException:
-        await delete(client, state, ids)
+    except BaseException as failure:
+        cleanup = await delete(client, state, ids)
+        if cleanup.left or cleanup.errors:
+            left = f"{cleanup.left} probe issue(s) left behind after: {failure}"
+            raise LeftBehind(left) from failure
         raise
     cleanup = await delete(client, state, ids)
     if cleanup.left or cleanup.errors:

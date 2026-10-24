@@ -336,13 +336,18 @@ def dechunk(body: bytes) -> bytes:
 
 
 def graphql_error(value: Json, where: str) -> GraphQLError:
-    """One `errors` entry, typed."""
+    """One `errors` entry, typed: its type a string when given, its path strings and indices."""
     entry = obj(value, f"{where}.errors[]")
-    path = entry.get("path", [])
+    kind = entry.get("type", "untyped")
+    path = []
+    for step in arr(entry.get("path", []), f"{where}.errors[].path"):
+        if isinstance(step, bool) or not isinstance(step, str | int):
+            raise ShapeError(f"{where}.errors[].path: a step that is neither a name nor an index")
+        path.append(str(step))
     return GraphQLError(
-        type=str(entry.get("type") or "untyped"),
-        path=tuple(str(p) for p in arr(path, f"{where}.errors[].path")),
-        message=text(entry.get("message") or "", f"{where}.errors[].message"),
+        type=text(kind, f"{where}.errors[].type"),
+        path=tuple(path),
+        message=text(entry.get("message", ""), f"{where}.errors[].message"),
     )
 
 

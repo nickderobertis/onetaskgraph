@@ -122,6 +122,24 @@
    "status": 200
   },
   {
+   "case": "a read listing this run's issue on another board",
+   "expected": 200,
+   "reached_upstream": 1,
+   "status": 200
+  },
+  {
+   "case": "a field value on this run's issue's item on another board",
+   "expected": 403,
+   "reached_upstream": 0,
+   "status": 403
+  },
+  {
+   "case": "createIssue on the test board carrying an input the probes never send",
+   "expected": 403,
+   "reached_upstream": 0,
+   "status": 403
+  },
+  {
    "case": "an asset upload",
    "expected": 403,
    "reached_upstream": 0,
