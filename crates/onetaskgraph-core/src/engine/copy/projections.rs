@@ -926,7 +926,7 @@ impl Engine {
             let destination = self.writable(&to)?;
             let ordered = projecting.ordered(&to);
             let project = self
-                .land_public_project(destination, &home, &ordered, &canonical, &mut map, journal)
+                .land_public_project(destination, &home, &ordered, &mut map, journal)
                 .await?;
             let mut views: HashMap<GlobalId, NativeId> = HashMap::new();
             // The tasks under the public project no map entry names, listed once when a view is
@@ -1036,11 +1036,12 @@ impl Engine {
         Ok(map)
     }
 
-    /// The public project the views of one plan in `destination` are filed under: the one an
-    /// existing view already sits under, else the one `map` records there — by the id the
-    /// source assigned it, or, when the copy never learned that id, by the allocation it was
-    /// created carrying — else one created under this plan's opaque id. No other project is ever
-    /// taken, whatever it says: one already at that id is refused, never adopted for its id.
+    /// The public project the views of one plan in `destination` are filed under: the one `map`
+    /// records there — by the id the source assigned it, or, when the copy never learned that
+    /// id, by the allocation it was created carrying — else one created under this plan's opaque
+    /// id. No other project is ever taken, whatever it says: not the one a view sits under, which
+    /// a person can move it into, and not one already at that id, which is refused, never adopted
+    /// for its id.
     ///
     /// A project is created only behind its allocation: recorded privately on the home before
     /// the create is sent, carried by the project, and journaled, so a copy that cannot finish
@@ -1051,35 +1052,10 @@ impl Engine {
         destination: &ResolvedSource,
         home: &GlobalId,
         ordered: &[&Projected],
-        canonical: &HashMap<GlobalId, GlobalId>,
         map: &mut PublicProjections,
         journal: &mut Journal,
     ) -> Result<NativeId, EngineError> {
         let at = self.writable(&home.source)?;
-        for task in ordered {
-            let Some(projection) = canonical
-                .get(&task.source)
-                .and_then(|canonical| map.projection_of(canonical))
-                .filter(|projection| &projection.source == destination.name())
-            else {
-                continue;
-            };
-            if let Some(project) = destination
-                .source()
-                .get_task(&projection.native)
-                .await
-                .map_err(|error| refused(destination, error))?
-                .and_then(|view| view.project)
-            {
-                return match self.not_neutral(destination, projection, &project).await? {
-                    None => Ok(project),
-                    Some(why) => Err(EngineError::ProjectionsMalformed {
-                        project: home.clone(),
-                        why,
-                    }),
-                };
-            }
-        }
         let not_one = |id: &NativeId| EngineError::ProjectionsMalformed {
             project: home.clone(),
             why: format!(
@@ -1325,8 +1301,8 @@ impl Engine {
     }
 
     /// Why a view `projection` filed under `project`, of `destination`, may not be written —
-    /// `None` when that project is a public projection project — so a view a person moved, or a
-    /// map naming somebody else's task, never redirects a write into a project that is not one.
+    /// `None` when that project is a public projection project — so a map naming somebody else's
+    /// task never redirects a write into a project that is not one.
     ///
     /// # Errors
     ///
@@ -1659,6 +1635,22 @@ impl Engine {
             .ok_or_else(|| {
                 not_mirrored(view.clone(), format!("{named} is filed under no project"))
             })?;
+        // And under the one this plan recorded: a view a person moved into another project, however
+        // neutral that one reads, is not written there.
+        if map
+            .project_in(&projection.source)
+            .and_then(|entry| entry.project.as_ref())
+            != Some(&filed)
+        {
+            return Err(not_mirrored(
+                view,
+                format!(
+                    "{named} is filed under {}:{filed}, which is not the public projection project \
+                     this plan recorded",
+                    projection.source
+                ),
+            ));
+        }
         if let Some(why) = self
             .not_neutral(public, &projection, &filed)
             .await

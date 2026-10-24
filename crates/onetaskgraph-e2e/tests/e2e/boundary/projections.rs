@@ -1376,43 +1376,97 @@ fn a_neutral_project_at_the_id_a_copy_would_request_is_never_adopted_for_its_id_
     assert!(tasks.is_empty(), "no view is filed under it: {tasks:?}");
 }
 
-#[test]
-fn a_view_filed_under_a_project_that_is_not_neutral_is_refused_by_a_copy_and_a_mirror() {
-    let store = projecting_store();
-    private_rollout(&store);
-    let landed = copy_rollout(&store);
-    let widget = &landed["plan:widget"];
-    let view = view_of(&store, &landed, widget);
-    store.record(
-        "site",
-        "projects",
-        "roadmap",
-        "title: Roadmap\nstatus: todo",
-        "Prose.",
-    );
-    let file = record_file(&store, "tasks", &view);
+/// Move the view `view` into the project `into` of its folder, as a person editing its file would.
+fn move_view(store: &Store, view: &str, into: &str) {
+    let file = record_file(store, "tasks", view);
     let moved = std::fs::read_to_string(&file)
         .expect("the view")
         .lines()
         .map(|line| {
             if line.starts_with("project:") {
-                "project: roadmap\n".to_owned()
+                format!("project: {into}\n")
             } else {
                 format!("{line}\n")
             }
         })
         .collect::<String>();
     std::fs::write(&file, moved).expect("the view moved");
-    let before = store.tree();
-    let (kind, said) = store.refused(&["project", "copy", "plan:rollout", "--to", "vault"]);
-    assert_eq!(kind, "projections-malformed", "{said}");
-    assert!(said.contains("roadmap"), "{said}");
-    assert_eq!(store.tree(), before, "nothing more was written");
-    let (kind, said) = store.refused(&["task", "status", "set", widget, "done"]);
-    assert_eq!(kind, "projection-not-mirrored", "{said}");
-    assert!(said.contains("roadmap"), "{said}");
-    assert_eq!(shown(&store, "task", widget)["status"]["category"], "done");
-    assert_eq!(shown(&store, "task", &view)["status"]["category"], "todo");
+}
+
+/// The project the view `view` is filed under, by its native id.
+fn filed_under(store: &Store, view: &str) -> String {
+    shown(store, "task", view)["project"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{view} is filed under a project"))
+        .to_owned()
+}
+
+#[test]
+fn a_project_a_person_moved_a_view_into_is_never_adopted_or_written() {
+    for (into, front, body) in [
+        // However neutral it reads — the very title and emptiness of the copy's own — nothing
+        // this copy recorded names it and it carries none of its allocation.
+        ("theirs", "title: Public work\nstatus: todo", ""),
+        ("roadmap", "title: Roadmap\nstatus: todo", "Prose."),
+    ] {
+        let store = projecting_store();
+        private_rollout(&store);
+        let landed = copy_rollout(&store);
+        let widget = &landed["plan:widget"];
+        let view = view_of(&store, &landed, widget);
+        let neutral = filed_under(&store, &view);
+        store.record("site", "projects", into, front, body);
+        move_view(&store, &view, into);
+        let occupant = record_file(&store, "projects", &format!("site:{into}"));
+        let held = std::fs::read(&occupant).expect("their project");
+        let moved = std::fs::read(record_file(&store, "tasks", &view)).expect("the moved view");
+
+        // A mirror will not write into a project this plan did not record.
+        let (kind, said) = store.refused(&["task", "status", "set", widget, "done"]);
+        assert_eq!(kind, "projection-not-mirrored", "{into}: {said}");
+        assert!(said.contains(into), "{into}: {said}");
+        assert_eq!(shown(&store, "task", &view)["status"]["category"], "todo");
+
+        // A recopy files every view under the project it recorded, and leaves theirs alone.
+        copy_rollout(&store);
+        assert_eq!(
+            std::fs::read(&occupant).expect("their project is still there"),
+            held,
+            "{into}: the project the view was moved into is left byte for byte"
+        );
+        assert_eq!(
+            std::fs::read(record_file(&store, "tasks", &view)).expect("the moved view"),
+            moved,
+            "{into}: the view a person moved is left where they put it"
+        );
+        let recorded = view_of(&store, &landed, widget);
+        assert_ne!(recorded, view, "{into}: a new view is recorded");
+        assert_eq!(filed_under(&store, &recorded), neutral, "{into}");
+        let guide = view_of(&store, &landed, &landed["plan:guide"]);
+        assert_eq!(filed_under(&store, &guide), neutral, "{into}");
+        let under_theirs: Vec<Value> = tasks_of(&store, "site")
+            .into_iter()
+            .filter(|task| task["item"]["project"] == into)
+            .collect();
+        assert_eq!(
+            under_theirs.len(),
+            1,
+            "{into}: nothing but the moved view is under it: {under_theirs:?}"
+        );
+        let projects = projection_map(&store, &landed["plan:rollout"])["projects"].clone();
+        assert_eq!(
+            projects[0]["project"], neutral,
+            "{into}: the record still names the project it made: {projects:#}"
+        );
+
+        // And now the status reaches the recorded view.
+        store.ok(&["task", "status", "set", widget, "done"]);
+        assert_eq!(
+            shown(&store, "task", &recorded)["status"]["category"],
+            "done"
+        );
+        assert_eq!(shown(&store, "task", &view)["status"]["category"], "todo");
+    }
 }
 
 #[test]

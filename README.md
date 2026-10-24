@@ -2039,12 +2039,15 @@ is filed under it; one entry per source, never a source declared private. A copy
 it the moment the view is created, so a copy interrupted part way and run again finds every view
 it made — by the map, by its opaque id, or, at a destination that issues ids of its own, as the
 one task under the public project no map entry names with the view's title and repositories —
-rather than making a second. The public project is found by ownership alone: under a view the
-map names, by the `project` its entry records, or — when the copy never learned that id, its
+rather than making a second. The public project is found by ownership alone: by the `project`
+its entry records, or — when the copy never learned that id, its
 create's answer lost or the copy ended first — as the one project carrying its recorded
 `allocation`, created afresh, carrying that same allocation, only when none does. No other
 project is ever taken or altered, however much it looks like one: an unrelated empty `Public work`
-naming the same repositories is left as it is, and so is one already sitting at the opaque
+naming the same repositories is left as it is, so is a project a person moved a view into —
+that view is left where they put it, the next copy records a new view under the copy's own
+project, and a status is not mirrored to a view filed anywhere else — and so is one already
+sitting at the opaque
 id a create would ask for — a destination honouring that id would write over it, so the copy is
 refused, naming that project, before anything is written. A copy that fails takes back the project it asked
 for by its allocation even when the answer was lost; when the destination will not take it back,
