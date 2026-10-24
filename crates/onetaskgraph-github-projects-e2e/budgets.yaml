@@ -209,3 +209,33 @@ budgets:
     unit: points
     direction: max
     threshold: 5
+  - id: github-requests-per-dependency-read
+    description: >-
+      The most requests any one necessarily consulted board receives in one complete dependency read through the binary on a fresh process, the larger over loopback boards of 1,100 and of 11,000 items: an issue blocked by 5 or 50 issues and recording an edge in its body, in both directions; a draft recording an edge; a folder task recording an edge to an issue, read by id; an opaque edge resolved cold and warm over two private boards; a legacy read of a copied task over a rate-limited private board and one holding its reverse record; and an unrelated edge-free task. The detail gives every case's requests by board, its total and its GraphQL points. Two, by the user's ruling: the board an opaque edge names says which board it is in one request and the far end is read in another on first use, which the plugin interface does not join; every other case is one. It protects the shared board token from a planning read.
+    labels: [github]
+    measure: reported
+    # llmlint: ignore[budget_commands_measure_directly] Every budget of this file selects its own report-only entry in `budget_runner`, the harness-runner convention this crate's budgets landed with; this one reads only the telemetry `store_cost.rs` recorded during the crate's test run, refuses a recording of another workload, scale or figure, and hands the figure to onebudgetspec, which alone judges it.
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_dependency_read", "--exact", "--nocapture"]
+    unit: requests
+    direction: max
+    threshold: 2
+  - id: github-requests-per-status-write
+    description: >-
+      The requests one status write of one issue item sends through the binary on a fresh process with the cache off, as a run's projection of a dispatch writes it, the larger over loopback boards of 1,100 and of 11,000 items; the detail gives each scale and its GraphQL points. Two, by the user's ruling: the write needs the board item's id and the Status option's id, which only a read of the issue answers on a fresh process. It protects the shared board token from every dispatch.
+    labels: [github]
+    measure: reported
+    # llmlint: ignore[budget_commands_measure_directly] Every budget of this file selects its own report-only entry in `budget_runner`, the harness-runner convention this crate's budgets landed with; this one reads only the telemetry `store_cost.rs` recorded during the crate's test run, refuses a recording of another workload, scale or figure, and hands the figure to onebudgetspec, which alone judges it.
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_status_write", "--exact", "--nocapture"]
+    unit: requests
+    direction: max
+    threshold: 2
+  - id: github-requests-per-settlement-update
+    description: >-
+      The requests one update of a status and one metadata key on one issue item sends through the binary on a fresh process with the cache off, as a run's settlement write-back writes it, the larger over loopback boards of 1,100 and of 11,000 items; the detail gives each scale and its GraphQL points. Three, by the user's ruling: the read of the issue, the board field write, and the body written last in a request of its own, so a refused field write leaves the body as it stood. It protects the shared board token from every settlement.
+    labels: [github]
+    measure: reported
+    # llmlint: ignore[budget_commands_measure_directly] Every budget of this file selects its own report-only entry in `budget_runner`, the harness-runner convention this crate's budgets landed with; this one reads only the telemetry `store_cost.rs` recorded during the crate's test run, refuses a recording of another workload, scale or figure, and hands the figure to onebudgetspec, which alone judges it.
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_settlement_update", "--exact", "--nocapture"]
+    unit: requests
+    direction: max
+    threshold: 3

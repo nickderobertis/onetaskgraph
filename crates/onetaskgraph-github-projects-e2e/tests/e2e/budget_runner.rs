@@ -195,6 +195,96 @@ fn report_plan_copy() {
 // llmlint: ignore-end[budget_commands_measure_directly]
 // llmlint: ignore-end[tests_assert_real_behavior]
 
+// llmlint: ignore-block[budget_commands_measure_directly] Every budget of this crate selects its own report-only entry here, the harness-runner convention it landed with (report_visibility_reads, report_metadata_fields), and the task registering these three names each entry. Each reads only the telemetry `store_cost.rs` recorded during the crate's ordinary test run, refuses a recording of another workload, scale or figure, and hands the figure to onebudgetspec, which alone judges it.
+#[test]
+fn report_dependency_read() {
+    report_store_cost(super::store_cost::DEPENDENCY_WORKLOAD);
+}
+#[test]
+fn report_status_write() {
+    report_store_cost(super::store_cost::STATUS_WORKLOAD);
+}
+#[test]
+fn report_settlement_update() {
+    report_store_cost(super::store_cost::SETTLEMENT_WORKLOAD);
+}
+// llmlint: ignore-end[budget_commands_measure_directly]
+
+fn report_store_cost(workload: &str) {
+    let Some(budget) = selected() else {
+        return;
+    };
+    let (value, detail) = recorded(&budget)
+        .and_then(|value| store_cost_of(&value, workload))
+        .unwrap_or_else(|error| refuse(&error));
+    hand_over(value, &detail);
+}
+
+/// What `store_cost` recorded, refused unless it is `workload`'s recording measured at both
+/// scales the budget states, the figure the larger of the two.
+fn store_cost_of(value: &Value, workload: &str) -> Result<(f64, String), String> {
+    if value["workload"].as_str() != Some(workload) {
+        return Err("the recording is not of the workload the budget states".into());
+    }
+    let figure = value["value"]
+        .as_u64()
+        .ok_or("missing whole-number figure")?;
+    let mut largest = None;
+    for (scale, _) in super::store_cost::SCALES {
+        let at = value["scales"][scale]["value"]
+            .as_u64()
+            .ok_or_else(|| format!("the {scale} scale is not measured"))?;
+        largest = Some(largest.map_or(at, |held: u64| held.max(at)));
+    }
+    if largest != Some(figure) {
+        return Err(format!(
+            "the figure {figure} is not the larger scale's, {largest:?}"
+        ));
+    }
+    let detail = value["detail"].as_str().ok_or("missing detail")?.to_owned();
+    let figure = u32::try_from(figure).map_err(|_| "figure out of range")?;
+    Ok((f64::from(figure), detail))
+}
+
+#[test]
+fn a_store_cost_report_hands_over_the_larger_scale_and_refuses_another_workload() {
+    use super::store_cost::STATUS_WORKLOAD;
+    let valid = serde_json::json!({"budget": "github-requests-per-status-write", "value": 2,
+        "workload": STATUS_WORKLOAD, "detail": "measured",
+        "scales": {"1x": {"value": 1}, "10x": {"value": 2}}});
+    assert_eq!(
+        store_cost_of(&valid, STATUS_WORKLOAD),
+        Ok((2.0, "measured".to_owned()))
+    );
+    let with = |pointer: &str, replaced: Value| {
+        let mut changed = valid.clone();
+        *changed.pointer_mut(pointer).expect("the member") = replaced;
+        changed
+    };
+    for (name, recording, reason) in [
+        (
+            "another workload",
+            with("/workload", serde_json::json!("one write")),
+            "workload",
+        ),
+        ("no figure", with("/value", Value::Null), "whole-number"),
+        (
+            "a smaller figure",
+            with("/value", serde_json::json!(1)),
+            "larger scale",
+        ),
+        (
+            "one scale",
+            with("/scales/10x", serde_json::json!({})),
+            "10x",
+        ),
+        ("no detail", with("/detail", Value::Null), "detail"),
+    ] {
+        let refused = store_cost_of(&recording, STATUS_WORKLOAD).expect_err(name);
+        assert!(refused.contains(reason), "{name}: {refused}");
+    }
+}
+
 /// The scenario a plan-copy budget measures, read off its own id: the scenario its id ends
 /// with, or the first copy for one naming none — the writes a first copy makes.
 fn plan_copy_scenario(budget: &str) -> &'static str {

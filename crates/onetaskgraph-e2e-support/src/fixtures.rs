@@ -3646,16 +3646,27 @@ fn github_projects_block_at(endpoint: &str) -> Value {
 /// rather than waiting it out: what is under test is what a caller is told, not how long
 /// the source is prepared to wait before telling it.
 pub fn github_projects_rate_limited(sandbox: &Sandbox, retry_after: Option<u64>) -> Value {
+    github_projects_rate_limited_counted(sandbox, retry_after).0
+}
+
+/// [`github_projects_rate_limited`], and a count of the requests it was sent.
+pub fn github_projects_rate_limited_counted(
+    sandbox: &Sandbox,
+    retry_after: Option<u64>,
+) -> (Value, Arc<Mutex<usize>>) {
     sandbox.secrets_file("GITHUB_PROJECTS_FIXTURE_TOKEN=test-token\n");
     let listener = TcpListener::bind("127.0.0.1:0").expect("GitHub fixture listener");
     let endpoint = format!(
         "http://{}/graphql",
         listener.local_addr().expect("fixture address")
     );
+    let sent = Arc::new(Mutex::new(0_usize));
+    let counted = Arc::clone(&sent);
     thread::spawn(move || {
         for stream in listener.incoming() {
             let mut stream = stream.expect("GitHub fixture connection");
             read_http_json(&mut stream);
+            *counted.lock().unwrap() += 1;
             let body = json!({"message": "API rate limit exceeded for this fixture"}).to_string();
             let wait = retry_after
                 .map(|seconds| format!("retry-after: {seconds}\r\n"))
@@ -3671,7 +3682,7 @@ pub fn github_projects_rate_limited(sandbox: &Sandbox, retry_after: Option<u64>)
     });
     let mut block = github_projects_block_at(&endpoint);
     block["pacing"]["retry_budget_ms"] = json!(0);
-    block
+    (block, sent)
 }
 
 /// A board whose GraphQL budget for the hour is already spent, answering every request the
@@ -5300,6 +5311,15 @@ pub fn linear_failing_a_relation_write_once(sandbox: &Sandbox) -> Value {
 /// rate limited was never asked at all.
 // llmlint: ignore[code_lands_in_the_domain_that_owns_it] As `linear_workspace` below: the shared e2e harness is where the agreed e2e layout puts every loopback server, and the engine's own suite drives this one.
 pub fn linear_rate_limited(sandbox: &Sandbox) -> (Value, Arc<Mutex<usize>>) {
+    linear_rate_limited_for(sandbox, None)
+}
+
+/// [`linear_rate_limited`], naming its reset `retry_after` seconds ahead on every refusal when
+/// it is given — what a source that remembers the reset is held to.
+pub fn linear_rate_limited_for(
+    sandbox: &Sandbox,
+    retry_after: Option<u64>,
+) -> (Value, Arc<Mutex<usize>>) {
     sandbox.secrets_file("LINEAR_API_KEY=fixture-key\n");
     let listener = TcpListener::bind("127.0.0.1:0").expect("fixture listener");
     let endpoint = format!("http://{}/graphql", listener.local_addr().unwrap());
@@ -5313,9 +5333,12 @@ pub fn linear_rate_limited(sandbox: &Sandbox) -> (Value, Arc<Mutex<usize>>) {
             *counted.lock().unwrap() += 1;
             let body =
                 r#"{"errors":[{"message":"rate limited","extensions":{"code":"RATELIMITED"}}]}"#;
+            let wait = retry_after
+                .map(|seconds| format!("retry-after: {seconds}\r\n"))
+                .unwrap_or_default();
             let _ = write!(
                 stream,
-                "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\n{wait}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()
             );
         }

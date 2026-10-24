@@ -13063,6 +13063,40 @@ impl TaskSource for GitHubProjectsSource {
         self.set_status(id, ItemKind::Task, category).await
     }
 
+    /// Set one task's status and answer the task with it, reading the item once: the read the
+    /// task is answered from is handed to the status write, which would otherwise read the
+    /// same issue again — two requests on a fresh process, the read and the field write,
+    /// where the default's `get_task` before `set_task_status` sent three.
+    async fn set_task_status_reading(
+        &self,
+        id: &NativeId,
+        category: StatusCategory,
+    ) -> Result<Option<Task>, SourceError> {
+        // Refused before anything is read, in the words the write itself refuses it.
+        self.resolved_target(ItemKind::Task, category)?;
+        let Some(item) = self
+            .bound_item(id)
+            .await?
+            .filter(|item| item.kind == BoardKind::Work(ItemKind::Task))
+        else {
+            return Ok(None);
+        };
+        let mut task = item.task()?;
+        self.held_cache
+            .lock()
+            .map_err(|_| SourceError::Unavailable {
+                message: "items read by issue reference were left inconsistent; run the \
+                          command again"
+                    .into(),
+            })?
+            .insert(id.clone(), item);
+        let Some(status) = self.set_status(id, ItemKind::Task, category).await? else {
+            return Ok(None);
+        };
+        task.status = status;
+        Ok(Some(task))
+    }
+
     /// Set one project's status alone, by exactly the paired write a task's status takes, for
     /// the project kind: a terminal category selects the project kind's mapped option and then
     /// closes the issue with the category's fixed reason — an issue already closed with a

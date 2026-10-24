@@ -33,3 +33,4 @@ onetaskgraph-github-live.workspace = true
 secrecy.workspace = true
 reqwest.workspace = true
 chrono.workspace = true
+sha2.workspace = true
