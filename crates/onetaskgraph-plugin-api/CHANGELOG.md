@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.1](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-plugin-api-v0.12.0...onetaskgraph-plugin-api-v0.12.1) - 2026-10-24
+
+### Added
+
+- support task-owned visibility and private coordination projections ([#3725](https://github.com/nickderobertis/onetaskgraph/pull/3725))
+
 ## [0.12.0](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-plugin-api-v0.11.1...onetaskgraph-plugin-api-v0.12.0) - 2026-10-24
 
 ### Added
