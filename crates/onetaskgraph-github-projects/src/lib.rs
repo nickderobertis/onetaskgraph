@@ -3143,7 +3143,9 @@ impl SourcePlugin for Plugin {
 
 /// The client `cell` holds, building it with `build` the first time it is asked for.
 ///
-/// A failed build is returned and not kept, so the next request tries again.
+/// A failed build is the request's failure, with the message the source's construction gave it
+/// before clients were deferred.
+// llmlint: ignore[changed_behavior_has_e2e] A client build fails only when the TLS backend cannot initialise, which nothing outside the process can induce: a certificate bundle of garbage still builds one. That the build is deferred is proven end to end by `store_startup::a_command_builds_no_client_for_a_source_it_sends_nothing`.
 fn built(
     cell: &std::sync::OnceLock<Client>,
     build: impl FnOnce() -> Result<Client, SourceError>,

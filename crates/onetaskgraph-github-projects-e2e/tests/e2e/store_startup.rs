@@ -177,7 +177,6 @@ impl Host {
         host
     }
 
-    /// Write the configuration with the unrelated sources, or without them.
     fn configure(&self, unrelated: bool) {
         self.plan.sandbox.project_document(if unrelated {
             &self.with_unrelated
@@ -242,8 +241,8 @@ fn allowed(command: &str) -> Contacted {
     })
 }
 
-/// The variants each command is run in, by the name the report gives each: the plan with the
-/// unrelated sources configured, the bare folder with them, and the bare folder without.
+/// Each variant a command is run in: the name the report gives it, the folder it reads, and
+/// whether the unrelated sources are configured.
 const VARIANTS: [(&str, &str, bool); 3] = [
     ("plan", "notes", true),
     ("bare", BARE, true),
@@ -484,4 +483,107 @@ fn compare_store_startup() {
         }
     }
     eprintln!("{report}");
+}
+
+/// Every open of the certificate bundle a process's HTTP clients load, counted from outside it.
+///
+/// The bundle is a FIFO named by `SSL_CERT_FILE`, which the binary's TLS library reads each time
+/// a client is built. A writer on a thread of its own opens the FIFO again and again: each open
+/// returns only once a reader has opened the other end, is counted, and is closed at once, which
+/// hands that reader an empty bundle. Once the process has exited the writer is released by
+/// opening the reading end here, which is not counted.
+#[cfg(unix)]
+struct BundleOpens {
+    fifo: PathBuf,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    opens: Arc<AtomicUsize>,
+    writer: std::thread::JoinHandle<()>,
+}
+
+#[cfg(unix)]
+impl BundleOpens {
+    fn watch(fifo: PathBuf) -> Self {
+        let made = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap();
+        assert!(made.success(), "mkfifo {}", fifo.display());
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let opens = Arc::new(AtomicUsize::new(0));
+        let writer = {
+            let (fifo, stop, opens) = (fifo.clone(), Arc::clone(&stop), Arc::clone(&opens));
+            std::thread::spawn(move || {
+                loop {
+                    let opened = std::fs::OpenOptions::new().write(true).open(&fifo);
+                    if stop.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    opened.unwrap();
+                    opens.fetch_add(1, Ordering::SeqCst);
+                }
+            })
+        };
+        Self {
+            fifo,
+            stop,
+            opens,
+            writer,
+        }
+    }
+
+    /// How many times the bundle was opened, the process that opened it having exited.
+    fn finish(self) -> usize {
+        self.stop.store(true, Ordering::SeqCst);
+        let released = std::fs::File::open(&self.fifo).unwrap();
+        self.writer.join().unwrap();
+        drop(released);
+        self.opens.load(Ordering::SeqCst)
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_command_builds_no_client_for_a_source_it_sends_nothing() {
+    let host = Host::new();
+    let fifo = host.plan.sandbox.project().join("bundle.pem");
+    let opened = |arguments: &[String]| {
+        let watched = BundleOpens::watch(fifo.clone());
+        let mut command = host.plan.sandbox.subprocess(binary());
+        command
+            .args(arguments)
+            .env("SSL_CERT_FILE", &fifo)
+            .envs(host.plan.clock.client_env(0))
+            .envs(UNRELATED_CREDENTIALS)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let lease = host.plan.clock.lease(0);
+        let output = command.spawn().unwrap().wait_with_output().unwrap();
+        lease.wait_for_detach();
+        drop(lease);
+        let opens = watched.finish();
+        std::fs::remove_file(&fifo).unwrap();
+        (output, opens)
+    };
+    // The copy sends to the board, so it builds that board's client: the bundle is opened, which
+    // is what says the count below can see a client being built.
+    let (_, copy) = commands("notes").pop().unwrap();
+    let (output, opens) = opened(&copy);
+    answered(&output, "the copy");
+    assert!(
+        opens > 0,
+        "the copy built no client for the board it copied to"
+    );
+    // Every read of the folder sends nothing to the board or to the two unrelated sources, a
+    // GitHub board and a Linear workspace, so it builds no client of theirs.
+    for (command, arguments) in commands("notes") {
+        if command == "project copy" {
+            continue;
+        }
+        let (output, opens) = opened(&arguments);
+        answered(&output, command);
+        assert_eq!(
+            opens, 0,
+            "{command} built an HTTP client it sent nothing through"
+        );
+    }
 }
