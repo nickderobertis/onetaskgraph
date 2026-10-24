@@ -347,8 +347,14 @@ address that answers nothing, and no layer of this run copied to it.
 - **Copy scenarios:** 88 issues were created, all on the test board; every one is deleted. The store took back 18 in the two refused host attempts,
   before the user-layer and folder deviations above were in place. Each of those attempts
   created 9 issues and deleted the same 9 when the copy could not finish. Cleanup deleted the
-  other 70: every issue of the five plans that landed, which is every issue of the seven plans that
-  landed (10 each), the first copies the re-measured host runs replaced among them.
+  other 70: every issue of the seven plans that landed, at 10 issues each. Five of those
+  plans are the first copies under `after/` (`tb-first-stock-20261024T093842`,
+  `tb-first-span-20261024T095836`, `tb-first-span-20261024T101453`,
+  `host-copy-stock-20261024T100745` and `host-copy-stock-20261024T102033`). The other two
+  are first copies of host runs that were later re-measured
+  (`superseded/host-copy-stock-20261024T095207` and
+  `superseded/host-copy-stock-20261024T101542`). The four cleanups deleted 30, 10, 20 and
+  10.
 - **Disposable test-board items created outside the copy scenarios: 0, and 0 deleted.** This
   run sent no probe and created nothing outside a copy scenario. Cleanup's 70 deletions are
   of copy-scenario issues.
@@ -383,9 +389,12 @@ These are second samples, recorded and not used in the rows above:
 | `host-copy-stock-20261024T102033` | host first copy the host one-body re-copy was made on | 64.7 s | 16 | 17 |
 
 `after/superseded/` holds every other run of this measurement: the refused host attempts, and
-the first set of host runs, which was re-measured once the screening log existed (64.4 s →
-76.7 s first copy, 44.7 s → 54.2 s unchanged, 16.4 s → 19.4 s approval). Its writes are
-counted above.
+the first set of host runs. That set was re-measured once the screening log existed, and the
+re-measured runs are the ones the rows above use. Superseded figures were 76.6 s for the first
+copy, 54.2 s for the unchanged re-copy and 19.4 s for the approval. The selected figures are
+64.4 s, 44.7 s and 16.4 s. Each superseded figure is the sum of its run's steps in
+`after/superseded/host-{copy,recopy,approve}-stock-20261024T09*/steps.jsonl`. The
+superseded runs' writes are counted above.
 
 ## Limits on how far the numbers carry
 
