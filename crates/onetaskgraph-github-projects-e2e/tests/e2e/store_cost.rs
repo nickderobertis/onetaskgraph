@@ -66,7 +66,6 @@ fn draft() -> Value {
         "status":"Todo","origin":"","labels":[]})
 }
 
-/// A folder of Markdown holding each `(id, front matter)` as a task.
 fn folder(sandbox: &Sandbox, name: &str, tasks: &[(&str, String)]) -> PathBuf {
     let root = sandbox.subdirectory(name);
     std::fs::create_dir_all(root.join("tasks")).expect("the tasks folder");
@@ -145,7 +144,6 @@ fn edges(read: &Value) -> Vec<(String, String)> {
     edges
 }
 
-/// The documents `board` served since `from`.
 fn since(board: &GitHubBoardFields, from: usize) -> Vec<String> {
     board.served()[from..]
         .iter()
@@ -660,7 +658,6 @@ fn measure_github_requests_per_status_write_and_settlement() {
 }
 // llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
-/// The fixture's credential.
 struct Secrets;
 impl SecretResolver for Secrets {
     fn get(&self, variable: &str) -> Option<secrecy::SecretString> {
@@ -775,6 +772,7 @@ fn a_board_that_named_a_reset_is_sent_nothing_before_it_and_reached_after_it() {
 /// its cache could answer: the memory stands in front of every call, as its rule says. The same
 /// pinned read is served from the cache, refused unsent during the hold, and served from the
 /// cache again after the reset.
+// llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] The task places this budget journey in the e2e crate's `test` target, whose telemetry its budget reads, and AGENTS.md records the aggregate coverage run repeating every crate's tests as the accepted cost of one coverage report; the module runs in about three seconds on a warm build.
 #[test]
 fn a_held_board_refuses_even_a_read_its_cache_holds_and_serves_it_after_the_reset() {
     let sandbox = Sandbox::new();
@@ -856,3 +854,4 @@ fn a_held_board_refuses_even_a_read_its_cache_holds_and_serves_it_after_the_rese
         );
     });
 }
+// llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]

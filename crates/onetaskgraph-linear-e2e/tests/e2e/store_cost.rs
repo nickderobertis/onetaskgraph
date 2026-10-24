@@ -56,7 +56,6 @@ fn workspace(
     linear_workspace(sandbox, data)
 }
 
-/// A folder of Markdown holding each `(id, front matter)` as a task.
 fn folder(sandbox: &Sandbox, name: &str, tasks: &[(&str, String)]) -> PathBuf {
     let root = sandbox.subdirectory(name);
     std::fs::create_dir_all(root.join("tasks")).expect("the tasks folder");
@@ -134,7 +133,6 @@ fn edges(read: &Value) -> Vec<(String, String)> {
     edges
 }
 
-/// The documents `workspace` served since `from`.
 fn since(workspace: &LinearWorkspace, from: usize) -> Vec<String> {
     workspace.served()[from..]
         .iter()
