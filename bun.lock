@@ -14,13 +14,13 @@
     },
     "sdks/typescript": {
       "name": "@onetaskgraph/sdk",
-      "version": "0.12.0",
+      "version": "0.12.1",
       "devDependencies": {
         "ajv": "8.17.1",
         "json-schema-to-typescript": "15.0.4",
       },
       "optionalDependencies": {
-        "@onetaskgraph/cli": "0.12.0",
+        "@onetaskgraph/cli": "0.12.1",
       },
     },
   },
