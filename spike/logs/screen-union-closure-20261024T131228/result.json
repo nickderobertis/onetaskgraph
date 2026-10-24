@@ -14,7 +14,7 @@
      "inspect_answers": [
       "{\"visibility\":\"public\"}\n"
      ],
-     "seconds": 0.347
+     "seconds": 0.226
     },
     "unioned": {
      "calls": 2,
@@ -24,7 +24,7 @@
      "inspect_answers": [
       "{\"visibility\":\"public\"}\n"
      ],
-     "seconds": 0.037
+     "seconds": 0.023
     }
    },
    "planted in metadata": {
@@ -39,7 +39,7 @@
      "inspect_answers": [
       "{\"visibility\":\"public\"}\n"
      ],
-     "seconds": 0.377
+     "seconds": 0.291
     },
     "unioned": {
      "calls": 2,
@@ -49,7 +49,7 @@
      "inspect_answers": [
       "{\"visibility\":\"public\"}\n"
      ],
-     "seconds": 0.036
+     "seconds": 0.03
     }
    },
    "planted in paths": {
@@ -64,7 +64,7 @@
      "inspect_answers": [
       "{\"visibility\":\"public\"}\n"
      ],
-     "seconds": 0.422
+     "seconds": 0.353
     },
     "unioned": {
      "calls": 2,
@@ -74,7 +74,7 @@
      "inspect_answers": [
       "{\"visibility\":\"public\"}\n"
      ],
-     "seconds": 0.024
+     "seconds": 0.032
     }
    },
    "planted in text": {
@@ -89,7 +89,7 @@
      "inspect_answers": [
       "{\"visibility\":\"public\"}\n"
      ],
-     "seconds": 0.411
+     "seconds": 0.316
     },
     "unioned": {
      "calls": 2,
@@ -99,7 +99,7 @@
      "inspect_answers": [
       "{\"visibility\":\"public\"}\n"
      ],
-     "seconds": 0.036
+     "seconds": 0.038
     }
    }
   },
@@ -116,7 +116,7 @@
      "inspect_answers": [
       "{\"visibility\":\"public\"}\n"
      ],
-     "seconds": 0.792
+     "seconds": 0.646
     },
     "unioned": {
      "calls": 2,
@@ -126,7 +126,7 @@
      "inspect_answers": [
       "{\"visibility\":\"public\"}\n"
      ],
-     "seconds": 0.05
+     "seconds": 0.033
     }
    },
    "planted in metadata": {
@@ -142,7 +142,7 @@
      "inspect_answers": [
       "{\"visibility\":\"public\"}\n"
      ],
-     "seconds": 0.624
+     "seconds": 0.622
     },
     "unioned": {
      "calls": 2,
@@ -152,7 +152,7 @@
      "inspect_answers": [
       "{\"visibility\":\"public\"}\n"
      ],
-     "seconds": 0.027
+     "seconds": 0.038
     }
    },
    "planted in paths": {
@@ -168,7 +168,7 @@
      "inspect_answers": [
       "{\"visibility\":\"public\"}\n"
      ],
-     "seconds": 0.92
+     "seconds": 0.46
     },
     "unioned": {
      "calls": 2,
@@ -178,7 +178,7 @@
      "inspect_answers": [
       "{\"visibility\":\"public\"}\n"
      ],
-     "seconds": 0.039
+     "seconds": 0.024
     }
    },
    "planted in text": {
@@ -194,7 +194,7 @@
      "inspect_answers": [
       "{\"visibility\":\"public\"}\n"
      ],
-     "seconds": 0.656
+     "seconds": 0.598
     },
     "unioned": {
      "calls": 2,
@@ -204,7 +204,7 @@
      "inspect_answers": [
       "{\"visibility\":\"public\"}\n"
      ],
-     "seconds": 0.05
+     "seconds": 0.025
     }
    }
   }
@@ -221,7 +221,7 @@
    "check": 10,
    "distinct_inspect_inputs": 1,
    "inspect": 44,
-   "seconds": 1.054,
+   "seconds": 0.869,
    "verdicts": [
     [
      "check",
