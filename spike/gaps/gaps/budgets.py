@@ -14,7 +14,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from gaps import proc
-from gaps.json_shape import Json, ShapeError, arr, decode, obj, parse
+from gaps.json_shape import Json, ShapeError, arr, decode, obj, parse, text
 
 PROJECT = "authoring:board-copy-gaps-2026-10-24"
 
@@ -68,7 +68,7 @@ class Budget:
 
 
 def from_tasks(listing: Json) -> tuple[Budget, ...]:
-    """Every budget record of every task in a `task list --json` answer."""
+    """Every budget record of every task in one `task list --json` page."""
     out: list[Budget] = []
     for index, entry in enumerate(arr(obj(listing, "listing").get("items"), "items")):
         item = obj(obj(entry, f"items[{index}]").get("item"), f"items[{index}].item")
@@ -79,7 +79,28 @@ def from_tasks(listing: Json) -> tuple[Budget, ...]:
     return tuple(sorted(out, key=lambda b: b.id))
 
 
-async def read(onetaskgraph: Path, cwd: Path) -> tuple[Budget, ...]:
-    """The plan project's budgets, through the real CLI configured from `cwd`."""
-    done = await proc.check([onetaskgraph, "task", "list", "--project", PROJECT, "--json"], cwd=cwd)
-    return from_tasks(parse(done.out, "task list"))
+async def read(onetaskgraph: Path, cwd: Path, limit: int | None = None) -> tuple[Budget, ...]:
+    """The plan project's budgets, every page of its listing through the real CLI from `cwd`.
+
+    A page reporting a source error, or a continuation token already followed, is refused rather
+    than taken as the whole project.
+    """
+    command = [onetaskgraph, "task", "list", "--project", PROJECT, "--json"]
+    if limit is not None:
+        command += ["--limit", str(limit)]
+    out: list[Budget] = []
+    followed: set[str] = set()
+    token: str | None = None
+    while True:
+        done = await proc.check(command + ([] if token is None else ["--page", token]), cwd=cwd)
+        page = obj(parse(done.out, "task list"), "task list")
+        if arr(page.get("errors", []), "task list errors"):
+            raise ShapeError(f"task list --project {PROJECT} reported errors: {page['errors']}")
+        out.extend(from_tasks(page))
+        following = page.get("next")
+        if following is None:
+            return tuple(sorted(out, key=lambda b: b.id))
+        token = text(following, "task list next")
+        if token in followed:
+            raise ShapeError(f"task list --project {PROJECT} repeated its page token {token}")
+        followed.add(token)

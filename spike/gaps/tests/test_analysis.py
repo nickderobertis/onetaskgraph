@@ -19,7 +19,7 @@ import pytest
 
 from gaps import analysis, budgets, report
 from gaps.budgets import Operation, Unit
-from gaps.json_shape import encode
+from gaps.json_shape import ShapeError, encode
 from tests.conftest import PYTHON, gaps_env, spawn
 
 PLAN_CHECKOUT = Path.home() / "ai-orchestrator"
@@ -32,6 +32,30 @@ def test_the_plan_states_sixteen_budgets_each_of_a_measured_unit_and_operation()
     assert len(found) == 16
     assert {b.unit for b in found} == set(Unit)
     assert {b.operation for b in found} == set(analysis.BASELINE_RUNS)
+
+
+def test_the_budgets_are_read_across_every_page_of_the_plan_listing() -> None:
+    """One task a page, the reader follows every continuation and finds the same budgets."""
+    whole = asyncio.run(budgets.read(ONETASKGRAPH, PLAN_CHECKOUT))
+    assert asyncio.run(budgets.read(ONETASKGRAPH, PLAN_CHECKOUT, limit=1)) == whole
+
+
+@pytest.mark.parametrize(
+    ("page", "refusal"),
+    [
+        ('{"items": [], "next": "same", "errors": []}', "repeated its page token same"),
+        ('{"items": [], "next": null, "errors": [{"source": "authoring"}]}', "reported errors"),
+    ],
+)
+def test_a_listing_that_loops_or_reports_an_error_is_refused(
+    tmp_path: Path, page: str, refusal: str
+) -> None:
+    """A page token seen before, or a source error, is refused rather than taken as complete."""
+    stub = tmp_path / "onetaskgraph"
+    stub.write_text(f"#!/bin/sh\ncat <<'EOF'\n{page}\nEOF\n")
+    stub.chmod(0o755)
+    with pytest.raises(ShapeError, match=refusal):
+        asyncio.run(budgets.read(stub, tmp_path))
 
 
 def test_the_committed_summary_is_what_the_committed_logs_and_the_plan_add_up_to() -> None:
