@@ -490,3 +490,43 @@ def test_a_cleanup_failing_while_a_probe_fails_reports_both(
     assert isinstance(result.__cause__, GitHubError)
     # The parent and the four children the partial create made.
     assert len(state.ids) == 5 and len(stand_in.issues) == 5
+
+
+@pytest.mark.parametrize(
+    "body",
+    [b"not json", b"[1, 2]", b"{}", b'{"data": [1]}'],
+    ids=["not JSON", "not an object", "neither data nor errors", "data not an object"],
+)
+def test_an_unusable_answer_is_still_recorded_then_refused(tmp_path: Path, body: bytes) -> None:
+    """An answer the client cannot use is recorded before it is refused, so it still counts."""
+
+    async def ask() -> tuple[Exception | None, list[RequestRecord]]:
+        """Send one request to a server answering `body` with status 200."""
+
+        async def answer(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+            head = await reader.readuntil(b"\r\n\r\n")
+            length = next(
+                int(line.split(b":", 1)[1])
+                for line in head.split(b"\r\n")
+                if line.lower().startswith(b"content-length:")
+            )
+            await reader.readexactly(length)
+            reply = b"HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n%s" % (len(body), body)
+            writer.write(reply)
+            await writer.drain()
+            writer.close()
+
+        server = await asyncio.start_server(answer, "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+        client = Client(f"http://127.0.0.1:{port}/graphql", Token("t0ken"))
+        try:
+            await client.graphql("unusable", "query { viewer { login } }", {})
+        except (GitHubError, ShapeError) as error:
+            return error, client.records
+        finally:
+            server.close()
+        return None, client.records
+
+    error, records = asyncio.run(ask())
+    assert error is not None
+    assert [(r.op, r.status, bool(r.errors)) for r in records] == [("unusable", 200, True)]

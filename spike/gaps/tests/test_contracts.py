@@ -320,11 +320,13 @@ def _id_fields(kind: graphql.GraphQLInputObjectType, allowed: frozenset[str] | N
     for name, input_field in kind.fields.items():
         if allowed is not None and name not in allowed:
             continue
-        inner = _named_type(input_field.type)
-        if isinstance(inner, graphql.GraphQLScalarType) and inner.name == "ID":
-            found.add(name)
-        elif isinstance(inner, graphql.GraphQLInputObjectType):
-            found |= _id_fields(inner, None)
+        match _named_type(input_field.type):
+            case graphql.GraphQLScalarType(name="ID"):
+                found.add(name)
+            case graphql.GraphQLInputObjectType() as inner:
+                found |= _id_fields(inner, None)
+            case _:
+                pass
     return found
 
 
