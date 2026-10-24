@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-linear-v0.11.1...onetaskgraph-linear-v0.12.0) - 2026-10-24
+
+### Added
+
+- [**breaking**] read dependencies from a task's own record, naming private ones opaquely ([#3724](https://github.com/nickderobertis/onetaskgraph/pull/3724))
+
+### Performance
+
+- cut backend requests per dependency read, status write and settlement ([#3727](https://github.com/nickderobertis/onetaskgraph/pull/3727))
+
 ## [0.9.2](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-linear-v0.9.1...onetaskgraph-linear-v0.9.2) - 2026-10-20
 
 ### Added
