@@ -271,8 +271,18 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # read from the raw document and the roots from the validated one.
     bundle = generate.validate_schema_bundle(emitted_bundle)
 
-    assert emitted_bundle["version"] == 45
-    # Version 45 publishes `PublicProjections`, the map a private destination project records
+    assert emitted_bundle["version"] == 46
+    # Version 45 adds the opaque dependency endpoint, `{designator, id, kind}`, and lets a
+    # dependency read name a designator no configured source is.
+    assert "designator" in {
+        key
+        for variant in emitted_bundle["roots"]["DependencyEdge"]["$defs"]["DependencyEndpoint"][
+            "oneOf"
+        ]
+        if isinstance(variant, dict)
+        for key in variant.get("properties", {})
+    }
+    # Version 46 publishes `PublicProjections`, the map a private destination project records
     # from each canonical task to its public view, and `TaskStatusSet.projection`.
     assert "PublicProjections" in bundle["roots"]
     for root in ("TaskStatusSet", "TaskUpdated"):

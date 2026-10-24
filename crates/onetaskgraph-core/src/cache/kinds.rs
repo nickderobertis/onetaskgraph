@@ -2,9 +2,9 @@
 //! project's forward and reverse edges each read on their own, and the verified bytes of an image
 //! asset.
 //!
-//! **Each kind lives in a directory of its own, named with its schema** — `projects-v3/`,
-//! `documents-v3/`, `edges-v3/`, `reverse-edges-v3/`, `project-edges-v3/`,
-//! `project-reverse-edges-v3/`, `bytes-v3/` — so an id cannot name one kind's entry for
+//! **Each kind lives in a directory of its own, named with its schema** — `projects-v4/`,
+//! `documents-v4/`, `edges-v4/`, `reverse-edges-v4/`, `project-edges-v4/`,
+//! `project-reverse-edges-v4/`, `bytes-v4/` — so an id cannot name one kind's entry for
 //! another's, and a release writing this schema never writes over a file a release of another
 //! schema wrote: that one lives in its own directory. Each entry still carries its schema, its
 //! kind and the remote it is from, and a reader holds it to all three, so a file another release
@@ -35,10 +35,12 @@ use super::{SourceCache, digest};
 ///
 /// Version 2 added a task's reverse edges and a project's forward and reverse edges as kinds of
 /// their own; what version 1 kept is left in its own directories, unread, for
-/// `cache clear` of that release. Version 3 changes no byte an entry holds: the schema these
-/// shapes are digested from now describes a task's classification as its own, never tightened
-/// by its project, and an entry version 2 wrote is read as a miss.
-pub const KIND_ENTRY_SCHEMA: u32 = 3;
+/// `cache clear` of that release. Version 3 admits the opaque form of a dependency endpoint
+/// among the edges they keep, which an earlier release would misread as a native id. Version 4
+/// changes no byte an entry holds: the schema these shapes are digested from now describes a
+/// task's classification as its own, never tightened by its project, and an entry version 3
+/// wrote is read as a miss.
+pub const KIND_ENTRY_SCHEMA: u32 = 4;
 
 /// Which kind an entry is: written into it and held to the directory it is read from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

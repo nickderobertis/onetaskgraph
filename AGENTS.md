@@ -70,7 +70,8 @@ silence. See the note on `Health` below for the one difference it carries delibe
   `Project`, `Document`, `Location`, `Label`, `Status`, `StatusCategory`, `Priority`,
   `TaskRef`,
   `Repository`,
-  `DependencyEdge`, `DependencyEndpoint`, `ItemKind`, `DependencyKind`,
+  `DependencyEdge`, `DependencyEndpoint`, `Designator`, `EndpointRefusal`, `ItemKind`,
+  `DependencyKind`,
   `Direction`, `NativeId`, `SourceName`, `Classification`; the destination-reality types
   `Visibility` and `WriteTarget`; the query and paging types `TaskQuery`,
   `ProjectQuery`, `DocumentQuery`, `TextQuery`, `TextFields`, `LabelFilter`,

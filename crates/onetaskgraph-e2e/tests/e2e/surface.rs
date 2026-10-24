@@ -301,8 +301,17 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 45);
-    // Version 45: the projection map a private destination project records, and the view a
+    assert_eq!(bundle["version"], 46);
+    // Version 45: the opaque dependency endpoint, and a dependency read's `unanswered` naming a
+    // designator no configured source is.
+    assert!(
+        bundle["roots"]["QueryResponseOfQualifiedEdge"]["$defs"]
+            .get("UnresolvedDesignator")
+            .is_some(),
+        "{:#}",
+        bundle["roots"]["QueryResponseOfQualifiedEdge"]["$defs"]
+    );
+    // Version 46: the projection map a private destination project records, and the view a
     // task's status set mirrored its category to.
     assert_eq!(
         bundle["roots"]["PublicProjections"]["required"],
@@ -975,6 +984,7 @@ fn the_reserved_key_inventory_names_exactly_the_keys_the_code_spells() {
         MetadataKey::COPIED_VERSION_KEY,
         MetadataKey::COPIED_WITH_COMMENTS_KEY,
         MetadataKey::COPIED_DESTINATION_VERSION_KEY,
+        MetadataKey::EDGES_ON_RECORD_KEY,
         onetaskgraph_core::GlobalId::ORIGIN_KEY,
     ]
     .into_iter()
@@ -999,7 +1009,7 @@ fn the_reserved_key_inventory_names_exactly_the_keys_the_code_spells() {
     assert_eq!(listed, spelled, "the keys docs/metadata.md lists");
     let words = [
         "", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
-        "eleven", "twelve", "thirteen", "fourteen",
+        "eleven", "twelve", "thirteen", "fourteen", "fifteen",
     ];
     assert!(
         bullet.contains(&format!("defines exactly {} keys", words[spelled.len()])),

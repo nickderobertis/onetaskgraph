@@ -798,8 +798,11 @@ pub struct TaskUpdateArgs {
     #[arg(long = "no-delivers")]
     pub no_delivers: bool,
 
-    /// A task it depends on, qualified. Repeat for several; together they replace its
-    /// dependencies.
+    /// A task it depends on, qualified, or a dependency endpoint as a JSON object of `id` and
+    /// `kind` — and `designator` for the opaque form. Repeat for several; together they replace
+    /// its dependencies. Onto a source not declared private, one naming a task of a source that
+    /// is, by its native id, is written as that source's designator and the id; an object
+    /// carrying any other key is refused naming the key.
     #[arg(
         long = "depends-on",
         value_name = "ID",

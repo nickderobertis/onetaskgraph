@@ -4466,7 +4466,7 @@ export const runtimeSchemas = {
   "DependencyEdge": {
     "$defs": {
       "DependencyEndpoint": {
-        "description": "A dependency endpoint. A bare string is a native id of the source reporting it, and this decoding reads one as a task; a reader that knows the level it was written at — a source's own configuration, say — may read it at that level instead.",
+        "description": "A dependency endpoint. A bare string is a native id of the source reporting it, and this decoding reads one as a task; a reader that knows the level it was written at — a source's own configuration, say — may read it at that level instead. An object with a `designator` is the opaque form: the item's native id in the tracker the designator names, which a reader resolves to whichever configured source that tracker is.",
         "oneOf": [
           {
             "minLength": 1,
@@ -4488,6 +4488,32 @@ export const runtimeSchemas = {
               }
             },
             "required": [
+              "id",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "designator": {
+                "pattern": "^(alias/[A-Za-z0-9_-]{16,64}|[a-z0-9][a-z0-9-]*/[0-9a-f]{64})$",
+                "type": "string"
+              },
+              "id": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "task",
+                  "project"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "designator",
               "id",
               "kind"
             ],
@@ -4537,7 +4563,7 @@ export const runtimeSchemas = {
   },
   "DependencyEndpoint": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "description": "A dependency endpoint. A bare string is a native id of the source reporting it, and this decoding reads one as a task; a reader that knows the level it was written at — a source's own configuration, say — may read it at that level instead.",
+    "description": "A dependency endpoint. A bare string is a native id of the source reporting it, and this decoding reads one as a task; a reader that knows the level it was written at — a source's own configuration, say — may read it at that level instead. An object with a `designator` is the opaque form: the item's native id in the tracker the designator names, which a reader resolves to whichever configured source that tracker is.",
     "oneOf": [
       {
         "minLength": 1,
@@ -4559,6 +4585,32 @@ export const runtimeSchemas = {
           }
         },
         "required": [
+          "id",
+          "kind"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "designator": {
+            "pattern": "^(alias/[A-Za-z0-9_-]{16,64}|[a-z0-9][a-z0-9-]*/[0-9a-f]{64})$",
+            "type": "string"
+          },
+          "id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "task",
+              "project"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "designator",
           "id",
           "kind"
         ],
@@ -4864,6 +4916,11 @@ export const runtimeSchemas = {
             "type": "string"
           }
         ]
+      },
+      "Designator": {
+        "description": "A tracker, named without conveying anything about it: `<plugin>/` and the hex SHA-256 of `<plugin>\n<backend identifier>`, or `alias/<public_alias>`.",
+        "pattern": "^(alias/[A-Za-z0-9_-]{16,64}|[a-z0-9][a-z0-9-]*/[0-9a-f]{64})$",
+        "type": "string"
       },
       "Document": {
         "description": "One piece of information that lives in a project and is not work.\n\nA document carries **no status** and **no dependencies**, and both omissions are the\ncontract rather than an oversight: a document is not work, so it has no place in a\nstatus filter and no place in a dependency graph. [`ItemKind`] therefore gains no\ndocument variant — that enum names what a dependency endpoint points at, and nothing\nmay point at a document.\n\nA source says whether it has documents at all through\n[`Capabilities::documents`](crate::Capabilities::documents), and one that says it has\nnone is never asked for one.",
@@ -5359,6 +5416,47 @@ export const runtimeSchemas = {
           "pages_fetched"
         ],
         "type": "object"
+      },
+      "Unanswered": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/SourceFailure",
+            "description": "A source that could not be asked, and why."
+          },
+          {
+            "$ref": "#/$defs/UnresolvedDesignator",
+            "description": "A far end recorded under a designator no source this host configures is."
+          }
+        ],
+        "description": "One thing a dependency read could not ask."
+      },
+      "UnresolvedDesignator": {
+        "description": "A far end recorded under a designator no configured source is: the edge is not in `items`,\nbecause nothing on this host can say which item it names.",
+        "properties": {
+          "designator": {
+            "$ref": "#/$defs/Designator",
+            "description": "The designator the far end was recorded under."
+          },
+          "reason": {
+            "$ref": "#/$defs/UnresolvedReason",
+            "description": "Why it was not resolved."
+          }
+        },
+        "required": [
+          "designator",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "UnresolvedReason": {
+        "description": "Why a designator was not resolved.",
+        "oneOf": [
+          {
+            "const": "not configured on this host",
+            "description": "No source this host configures is the tracker it names.",
+            "type": "string"
+          }
+        ]
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -5405,9 +5503,9 @@ export const runtimeSchemas = {
       },
       "unanswered": {
         "default": [],
-        "description": "Each source declared private that a task's dependency read could not ask what it\nrecords of that task — its credential absent or refused, or it unreachable or\nrate-limited — and why. Not a failure of the read: the task lives elsewhere and every\nsource holding it answered, so `items` is every edge this reader can be shown. Only\nthat read fills it, and only while it does not ask for\n[`Completeness::Required`](crate::Completeness::Required), which reports such a source\nin `errors` instead. Left out when empty.",
+        "description": "What a task's dependency read could not ask, and why: each source declared private it\ncould not ask what that source records of the task — its credential absent or refused,\nor it unreachable or rate-limited — and each opaque far end whose designator no\nconfigured source is. Not a failure of the read: every source holding the task\nanswered, so `items` is every edge this reader can be shown. Only that read fills it,\nand only while it does not ask for\n[`Completeness::Required`](crate::Completeness::Required), which reports such a source\nin `errors` instead. Left out when empty.",
         "items": {
-          "$ref": "#/$defs/SourceFailure"
+          "$ref": "#/$defs/Unanswered"
         },
         "type": "array"
       }
@@ -8603,7 +8701,7 @@ export const runtimeSchemas = {
         "type": "object"
       },
       "DependencyEndpoint": {
-        "description": "A dependency endpoint. A bare string is a native id of the source reporting it, and this decoding reads one as a task; a reader that knows the level it was written at — a source's own configuration, say — may read it at that level instead.",
+        "description": "A dependency endpoint. A bare string is a native id of the source reporting it, and this decoding reads one as a task; a reader that knows the level it was written at — a source's own configuration, say — may read it at that level instead. An object with a `designator` is the opaque form: the item's native id in the tracker the designator names, which a reader resolves to whichever configured source that tracker is.",
         "oneOf": [
           {
             "minLength": 1,
@@ -8625,6 +8723,32 @@ export const runtimeSchemas = {
               }
             },
             "required": [
+              "id",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "designator": {
+                "pattern": "^(alias/[A-Za-z0-9_-]{16,64}|[a-z0-9][a-z0-9-]*/[0-9a-f]{64})$",
+                "type": "string"
+              },
+              "id": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "task",
+                  "project"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "designator",
               "id",
               "kind"
             ],
@@ -9997,6 +10121,11 @@ export const runtimeSchemas = {
   },
   "ProjectGraph": {
     "$defs": {
+      "Designator": {
+        "description": "A tracker, named without conveying anything about it: `<plugin>/` and the hex SHA-256 of `<plugin>\n<backend identifier>`, or `alias/<public_alias>`.",
+        "pattern": "^(alias/[A-Za-z0-9_-]{16,64}|[a-z0-9][a-z0-9-]*/[0-9a-f]{64})$",
+        "type": "string"
+      },
       "FailureClass": {
         "description": "Whether repeating a failed request unchanged could change the answer.\n\nClosed on purpose: a caller acts on this alone, so a third value would be one every\ncaller written before it silently misreads. What the failure *was* is\n[`Failure`]'s `kind`, which is the open half.",
         "oneOf": [
@@ -10240,6 +10369,47 @@ export const runtimeSchemas = {
         "description": "The name a configuration document gives one configured source.",
         "pattern": "^[a-z0-9][a-z0-9-]*$",
         "type": "string"
+      },
+      "Unanswered": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/SourceFailure",
+            "description": "A source that could not be asked, and why."
+          },
+          {
+            "$ref": "#/$defs/UnresolvedDesignator",
+            "description": "A far end recorded under a designator no source this host configures is."
+          }
+        ],
+        "description": "One thing a dependency read could not ask."
+      },
+      "UnresolvedDesignator": {
+        "description": "A far end recorded under a designator no configured source is: the edge is not in `items`,\nbecause nothing on this host can say which item it names.",
+        "properties": {
+          "designator": {
+            "$ref": "#/$defs/Designator",
+            "description": "The designator the far end was recorded under."
+          },
+          "reason": {
+            "$ref": "#/$defs/UnresolvedReason",
+            "description": "Why it was not resolved."
+          }
+        },
+        "required": [
+          "designator",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "UnresolvedReason": {
+        "description": "Why a designator was not resolved.",
+        "oneOf": [
+          {
+            "const": "not configured on this host",
+            "description": "No source this host configures is the tracker it names.",
+            "type": "string"
+          }
+        ]
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -10288,7 +10458,7 @@ export const runtimeSchemas = {
         "default": [],
         "description": "Each source declared private that could not be asked what it records of the project's\ntasks, and why — so `edges` lacks whatever it records. Absent when every source\nanswered, which is the one case the graph is complete.",
         "items": {
-          "$ref": "#/$defs/SourceFailure"
+          "$ref": "#/$defs/Unanswered"
         },
         "type": "array"
       }
@@ -11871,6 +12041,11 @@ export const runtimeSchemas = {
           }
         ]
       },
+      "Designator": {
+        "description": "A tracker, named without conveying anything about it: `<plugin>/` and the hex SHA-256 of `<plugin>\n<backend identifier>`, or `alias/<public_alias>`.",
+        "pattern": "^(alias/[A-Za-z0-9_-]{16,64}|[a-z0-9][a-z0-9-]*/[0-9a-f]{64})$",
+        "type": "string"
+      },
       "Document": {
         "description": "One piece of information that lives in a project and is not work.\n\nA document carries **no status** and **no dependencies**, and both omissions are the\ncontract rather than an oversight: a document is not work, so it has no place in a\nstatus filter and no place in a dependency graph. [`ItemKind`] therefore gains no\ndocument variant — that enum names what a dependency endpoint points at, and nothing\nmay point at a document.\n\nA source says whether it has documents at all through\n[`Capabilities::documents`](crate::Capabilities::documents), and one that says it has\nnone is never asked for one.",
         "properties": {
@@ -12365,6 +12540,47 @@ export const runtimeSchemas = {
           "pages_fetched"
         ],
         "type": "object"
+      },
+      "Unanswered": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/SourceFailure",
+            "description": "A source that could not be asked, and why."
+          },
+          {
+            "$ref": "#/$defs/UnresolvedDesignator",
+            "description": "A far end recorded under a designator no source this host configures is."
+          }
+        ],
+        "description": "One thing a dependency read could not ask."
+      },
+      "UnresolvedDesignator": {
+        "description": "A far end recorded under a designator no configured source is: the edge is not in `items`,\nbecause nothing on this host can say which item it names.",
+        "properties": {
+          "designator": {
+            "$ref": "#/$defs/Designator",
+            "description": "The designator the far end was recorded under."
+          },
+          "reason": {
+            "$ref": "#/$defs/UnresolvedReason",
+            "description": "Why it was not resolved."
+          }
+        },
+        "required": [
+          "designator",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "UnresolvedReason": {
+        "description": "Why a designator was not resolved.",
+        "oneOf": [
+          {
+            "const": "not configured on this host",
+            "description": "No source this host configures is the tracker it names.",
+            "type": "string"
+          }
+        ]
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -12401,9 +12617,9 @@ export const runtimeSchemas = {
       },
       "unanswered": {
         "default": [],
-        "description": "Each source declared private that a task's dependency read could not ask what it\nrecords of that task — its credential absent or refused, or it unreachable or\nrate-limited — and why. Not a failure of the read: the task lives elsewhere and every\nsource holding it answered, so `items` is every edge this reader can be shown. Only\nthat read fills it, and only while it does not ask for\n[`Completeness::Required`](crate::Completeness::Required), which reports such a source\nin `errors` instead. Left out when empty.",
+        "description": "What a task's dependency read could not ask, and why: each source declared private it\ncould not ask what that source records of the task — its credential absent or refused,\nor it unreachable or rate-limited — and each opaque far end whose designator no\nconfigured source is. Not a failure of the read: every source holding the task\nanswered, so `items` is every edge this reader can be shown. Only that read fills it,\nand only while it does not ask for\n[`Completeness::Required`](crate::Completeness::Required), which reports such a source\nin `errors` instead. Left out when empty.",
         "items": {
-          "$ref": "#/$defs/SourceFailure"
+          "$ref": "#/$defs/Unanswered"
         },
         "type": "array"
       }
@@ -12432,6 +12648,11 @@ export const runtimeSchemas = {
             "type": "string"
           }
         ]
+      },
+      "Designator": {
+        "description": "A tracker, named without conveying anything about it: `<plugin>/` and the hex SHA-256 of `<plugin>\n<backend identifier>`, or `alias/<public_alias>`.",
+        "pattern": "^(alias/[A-Za-z0-9_-]{16,64}|[a-z0-9][a-z0-9-]*/[0-9a-f]{64})$",
+        "type": "string"
       },
       "FailureClass": {
         "description": "Whether repeating a failed request unchanged could change the answer.\n\nClosed on purpose: a caller acts on this alone, so a third value would be one every\ncaller written before it silently misreads. What the failure *was* is\n[`Failure`]'s `kind`, which is the open half.",
@@ -12796,6 +13017,47 @@ export const runtimeSchemas = {
           "pages_fetched"
         ],
         "type": "object"
+      },
+      "Unanswered": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/SourceFailure",
+            "description": "A source that could not be asked, and why."
+          },
+          {
+            "$ref": "#/$defs/UnresolvedDesignator",
+            "description": "A far end recorded under a designator no source this host configures is."
+          }
+        ],
+        "description": "One thing a dependency read could not ask."
+      },
+      "UnresolvedDesignator": {
+        "description": "A far end recorded under a designator no configured source is: the edge is not in `items`,\nbecause nothing on this host can say which item it names.",
+        "properties": {
+          "designator": {
+            "$ref": "#/$defs/Designator",
+            "description": "The designator the far end was recorded under."
+          },
+          "reason": {
+            "$ref": "#/$defs/UnresolvedReason",
+            "description": "Why it was not resolved."
+          }
+        },
+        "required": [
+          "designator",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "UnresolvedReason": {
+        "description": "Why a designator was not resolved.",
+        "oneOf": [
+          {
+            "const": "not configured on this host",
+            "description": "No source this host configures is the tracker it names.",
+            "type": "string"
+          }
+        ]
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -12832,9 +13094,9 @@ export const runtimeSchemas = {
       },
       "unanswered": {
         "default": [],
-        "description": "Each source declared private that a task's dependency read could not ask what it\nrecords of that task — its credential absent or refused, or it unreachable or\nrate-limited — and why. Not a failure of the read: the task lives elsewhere and every\nsource holding it answered, so `items` is every edge this reader can be shown. Only\nthat read fills it, and only while it does not ask for\n[`Completeness::Required`](crate::Completeness::Required), which reports such a source\nin `errors` instead. Left out when empty.",
+        "description": "What a task's dependency read could not ask, and why: each source declared private it\ncould not ask what that source records of the task — its credential absent or refused,\nor it unreachable or rate-limited — and each opaque far end whose designator no\nconfigured source is. Not a failure of the read: every source holding the task\nanswered, so `items` is every edge this reader can be shown. Only that read fills it,\nand only while it does not ask for\n[`Completeness::Required`](crate::Completeness::Required), which reports such a source\nin `errors` instead. Left out when empty.",
         "items": {
-          "$ref": "#/$defs/SourceFailure"
+          "$ref": "#/$defs/Unanswered"
         },
         "type": "array"
       }
@@ -12849,6 +13111,11 @@ export const runtimeSchemas = {
   },
   "QueryResponseOfQualifiedLabel": {
     "$defs": {
+      "Designator": {
+        "description": "A tracker, named without conveying anything about it: `<plugin>/` and the hex SHA-256 of `<plugin>\n<backend identifier>`, or `alias/<public_alias>`.",
+        "pattern": "^(alias/[A-Za-z0-9_-]{16,64}|[a-z0-9][a-z0-9-]*/[0-9a-f]{64})$",
+        "type": "string"
+      },
       "FailureClass": {
         "description": "Whether repeating a failed request unchanged could change the answer.\n\nClosed on purpose: a caller acts on this alone, so a third value would be one every\ncaller written before it silently misreads. What the failure *was* is\n[`Failure`]'s `kind`, which is the open half.",
         "oneOf": [
@@ -13203,6 +13470,47 @@ export const runtimeSchemas = {
           "pages_fetched"
         ],
         "type": "object"
+      },
+      "Unanswered": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/SourceFailure",
+            "description": "A source that could not be asked, and why."
+          },
+          {
+            "$ref": "#/$defs/UnresolvedDesignator",
+            "description": "A far end recorded under a designator no source this host configures is."
+          }
+        ],
+        "description": "One thing a dependency read could not ask."
+      },
+      "UnresolvedDesignator": {
+        "description": "A far end recorded under a designator no configured source is: the edge is not in `items`,\nbecause nothing on this host can say which item it names.",
+        "properties": {
+          "designator": {
+            "$ref": "#/$defs/Designator",
+            "description": "The designator the far end was recorded under."
+          },
+          "reason": {
+            "$ref": "#/$defs/UnresolvedReason",
+            "description": "Why it was not resolved."
+          }
+        },
+        "required": [
+          "designator",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "UnresolvedReason": {
+        "description": "Why a designator was not resolved.",
+        "oneOf": [
+          {
+            "const": "not configured on this host",
+            "description": "No source this host configures is the tracker it names.",
+            "type": "string"
+          }
+        ]
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -13239,9 +13547,9 @@ export const runtimeSchemas = {
       },
       "unanswered": {
         "default": [],
-        "description": "Each source declared private that a task's dependency read could not ask what it\nrecords of that task — its credential absent or refused, or it unreachable or\nrate-limited — and why. Not a failure of the read: the task lives elsewhere and every\nsource holding it answered, so `items` is every edge this reader can be shown. Only\nthat read fills it, and only while it does not ask for\n[`Completeness::Required`](crate::Completeness::Required), which reports such a source\nin `errors` instead. Left out when empty.",
+        "description": "What a task's dependency read could not ask, and why: each source declared private it\ncould not ask what that source records of the task — its credential absent or refused,\nor it unreachable or rate-limited — and each opaque far end whose designator no\nconfigured source is. Not a failure of the read: every source holding the task\nanswered, so `items` is every edge this reader can be shown. Only that read fills it,\nand only while it does not ask for\n[`Completeness::Required`](crate::Completeness::Required), which reports such a source\nin `errors` instead. Left out when empty.",
         "items": {
-          "$ref": "#/$defs/SourceFailure"
+          "$ref": "#/$defs/Unanswered"
         },
         "type": "array"
       }
@@ -13270,6 +13578,11 @@ export const runtimeSchemas = {
             "type": "string"
           }
         ]
+      },
+      "Designator": {
+        "description": "A tracker, named without conveying anything about it: `<plugin>/` and the hex SHA-256 of `<plugin>\n<backend identifier>`, or `alias/<public_alias>`.",
+        "pattern": "^(alias/[A-Za-z0-9_-]{16,64}|[a-z0-9][a-z0-9-]*/[0-9a-f]{64})$",
+        "type": "string"
       },
       "FailureClass": {
         "description": "Whether repeating a failed request unchanged could change the answer.\n\nClosed on purpose: a caller acts on this alone, so a third value would be one every\ncaller written before it silently misreads. What the failure *was* is\n[`Failure`]'s `kind`, which is the open half.",
@@ -13822,6 +14135,47 @@ export const runtimeSchemas = {
             "type": "string"
           }
         ]
+      },
+      "Unanswered": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/SourceFailure",
+            "description": "A source that could not be asked, and why."
+          },
+          {
+            "$ref": "#/$defs/UnresolvedDesignator",
+            "description": "A far end recorded under a designator no source this host configures is."
+          }
+        ],
+        "description": "One thing a dependency read could not ask."
+      },
+      "UnresolvedDesignator": {
+        "description": "A far end recorded under a designator no configured source is: the edge is not in `items`,\nbecause nothing on this host can say which item it names.",
+        "properties": {
+          "designator": {
+            "$ref": "#/$defs/Designator",
+            "description": "The designator the far end was recorded under."
+          },
+          "reason": {
+            "$ref": "#/$defs/UnresolvedReason",
+            "description": "Why it was not resolved."
+          }
+        },
+        "required": [
+          "designator",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "UnresolvedReason": {
+        "description": "Why a designator was not resolved.",
+        "oneOf": [
+          {
+            "const": "not configured on this host",
+            "description": "No source this host configures is the tracker it names.",
+            "type": "string"
+          }
+        ]
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -13858,9 +14212,9 @@ export const runtimeSchemas = {
       },
       "unanswered": {
         "default": [],
-        "description": "Each source declared private that a task's dependency read could not ask what it\nrecords of that task — its credential absent or refused, or it unreachable or\nrate-limited — and why. Not a failure of the read: the task lives elsewhere and every\nsource holding it answered, so `items` is every edge this reader can be shown. Only\nthat read fills it, and only while it does not ask for\n[`Completeness::Required`](crate::Completeness::Required), which reports such a source\nin `errors` instead. Left out when empty.",
+        "description": "What a task's dependency read could not ask, and why: each source declared private it\ncould not ask what that source records of the task — its credential absent or refused,\nor it unreachable or rate-limited — and each opaque far end whose designator no\nconfigured source is. Not a failure of the read: every source holding the task\nanswered, so `items` is every edge this reader can be shown. Only that read fills it,\nand only while it does not ask for\n[`Completeness::Required`](crate::Completeness::Required), which reports such a source\nin `errors` instead. Left out when empty.",
         "items": {
-          "$ref": "#/$defs/SourceFailure"
+          "$ref": "#/$defs/Unanswered"
         },
         "type": "array"
       }
@@ -13889,6 +14243,11 @@ export const runtimeSchemas = {
             "type": "string"
           }
         ]
+      },
+      "Designator": {
+        "description": "A tracker, named without conveying anything about it: `<plugin>/` and the hex SHA-256 of `<plugin>\n<backend identifier>`, or `alias/<public_alias>`.",
+        "pattern": "^(alias/[A-Za-z0-9_-]{16,64}|[a-z0-9][a-z0-9-]*/[0-9a-f]{64})$",
+        "type": "string"
       },
       "FailureClass": {
         "description": "Whether repeating a failed request unchanged could change the answer.\n\nClosed on purpose: a caller acts on this alone, so a third value would be one every\ncaller written before it silently misreads. What the failure *was* is\n[`Failure`]'s `kind`, which is the open half.",
@@ -14515,6 +14874,47 @@ export const runtimeSchemas = {
       "TaskRef": {
         "description": "One task named by another task's [`Task::delivers`] or [`Task::delivered_by`].\n\nA string with one of two spellings, decided the way a [`DependencyEndpoint`] decides it:\none holding a colon is `<source>:<native>` and names a task of any source, and one\nwithout is a bare native id naming a task of the source that holds the list. So a\nnative id holding a colon cannot be named bare, exactly as it cannot in\n`onetaskgraph.depends_on`.",
         "type": "string"
+      },
+      "Unanswered": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/SourceFailure",
+            "description": "A source that could not be asked, and why."
+          },
+          {
+            "$ref": "#/$defs/UnresolvedDesignator",
+            "description": "A far end recorded under a designator no source this host configures is."
+          }
+        ],
+        "description": "One thing a dependency read could not ask."
+      },
+      "UnresolvedDesignator": {
+        "description": "A far end recorded under a designator no configured source is: the edge is not in `items`,\nbecause nothing on this host can say which item it names.",
+        "properties": {
+          "designator": {
+            "$ref": "#/$defs/Designator",
+            "description": "The designator the far end was recorded under."
+          },
+          "reason": {
+            "$ref": "#/$defs/UnresolvedReason",
+            "description": "Why it was not resolved."
+          }
+        },
+        "required": [
+          "designator",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "UnresolvedReason": {
+        "description": "Why a designator was not resolved.",
+        "oneOf": [
+          {
+            "const": "not configured on this host",
+            "description": "No source this host configures is the tracker it names.",
+            "type": "string"
+          }
+        ]
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -14551,9 +14951,9 @@ export const runtimeSchemas = {
       },
       "unanswered": {
         "default": [],
-        "description": "Each source declared private that a task's dependency read could not ask what it\nrecords of that task — its credential absent or refused, or it unreachable or\nrate-limited — and why. Not a failure of the read: the task lives elsewhere and every\nsource holding it answered, so `items` is every edge this reader can be shown. Only\nthat read fills it, and only while it does not ask for\n[`Completeness::Required`](crate::Completeness::Required), which reports such a source\nin `errors` instead. Left out when empty.",
+        "description": "What a task's dependency read could not ask, and why: each source declared private it\ncould not ask what that source records of the task — its credential absent or refused,\nor it unreachable or rate-limited — and each opaque far end whose designator no\nconfigured source is. Not a failure of the read: every source holding the task\nanswered, so `items` is every edge this reader can be shown. Only that read fills it,\nand only while it does not ask for\n[`Completeness::Required`](crate::Completeness::Required), which reports such a source\nin `errors` instead. Left out when empty.",
         "items": {
-          "$ref": "#/$defs/SourceFailure"
+          "$ref": "#/$defs/Unanswered"
         },
         "type": "array"
       }
@@ -14582,6 +14982,11 @@ export const runtimeSchemas = {
             "type": "string"
           }
         ]
+      },
+      "Designator": {
+        "description": "A tracker, named without conveying anything about it: `<plugin>/` and the hex SHA-256 of `<plugin>\n<backend identifier>`, or `alias/<public_alias>`.",
+        "pattern": "^(alias/[A-Za-z0-9_-]{16,64}|[a-z0-9][a-z0-9-]*/[0-9a-f]{64})$",
+        "type": "string"
       },
       "FailureClass": {
         "description": "Whether repeating a failed request unchanged could change the answer.\n\nClosed on purpose: a caller acts on this alone, so a third value would be one every\ncaller written before it silently misreads. What the failure *was* is\n[`Failure`]'s `kind`, which is the open half.",
@@ -15358,6 +15763,47 @@ export const runtimeSchemas = {
       "TaskRef": {
         "description": "One task named by another task's [`Task::delivers`] or [`Task::delivered_by`].\n\nA string with one of two spellings, decided the way a [`DependencyEndpoint`] decides it:\none holding a colon is `<source>:<native>` and names a task of any source, and one\nwithout is a bare native id naming a task of the source that holds the list. So a\nnative id holding a colon cannot be named bare, exactly as it cannot in\n`onetaskgraph.depends_on`.",
         "type": "string"
+      },
+      "Unanswered": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/SourceFailure",
+            "description": "A source that could not be asked, and why."
+          },
+          {
+            "$ref": "#/$defs/UnresolvedDesignator",
+            "description": "A far end recorded under a designator no source this host configures is."
+          }
+        ],
+        "description": "One thing a dependency read could not ask."
+      },
+      "UnresolvedDesignator": {
+        "description": "A far end recorded under a designator no configured source is: the edge is not in `items`,\nbecause nothing on this host can say which item it names.",
+        "properties": {
+          "designator": {
+            "$ref": "#/$defs/Designator",
+            "description": "The designator the far end was recorded under."
+          },
+          "reason": {
+            "$ref": "#/$defs/UnresolvedReason",
+            "description": "Why it was not resolved."
+          }
+        },
+        "required": [
+          "designator",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "UnresolvedReason": {
+        "description": "Why a designator was not resolved.",
+        "oneOf": [
+          {
+            "const": "not configured on this host",
+            "description": "No source this host configures is the tracker it names.",
+            "type": "string"
+          }
+        ]
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -15394,9 +15840,9 @@ export const runtimeSchemas = {
       },
       "unanswered": {
         "default": [],
-        "description": "Each source declared private that a task's dependency read could not ask what it\nrecords of that task — its credential absent or refused, or it unreachable or\nrate-limited — and why. Not a failure of the read: the task lives elsewhere and every\nsource holding it answered, so `items` is every edge this reader can be shown. Only\nthat read fills it, and only while it does not ask for\n[`Completeness::Required`](crate::Completeness::Required), which reports such a source\nin `errors` instead. Left out when empty.",
+        "description": "What a task's dependency read could not ask, and why: each source declared private it\ncould not ask what that source records of the task — its credential absent or refused,\nor it unreachable or rate-limited — and each opaque far end whose designator no\nconfigured source is. Not a failure of the read: every source holding the task\nanswered, so `items` is every edge this reader can be shown. Only that read fills it,\nand only while it does not ask for\n[`Completeness::Required`](crate::Completeness::Required), which reports such a source\nin `errors` instead. Left out when empty.",
         "items": {
-          "$ref": "#/$defs/SourceFailure"
+          "$ref": "#/$defs/Unanswered"
         },
         "type": "array"
       }
@@ -19790,6 +20236,11 @@ export const runtimeSchemas = {
         ],
         "type": "object"
       },
+      "Designator": {
+        "description": "A tracker, named without conveying anything about it: `<plugin>/` and the hex SHA-256 of `<plugin>\n<backend identifier>`, or `alias/<public_alias>`.",
+        "pattern": "^(alias/[A-Za-z0-9_-]{16,64}|[a-z0-9][a-z0-9-]*/[0-9a-f]{64})$",
+        "type": "string"
+      },
       "FailureClass": {
         "description": "Whether repeating a failed request unchanged could change the answer.\n\nClosed on purpose: a caller acts on this alone, so a third value would be one every\ncaller written before it silently misreads. What the failure *was* is\n[`Failure`]'s `kind`, which is the open half.",
         "oneOf": [
@@ -20430,6 +20881,47 @@ export const runtimeSchemas = {
       "TaskRef": {
         "description": "One task named by another task's [`Task::delivers`] or [`Task::delivered_by`].\n\nA string with one of two spellings, decided the way a [`DependencyEndpoint`] decides it:\none holding a colon is `<source>:<native>` and names a task of any source, and one\nwithout is a bare native id naming a task of the source that holds the list. So a\nnative id holding a colon cannot be named bare, exactly as it cannot in\n`onetaskgraph.depends_on`.",
         "type": "string"
+      },
+      "Unanswered": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/SourceFailure",
+            "description": "A source that could not be asked, and why."
+          },
+          {
+            "$ref": "#/$defs/UnresolvedDesignator",
+            "description": "A far end recorded under a designator no source this host configures is."
+          }
+        ],
+        "description": "One thing a dependency read could not ask."
+      },
+      "UnresolvedDesignator": {
+        "description": "A far end recorded under a designator no configured source is: the edge is not in `items`,\nbecause nothing on this host can say which item it names.",
+        "properties": {
+          "designator": {
+            "$ref": "#/$defs/Designator",
+            "description": "The designator the far end was recorded under."
+          },
+          "reason": {
+            "$ref": "#/$defs/UnresolvedReason",
+            "description": "Why it was not resolved."
+          }
+        },
+        "required": [
+          "designator",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "UnresolvedReason": {
+        "description": "Why a designator was not resolved.",
+        "oneOf": [
+          {
+            "const": "not configured on this host",
+            "description": "No source this host configures is the tracker it names.",
+            "type": "string"
+          }
+        ]
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -20497,9 +20989,9 @@ export const runtimeSchemas = {
       },
       "unanswered": {
         "default": [],
-        "description": "Each source declared private that a task's dependency read could not ask what it\nrecords of that task — its credential absent or refused, or it unreachable or\nrate-limited — and why. Not a failure of the read: the task lives elsewhere and every\nsource holding it answered, so `items` is every edge this reader can be shown. Only\nthat read fills it, and only while it does not ask for\n[`Completeness::Required`](crate::Completeness::Required), which reports such a source\nin `errors` instead. Left out when empty.",
+        "description": "What a task's dependency read could not ask, and why: each source declared private it\ncould not ask what that source records of the task — its credential absent or refused,\nor it unreachable or rate-limited — and each opaque far end whose designator no\nconfigured source is. Not a failure of the read: every source holding the task\nanswered, so `items` is every edge this reader can be shown. Only that read fills it,\nand only while it does not ask for\n[`Completeness::Required`](crate::Completeness::Required), which reports such a source\nin `errors` instead. Left out when empty.",
         "items": {
-          "$ref": "#/$defs/SourceFailure"
+          "$ref": "#/$defs/Unanswered"
         },
         "type": "array"
       }
@@ -20714,6 +21206,11 @@ export const runtimeSchemas = {
           "id"
         ],
         "type": "object"
+      },
+      "Designator": {
+        "description": "A tracker, named without conveying anything about it: `<plugin>/` and the hex SHA-256 of `<plugin>\n<backend identifier>`, or `alias/<public_alias>`.",
+        "pattern": "^(alias/[A-Za-z0-9_-]{16,64}|[a-z0-9][a-z0-9-]*/[0-9a-f]{64})$",
+        "type": "string"
       },
       "FailureClass": {
         "description": "Whether repeating a failed request unchanged could change the answer.\n\nClosed on purpose: a caller acts on this alone, so a third value would be one every\ncaller written before it silently misreads. What the failure *was* is\n[`Failure`]'s `kind`, which is the open half.",
@@ -21417,9 +21914,9 @@ export const runtimeSchemas = {
           },
           "unanswered": {
             "default": [],
-            "description": "Each source declared private that a task's dependency read could not ask what it\nrecords of that task — its credential absent or refused, or it unreachable or\nrate-limited — and why. Not a failure of the read: the task lives elsewhere and every\nsource holding it answered, so `items` is every edge this reader can be shown. Only\nthat read fills it, and only while it does not ask for\n[`Completeness::Required`](crate::Completeness::Required), which reports such a source\nin `errors` instead. Left out when empty.",
+            "description": "What a task's dependency read could not ask, and why: each source declared private it\ncould not ask what that source records of the task — its credential absent or refused,\nor it unreachable or rate-limited — and each opaque far end whose designator no\nconfigured source is. Not a failure of the read: every source holding the task\nanswered, so `items` is every edge this reader can be shown. Only that read fills it,\nand only while it does not ask for\n[`Completeness::Required`](crate::Completeness::Required), which reports such a source\nin `errors` instead. Left out when empty.",
             "items": {
-              "$ref": "#/$defs/SourceFailure"
+              "$ref": "#/$defs/Unanswered"
             },
             "type": "array"
           }
@@ -21434,6 +21931,47 @@ export const runtimeSchemas = {
       "TaskRef": {
         "description": "One task named by another task's [`Task::delivers`] or [`Task::delivered_by`].\n\nA string with one of two spellings, decided the way a [`DependencyEndpoint`] decides it:\none holding a colon is `<source>:<native>` and names a task of any source, and one\nwithout is a bare native id naming a task of the source that holds the list. So a\nnative id holding a colon cannot be named bare, exactly as it cannot in\n`onetaskgraph.depends_on`.",
         "type": "string"
+      },
+      "Unanswered": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/SourceFailure",
+            "description": "A source that could not be asked, and why."
+          },
+          {
+            "$ref": "#/$defs/UnresolvedDesignator",
+            "description": "A far end recorded under a designator no source this host configures is."
+          }
+        ],
+        "description": "One thing a dependency read could not ask."
+      },
+      "UnresolvedDesignator": {
+        "description": "A far end recorded under a designator no configured source is: the edge is not in `items`,\nbecause nothing on this host can say which item it names.",
+        "properties": {
+          "designator": {
+            "$ref": "#/$defs/Designator",
+            "description": "The designator the far end was recorded under."
+          },
+          "reason": {
+            "$ref": "#/$defs/UnresolvedReason",
+            "description": "Why it was not resolved."
+          }
+        },
+        "required": [
+          "designator",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "UnresolvedReason": {
+        "description": "Why a designator was not resolved.",
+        "oneOf": [
+          {
+            "const": "not configured on this host",
+            "description": "No source this host configures is the tracker it names.",
+            "type": "string"
+          }
+        ]
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -22509,7 +23047,7 @@ export const runtimeSchemas = {
         "type": "object"
       },
       "DependencyEndpoint": {
-        "description": "A dependency endpoint. A bare string is a native id of the source reporting it, and this decoding reads one as a task; a reader that knows the level it was written at — a source's own configuration, say — may read it at that level instead.",
+        "description": "A dependency endpoint. A bare string is a native id of the source reporting it, and this decoding reads one as a task; a reader that knows the level it was written at — a source's own configuration, say — may read it at that level instead. An object with a `designator` is the opaque form: the item's native id in the tracker the designator names, which a reader resolves to whichever configured source that tracker is.",
         "oneOf": [
           {
             "minLength": 1,
@@ -22531,6 +23069,32 @@ export const runtimeSchemas = {
               }
             },
             "required": [
+              "id",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "designator": {
+                "pattern": "^(alias/[A-Za-z0-9_-]{16,64}|[a-z0-9][a-z0-9-]*/[0-9a-f]{64})$",
+                "type": "string"
+              },
+              "id": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "task",
+                  "project"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "designator",
               "id",
               "kind"
             ],

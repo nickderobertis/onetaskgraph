@@ -15,6 +15,16 @@ class Classification(StrEnum):
     ClassificationPrivate = "private"
 
 
+class Designator(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="A tracker, named without conveying anything about it: `<plugin>/` and the hex SHA-256 of `<plugin>\n<backend identifier>`, or `alias/<public_alias>`.",
+            pattern="^(alias/[A-Za-z0-9_-]{16,64}|[a-z0-9][a-z0-9-]*/[0-9a-f]{64})$",
+        ),
+    ]
+
+
 class FailureClass(StrEnum):
     FailureClassRefused = "refused"
     FailureClassTransient = "transient"
@@ -225,6 +235,10 @@ class TaskRef(RootModel[str]):
     ]
 
 
+class UnresolvedReason(StrEnum):
+    UnresolvedReasonNot_Configured_On_This_Host = "not configured on this host"
+
+
 class Label(BaseModel):
     color: Annotated[
         str | None,
@@ -345,6 +359,13 @@ class Task(BaseModel):
     ] = None
 
 
+class UnresolvedDesignator(BaseModel):
+    designator: Annotated[
+        Designator, Field(description="The designator the far end was recorded under.")
+    ]
+    reason: Annotated[UnresolvedReason, Field(description="Why it was not resolved.")]
+
+
 class QualifiedTask(BaseModel):
     id: Annotated[
         GlobalId,
@@ -431,6 +452,13 @@ class SearchHit(RootModel[SearchHitTask | SearchHitProject]):
     ]
 
 
+class Unanswered(RootModel[SourceFailure | UnresolvedDesignator]):
+    root: Annotated[
+        SourceFailure | UnresolvedDesignator,
+        Field(description="One thing a dependency read could not ask."),
+    ]
+
+
 class QualifiedProject(BaseModel):
     id: Annotated[
         GlobalId,
@@ -457,9 +485,9 @@ class QueryResponse(BaseModel):
         Field(description="What each source was asked to do, and what the engine did instead."),
     ]
     unanswered: Annotated[
-        list[SourceFailure],
+        list[Unanswered],
         Field(
-            description="Each source declared private that a task's dependency read could not ask what it\nrecords of that task — its credential absent or refused, or it unreachable or\nrate-limited — and why. Not a failure of the read: the task lives elsewhere and every\nsource holding it answered, so `items` is every edge this reader can be shown. Only\nthat read fills it, and only while it does not ask for\n[`Completeness::Required`](crate::Completeness::Required), which reports such a source\nin `errors` instead. Left out when empty.",
+            description="What a task's dependency read could not ask, and why: each source declared private it\ncould not ask what that source records of the task — its credential absent or refused,\nor it unreachable or rate-limited — and each opaque far end whose designator no\nconfigured source is. Not a failure of the read: every source holding the task\nanswered, so `items` is every edge this reader can be shown. Only that read fills it,\nand only while it does not ask for\n[`Completeness::Required`](crate::Completeness::Required), which reports such a source\nin `errors` instead. Left out when empty.",
             validate_default=True,
         ),
     ] = []

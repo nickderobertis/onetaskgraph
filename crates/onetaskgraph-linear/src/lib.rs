@@ -460,12 +460,12 @@ pub mod stored_form;
 use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
     Capabilities, Classification, Comment, CommentBody, CommentOrigin, Cursor, DependencyEdge,
-    DependencyEndpoint, DependencyKind, DependencySupport, Direction, Document, DocumentQuery,
-    Health, ItemKind, ItemWrite, Label, LabelFilter, Location, MetadataKey, MetadataRecord,
-    NativeId, NewComment, Page, PageRequest, Priority, Project, ProjectFilter, ProjectQuery,
-    Repository, SecretResolver, SourceError, SourceName, SourcePlugin, Status, StatusCategory,
-    StatusMapping, StatusName, Support, Task, TaskDetailRead, TaskQuery, TaskRef, TaskSource,
-    TaskUpdate, TaskUpdateOutcome, TextFields, TextQuery, UpdatedField, WriteSupport,
+    DependencyEndpoint, DependencyKind, DependencySupport, Designator, Direction, Document,
+    DocumentQuery, Health, ItemKind, ItemWrite, Label, LabelFilter, Location, MetadataKey,
+    MetadataRecord, NativeId, NewComment, Page, PageRequest, Priority, Project, ProjectFilter,
+    ProjectQuery, Repository, SecretResolver, SourceError, SourceName, SourcePlugin, Status,
+    StatusCategory, StatusMapping, StatusName, Support, Task, TaskDetailRead, TaskQuery, TaskRef,
+    TaskSource, TaskUpdate, TaskUpdateOutcome, TextFields, TextQuery, UpdatedField, WriteSupport,
 };
 use schemars::{Schema, schema_for};
 use secrecy::{ExposeSecret, SecretString};
@@ -532,6 +532,8 @@ pub mod graphql {
 
     /// Check the authenticated viewer.
     pub const VIEWER: &str = "query { viewer { id } }";
+    /// The workspace's own id, which this source's designator digests.
+    pub const ORGANIZATION: &str = "query { organization { id } }";
     /// Fetch one issue.
     pub const ISSUE: &str = "query($id:String!){ issue(id:$id){ id identifier title description url createdAt updatedAt archivedAt state{name type} priority labels{nodes{id name color}} project{id} } }";
     /// Fetch one project.
@@ -2352,13 +2354,14 @@ impl LinearSource {
                         WriteKind::Task => ItemKind::Task,
                         WriteKind::Project => ItemKind::Project,
                     }
+                    || edge.to.designator().is_some()
                     || edge
                         .to
                         .id()
                         .split_once(':')
                         .is_some_and(|(source, _)| source != self.name.as_str())
             })
-            .map(|edge| json!({"id":edge.to.id(),"kind":edge.to.kind}))
+            .map(|edge| serde_json::to_value(&edge.to).expect("an endpoint renders as JSON"))
             .collect()
     }
 
@@ -2813,6 +2816,8 @@ impl LinearSource {
                     WriteKind::Task => ItemKind::Task,
                     WriteKind::Project => ItemKind::Project,
                 }
+                // An opaque far end names another tracker, which no relation here can hold.
+                || edge.to.designator().is_some()
             {
                 continue;
             }
@@ -3148,6 +3153,28 @@ impl TaskSource for LinearSource {
             reachable: true,
             detail: None,
         })
+    }
+    /// The workspace's organization id, digested: one request. A team or a project scope
+    /// narrows what this source reads, never which workspace it is, so every source of one
+    /// workspace designates the same tracker.
+    async fn designator(&self) -> Result<Option<Designator>, SourceError> {
+        let data = self.send(graphql::ORGANIZATION, json!({})).await?;
+        let organization = str_at(
+            data.get("organization")
+                .ok_or_else(|| SourceError::Malformed {
+                    message: "missing organization".into(),
+                })?,
+            "id",
+        )?;
+        // An empty id names no workspace, and its digest would name one all the same.
+        if organization.trim().is_empty() {
+            return Err(SourceError::Malformed {
+                message: "Linear answered an organization with an empty id".into(),
+            });
+        }
+        Designator::of_backend(KIND, organization)
+            .map(Some)
+            .map_err(|message| SourceError::Malformed { message })
     }
     async fn get_task(&self, id: &NativeId) -> Result<Option<Task>, SourceError> {
         Ok(self.issue_held(id, Read::Load).await?.map(|(task, _)| task))

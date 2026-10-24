@@ -57,10 +57,11 @@ pub(crate) use source::CachedSource;
 /// every release on a host, so an entry a later release wrote in a shape this one does not know
 /// must cost a read, never a failure or a misreading.
 ///
-/// Version 2 changes no byte an entry holds: the schema its shapes are digested from now
-/// describes a task's classification as its own, never tightened by its project, and an entry
-/// version 1 wrote is read as a miss.
-pub const ENTRY_SCHEMA: u32 = 2;
+/// Version 2 admits the opaque form of a dependency endpoint among a task's edges, which an
+/// earlier release would misread as a native id. Version 3 changes no byte an entry holds: the
+/// schema its shapes are digested from now describes a task's classification as its own, never
+/// tightened by its project, and an entry version 2 wrote is read as a miss.
+pub const ENTRY_SCHEMA: u32 = 3;
 
 /// Where a source's cache lives, and what names the remote it caches.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,6 +89,27 @@ pub fn location(config: &SourceConfig, home: Option<&Path>) -> Option<CacheLocat
         None => home?.join("onetaskgraph").join(&remote),
     };
     Some(CacheLocation { dir, remote })
+}
+
+/// Where the source `config` keeps the designator its backend answered, whether or not its
+/// cache is on: the path of `designator.json` in the directory the cache lives in — `cache.dir`,
+/// or the directory named for the remote under `home` — and the digest of that remote, which a
+/// reader holds the file to. `None` for a source with no remote, whose designator costs no request.
+///
+/// A designator is a digest naming the tracker, never anything of a user's work, so keeping it
+/// is not the cache's exception to the rule that nothing is stored outside a plugin.
+#[must_use]
+pub(crate) fn designator_location(
+    config: &SourceConfig,
+    home: Option<&Path>,
+) -> Option<(PathBuf, String)> {
+    let identity = config.plugin().plugin().remote_identity(config.config())?;
+    let remote = digest(&format!("{}\n{identity}", config.plugin().as_str()));
+    let dir = match &config.cache().dir {
+        Some(dir) => dir.clone(),
+        None => home?.join("onetaskgraph").join(&remote),
+    };
+    Some((dir.join("designator.json"), remote))
 }
 
 /// The directory caches default to living under for a configuration that names none: the

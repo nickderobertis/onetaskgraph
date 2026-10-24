@@ -144,12 +144,24 @@ fn recorder(id: &str, dependent: &str) -> Value {
     )
 }
 
-/// The public `site`, holding project `P-1` and its tasks `T-1`, `T-2` and `T-3`, beside the
-/// private `vault`, whose `V-1`, `V-2` and `V-3` each record one of them depending on it, and
-/// which answers its first `answers` task reads alone.
+/// The public `site`, holding project `P-1` and its tasks `T-1`, `T-2` and `T-3` — each landed
+/// there by a copy that left an edge of it on the private side, so it carries a copy's record and
+/// not the mark of one whose edges are all its own — beside the private `vault`, whose `V-1`,
+/// `V-2` and `V-3` each record one of them depending on it, and which answers its first
+/// `answers` task reads alone.
 fn engine(answers: u32) -> (Engine, Arc<AtomicU32>) {
+    engine_marked(answers, json!({}))
+}
+
+/// [`engine`], with `site`'s tasks carrying `metadata` beside a copy's record.
+fn engine_marked(answers: u32, metadata: Value) -> (Engine, Arc<AtomicU32>) {
+    let mut recorded = json!({"onetaskgraph.copied_destination_version": "sha256:00"});
+    recorded
+        .as_object_mut()
+        .expect("an object")
+        .extend(metadata.as_object().expect("metadata").clone());
     let tasks: Vec<Value> = ["T-1", "T-2", "T-3"]
-        .map(|id| task(id, id, json!({"project": "P-1"})))
+        .map(|id| task(id, id, json!({"project": "P-1", "metadata": recorded})))
         .into();
     let site = built(
         "site",
@@ -242,7 +254,10 @@ async fn a_private_source_that_stops_answering_keeps_what_it_answered_and_is_not
     let unanswered: Vec<(&str, &SourceError)> = graph
         .unanswered()
         .iter()
-        .map(|failure| (failure.source.as_str(), &failure.error))
+        .map(|entry| {
+            let failure = entry.source().expect("a private source not asked");
+            (failure.source.as_str(), &failure.error)
+        })
         .collect();
     assert_eq!(
         unanswered,
@@ -280,5 +295,23 @@ async fn a_complete_graph_is_refused_once_a_private_source_stops_answering() {
                 if name == "vault"
         ),
         "{refused:?}"
+    );
+}
+
+/// A task whose copy marked every edge of it as on its own record is never asked about of a
+/// private source: the graph draws nothing the vault records, and the vault is sent nothing.
+#[tokio::test]
+async fn a_task_whose_edges_are_on_its_record_is_not_asked_about_of_a_private_source() {
+    let (engine, asked) = engine_marked(u32::MAX, json!({"onetaskgraph.edges_on_record": 1}));
+    let graph = engine
+        .project_graph(&request(Completeness::Required))
+        .await
+        .expect("a graph that asks the vault nothing");
+    assert!(graph.is_complete());
+    assert_eq!(edges(&graph), Vec::<(String, String)>::new());
+    assert_eq!(
+        asked.load(Ordering::Relaxed),
+        0,
+        "the vault was sent nothing"
     );
 }

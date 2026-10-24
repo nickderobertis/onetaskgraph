@@ -339,6 +339,21 @@ pub trait TaskSource: Send + Sync {
     /// Returns a [`SourceError`] when the check itself could not be made.
     async fn health(&self) -> Result<Health, SourceError>;
 
+    /// The [`Designator`](crate::Designator) naming the tracker this source reads, built by
+    /// [`Designator::of_backend`](crate::Designator::of_backend) over the backend's own opaque
+    /// identifier of itself — or `None` for a backend with none, whose configuration may
+    /// declare a `public_alias` instead.
+    ///
+    /// At most one request. The engine keeps the answer per host, so a source is asked once.
+    /// The default is `None`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`SourceError`] when the backend could not be asked.
+    async fn designator(&self) -> Result<Option<crate::Designator>, SourceError> {
+        Ok(None)
+    }
+
     /// Fetch one task by its native id, or `None` when there is no such task.
     ///
     /// # Errors

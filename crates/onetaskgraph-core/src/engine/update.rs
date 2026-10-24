@@ -100,11 +100,19 @@ impl Engine {
         if let Some(priority) = update.priority {
             holds_priority(source, &id.to_string(), priority)?;
         }
+        let depends_on = match &update.depends_on {
+            Some(edges) => Some(
+                self.publicly_named(
+                    &id.source,
+                    &id.to_string(),
+                    near_edges(edges, &id.native, &id.source),
+                )
+                .await?,
+            ),
+            None => None,
+        };
         let update = TaskUpdate {
-            depends_on: update
-                .depends_on
-                .as_ref()
-                .map(|edges| near_edges(edges, &id.native, &id.source)),
+            depends_on,
             ..update.clone()
         };
         // Each reference as the qualified id it names: a native one names a task of this source.
@@ -119,7 +127,13 @@ impl Engine {
                 })
         };
         let mut references = Vec::new();
-        for edge in update.depends_on.iter().flatten() {
+        // An opaque far end conveys nothing, so it names nothing this write has to refuse.
+        for edge in update
+            .depends_on
+            .iter()
+            .flatten()
+            .filter(|edge| edge.to.designator().is_none())
+        {
             references.push((
                 if edge.to.is_qualified() {
                     qualified(edge.to.id().to_owned())?
@@ -197,8 +211,12 @@ fn near_edges(
     edges
         .iter()
         .map(|edge| {
-            let to = match edge.to.id().parse::<GlobalId>() {
-                Ok(far) if &far.source == source => {
+            let qualified = edge
+                .to
+                .is_qualified()
+                .then(|| edge.to.id().parse::<GlobalId>());
+            let to = match qualified {
+                Some(Ok(far)) if &far.source == source => {
                     DependencyEndpoint::from_native(far.native, edge.to.kind)
                 }
                 _ => edge.to.clone(),

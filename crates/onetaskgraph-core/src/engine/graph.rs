@@ -23,7 +23,7 @@ use super::copy::{Level, forward_edges};
 use super::dependents::Completeness;
 use super::{Engine, EngineError, Qualified, qualify_endpoint};
 use crate::GlobalId;
-use crate::plan::SourceFailure;
+use crate::plan::Unanswered;
 
 /// The version of the document [`ProjectGraph`] serialises to, which its consumers read
 /// before anything else in it.
@@ -155,7 +155,7 @@ pub struct ProjectGraph {
     /// answered, which is the one case the graph is complete.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[schemars(!skip_serializing_if)]
-    unanswered: Vec<SourceFailure>,
+    unanswered: Vec<Unanswered>,
     /// Each edge as the positions in `nodes` of its prerequisite and its dependent, in the
     /// order of `edges` — what the Mermaid form names each end by.
     #[serde(skip)]
@@ -271,7 +271,7 @@ impl ProjectGraph {
     /// Each source declared private that could not be asked what it records of the project's
     /// tasks, and why; empty exactly when the graph is complete.
     #[must_use]
-    pub fn unanswered(&self) -> &[SourceFailure] {
+    pub fn unanswered(&self) -> &[Unanswered] {
         &self.unanswered
     }
 
@@ -452,19 +452,28 @@ impl Engine {
         // still has one edge to draw.
         let mut edges: HashSet<(GlobalId, GlobalId)> = HashSet::new();
         let mut unanswered = Vec::new();
+        let mut resolving = super::designators::Resolving::default();
         for task in &tasks {
             let read = forward_edges(source, &task.id.native, Level::Task)
                 .await
                 .map_err(failed_read)?;
             for edge in read {
-                let to = qualify_endpoint(&name, edge.to);
+                // An opaque far end is drawn as the source its designator is, or named.
+                let Some(far) = self.resolve_endpoint(edge.to, &mut resolving).await else {
+                    continue;
+                };
+                let to = qualify_endpoint(&name, far);
                 // A task that depends on a whole project is not drawn: the graph is of tasks.
                 if to.kind == ItemKind::Task {
                     edges.insert((to.id, task.id.clone()));
                 }
             }
             // And what a task of a source declared private records of this one, which this
-            // task's own source cannot hold without naming it.
+            // task's own source cannot hold without naming it — asked only of a task a copy
+            // may have left such an edge of.
+            if !self.reads_recorded_for(&name, &task.item) {
+                continue;
+            }
             for prerequisite in self
                 .recorded_prerequisites_answered(&task.id, request.completeness, &mut unanswered)
                 .await?
@@ -472,6 +481,30 @@ impl Engine {
                 edges.insert((prerequisite, task.id.clone()));
             }
         }
+        // A far end that could not be confirmed fails the graph as any failed read does, and so,
+        // when every edge is asked for, does one that could not be asked.
+        if request.completeness == Completeness::Required {
+            let mut failed = Vec::new();
+            resolving.required(&request.project.to_string(), &mut failed)?;
+            resolving = super::designators::Resolving::default();
+            if let Some(failure) = failed.into_iter().next() {
+                return Err(EngineError::SourceFailed {
+                    name: failure.source.to_string(),
+                    error: failure.error,
+                });
+            }
+        }
+        if let Some(failure) = std::mem::take(&mut resolving.failed).into_iter().next() {
+            return Err(EngineError::SourceFailed {
+                name: failure.source.to_string(),
+                error: failure.error,
+            });
+        }
+        let unanswered: Vec<Unanswered> = unanswered
+            .into_iter()
+            .map(Unanswered::Source)
+            .chain(resolving.unanswered)
+            .collect();
 
         let own: HashMap<&GlobalId, usize> = tasks
             .iter()
@@ -509,8 +542,23 @@ impl Engine {
             .map(|(prerequisite, _)| prerequisite)
             .filter(|prerequisite| !own.contains_key(prerequisite))
             .collect();
+        // A far end whose source could not be asked is already named in `unanswered`: it is
+        // drawn under its qualified id rather than asked again, so the graph answers as a
+        // dependency read does.
+        let unasked: HashSet<&str> = unanswered
+            .iter()
+            .filter_map(|entry| match entry {
+                Unanswered::Source(failure) => Some(failure.source.as_str()),
+                Unanswered::Designator(_) => None,
+            })
+            .collect();
         for id in outside {
-            externals.push((self.graph_title(id).await?, id.clone()));
+            let title = if unasked.contains(id.source.as_str()) {
+                id.to_string()
+            } else {
+                self.graph_title(id).await?
+            };
+            externals.push((title, id.clone()));
         }
         externals.sort_by_key(|(title, id)| tie(title, id));
 
