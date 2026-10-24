@@ -144,6 +144,8 @@ def refusal(kind: str, body: bytes, writes: str, allowed: set[str]) -> str | Non
     query = payload.get("query", "")
     names = set(guarded_ids(variables))
     names |= set(re.findall(r'(?:repositoryId|projectId):\s*"([^"]+)"', query))
+    for listed in re.findall(r"projectV2Ids:\s*\[([^\]]*)\]", query):
+        names |= set(re.findall(r'"([^"]+)"', listed))
     # A guarded input field given a variable of any name: `projectId: $p`.
     for variable in re.findall(
         r"(?:repositoryId|projectId|projectV2Ids):\s*\$(\w+)", query

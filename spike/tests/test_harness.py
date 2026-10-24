@@ -219,8 +219,16 @@ def test_a_mutation_naming_another_repository_never_leaves(proxy):
             {"r": "R_scratch", "b": ["PVT_other"]},
             {"r": "R_scratch", "b": ["PVT_board"]},
         ),
+        (
+            (
+                'mutation { createIssue(input: {repositoryId: "R_scratch", title: "x",'
+                ' projectV2Ids: ["PVT_other"]}) { issue { id } } }'
+            ),
+            {},
+            None,
+        ),
     ],
-    ids=["projectId", "repositoryId", "projectV2Ids"],
+    ids=["projectId", "repositoryId", "projectV2Ids", "inline projectV2Ids"],
 )
 def test_a_guarded_field_given_a_variable_of_another_name_is_still_guarded(
     proxy, query, outside, inside
@@ -230,8 +238,9 @@ def test_a_guarded_field_given_a_variable_of_another_name_is_still_guarded(
     assert status == 403
     assert answer["errors"][0]["type"] == "SPIKE_REFUSED"
     assert StandIn.seen == []
-    status, _ = post(f"{url}/graphql", {"query": query, "variables": inside})
-    assert status == 200
+    if inside is not None:
+        status, _ = post(f"{url}/graphql", {"query": query, "variables": inside})
+        assert status == 200
 
 
 @pytest.mark.parametrize("proxy", [("none", [])], indirect=True)

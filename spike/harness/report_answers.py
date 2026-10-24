@@ -36,18 +36,19 @@ GRAPHQL_HOUR = 5000
 
 
 def label(candidate: dict) -> str:
-    # llmlint: ignore[structural_pattern_matching] This repository declares requires-python >=3.9 and ruff targets it; `match` is a syntax error there.
+    # llmlint: ignore-block[structural_pattern_matching] This repository declares requires-python >=3.9 and ruff targets it; `match` is a syntax error there.
     if candidate["unit"] == "seconds":
         return "estimate"
     if candidate["unit"] == "writes":
         return "observed (unchanged by the selected strategy)"
+    # llmlint: ignore-end[structural_pattern_matching]
     return "estimate from observed prices"
 
 
 def system_limits(candidate: dict) -> str:
     bar = candidate["bar"]
     unit = candidate["unit"]
-    # llmlint: ignore[structural_pattern_matching] This repository declares requires-python >=3.9 and ruff targets it; `match` is a syntax error there.
+    # llmlint: ignore-block[structural_pattern_matching] This repository declares requires-python >=3.9 and ruff targets it; `match` is a syntax error there.
     if unit == "points":
         burst = 3 * candidate["attainable"]
         return (
@@ -62,6 +63,7 @@ def system_limits(candidate: dict) -> str:
             "copy sends 10 issue creations in 3 requests and 1 upload. Its mutation total is "
             f"{candidate['attainable']} against the strict {bar}. {candidate['limits']}"
         )
+    # llmlint: ignore-end[structural_pattern_matching]
     return f"{candidate['limits']} The bar is {bar} s and only warns on this host."
 
 
@@ -155,6 +157,11 @@ def findings(summary: dict, ruling: str | None) -> list[str]:
     )
     pub = {b: reach[f"reach-public {b}"] for b in ("stock", "head", "closure")}
     trimmed = shape["listing through the item's parent, item trimmed"]
+    over = ", ".join(
+        f"`{c['budget']}` about {c['attainable']} s against {c['bar']}"
+        for c in summary["candidates"]
+        if c["unit"] == "seconds" and not c["within"]
+    )
     untrimmed = dry["SUB_ISSUES through the item's parent"]
     calls = union["commands"]
     out = [
@@ -272,9 +279,8 @@ def findings(summary: dict, ruling: str | None) -> list[str]:
             "placement within a bounded read or two. The worst-case reading stands: the first copy is exactly "
             "at 12 only if both the second placement read and the split write happen, and writes stay within "
             "40 only while placement rides on `createIssue(projectV2Ids)`. The four warn-only host seconds "
-            "bars are estimated over even after union screening and the request cuts: host first copy about "
-            "33.5 s against 32, one-body re-copy about 19.0 s against 8, unchanged about 12.8 s against 7, "
-            "approval about 10.1 s against 7. What remains is unattributed time in the plan store's own "
+            "bars are estimated over even after union screening and the request cuts: "
+            f"{over}. What remains is unattributed time in the plan store's own "
             "process (7.7–11.0 s in the baseline) and the host recipe's steps (1.8–2.2 s). The final "
             "measurement must attribute those seconds to named causes. No target was changed. All of this "
             "went to the manager before finalize."

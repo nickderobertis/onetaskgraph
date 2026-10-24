@@ -68,9 +68,6 @@ PROBE_ALIASES = {
 }
 
 
-# --- documents ------------------------------------------------------------------------------
-
-
 def split(document: str) -> tuple[list[str], str, dict[str, str]]:
     """A `query(<defs>){<body>} fragment ...` document as its variable definitions, its
     top-level selection and its fragments by name."""
@@ -278,9 +275,6 @@ def board(client: Sender, owner: str, number: int, repo: str) -> dict:
     }
 
 
-# --- probe-alias-pricing --------------------------------------------------------------------
-
-
 def alias_pricing(
     run_dir: Path, endpoint: str, token: str, owner: str, number: int, repo: str
 ) -> dict:
@@ -385,8 +379,6 @@ def alias_pricing(
     return out
 
 
-# --- probe-placement ------------------------------------------------------------------------
-
 ITEMS = "projectItems(first: 5) { nodes { id project { id } } }"
 
 
@@ -416,6 +408,10 @@ def poll_items(client: Sender, issues: list[str], project: str) -> tuple[dict, i
 def aliased_create(
     client: Sender, record: dict, inputs: list[dict], label: str
 ) -> tuple[list[dict], dict, float]:
+    if len(inputs) != PROBE_ALIASES[f"ProbeCreate{label}"]:
+        raise ValueError(
+            f"ProbeCreate{label} sends {len(inputs)} creations; PROBE_ALIASES says otherwise"
+        )
     defs = ", ".join(f"$c{k}: CreateIssueInput!" for k in range(len(inputs)))
     aliases = " ".join(
         f"c{k}: createIssue(input: $c{k}) {{ issue {{ id parent {{ id }} {ITEMS} }} }}"
@@ -640,6 +636,11 @@ def placement(
         out["reference_resolution"] = read
     finally:
         out["cleanup"] = delete(client, record, ids["repo"])
+        (run_dir / "feasibility.json").write_text(json.dumps(out, indent=1))
+        if out["cleanup"].get("left") or out["cleanup"].get("errors"):
+            raise SystemExit(
+                f"feasibility: {out['cleanup'].get('left')} probe issue(s) left; run `copy-timing.sh cleanup`"
+            )
     (run_dir / "feasibility.json").write_text(json.dumps(out, indent=1))
     return out
 

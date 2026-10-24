@@ -377,6 +377,7 @@
     "gate readings (1 GET /rate_limit + 3 rateLimit queries each)": 6
    },
    "requests": 149,
+   "requests_with_quota_readings": 197,
    "runs": 6,
    "seconds": 234.6
   }
@@ -648,7 +649,7 @@
      "status": 200
     }
    ],
-   "run": "proxy-refusal-head-20261024T133714"
+   "run": "proxy-refusal-head-20261024T134233"
   },
   "union": {
    "closure": {

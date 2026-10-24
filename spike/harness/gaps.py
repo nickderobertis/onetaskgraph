@@ -65,9 +65,6 @@ def latest(prefix: str) -> Path:
     return found[-1]
 
 
-# --- prices ---------------------------------------------------------------------------------
-
-
 def mutation_rises() -> dict[int, list[int]]:
     """For each alias count, every `used` rise a probe mutation request carried over the last
     request before it in the same window."""
@@ -137,9 +134,6 @@ def prices() -> dict:
         )
     }
     return out
-
-
-# --- the 16 candidates ------------------------------------------------------------------------
 
 
 def baseline() -> dict:
@@ -507,9 +501,6 @@ def seconds(base: dict, union: dict, placement: list[dict], shape: dict) -> list
     ]
 
 
-# --- offline results and consumption --------------------------------------------------------
-
-
 def offline() -> dict:
     out: dict = {"reach": {}, "union": {}, "refusal": None}
     for case in (
@@ -640,6 +631,9 @@ def consumed() -> dict:
             total[key] += figures[key]
         total["seconds"] = round(total["seconds"] + figures["seconds"], 1)
     readings = len(runs("probe-"))
+    # Each reading is 1 `GET /rate_limit` (free) and 3 `rateLimit` queries, which moved `used`
+    # by nothing in these logs; they are requests all the same.
+    total["requests_with_quota_readings"] = total["requests"] + 2 * readings * 4
     total["quota_readings"] = {
         "gate readings (1 GET /rate_limit + 3 rateLimit queries each)": readings,
         "after-run readings (the same)": readings,
