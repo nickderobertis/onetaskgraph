@@ -2041,8 +2041,9 @@ it made — by the map, by its opaque id, or, at a destination that issues ids o
 one task under the public project no map entry names with the view's title and repositories —
 rather than making a second. The public project is found by ownership alone: by the `project`
 its entry records, or — when the copy never learned that id, its
-create's answer lost or the copy ended first — as the one project carrying its recorded
-`allocation`, created afresh, carrying that same allocation, only when none does. No other
+create's answer lost or the copy ended first — as the one project, whatever its title,
+carrying its recorded `allocation` — refused, writing nothing, when that one is no longer a
+neutral `Public work` or when two carry it — created afresh, carrying that same allocation, only when none does. No other
 project is ever taken or altered, however much it looks like one: an unrelated empty `Public work`
 naming the same repositories is left as it is, so is a project a person moved a view into —
 that view is left where they put it, the next copy records a new view under the copy's own

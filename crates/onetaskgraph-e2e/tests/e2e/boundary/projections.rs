@@ -2184,6 +2184,85 @@ fn a_board_copy_interrupted_with_its_project_left_behind_resumes_into_that_proje
 }
 
 #[test]
+fn a_board_project_left_behind_and_renamed_is_found_by_its_allocation_refused_then_resumed() {
+    // The board stores the copy's public project, drops the answer and will not take it back, so
+    // the private home records the allocation and no id. A person then renames that project: it
+    // still carries the allocation, so the next copy finds it, refuses it as no public projection
+    // project, and makes no other; renamed back, it is resumed into.
+    let (store, board) = board_store();
+    let (theirs, before) = unrelated_public_work(&store, "board", BOARD_REPOSITORY);
+    board.drop_response_once("createIssue(input:$input)");
+    board.refuse_once("deleteIssue(input:$input)");
+    let output = store.run(&["project", "copy", "plan:rollout", "--to", "vault"]);
+    assert_ne!(output.status.code(), Some(0), "{}", stderr(&output));
+    let left: Vec<String> = public_work_projects(&store, "board")
+        .into_iter()
+        .filter(|id| id != &theirs)
+        .collect();
+    assert_eq!(left.len(), 1, "the copy's own project is left: {left:?}");
+    let ours = left[0].clone();
+    let native = ours.trim_start_matches("board:");
+    let homes: Value =
+        serde_json::from_str(&store.ok(&["project", "list", "--source", "vault", "--json"]))
+            .expect("a project listing");
+    let recorded = &homes["items"][0]["item"]["metadata"]["onetaskgraph.public_projections"];
+    assert!(
+        recorded["projects"][0]["allocation"].is_string()
+            && recorded["projects"][0]["project"].is_null(),
+        "the allocation is recorded and the id the board assigned is not: {recorded:#}"
+    );
+
+    board.edit_title(native, "Roadmap");
+    let creates = |board: &crate::fixtures::GitHubBoardFields| {
+        board
+            .served()
+            .iter()
+            .filter(|(document, _)| document.contains("createIssue(input:$input)"))
+            .count()
+    };
+    let made = creates(&board);
+    let renamed = shown(&store, "project", &ours);
+    let (kind, said) = store.refused(&["project", "copy", "plan:rollout", "--to", "vault"]);
+    assert_eq!(kind, "projections-malformed", "{said}");
+    assert!(
+        said.contains(&format!(
+            "{ours} is recorded as the public projection project"
+        )),
+        "{said}"
+    );
+    assert_eq!(
+        creates(&board),
+        made,
+        "no other project, and no view, was made"
+    );
+    assert_eq!(
+        public_work_projects(&store, "board"),
+        vec![theirs.clone()],
+        "no `Public work` was made beside the renamed one"
+    );
+    assert_eq!(
+        shown(&store, "project", &ours),
+        renamed,
+        "the renamed project is left as the person left it"
+    );
+    assert_unrelated_untouched(&store, &theirs, &before, None, "board");
+
+    board.edit_title(native, "Public work");
+    for _ in 0..2 {
+        let landed = copy_rollout(&store);
+        assert_eq!(creates(&board) - made, 2, "only the two views were made");
+        assert_eq!(public_project_of_views(&store, &landed, "board"), ours);
+        assert_unrelated_untouched(&store, &theirs, &before, Some(&landed), "board");
+        assert_eq!(
+            projection_map(&store, &landed["plan:rollout"])["projects"][0]["project"],
+            native,
+            "the id the board assigned is recorded now"
+        );
+    }
+    assert_eq!(public_work_projects(&store, "board").len(), 2);
+}
+
+#[test]
 fn a_board_copy_that_cannot_look_its_project_up_to_take_it_back_keeps_the_allocation() {
     // The create's answer is lost, and the search that would find the project by its
     // allocation is refused too: the copy cannot say which project is its own, so it keeps the

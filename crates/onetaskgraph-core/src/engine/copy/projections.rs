@@ -21,8 +21,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use onetaskgraph_plugin_api::{
     AssetPayload, Classification, DependencyEdge, DependencyEndpoint, DependencyKind, ItemKind,
-    ItemWrite, LabelFilter, MetadataKey, NativeId, Priority, Project, Repository, SourceError,
-    SourceName, Status, StatusCategory, Task, TextFields, TextQuery, WriteTarget,
+    ItemWrite, MetadataKey, NativeId, Priority, Project, Repository, SourceError, SourceName,
+    Status, StatusCategory, Task, WriteTarget,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -1195,8 +1195,9 @@ impl Engine {
     /// [`PublicProjectAllocation::KEY`], exactly — the public projection project created behind
     /// it, and never any other.
     ///
-    /// Read through the engine's own project listing narrowed to the neutral title, paged by
-    /// its own token as a project's members are, and narrowed here by the allocation alone.
+    /// Read through the engine's own project listing of every project the source holds, paged by
+    /// its own token as a project's members are, and narrowed here by the allocation alone —
+    /// never by title, which a person can change.
     ///
     /// # Errors
     ///
@@ -1208,14 +1209,10 @@ impl Engine {
     ) -> Result<Vec<NativeId>, EngineError> {
         let mut request = ProjectRequest {
             sources: vec![destination.name().clone()],
-            filters: Filters {
-                text: Some(TextQuery {
-                    terms: PUBLIC_PROJECT_TITLE.to_owned(),
-                    fields: TextFields::Title,
-                }),
-                labels: LabelFilter::default(),
-                statuses: Vec::new(),
-            },
+            // No narrowing but the allocation: a project a person renamed still carries it, and
+            // is found — and refused, being no public projection project — rather than missed and
+            // made again beside.
+            filters: Filters::default(),
             paging: Paging {
                 limit: PROJECT_PAGE,
                 token: None,
