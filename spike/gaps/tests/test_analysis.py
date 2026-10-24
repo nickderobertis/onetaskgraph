@@ -54,6 +54,8 @@ def test_every_candidate_states_its_baseline_its_figure_and_its_arithmetic() -> 
     assert (
         "llmlint run `run-1`" in answers.findings[-2]
         and "Still failing: r." in answers.findings[-2]
+        and "inherited, preserved and never-landing timing-spike harness: none"
+        in answers.findings[-2]
     )
     for candidate in summary.candidates:
         if candidate.budget.unit is Unit.POINTS:

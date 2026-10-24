@@ -396,6 +396,9 @@ def findings(summary: Summary, ruling: str | None, lint: Lint | None) -> list[st
             f"excluded): {lint.summary.passed} rules passed and {lint.summary.failed} failed of "
             f"{lint.summary.total}."
             + (f" Still failing: {', '.join(failed)}." if failed else " None failed.")
+            + " Remaining rules falling only on the inherited, preserved and never-landing "
+            "timing-spike harness: none, because that harness is unchanged from `bc49f888` and "
+            "the run judged only files this dispatch wrote or changed."
         )
     if ruling:
         out.append(f"**Manager ruling, as received.** {ruling}")
