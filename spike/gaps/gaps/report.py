@@ -17,6 +17,7 @@ import asyncio
 import json
 import sys
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 
 from gaps import analysis, budgets
@@ -50,12 +51,23 @@ class Violation:
     message: str
 
 
+class Outcome(StrEnum):
+    """A judged-lint rule's outcome, as llmlint spells it; any other spelling is refused."""
+
+    PASS = "pass"
+    FAIL = "fail"
+    SKIPPED = "skipped"
+    NOT_RELEVANT = "not_relevant"
+    IGNORED = "ignored"
+    ERRORED = "errored"
+
+
 @dataclass(frozen=True)
 class Rule:
     """One judged-lint rule's outcome."""
 
     name: str
-    outcome: str
+    outcome: Outcome
     violations: tuple[Violation, ...] = ()
 
 
@@ -75,6 +87,23 @@ class Lint:
     id: str
     summary: LintSummary
     rules: tuple[Rule, ...]
+
+    def __post_init__(self) -> None:
+        """Refuse a record whose rules disagree with its own totals."""
+        for outcome, total in (
+            (Outcome.FAIL, self.summary.failed),
+            (Outcome.PASS, self.summary.passed),
+        ):
+            counted = sum(1 for r in self.rules if r.outcome is outcome)
+            if counted != total:
+                raise ShapeError(
+                    f"lint run {self.id}: {counted} rules {outcome.value}, its summary says {total}"
+                )
+        if len(self.rules) != self.summary.total:
+            raise ShapeError(
+                f"lint run {self.id}: {len(self.rules)} rules, "
+                f"its summary says {self.summary.total}"
+            )
 
 
 @dataclass(frozen=True)
@@ -256,6 +285,22 @@ def attribution(times: tuple[HostTime, ...], parent_listing: float, approval: fl
     )
 
 
+def first_copy_bar(summary: Summary, unit: Unit) -> Candidate:
+    """The bare first copy's candidate in `unit`: the bar the plan's worst case is read against."""
+    return next(
+        c
+        for c in summary.candidates
+        if c.budget.operation is Operation.BARE_FIRST and c.budget.unit is unit
+    )
+
+
+def against(value: float, bar: float) -> str:
+    """How `value` stands against `bar`, in words."""
+    if value == bar:
+        return f"exactly at {bar:g}"
+    return f"within {bar:g}" if value < bar else f"over {bar:g}"
+
+
 def findings(summary: Summary, rulings: tuple[str, ...], lint: Lint | None) -> list[str]:
     """One string per problem the spike found with the plan's design."""
     reach, union = summary.offline.reach, summary.offline.union
@@ -276,6 +321,15 @@ def findings(summary: Summary, rulings: tuple[str, ...], lint: Lint | None) -> l
         step: next(v for v in variants if v.plant.value == "as copied")
         for step, variants in union.commands.items()
     }
+    points, writes = first_copy_bar(summary, Unit.POINTS), first_copy_bar(summary, Unit.WRITES)
+    worst = points.worst if points.worst is not None else points.attainable
+    # Every issue of the first copy: one a task, plus the project's and the document's.
+    issues = summary.workload.tasks + 2
+    strict_over = [
+        c.budget.id
+        for c in summary.candidates
+        if c.budget.unit in (Unit.POINTS, Unit.WRITES) and not c.within
+    ]
     over = ", ".join(
         f"`{c.budget.id}` about {c.attainable:g} s against {c.budget.threshold:g}"
         for c in summary.candidates
@@ -368,7 +422,8 @@ def findings(summary: Summary, rulings: tuple[str, ...], lint: Lint | None) -> l
         "exists in this project' rather than answered with the item, so the fallback treats that "
         "refusal as placed and reads the item — but it costs a write an issue, "
         "and "
-        "for all 10 the first copy would be 46 writes, over the strict 40. (4) Send every field "
+        f"for all {issues} the first copy would be {writes.attainable + issues:g} writes, "
+        f"{against(writes.attainable + issues, writes.budget.threshold)}. (4) Send every field "
         "value "
         "and blocked-by edge as one aliased request of two mutation kinds; split one that would "
         "exceed "
@@ -400,7 +455,8 @@ def findings(summary: Summary, rulings: tuple[str, ...], lint: Lint | None) -> l
         "prices a "
         "mutation request at its least rise; no 24-alias request was sent, so the first copy's "
         "worst "
-        "case splits its field and edge write in two and is still within 12.",
+        f"case splits its field and edge write in two and is {worst:g}, "
+        f"{against(worst, points.budget.threshold)}.",
         "**Undo batching** (an earlier run of this spike, commit bae8223f's logs): one request of "
         "11 "
         "aliased `deleteIssue` met `RESOURCE_LIMITS_EXCEEDED` from the 8th alias on, and batches "
@@ -412,15 +468,18 @@ def findings(summary: Summary, rulings: tuple[str, ...], lint: Lint | None) -> l
         "for issues it saw this run create; `proxy-refusal` shows its "
         f"{len(summary.offline.refusal.cases)} cases as expected, nothing refused reaching "
         f"upstream (all as expected: {summary.offline.refusal.all_as_expected}).",
-        "**Bars over, escalated.** Every strict points and writes bar is attainable on observed "
-        "prices, "
-        "under two unknown-API assumptions: alias-independent mutation pricing beyond 19 aliases, "
-        "and "
-        "placement within a bounded read or two. The worst-case reading stands: the first copy is "
-        "exactly at 12 only if both the second placement read and the split write happen, and "
-        "writes "
-        "stay within 40 only while placement rides on `createIssue(projectV2Ids)`. The warn-only "
-        "host "
+        "**Bars over, escalated.** "
+        + (
+            "Strict bars over: " + ", ".join(f"`{i}`" for i in strict_over) + ". "
+            if strict_over
+            else "Every strict points and writes bar is attainable on observed prices, "
+        )
+        + "under two unknown-API assumptions: alias-independent mutation pricing beyond 19 "
+        "aliases, and placement within a bounded read or two. The worst-case reading stands: the "
+        f"first copy's worst case, {worst:g} points, is {against(worst, points.budget.threshold)} "
+        "only if both the second placement read and the split write happen, and its "
+        f"{writes.attainable:g} writes stay {against(writes.attainable, writes.budget.threshold)} "
+        "only while placement rides on `createIssue(projectV2Ids)`. The warn-only host "
         f"seconds bars stay over: {over}. What remains is time in the plan store's own process "
         "and the host recipe's steps, attributed in the next finding; the rulings quoted below "
         "decide what finalize does with these figures. No target was changed by this spike.",
@@ -435,7 +494,7 @@ def findings(summary: Summary, rulings: tuple[str, ...], lint: Lint | None) -> l
         ),
     ]
     if lint is not None:
-        failed = sorted(r.name for r in lint.rules if r.outcome == "fail")
+        failed = sorted(r.name for r in lint.rules if r.outcome is Outcome.FAIL)
         out.append(
             f"**Judged lint of this spike's code** (llmlint run `{lint.id}`, base `bc49f888`, logs "
             f"excluded): {lint.summary.passed} rules passed and {lint.summary.failed} failed of "

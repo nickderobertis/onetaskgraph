@@ -20,6 +20,7 @@ import pytest
 from gaps import analysis, budgets, report
 from gaps.budgets import Operation, Unit
 from gaps.json_shape import ShapeError, encode
+from gaps.report import Outcome
 from tests.conftest import PYTHON, gaps_env, spawn
 
 PLAN_CHECKOUT = Path.home() / "ai-orchestrator"
@@ -58,6 +59,45 @@ def test_a_listing_that_loops_or_reports_an_error_is_refused(
         asyncio.run(budgets.read(stub, tmp_path))
 
 
+@pytest.mark.parametrize(
+    ("rules", "refusal"),
+    [
+        ([{"name": "a", "outcome": "failed"}], "lint.json"),
+        ([{"name": "a", "outcome": "pass"}], "0 rules fail, its summary says 1"),
+    ],
+)
+def test_a_lint_record_whose_outcomes_disagree_with_its_totals_is_refused(
+    tmp_path: Path, rules: list[dict[str, str]], refusal: str
+) -> None:
+    """An unknown outcome spelling, or rules that disagree with the totals, refuse the report."""
+    lint = tmp_path / "lint.json"
+    lint.write_text(
+        json.dumps(
+            {"id": "run-8", "summary": {"total": 1, "passed": 0, "failed": 1}, "rules": rules}
+        )
+    )
+    out = tmp_path / "answers.json"
+    done = spawn(
+        [PYTHON, "-m", "gaps.report", "--answers", str(out), "--lint", str(lint)],
+        gaps_env(tmp_path),
+    )
+    assert done.returncode == 1 and refusal in done.err
+    assert not out.exists()
+
+
+def test_a_strict_bar_the_estimate_misses_is_reported_over_and_not_attainable() -> None:
+    """Lower the first copy's points bar under its estimate: the findings say it is over."""
+    found = asyncio.run(budgets.read(ONETASKGRAPH, PLAN_CHECKOUT))
+    honest = report.answers(analysis.analyse(found), (), None).findings
+    target = next(b for b in found if b.operation is Operation.BARE_FIRST and b.unit is Unit.POINTS)
+    lowered = tuple(dataclasses.replace(b, threshold=2) if b is target else b for b in found)
+    findings = report.answers(analysis.analyse(lowered), (), None).findings
+    assert any("Every strict points and writes bar is attainable" in f for f in honest)
+    assert not any("Every strict points and writes bar is attainable" in f for f in findings)
+    assert any(f"Strict bars over: `{target.id}`" in f for f in findings)
+    assert any("first copy's worst case, 12 points, is over 2 only if" in f for f in findings)
+
+
 def test_the_committed_summary_is_what_the_committed_logs_and_the_plan_add_up_to() -> None:
     """The committed summary is what the committed logs and the plan add up to."""
     summary = asyncio.run(report.build(PLAN_CHECKOUT, ONETASKGRAPH))
@@ -68,7 +108,7 @@ def test_the_committed_summary_is_what_the_committed_logs_and_the_plan_add_up_to
 def test_every_candidate_states_its_baseline_its_figure_and_its_arithmetic() -> None:
     """Every candidate states its baseline its figure and its arithmetic."""
     summary = asyncio.run(report.build(PLAN_CHECKOUT, ONETASKGRAPH))
-    lint = report.Lint("run-1", report.LintSummary(56, 50, 1), (report.Rule("r", "fail", ()),))
+    lint = report.Lint("run-1", report.LintSummary(1, 0, 1), (report.Rule("r", Outcome.FAIL),))
     answers = report.answers(summary, ("a ruling", "a later ruling"), lint)
     assert len(answers.candidates) == 16
     for row in answers.candidates:
@@ -157,10 +197,14 @@ def test_the_consumed_points_count_charges_and_mutations_and_never_a_dry_runs_qu
 def test_the_report_command_quotes_a_ruling_and_states_a_recorded_lint_run(tmp_path: Path) -> None:
     """The report command quotes a ruling and states a recorded lint run."""
     lint = tmp_path / "lint.json"
-    rule = {"name": "a_rule", "outcome": "fail", "violations": []}
+    rules = [
+        {"name": "a_rule", "outcome": "fail", "violations": []},
+        {"name": "b_rule", "outcome": "pass"},
+        {"name": "c_rule", "outcome": "pass"},
+    ]
     lint.write_text(
         json.dumps(
-            {"id": "run-9", "summary": {"total": 3, "passed": 2, "failed": 1}, "rules": [rule]}
+            {"id": "run-9", "summary": {"total": 3, "passed": 2, "failed": 1}, "rules": rules}
         )
     )
     ruling = tmp_path / "ruling.md"
@@ -242,7 +286,11 @@ def test_a_dry_run_price_disagreeing_with_the_charge_is_disclosed(
 def test_a_clean_lint_run_is_reported_as_one_with_nothing_failing() -> None:
     """A lint run with no failing rule is stated as such."""
     summary = asyncio.run(report.build(PLAN_CHECKOUT, ONETASKGRAPH))
-    clean = report.Lint("run-0", report.LintSummary(56, 56, 0), ())
+    clean = report.Lint(
+        "run-0",
+        report.LintSummary(56, 56, 0),
+        tuple(report.Rule(f"r{n}", Outcome.PASS) for n in range(56)),
+    )
     finding = report.answers(summary, (), clean).findings[-1]
     assert "56 rules passed and 0 failed of 56. None failed." in finding
 

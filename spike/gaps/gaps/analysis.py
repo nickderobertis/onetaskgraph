@@ -30,6 +30,8 @@ REPO = PACKAGE_ROOT.parents[1]
 LOGS = PACKAGE_ROOT / "logs"
 BASELINE = REPO / "docs/measurements/board-copy-speed-2026-10-18/after"
 BASELINE_DOC = REPO / "docs/measurements/board-copy-speed-2026-10-18.md"
+# GitHub's published limits, as the GitHub Projects plugin pins and gates them.
+RATE_LIMITS = REPO / "crates/onetaskgraph-github-projects/tests/fixtures/rate-limits.json"
 # The run of each operation the measurement document draws its figures from; a test holds each
 # name to that document.
 BASELINE_RUNS = {
@@ -143,6 +145,7 @@ class Candidate:
     label: str
     arithmetic: str
     limits: str
+    worst: float | None = None
 
 
 @dataclass(frozen=True)
@@ -614,6 +617,13 @@ def seconds(base: Baseline, union_calls: int, parent_seconds: float, per_call: f
     )
 
 
+def content_creation_per_minute() -> int:
+    """GitHub's published per-minute ceiling on content-creating requests, as pinned."""
+    pinned = obj(load(RATE_LIMITS), str(RATE_LIMITS))
+    creation = obj(pinned.get("content_creation"), f"{RATE_LIMITS}.content_creation")
+    return integer(creation.get("per_minute"), f"{RATE_LIMITS}.content_creation.per_minute")
+
+
 def hourly_allowance() -> int:
     """The GraphQL bucket's limit, as the latest live run's gate read it."""
     for run in reversed(runs("probe-")):
@@ -633,6 +643,7 @@ def candidate(
 ) -> Candidate:
     """One budget's attainable figure, its arithmetic and its limits."""
     shape = prices_.shape
+    worst_value: float | None = None
     match budget.unit:
         case Unit.POINTS:
             figure = plan(shape, PLANS[budget.operation])
@@ -640,6 +651,7 @@ def candidate(
             arithmetic = figure.arithmetic
             if budget.operation in (Operation.BARE_FIRST, Operation.HOST_FIRST):
                 worst = plan(shape, first_copy(2, 2))
+                worst_value = worst.value
                 arithmetic += (
                     "; worst case, two placement reads and two write requests a process: "
                     f"{worst.arithmetic}"
@@ -662,7 +674,8 @@ def candidate(
             )
             label = "observed, unchanged by the selected strategy"
             limits = (
-                "GitHub's secondary limit is 80 content-creating requests a minute; the first copy "
+                f"GitHub's secondary limit is {content_creation_per_minute()} content-creating "
+                "requests a minute; the first copy "
                 "creates 10 issues in 3 requests and uploads 1 asset. The total holds only while "
                 "placement rides on createIssue(projectV2Ids): an addProjectV2ItemById per issue "
                 "adds 10."
@@ -684,6 +697,7 @@ def candidate(
         label=label,
         arithmetic=arithmetic,
         limits=limits,
+        worst=worst_value,
     )
 
 

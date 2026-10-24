@@ -153,7 +153,8 @@
    },
    "label": "observed, unchanged by the selected strategy",
    "limits": "GitHub's secondary limit is 80 content-creating requests a minute; the first copy creates 10 issues in 3 requests and uploads 1 asset. The total holds only while placement rides on createIssue(projectV2Ids): an addProjectV2ItemById per issue adds 10.",
-   "within": true
+   "within": true,
+   "worst": null
   },
   {
    "arithmetic": "project copy: listing 1\u00d71 + update the changed body 1\u00d71 + document copy: listing 1\u00d71 = 3",
@@ -178,7 +179,8 @@
    },
    "label": "estimate from observed prices",
    "limits": "GraphQL allows 5000 points an hour, shared with all host work: 3 operations an hour at 3 is 9 points (0.18%). Every price is GitHub's own (dry run, matched by the charge of each coalesced shape); a mutation request rose by its least observed amount whatever its aliases, up to 19.",
-   "within": true
+   "within": true,
+   "worst": null
   },
   {
    "arithmetic": "project copy: origin lookups of the project and 8 tasks 1\u00d71 + create the project issue 1\u00d71 + create 8 task issues, aliased, with projectV2Ids and parentIssueId 1\u00d71 + placement read of 9 issues 1\u00d71 + field values and 10 blocked-by edges, aliased 1\u00d71 + document copy: its origin lookup 1\u00d71 + create the document issue 1\u00d71 + placement read 1\u00d71 + its field value 1\u00d71 = 9; worst case, two placement reads and two write requests a process: project copy: origin lookups of the project and 8 tasks 1\u00d71 + create the project issue 1\u00d71 + create 8 task issues, aliased, with projectV2Ids and parentIssueId 1\u00d71 + placement read of 9 issues 2\u00d71 + field values and 10 blocked-by edges, aliased 2\u00d71 + document copy: its origin lookup 1\u00d71 + create the document issue 1\u00d71 + placement read 2\u00d71 + its field value 1\u00d71 = 12",
@@ -203,7 +205,8 @@
    },
    "label": "estimate from observed prices",
    "limits": "GraphQL allows 5000 points an hour, shared with all host work: 3 operations an hour at 9 is 27 points (0.54%). Every price is GitHub's own (dry run, matched by the charge of each coalesced shape); a mutation request rose by its least observed amount whatever its aliases, up to 19.",
-   "within": true
+   "within": true,
+   "worst": 12
   },
   {
    "arithmetic": "project copy: listing 1\u00d71 + document copy: listing 1\u00d71 = 2",
@@ -228,7 +231,8 @@
    },
    "label": "estimate from observed prices",
    "limits": "GraphQL allows 5000 points an hour, shared with all host work: 3 operations an hour at 2 is 6 points (0.12%). Every price is GitHub's own (dry run, matched by the charge of each coalesced shape); a mutation request rose by its least observed amount whatever its aliases, up to 19.",
-   "within": true
+   "within": true,
+   "worst": null
   },
   {
    "arithmetic": "8.7 s measured \u2212 3.34 s (4 ORIGIN_LOOKUP) = 5.4 s",
@@ -253,7 +257,8 @@
    },
    "label": "estimate",
    "limits": "Seconds warn on this host; one baseline sample each; host onevcs calls at 0.67 s, the baseline's slowest mean.",
-   "within": true
+   "within": true,
+   "worst": null
   },
   {
    "arithmetic": "29.8 s measured \u2212 6.61 s (3 ORIGIN_LOOKUP, 1 ISSUE, 1 SUB_ISSUES, 2 CREATED_BOARD_ITEMS, 1 WRITE_FIELD_VALUES) = 23.2 s",
@@ -278,7 +283,8 @@
    },
    "label": "estimate",
    "limits": "Seconds warn on this host; one baseline sample each; host onevcs calls at 0.67 s, the baseline's slowest mean.",
-   "within": true
+   "within": true,
+   "worst": null
   },
   {
    "arithmetic": "6.7 s measured \u2212 2.82 s (4 ORIGIN_LOOKUP) = 3.9 s",
@@ -303,7 +309,8 @@
    },
    "label": "estimate",
    "limits": "Seconds warn on this host; one baseline sample each; host onevcs calls at 0.67 s, the baseline's slowest mean.",
-   "within": true
+   "within": true,
+   "worst": null
   },
   {
    "arithmetic": "document list --project 1\u00d71 + project show 1\u00d71 + task list --project 1\u00d71 + metadata set: document, project and members in one read 1\u00d71 + the write 1\u00d71 = 5",
@@ -328,7 +335,8 @@
    },
    "label": "estimate from observed prices",
    "limits": "GraphQL allows 5000 points an hour, shared with all host work: 3 operations an hour at 5 is 15 points (0.30%). Every price is GitHub's own (dry run, matched by the charge of each coalesced shape); a mutation request rose by its least observed amount whatever its aliases, up to 19.",
-   "within": true
+   "within": true,
+   "worst": null
   },
   {
    "arithmetic": "16.4 s measured \u2212 6.03 s screening (9 onevcs calls) + 2 calls \u00d7 0.67 s \u2212 2.12 s (2 ISSUE, 1 SUB_ISSUES) + 1.169 s added = 10.8 s",
@@ -353,7 +361,8 @@
    },
    "label": "estimate",
    "limits": "Seconds warn on this host; one baseline sample each; host onevcs calls at 0.67 s, the baseline's slowest mean.",
-   "within": false
+   "within": false,
+   "worst": null
   },
   {
    "arithmetic": "project copy: listing (field options from it) 1\u00d71 + 2 body updates, aliased 1\u00d71 + document copy: listing 1\u00d71 = 3",
@@ -378,7 +387,8 @@
    },
    "label": "estimate from observed prices",
    "limits": "GraphQL allows 5000 points an hour, shared with all host work: 3 operations an hour at 3 is 9 points (0.18%). Every price is GitHub's own (dry run, matched by the charge of each coalesced shape); a mutation request rose by its least observed amount whatever its aliases, up to 19.",
-   "within": true
+   "within": true,
+   "worst": null
   },
   {
    "arithmetic": "project copy: origin lookups of the project and 8 tasks 1\u00d71 + create the project issue 1\u00d71 + create 8 task issues, aliased, with projectV2Ids and parentIssueId 1\u00d71 + placement read of 9 issues 1\u00d71 + field values and 10 blocked-by edges, aliased 1\u00d71 + document copy: its origin lookup 1\u00d71 + create the document issue 1\u00d71 + placement read 1\u00d71 + its field value 1\u00d71 = 9; worst case, two placement reads and two write requests a process: project copy: origin lookups of the project and 8 tasks 1\u00d71 + create the project issue 1\u00d71 + create 8 task issues, aliased, with projectV2Ids and parentIssueId 1\u00d71 + placement read of 9 issues 2\u00d71 + field values and 10 blocked-by edges, aliased 2\u00d71 + document copy: its origin lookup 1\u00d71 + create the document issue 1\u00d71 + placement read 2\u00d71 + its field value 1\u00d71 = 12",
@@ -403,7 +413,8 @@
    },
    "label": "estimate from observed prices",
    "limits": "GraphQL allows 5000 points an hour, shared with all host work: 3 operations an hour at 9 is 27 points (0.54%). Every price is GitHub's own (dry run, matched by the charge of each coalesced shape); a mutation request rose by its least observed amount whatever its aliases, up to 19.",
-   "within": true
+   "within": true,
+   "worst": 12
   },
   {
    "arithmetic": "project copy: listing 1\u00d71 + document copy: listing 1\u00d71 = 2",
@@ -428,7 +439,8 @@
    },
    "label": "estimate from observed prices",
    "limits": "GraphQL allows 5000 points an hour, shared with all host work: 3 operations an hour at 2 is 6 points (0.12%). Every price is GitHub's own (dry run, matched by the charge of each coalesced shape); a mutation request rose by its least observed amount whatever its aliases, up to 19.",
-   "within": true
+   "within": true,
+   "worst": null
   },
   {
    "arithmetic": "52.2 s measured \u2212 33.4 s screening (50 onevcs calls) + 4 calls \u00d7 0.67 s \u2212 2.51 s (1 BOARD_FIELDS, 1 ORIGIN_LOOKUP, 1 ISSUE, 1 UPDATE_ISSUE) + 0.0 s added = 19.0 s",
@@ -453,7 +465,8 @@
    },
    "label": "estimate",
    "limits": "Seconds warn on this host; one baseline sample each; host onevcs calls at 0.67 s, the baseline's slowest mean.",
-   "within": false
+   "within": false,
+   "worst": null
   },
   {
    "arithmetic": "64.4 s measured \u2212 30.8 s screening (50 onevcs calls) + 4 calls \u00d7 0.67 s \u2212 2.78 s (2 ISSUE, 2 CREATED_BOARD_ITEMS, 1 SUB_ISSUES) + 0.0 s added = 33.5 s",
@@ -478,7 +491,8 @@
    },
    "label": "estimate",
    "limits": "Seconds warn on this host; one baseline sample each; host onevcs calls at 0.67 s, the baseline's slowest mean.",
-   "within": false
+   "within": false,
+   "worst": null
   },
   {
    "arithmetic": "44.7 s measured \u2212 30.93 s screening (50 onevcs calls) + 0 calls \u00d7 0.67 s \u2212 0.93 s (1 ORIGIN_LOOKUP, 1 ISSUE) + 0.0 s added = 12.8 s",
@@ -503,7 +517,8 @@
    },
    "label": "estimate",
    "limits": "Seconds warn on this host; one baseline sample each; host onevcs calls at 0.67 s, the baseline's slowest mean.",
-   "within": false
+   "within": false,
+   "worst": null
   },
   {
    "arithmetic": "25 as measured: coalescing moves requests, not mutations",
@@ -528,7 +543,8 @@
    },
    "label": "observed, unchanged by the selected strategy",
    "limits": "GitHub's secondary limit is 80 content-creating requests a minute; the first copy creates 10 issues in 3 requests and uploads 1 asset. The total holds only while placement rides on createIssue(projectV2Ids): an addProjectV2ItemById per issue adds 10.",
-   "within": true
+   "within": true,
+   "worst": null
   }
  ],
  "consumed": {
