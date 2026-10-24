@@ -163,18 +163,14 @@ def write_plan(root: Path, case: str) -> None:
     (root / "documents" / f"{PLAN}-design.md").write_text(document)
     task = root / "tasks" / PLAN / "t1.md"
     text = task.read_text()
+    # llmlint: ignore[structural_pattern_matching] This repository declares requires-python >=3.9 and ruff targets it; `match` is a syntax error there.
     if case == "reach-private-item":
         text = text.replace("\nstatus:", '\nclassification: "private"\nstatus:', 1)
-    elif case == "reach-private-ref":
+    elif case in ("reach-private-ref", "reach-unresolvable-ref"):
+        far = "priv-linear:SYN-1" if case == "reach-private-ref" else "ghost:G-1"
         text = text.replace(
             "\nstatus:",
-            '\ndepends_on: [{"id": "priv-linear:SYN-1", "item": "task"}]\nstatus:',
-            1,
-        )
-    elif case == "reach-unresolvable-ref":
-        text = text.replace(
-            "\nstatus:",
-            '\ndepends_on: [{"id": "ghost:G-1", "item": "task"}]\nstatus:',
+            f'\ndepends_on: [{{"id": "{far}", "item": "task"}}]\nstatus:',
             1,
         )
     task.write_text(text)

@@ -398,7 +398,7 @@
     "output_says_withheld": false,
     "refusal": "onetaskgraph: src:reach-plan is private, and source dest is not declared private (it is declared public); a private item is written only to a source declared private whose backend agrees",
     "requests_to_private_doubles": 0,
-    "run": "reach-private-item-closure-20261024T131711"
+    "run": "reach-private-item-closure-20261024T133621"
    },
    "reach-private-item head": {
     "binary": "onetaskgraph 0.11.1",
@@ -415,7 +415,7 @@
     "output_says_withheld": false,
     "refusal": "onetaskgraph: src:reach-plan is private, and source dest is not declared private (it is declared public); a private item is written only to a source declared private whose backend agrees",
     "requests_to_private_doubles": 0,
-    "run": "reach-private-item-head-20261024T131652"
+    "run": "reach-private-item-head-20261024T133534"
    },
    "reach-private-item stock": {
     "binary": "onetaskgraph 0.11.0",
@@ -432,7 +432,7 @@
     "output_says_withheld": false,
     "refusal": "onetaskgraph: src:reach-plan is private, and source dest is not declared private (it is declared public); a private item is written only to a source declared private whose backend agrees",
     "requests_to_private_doubles": 0,
-    "run": "reach-private-item-stock-20261024T131631"
+    "run": "reach-private-item-stock-20261024T133511"
    },
    "reach-private-ref closure": {
     "binary": "onetaskgraph 0.11.1",
@@ -452,7 +452,7 @@
     "output_says_withheld": false,
     "refusal": null,
     "requests_to_private_doubles": 1,
-    "run": "reach-private-ref-closure-20261024T131713"
+    "run": "reach-private-ref-closure-20261024T133626"
    },
    "reach-private-ref head": {
     "binary": "onetaskgraph 0.11.1",
@@ -472,7 +472,7 @@
     "output_says_withheld": false,
     "refusal": "onetaskgraph: source priv-board could not do it: the source could not be reached: GitHub GraphQL returned HTTP 503 Service Unavailable",
     "requests_to_private_doubles": 2,
-    "run": "reach-private-ref-head-20261024T131658"
+    "run": "reach-private-ref-head-20261024T133541"
    },
    "reach-private-ref stock": {
     "binary": "onetaskgraph 0.11.0",
@@ -491,7 +491,7 @@
     "output_says_withheld": false,
     "refusal": "onetaskgraph: source priv-board could not do it: the source could not be reached: GitHub GraphQL returned HTTP 503 Service Unavailable",
     "requests_to_private_doubles": 1,
-    "run": "reach-private-ref-stock-20261024T131636"
+    "run": "reach-private-ref-stock-20261024T133514"
    },
    "reach-public closure": {
     "binary": "onetaskgraph 0.11.1",
@@ -509,7 +509,7 @@
     "output_says_withheld": false,
     "refusal": null,
     "requests_to_private_doubles": 0,
-    "run": "reach-public-closure-20261024T131706"
+    "run": "reach-public-closure-20261024T133602"
    },
    "reach-public head": {
     "binary": "onetaskgraph 0.11.1",
@@ -528,7 +528,7 @@
     "output_says_withheld": false,
     "refusal": "onetaskgraph: source priv-board could not do it: the source could not be reached: GitHub GraphQL returned HTTP 503 Service Unavailable",
     "requests_to_private_doubles": 1,
-    "run": "reach-public-head-20261024T131646"
+    "run": "reach-public-head-20261024T133525"
    },
    "reach-public stock": {
     "binary": "onetaskgraph 0.11.0",
@@ -547,7 +547,7 @@
     "output_says_withheld": false,
     "refusal": "onetaskgraph: source priv-board could not do it: the source could not be reached: GitHub GraphQL returned HTTP 503 Service Unavailable",
     "requests_to_private_doubles": 1,
-    "run": "reach-public-stock-20261024T131623"
+    "run": "reach-public-stock-20261024T133504"
    },
    "reach-unresolvable-ref closure": {
     "binary": "onetaskgraph 0.11.1",
@@ -564,7 +564,7 @@
     "output_says_withheld": false,
     "refusal": "onetaskgraph: src:reach-plan/t1 names ghost:G-1, whose classification could not be established (no source of that name is configured to read it from), and source dest is not declared private; an id that might name a private item is never written where it would name it, so nothing was written",
     "requests_to_private_doubles": 0,
-    "run": "reach-unresolvable-ref-closure-20261024T131719"
+    "run": "reach-unresolvable-ref-closure-20261024T133640"
    },
    "reach-unresolvable-ref head": {
     "binary": "onetaskgraph 0.11.1",
@@ -581,7 +581,7 @@
     "output_says_withheld": false,
     "refusal": "onetaskgraph: src:reach-plan/t1 names ghost:G-1, whose classification could not be established (no source of that name is configured to read it from), and source dest is not declared private; an id that might name a private item is never written where it would name it, so nothing was written",
     "requests_to_private_doubles": 0,
-    "run": "reach-unresolvable-ref-head-20261024T131703"
+    "run": "reach-unresolvable-ref-head-20261024T133553"
    },
    "reach-unresolvable-ref stock": {
     "binary": "onetaskgraph 0.11.0",
@@ -598,7 +598,7 @@
     "output_says_withheld": false,
     "refusal": "onetaskgraph: src:reach-plan/t1 names ghost:G-1, whose classification could not be established (no source of that name is configured to read it from), and source dest is not declared private; an id that might name a private item is never written where it would name it, so nothing was written",
     "requests_to_private_doubles": 0,
-    "run": "reach-unresolvable-ref-stock-20261024T131642"
+    "run": "reach-unresolvable-ref-stock-20261024T133520"
    }
   },
   "refusal": {
@@ -648,7 +648,7 @@
      "status": 200
     }
    ],
-   "run": "proxy-refusal-head-20261024T132732"
+   "run": "proxy-refusal-head-20261024T133714"
   },
   "union": {
    "closure": {
@@ -656,25 +656,25 @@
     "commands": {
      "document-copy": {
       "as copied": {
-       "per_item_calls": 19,
+       "per_item_calls": 18,
        "per_item_refused": false,
        "union_refused": false,
        "unioned_calls": 2
       },
       "planted in metadata": {
-       "per_item_calls": 19,
+       "per_item_calls": 18,
        "per_item_refused": true,
        "union_refused": true,
        "unioned_calls": 2
       },
       "planted in paths": {
-       "per_item_calls": 19,
+       "per_item_calls": 18,
        "per_item_refused": true,
        "union_refused": true,
        "unioned_calls": 2
       },
       "planted in text": {
-       "per_item_calls": 19,
+       "per_item_calls": 18,
        "per_item_refused": true,
        "union_refused": true,
        "unioned_calls": 2
@@ -682,32 +682,32 @@
      },
      "project-copy": {
       "as copied": {
-       "per_item_calls": 35,
+       "per_item_calls": 36,
        "per_item_refused": false,
        "union_refused": false,
        "unioned_calls": 2
       },
       "planted in metadata": {
-       "per_item_calls": 35,
+       "per_item_calls": 36,
        "per_item_refused": true,
        "union_refused": true,
        "unioned_calls": 2
       },
       "planted in paths": {
-       "per_item_calls": 35,
+       "per_item_calls": 36,
        "per_item_refused": true,
        "union_refused": true,
        "unioned_calls": 2
       },
       "planted in text": {
-       "per_item_calls": 35,
+       "per_item_calls": 36,
        "per_item_refused": true,
        "union_refused": true,
        "unioned_calls": 2
       }
      }
     },
-    "run": "screen-union-closure-20261024T132721"
+    "run": "screen-union-closure-20261024T133649"
    }
   }
  },

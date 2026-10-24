@@ -92,11 +92,16 @@ OFFLINE = (
     "screen-union",
     "proxy-refusal",
 )
-HEAD_BINARY = Path(os.environ.get("SPIKE_HEAD_BINARY") or REPO / "target/debug/onetaskgraph")
-CLOSURE_BINARY = Path(
-    os.environ.get("SPIKE_CLOSURE_BINARY") or CACHE / "prototype/target/debug/onetaskgraph"
+HEAD_BINARY = Path(
+    os.environ.get("SPIKE_HEAD_BINARY") or REPO / "target/debug/onetaskgraph"
 )
-ONEVCS = Path(os.environ.get("SPIKE_ONEVCS") or Path.home() / "ai-orchestrator/.venv/bin/onevcs")
+CLOSURE_BINARY = Path(
+    os.environ.get("SPIKE_CLOSURE_BINARY")
+    or CACHE / "prototype/target/debug/onetaskgraph"
+)
+ONEVCS = Path(
+    os.environ.get("SPIKE_ONEVCS") or Path.home() / "ai-orchestrator/.venv/bin/onevcs"
+)
 UNREACHABLE = "http://127.0.0.1:9/graphql"
 HOST_XDG = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
 
@@ -114,7 +119,11 @@ def binary(build: str) -> Path:
     if build in ("head", "closure"):
         path = HEAD_BINARY if build == "head" else CLOSURE_BINARY
         if not path.exists():
-            hint = "cargo build -p onetaskgraph" if build == "head" else "spike/prototype/build.sh"
+            hint = (
+                "cargo build -p onetaskgraph"
+                if build == "head"
+                else "spike/prototype/build.sh"
+            )
             sys.exit(f"run.py: no {build} binary at {path}; run {hint}")
         return path
     path = SPAN_BINARY if build == "span" else STOCK_BINARY
@@ -383,7 +392,9 @@ def unreachable_others() -> dict[str, str]:
         key = name.upper().replace("-", "_")
         env[f"ONETASKGRAPH_SOURCES__{key}__CONFIG__ENDPOINT"] = UNREACHABLE
         if plugin == "linear":
-            env[f"ONETASKGRAPH_SOURCES__{key}__CONFIG__API_KEY_ENV"] = "SPIKE_NO_LINEAR_KEY"
+            env[f"ONETASKGRAPH_SOURCES__{key}__CONFIG__API_KEY_ENV"] = (
+                "SPIKE_NO_LINEAR_KEY"
+            )
     return env
 
 
@@ -445,7 +456,9 @@ def host_setup() -> None:
 def stamp(env: dict) -> None:
     """Stamp the host plan's review records for its current content (no judged turn)."""
     argv = ["uv", "run", "python", HERE / "stamp_reviews.py", f"authoring:{HOST_PLAN}"]
-    clean = {k: v for k, v in env.items() if k not in ("SPIKE_HOST_AUDIT", "PYTHONPATH")}
+    clean = {
+        k: v for k, v in env.items() if k not in ("SPIKE_HOST_AUDIT", "PYTHONPATH")
+    }
     done = subprocess.run(
         [str(a) for a in argv], env=clean, cwd=CLONE, capture_output=True, check=False
     )
@@ -474,7 +487,11 @@ def run_host(run: Path, scenario: str, build: str, proxy: Proxy) -> None:
     env = host_env(proxy, run)
     if scenario == "host-changed1":
         state = CACHE / "state" / HOST_PLAN
-        variant = int((state / "variant").read_text()) + 1 if (state / "variant").exists() else 1
+        variant = (
+            int((state / "variant").read_text()) + 1
+            if (state / "variant").exists()
+            else 1
+        )
         workload.rewrite_one(state / "md", HOST_PLAN, 1, variant)
         (state / "variant").write_text(str(variant))
         stamp(env)
@@ -541,9 +558,7 @@ def header_floor(scenario: str) -> None:
     """Pause for the reset while the last GraphQL answer any run recorded, in the current
     window, left the bucket under the floor: the headers are what GitHub enforces, and the
     readings the gate takes have answered thousands of points too generously."""
-    logs = sorted(
-        RUNS.glob("*/proxy.jsonl"), key=lambda p: p.stat().st_mtime
-    )
+    logs = sorted(RUNS.glob("*/proxy.jsonl"), key=lambda p: p.stat().st_mtime)
     for log in reversed(logs[-3:]):
         records = [
             json.loads(line) for line in log.read_text().splitlines() if line.strip()
@@ -605,7 +620,9 @@ def corrected_read(token_value: str) -> dict:
     out = quota.read(token_value)
     headers = last_headers()
     if headers is not None:
-        out["graphql (last headers)"] = {k: headers[k] for k in ("limit", "used", "remaining", "reset")}
+        out["graphql (last headers)"] = {
+            k: headers[k] for k in ("limit", "used", "remaining", "reset")
+        }
         if headers["remaining"] < out["graphql"]["remaining"]:
             out["graphql"] = dict(out["graphql (last headers)"])
     return out
@@ -633,6 +650,7 @@ def run_offline(scenario: str, build: str, stamp: str) -> None:
     run = RUNS / f"{name}-{stamp}"
     run.mkdir(parents=True)
     print(f"{name}: raw logs in {run}", flush=True)
+    # llmlint: ignore[structural_pattern_matching] This repository declares requires-python >=3.9 and ruff targets it; `match` is a syntax error there.
     if scenario == "proxy-refusal":
         import refusal
 
@@ -644,7 +662,9 @@ def run_offline(scenario: str, build: str, stamp: str) -> None:
     out = sanitize.write_offline(run, result, LOGS / f"{name}-{stamp}")
     print(f"{name}: sanitized result in {out}", flush=True)
     if result.get("all_as_expected") is False or result.get("all_agree") is False:
-        sys.exit(f"run.py: {name} recorded an outcome other than the expected one; read {out}/result.json")
+        sys.exit(
+            f"run.py: {name} recorded an outcome other than the expected one; read {out}/result.json"
+        )
 
 
 def main() -> None:
@@ -678,10 +698,17 @@ def main() -> None:
     logged = len(QUOTA_LOG.read_text().splitlines()) if QUOTA_LOG.exists() else 0
     header_floor(name)
     reading = quota.gate(
-        token(), QUOTA_LOG, name, DRAWS.get(args.scenario, quota.BUCKETS),
+        token(),
+        QUOTA_LOG,
+        name,
+        DRAWS.get(args.scenario, quota.BUCKETS),
         reader=corrected_read,
     )
-    events = [json.loads(line) for line in QUOTA_LOG.read_text().splitlines()[logged:] if line.strip()]
+    events = [
+        json.loads(line)
+        for line in QUOTA_LOG.read_text().splitlines()[logged:]
+        if line.strip()
+    ]
     (run / "quota-events.json").write_text(json.dumps(events))
     (run / "quota-before.json").write_text(json.dumps(reading))
     walk = args.scenario in ("plans-walk", "plans-board-walk", "plans-read")
@@ -716,7 +743,9 @@ def main() -> None:
                 if args.scenario == "probe-alias-pricing"
                 else feasibility.placement
             )
-            probe(run, proxy.endpoint, token(), TEST_OWNER, TEST_NUMBER, TEST_REPOSITORY)
+            probe(
+                run, proxy.endpoint, token(), TEST_OWNER, TEST_NUMBER, TEST_REPOSITORY
+            )
         elif args.scenario == "probes":
             import probes
 

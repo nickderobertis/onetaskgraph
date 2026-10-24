@@ -36,6 +36,7 @@ GRAPHQL_HOUR = 5000
 
 
 def label(candidate: dict) -> str:
+    # llmlint: ignore[structural_pattern_matching] This repository declares requires-python >=3.9 and ruff targets it; `match` is a syntax error there.
     if candidate["unit"] == "seconds":
         return "estimate"
     if candidate["unit"] == "writes":
@@ -44,7 +45,9 @@ def label(candidate: dict) -> str:
 
 
 def system_limits(candidate: dict) -> str:
-    bar, unit = candidate["bar"], candidate["unit"]
+    bar = candidate["bar"]
+    unit = candidate["unit"]
+    # llmlint: ignore[structural_pattern_matching] This repository declares requires-python >=3.9 and ruff targets it; `match` is a syntax error there.
     if unit == "points":
         burst = 3 * candidate["attainable"]
         return (

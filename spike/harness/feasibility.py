@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
+from typing import Protocol
 
 import pricing
 import probes
@@ -43,6 +44,28 @@ PLACEMENT_TIMEOUT = 45.0
 TITLE = "bcg-probe"
 # The plan's ten blocked-by edges among its eight tasks, by index (the parent is 0).
 EDGES = workload.TASK_EDGES
+
+
+class Sender(Protocol):
+    """What a probe needs of its client: send one GraphQL document, answer body and headers."""
+
+    last_write: float
+
+    def send(
+        self, query: str, variables: dict, write: bool = False
+    ) -> tuple[dict, dict]: ...
+
+
+# Each probe mutation's operation name and how many aliased mutations it carries: the one
+# statement of both, which the documents below are built to and `gaps.py` prices them by.
+PROBE_ALIASES = {
+    "ProbeCreateParent": 1,
+    "ProbeCreateRace": 2,
+    "ProbeAdd": 3,
+    "ProbeCreateChildren": 8,
+    "ProbeCoalesced": 19,
+    "ProbeNineteen": 19,
+}
 
 
 # --- documents ------------------------------------------------------------------------------
@@ -202,7 +225,7 @@ def issue_variables(issue: str) -> dict:
     }
 
 
-def priced(client: probes.Client, label: str, document: str, variables: dict) -> dict:
+def priced(client: Sender, label: str, document: str, variables: dict) -> dict:
     start = time.time()
     body, headers = client.send(pricing.dry_run(document), variables)
     cost = ((body.get("data") or {}).get("rateLimit") or {}).get("cost")
@@ -215,7 +238,7 @@ def priced(client: probes.Client, label: str, document: str, variables: dict) ->
     }
 
 
-def charged(client: probes.Client, label: str, document: str, variables: dict) -> dict:
+def charged(client: Sender, label: str, document: str, variables: dict) -> dict:
     """Run `document` for real, asking GitHub what it charged in the same request."""
     root = document.index("{")
     asked = (
@@ -238,7 +261,7 @@ def charged(client: probes.Client, label: str, document: str, variables: dict) -
     }
 
 
-def board(client: probes.Client, owner: str, number: int, repo: str) -> dict:
+def board(client: Sender, owner: str, number: int, repo: str) -> dict:
     body, _ = client.send(
         "query ProbeIds($owner: String!, $name: String!, $number: Int!) {"
         " repository(owner: $owner, name: $name) { id }"
@@ -372,9 +395,7 @@ def on_board(issue: dict | None, project: str) -> list[str]:
     return [n["id"] for n in nodes if (n.get("project") or {}).get("id") == project]
 
 
-def poll_items(
-    client: probes.Client, issues: list[str], project: str
-) -> tuple[dict, int]:
+def poll_items(client: Sender, issues: list[str], project: str) -> tuple[dict, int]:
     """One aliased read of every issue's board items, with what GitHub charged for it."""
     aliases = " ".join(
         f"i{k}: node(id: $id{k}) {{ ... on Issue {{ {ITEMS} }} }}"
@@ -393,7 +414,7 @@ def poll_items(
 
 
 def aliased_create(
-    client: probes.Client, record: dict, inputs: list[dict], label: str
+    client: Sender, record: dict, inputs: list[dict], label: str
 ) -> tuple[list[dict], dict, float]:
     defs = ", ".join(f"$c{k}: CreateIssueInput!" for k in range(len(inputs)))
     aliases = " ".join(
@@ -627,15 +648,13 @@ RATE = "query ProbeRate { rateLimit { used resetAt } }"
 TRIALS = 3
 
 
-def used(client: probes.Client) -> tuple[int, str]:
+def used(client: Sender) -> tuple[int, str]:
     body, _ = client.send(RATE, {})
     rate = (body.get("data") or {}).get("rateLimit") or {}
     return int(rate.get("used", -1)), str(rate.get("resetAt"))
 
 
-def mutation_cost(
-    client: probes.Client, project: str, ids: dict, item_ids: list[str]
-) -> dict:
+def mutation_cost(client: Sender, project: str, ids: dict, item_ids: list[str]) -> dict:
     """Least `rateLimit.used` rise across a 19-alias field-value request, and across nothing."""
     aliases, variables = [], {"p": project, "f": ids["field"], "o": ids["option"]}
     for k in range(19):
@@ -675,7 +694,7 @@ DELETE_BATCH = (
 )
 
 
-def delete(client: probes.Client, record: dict, repo_id: str) -> dict:
+def delete(client: Sender, record: dict, repo_id: str) -> dict:
     """Delete every issue this probe created (and any an interrupted run left recorded),
     `DELETE_BATCH` to a request, after reading each back and keeping only those in the
     scratch repository titled as this probe titles them; an issue already gone is dropped."""

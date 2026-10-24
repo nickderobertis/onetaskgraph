@@ -189,18 +189,48 @@ def test_a_mutation_naming_another_repository_never_leaves(proxy):
     assert [r["status"] for r in raw(directory)] == [403, 200]
 
 
-@pytest.mark.parametrize("proxy", [("allowed", ["R_scratch", "PVT_board"])], indirect=True)
-def test_a_guarded_field_given_a_variable_of_another_name_is_still_guarded(proxy):
+@pytest.mark.parametrize(
+    "proxy", [("allowed", ["R_scratch", "PVT_board"])], indirect=True
+)
+@pytest.mark.parametrize(
+    ("query", "outside", "inside"),
+    [
+        (
+            (
+                "mutation($p: ID!, $c: ID!) { addProjectV2ItemById(input: {projectId: $p,"
+                " contentId: $c}) { item { id } } }"
+            ),
+            {"p": "PVT_other", "c": "I_1"},
+            {"p": "PVT_board", "c": "I_1"},
+        ),
+        (
+            (
+                'mutation($r: ID!) { createIssue(input: {repositoryId: $r, title: "x"})'
+                " { issue { id } } }"
+            ),
+            {"r": "R_other"},
+            {"r": "R_scratch"},
+        ),
+        (
+            (
+                'mutation($r: ID!, $b: [ID!]) { createIssue(input: {repositoryId: $r, title: "x",'
+                " projectV2Ids: $b}) { issue { id } } }"
+            ),
+            {"r": "R_scratch", "b": ["PVT_other"]},
+            {"r": "R_scratch", "b": ["PVT_board"]},
+        ),
+    ],
+    ids=["projectId", "repositoryId", "projectV2Ids"],
+)
+def test_a_guarded_field_given_a_variable_of_another_name_is_still_guarded(
+    proxy, query, outside, inside
+):
     url, _ = proxy
-    add = (
-        "mutation($p: ID!, $c: ID!) { addProjectV2ItemById(input: {projectId: $p, contentId: $c})"
-        " { item { id } } }"
-    )
-    status, answer = post(f"{url}/graphql", {"query": add, "variables": {"p": "PVT_other", "c": "I_1"}})
+    status, answer = post(f"{url}/graphql", {"query": query, "variables": outside})
     assert status == 403
     assert answer["errors"][0]["type"] == "SPIKE_REFUSED"
     assert StandIn.seen == []
-    status, _ = post(f"{url}/graphql", {"query": add, "variables": {"p": "PVT_board", "c": "I_1"}})
+    status, _ = post(f"{url}/graphql", {"query": query, "variables": inside})
     assert status == 200
 
 
@@ -511,7 +541,9 @@ def test_consumption_counts_every_request_and_creation_from_the_committed_logs(
 
 def test_the_committed_consumption_is_what_the_committed_logs_add_up_to():
     # The timing spike's own logs moved to docs/measurements/ when its comparison landed.
-    logs = HARNESS.parent.parent / "docs/measurements/board-copy-speed-2026-10-18/before"
+    logs = (
+        HARNESS.parent.parent / "docs/measurements/board-copy-speed-2026-10-18/before"
+    )
     committed = json.loads((logs / "consumption.json").read_text())
     prices = json.loads((logs / "pricing.json").read_text())
     dirs = consumption.run_dirs(logs)

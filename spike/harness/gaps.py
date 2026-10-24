@@ -23,6 +23,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import feasibility
+
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
 LOGS = HERE.parent / "logs"
@@ -37,15 +39,7 @@ BASELINE_RUNS = {
     "host unchanged": "host-recopy-stock-20261024T100859",
     "host approval": "host-approve-stock-20261024T100947",
 }
-# Each probe mutation's operation name, and how many aliased mutations it carries.
-PROBE_ALIASES = {
-    "ProbeCreateParent": 1,
-    "ProbeCreateRace": 2,
-    "ProbeAdd": 3,
-    "ProbeCreateChildren": 8,
-    "ProbeCoalesced": 19,
-    "ProbeNineteen": 19,
-}
+PROBE_ALIASES = feasibility.PROBE_ALIASES
 ONEVCS_CALL_SECONDS = (
     0.62,
     0.67,

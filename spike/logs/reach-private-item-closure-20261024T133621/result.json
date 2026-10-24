@@ -1,0 +1,42 @@
+{
+ "binary": "onetaskgraph 0.11.1",
+ "case": "reach-private-item",
+ "destination_changed": false,
+ "destination_files": 0,
+ "onevcs": "onevcs 0.56.5",
+ "private_requests": 0,
+ "screens": {
+  "check": 0,
+  "distinct_inspect_inputs": 1,
+  "inspect": 16,
+  "seconds": 0.441,
+  "verdicts": [
+   [
+    "inspect",
+    0
+   ]
+  ]
+ },
+ "steps": [
+  {
+   "argv": [
+    "project",
+    "copy",
+    "src:reach-plan",
+    "--to",
+    "dest",
+    "--json"
+   ],
+   "output_names_the_reference": false,
+   "output_says_withheld": false,
+   "recorder_requests": [],
+   "returncode": 1,
+   "seconds": 3.43,
+   "stderr_tail": [
+    "onetaskgraph: src:reach-plan is private, and source dest is not declared private (it is declared public); a private item is written only to a source declared private whose backend agrees",
+    "next: write it to a source declared `visibility: private`, give dest a `{classification: private, to: <source>}` route to one, or declare dest private if its backend is."
+   ],
+   "step": "project-copy"
+  }
+ ]
+}

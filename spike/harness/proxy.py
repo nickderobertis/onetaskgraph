@@ -195,7 +195,7 @@ class Handler(BaseHTTPRequestHandler):
     recorder: Recorder
     api: str
     uploads: str
-    writes: str = "any"
+    writes: str = "none"
     allowed: frozenset[str] = frozenset()
     refused_ops: frozenset[str] = frozenset()
     local = threading.local()
@@ -388,7 +388,7 @@ def serve(
     api: str,
     uploads: str,
     port: int = 0,
-    writes: str = "any",
+    writes: str = "none",
     allowed: frozenset[str] = frozenset(),
     refused_ops: frozenset[str] = frozenset(),
 ) -> None:
@@ -414,8 +414,8 @@ def main() -> None:
     parser.add_argument(
         "--writes",
         choices=("any", "none", "allowed"),
-        default="any",
-        help="none: refuse every mutation and upload; allowed: refuse a mutation naming a "
+        default="none",
+        help="any: forward every write (stand-in upstreams only); none: refuse every mutation and upload; allowed: refuse a mutation naming a "
         "repository or project id not given with --allow",
     )
     parser.add_argument("--allow", action="append", default=[])
