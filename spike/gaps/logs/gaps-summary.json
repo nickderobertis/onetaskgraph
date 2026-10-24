@@ -1667,7 +1667,37 @@
      "status": 403
     },
     {
-     "case": "a field value written as text rather than as a single-select option",
+     "case": "a single-select option on this run's own item on the test board",
+     "expected": 200,
+     "reached_upstream": 1,
+     "status": 200
+    },
+    {
+     "case": "the same item's value written as text",
+     "expected": 403,
+     "reached_upstream": 0,
+     "status": 403
+    },
+    {
+     "case": "the same item's option beside a number the probes never write",
+     "expected": 403,
+     "reached_upstream": 0,
+     "status": 403
+    },
+    {
+     "case": "the same item's value as an empty object",
+     "expected": 403,
+     "reached_upstream": 0,
+     "status": 403
+    },
+    {
+     "case": "the same item's value as a bare string",
+     "expected": 403,
+     "reached_upstream": 0,
+     "status": 403
+    },
+    {
+     "case": "createIssue answering a field under the key the guard reads issues from, in a fragment",
      "expected": 403,
      "reached_upstream": 0,
      "status": 403
@@ -1734,7 +1764,7 @@
     }
    ]
   },
-  "refusal_run": "proxy-refusal-head-20261024T175536",
+  "refusal_run": "proxy-refusal-head-20261024T180518",
   "union": {
    "commands": {
     "document-copy": [

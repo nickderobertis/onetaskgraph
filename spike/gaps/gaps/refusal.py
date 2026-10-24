@@ -61,6 +61,12 @@ READ_OWN_ITEMS = (
     " { nodes { id project { id } } } } } }"
 )
 FOREIGN_ITEM = "PVTI_listed_under_a_foreign_issue"
+# The board item a read lists for this run's own issue on the test board: owned once listed.
+OWN_ITEM = "PVTI_of_this_runs_issue_on_the_test_board"
+HIDDEN_IMPOSTOR = (
+    "mutation($input: CreateIssueInput!) { createIssue(input: $input) { ...F } }"
+    " fragment F on CreateIssuePayload { issue: clientMutationId }"
+)
 TWO_OPERATIONS = (
     "query Q { viewer { login } } mutation M($i: CreateIssueInput!) {"
     " createIssue(input: $i) { issue { id } } }"
@@ -76,7 +82,10 @@ FIELD = (
     ' itemId: $i, fieldId: "F", value: {singleSelectOptionId: "O"}}) { projectV2Item { id } } }'
 )
 
-FIELD_TEXT = FIELD.replace('value: {singleSelectOptionId: "O"}', 'value: {text: "free text"}')
+FIELD_VALUE = (
+    "mutation($p: ID!, $i: ID!, $v: ProjectV2FieldValue!) { updateProjectV2ItemFieldValue(input:"
+    ' {projectId: $p, itemId: $i, fieldId: "F", value: $v}) { projectV2Item { id } } }'
+)
 
 
 class Allowed(StrEnum):
@@ -213,9 +222,39 @@ CASES = (
         403,
     ),
     Case(
-        "a field value written as text rather than as a single-select option",
-        FIELD_TEXT,
-        {"p": PROJECT_ID, "i": FOREIGN_ITEM},
+        "a single-select option on this run's own item on the test board",
+        FIELD_VALUE,
+        {"p": PROJECT_ID, "i": OWN_ITEM, "v": {"singleSelectOptionId": "O"}},
+        200,
+    ),
+    Case(
+        "the same item's value written as text",
+        FIELD_VALUE,
+        {"p": PROJECT_ID, "i": OWN_ITEM, "v": {"text": "free text"}},
+        403,
+    ),
+    Case(
+        "the same item's option beside a number the probes never write",
+        FIELD_VALUE,
+        {"p": PROJECT_ID, "i": OWN_ITEM, "v": {"singleSelectOptionId": "O", "number": 1}},
+        403,
+    ),
+    Case(
+        "the same item's value as an empty object",
+        FIELD_VALUE,
+        {"p": PROJECT_ID, "i": OWN_ITEM, "v": {}},
+        403,
+    ),
+    Case(
+        "the same item's value as a bare string",
+        FIELD_VALUE,
+        {"p": PROJECT_ID, "i": OWN_ITEM, "v": "O"},
+        403,
+    ),
+    Case(
+        "createIssue answering a field under the key the guard reads issues from, in a fragment",
+        HIDDEN_IMPOSTOR,
+        {"input": {"repositoryId": REPO_ID, "title": "I_someone_else"}},
         403,
     ),
     Case(
@@ -325,7 +364,8 @@ def answer_for(body: bytes) -> dict[str, object]:
 
     Every `createIssue` answers `MADE` as its issue; every other top-level field that selects
     `id` answers the issue it names (`MADE` when it names it, `RETURNED` otherwise) with, when
-    asked, one board item on another project: the shape GitHub gives a node read.
+    asked, one board item on another project, and for `MADE` its item on the test board too:
+    the shape GitHub gives a node read.
     """
     try:
         document = graphql.parse(text(obj(parse(body.decode(), "request"), "r").get("query"), "q"))
@@ -344,8 +384,10 @@ def answer_for(body: bytes) -> dict[str, object]:
                 data[alias] = {"issue": {"id": MADE}}
             elif "id" in selected:
                 issue = MADE if f'"{MADE}"' in graphql.print_ast(selection) else RETURNED
-                node = {"id": FOREIGN_ITEM, "project": {"id": ELSEWHERE_PROJECT}}
-                listed = {"projectItems": {"nodes": [node]}} if "projectItems" in selected else {}
+                nodes = [{"id": FOREIGN_ITEM, "project": {"id": ELSEWHERE_PROJECT}}]
+                if issue == MADE:
+                    nodes.append({"id": OWN_ITEM, "project": {"id": PROJECT_ID}})
+                listed = {"projectItems": {"nodes": nodes}} if "projectItems" in selected else {}
                 data[alias] = {"id": issue} | listed
     return data
 
