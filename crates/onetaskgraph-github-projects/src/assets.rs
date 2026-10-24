@@ -119,7 +119,7 @@ impl GitHubProjectsSource {
         }
         base.set_query(None);
         let bytes = self
-            .asset_request(self.client.get(base), name, AssetOperation::Repository)
+            .asset_request(self.client()?.get(base), name, AssetOperation::Repository)
             .await?;
         let value: Value =
             serde_json::from_slice(&bytes).map_err(|error| SourceError::Refused {
@@ -171,7 +171,7 @@ impl GitHubProjectsSource {
                     .map_err(|message| SourceError::Refused { message })?;
                 let id = self.numeric_repository(&target, &asset.name).await?;
                 let request = self
-                    .client
+                    .client()?
                     .post(self.upload_endpoint()?)
                     .query(&[
                         ("name", asset.name.as_str().to_owned()),
@@ -195,7 +195,7 @@ impl GitHubProjectsSource {
                 })?;
                 let verified = self.attachment_url(&asset.name, url)?;
                 self.asset_request(
-                    self.client.get(verified),
+                    self.client()?.get(verified),
                     &asset.name,
                     AssetOperation::Verification,
                 )
@@ -252,7 +252,7 @@ impl GitHubProjectsSource {
             return Ok(None);
         };
         let url = self.attachment_url(name, &upload.url)?;
-        self.asset_request(self.client.get(url), name, AssetOperation::Read)
+        self.asset_request(self.client()?.get(url), name, AssetOperation::Read)
             .await
             .map(Some)
     }
@@ -293,7 +293,7 @@ impl GitHubProjectsSource {
         loop {
             let ticket = self.pace(charge, mutation).await;
             let response = self
-                .asset_client
+                .asset_client()?
                 .execute(request.try_clone().ok_or_else(|| SourceError::Refused {
                     message: format!("GitHub asset {name} {stage} cannot be retried"),
                 })?)

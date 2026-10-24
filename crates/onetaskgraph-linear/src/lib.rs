@@ -1452,7 +1452,10 @@ pub async fn status_names(
 
 struct LinearSource {
     clock: onetaskgraph_plugin_api::SharedClock,
-    client: reqwest::Client,
+    /// Built on the first request rather than with the source: building one loads the
+    /// system's certificate store, tens of milliseconds a source that a command never sends to
+    /// should not cost its process.
+    client: std::sync::OnceLock<reqwest::Client>,
     endpoint: Endpoint,
     key: SecretString,
     team: Option<Team>,
@@ -1506,7 +1509,7 @@ impl LinearSource {
             })?;
         Ok(Self {
             clock: onetaskgraph_plugin_api::system_clock(),
-            client: reqwest::Client::new(),
+            client: std::sync::OnceLock::new(),
             endpoint: config.endpoint,
             key,
             team: config.team,
@@ -1811,7 +1814,14 @@ impl LinearSource {
         query: &str,
         variables: Value,
     ) -> Result<Result<Value, Refusal>, SourceError> {
-        match self.answer_using(&self.client, query, variables).await {
+        match self
+            .answer_using(
+                self.client.get_or_init(reqwest::Client::new),
+                query,
+                variables,
+            )
+            .await
+        {
             Err(SourceError::RateLimited {
                 retry_after_seconds,
                 ..
