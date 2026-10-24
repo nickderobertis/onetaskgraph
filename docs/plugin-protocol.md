@@ -1245,8 +1245,9 @@ metadata key `onetaskgraph.classification` while it is `"private"` and nowhere w
 public, and reports it as this member rather than as metadata.
 
 It is the record's *declared* classification. The engine tightens it before it writes — a
-record naming a private repository, or filed under a private project, is private however this
-member reads — and never loosens it. Where a private record may be written is the engine's to
+record naming a private repository, or a document filed under a private project, is private
+however this member reads — and never loosens it. A task is never tightened by the project it is
+filed under: its classification is its own declaration and the repositories it names. Where a private record may be written is the engine's to
 decide: it writes one only to a source declared `visibility: private` whose own live read,
 `TaskSource::visibility`, answers that it is private; a source hosted over this protocol
 answers `unknown` there (see the paragraph after the method table), so a private record is never

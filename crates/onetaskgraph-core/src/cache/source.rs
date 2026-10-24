@@ -3041,12 +3041,12 @@ mod tests {
             repositories: Vec::new(),
             classification: Default::default(),
         });
-        let Some(_refusing) = refusing_in(&dir.path().join("projects-v2")) else {
+        let Some(_refusing) = refusing_in(&dir.path().join("projects-v3")) else {
             return;
         };
         let _read_only = Mode::set(
             &dir.path()
-                .join("projects-v2")
+                .join("projects-v3")
                 .join(format!("{}.json", super::super::digest("P-1"))),
             0o444,
         );

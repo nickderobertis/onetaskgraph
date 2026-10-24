@@ -343,7 +343,7 @@ fn a_projects_tasks_listed_then_their_forward_edges_are_answered_from_the_cache_
 fn edges_kept(cached: &Cached) -> Vec<String> {
     let mut kept: Vec<String> = cached
         .dir()
-        .map(|dir| walk(&dir.join("edges-v2")))
+        .map(|dir| walk(&dir.join("edges-v3")))
         .unwrap_or_default()
         .iter()
         .filter_map(|path| std::fs::read(path).ok())
@@ -945,14 +945,14 @@ fn every_linear_write_takes_the_entries_naming_its_item_out_of_service() {
             (
                 "project",
                 "linear:P-1",
-                "projects-v2",
+                "projects-v3",
                 words("project metadata set linear:P-1 caller.note \"noted\""),
                 "noted",
             ),
             (
                 "document",
                 "linear:D-1",
-                "documents-v2",
+                "documents-v3",
                 words("document metadata set linear:D-1 caller.note \"noted\""),
                 "noted",
             ),

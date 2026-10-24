@@ -4379,7 +4379,8 @@ impl Engine {
 
         // A task or a document copied on its own joins whatever project it is filed under at
         // the destination, which says who may read it too: a private one is never filed under
-        // a project held public there, and one filed under a private project is private. A dry
+        // a project held public there, and a document filed under a private project is private
+        // — a task keeps its own classification, whatever project it is filed under. A dry
         // run reads that project too, so it reports the refusal its copy would meet.
         if project.is_none() {
             for (item, filed) in planned.iter_mut().zip(&filed) {

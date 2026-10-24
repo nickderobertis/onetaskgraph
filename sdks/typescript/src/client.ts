@@ -154,7 +154,8 @@ export type CreateOptions = TemplateSourceOptions &
     labels?: string[];
     repositories?: string[];
     metadata?: Record<string, JsonValue>;
-    // Who may read it. Its repositories and its project tighten it, and nothing loosens it.
+    // Who may read it. Its repositories tighten it, and so does a document's project; a task's
+    // project never does, and nothing loosens it.
     classification?: Classification;
   };
 // The image files a create or a render stores with a task or a document, each under its base

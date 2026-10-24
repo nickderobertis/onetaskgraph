@@ -11,6 +11,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
+use onetaskgraph_core::cache::ENTRY_SCHEMA;
 use onetaskgraph_e2e_support::sdk::Sdk;
 use onetaskgraph_github_projects::graphql;
 use serde_json::{Value, json};
@@ -2342,7 +2343,8 @@ fn a_context_another_release_wrote_is_declined_and_the_write_reads_once_instead(
     let v2 = written_version(&written);
     std::fs::write(
         cached.default_dir().join("board.json"),
-        serde_json::to_vec(&json!({"schema": 1, "remote": "elsewhere", "context": {}})).unwrap(),
+        serde_json::to_vec(&json!({"schema": ENTRY_SCHEMA, "remote": "elsewhere", "context": {}}))
+            .unwrap(),
     )
     .unwrap();
     let (_, sent) = cached.ok(&[
@@ -2394,7 +2396,7 @@ fn cache_clear_leaves_another_remotes_entries_another_releases_and_their_staging
     let tasks = dir.join("tasks");
     std::fs::write(
         tasks.join("other.json"),
-        r#"{"schema":1,"remote":"another"}"#,
+        json!({"schema": ENTRY_SCHEMA, "remote": "another"}).to_string(),
     )
     .unwrap();
     let ours = Cached::entries(&dir)
@@ -2402,7 +2404,7 @@ fn cache_clear_leaves_another_remotes_entries_another_releases_and_their_staging
         .find(|path| !path.ends_with("other.json"))
         .unwrap();
     let mut later: Value = serde_json::from_slice(&std::fs::read(&ours).unwrap()).unwrap();
-    later["schema"] = json!(2);
+    later["schema"] = json!(ENTRY_SCHEMA + 1);
     std::fs::write(
         tasks.join("later.json"),
         serde_json::to_vec(&later).unwrap(),

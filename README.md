@@ -1898,8 +1898,9 @@ things decide where an item may be written, and one decides what it may say ther
 `public` or `private`. A folder of Markdown writes `classification: private` in the front
 matter and nothing while it is public; a hosted source keeps it under the reserved metadata key
 `onetaskgraph.classification`. An item written before it existed reads as public. It only ever
-tightens: an item naming a repository that is not public is private, an item filed under a
-private project is private, and an explicit `public` changes neither. A project is the strictest
+tightens: an item naming a repository that is not public is private, a document filed under a
+private project is private, and an explicit `public` changes neither — a task's project never
+tightens it (see below). A project is the strictest
 of its own classification, its tasks' and its documents', and a store writes it so — so a
 project stays private after the members that made it private are gone, and a copy never writes
 an item looser than the destination already holds it. `task create`, `document create` and

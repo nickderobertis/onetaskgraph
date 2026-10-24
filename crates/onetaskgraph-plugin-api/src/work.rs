@@ -126,9 +126,10 @@ pub struct Task {
     ///
     /// Defaulted and left out of the wire while `public`, so a task written before this
     /// field existed reads as public and a reader written before it reads what it always
-    /// read. It is the *declared* classification: the engine tightens it by the task's
-    /// repositories and its project before it decides where the task may be written, and
-    /// nothing written here can loosen either.
+    /// read. It is the *declared* classification: the engine tightens it by the task's own
+    /// repositories — any private or unknown one makes the task private — before it decides
+    /// where the task may be written, and nothing written here can loosen that. The project
+    /// a task is filed under never tightens it: a task's visibility is its own.
     #[serde(default, skip_serializing_if = "Classification::is_public")]
     #[schemars(!skip_serializing_if)]
     pub classification: Classification,
@@ -232,7 +233,8 @@ pub struct Document {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     /// Who may read this document, as it was declared, on the terms of
-    /// [`Task::classification`].
+    /// [`Task::classification`] — except that a document filed under a private project is
+    /// private, however this reads.
     #[serde(default, skip_serializing_if = "Classification::is_public")]
     #[schemars(!skip_serializing_if)]
     pub classification: Classification,
@@ -242,8 +244,9 @@ pub struct Document {
 ///
 /// Two values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of
 /// any two is the one an item they both describe carries. Nothing combines them any other
-/// way, which is what makes an explicit `public` unable to loosen a private repository or a
-/// private project — a classification only ever tightens.
+/// way, which is what makes an explicit `public` unable to loosen a private repository, or
+/// a document's private project — a classification only ever tightens. A task's project
+/// never tightens the task.
 ///
 /// It is recorded on the item and travels with it. A source whose backend has no notion of
 /// its own records it under [`Self::METADATA_KEY`], exactly as it records
