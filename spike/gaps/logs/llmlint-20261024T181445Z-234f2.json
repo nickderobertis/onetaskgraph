@@ -1,6 +1,6 @@
 {
-  "id": "20261024T172133Z-c313a",
-  "timestamp": "2026-10-24T17:21:33Z",
+  "id": "20261024T181445Z-234f2",
+  "timestamp": "2026-10-24T18:14:45Z",
   "llmlint_version": "0.4.11",
   "command": "lint",
   "cwd": "/home/whoop/.onevcs/workspaces/github.com-nickderobertis-onetaskgraph-9c94c67fcf19/pool/1/worktree",
@@ -36,42 +36,42 @@
     },
     {
       "name": "async_typed_clients_at_boundaries",
-      "rationale": "GitHub calls use the typed async Client, forwarding uses asyncio streams, and CLI, git, cargo, and onevcs calls use async subprocess wrappers returning Completed.",
+      "rationale": "GitHub calls use the typed async Client; subprocess services use proc.Completed and async process execution; guard forwarding uses asyncio streams.",
       "outcome": "pass",
       "votes_total": 1,
       "votes_hold": 1
     },
     {
       "name": "boundary_inputs_validated",
-      "rationale": "json_shape validates consumed JSON fields; CLI paths, credentials, endpoints, HTTP framing, GraphQL operations, and mutation ownership are checked before use.",
+      "rationale": "json_shape validates external records; CLI paths and credentials are checked; GraphQL parsing and ownership checks constrain requests before forwarding.",
       "outcome": "pass",
       "votes_total": 1,
       "votes_hold": 1
     },
     {
       "name": "budget_commands_measure_directly",
-      "rationale": "No target declares a budget command or implements a program named by one.",
+      "rationale": "No target declares a budget command or a wrapper named by one.",
       "outcome": "not_relevant",
       "votes_total": 0,
       "votes_hold": 0
     },
     {
       "name": "budget_descriptions_durable_and_terse",
-      "rationale": "No target declares a budget description; budgets.py reads candidate records and test_contracts.py supplies decoder fixtures.",
+      "rationale": "No target declares a budget description; budgets.py decodes candidate records maintained in the plan.",
       "outcome": "not_relevant",
       "votes_total": 0,
       "votes_hold": 0
     },
     {
       "name": "budgets_reuse_gate_telemetry",
-      "rationale": "The tests exercise candidate measurements; test_analysis.py recomputes figures from committed baseline and probe logs without repeating live measurements.",
+      "rationale": "The feasibility analysis reads committed request logs; the new tests validate that analysis and probe behavior rather than rerunning workloads solely for budget measurements.",
       "outcome": "pass",
       "votes_total": 1,
       "votes_hold": 1
     },
     {
       "name": "budgets_scoped_to_minimal_tree",
-      "rationale": "The targets analyse plan candidate records; none declares executable budgets or serves a budgets.yaml measurement command.",
+      "rationale": "The targets contain feasibility analysis and its tests, with no budgets.yaml declaration or budget command consuming these files.",
       "outcome": "not_relevant",
       "votes_total": 0,
       "votes_hold": 0
@@ -84,7 +84,7 @@
     },
     {
       "name": "changed_behavior_has_e2e",
-      "rationale": "test_live_probes.py, test_offline.py, and test_analysis.py exercise probe results, refusal, cleanup recovery, copy variants, and report output; exceptional structural proofs explain their limits.",
+      "rationale": "test_live_probes.py exercises probes and recovery through the real guard; test_offline.py covers reachability and screening; test_analysis.py verifies report output and arithmetic. Structural exceptions explain their limits locally.",
       "outcome": "pass",
       "votes_total": 1,
       "votes_hold": 1
@@ -97,35 +97,35 @@
     },
     {
       "name": "cli_output_contract",
-      "rationale": "cli.py documents statuses 0/1/2, writes diagnostics to stderr, and prints only the result path on success; report.py writes JSON artifacts separately, and shim.py preserves subprocess streams and status.",
+      "rationale": "cli.py documents measurement exit statuses and prints only the result path on success; report.py and shim.py keep diagnostics on stderr and structured output separate.",
       "outcome": "pass",
       "votes_total": 1,
       "votes_hold": 1
     },
     {
       "name": "code_lands_in_the_domain_that_owns_it",
-      "rationale": "New helpers and models remain within the spike-gaps feasibility project, alongside the probes, analysis, and tests that own their behavior.",
+      "rationale": "The feasibility harness, its models, helpers, and tests remain within the spike-gaps project that owns the experiment.",
       "outcome": "pass",
       "votes_total": 1,
       "votes_hold": 1
     },
     {
       "name": "comments_earn_their_place",
-      "rationale": "Comments explain quota accounting, ownership checks, cleanup guarantees, compatibility defaults, and test constraints; docstrings document public contracts.",
+      "rationale": "Comments explain quota conservatism, ownership checks, cleanup guarantees, compatibility defaults, and measurement limits; docstrings document callable contracts.",
       "outcome": "pass",
       "votes_total": 1,
       "votes_hold": 1
     },
     {
       "name": "contracts_have_one_source_or_a_drift_gate",
-      "rationale": "Contract tests reconcile plugin documents, variable declarations, scratch destinations, boundary fields, baseline runs, lint records, and report variables; schema tests reconcile the GraphQL extension with recorded introspection.",
+      "rationale": "test_contracts.py and test_documents.py reconcile plugin documents, variables, board constants, boundary fields, lint records, and GraphQL schema; integration tests exercise CLI seams.",
       "outcome": "pass",
       "votes_total": 1,
       "votes_hold": 1
     },
     {
       "name": "crates_stay_in_one_cargo_workspace",
-      "rationale": "project.json defines a Python application; it adds or changes no Rust crate project, manifest, lockfile, or toolchain.",
+      "rationale": "spike/gaps/project.json defines a Python application, not a new or changed Rust crate project.",
       "outcome": "not_relevant",
       "votes_total": 0,
       "votes_hold": 0
@@ -162,14 +162,14 @@
     },
     {
       "name": "expensive_tests_stay_behind_their_own_edge",
-      "rationale": "spike-gaps owns its subprocess suite; its onetaskgraph dependency and both build dependencies produce binaries the tests exercise.",
+      "rationale": "spike-gaps owns the suite and depends on onetaskgraph, whose compiled binary its offline journeys exercise.",
       "outcome": "pass",
       "votes_total": 1,
       "votes_hold": 1
     },
     {
       "name": "external_service_suite_stays_out_of_the_affected_tier",
-      "rationale": "The test target uses loopback GitHub substitutes, synthetic onevcs identities, committed logs, and local authoring records; real GitHub probes run separately through gaps.sh.",
+      "rationale": "The test target uses loopback GitHub servers and local tools; authoring budgets come from a local-md source, while real GitHub probes remain manual commands.",
       "outcome": "not_relevant",
       "votes_total": 0,
       "votes_hold": 0
@@ -188,7 +188,7 @@
     },
     {
       "name": "least_privilege_grants",
-      "rationale": "Guard restricts writes to five mutation kinds, approved input fields, scratch destinations, owned issues, and owned board items; pricing receives no write grant.",
+      "rationale": "Guard.PROBE_INPUTS limits mutation kinds and fields, while destination, issue, and board-item ownership checks constrain every permitted write.",
       "outcome": "pass",
       "votes_total": 1,
       "votes_hold": 1
@@ -207,7 +207,7 @@
     },
     {
       "name": "modern_domain_modeling",
-      "rationale": "Measurements, requests, outcomes, budgets, and screening results use dataclasses and enums; credentials and GitHub identifiers use NewType, with dictionaries retained for JSON payloads and mappings.",
+      "rationale": "Results, requests, budgets, and measurements use dataclasses and enums; identifiers and credentials use NewType; dictionaries represent JSON payloads or keyed collections.",
       "outcome": "pass",
       "votes_total": 1,
       "votes_hold": 1
@@ -220,42 +220,42 @@
     },
     {
       "name": "names_match_behavior",
-      "rationale": "Scenario, result, ownership, pricing, and screening names match their implementations and documented measurement scope.",
+      "rationale": "Probe, allowance, placement, screening, analysis, and report names describe their implemented responsibilities and recorded measurements.",
       "outcome": "pass",
       "votes_total": 1,
       "votes_hold": 1
     },
     {
       "name": "new_code_lands_in_a_project",
-      "rationale": "spike/gaps/project.json declares spike-gaps and covers every newly added source, script, and test in scope.",
+      "rationale": "spike/gaps/project.json declares spike-gaps and covers every added source, test, and script in scope.",
       "outcome": "pass",
       "votes_total": 1,
       "votes_hold": 1
     },
     {
       "name": "new_command_or_client_gets_its_own_project",
-      "rationale": "The gaps command and GitHub probes belong to the separate spike-gaps Nx project and Python workspace member.",
+      "rationale": "The gaps command and GitHub probe client live in the separate spike-gaps Nx project and Python workspace member.",
       "outcome": "pass",
       "votes_total": 1,
       "votes_hold": 1
     },
     {
       "name": "new_projects_keep_the_graph_uniform",
-      "rationale": "spike-gaps declares build, lint, test, and typecheck targets with lang:python and layer:spike tags.",
+      "rationale": "spike-gaps declares build, lint, test, typecheck and format-check targets with lang:python and layer:spike tags.",
       "outcome": "pass",
       "votes_total": 1,
       "votes_hold": 1
     },
     {
       "name": "no_hardcoded_secrets",
-      "rationale": "Live credentials come from GH_PROJECTS_TOKEN or SPIKE_TOKEN_ENV; embedded tokens belong exclusively to synthetic loopback tests.",
+      "rationale": "Live credentials come from GH_PROJECTS_TOKEN or the named environment file; embedded credentials are synthetic loopback test placeholders.",
       "outcome": "pass",
       "votes_total": 1,
       "votes_hold": 1
     },
     {
       "name": "no_injection_from_untrusted_input",
-      "rationale": "Subprocesses receive argument vectors through create_subprocess_exec, JSON uses ordinary parsing, and no shell execution, eval, exec, or unsafe deserialization consumes external input.",
+      "rationale": "Subprocesses receive argument vectors through create_subprocess_exec, and external structured data is parsed as JSON or GraphQL without dynamic execution.",
       "outcome": "pass",
       "votes_total": 1,
       "votes_hold": 1
@@ -268,7 +268,7 @@
     },
     {
       "name": "no_redundant_instruction_pointers",
-      "rationale": "spike/gaps/README.md is not reachable through reference links from an applicable AGENTS.md or CLAUDE.md.",
+      "rationale": "No applicable AGENTS.md reference path reaches spike/gaps/README.md.",
       "outcome": "not_relevant",
       "votes_total": 0,
       "votes_hold": 0
@@ -293,7 +293,7 @@
     },
     {
       "name": "onebudgetspec_is_the_only_judge",
-      "rationale": "The candidate-budget reader and report tests are feasibility analysis, not declarations or measurement code invoked by a budget command.",
+      "rationale": "The candidate-threshold comparisons belong to a feasibility report; no target declares or implements a budget measurement command.",
       "outcome": "not_relevant",
       "votes_total": 0,
       "votes_hold": 0
@@ -306,21 +306,21 @@
     },
     {
       "name": "projects_stay_in_one_js_workspace",
-      "rationale": "spike-gaps is tagged lang:python and introduces no TypeScript project.",
+      "rationale": "The new project is tagged lang:python and introduces no TypeScript project configuration.",
       "outcome": "not_relevant",
       "votes_total": 0,
       "votes_hold": 0
     },
     {
       "name": "projects_stay_in_one_uv_workspace",
-      "rationale": "The root workspace adds spike/gaps, which has its own pyproject.toml and resolves through root uv.lock; the reused timing harness is not a separate distribution.",
+      "rationale": "The root workspace includes spike/gaps, which owns its pyproject.toml and resolves through root uv.lock; imported timing-harness modules are not a sibling distribution.",
       "outcome": "pass",
       "votes_total": 1,
       "votes_hold": 1
     },
     {
       "name": "protocol_based_seams",
-      "rationale": "No pluggable object interface is introduced; substitutes operate across HTTP or subprocess boundaries, and the injectable sleep dependency has a structural Callable annotation.",
+      "rationale": "No pluggable object interface is introduced; tests substitute network endpoints, and the injectable pause operation has a Callable signature.",
       "outcome": "not_relevant",
       "votes_total": 0,
       "votes_hold": 0
@@ -345,35 +345,35 @@
     },
     {
       "name": "structural_pattern_matching",
-      "rationale": "Shape and value dispatch uses match/case in decoding, scenario selection, AST handling, and test responses; remaining conditionals express independent guards.",
+      "rationale": "Shape and value dispatch use match/case in JSON decoding, GraphQL inspection, scenario handling, and test doubles; remaining conditionals express independent guards.",
       "outcome": "pass",
       "votes_total": 1,
       "votes_hold": 1
     },
     {
       "name": "suppressions_justified",
-      "rationale": "The targets contain no linter or type-checker suppression directives or in-language type-system escape hatches.",
+      "rationale": "The changed files contain no linter suppression directives or unchecked type-system escape hatches.",
       "outcome": "not_relevant",
       "votes_total": 0,
       "votes_hold": 0
     },
     {
       "name": "test_tiers_split_by_project_not_by_marker",
-      "rationale": "The subprocess suite lives in spike-gaps, whose test target runs pytest without marker deselection or environment-based tier skips.",
+      "rationale": "The slow subprocess journeys belong to spike-gaps and run through its ordinary test target without deselecting markers or environment-based tier skips.",
       "outcome": "pass",
       "votes_total": 1,
       "votes_hold": 1
     },
     {
       "name": "tests_assert_real_behavior",
-      "rationale": "Every test asserts returned data, command status, recorded requests, filesystem state, schema agreement, or an expected exception.",
+      "rationale": "Every test asserts returned values, schema validation results, exceptions, process outcomes, recorded requests, or persisted state.",
       "outcome": "pass",
       "votes_total": 1,
       "votes_hold": 1
     },
     {
       "name": "tests_hold_no_nonfunctional_thresholds",
-      "rationale": "Count assertions describe exact actions and state; timing assertions verify recorded arithmetic or configured backoff, and quota assertions verify the gate's own enforced policy.",
+      "rationale": "Counts assert concrete actions and state; timeouts guard hangs, backoff checks enforce configured behavior, and timing tolerances validate recorded arithmetic rather than runtime performance.",
       "outcome": "pass",
       "votes_total": 1,
       "votes_hold": 1
@@ -386,14 +386,14 @@
     },
     {
       "name": "tool_output_is_signal",
-      "rationale": "Both launchers are quiet on success; their explicit failures identify missing uv or an incompatible patch and provide concrete recovery instructions.",
+      "rationale": "Both launchers are quiet on success; their explicit failures identify missing uv or an incompatible patch and provide concrete corrective commands or actions.",
       "outcome": "pass",
       "votes_total": 1,
       "votes_hold": 1
     },
     {
       "name": "work_goes_through_command_surface",
-      "rationale": "README.md directs checks through just test, just lint, just format-check, and just typecheck.",
+      "rationale": "README.md names just test, just lint, just format-check, and just typecheck as its quality-check commands.",
       "outcome": "pass",
       "votes_total": 1,
       "votes_hold": 1
@@ -707,12 +707,12 @@
       }
     ],
     "optimization": {
-      "billed_tokens": 145182,
-      "baseline_billed_tokens": 236498,
-      "saved_billed_tokens": 91316,
-      "per_rule_tokens": 2666534,
-      "baseline_per_rule_tokens": 4020466,
-      "saved_per_rule_tokens": 1353932
+      "billed_tokens": 154486,
+      "baseline_billed_tokens": 249233,
+      "saved_billed_tokens": 94747,
+      "per_rule_tokens": 2831566,
+      "baseline_per_rule_tokens": 4236961,
+      "saved_per_rule_tokens": 1405395
     }
   }
 }
