@@ -144,6 +144,22 @@ fn since(workspace: &LinearWorkspace, from: usize) -> Vec<String> {
 struct Case {
     name: String,
     per_source: Vec<(&'static str, usize)>,
+    /// The complexity points the workspaces that answered spent on it, priced by the cache
+    /// budget's table of Linear's measured costs; a refusal answers nothing and is priced at none.
+    points: u64,
+}
+
+/// The complexity points `workspace` was charged for what it served since `from`.
+fn points(workspace: &LinearWorkspace, from: usize) -> u64 {
+    let served = workspace.served();
+    let answered = workspace.answered();
+    served[from..]
+        .iter()
+        .zip(&answered[from..])
+        .map(|((document, variables), answer)| {
+            crate::cache_budget::complexity(document, variables, answer)
+        })
+        .sum()
 }
 
 impl Case {
@@ -162,7 +178,10 @@ impl Case {
             .collect::<Vec<_>>()
             .join(", ");
         let total: usize = self.per_source.iter().map(|(_, sent)| *sent).sum();
-        format!("{}: {each} (total {total})", self.name)
+        format!(
+            "{}: {each} (total {total}, {} complexity points)",
+            self.name, self.points
+        )
     }
 }
 
@@ -176,15 +195,24 @@ fn cases(total: usize) -> Vec<Case> {
     {
         let sandbox = Sandbox::new();
         let recorded = json!({"onetaskgraph.depends_on": [{"id": "notes:T-9", "kind": "task"}]});
-        let (config, linear) = workspace(
-            &sandbox,
-            "org-work",
-            vec![issue("L-0", json!({"metadata": recorded}))],
-            total,
+        // `L-R` is what `relations` issues depend on, each recording an edge of its own besides.
+        let dependents: Vec<String> = (1..=relations).map(|at| format!("D-{at}")).collect();
+        let mut held = vec![
+            issue("L-0", json!({"metadata": recorded.clone()})),
+            issue("L-R", json!({})),
+        ];
+        held.extend(
+            dependents
+                .iter()
+                .map(|id| issue(id, json!({"metadata": recorded.clone()}))),
         );
+        let (config, linear) = workspace(&sandbox, "org-work", held, total);
         let related: Vec<String> = (1..=relations).map(|at| format!("F-{at}")).collect();
         for far in &related {
             linear.relate("L-0", far, "blocks");
+        }
+        for dependent in &dependents {
+            linear.relate(dependent, "L-R", "blocks");
         }
         let notes = folder(
             &sandbox,
@@ -194,6 +222,10 @@ fn cases(total: usize) -> Vec<Case> {
                 (
                     "T-1",
                     "title: Ship\ndepends_on:\n  - {id: linear:L-0, item: task}\n".to_owned(),
+                ),
+                (
+                    "T-5",
+                    "title: Waits\ndepends_on:\n  - {id: linear:L-R, item: task}\n".to_owned(),
                 ),
             ],
         );
@@ -222,9 +254,15 @@ fn cases(total: usize) -> Vec<Case> {
             [graphql::ISSUE_DEPENDS_ON],
             "one request, asking for `relations` alone"
         );
+        assert!(
+            !sent[0].contains("inverseRelations"),
+            "no reverse connection: {}",
+            sent[0]
+        );
         cases.push(Case {
             name: format!("depends-on of an issue with {relations} relations, recording one more"),
             per_source: vec![("linear", sent.len())],
+            points: points(&linear, from),
         });
 
         let from = linear.served().len();
@@ -233,7 +271,7 @@ fn cases(total: usize) -> Vec<Case> {
             &[
                 "task",
                 "deps",
-                "linear:F-1",
+                "linear:L-R",
                 "--direction",
                 "depended-on-by",
                 "--limit",
@@ -241,9 +279,19 @@ fn cases(total: usize) -> Vec<Case> {
                 "--json",
             ],
         );
+        let mut expected: Vec<(String, String)> = dependents
+            .iter()
+            .map(|dependent| (format!("linear:{dependent}"), "linear:L-R".to_owned()))
+            .collect();
+        expected.sort();
+        // Exactly the native reverse edges. A recorded edge lives on the item that depends and
+        // is never written down on its far end, and the store's read scope asks no other source
+        // about a reverse read: so neither `notes:T-5`'s edge into `L-R` nor the dependents' own
+        // recorded edges are answered here — the forward reads above answer those.
         assert_eq!(
             edges(&reverse),
-            [("linear:L-0".to_owned(), "linear:F-1".to_owned())]
+            expected,
+            "every native reverse edge, and no recorded one"
         );
         let sent = since(&linear, from);
         assert_eq!(
@@ -251,9 +299,15 @@ fn cases(total: usize) -> Vec<Case> {
             [graphql::ISSUE_DEPENDED_ON_BY],
             "one request, asking for `inverseRelations` alone"
         );
+        assert!(
+            !sent[0].contains(" relations(") && !sent[0].contains("description"),
+            "no forward connection and no long form: {}",
+            sent[0]
+        );
         cases.push(Case {
-            name: "depended-on-by of one of its relations".to_owned(),
+            name: format!("depended-on-by of an issue {relations} issues depend on"),
             per_source: vec![("linear", sent.len())],
+            points: points(&linear, from),
         });
 
         let from = linear.served().len();
@@ -267,6 +321,7 @@ fn cases(total: usize) -> Vec<Case> {
         cases.push(Case {
             name: "a folder task recording an edge to an issue, read by id".to_owned(),
             per_source: vec![("linear", sent)],
+            points: 0,
         });
     }
 
@@ -344,6 +399,7 @@ fn cases(total: usize) -> Vec<Case> {
                     discovery(&sent_b)
                 ),
                 per_source: vec![("la", sent_a.len()), ("lb", sent_b.len())],
+                points: points(&first_workspace, a) + points(&second_workspace, b),
             });
         }
     }
@@ -401,10 +457,15 @@ fn cases(total: usize) -> Vec<Case> {
                 sent_r, 1,
                 "the rate-limited source was asked once and refused"
             );
-            assert!(sent_h >= 1, "the holding source was asked");
+            assert_eq!(
+                since(&holding_workspace, held),
+                [graphql::ISSUES],
+                "the holding source was asked once, by the one query naming the dependent"
+            );
             cases.push(Case {
                 name: format!("a legacy read {warmth}, one refusal and one edge query"),
                 per_source: vec![("lr", sent_r), ("lh", sent_h)],
+                points: points(&holding_workspace, held),
             });
         }
         let (refused, held) = (*refusals.lock().unwrap(), holding_workspace.served().len());
@@ -421,6 +482,7 @@ fn cases(total: usize) -> Vec<Case> {
         cases.push(Case {
             name: "an unrelated edge-free task".to_owned(),
             per_source: vec![("lr", sent_r), ("lh", sent_h)],
+            points: 0,
         });
     }
 
@@ -429,6 +491,7 @@ fn cases(total: usize) -> Vec<Case> {
     cases.push(Case {
         name: "a held task read, then re-read before its source's reset".to_owned(),
         per_source: vec![("linear", first), ("linear, re-read", again)],
+        points: 0,
     });
     cases
 }

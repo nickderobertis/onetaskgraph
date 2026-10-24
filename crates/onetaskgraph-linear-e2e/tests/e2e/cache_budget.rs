@@ -123,7 +123,8 @@ pub(crate) fn complexity(document: &str, variables: &Value, answer: &Value) -> u
     };
     let relations = |at_100: u64| (at_100 * first("first")).div_ceil(100);
     match document {
-        g::VIEWER => price::VIEWER,
+        // The workspace's own id: one object and its id, the shape `VIEWER` is measured at.
+        g::VIEWER | g::ORGANIZATION => price::VIEWER,
         g::ISSUE => price::ISSUE,
         g::ISSUE_CACHED => {
             price::ISSUE

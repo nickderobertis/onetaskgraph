@@ -245,7 +245,16 @@ fn dependency_cases(total: usize) -> (usize, String) {
         board.block(&near, &blocking);
         let recorded = json!([{"id": "notes:T-9", "kind": "task"}]);
         board.set_metadata(&near, "onetaskgraph.depends_on", recorded.clone());
-        board.set_metadata("DRAFT-1", "onetaskgraph.depends_on", recorded);
+        board.set_metadata("DRAFT-1", "onetaskgraph.depends_on", recorded.clone());
+        // What `blockers` issues are blocked by, each recording an edge of its own besides.
+        let target = github_extra_task(blockers + 1);
+        let dependents: Vec<String> = (blockers + 2..=2 * blockers + 1)
+            .map(github_extra_task)
+            .collect();
+        for dependent in &dependents {
+            board.block(dependent, std::slice::from_ref(&target));
+            board.set_metadata(dependent, "onetaskgraph.depends_on", recorded.clone());
+        }
         let notes = folder(
             &sandbox,
             "notes",
@@ -254,6 +263,10 @@ fn dependency_cases(total: usize) -> (usize, String) {
                 (
                     "T-1",
                     format!("title: Ship\ndepends_on:\n  - {{id: board:{near}, item: task}}\n"),
+                ),
+                (
+                    "T-5",
+                    format!("title: Waits\ndepends_on:\n  - {{id: board:{target}, item: task}}\n"),
                 ),
             ],
         );
@@ -290,6 +303,11 @@ fn dependency_cases(total: usize) -> (usize, String) {
             [graphql::ISSUE_DEPENDS_ON],
             "what it depends on is one request, asking for `blockedBy` alone"
         );
+        assert!(
+            !sent[0].contains("blocking("),
+            "no reverse connection: {}",
+            sent[0]
+        );
         cases.push(Case {
             name: format!("depends-on of an issue blocked by {blockers}, recording one more"),
             per_source: vec![("board", sent.len())],
@@ -302,7 +320,7 @@ fn dependency_cases(total: usize) -> (usize, String) {
             &[
                 "task",
                 "deps",
-                &format!("board:{}", blocking[0]),
+                &format!("board:{target}"),
                 "--direction",
                 "depended-on-by",
                 "--limit",
@@ -311,9 +329,19 @@ fn dependency_cases(total: usize) -> (usize, String) {
             ],
             0,
         );
+        let mut expected: Vec<(String, String)> = dependents
+            .iter()
+            .map(|dependent| (format!("board:{dependent}"), format!("board:{target}")))
+            .collect();
+        expected.sort();
+        // Exactly the native reverse edges. A recorded edge lives on the item that depends and
+        // is never written down on its far end, and the store's read scope asks no other source
+        // about a reverse read: so neither `notes:T-5`'s edge into the target nor the
+        // dependents' own recorded edges are answered here — the forward reads answer those.
         assert_eq!(
             edges(&reverse),
-            [(format!("board:{near}"), format!("board:{}", blocking[0]))]
+            expected,
+            "every native reverse edge, and no recorded one"
         );
         let sent = since(&board, from);
         assert_eq!(
@@ -321,8 +349,16 @@ fn dependency_cases(total: usize) -> (usize, String) {
             [graphql::ISSUE_DEPENDED_ON_BY],
             "what depends on it is one request, asking for `blocking` alone"
         );
+        // The near issue's own selection, before the far ends' fragment, which reads each far
+        // end's body for its kind.
+        let near_selection = sent[0].split(" fragment ").next().unwrap_or_default();
+        assert!(
+            !near_selection.contains("blockedBy") && !near_selection.contains("body"),
+            "no forward connection and no body of its own: {}",
+            sent[0]
+        );
         cases.push(Case {
-            name: "depended-on-by of one of its blockers".to_owned(),
+            name: format!("depended-on-by of an issue blocking {blockers}"),
             per_source: vec![("board", sent.len())],
             points: points(&sent),
         });
@@ -487,7 +523,11 @@ fn dependency_cases(total: usize) -> (usize, String) {
                 sent_l, 1,
                 "the rate-limited board was asked once and refused"
             );
-            assert!(sent_h >= 1, "the holding board was asked");
+            assert_eq!(
+                asked,
+                [graphql::SEARCH_ISSUES],
+                "the holding board was asked once, by the one search naming the dependent"
+            );
             cases.push(Case {
                 name: format!("a legacy read {warmth}, one refusal and one edge query"),
                 per_source: vec![("pl", sent_l), ("ph", sent_h)],
