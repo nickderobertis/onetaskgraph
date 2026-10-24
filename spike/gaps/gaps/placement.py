@@ -67,7 +67,9 @@ class Placement:
     polls: int
     poll_costs: tuple[int, ...]
     children_seconds_after_their_answer: tuple[float, ...]
-    items_per_issue: tuple[int, ...]
+    # How many items of the board each issue read, in creation order (absent from runs recorded
+    # before it was kept).
+    items_each: tuple[int, ...] = ()
 
 
 class AddOutcome(StrEnum):
@@ -128,6 +130,8 @@ class PlacementResult:
     reference_resolution_cost: int
     reference_resolution_children: int
     cleanup: Cleanup
+    # The time of the parent listing, absent from runs recorded before it was kept.
+    reference_resolution_seconds: float | None = None
 
     def to_json(self) -> Json:
         """The result as `feasibility.json` holds it."""
@@ -326,7 +330,7 @@ async def poll(
             polls=len(costs),
             poll_costs=tuple(sorted(set(costs))),
             children_seconds_after_their_answer=children,
-            items_per_issue=tuple(sorted({len(v) for v in items.values()})),
+            items_each=tuple(len(items.get(i, ())) for i in issues),
         ),
         items,
     )
@@ -420,13 +424,24 @@ async def nineteen(client: Client, ids: BoardIds, items: list[ItemId]) -> None:
         require(await client.graphql("ProbeNineteen", document, variables, aliases=NINETEEN), "19")
 
 
-async def references(client: Client, parent: IssueId) -> tuple[int, int]:
-    """One charged `SUB_ISSUES` read of the parent: its cost and the children it answered."""
+@dataclass(frozen=True)
+class Listing:
+    """One charged `SUB_ISSUES` read of a real parent."""
+
+    cost: int
+    children: int
+    seconds: float
+
+
+async def references(client: Client, parent: IssueId) -> Listing:
+    """One charged `SUB_ISSUES` read of the parent: its cost, its children and its time."""
     document = documents.charged(documents.snapshot()[Doc.SUB_ISSUES])
-    data = require(await client.graphql("SUB_ISSUES", document, documents.members(parent)), "SUB")
+    answer = await client.graphql("SUB_ISSUES", document, documents.members(parent))
+    data = require(answer, "SUB_ISSUES")
     cost = integer(obj(data.get("rateLimit"), "rateLimit").get("cost"), "rateLimit.cost")
     sub = obj(obj(data.get("node"), "node").get("subIssues"), "node.subIssues")
-    return cost, len(arr(sub.get("nodes"), "subIssues.nodes"))
+    children = len(arr(sub.get("nodes"), "subIssues.nodes"))
+    return Listing(cost=cost, children=children, seconds=round(answer.seconds, 3))
 
 
 def confirmed(payload: Json) -> bool:
@@ -526,7 +541,7 @@ async def _steps(client: Client, ids: BoardIds, state: State) -> PlacementResult
     idempotence = await race(client, state, ids, parent.issue)
     write = await coalesced_write(client, ids, issues, item_ids)
     await nineteen(client, ids, item_ids)
-    cost, members = await references(client, parent.issue)
+    listing = await references(client, parent.issue)
     return PlacementResult(
         board_items_in_create_answers=sum(1 for c in [parent, *children] if c.items),
         children_with_parent=sum(1 for c in children if c.parent == parent.issue),
@@ -535,7 +550,8 @@ async def _steps(client: Client, ids: BoardIds, state: State) -> PlacementResult
         coalesced_write_answered=write.answered,
         coalesced_write_aliases=write.aliases,
         coalesced_write_seconds=round(write.seconds, 3),
-        reference_resolution_cost=cost,
-        reference_resolution_children=members,
+        reference_resolution_cost=listing.cost,
+        reference_resolution_children=listing.children,
+        reference_resolution_seconds=listing.seconds,
         cleanup=Cleanup(0, 0, 0, 0, ()),
     )

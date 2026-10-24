@@ -285,10 +285,20 @@ def prices() -> Prices:
         dry_runs_moved_used_by=tuple(sorted(set(dry_rises))),
         placement_poll_costs=polls,
         shape=shape,
-        parent_listing_seconds=next(
-            p.seconds for p in pricing.executed if p.variant == Named.PARENT_TRIMMED
-        ),
+        parent_listing_seconds=listing_seconds(placements),
     )
+
+
+def listing_seconds(placements: list[PlacementResult]) -> float:
+    """The latest executed `SUB_ISSUES` read of a real parent.
+
+    The nearest measured shape to the trimmed parent-scoped listing an approval would send,
+    which lists the same members.
+    """
+    timed = [p.reference_resolution_seconds for p in placements if p.reference_resolution_seconds]
+    if not timed:
+        raise ShapeError("no placement probe timed its parent listing")
+    return timed[-1]
 
 
 def placement() -> Placement:

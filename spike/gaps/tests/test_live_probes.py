@@ -47,6 +47,8 @@ def test_a_placement_probe_runs_end_to_end_and_deletes_every_issue_it_created(
     assert result.idempotence.one_item_each_after_settling
     assert result.coalesced_write_answered == result.coalesced_write_aliases == 19
     assert result.reference_resolution_children == 8
+    assert result.placement.items_each == (1,) * 9
+    assert result.reference_resolution_seconds is not None
     assert result.cleanup.deleted == 11 and result.cleanup.left == 0
     assert stand_in.issues == {}
     ops = [obj(line, "record").get("op") for line in load_lines(out / "requests.jsonl")]
@@ -486,4 +488,5 @@ def test_a_cleanup_failing_while_a_probe_fails_reports_both(
     result, state, _ = asyncio.run(probe(url, tmp_path))
     assert isinstance(result, placement.LeftBehind) and "not created" in str(result)
     assert isinstance(result.__cause__, GitHubError)
-    assert len(state.ids) == 4 and len(stand_in.issues) == 4
+    # The parent and the four children the partial create made.
+    assert len(state.ids) == 5 and len(stand_in.issues) == 5

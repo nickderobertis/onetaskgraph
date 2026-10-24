@@ -307,8 +307,8 @@
    "within": true
   },
   {
-   "arithmetic": "16.4 s measured \u2212 6.03 s screening (9 onevcs calls) + 2 calls \u00d7 0.67 s \u2212 2.12 s (2 ISSUE, 1 SUB_ISSUES) + 0.5468974113464355 s added = 10.1 s",
-   "attainable": 10.1,
+   "arithmetic": "16.4 s measured \u2212 6.03 s screening (9 onevcs calls) + 2 calls \u00d7 0.67 s \u2212 2.12 s (2 ISSUE, 1 SUB_ISSUES) + 1.169 s added = 10.8 s",
+   "attainable": 10.8,
    "baseline": {
     "operation": "host approval",
     "points": 7,
@@ -500,14 +500,14 @@
   }
  ],
  "consumed": {
-  "creations_sent": 132,
+  "creations_sent": 143,
   "dry_runs": 135,
   "issues_left_by_the_last_placement": 0,
   "least_share_before": 0.544,
-  "mutation_requests": 124,
+  "mutation_requests": 135,
   "pauses": 0,
-  "points": 255,
-  "rate_limit_reads": 128,
+  "points": 271,
+  "rate_limit_reads": 136,
   "remaining_before_and_after": {
    "probe-alias-pricing-head-20261024T140959": [
     3452,
@@ -564,12 +564,16 @@
    "probe-placement-head-20261024T163225": [
     4776,
     4771
+   ],
+   "probe-placement-head-20261024T164142": [
+    4588,
+    4569
    ]
   },
-  "requests": 488,
-  "runs": 17,
-  "runs_recording_pauses": 4,
-  "seconds": 588.2
+  "requests": 512,
+  "runs": 18,
+  "runs_recording_pauses": 5,
+  "seconds": 627.9
  },
  "offline": {
   "reach": {
@@ -2605,6 +2609,9 @@
    "returned the issue's one item",
    "returned the issue's one item",
    "returned the issue's one item",
+   "returned the issue's one item",
+   "returned the issue's one item",
+   "returned the issue's one item",
    "returned the issue's one item"
   ],
   "children_seconds": [
@@ -2679,11 +2686,19 @@
    0.626,
    0.626,
    0.626,
-   1.692
+   1.692,
+   0.568,
+   0.568,
+   0.568,
+   0.568,
+   0.568,
+   0.568,
+   0.568,
+   0.568
   ],
   "idempotent": true,
   "in_create_answers": 0,
-  "issues": 81,
+  "issues": 90,
   "polls": [
    2,
    2,
@@ -2693,9 +2708,10 @@
    1,
    2,
    1,
-   2
+   2,
+   1
   ],
-  "samples": 9
+  "samples": 10
  },
  "prices": {
   "charged": {
@@ -2773,6 +2789,8 @@
     1,
     3,
     1,
+    1,
+    1,
     1
    ],
    "19": [
@@ -2815,7 +2833,11 @@
     5,
     2,
     1,
-    1
+    1,
+    1,
+    2,
+    1,
+    3
    ],
    "2": [
     4,
@@ -2829,11 +2851,13 @@
     1,
     1,
     2,
+    1,
     1
    ],
    "3": [
     1,
     3,
+    1,
     1
    ],
    "5": [
@@ -2860,6 +2884,8 @@
     1,
     1,
     1,
+    1,
+    1,
     1
    ],
    "8": [
@@ -2874,10 +2900,11 @@
     1,
     4,
     1,
+    1,
     1
    ]
   },
-  "parent_listing_seconds": 0.5468974113464355,
+  "parent_listing_seconds": 1.169,
   "placement_poll_costs": [
    1
   ],

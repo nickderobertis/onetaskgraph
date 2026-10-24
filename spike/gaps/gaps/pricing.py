@@ -49,11 +49,15 @@ class Shape:
 
 @dataclass(frozen=True)
 class Price:
-    """What GitHub said one shape costs."""
+    """What GitHub said one shape costs.
+
+    Read for its cost alone: GitHub computes a document's price from its arguments before it
+    runs it, and the anchor a shape is priced on is not an issue, so its issue selections do
+    not run and the answer's timing says nothing about the shape's own.
+    """
 
     variant: str
     cost: int
-    seconds: float
 
 
 # GitHub's own description of what the spike's schema extension declares: the `RateLimit`
@@ -182,13 +186,13 @@ async def probe(client: Client, board: ScratchBoard, anchor: str) -> PricingResu
     dry = []
     for shape in priced:
         answer = await client.graphql("dry run", documents.dry_run(shape.document), shape.variables)
-        dry.append(Price(shape.variant, cost_of(answer, shape.variant), answer.seconds))
+        dry.append(Price(shape.variant, cost_of(answer, shape.variant)))
     executed = []
     for shape in coalesced:
         answer = await client.graphql(
             "charged read", documents.charged(shape.document), shape.variables
         )
-        executed.append(Price(shape.variant, cost_of(answer, shape.variant), answer.seconds))
+        executed.append(Price(shape.variant, cost_of(answer, shape.variant)))
     schema = rate_limit_schema(await client.graphql("schema", INTROSPECTION, {}))
     return PricingResult(dry_runs=tuple(dry), executed=tuple(executed), rate_limit_schema=schema)
 
