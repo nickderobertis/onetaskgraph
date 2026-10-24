@@ -24,7 +24,8 @@ each far end carrying the fields that say which kind of item it is.
 `dependencies-depends-on.json` and `dependencies-depended-on-by.json` are that answer as each
 one-direction read receives it: `blockedBy` with the issue's `body`, whose metadata slot
 records a far end in another source, and this board's own id under the aliased `board` root;
-and `blocking` alone.
+and `blocking` alone, holding one dependent filed under a project so its far-end keys are
+checked too.
 
 `issues.json` and `sub-issues.json` are the same board reached the two ways a read that is
 *not* about the whole board reaches it: a board-scoped issue search
