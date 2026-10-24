@@ -276,10 +276,13 @@ def fields_of(selection_set: graphql.SelectionSetNode | None) -> set[str]:
     """Every field a selection set selects, inline fragments' included."""
     found: set[str] = set()
     for selection in selection_set.selections if selection_set else ():
-        if isinstance(selection, graphql.FieldNode):
-            found.add(selection.name.value)
-        elif isinstance(selection, graphql.InlineFragmentNode):
-            found |= fields_of(selection.selection_set)
+        match selection:
+            case graphql.FieldNode(name=graphql.NameNode(value=name)):
+                found.add(name)
+            case graphql.InlineFragmentNode(selection_set=inner):
+                found |= fields_of(inner)
+            case _:
+                pass
     return found
 
 

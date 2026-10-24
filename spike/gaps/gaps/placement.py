@@ -367,8 +367,12 @@ def add_outcome(answer: Answer, alias: str, items: tuple[ItemId, ...]) -> AddOut
     if refusals:
         refused = all(ALREADY_EXISTS in e.message for e in refusals)
         return AddOutcome.REFUSED_ALREADY_EXISTS if refused else AddOutcome.OTHER
-    item = obj(obj(answer.data.get(alias), alias).get("item"), f"{alias}.item").get("id")
-    return AddOutcome.RETURNED_THE_ITEM if (item,) == items else AddOutcome.OTHER
+    payload = answer.data.get(alias)
+    item = payload.get("item") if isinstance(payload, dict) else None
+    found = item.get("id") if isinstance(item, dict) else None
+    # A malformed payload, or an item other than the one the issue reads, is an outcome to
+    # record, not a reason to abandon the probe before its cleanup.
+    return AddOutcome.RETURNED_THE_ITEM if (found,) == items else AddOutcome.OTHER
 
 
 def field_write(alias: str, item: str) -> str:

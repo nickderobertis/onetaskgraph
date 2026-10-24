@@ -92,6 +92,7 @@ class Board:
     chunked: Chunking = Chunking.NONE
     placement_reads: int = 1
     refuse_present_adds: bool = False
+    odd_add: str | None = None  # "error", "other item" or "malformed", for alias b
     fail_deletes: bool = False
     null_deletes: bool = False
     fail_ownership_read: bool = False
@@ -230,6 +231,18 @@ class Board:
         errors = []
         for alias in ("a", "b", "c"):
             issue = self.issues[str(variables[alias])]
+            if alias == "b" and self.odd_add is not None:
+                match self.odd_add:
+                    case "error":
+                        data[alias] = None
+                        errors.append({"type": "FORBIDDEN", "path": [alias], "message": "no"})
+                    case "other item":
+                        issue.item = issue.item or f"PVTI_{issue.id}"
+                        data[alias] = {"item": {"id": "PVTI_somewhere_else"}}
+                    case _:
+                        issue.item = issue.item or f"PVTI_{issue.id}"
+                        data[alias] = {"item": None}
+                continue
             if issue.item is not None and self.refuse_present_adds:
                 data[alias] = None
                 message = "Content already exists in this project"

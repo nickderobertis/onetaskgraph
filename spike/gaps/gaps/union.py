@@ -43,7 +43,7 @@ class Way:
     inspect: int
     check: int
     verdict: Verdict
-    visibilities: tuple[Visibility, ...]
+    visibilities: tuple[tuple[str, Visibility], ...]  # (repository, what onevcs answered)
     seconds: float
 
 
@@ -57,9 +57,15 @@ class Variant:
 
     @property
     def agrees(self) -> bool:
-        """Same visibilities both ways, and the union's verdict the strictest per-item one."""
+        """Each repository answers the same visibility both ways, and the verdicts agree.
+
+        Every per-item answer for a repository is the one its deduplicated inspection gave, and
+        the union's verdict is the strictest per-item one.
+        """
+        deduplicated = dict(self.unioned.visibilities)
         return (
-            set(self.per_item.visibilities) == set(self.unioned.visibilities)
+            all(deduplicated.get(r) == v for r, v in self.per_item.visibilities)
+            and set(deduplicated) == {r for r, _ in self.per_item.visibilities}
             and self.per_item.verdict == self.unioned.verdict
         )
 
@@ -110,8 +116,8 @@ async def screen(
     distinct = sorted(set(repositories))
     union_inspects = [await boundary.inspect_timed(home, r) for r in distinct]
     union_verdict, union_check = await boundary.check(home, boundary.union(checks))
-    item_visibility = [v for v, _ in item_inspects]
-    union_visibility = [v for v, _ in union_inspects]
+    item_visibility = [(r, v) for r, (v, _) in zip(repositories, item_inspects, strict=True)]
+    union_visibility = [(r, v) for r, (v, _) in zip(distinct, union_inspects, strict=True)]
     return Variant(
         plant=plant,
         per_item=Way(

@@ -1,0 +1,975 @@
+{
+ "all_agree": true,
+ "commands": {
+  "document-copy": [
+   {
+    "per_item": {
+     "calls": 19,
+     "check": 1,
+     "inspect": 18,
+     "seconds": 0.49,
+     "verdict": 0,
+     "visibilities": [
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ]
+     ]
+    },
+    "plant": "as copied",
+    "unioned": {
+     "calls": 2,
+     "check": 1,
+     "inspect": 1,
+     "seconds": 0.055,
+     "verdict": 0,
+     "visibilities": [
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ]
+     ]
+    }
+   },
+   {
+    "per_item": {
+     "calls": 19,
+     "check": 1,
+     "inspect": 18,
+     "seconds": 0.566,
+     "verdict": 1,
+     "visibilities": [
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ]
+     ]
+    },
+    "plant": "planted in metadata",
+    "unioned": {
+     "calls": 2,
+     "check": 1,
+     "inspect": 1,
+     "seconds": 0.057,
+     "verdict": 1,
+     "visibilities": [
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ]
+     ]
+    }
+   },
+   {
+    "per_item": {
+     "calls": 19,
+     "check": 1,
+     "inspect": 18,
+     "seconds": 0.582,
+     "verdict": 1,
+     "visibilities": [
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ]
+     ]
+    },
+    "plant": "planted in text",
+    "unioned": {
+     "calls": 2,
+     "check": 1,
+     "inspect": 1,
+     "seconds": 0.063,
+     "verdict": 1,
+     "visibilities": [
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ]
+     ]
+    }
+   },
+   {
+    "per_item": {
+     "calls": 19,
+     "check": 1,
+     "inspect": 18,
+     "seconds": 0.651,
+     "verdict": 1,
+     "visibilities": [
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ]
+     ]
+    },
+    "plant": "planted in paths",
+    "unioned": {
+     "calls": 2,
+     "check": 1,
+     "inspect": 1,
+     "seconds": 0.059,
+     "verdict": 1,
+     "visibilities": [
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ]
+     ]
+    }
+   }
+  ],
+  "project-copy": [
+   {
+    "per_item": {
+     "calls": 35,
+     "check": 9,
+     "inspect": 26,
+     "seconds": 0.961,
+     "verdict": 0,
+     "visibilities": [
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ]
+     ]
+    },
+    "plant": "as copied",
+    "unioned": {
+     "calls": 2,
+     "check": 1,
+     "inspect": 1,
+     "seconds": 0.058,
+     "verdict": 0,
+     "visibilities": [
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ]
+     ]
+    }
+   },
+   {
+    "per_item": {
+     "calls": 35,
+     "check": 9,
+     "inspect": 26,
+     "seconds": 1.246,
+     "verdict": 1,
+     "visibilities": [
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ]
+     ]
+    },
+    "plant": "planted in metadata",
+    "unioned": {
+     "calls": 2,
+     "check": 1,
+     "inspect": 1,
+     "seconds": 0.044,
+     "verdict": 1,
+     "visibilities": [
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ]
+     ]
+    }
+   },
+   {
+    "per_item": {
+     "calls": 35,
+     "check": 9,
+     "inspect": 26,
+     "seconds": 0.812,
+     "verdict": 1,
+     "visibilities": [
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ]
+     ]
+    },
+    "plant": "planted in text",
+    "unioned": {
+     "calls": 2,
+     "check": 1,
+     "inspect": 1,
+     "seconds": 0.052,
+     "verdict": 1,
+     "visibilities": [
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ]
+     ]
+    }
+   },
+   {
+    "per_item": {
+     "calls": 35,
+     "check": 9,
+     "inspect": 26,
+     "seconds": 0.813,
+     "verdict": 1,
+     "visibilities": [
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ],
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ]
+     ]
+    },
+    "plant": "planted in paths",
+    "unioned": {
+     "calls": 2,
+     "check": 1,
+     "inspect": 1,
+     "seconds": 0.058,
+     "verdict": 1,
+     "visibilities": [
+      [
+       "github.com/synthco/public-widgets",
+       "public"
+      ]
+     ]
+    }
+   }
+  ]
+ },
+ "copy": {
+  "binary": "onetaskgraph 0.11.1",
+  "case": "reach-public",
+  "destination_changed": true,
+  "destination_files": 10,
+  "destination_names_private": false,
+  "onevcs": "onevcs 0.56.5",
+  "private_requests": 0,
+  "screens": {
+   "check": 10,
+   "distinct_inspect_inputs": 1,
+   "inspect": 44,
+   "seconds": 1.4,
+   "verdicts": [
+    [
+     "check",
+     0
+    ],
+    [
+     "inspect",
+     0
+    ]
+   ]
+  },
+  "steps": [
+   {
+    "argv": [
+     "project",
+     "copy",
+     "src:reach-plan",
+     "--to",
+     "dest",
+     "--json"
+    ],
+    "output_names_the_reference": false,
+    "output_says_withheld": false,
+    "recorder_requests": [],
+    "returncode": 0,
+    "seconds": 12.662,
+    "stderr_tail": [],
+    "step": "project-copy"
+   },
+   {
+    "argv": [
+     "document",
+     "copy",
+     "src:reach-plan-design",
+     "--to",
+     "dest",
+     "--json"
+    ],
+    "output_names_the_reference": false,
+    "output_says_withheld": false,
+    "recorder_requests": [],
+    "returncode": 0,
+    "seconds": 6.514,
+    "stderr_tail": [],
+    "step": "document-copy"
+   }
+  ],
+  "tasks_unmarked": 0
+ }
+}

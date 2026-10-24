@@ -274,3 +274,32 @@ def test_an_unavailable_check_stays_unavailable_after_the_union() -> None:
     screens = reach.Screens(0, 0, 0, 0.0, ())
     copy = reach.ReachResult(reach.Case.PUBLIC, "", "", (), 0, False, 0, False, 0, screens)
     assert not union.UnionResult(copy=copy, commands={}).all_agree
+
+
+def test_union_agreement_holds_each_repository_to_its_own_answer(tmp_path: Path) -> None:
+    """Union agreement holds each repository to its own answer, through the real onevcs."""
+    public = boundary.Identity("o", "open", boundary.Visibility.PUBLIC)
+    private = boundary.Identity("o", "closed", boundary.Visibility.PRIVATE)
+    home = asyncio.run(boundary.make_home(tmp_path, ONEVCS, (public, private)))
+    check = boundary.CheckInput(
+        {"text": ("x",), "paths": (), "metadata": ()}, None, boundary.Visibility.PUBLIC
+    )
+    repositories = [public.qualified, private.qualified, public.qualified]
+    variant = asyncio.run(union.screen(home, repositories, [check], union.Plant.NONE, "t"))
+    assert variant.agrees
+    assert dict(variant.unioned.visibilities) == {
+        public.qualified: boundary.Visibility.PUBLIC,
+        private.qualified: boundary.Visibility.PRIVATE,
+    }
+    swapped = union.Way(
+        variant.unioned.calls,
+        variant.unioned.inspect,
+        variant.unioned.check,
+        variant.unioned.verdict,
+        (
+            (public.qualified, boundary.Visibility.PRIVATE),
+            (private.qualified, boundary.Visibility.PUBLIC),
+        ),
+        variant.unioned.seconds,
+    )
+    assert not union.Variant(variant.plant, variant.per_item, swapped).agrees

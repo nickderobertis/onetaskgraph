@@ -248,7 +248,14 @@ class Client:
     async def rest_get(self, op: str, path: str) -> dict[str, Json]:
         """One REST `GET`, logged like a GraphQL request."""
         start = time.time()
-        reply = await self._send("GET", path, None)
+        try:
+            reply = await self._send("GET", path, None)
+        except (OSError, TimeoutError, GitHubError) as error:
+            # Sent and lost in transport: recorded all the same.
+            lost = HttpReply(status=0, headers={}, body=b"")
+            failed = (type(error).__name__,)
+            self._keep(self._record(Kind.REST, op, start, time.time(), lost, None, failed, 1))
+            raise GitHubError(f"{op}: no answer ({error})") from error
         record = RequestRecord(
             seq=len(self.records) + 1,
             kind=Kind.REST,

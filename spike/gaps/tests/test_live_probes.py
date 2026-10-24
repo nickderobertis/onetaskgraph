@@ -434,3 +434,43 @@ def test_a_request_lost_in_transport_is_still_recorded(tmp_path: Path) -> None:
     assert [(r.op, r.status) for r in records] == [("lost", 0)]
     logged = [obj(line, "r").get("status") for line in load_lines(tmp_path / "requests.jsonl")]
     assert logged == [0]
+
+
+@pytest.mark.parametrize("odd", ["error", "other item", "malformed"])
+def test_an_unexpected_add_is_recorded_as_such_and_every_issue_still_deleted(
+    tmp_path: Path,
+    github: tuple[fake_github.Board, str],
+    monkeypatch: pytest.MonkeyPatch,
+    odd: str,
+) -> None:
+    """An add refused otherwise, answering another item, or malformed is recorded, not fatal."""
+    stand_in, url = github
+    monkeypatch.setattr(placement, "RACE_SETTLE", 0.1)
+    stand_in.odd_add = odd
+    result, state, _ = asyncio.run(probe(url, tmp_path))
+    assert isinstance(result, PlacementResult)
+    assert result.idempotence.racing_outcomes[1] is AddOutcome.OTHER
+    assert not result.idempotence.one_item_each_after_settling
+    assert stand_in.issues == {} and state.ids == []
+
+
+def test_a_rest_request_lost_in_transport_is_still_recorded(tmp_path: Path) -> None:
+    """A REST request whose connection closes before any answer is still recorded."""
+
+    async def lose() -> list[RequestRecord]:
+        """Send one REST request to a server that closes without answering."""
+
+        async def close(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+            await reader.readuntil(b"\r\n\r\n")
+            writer.close()
+
+        server = await asyncio.start_server(close, "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+        client = Client(f"http://127.0.0.1:{port}/graphql", Token("t0ken"))
+        with pytest.raises(GitHubError, match="no answer"):
+            await client.rest_get("GET /rate_limit", "/rate_limit")
+        server.close()
+        return client.records
+
+    records = asyncio.run(lose())
+    assert [(r.kind, r.status) for r in records] == [(Kind.REST, 0)]
