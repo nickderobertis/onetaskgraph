@@ -209,3 +209,42 @@ budgets:
     unit: points
     direction: max
     threshold: 5
+  # llmlint: ignore[budgets_track_product_owner_outcomes] The user ruled that every store operation the engine uses carries its own per-backend request bound, paired with the engine's backend-agnostic store-operation budgets (its hold loop with the dependency reads, each dispatch with the status writes); a session or hourly total cannot show one operation's requests regressing, which is what this bound is for.
+  - id: github-requests-per-dependency-read
+    description: >-
+      The most requests any one necessarily consulted board receives in one complete dependency
+      read through the binary on a fresh process, across the cases the detail lists, on boards of
+      1,100 and of 11,000 items. It protects every manager's share of the board token.
+    labels: [github]
+    measure: reported
+    # llmlint: ignore[budget_commands_measure_directly] Every budget of this file selects its own report-only entry in `budget_runner`, the harness-runner convention this crate's budgets landed with; this one reads only the telemetry `store_cost.rs` recorded during the crate's test run, refuses a recording of another workload, scale or figure, and hands the figure to onebudgetspec, which alone judges it.
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_dependency_read", "--exact", "--nocapture"]
+    unit: requests
+    direction: max
+    threshold: 2
+  # llmlint: ignore[budgets_track_product_owner_outcomes] The user ruled that every store operation the engine uses carries its own per-backend request bound, paired with the engine's backend-agnostic store-operation budgets (its hold loop with the dependency reads, each dispatch with the status writes); a session or hourly total cannot show one operation's requests regressing, which is what this bound is for.
+  - id: github-requests-per-status-write
+    description: >-
+      The requests one status write of one issue item sends through the binary on a fresh process
+      with the cache off, the larger over boards of 1,100 and of 11,000 items. It protects every
+      manager's share of the board token.
+    labels: [github]
+    measure: reported
+    # llmlint: ignore[budget_commands_measure_directly] Every budget of this file selects its own report-only entry in `budget_runner`, the harness-runner convention this crate's budgets landed with; this one reads only the telemetry `store_cost.rs` recorded during the crate's test run, refuses a recording of another workload, scale or figure, and hands the figure to onebudgetspec, which alone judges it.
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_status_write", "--exact", "--nocapture"]
+    unit: requests
+    direction: max
+    threshold: 2
+  # llmlint: ignore[budgets_track_product_owner_outcomes] The user ruled that every store operation the engine uses carries its own per-backend request bound, paired with the engine's backend-agnostic store-operation budgets (its hold loop with the dependency reads, each dispatch with the status writes); a session or hourly total cannot show one operation's requests regressing, which is what this bound is for.
+  - id: github-requests-per-settlement-update
+    description: >-
+      The requests one update of a status and one metadata key on one issue item sends through the
+      binary on a fresh process with the cache off, the larger over boards of 1,100 and of 11,000
+      items. It protects every manager's share of the board token.
+    labels: [github]
+    measure: reported
+    # llmlint: ignore[budget_commands_measure_directly] Every budget of this file selects its own report-only entry in `budget_runner`, the harness-runner convention this crate's budgets landed with; this one reads only the telemetry `store_cost.rs` recorded during the crate's test run, refuses a recording of another workload, scale or figure, and hands the figure to onebudgetspec, which alone judges it.
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_settlement_update", "--exact", "--nocapture"]
+    unit: requests
+    direction: max
+    threshold: 3

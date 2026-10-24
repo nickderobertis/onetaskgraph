@@ -1,5 +1,5 @@
-requests 212
-node count 244247
+requests 214
+node count 244256
 
 requests per call
     1       0  DELETE /repos/{owner}/{repo}/labels/{name}
@@ -46,6 +46,8 @@ requests per call
     1      50  node-count and point-cost reconciliation while reading the board's fields
     1      50  node-count and point-cost reconciliation while reading the board's fields and the destination repository
     1       0  node-count and point-cost reconciliation while reading the destination repository
+    1     103  node-count and point-cost reconciliation while reading what an item depends on
+    1     100  node-count and point-cost reconciliation while reading what depends on an issue
     1       0  node-count and point-cost reconciliation while reading whether the board's project is public
     1       0  node-count and point-cost reconciliation while reading which issue a comment is on
     1   20400  node-count and point-cost reconciliation while searching this board's issues
@@ -54,10 +56,12 @@ requests per call
     1    7272  reading a batch of issues with their comments
     2   12190  reading a project's tasks
     3     300  reading a task's comments
-    7    1000  reading an issue's dependencies
+    3     600  reading an issue's dependencies
    37   16872  reading one issue
     3   20451  reading the board
     2     100  reading the board's fields and the destination repository
+    2     106  reading what an item depends on
+    2     100  reading what depends on an issue
     3       0  reading which issue a comment is on
     4       0  recording a dependency
     2       0  removing a dependency

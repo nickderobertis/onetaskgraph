@@ -436,7 +436,7 @@ fn a_pin_reaches_the_cache_through_both_sdks_and_a_rust_caller() {
             && sent
                 .iter()
                 .all(|document| document
-                    == onetaskgraph_github_projects::graphql::ISSUE_DEPENDENCIES),
+                    == onetaskgraph_github_projects::graphql::ISSUE_DEPENDS_ON),
         "the project's own fields are the entry's; its forward edges are read, and only they: \
          {sent:?}"
     );

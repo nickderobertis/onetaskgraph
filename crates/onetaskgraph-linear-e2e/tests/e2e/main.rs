@@ -26,5 +26,6 @@ mod linear_boundary;
 mod linear_budget;
 mod linear_status;
 mod pinning_walk;
+mod store_cost;
 mod stored_digest;
 mod telemetry;

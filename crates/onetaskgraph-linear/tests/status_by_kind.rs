@@ -270,6 +270,24 @@ impl Workspace {
             graphql::ISSUE => {
                 json!({"issue": held.issues.iter().find(|issue| issue["id"] == id)})
             }
+            // The issue beside a resolution without the team's states, as a malformed
+            // `RESOLUTION` above is answered.
+            graphql::ISSUE_RESOLVED if std::mem::take(&mut held.malformed_next_resolution) => {
+                json!({"issue": held.issues.iter().find(|issue| issue["id"] == id),
+                       "teams":{"nodes":[{"id":format!("TEAM-{}", held.team)}]},
+                       "projectStatuses":{"nodes":held.statuses,"pageInfo":{"hasNextPage":false}}})
+            }
+            // The issue beside the resolution, each answered as it is alone.
+            graphql::ISSUE_RESOLVED => {
+                let teams = if variables["key"] == json!(held.team) {
+                    json!([{"id":format!("TEAM-{}", held.team),"states":{"nodes":held.states,"pageInfo":{"hasNextPage":held.more_states}}}])
+                } else {
+                    json!([])
+                };
+                json!({"issue": held.issues.iter().find(|issue| issue["id"] == id),
+                       "teams":{"nodes":teams},
+                       "projectStatuses":{"nodes":held.statuses,"pageInfo":{"hasNextPage":held.more_statuses}}})
+            }
             graphql::PROJECT => {
                 json!({"project": held.projects.iter().find(|project| project["id"] == id)})
             }
@@ -448,6 +466,7 @@ fn read_request(stream: &mut std::net::TcpStream) -> Option<Value> {
 fn document_name(query: &str) -> &'static str {
     [
         ("RESOLUTION", graphql::RESOLUTION),
+        ("ISSUE_RESOLVED", graphql::ISSUE_RESOLVED),
         ("ISSUE", graphql::ISSUE),
         ("PROJECT", graphql::PROJECT),
         ("ISSUE_RELATIONS", graphql::ISSUE_RELATIONS),
@@ -1207,10 +1226,11 @@ async fn refused_settlement_task_and_project_writes_resolve_again_before_their_r
             if retry {
                 result.unwrap();
                 let requests = workspace.names_since(from);
+                // A settlement resolves again inside the read of its issue.
                 assert_eq!(
                     requests
                         .iter()
-                        .filter(|name| **name == "RESOLUTION")
+                        .filter(|name| matches!(**name, "RESOLUTION" | "ISSUE_RESOLVED"))
                         .count(),
                     1,
                     "{operation}: {requests:?}"
@@ -1596,4 +1616,76 @@ async fn a_source_scoped_to_one_project_refuses_another_projects_status_before_a
         Some(StatusCategory::Done)
     );
     assert_eq!(workspace.status_of("P-1").as_deref(), Some("Completed"));
+}
+
+/// A fresh source's settlement reads its issue and the resolution in one request. An answer
+/// to it that is malformed — the team's states missing — or never arrives fails the update,
+/// writes nothing and holds nothing, and the same update retried on the same source reads both
+/// again in one request and lands.
+#[tokio::test]
+async fn a_failed_read_of_an_issue_with_its_resolution_writes_nothing_and_is_retried() {
+    for malformed in [true, false] {
+        let workspace = example_workspace("A");
+        workspace.issue("I-1", "Todo", Some("A person's text."));
+        let source = source(&workspace, example_mapping());
+        let mut settlement = TaskUpdate {
+            status: Some(Status {
+                category: StatusCategory::Done,
+                name: String::new(),
+            }),
+            ..TaskUpdate::default()
+        };
+        settlement.metadata_set.insert(
+            MetadataKey::new("onepipeline.settlement").unwrap(),
+            json!("landed"),
+        );
+        if malformed {
+            workspace.held().malformed_next_resolution = true;
+        } else {
+            workspace.held().drop_next = true;
+        }
+        let from = workspace.count();
+        let failed = source
+            .update_task(&"I-1".into(), &settlement)
+            .await
+            .expect_err("the read failed");
+        assert!(
+            matches!(
+                (&failed, malformed),
+                (SourceError::Malformed { .. }, true) | (SourceError::Unavailable { .. }, false)
+            ),
+            "{failed:?}"
+        );
+        // The workspace records what it answered: the malformed read, and nothing at all for
+        // the one it dropped.
+        let answered: &[&str] = if malformed { &["ISSUE_RESOLVED"] } else { &[] };
+        assert_eq!(
+            workspace.names_since(from),
+            answered,
+            "nothing was written: {failed:?}"
+        );
+        assert_eq!(workspace.state_of("I-1").as_deref(), Some("Todo"));
+        assert_eq!(
+            workspace.description_of("I-1").as_deref(),
+            Some("A person's text.")
+        );
+
+        let from = workspace.count();
+        source
+            .update_task(&"I-1".into(), &settlement)
+            .await
+            .expect("the retry lands");
+        assert_eq!(
+            workspace.names_since(from),
+            ["ISSUE_RESOLVED", "ISSUE_UPDATE_READ"],
+            "nothing of the failed answer was held: the retry reads both again, in one request"
+        );
+        assert_eq!(workspace.state_of("I-1").as_deref(), Some("Done"));
+        let description = workspace.description_of("I-1").expect("a description");
+        assert!(description.starts_with("A person's text."), "{description}");
+        assert!(
+            description.contains(r#""onepipeline.settlement":"landed""#),
+            "{description}"
+        );
+    }
 }

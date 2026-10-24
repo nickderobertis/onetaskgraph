@@ -1129,6 +1129,8 @@ struct GitHubBoard {
     /// Operations this board refuses once after answering that many requests carrying them —
     /// so a journey can let a read's first pages land and refuse a later one.
     refusing_after: Vec<(&'static str, usize)>,
+    /// The `retry-after` the next request is refused `429 Too Many Requests` with, once.
+    rate_limit_next: Option<u64>,
     /// Items this board replaces after answering that many requests naming them by id — with
     /// another item, or with nothing — so a journey can let a command read one and then find it
     /// changed or gone.
@@ -1585,6 +1587,13 @@ impl GitHubBoardFields {
             .unwrap()
             .replacing
             .push((id.to_owned(), answered, replacement));
+    }
+
+    /// Refuse the next request `429 Too Many Requests`, naming a reset `retry_after` seconds
+    /// ahead, as GitHub's primary limit does; every request after it is answered as before.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board's own answer to its next request, which only its server loop here answers: that state is private to the loopback, so a suite can set it only through this handle, as `block`, `edit_body` and `refuse_once` set the rest; the GitHub Projects and Linear suites are what drive it.
+    pub fn rate_limit_next(&self, retry_after: u64) {
+        self.board.lock().unwrap().rate_limit_next = Some(retry_after);
     }
 
     /// Record that the issue `id` is blocked by each of `blockers`, beside whatever already
@@ -3319,6 +3328,7 @@ fn github_projects_board_at(
         owed_errors: Vec::new(),
         refusing: Vec::new(),
         refusing_after: Vec::new(),
+        rate_limit_next: None,
         replacing: Vec::new(),
         blocked_by: github_blockers(),
         counted_types: Vec::new(),
@@ -3468,6 +3478,13 @@ fn github_projects_board_at(
                     served.replacing[at].1 -= 1;
                 }
             }
+        }
+        if let Some(wait) = board.lock().unwrap().rate_limit_next.take() {
+            let body = r#"{"message":"API rate limit exceeded for this fixture"}"#;
+            return Some(format!(
+                "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nretry-after: {wait}\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            ));
         }
         {
             // Refusals named after the board was built join the ones it was built with.
@@ -3646,16 +3663,28 @@ fn github_projects_block_at(endpoint: &str) -> Value {
 /// rather than waiting it out: what is under test is what a caller is told, not how long
 /// the source is prepared to wait before telling it.
 pub fn github_projects_rate_limited(sandbox: &Sandbox, retry_after: Option<u64>) -> Value {
+    github_projects_rate_limited_counted(sandbox, retry_after).0
+}
+
+/// [`github_projects_rate_limited`], and a count of the requests it was sent.
+// llmlint: ignore[code_lands_in_the_domain_that_owns_it] This is `github_projects_rate_limited` above with its request count exposed, and that helper now delegates here: AGENTS.md puts every loopback server and its constructors in this shared harness, once, so no suite copies one.
+pub fn github_projects_rate_limited_counted(
+    sandbox: &Sandbox,
+    retry_after: Option<u64>,
+) -> (Value, Arc<Mutex<usize>>) {
     sandbox.secrets_file("GITHUB_PROJECTS_FIXTURE_TOKEN=test-token\n");
     let listener = TcpListener::bind("127.0.0.1:0").expect("GitHub fixture listener");
     let endpoint = format!(
         "http://{}/graphql",
         listener.local_addr().expect("fixture address")
     );
+    let sent = Arc::new(Mutex::new(0_usize));
+    let counted = Arc::clone(&sent);
     thread::spawn(move || {
         for stream in listener.incoming() {
             let mut stream = stream.expect("GitHub fixture connection");
             read_http_json(&mut stream);
+            *counted.lock().unwrap() += 1;
             let body = json!({"message": "API rate limit exceeded for this fixture"}).to_string();
             let wait = retry_after
                 .map(|seconds| format!("retry-after: {seconds}\r\n"))
@@ -3671,7 +3700,7 @@ pub fn github_projects_rate_limited(sandbox: &Sandbox, retry_after: Option<u64>)
     });
     let mut block = github_projects_block_at(&endpoint);
     block["pacing"]["retry_budget_ms"] = json!(0);
-    block
+    (block, sent)
 }
 
 /// A board whose GraphQL budget for the hour is already spent, answering every request the
@@ -4920,6 +4949,55 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         let page = GitHubBoard::membership_page(board.memberships(item), offset, first);
         return json!({"node":{"projectItems":page}});
     }
+    // llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] How the loopback board answers the two one-direction dependency documents, which its request loop serves from its private state; it lives beside `GitHubBoard` for the reason that type records, and a GitHub suite could not add an answer from outside it.
+    // A dependency read of one direction, answering exactly what its document selects: what
+    // an item is blocked by, with its body — a draft's body with the one board item it is,
+    // beside this board's own id — or what an issue blocks.
+    {
+        use onetaskgraph_github_projects::graphql::{ISSUE_DEPENDED_ON_BY, ISSUE_DEPENDS_ON};
+        if query == ISSUE_DEPENDS_ON || query == ISSUE_DEPENDED_ON_BY {
+            let forward = query == ISSUE_DEPENDS_ON;
+            let id = variables["id"].as_str().expect("dependency id").to_owned();
+            let first = variables["first"]
+                .as_u64()
+                .expect("dependency first must be an unsigned integer");
+            assert!(
+                (1..=100).contains(&first),
+                "dependency first is out of range"
+            );
+            let board_root = json!({"projectV2":{"id":"PVT-board"}});
+            let Some(near) = board.items.iter().find(|item| item["id"] == json!(id)) else {
+                return if forward {
+                    json!({"node":null,"board":board_root})
+                } else {
+                    json!({ "node": null })
+                };
+            };
+            if GitHubBoard::is_draft(near) {
+                if !forward {
+                    return json!({"node":{"__typename":"DraftIssue"}});
+                }
+                return json!({"node":{"__typename":"DraftIssue","id":id,"body":near["body"]},
+                    "draft":{"projectV2Items":{"nodes":[{"project":{"id":"PVT-board","number":7}}],
+                                               "pageInfo":{"hasNextPage":false}}},
+                    "board":board_root});
+            }
+            let (connection, blocking) = if forward {
+                ("blockedBy", false)
+            } else {
+                ("blocking", true)
+            };
+            let mut node = json!({"__typename":"Issue"});
+            node[connection] = json!({"nodes":board.related(&id, blocking),
+                                      "pageInfo":{"hasNextPage":false,"endCursor":null}});
+            if forward {
+                node["body"] = near["body"].clone();
+                return json!({"node":node,"board":board_root});
+            }
+            return json!({ "node": node });
+        }
+    }
+    // llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
     // One draft by its own id, with the one board item GitHub links it to.
     if query.contains("on DraftIssue{") && query.contains("projectV2Items(") {
         let id = variables["id"].as_str().expect("a node id").to_owned();
@@ -5253,6 +5331,16 @@ pub fn linear_failing_a_relation_write_once(sandbox: &Sandbox) -> Value {
 /// rate limited was never asked at all.
 // llmlint: ignore[code_lands_in_the_domain_that_owns_it] As `linear_workspace` below: the shared e2e harness is where the agreed e2e layout puts every loopback server, and the engine's own suite drives this one.
 pub fn linear_rate_limited(sandbox: &Sandbox) -> (Value, Arc<Mutex<usize>>) {
+    linear_rate_limited_for(sandbox, None)
+}
+
+/// [`linear_rate_limited`], naming its reset `retry_after` seconds ahead on every refusal when
+/// it is given — what a source that remembers the reset is held to.
+// llmlint: ignore[code_lands_in_the_domain_that_owns_it] This is `linear_rate_limited` above naming its reset, and that helper now delegates here: AGENTS.md puts every loopback server and its constructors in this shared harness, once, so no suite copies one.
+pub fn linear_rate_limited_for(
+    sandbox: &Sandbox,
+    retry_after: Option<u64>,
+) -> (Value, Arc<Mutex<usize>>) {
     sandbox.secrets_file("LINEAR_API_KEY=fixture-key\n");
     let listener = TcpListener::bind("127.0.0.1:0").expect("fixture listener");
     let endpoint = format!("http://{}/graphql", listener.local_addr().unwrap());
@@ -5266,9 +5354,12 @@ pub fn linear_rate_limited(sandbox: &Sandbox) -> (Value, Arc<Mutex<usize>>) {
             *counted.lock().unwrap() += 1;
             let body =
                 r#"{"errors":[{"message":"rate limited","extensions":{"code":"RATELIMITED"}}]}"#;
+            let wait = retry_after
+                .map(|seconds| format!("retry-after: {seconds}\r\n"))
+                .unwrap_or_default();
             let _ = write!(
                 stream,
-                "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\n{wait}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()
             );
         }
@@ -5336,6 +5427,7 @@ pub fn linear_workspace_failing(
         answers: Arc::new(Mutex::new(Vec::new())),
         hooks: Arc::new(Mutex::new(Vec::new())),
         bends: Arc::new(Mutex::new(Vec::new())),
+        limits: Arc::new(Mutex::new(std::collections::VecDeque::new())),
     };
     let config = linear_serve(sandbox, workspace.clone(), None, failing);
     (config, workspace)
@@ -5460,9 +5552,20 @@ pub struct LinearWorkspace {
     answers: Arc<Mutex<Vec<Value>>>,
     hooks: Arc<Mutex<Vec<LinearHook>>>,
     bends: Arc<Mutex<Vec<LinearBend>>>,
+    /// How each of the next requests is answered, in order: `Some(wait)` refused `429` naming
+    /// a reset `wait` seconds ahead, `None` answered as usual.
+    limits: Arc<Mutex<std::collections::VecDeque<Option<u64>>>>,
 }
 
 impl LinearWorkspace {
+    /// Answer each of the next requests by `script`, in order: `Some(wait)` is refused
+    /// `429 Too Many Requests` with `retry-after: wait`, as Linear's limiter answers, and `None`
+    /// is answered as it would have been. Every request after the script is answered as usual.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback Linear's own answers to its next requests, which only its server loop here answers: that state is private to the loopback, so a suite can set it only through this handle, as `block`, `edit_body` and `refuse_once` set the rest; the GitHub Projects and Linear suites are what drive it.
+    pub fn rate_limit(&self, script: &[Option<u64>]) {
+        self.limits.lock().unwrap().extend(script.iter().copied());
+    }
+
     /// Have this workspace rewrite its answer to each of the next `times` requests `matches`
     /// holds of through `bend`, given that request's variables and the `data` it would have
     /// answered — a Linear whose connections answer as no correct one does.
@@ -5963,6 +6066,7 @@ fn linear_server_over(
         answers: Arc::new(Mutex::new(Vec::new())),
         hooks: Arc::new(Mutex::new(Vec::new())),
         bends: Arc::new(Mutex::new(Vec::new())),
+        limits: Arc::new(Mutex::new(std::collections::VecDeque::new())),
     };
     linear_serve(sandbox, workspace, recorded, failing)
 }
@@ -6095,6 +6199,19 @@ fn linear_serve(
                     .map(|at| pending.remove(at))
                     .is_some()
             };
+            let limited = workspace.limits.lock().unwrap().pop_front().flatten();
+            if let Some(wait) = limited {
+                let body = json!({"errors":[{"message":"rate limited",
+                                             "extensions":{"code":"RATELIMITED"}}]});
+                let text = body.to_string();
+                answers.lock().unwrap().push(body);
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nretry-after: {wait}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}",
+                    text.len()
+                );
+                continue;
+            }
             if refused {
                 let text = json!({"errors":[{"message":LINEAR_REFUSED_WRITE}]}).to_string();
                 answers
@@ -6660,8 +6777,11 @@ fn linear_response(
         graphql::COMMENT_DELETE,
     ]
     .contains(&operation)
-        // The documents an attached cache sends are the ones `linear_uncached` answers.
+        // The documents an attached cache sends are the ones `linear_uncached` answers, and a
+        // dependency read's are the ones `linear_narrowed` does.
         && linear_uncached(operation).is_none()
+        && linear_narrowed(operation).is_none()
+        && operation != graphql::ISSUE_RESOLVED
     {
         return Err("unknown GraphQL operation");
     }
@@ -6679,6 +6799,37 @@ fn linear_response(
         let mut answer =
             linear_response(&json!({"query": plain, "variables": vars}), recorded, data)?;
         linear_widen(operation, &mut answer, data, &vars);
+        return Ok(answer);
+    }
+    // llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] How the loopback Linear answers a document Linear's own plugin sends, which this harness's one request loop serves from the fixture's data; every loopback server lives here by the agreed e2e layout, as `GitHubBoard` records, so a Linear suite could not add an answer from outside it.
+    // An issue read beside the resolution a status write needs: each answered as it is
+    // answered alone, side by side under their own roots.
+    if operation == graphql::ISSUE_RESOLVED {
+        let mut answer = linear_response(
+            &json!({"query": graphql::ISSUE, "variables": {"id": vars["id"]}}),
+            recorded,
+            data,
+        )?;
+        let resolution = linear_response(
+            &json!({"query": graphql::RESOLUTION, "variables": {"key": vars["key"]}}),
+            recorded,
+            data,
+        )?;
+        for (root, value) in resolution.as_object().into_iter().flatten() {
+            answer[root] = value.clone();
+        }
+        return Ok(answer);
+    }
+    // llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
+    // A dependency read of one direction: the two-direction read's answer, holding only the
+    // members that document selects, as Linear answers exactly what is selected.
+    if let Some((wide, root)) = linear_narrowed(operation) {
+        let selected = selected_members(operation, root);
+        let mut answer =
+            linear_response(&json!({"query": wide, "variables": vars}), recorded, data)?;
+        if let Some(item) = answer.get_mut(root).and_then(Value::as_object_mut) {
+            item.retain(|member, _| selected.iter().any(|kept| kept == member));
+        }
         return Ok(answer);
     }
     validate_linear_variables(operation, &vars)?;
@@ -7022,6 +7173,57 @@ fn linear_uncached(operation: &str) -> Option<&'static str> {
         graphql::PROJECT_RELATIONS_CACHED => Some(graphql::PROJECT_RELATIONS),
         _ => None,
     }
+}
+
+/// The two-direction relations read a one-direction dependency read narrows, and the root it
+/// reads; the members it selects of that root are read off the document itself, by
+/// [`selected_members`], so they cannot drift from what the plugin sends.
+// llmlint: ignore[code_lands_in_the_domain_that_owns_it] As `linear_uncached` below: the engine's own suite and the Linear suite both drive this loopback Linear, so recognising the one-direction dependency reads it is sent, and answering them, is part of answering a request here.
+fn linear_narrowed(operation: &str) -> Option<(&'static str, &'static str)> {
+    use onetaskgraph_linear::graphql;
+    match operation {
+        graphql::ISSUE_DEPENDS_ON | graphql::ISSUE_DEPENDED_ON_BY => {
+            Some((graphql::ISSUE_RELATIONS, "issue"))
+        }
+        graphql::PROJECT_DEPENDS_ON | graphql::PROJECT_DEPENDED_ON_BY => {
+            Some((graphql::PROJECT_RELATIONS, "project"))
+        }
+        _ => None,
+    }
+}
+
+/// The members `document` selects directly under its root field `root`.
+fn selected_members(document: &str, root: &str) -> Vec<String> {
+    use graphql_parser::query::{Definition, OperationDefinition, Selection, SelectionSet};
+    let parsed = graphql_parser::parse_query::<String>(document).expect("a plugin document parses");
+    let fields = |set: &SelectionSet<'_, String>| -> Vec<String> {
+        set.items
+            .iter()
+            .filter_map(|item| match item {
+                Selection::Field(field) => {
+                    Some(field.alias.clone().unwrap_or_else(|| field.name.clone()))
+                }
+                _ => None,
+            })
+            .collect()
+    };
+    parsed
+        .definitions
+        .iter()
+        .find_map(|definition| match definition {
+            Definition::Operation(OperationDefinition::Query(query)) => query
+                .selection_set
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    Selection::Field(field) if field.name == root => {
+                        Some(fields(&field.selection_set))
+                    }
+                    _ => None,
+                }),
+            _ => None,
+        })
+        .expect("the document selects its root")
 }
 
 /// `nodes` as the first page of a `first:` connection the cache's documents select answers it:

@@ -123,7 +123,8 @@ pub(crate) fn complexity(document: &str, variables: &Value, answer: &Value) -> u
     };
     let relations = |at_100: u64| (at_100 * first("first")).div_ceil(100);
     match document {
-        g::VIEWER => price::VIEWER,
+        // The workspace's own id: one object and its id, the shape `VIEWER` is measured at.
+        g::VIEWER | g::ORGANIZATION => price::VIEWER,
         g::ISSUE => price::ISSUE,
         g::ISSUE_CACHED => {
             price::ISSUE
@@ -146,6 +147,12 @@ pub(crate) fn complexity(document: &str, variables: &Value, answer: &Value) -> u
                     * rows("/data/issues/nodes")
         }
         g::ISSUE_RELATIONS | g::PROJECT_RELATIONS => relations(price::RELATIONS_AT_100),
+        // A dependency read of one direction, priced as the two-direction read it narrows: it
+        // selects one of that read's two connections, so the measured price bounds it above.
+        g::ISSUE_DEPENDS_ON
+        | g::ISSUE_DEPENDED_ON_BY
+        | g::PROJECT_DEPENDS_ON
+        | g::PROJECT_DEPENDED_ON_BY => relations(price::RELATIONS_AT_100),
         g::ISSUE_RELATIONS_CACHED => {
             relations(price::RELATIONS_CACHED_AT_100) + price::COMMENTS_PAGE
         }
@@ -256,12 +263,16 @@ fn read_name(document: &str) -> &'static str {
         ("ISSUES_CACHED", g::ISSUES_CACHED),
         ("ISSUE_RELATIONS", g::ISSUE_RELATIONS),
         ("ISSUE_RELATIONS_CACHED", g::ISSUE_RELATIONS_CACHED),
+        ("ISSUE_DEPENDS_ON", g::ISSUE_DEPENDS_ON),
+        ("ISSUE_DEPENDED_ON_BY", g::ISSUE_DEPENDED_ON_BY),
         ("PROJECT", g::PROJECT),
         ("PROJECT_CACHED", g::PROJECT_CACHED),
         ("PROJECTS", g::PROJECTS),
         ("PROJECTS_CACHED", g::PROJECTS_CACHED),
         ("PROJECT_RELATIONS", g::PROJECT_RELATIONS),
         ("PROJECT_RELATIONS_CACHED", g::PROJECT_RELATIONS_CACHED),
+        ("PROJECT_DEPENDS_ON", g::PROJECT_DEPENDS_ON),
+        ("PROJECT_DEPENDED_ON_BY", g::PROJECT_DEPENDED_ON_BY),
         ("DOCUMENT", g::DOCUMENT),
         ("DOCUMENTS", g::DOCUMENTS),
         ("LABELS", g::LABELS),

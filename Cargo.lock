@@ -1347,6 +1347,7 @@ dependencies = [
  "reqwest",
  "secrecy",
  "serde_json",
+ "sha2",
  "tokio",
 ]
 

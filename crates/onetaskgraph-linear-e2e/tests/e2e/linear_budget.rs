@@ -123,17 +123,45 @@ fn held(tasks: Vec<Value>) -> Value {
            "task_dependencies": [], "project_dependencies": []})
 }
 
+/// The two workspace sizes every status-write and settlement budget is measured at: 60 issues
+/// and ten times that.
+const SCALES: [(&str, usize); 2] = [("1x", 60), ("10x", 600)];
+
+/// `tasks`, and unrelated issues after them until the workspace holds `total`.
+fn filled(mut tasks: Vec<Value>, total: usize) -> Vec<Value> {
+    let held = tasks.len();
+    tasks.extend((held..total).map(|at| issue(&format!("F-{at}"), "Ready", json!({}))));
+    tasks
+}
+
 /// The workspace over `tasks`, and the source configuration that reaches it.
 fn example_workspace(sandbox: &Sandbox, tasks: Vec<Value>) -> (Value, LinearWorkspace) {
-    let (mut config, workspace) =
-        linear_workspace_with(sandbox, held(tasks), TEAM_STATES, PROJECT_STATUSES);
+    example_workspace_at(sandbox, tasks, 0)
+}
+
+/// [`example_workspace`], filled to `total` issues.
+fn example_workspace_at(
+    sandbox: &Sandbox,
+    tasks: Vec<Value>,
+    total: usize,
+) -> (Value, LinearWorkspace) {
+    let (mut config, workspace) = linear_workspace_with(
+        sandbox,
+        held(filled(tasks, total)),
+        TEAM_STATES,
+        PROJECT_STATUSES,
+    );
     config["status_mapping"] = mapping();
     (config, workspace)
 }
 
 /// The workspace holding two projects of the team, `LP-SCOPE` and `LP-ELSEWHERE`,
 /// and `tasks`; and the configuration of a source scoped to `LP-SCOPE` that reaches it.
-fn example_workspace_scoped(sandbox: &Sandbox, tasks: Vec<Value>) -> (Value, LinearWorkspace) {
+fn example_workspace_scoped(
+    sandbox: &Sandbox,
+    tasks: Vec<Value>,
+    total: usize,
+) -> (Value, LinearWorkspace) {
     let projects = ["LP-SCOPE", "LP-ELSEWHERE"]
         .iter()
         .map(|id| {
@@ -143,7 +171,7 @@ fn example_workspace_scoped(sandbox: &Sandbox, tasks: Vec<Value>) -> (Value, Lin
                    "labels": []})
         })
         .collect::<Vec<_>>();
-    let mut dataset = held(tasks);
+    let mut dataset = held(filled(tasks, total));
     dataset["projects"] = json!(projects);
     let (mut config, workspace) =
         linear_workspace_with(sandbox, dataset, TEAM_STATES, PROJECT_STATUSES);
@@ -155,7 +183,7 @@ fn example_workspace_scoped(sandbox: &Sandbox, tasks: Vec<Value>) -> (Value, Lin
 /// A status write through a source scoped to one project, each by a fresh invocation, to an
 /// issue filed in its project and to one filed in another project of its team: what each of
 /// `task status set` and `task update --status` sent, in that order.
-fn scoped_cold() -> Vec<usize> {
+fn scoped_cold(total: usize) -> Vec<usize> {
     let sandbox = Sandbox::new();
     let (config, workspace) = example_workspace_scoped(
         &sandbox,
@@ -163,6 +191,7 @@ fn scoped_cold() -> Vec<usize> {
             issue("L-IN", "Ready", json!({"project": "LP-SCOPE"})),
             issue("L-OUT", "Ready", json!({"project": "LP-ELSEWHERE"})),
         ],
+        total,
     );
     sandbox.project_document(&document(&json!({
         "scoped": {"plugin": "linear", "config": config},
@@ -269,15 +298,46 @@ fn per_write(served: &[(String, Value)], documents: &[&str], creates: &[&str]) -
     writes
 }
 
+// llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] The task places this budget journey in the e2e crate's `test` target, whose telemetry its budget reads, and AGENTS.md records the aggregate coverage run repeating every crate's tests as the accepted cost of one coverage report; the module runs in about three seconds on a warm build.
 #[test]
 fn measure_linear_requests_per_status_write_cold() {
+    let measured: Vec<(usize, String)> = SCALES
+        .iter()
+        .map(|(scale, total)| {
+            let (highest, detail) = status_write_cold(*total);
+            (highest, format!("{scale} ({total} issues): {detail}"))
+        })
+        .collect();
+    record(
+        "linear-requests-per-status-write-cold",
+        measured
+            .iter()
+            .map(|(highest, _)| *highest)
+            .max()
+            .unwrap_or_default(),
+        &format!(
+            "the larger of each scale; each the most of: {}",
+            measured
+                .iter()
+                .map(|(_, detail)| detail.as_str())
+                .collect::<Vec<_>>()
+                .join("; ")
+        ),
+    );
+}
+// llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+
+/// What each cold status write costs on a workspace of `total` issues: the most of them, and
+/// each.
+fn status_write_cold(total: usize) -> (usize, String) {
     let sandbox = Sandbox::new();
-    let (config, workspace) = example_workspace(
+    let (config, workspace) = example_workspace_at(
         &sandbox,
         vec![
             issue("L-SET", "Ready", json!({})),
             issue("L-UPDATE", "Ready", json!({})),
         ],
+        total,
     );
     let plan = folder(
         &sandbox,
@@ -367,30 +427,59 @@ fn measure_linear_requests_per_status_write_cold() {
     );
     // And a source scoped to one project, writing an issue of its own project and one filed
     // in another project of its team.
-    let scoped = scoped_cold();
+    let scoped = scoped_cold(total);
     let highest = set
         .max(update)
         .max(project)
         .max(member[0])
         .max(scoped.iter().copied().max().unwrap_or_default());
-    record(
-        "linear-requests-per-status-write-cold",
+    (
         highest,
-        &format!(
+        format!(
             "task status set {set}, task update --status {update}, write_project of a project \
              copy {project}, write_project of a routed member {}, a scoped source's task status \
              set and task update --status in its project and elsewhere {scoped:?}",
             member[0]
         ),
-    );
+    )
 }
 
+// llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] The task places this budget journey in the e2e crate's `test` target, whose telemetry its budget reads, and AGENTS.md records the aggregate coverage run repeating every crate's tests as the accepted cost of one coverage report; the module runs in about three seconds on a warm build.
 #[test]
 fn measure_linear_requests_per_status_write_warm() {
+    let measured: Vec<(usize, String)> = SCALES
+        .iter()
+        .map(|(scale, total)| {
+            let (highest, detail) = status_write_warm(*total);
+            (highest, format!("{scale} ({total} issues): {detail}"))
+        })
+        .collect();
+    record(
+        "linear-requests-per-status-write-warm",
+        measured
+            .iter()
+            .map(|(highest, _)| *highest)
+            .max()
+            .unwrap_or_default(),
+        &format!(
+            "the larger of each scale; each the most of: {}",
+            measured
+                .iter()
+                .map(|(_, detail)| detail.as_str())
+                .collect::<Vec<_>>()
+                .join("; ")
+        ),
+    );
+}
+// llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+
+/// What each status write after the first costs on one long-lived source over a workspace of
+/// `total` issues: the most of them, and each.
+fn status_write_warm(total: usize) -> (usize, String) {
     // A copy creating a project and its five tasks, each create carrying a status: one
     // resolution, then one mutation per item.
     let sandbox = Sandbox::new();
-    let (config, workspace) = example_workspace(&sandbox, Vec::new());
+    let (config, workspace) = example_workspace_at(&sandbox, Vec::new(), total);
     let mut files = vec![(
         "projects/big.md".to_owned(),
         "---\ntitle: Big\nstatus: todo\n---\nFive tasks.\n".to_owned(),
@@ -439,7 +528,7 @@ fn measure_linear_requests_per_status_write_warm() {
     let tasks = (0..5)
         .map(|at| issue(&format!("L-{at}"), "Ready", json!({})))
         .collect();
-    let (config, workspace) = example_workspace(&sandbox, tasks);
+    let (config, workspace) = example_workspace_at(&sandbox, tasks, total);
     let plan = folder(
         &sandbox,
         &[(
@@ -536,7 +625,7 @@ fn measure_linear_requests_per_status_write_warm() {
             issue(&format!("L-{at}"), "Ready", json!({"project": project}))
         })
         .collect();
-    let (config, workspace) = example_workspace_scoped(&sandbox, tasks);
+    let (config, workspace) = example_workspace_scoped(&sandbox, tasks, total);
     let scoped_engine = self::engine(&config, None);
     let mut scoped = Vec::new();
     runtime.block_on(async {
@@ -563,10 +652,9 @@ fn measure_linear_requests_per_status_write_warm() {
     });
     let scoped_updated = scoped[1..].iter().copied().max().unwrap_or_default();
     let highest = created.max(updated).max(rewritten).max(scoped_updated);
-    record(
-        "linear-requests-per-status-write-warm",
+    (
         highest,
-        &format!(
+        format!(
             "a copy's task creates after the first {:?}, status-only updates after the first \
              {:?}, project rewrites after the first create {:?}, a scoped source's status-only \
              updates after the first {:?}",
@@ -575,7 +663,7 @@ fn measure_linear_requests_per_status_write_warm() {
             &rewrites[1..],
             &scoped[1..]
         ),
-    );
+    )
 }
 
 /// An Engine over the Linear source `config` configures — and the folder of Markdown at
@@ -616,7 +704,7 @@ const PERSONS_TEXT: &str = "A person's own words, edited by hand.";
 /// Five settlement-shaped updates in one Engine — a status and one `onepipeline.*` key each,
 /// with `Engine::end_command` after each as the write-back worker calls it — and what each
 /// cost, every one checked to have kept the person's text and the unrelated key.
-fn settlements() -> Vec<usize> {
+fn settlements(total: usize) -> Vec<usize> {
     let sandbox = Sandbox::new();
     let tasks = (0..5)
         .map(|at| {
@@ -627,7 +715,7 @@ fn settlements() -> Vec<usize> {
             )
         })
         .collect();
-    let (config, workspace) = example_workspace(&sandbox, tasks);
+    let (config, workspace) = example_workspace_at(&sandbox, tasks, total);
     let before = (0..5)
         .map(|at| {
             workspace
@@ -700,21 +788,42 @@ fn split_slot(field: &str) -> (String, Value) {
     )
 }
 
+// llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] The task places this budget journey in the e2e crate's `test` target, whose telemetry its budget reads, and AGENTS.md records the aggregate coverage run repeating every crate's tests as the accepted cost of one coverage report; the module runs in about three seconds on a warm build.
 #[test]
 fn measure_linear_requests_per_settlement_update() {
-    let spent = settlements();
+    let spent: Vec<(&str, usize, Vec<usize>)> = SCALES
+        .iter()
+        .map(|(scale, total)| (*scale, *total, settlements(*total)))
+        .collect();
+    let each = |pick: &dyn Fn(&[usize]) -> usize| {
+        let figures: Vec<usize> = spent.iter().map(|(_, _, spent)| pick(spent)).collect();
+        let detail = spent
+            .iter()
+            .map(|(scale, total, spent)| format!("{scale} ({total} issues) {spent:?}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        (figures.into_iter().max().unwrap_or_default(), detail)
+    };
+    let (cold, detail) = each(&|spent| spent[0]);
     record(
         "linear-requests-per-settlement-update-cold",
-        spent[0],
-        &format!("the first of {spent:?}: the issue read, the resolution and the mutation"),
+        cold,
+        &format!(
+            "the larger over the scales of the first settlement of each: {detail}; the issue \
+             read carrying the resolution, and the mutation"
+        ),
     );
-    let warm = spent[1..].iter().copied().max().unwrap_or_default();
+    let (warm, detail) = each(&|spent| spent[1..].iter().copied().max().unwrap_or_default());
     record(
         "linear-requests-per-settlement-update-warm",
         warm,
-        &format!("every one after the first of {spent:?}: the issue read and the mutation"),
+        &format!(
+            "the larger over the scales of every settlement after the first: {detail}; the \
+             issue read and the mutation"
+        ),
     );
 }
+// llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 /// The requests one copy sent besides its item writes: everything before the first request
 /// only a write sends, and everything after it that no write sends.

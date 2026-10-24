@@ -27,6 +27,7 @@ mod designators;
 pub use dependents::Completeness;
 mod fetch;
 mod graph;
+mod held_off;
 mod join;
 mod local;
 mod metadata;
@@ -1599,6 +1600,13 @@ pub struct Engine {
     designators: designators::Designators,
 }
 
+/// `source`, sent nothing between a rate limit it answers and the reset that limit names, on
+/// `clock`.
+fn held_off(source: ResolvedSource, clock: &SharedClock) -> ResolvedSource {
+    let name = source.name().clone();
+    source.wrapped(|inner| Box::new(held_off::HeldOff::new(name, inner, clock.clone())))
+}
+
 impl Engine {
     /// Build every source a configuration names.
     ///
@@ -1640,13 +1648,14 @@ impl Engine {
                 None => source,
             })
             .collect();
-        let mut engine = Self::new(
+        let mut engine = Self::assembled(
             ready
                 .into_iter()
                 .map(ConfiguredSource::Ready)
                 .chain(unavailable.into_iter().map(ConfiguredSource::Unavailable))
                 .collect(),
             config.selected_sources(),
+            clock,
         )
         .with_routes(config.routes())
         .with_incomplete(config.incomplete().clone())
@@ -1661,8 +1670,29 @@ impl Engine {
 
     /// Drive sources built elsewhere — the engine's own tests, and any caller holding a
     /// source it did not resolve from a configuration document.
+    ///
+    /// Each ready source is put behind the engine's rate-limit memory on the system clock, as
+    /// [`build_with_clock`](Self::build_with_clock) puts each one behind it on the clock it is
+    /// handed: see `held_off`.
     #[must_use]
     pub fn new(sources: Vec<ConfiguredSource>, selection: Vec<SourceName>) -> Self {
+        Self::assembled(sources, selection, &system_clock())
+    }
+
+    /// An engine over `sources`, each ready one behind the rate-limit memory on `clock` — the
+    /// one place every source is put there, so every call to it passes through.
+    fn assembled(
+        sources: Vec<ConfiguredSource>,
+        selection: Vec<SourceName>,
+        clock: &SharedClock,
+    ) -> Self {
+        let sources = sources
+            .into_iter()
+            .map(|source| match source {
+                ConfiguredSource::Ready(source) => ConfiguredSource::Ready(held_off(source, clock)),
+                unavailable @ ConfiguredSource::Unavailable(_) => unavailable,
+            })
+            .collect();
         Self {
             sources,
             selection,

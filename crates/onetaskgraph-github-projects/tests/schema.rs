@@ -349,6 +349,16 @@ fn pinned_schema_checks_selected_fields_arguments_types_fragments_and_fixture_ke
             Some("/data/node"),
             Some(include_str!("fixtures/dependencies.json")),
         ),
+        (
+            graphql::ISSUE_DEPENDS_ON,
+            Some("/data"),
+            Some(include_str!("fixtures/dependencies-depends-on.json")),
+        ),
+        (
+            graphql::ISSUE_DEPENDED_ON_BY,
+            Some("/data"),
+            Some(include_str!("fixtures/dependencies-depended-on-by.json")),
+        ),
         (graphql::CREATE_ISSUE, None, None),
         (graphql::ADD_TO_BOARD, None, None),
         (graphql::UPDATE_ISSUE, None, None),

@@ -152,6 +152,26 @@ MANIFEST = {
         "facets": {},
         "least": 1,
     },
+    # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This table is the one place every fixture under crates/*/tests/fixtures is named, by design: the check refuses a fixture it was never told about, so a plugin's fixture is registered here rather than in a table of that plugin's own the check could not see.
+    "crates/onetaskgraph-github-projects/tests/fixtures/dependencies-depends-on.json": {
+        "items": ["data", "node", "blockedBy", "nodes"],
+        "id": ["id"],
+        # The one-direction read of dependencies.json's `blockedBy`: a far end is read for
+        # its id and its kind, never for a title, so rule 1 does not reach it either.
+        "title": None,
+        "facets": {},
+        "least": 1,
+    },
+    "crates/onetaskgraph-github-projects/tests/fixtures/dependencies-depended-on-by.json": {
+        "items": ["data", "node", "blocking", "nodes"],
+        "id": ["id"],
+        # The other direction's read, `blocking` alone, with one far end so the pinned-schema
+        # test checks the keys a reverse read selects rather than an empty list.
+        "title": None,
+        "facets": {},
+        "least": 1,
+    },
+    # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
     "crates/onetaskgraph-github-projects/tests/fixtures/issue-board-items.json": {
         "items": ["data", "node", "projectItems", "nodes"],
         "id": ["id"],

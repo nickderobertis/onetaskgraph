@@ -114,7 +114,7 @@ fn named(served: &[String]) -> Vec<&'static str> {
         .map(|query| {
             if query.contains("subIssues(first:$memberFirst") {
                 "subIssues page"
-            } else if query.contains("blocking(first:$first") {
+            } else if query.contains("blockedBy(first:$first,after:$after)") {
                 "dependency read"
             } else if query == onetaskgraph_github_projects::graphql::ISSUE {
                 "issue read"
@@ -225,12 +225,12 @@ fn a_board_refusing_a_dependency_read_after_the_listing_prints_no_part_of_the_gr
             blocked_by: crowded,
         });
         let (sandbox, board) = hosted(&plan);
-        board.refuse_once("blocking(first:$first");
+        board.refuse_once("blockedBy(first:$first,after:$after)");
         let (output, served) = graph(&sandbox, &board, &["--format", format]);
         assert_ne!(output.status.code(), Some(0));
         assert_eq!(stdout(&output), "", "a graph was printed in part");
         assert!(
-            stderr(&output).contains("blocking(first:$first"),
+            stderr(&output).contains("blockedBy(first:$first,after:$after)"),
             "the source's error is not reported: {}",
             stderr(&output)
         );

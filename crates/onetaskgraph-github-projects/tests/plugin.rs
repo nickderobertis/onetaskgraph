@@ -1771,6 +1771,53 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
     state
         .bindings
         .push((operation_name(query).to_owned(), variables.clone()));
+    // A dependency read of one direction answers exactly what its document selects: what an
+    // item is blocked by, with its body — and a draft's body with the one board item it is,
+    // beside this board's own id — or what an issue blocks, and nothing else.
+    {
+        use onetaskgraph_github_projects::graphql::{ISSUE_DEPENDED_ON_BY, ISSUE_DEPENDS_ON};
+        if query == ISSUE_DEPENDS_ON || query == ISSUE_DEPENDED_ON_BY {
+            let forward = query == ISSUE_DEPENDS_ON;
+            let id = variables["id"].as_str().expect("a node id").to_owned();
+            let board = json!({"projectV2":{"id":"PVT_board"}});
+            let Some(item) = state.items.iter().find(|item| item.content_id == id) else {
+                return if forward {
+                    json!({"node":null,"board":board})
+                } else {
+                    json!({ "node": null })
+                };
+            };
+            if item.typename != "Issue" {
+                if !forward {
+                    return json!({"node":{"__typename":item.typename}});
+                }
+                let boards: Vec<Value> = if item.on_this_board {
+                    vec![json!({"project":{"id":item.board_entry_id,"number":7}})]
+                } else {
+                    Vec::new()
+                };
+                return json!({"node":{"__typename":item.typename,"id":id,"body":item.body.clone()},
+                    "draft":{"projectV2Items":{"nodes":boards,"pageInfo":{"hasNextPage":false}}},
+                    "board":board});
+            }
+            if forward {
+                let blocked = state.blocked_by.get(&id).cloned().unwrap_or_default();
+                return json!({"node":{"__typename":"Issue","body":item.body.clone(),
+                    "blockedBy":{"nodes":related_issues(&state, blocked),
+                                 "pageInfo":{"hasNextPage":false,"endCursor":null}}},
+                    "board":board});
+            }
+            let blocking = state
+                .blocked_by
+                .iter()
+                .filter(|(_, blockers)| blockers.contains(&id))
+                .map(|(issue, _)| issue.clone())
+                .collect::<Vec<_>>();
+            return json!({"node":{"__typename":"Issue",
+                "blocking":{"nodes":related_issues(&state, blocking),
+                            "pageInfo":{"hasNextPage":false,"endCursor":null}}}});
+        }
+    }
     // Which read this is, taken from the document itself: every label this board answers
     // with hangs on the content, and which path asked is what lets one case make a single
     // path disagree.
@@ -21384,4 +21431,197 @@ fn live_pair_fixture_child() {
         fixture.state.lock().unwrap().labels.is_empty(),
         "main cleaned up its label"
     );
+}
+
+/// A draft's recorded edges are read off the dependency read's own answer: those of a draft
+/// whose one board item is this board's — named by its number and by the board id the same
+/// answer carries — and none of a draft on another board; and an answer that names another
+/// draft, more board items than GitHub links a draft to, a board item without its project's
+/// number or id, or no board id at all, is refused rather than read as a draft held elsewhere.
+#[tokio::test]
+async fn a_drafts_recorded_edges_ride_its_dependency_read_and_a_malformed_answer_is_refused() {
+    let body = "<!-- onetaskgraph.metadata\n{\"onetaskgraph.depends_on\":[{\"id\":\"elsewhere:T-9\",\"kind\":\"task\"}]}\n-->";
+    let answer = |draft: &str, items: Value, board: Value| {
+        json!({"data":{"node":{"__typename":"DraftIssue","id":draft,"body":body},
+            "draft":{"projectV2Items":items},"board":board}})
+        .to_string()
+    };
+    let one =
+        |project: Value| json!({"nodes":[{"project":project}],"pageInfo":{"hasNextPage":false}});
+    let this_board = json!({"projectV2":{"id":"PVT_board"}});
+    let read = |served: String| async move {
+        configured(&served, json!({}))
+            .task_dependencies(
+                &NativeId("DI_1".to_owned()),
+                Direction::DependsOn,
+                &page(10),
+            )
+            .await
+    };
+
+    let held = read(raw_server(
+        "200 OK",
+        &answer(
+            "DI_1",
+            one(json!({"id":"PVT_board","number":7})),
+            this_board.clone(),
+        ),
+    ))
+    .await
+    .expect("this board's draft");
+    assert_eq!(held.items.len(), 1, "{held:?}");
+    assert_eq!(held.items[0].to.id(), "elsewhere:T-9");
+    assert!(held.next.is_none());
+
+    for (case, foreign) in [
+        (
+            "another board's number",
+            one(json!({"id":"PVT_board","number":8})),
+        ),
+        (
+            "another board's id",
+            one(json!({"id":"PVT_other","number":7})),
+        ),
+        (
+            "on no board",
+            json!({"nodes":[],"pageInfo":{"hasNextPage":false}}),
+        ),
+    ] {
+        let answered = read(raw_server(
+            "200 OK",
+            &answer("DI_1", foreign, this_board.clone()),
+        ))
+        .await
+        .unwrap_or_else(|error| panic!("{case}: {error}"));
+        assert!(answered.items.is_empty(), "{case}: {answered:?}");
+    }
+
+    for (case, served, said) in [
+        (
+            "another draft",
+            answer(
+                "DI_2",
+                one(json!({"id":"PVT_board","number":7})),
+                this_board.clone(),
+            ),
+            "different draft",
+        ),
+        (
+            "two board items",
+            answer(
+                "DI_1",
+                json!({"nodes":[{"project":{"id":"PVT_board","number":7}},
+                                {"project":{"id":"PVT_other","number":8}}],
+                       "pageInfo":{"hasNextPage":false}}),
+                this_board.clone(),
+            ),
+            "more board items",
+        ),
+        (
+            "a further page of board items",
+            answer(
+                "DI_1",
+                json!({"nodes":[{"project":{"id":"PVT_board","number":7}}],
+                       "pageInfo":{"hasNextPage":true}}),
+                this_board.clone(),
+            ),
+            "more board items",
+        ),
+        (
+            "a board item with no number",
+            answer("DI_1", one(json!({"id":"PVT_board"})), this_board.clone()),
+            "numeric project number",
+        ),
+        (
+            "a board item with no project",
+            answer(
+                "DI_1",
+                json!({"nodes":[{}],"pageInfo":{"hasNextPage":false}}),
+                this_board.clone(),
+            ),
+            "has no project",
+        ),
+        (
+            "no board id",
+            answer(
+                "DI_1",
+                one(json!({"id":"PVT_board","number":7})),
+                Value::Null,
+            ),
+            "own id",
+        ),
+    ] {
+        let refused = read(raw_server("200 OK", &served)).await.expect_err(case);
+        assert!(
+            matches!(refused, SourceError::Malformed { .. }),
+            "{case}: {refused:?}"
+        );
+        assert!(format!("{refused}").contains(said), "{case}: {refused}");
+    }
+    // Every other shape this answer can come in wrong, each refused as malformed: a draft id
+    // that is missing or not a string, board items without their nodes or page, a page whose
+    // `hasNextPage` is not a boolean, a project id missing or not a string, a body that is not
+    // a string, and a metadata slot that does not hold JSON.
+    // The draft's board item is answered under the document's own `draft` root, beside the
+    // `node` that carries its id and body.
+    let node = |mut draft: Value| {
+        let items = draft
+            .as_object_mut()
+            .and_then(|draft| draft.remove("projectV2Items"));
+        json!({"data":{"node":draft,"draft":{"projectV2Items":items},"board":this_board}})
+            .to_string()
+    };
+    let well = || {
+        json!({"__typename":"DraftIssue","id":"DI_1","body":body,
+               "projectV2Items":one(json!({"id":"PVT_board","number":7}))})
+    };
+    let with = |pointer: &str, replaced: Value| {
+        let mut draft = well();
+        *draft.pointer_mut(pointer).expect("the member") = replaced;
+        draft
+    };
+    let without = |pointer: &str, member: &str| {
+        let mut draft = well();
+        draft
+            .pointer_mut(pointer)
+            .and_then(Value::as_object_mut)
+            .expect("the parent")
+            .remove(member);
+        draft
+    };
+    for (case, draft) in [
+        ("no draft id", without("", "id")),
+        ("a draft id that is no string", with("/id", json!(7))),
+        ("no board item nodes", without("/projectV2Items", "nodes")),
+        (
+            "board item nodes that are no array",
+            with("/projectV2Items/nodes", json!({})),
+        ),
+        ("no board item page", without("/projectV2Items", "pageInfo")),
+        (
+            "a page that is no boolean",
+            with("/projectV2Items/pageInfo/hasNextPage", json!("no")),
+        ),
+        (
+            "no project id",
+            without("/projectV2Items/nodes/0/project", "id"),
+        ),
+        (
+            "a project id that is no string",
+            with("/projectV2Items/nodes/0/project/id", json!(1)),
+        ),
+        ("a body that is no string", with("/body", json!(["text"]))),
+        (
+            "a slot that holds no JSON",
+            with("/body", json!("<!-- onetaskgraph.metadata\n{not json\n-->")),
+        ),
+    ] {
+        let refused = read(raw_server("200 OK", &node(draft)))
+            .await
+            .expect_err(case);
+        assert!(
+            matches!(refused, SourceError::Malformed { .. }),
+            "{case}: {refused:?}"
+        );
+    }
 }
