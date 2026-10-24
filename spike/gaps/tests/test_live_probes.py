@@ -169,7 +169,10 @@ def test_the_gate_pauses_under_forty_percent_and_proceeds_once_the_bucket_recove
         """The gate through the real relay."""
         async with relay(tmp_path, (), upstream=url) as proxy:
             client = Client(proxy.endpoint, Token("t0ken"))
-            return await allowance.gate(client, tmp_path / "allowance.jsonl", "test", None, recover)
+            log = tmp_path / "allowance.jsonl"
+            gated = await allowance.gate(client, log, "test", None, recover)
+            assert gated.pauses == 1
+            return gated.reading
 
     reading = asyncio.run(gate())
     assert len(pauses) == 1 and pauses[0] >= allowance.MIN_PAUSE
@@ -359,7 +362,9 @@ def test_under_forty_percent_the_burn_rate_decides_whether_to_pause(
         """The gate through the real relay."""
         async with relay(tmp_path, (), upstream=url) as proxy:
             client = Client(proxy.endpoint, Token("t0ken"))
-            return await allowance.gate(client, log, "test", None, recover)
+            gated = await allowance.gate(client, log, "test", None, recover)
+            assert gated.pauses == pauses
+            return gated.reading
 
     asyncio.run(gate())
     assert len(slept) == pauses

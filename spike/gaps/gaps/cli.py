@@ -193,7 +193,8 @@ async def live(scenario: Scenario, where: Paths, run: Path, out: Path) -> Path:
             before = await allowance.gate(
                 client, where.quota_log, run.name, last_headers(where.runs)
             )
-            readings["before"] = before.to_json()
+            readings["before"] = before.reading.to_json()
+            readings["pauses"] = before.pauses
             context = await client.graphql(
                 "CREATION_CONTEXT", board.ids_query(), board.ids_variables(scratch)
             )

@@ -18,7 +18,18 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from gaps.github import Client, RateLimit, require
-from gaps.json_shape import Json, arr, encode, field, integer, load_lines, number, obj, text
+from gaps.json_shape import (
+    Json,
+    ShapeError,
+    arr,
+    encode,
+    field,
+    integer,
+    load_lines,
+    number,
+    obj,
+    text,
+)
 
 OWN_READS = 3
 RATE_QUERY = "query SpikeRateLimit { rateLimit { limit used remaining resetAt } }"
@@ -27,12 +38,17 @@ MIN_PAUSE = 30.0
 
 @dataclass(frozen=True)
 class Bucket:
-    """One reading of the GraphQL bucket."""
+    """One reading of the GraphQL bucket, refused unless it is a possible allowance."""
 
     limit: int
     used: int
     remaining: int
     reset: int
+
+    def __post_init__(self) -> None:
+        """Refuse a bucket no allowance could be: the 40% rule divides by its limit."""
+        if self.limit <= 0 or self.used < 0 or not 0 <= self.remaining <= self.limit:
+            raise ShapeError(f"an impossible GraphQL bucket: {self}")
 
 
 @dataclass(frozen=True)
@@ -142,15 +158,27 @@ def previous_reading(log: Path) -> Reading | None:
     )
 
 
+@dataclass(frozen=True)
+class Gated:
+    """The reading the gate proceeded on, and how many pauses it took before it."""
+
+    reading: Reading
+    pauses: int
+
+
 async def gate(
     client: Client,
     log: Path,
     scenario: str,
     last_headers: RateLimit | None,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
-) -> Reading:
-    """Block until the bucket may be drawn on; answer the reading that let it, all logged."""
+) -> Gated:
+    """Block until the bucket may be drawn on, every reading and pause logged.
+
+    Answers the reading that let it, and how many pauses it took before it.
+    """
     log.parent.mkdir(parents=True, exist_ok=True)
+    pauses = 0
     while True:
         previous = previous_reading(log)
         now = await read(client, last_headers)
@@ -165,9 +193,10 @@ async def gate(
         with log.open("a", encoding="utf-8") as out:
             out.write(json.dumps(entry, sort_keys=True) + "\n")
         if decision.proceed:
-            return now
+            return Gated(reading=now, pauses=pauses)
         wait = max(now.least.reset - now.at + 5, MIN_PAUSE)
         with log.open("a", encoding="utf-8") as out:
             pause = {"event": "pause", "scenario": scenario, "at": now.at, "seconds": wait}
             out.write(json.dumps(pause, sort_keys=True) + "\n")
+        pauses += 1
         await sleep(wait)

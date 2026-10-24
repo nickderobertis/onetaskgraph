@@ -108,6 +108,12 @@ def measure_of(candidate: Candidate) -> str:
 def row(candidate: Candidate, summary: Summary) -> dict[str, str]:
     """One candidate as the template's six strings."""
     consumed = summary.consumed
+    left = consumed.issues_left_by_the_last_placement
+    left_said = (
+        "the last placement probe's cleanup unrecorded"
+        if left is None
+        else f"{left} left recorded after the last placement probe"
+    )
     verdict = "within" if candidate.within else "OVER"
     base = candidate.baseline
     return {
@@ -128,7 +134,8 @@ def row(candidate: Candidate, summary: Summary) -> dict[str, str]:
             f"{consumed.requests} requests ({consumed.dry_runs} dry runs, "
             f"{consumed.rate_limit_reads} "
             f"quota reads, {consumed.mutation_requests} mutation requests, "
-            f"{consumed.creations_sent} disposable issue creations sent, every issue deleted), "
+            f"{consumed.creations_sent} disposable issue creations sent; "
+            f"{left_said}), "
             f"{consumed.points} points by the prices observed, "
             f"in {consumed.seconds} s of request time. The baseline was not run again: it is the "
             "cached re-measurement."
@@ -160,8 +167,11 @@ def method(summary: Summary) -> str:
         "project, however written, and every upload and tunnel are refused locally). Before every "
         "probe the harness reads `GET /rate_limit`, GraphQL's own `rateLimit` three times and the "
         "last "
-        "answer's headers, and applies the timing spike's 40% rule to the least of them. No pause "
-        f"was needed. GraphQL points remaining before → after each live run: {allowance}. "
+        "answer's headers, and applies the timing spike's 40% rule to the least of them. "
+        f"Pauses: {summary.consumed.pauses}, across the {summary.consumed.runs_recording_pauses} "
+        "live runs that record them; the least GraphQL share any gate proceeded on was "
+        f"{summary.consumed.least_share_before:.0%}. GraphQL points remaining before → after each "
+        f"live run: {allowance}. "
         "`probe-alias-pricing` prices the plugin's own documents (regenerated from the crate and "
         "held to it by a test) by GitHub's dry run at each alias count a copy sends, plus "
         "coalesced "

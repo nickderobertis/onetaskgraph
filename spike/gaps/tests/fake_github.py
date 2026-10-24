@@ -253,10 +253,13 @@ def serve(board: Board) -> tuple[ThreadingHTTPServer, str]:
             half = len(body) // 2
             for piece in (body[:half], body[half:]):
                 self.wfile.write(f"{len(piece):x};ext=1\r\n".encode() + piece + b"\r\n")
-            if board.chunked is Chunking.WHOLE:
-                self.wfile.write(b"0\r\n\r\n")
-            elif board.chunked is Chunking.NO_FINAL_LINE:
-                self.wfile.write(b"0\r\n")
+            match board.chunked:
+                case Chunking.WHOLE:
+                    self.wfile.write(b"0\r\n\r\n")
+                case Chunking.NO_FINAL_LINE:
+                    self.wfile.write(b"0\r\n")
+                case _:
+                    pass
             self.close_connection = True
 
         def do_GET(self) -> None:

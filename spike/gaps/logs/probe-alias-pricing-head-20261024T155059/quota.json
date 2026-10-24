@@ -1,0 +1,92 @@
+{
+ "after": {
+  "answered_fields": [
+   "limit",
+   "remaining",
+   "resetAt",
+   "used"
+  ],
+  "at": 1792857087.7909484,
+  "last_headers": null,
+  "least": {
+   "limit": 5000,
+   "remaining": 3838,
+   "reset": 1792859296,
+   "used": 1162
+  },
+  "own": [
+   {
+    "limit": 5000,
+    "remaining": 3838,
+    "reset": 1792859296,
+    "used": 1162
+   },
+   {
+    "limit": 5000,
+    "remaining": 3838,
+    "reset": 1792859296,
+    "used": 1162
+   },
+   {
+    "limit": 5000,
+    "remaining": 3838,
+    "reset": 1792859296,
+    "used": 1162
+   }
+  ],
+  "rest_endpoint": {
+   "limit": 5000,
+   "remaining": 4404,
+   "reset": 1792857951,
+   "used": 596
+  }
+ },
+ "before": {
+  "answered_fields": [
+   "limit",
+   "remaining",
+   "resetAt",
+   "used"
+  ],
+  "at": 1792857059.6915376,
+  "last_headers": {
+   "limit": 5000,
+   "remaining": 2843,
+   "reset": 1792855694,
+   "used": 2157
+  },
+  "least": {
+   "limit": 5000,
+   "remaining": 3855,
+   "reset": 1792859296,
+   "used": 1145
+  },
+  "own": [
+   {
+    "limit": 5000,
+    "remaining": 3855,
+    "reset": 1792859296,
+    "used": 1145
+   },
+   {
+    "limit": 5000,
+    "remaining": 4409,
+    "reset": 1792857951,
+    "used": 591
+   },
+   {
+    "limit": 5000,
+    "remaining": 3855,
+    "reset": 1792859296,
+    "used": 1145
+   }
+  ],
+  "rest_endpoint": {
+   "limit": 5000,
+   "remaining": 4409,
+   "reset": 1792857951,
+   "used": 591
+  }
+ },
+ "pauses": 0
+}

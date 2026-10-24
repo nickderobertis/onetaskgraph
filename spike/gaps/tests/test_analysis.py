@@ -164,3 +164,20 @@ def test_the_answers_are_the_spike_report_templates_own_variables(tmp_path: Path
     summary = asyncio.run(report.build(PLAN_CHECKOUT, ONETASKGRAPH))
     row = report.answers(summary, None, None).candidates[0]
     assert set(row) == keys
+
+
+def test_the_reported_pauses_and_leftovers_are_what_the_live_runs_recorded() -> None:
+    """The reported pauses and leftovers are what the committed live runs recorded."""
+    summary = asyncio.run(report.build(PLAN_CHECKOUT, ONETASKGRAPH))
+    pauses, recording = 0, 0
+    for quota in sorted(analysis.LOGS.glob("probe-*/quota.json")):
+        recorded = json.loads(quota.read_text())
+        if "before" in recorded and "after" in recorded and "pauses" in recorded:
+            recording += 1
+            pauses += recorded["pauses"]
+    assert (summary.consumed.pauses, summary.consumed.runs_recording_pauses) == (pauses, recording)
+    last = sorted(analysis.LOGS.glob("probe-placement-*"))[-1] / "feasibility.json"
+    left = json.loads(last.read_text())["cleanup"]["left"]
+    assert summary.consumed.issues_left_by_the_last_placement == left
+    row = report.answers(summary, None, None).candidates[0]
+    assert f"{left} left recorded after the last placement probe" in row["consumed"]

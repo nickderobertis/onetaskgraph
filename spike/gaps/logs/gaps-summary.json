@@ -307,7 +307,7 @@
    "within": true
   },
   {
-   "arithmetic": "16.4 s measured \u2212 6.03 s screening (9 onevcs calls) + 2 calls \u00d7 0.67 s \u2212 2.12 s (2 ISSUE, 1 SUB_ISSUES) + 0.5004651546478271 s added = 10.1 s",
+   "arithmetic": "16.4 s measured \u2212 6.03 s screening (9 onevcs calls) + 2 calls \u00d7 0.67 s \u2212 2.12 s (2 ISSUE, 1 SUB_ISSUES) + 0.5235323905944824 s added = 10.1 s",
    "attainable": 10.1,
    "baseline": {
     "operation": "host approval",
@@ -500,11 +500,14 @@
   }
  ],
  "consumed": {
-  "creations_sent": 110,
-  "dry_runs": 81,
-  "mutation_requests": 102,
-  "points": 195,
-  "rate_limit_reads": 96,
+  "creations_sent": 121,
+  "dry_runs": 108,
+  "issues_left_by_the_last_placement": 0,
+  "least_share_before": 0.586,
+  "mutation_requests": 113,
+  "pauses": 0,
+  "points": 224,
+  "rate_limit_reads": 112,
   "remaining_before_and_after": {
    "probe-alias-pricing-head-20261024T140959": [
     3452,
@@ -517,6 +520,10 @@
    "probe-alias-pricing-head-20261024T152151": [
     2940,
     2932
+   ],
+   "probe-alias-pricing-head-20261024T155059": [
+    3855,
+    3838
    ],
    "probe-placement-head-20261024T141321": [
     3273,
@@ -545,11 +552,16 @@
    "probe-placement-head-20261024T152217": [
     2932,
     2843
+   ],
+   "probe-placement-head-20261024T155130": [
+    3835,
+    3769
    ]
   },
-  "requests": 354,
-  "runs": 13,
-  "seconds": 447.6
+  "requests": 420,
+  "runs": 15,
+  "runs_recording_pauses": 2,
+  "seconds": 516.7
  },
  "offline": {
   "reach": {
@@ -1985,6 +1997,9 @@
    "returned the issue's one item",
    "returned the issue's one item",
    "refused: content already exists in this project",
+   "returned the issue's one item",
+   "returned the issue's one item",
+   "refused: content already exists in this project",
    "returned the issue's one item"
   ],
   "children_seconds": [
@@ -2043,11 +2058,19 @@
    0.523,
    0.523,
    0.523,
-   1.837
+   1.837,
+   0.614,
+   0.614,
+   0.614,
+   0.614,
+   0.614,
+   0.614,
+   0.614,
+   0.614
   ],
   "idempotent": true,
   "in_create_answers": 0,
-  "issues": 63,
+  "issues": 72,
   "polls": [
    2,
    2,
@@ -2055,9 +2078,10 @@
    2,
    2,
    1,
-   2
+   2,
+   1
   ],
-  "samples": 7
+  "samples": 8
  },
  "prices": {
   "charged": {
@@ -2131,7 +2155,9 @@
     1,
     1,
     2,
-    18
+    18,
+    1,
+    3
    ],
    "19": [
     5,
@@ -2165,7 +2191,11 @@
     1,
     5,
     3,
-    2
+    2,
+    12,
+    11,
+    8,
+    3
    ],
    "2": [
     4,
@@ -2177,7 +2207,8 @@
     1,
     1,
     1,
-    1
+    1,
+    2
    ],
    "3": [
     1,
@@ -2203,7 +2234,9 @@
     1,
     1,
     3,
-    19
+    19,
+    1,
+    1
    ],
    "8": [
     1,
@@ -2215,10 +2248,11 @@
     1,
     2,
     1,
-    4
+    4,
+    1
    ]
   },
-  "parent_listing_seconds": 0.5004651546478271,
+  "parent_listing_seconds": 0.5235323905944824,
   "placement_poll_costs": [
    1
   ],

@@ -10,7 +10,7 @@ from __future__ import annotations
 import graphql
 import pytest
 
-from gaps import allowance, analysis, board, documents, placement
+from gaps import allowance, analysis, board, documents, placement, pricing
 from gaps.documents import Doc
 from gaps.json_shape import decode, load, obj
 from gaps.pricing import PricingResult
@@ -35,17 +35,18 @@ def schema() -> graphql.GraphQLSchema:
 
 
 def sent() -> dict[str, str]:
-    """Every document the probes and the quota reading send, by a name for each."""
-    docs = documents.snapshot()
-    out = {f"plugin {doc.value}": text for doc, text in docs.items()}
-    out |= {f"dry run of {doc.value}": documents.dry_run(text) for doc, text in docs.items()}
-    out["charged SUB_ISSUES"] = documents.charged(docs[Doc.SUB_ISSUES])
-    out["merged SUB_ISSUES + ORIGIN_LOOKUPS"] = documents.merge(
-        docs[Doc.SUB_ISSUES], docs[Doc.ORIGIN_LOOKUPS]
-    )
-    out["parent-scoped SUB_ISSUES"] = documents.through_parent(docs[Doc.SUB_ISSUES])
-    out["trimmed parent-scoped SUB_ISSUES"] = documents.through_parent(
-        docs[Doc.SUB_ISSUES], trimmed=True
+    """Every document the probes and the quota reading send, by a name for each.
+
+    The pricing probe's documents are taken from the probe itself, so a shape it gains is
+    validated without an edit here.
+    """
+    scratch = board.ScratchBoard("o", 1, "o/r")
+    priced, coalesced = pricing.shapes(scratch, "I_1")
+    out = {f"dry run of {s.variant}": documents.dry_run(s.document) for s in priced}
+    out |= {f"charged {s.variant}": documents.charged(s.document) for s in coalesced}
+    out |= {f"plugin {doc.value}": text for doc, text in documents.snapshot().items()}
+    out["charged SUB_ISSUES (reference resolution)"] = documents.charged(
+        documents.snapshot()[Doc.SUB_ISSUES]
     )
     out["board ids"] = board.ids_query()
     out["rate limit"] = allowance.RATE_QUERY
@@ -103,8 +104,11 @@ def test_the_extension_declares_only_what_github_itself_answered() -> None:
     for run in analysis.runs("probe-"):
         quota = run / "quota.json"
         if quota.exists():
-            for reading in obj(load(quota), str(quota)).values():
-                answered |= set(decode(allowance.Reading, reading, str(quota)).answered_fields)
+            recorded = obj(load(quota), str(quota))
+            for key in ("before", "after"):
+                if key in recorded:
+                    reading = decode(allowance.Reading, recorded[key], f"{quota}.{key}")
+                    answered |= set(reading.answered_fields)
     pricing = decode(
         PricingResult, load(analysis.latest("probe-alias-pricing-") / "feasibility.json"), "p"
     )

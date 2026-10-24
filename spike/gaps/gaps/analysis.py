@@ -17,7 +17,7 @@ from pathlib import Path
 from gaps.allowance import Reading
 from gaps.budgets import Budget, Operation, Unit
 from gaps.github import Kind, RequestRecord
-from gaps.json_shape import ShapeError, decode, load, load_lines, obj
+from gaps.json_shape import ShapeError, decode, integer, load, load_lines, obj
 from gaps.placement import AddOutcome, PlacementResult
 from gaps.pricing import Named, PricingResult
 from gaps.reach import Case, ReachResult
@@ -184,6 +184,10 @@ class Consumed:
     points: int
     seconds: float
     remaining_before_and_after: dict[str, tuple[int, int]]
+    least_share_before: float
+    pauses: int
+    runs_recording_pauses: int
+    issues_left_by_the_last_placement: int | None
 
 
 @dataclass(frozen=True)
@@ -552,6 +556,8 @@ def consumed() -> Consumed:
         if r.kind is not Kind.REST
     )
     remaining = {}
+    shares: list[float] = []
+    pauses, recording = 0, 0
     for run, _ in entries:
         if not (run / "quota.json").exists():
             continue
@@ -561,6 +567,15 @@ def consumed() -> Consumed:
         before = decode(Reading, quota.get("before"), f"{run}/quota.json.before")
         after = decode(Reading, quota.get("after"), f"{run}/quota.json.after")
         remaining[run.name] = (before.least.remaining, after.least.remaining)
+        shares.append(before.least.remaining / before.least.limit)
+        if "pauses" in quota:
+            recording += 1
+            pauses += integer(quota.get("pauses"), f"{run}/quota.json.pauses")
+    placements = runs("probe-placement-")
+    last = placements[-1] if placements else None
+    left = None
+    if last is not None and (last / "feasibility.json").exists():
+        left = decode(PlacementResult, load(last / "feasibility.json"), str(last)).cleanup.left
     return Consumed(
         runs=len(entries),
         requests=len(all_records),
@@ -571,6 +586,10 @@ def consumed() -> Consumed:
         points=points,
         seconds=round(sum(r.end - r.start for r in all_records), 1),
         remaining_before_and_after=remaining,
+        least_share_before=round(min(shares), 3) if shares else 0.0,
+        pauses=pauses,
+        runs_recording_pauses=recording,
+        issues_left_by_the_last_placement=left,
     )
 
 
