@@ -51,6 +51,26 @@ budgets:
     unit: requests
     direction: max
     threshold: 2
+  - id: linear-requests-per-dependency-read
+    description: >-
+      The most requests any one necessarily consulted Linear source receives in one complete
+      dependency read through the binary on a fresh process, the larger over workspaces of 60
+      and of 600 issues: an issue with 5 or 50 relations recording an edge in its description,
+      both directions; a folder task recording an edge to an issue, read by id; an opaque edge
+      resolved cold and warm over two private sources of two workspaces; a legacy read of a
+      copied task over a rate-limited private source and one holding its reverse record; an
+      unrelated edge-free task; and a held task re-read before its source's reset. The detail
+      gives every case's requests by source and its total. Two, by the user's ruling: the
+      workspace an opaque edge names says which workspace it is in one request and the far end
+      is read in another on first use, which the plugin interface does not join; every other
+      case is one, or none. It protects headroom on the production Linear key every manager of
+      a host shares.
+    labels: [linear]
+    measure: reported
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
+    unit: requests
+    direction: max
+    threshold: 2
   - id: linear-asset-requests-per-new-asset
     description: >-
       An inner measure of the requests added by new document and issue images protects headroom on a production Linear key every manager of a host shares, which no check may reach.
