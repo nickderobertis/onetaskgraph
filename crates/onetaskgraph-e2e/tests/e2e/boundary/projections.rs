@@ -565,9 +565,35 @@ fn a_malformed_projection_map_is_refused_by_a_copy_and_a_status_write_rather_tha
         landed["plan:rollout"].trim_start_matches("vault:")
     ));
     let held = std::fs::read_to_string(&home).expect("the private project");
-    let entries = projection_map(&store, &landed["plan:rollout"])["tasks"].clone();
+    let recorded = projection_map(&store, &landed["plan:rollout"]);
+    let entries = recorded["tasks"].clone();
     let first = entries[0].clone();
+    let project = recorded["projects"][0].clone();
+    assert!(project["project"].is_string(), "{recorded:#}");
     for (case, map, said) in [
+        (
+            "an allocation that is not one",
+            json!({"schema_version": 1, "tasks": entries, "projects": [
+                {"source": "site", "allocation": "not-a-nonce", "project": project["project"]}]}),
+            "is not 32 lower-case hex digits",
+        ),
+        (
+            "one source's project twice",
+            json!({"schema_version": 1, "tasks": entries, "projects": [project, project]}),
+            "names a project in site twice",
+        ),
+        (
+            "an empty project id",
+            json!({"schema_version": 1, "tasks": entries, "projects": [
+                {"source": "site", "allocation": project["allocation"], "project": ""}]}),
+            "names an empty project for site",
+        ),
+        (
+            "a public project in a private source",
+            json!({"schema_version": 1, "tasks": entries, "projects": [
+                {"source": "vault", "allocation": project["allocation"]}]}),
+            "in vault is in a source declared private",
+        ),
         (
             "a projection in a private source",
             json!({"schema_version": 1, "tasks": [
@@ -1993,6 +2019,47 @@ fn a_board_copy_interrupted_with_its_project_left_behind_resumes_into_that_proje
 }
 
 #[test]
+fn a_board_copy_that_cannot_look_its_project_up_to_take_it_back_keeps_the_allocation() {
+    // The create's answer is lost, and the search that would find the project by its
+    // allocation is refused too: the copy cannot say which project is its own, so it keeps the
+    // private home recording the allocation, names it among what is still there, and the next
+    // copy resumes into that project rather than making another.
+    let (store, board) = board_store();
+    let (theirs, before) = unrelated_public_work(&store, "board", BOARD_REPOSITORY);
+    board.drop_response_once("createIssue(input:$input)");
+    board.refuse_once("search(query:$search,type:$type,first:$first");
+    let output = store.run(&["project", "copy", "plan:rollout", "--to", "vault"]);
+    assert_ne!(output.status.code(), Some(0), "{}", stderr(&output));
+    let said = stderr(&output);
+    assert!(
+        said.contains("vault:"),
+        "the private home is named as kept:\n{said}"
+    );
+    let left: Vec<String> = public_work_projects(&store, "board")
+        .into_iter()
+        .filter(|id| id != &theirs)
+        .collect();
+    assert_eq!(left.len(), 1, "the copy's own project is left: {left:?}");
+    let creates = |board: &crate::fixtures::GitHubBoardFields| {
+        board
+            .served()
+            .iter()
+            .filter(|(document, variables)| {
+                document.contains("createIssue(input:$input)")
+                    && variables["input"]["title"] == "Public work"
+            })
+            .count()
+    };
+    let made = creates(&board);
+    for _ in 0..2 {
+        let landed = copy_rollout(&store);
+        assert_eq!(creates(&board), made, "no copy made another project");
+        assert_eq!(public_project_of_views(&store, &landed, "board"), left[0]);
+        assert_unrelated_untouched(&store, &theirs, &before, Some(&landed), "board");
+    }
+}
+
+#[test]
 fn a_linear_copy_whose_project_create_answer_is_lost_takes_the_project_back_and_resumes_once() {
     // Linear issues its own ids too, and answers the project create with nothing in it: the
     // project it stored carries the copy's allocation, so the copy takes it back, and the next
@@ -2066,7 +2133,8 @@ fn a_copy_killed_after_its_public_project_and_before_recording_it_resumes_into_i
     });
     private_rollout(&store);
     // Somebody else's, written straight into the folder so the relay's one interruption is
-    // the copy's own project write.
+    // the copy's own project write — and sixty more of another repository listed ahead of the
+    // copy's own, so the project it made is found on a later page of the listing.
     store.record(
         "site",
         "projects",
@@ -2074,6 +2142,15 @@ fn a_copy_killed_after_its_public_project_and_before_recording_it_resumes_into_i
         &format!("title: Public work\nstatus: todo\nrepositories: [{OPEN}]"),
         "",
     );
+    for n in 0..60 {
+        store.record(
+            "site",
+            "projects",
+            &format!("a{n:02}"),
+            &format!("title: Public work\nstatus: todo\nrepositories: [{SHOP}]"),
+            "",
+        );
+    }
     let theirs = "site:somebody-else".to_owned();
     let before = shown(&store, "project", &theirs);
     let interrupted = store.run(&["project", "copy", "plan:rollout", "--to", "vault"]);
@@ -2086,7 +2163,10 @@ fn a_copy_killed_after_its_public_project_and_before_recording_it_resumes_into_i
         store.sandbox.project().join("interrupted").exists(),
         "the relay ended it"
     );
-    let left = public_work_projects(&store, "site");
+    let left: Vec<String> = public_work_projects(&store, "site")
+        .into_iter()
+        .filter(|id| !id.starts_with("site:a"))
+        .collect();
     assert_eq!(left.len(), 2, "the copy's project and theirs: {left:?}");
     let homes: Value =
         serde_json::from_str(&store.ok(&["project", "list", "--source", "vault", "--json"]))
@@ -2102,8 +2182,8 @@ fn a_copy_killed_after_its_public_project_and_before_recording_it_resumes_into_i
         let landed = copy_rollout(&store);
         assert_eq!(
             public_work_projects(&store, "site").len(),
-            2,
-            "no third project"
+            62,
+            "no other project"
         );
         let ours: Vec<&String> = left.iter().filter(|id| **id != theirs).collect();
         assert_eq!(&public_project_of_views(&store, &landed, "site"), ours[0]);
