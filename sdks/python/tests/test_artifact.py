@@ -271,7 +271,7 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # read from the raw document and the roots from the validated one.
     bundle = generate.validate_schema_bundle(emitted_bundle)
 
-    assert emitted_bundle["version"] == 45
+    assert emitted_bundle["version"] == 46
     # Version 45 adds the opaque dependency endpoint, `{designator, id, kind}`, and lets a
     # dependency read name a designator no configured source is.
     assert "designator" in {
@@ -282,6 +282,12 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
         if isinstance(variant, dict)
         for key in variant.get("properties", {})
     }
+    # Version 46 publishes `PublicProjections`, the map a private destination project records
+    # from each canonical task to its public view, and `TaskStatusSet.projection`.
+    assert "PublicProjections" in bundle["roots"]
+    for root in ("TaskStatusSet", "TaskUpdated"):
+        assert "projection" in emitted_bundle["roots"][root]["properties"], root
+        assert "projection" not in emitted_bundle["roots"][root].get("required", []), root
     # Version 44 lets copy report an explicitly selected destination task.
     assert "target-task" in {
         variant["const"]

@@ -567,8 +567,9 @@ impl Engine {
             &request.assets,
             &[],
         )?;
-        // Who may read it, settled before it is placed: its declaration, its repositories and
-        // the project it is filed under, a private task under a public project refused.
+        // Who may read it, settled before it is placed: its declaration and its repositories —
+        // never the project it is filed under, though a private task under a public project is
+        // refused.
         let named = self.creatable(&request.source, MetadataRecord::Task)?;
         let classification = self
             .classify(request.classification, &request.repositories)
@@ -579,6 +580,7 @@ impl Engine {
                 &request.project,
                 "the new task",
                 classification,
+                super::boundary::Held::Task,
                 super::boundary::Absent::Unclassifies,
             )
             .await?;
@@ -830,6 +832,7 @@ impl Engine {
                 &request.project,
                 "the document",
                 classification,
+                super::boundary::Held::Document,
                 super::boundary::Absent::Unclassifies,
             )
             .await?;

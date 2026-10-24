@@ -51,6 +51,10 @@ pub struct TaskUpdated {
     /// mutations, and for a write made without `--expect`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fallback: Option<WriteFallback>,
+    /// The public projection a written status category was mirrored to — absent when the
+    /// update wrote no status, and for a task with no projection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub projection: Option<GlobalId>,
 }
 
 impl Engine {
@@ -178,6 +182,12 @@ impl Engine {
         };
         let spent = spent_between(&before, &readings(&[source]).await);
         let (result, fallback, _) = self.expected_parts(id);
+        let projection = if outcome.written.contains(&UpdatedField::Status) {
+            self.mirror_status(id, &outcome.task, outcome.task.status.category)
+                .await?
+        } else {
+            None
+        };
         Ok(TaskUpdated {
             id: id.clone(),
             task: qualified_task(id.clone(), outcome.task).item,
@@ -186,6 +196,7 @@ impl Engine {
             spent,
             result,
             fallback,
+            projection,
         })
     }
 }

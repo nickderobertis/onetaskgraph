@@ -58,8 +58,10 @@ pub(crate) use source::CachedSource;
 /// must cost a read, never a failure or a misreading.
 ///
 /// Version 2 admits the opaque form of a dependency endpoint among a task's edges, which an
-/// earlier release would misread as a native id.
-pub const ENTRY_SCHEMA: u32 = 2;
+/// earlier release would misread as a native id. Version 3 changes no byte an entry holds: the
+/// schema its shapes are digested from now describes a task's classification as its own, never
+/// tightened by its project, and an entry version 2 wrote is read as a miss.
+pub const ENTRY_SCHEMA: u32 = 3;
 
 /// Where a source's cache lives, and what names the remote it caches.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -1251,6 +1251,7 @@ dependencies = [
  "onetaskgraph-linear",
  "onetaskgraph-local-md",
  "onetaskgraph-plugin-api",
+ "pulldown-cmark",
  "schemars",
  "secrecy",
  "serde",

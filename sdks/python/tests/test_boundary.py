@@ -132,3 +132,113 @@ def test_a_private_item_stays_in_a_private_source_and_a_refusal_reaches_the_call
     assert "term of a private repository in its text" in str(refused.value)
     assert not list((tmp_path / "site" / "tasks").rglob("*.md"))
     assert scopes(record) == [[]]
+
+
+OPENCO_PUBLIC = """
+import json, sys
+asked = sys.stdin.read()
+print(json.dumps({"visibility": "public" if "openco" in asked else "private"}))
+"""
+
+
+def projecting_store(binary: Path, tmp_path: Path) -> Client:
+    """A private plan `plan:rollout` in `plan`, `vault` private and routing `openco` work to `site`.
+
+    The plan holds a private producer, of the private `hiddenco/quietharbor`, and public work
+    of `openco/widget` depending on it.
+    """
+    (tmp_path / "plan" / "projects").mkdir(parents=True)
+    (tmp_path / "plan" / "tasks").mkdir(parents=True)
+    (tmp_path / "vault").mkdir()
+    (tmp_path / "site").mkdir()
+    (tmp_path / "plan" / "projects" / "rollout.md").write_text(
+        "---\ntitle: Quietharbor rollout\nstatus: todo\n---\nThe private plan.\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "plan" / "tasks" / "producer.md").write_text(
+        "---\ntitle: Harden the ingest\nstatus: todo\nproject: rollout\n"
+        "repositories: [github.com/hiddenco/quietharbor]\n---\nPrivate work.\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "plan" / "tasks" / "widget.md").write_text(
+        "---\ntitle: Add retry to the widget\nstatus: todo\nproject: rollout\n"
+        "repositories: [github.com/openco/widget]\ndepends_on: [producer]\n---\nGeneric.\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "onetaskgraph.yaml").write_text(
+        json.dumps(
+            {
+                "write_policy": {
+                    "visibility_command": [sys.executable, "-c", OPENCO_PUBLIC],
+                    "check_command": [sys.executable, "-c", CHECK],
+                },
+                "sources": {
+                    "plan": {
+                        "plugin": "local-md",
+                        "config": {"root": "plan"},
+                        "visibility": "private",
+                    },
+                    "vault": {
+                        "plugin": "local-md",
+                        "config": {"root": "vault"},
+                        "visibility": "private",
+                        "routes": [{"repositories": ["github.com/openco/*"], "to": "site"}],
+                    },
+                    "site": {
+                        "plugin": "local-md",
+                        "config": {"root": "site"},
+                        "visibility": "public",
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    environment = dict(os.environ)
+    environment["BOUNDARY_RECORD"] = str(tmp_path / "checked.jsonl")
+    return Client(binary, cwd=tmp_path, environment=environment)
+
+
+def test_a_project_copy_records_its_public_projections_in_the_shape_the_sdk_models(
+    binary: Path, tmp_path: Path
+) -> None:
+    """The map the binary records reads back through the generated model and round-trips."""
+    from onetaskgraph_sdk._generated.public_projections import PublicProjections
+
+    client = projecting_store(binary, tmp_path)
+    report = run(client.project_copy("plan:rollout", to="vault"))
+    landed: dict[str, str] = {}
+    for item in report.items:
+        # A failed or skipped outcome has no destination; every outcome here landed.
+        destination = getattr(item.root, "destination", None)
+        if destination is not None:
+            landed[item.root.source.root] = destination.root
+    home = landed["plan:rollout"]
+    shown = run(client.project_show(home))
+    recorded = shown.items[0].item.metadata["onetaskgraph.public_projections"]
+    projections = PublicProjections.model_validate(recorded)
+    assert projections.schema_version == 1
+    assert [entry.task.root for entry in projections.tasks] == [landed["plan:widget"]]
+    view = projections.tasks[0].projection.root
+    assert view.startswith("site:pt-")
+    assert projections.model_dump(mode="json") == recorded
+    # The store owns each task's visibility: the producer is private, the widget public.
+    producer = run(client.task_show(landed["plan:producer"])).items[0].item
+    widget = run(client.task_show(landed["plan:widget"])).items[0].item
+    assert producer.classification == "private"
+    assert widget.classification == "public"
+    # A canonical status change reaches the view as its category alone.
+    status = run(client.task_status_set(landed["plan:widget"], "done"))
+    assert status.projection is not None
+    assert status.projection.root == view
+    assert run(client.task_show(view)).items[0].item.status.category == "done"
+    # So does a targeted update naming the status, which answers the view too.
+    updated = run(client.task_update(landed["plan:widget"], status="in-progress"))
+    assert updated.projection is not None
+    assert updated.projection.root == view
+    assert run(client.task_show(view)).items[0].item.status.category == "in-progress"
+    # A malformed map is refused by the model exactly as the engine refuses it.
+    with pytest.raises(ValueError):
+        PublicProjections.model_validate({"schema_version": 1, "tasks": [], "extra": True})
+    with pytest.raises(ValueError):
+        PublicProjections.model_validate({"schema_version": 2, "tasks": []})

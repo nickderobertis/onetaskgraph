@@ -572,7 +572,7 @@ export const runtimeSchemas = {
   },
   "Classification": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository or a\nprivate project — a classification only ever tightens.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
+    "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository, or\na document's private project — a classification only ever tightens. A task's project\nnever tightens the task.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
     "oneOf": [
       {
         "const": "public",
@@ -1253,7 +1253,7 @@ export const runtimeSchemas = {
   "Completion": {
     "$defs": {
       "Classification": {
-        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository or a\nprivate project — a classification only ever tightens.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
+        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository, or\na document's private project — a classification only ever tightens. A task's project\nnever tightens the task.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
         "oneOf": [
           {
             "const": "public",
@@ -1426,7 +1426,7 @@ export const runtimeSchemas = {
   "ContradictedItem": {
     "$defs": {
       "Classification": {
-        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository or a\nprivate project — a classification only ever tightens.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
+        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository, or\na document's private project — a classification only ever tightens. A task's project\nnever tightens the task.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
         "oneOf": [
           {
             "const": "public",
@@ -1702,7 +1702,7 @@ export const runtimeSchemas = {
           "classification": {
             "$ref": "#/$defs/Classification",
             "default": "public",
-            "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's\nrepositories and its project before it decides where the task may be written, and\nnothing written here can loosen either."
+            "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's own\nrepositories — any private or unknown one makes the task private — before it decides\nwhere the task may be written, and nothing written here can loosen that. The project\na task is filed under never tightens it: a task's visibility is its own."
           },
           "content": {
             "description": "The long-form body, when the source has one.",
@@ -4656,7 +4656,7 @@ export const runtimeSchemas = {
   "Document": {
     "$defs": {
       "Classification": {
-        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository or a\nprivate project — a classification only ever tightens.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
+        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository, or\na document's private project — a classification only ever tightens. A task's project\nnever tightens the task.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
         "oneOf": [
           {
             "const": "public",
@@ -4741,7 +4741,7 @@ export const runtimeSchemas = {
       "classification": {
         "$ref": "#/$defs/Classification",
         "default": "public",
-        "description": "Who may read this document, as it was declared, on the terms of\n[`Task::classification`]."
+        "description": "Who may read this document, as it was declared, on the terms of\n[`Task::classification`] — except that a document filed under a private project is\nprivate, however this reads."
       },
       "content": {
         "description": "The long-form body, when the source has one.",
@@ -4903,7 +4903,7 @@ export const runtimeSchemas = {
         "type": "string"
       },
       "Classification": {
-        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository or a\nprivate project — a classification only ever tightens.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
+        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository, or\na document's private project — a classification only ever tightens. A task's project\nnever tightens the task.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
         "oneOf": [
           {
             "const": "public",
@@ -4928,7 +4928,7 @@ export const runtimeSchemas = {
           "classification": {
             "$ref": "#/$defs/Classification",
             "default": "public",
-            "description": "Who may read this document, as it was declared, on the terms of\n[`Task::classification`]."
+            "description": "Who may read this document, as it was declared, on the terms of\n[`Task::classification`] — except that a document filed under a private project is\nprivate, however this reads."
           },
           "content": {
             "description": "The long-form body, when the source has one.",
@@ -6758,7 +6758,7 @@ export const runtimeSchemas = {
   "HeldTask": {
     "$defs": {
       "Classification": {
-        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository or a\nprivate project — a classification only ever tightens.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
+        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository, or\na document's private project — a classification only ever tightens. A task's project\nnever tightens the task.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
         "oneOf": [
           {
             "const": "public",
@@ -7239,7 +7239,7 @@ export const runtimeSchemas = {
   "IssueHolding": {
     "$defs": {
       "Classification": {
-        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository or a\nprivate project — a classification only ever tightens.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
+        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository, or\na document's private project — a classification only ever tightens. A task's project\nnever tightens the task.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
         "oneOf": [
           {
             "const": "public",
@@ -8803,7 +8803,7 @@ export const runtimeSchemas = {
   "PageOfDocument": {
     "$defs": {
       "Classification": {
-        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository or a\nprivate project — a classification only ever tightens.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
+        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository, or\na document's private project — a classification only ever tightens. A task's project\nnever tightens the task.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
         "oneOf": [
           {
             "const": "public",
@@ -8827,7 +8827,7 @@ export const runtimeSchemas = {
           "classification": {
             "$ref": "#/$defs/Classification",
             "default": "public",
-            "description": "Who may read this document, as it was declared, on the terms of\n[`Task::classification`]."
+            "description": "Who may read this document, as it was declared, on the terms of\n[`Task::classification`] — except that a document filed under a private project is\nprivate, however this reads."
           },
           "content": {
             "description": "The long-form body, when the source has one.",
@@ -9086,7 +9086,7 @@ export const runtimeSchemas = {
   "PageOfProject": {
     "$defs": {
       "Classification": {
-        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository or a\nprivate project — a classification only ever tightens.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
+        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository, or\na document's private project — a classification only ever tightens. A task's project\nnever tightens the task.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
         "oneOf": [
           {
             "const": "public",
@@ -9362,7 +9362,7 @@ export const runtimeSchemas = {
   "PageOfTask": {
     "$defs": {
       "Classification": {
-        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository or a\nprivate project — a classification only ever tightens.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
+        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository, or\na document's private project — a classification only ever tightens. A task's project\nnever tightens the task.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
         "oneOf": [
           {
             "const": "public",
@@ -9543,7 +9543,7 @@ export const runtimeSchemas = {
           "classification": {
             "$ref": "#/$defs/Classification",
             "default": "public",
-            "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's\nrepositories and its project before it decides where the task may be written, and\nnothing written here can loosen either."
+            "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's own\nrepositories — any private or unknown one makes the task private — before it decides\nwhere the task may be written, and nothing written here can loosen that. The project\na task is filed under never tightens it: a task's visibility is its own."
           },
           "content": {
             "description": "The long-form body, when the source has one.",
@@ -9877,7 +9877,7 @@ export const runtimeSchemas = {
   "Project": {
     "$defs": {
       "Classification": {
-        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository or a\nprivate project — a classification only ever tightens.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
+        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository, or\na document's private project — a classification only ever tightens. A task's project\nnever tightens the task.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
         "oneOf": [
           {
             "const": "public",
@@ -10713,6 +10713,110 @@ export const runtimeSchemas = {
     "title": "ProjectStatusSet",
     "type": "object"
   },
+  "PublicProjections": {
+    "$defs": {
+      "Allocation": {
+        "description": "The random nonce a public projection project is created carrying.",
+        "pattern": "^[0-9a-f]{32}$",
+        "type": "string"
+      },
+      "GlobalId": {
+        "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
+        "type": "string"
+      },
+      "NativeId": {
+        "description": "A source's own opaque identifier for one item.\n\nDeliberately unvalidated: a native id is whatever the upstream system says it\nis, colons included. The engine parses a qualified id by splitting on the\n*first* colon precisely so this stays true.",
+        "type": "string"
+      },
+      "PublicProjectAllocation": {
+        "additionalProperties": false,
+        "description": "The public projection project of one plan in one public source: the allocation recorded\nprivately before it was created, and the id the source assigned it, recorded before any\nview is filed under it.\n\nThe allocation is a random nonce, derived from nothing private, that the project itself\ncarries at [`PublicProjectAllocation::KEY`]: a copy that never learned the id — its create's\nanswer lost, or the copy ended before it recorded one — finds the project it made by that\nnonce alone, and never takes any other project.",
+        "properties": {
+          "allocation": {
+            "$ref": "#/$defs/Allocation",
+            "description": "The nonce the project is created carrying, at [`PublicProjectAllocation::KEY`]."
+          },
+          "project": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/NativeId"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The id the source assigned the project, once it answered with one."
+          },
+          "source": {
+            "$ref": "#/$defs/SourceName",
+            "description": "The public source the project is in."
+          }
+        },
+        "required": [
+          "source",
+          "allocation"
+        ],
+        "type": "object"
+      },
+      "PublicProjection": {
+        "additionalProperties": false,
+        "description": "One canonical task and its public projection.",
+        "properties": {
+          "projection": {
+            "$ref": "#/$defs/GlobalId",
+            "description": "Its public counterpart, qualified: a view in a source not declared private."
+          },
+          "task": {
+            "$ref": "#/$defs/GlobalId",
+            "description": "The canonical task, qualified: the one the private destination holds."
+          }
+        },
+        "required": [
+          "task",
+          "projection"
+        ],
+        "type": "object"
+      },
+      "SourceName": {
+        "description": "The name a configuration document gives one configured source.",
+        "pattern": "^[a-z0-9][a-z0-9-]*$",
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "description": "The private destination project's map from each canonical task to its public projection.\n\nEvery value of it holds to the shape: its `schema_version` is\n[`PublicProjections::SCHEMA_VERSION`] and its entries are unique by both ids. Deserializing\none is held to both — [`PublicProjections::parse`] names what is wrong — and the entries\nchange only through [`PublicProjections::set`] and [`PublicProjections::retain`], which keep\nthem so. Written back with [`PublicProjections::to_value`].",
+    "properties": {
+      "projects": {
+        "default": [],
+        "description": "One entry per public source the plan's views are filed in, unique by source: the\nallocation its public projection project is created under, and the id that source\nassigned it once it answered.",
+        "items": {
+          "$ref": "#/$defs/PublicProjectAllocation"
+        },
+        "type": "array"
+      },
+      "schema_version": {
+        "description": "The version of this shape; 1 is the only one.",
+        "format": "uint32",
+        "maximum": 1,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "tasks": {
+        "description": "One entry per canonical task that has a public projection, unique by both ids.",
+        "items": {
+          "$ref": "#/$defs/PublicProjection"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "schema_version",
+      "tasks"
+    ],
+    "title": "PublicProjections",
+    "type": "object"
+  },
   "PublicWriteInput": {
     "$defs": {
       "RepositoryVisibility": {
@@ -10788,7 +10892,7 @@ export const runtimeSchemas = {
   "QualifiedDocument": {
     "$defs": {
       "Classification": {
-        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository or a\nprivate project — a classification only ever tightens.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
+        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository, or\na document's private project — a classification only ever tightens. A task's project\nnever tightens the task.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
         "oneOf": [
           {
             "const": "public",
@@ -10808,7 +10912,7 @@ export const runtimeSchemas = {
           "classification": {
             "$ref": "#/$defs/Classification",
             "default": "public",
-            "description": "Who may read this document, as it was declared, on the terms of\n[`Task::classification`]."
+            "description": "Who may read this document, as it was declared, on the terms of\n[`Task::classification`] — except that a document filed under a private project is\nprivate, however this reads."
           },
           "content": {
             "description": "The long-form body, when the source has one.",
@@ -11173,7 +11277,7 @@ export const runtimeSchemas = {
   "QualifiedProject": {
     "$defs": {
       "Classification": {
-        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository or a\nprivate project — a classification only ever tightens.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
+        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository, or\na document's private project — a classification only ever tightens. A task's project\nnever tightens the task.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
         "oneOf": [
           {
             "const": "public",
@@ -11440,7 +11544,7 @@ export const runtimeSchemas = {
   "QualifiedTask": {
     "$defs": {
       "Classification": {
-        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository or a\nprivate project — a classification only ever tightens.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
+        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository, or\na document's private project — a classification only ever tightens. A task's project\nnever tightens the task.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
         "oneOf": [
           {
             "const": "public",
@@ -11621,7 +11725,7 @@ export const runtimeSchemas = {
           "classification": {
             "$ref": "#/$defs/Classification",
             "default": "public",
-            "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's\nrepositories and its project before it decides where the task may be written, and\nnothing written here can loosen either."
+            "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's own\nrepositories — any private or unknown one makes the task private — before it decides\nwhere the task may be written, and nothing written here can loosen that. The project\na task is filed under never tightens it: a task's visibility is its own."
           },
           "content": {
             "description": "The long-form body, when the source has one.",
@@ -11923,7 +12027,7 @@ export const runtimeSchemas = {
   "QueryResponseOfQualifiedDocument": {
     "$defs": {
       "Classification": {
-        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository or a\nprivate project — a classification only ever tightens.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
+        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository, or\na document's private project — a classification only ever tightens. A task's project\nnever tightens the task.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
         "oneOf": [
           {
             "const": "public",
@@ -11948,7 +12052,7 @@ export const runtimeSchemas = {
           "classification": {
             "$ref": "#/$defs/Classification",
             "default": "public",
-            "description": "Who may read this document, as it was declared, on the terms of\n[`Task::classification`]."
+            "description": "Who may read this document, as it was declared, on the terms of\n[`Task::classification`] — except that a document filed under a private project is\nprivate, however this reads."
           },
           "content": {
             "description": "The long-form body, when the source has one.",
@@ -13461,7 +13565,7 @@ export const runtimeSchemas = {
   "QueryResponseOfQualifiedProject": {
     "$defs": {
       "Classification": {
-        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository or a\nprivate project — a classification only ever tightens.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
+        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository, or\na document's private project — a classification only ever tightens. A task's project\nnever tightens the task.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
         "oneOf": [
           {
             "const": "public",
@@ -14126,7 +14230,7 @@ export const runtimeSchemas = {
   "QueryResponseOfQualifiedTask": {
     "$defs": {
       "Classification": {
-        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository or a\nprivate project — a classification only ever tightens.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
+        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository, or\na document's private project — a classification only ever tightens. A task's project\nnever tightens the task.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
         "oneOf": [
           {
             "const": "public",
@@ -14634,7 +14738,7 @@ export const runtimeSchemas = {
           "classification": {
             "$ref": "#/$defs/Classification",
             "default": "public",
-            "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's\nrepositories and its project before it decides where the task may be written, and\nnothing written here can loosen either."
+            "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's own\nrepositories — any private or unknown one makes the task private — before it decides\nwhere the task may be written, and nothing written here can loosen that. The project\na task is filed under never tightens it: a task's visibility is its own."
           },
           "content": {
             "description": "The long-form body, when the source has one.",
@@ -14865,7 +14969,7 @@ export const runtimeSchemas = {
   "QueryResponseOfSearchHit": {
     "$defs": {
       "Classification": {
-        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository or a\nprivate project — a classification only ever tightens.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
+        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository, or\na document's private project — a classification only ever tightens. A task's project\nnever tightens the task.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
         "oneOf": [
           {
             "const": "public",
@@ -15523,7 +15627,7 @@ export const runtimeSchemas = {
           "classification": {
             "$ref": "#/$defs/Classification",
             "default": "public",
-            "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's\nrepositories and its project before it decides where the task may be written, and\nnothing written here can loosen either."
+            "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's own\nrepositories — any private or unknown one makes the task private — before it decides\nwhere the task may be written, and nothing written here can loosen that. The project\na task is filed under never tightens it: a task's visibility is its own."
           },
           "content": {
             "description": "The long-form body, when the source has one.",
@@ -16013,7 +16117,7 @@ export const runtimeSchemas = {
   "SearchHit": {
     "$defs": {
       "Classification": {
-        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository or a\nprivate project — a classification only ever tightens.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
+        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository, or\na document's private project — a classification only ever tightens. A task's project\nnever tightens the task.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
         "oneOf": [
           {
             "const": "public",
@@ -16329,7 +16433,7 @@ export const runtimeSchemas = {
           "classification": {
             "$ref": "#/$defs/Classification",
             "default": "public",
-            "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's\nrepositories and its project before it decides where the task may be written, and\nnothing written here can loosen either."
+            "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's own\nrepositories — any private or unknown one makes the task private — before it decides\nwhere the task may be written, and nothing written here can loosen that. The project\na task is filed under never tightens it: a task's visibility is its own."
           },
           "content": {
             "description": "The long-form body, when the source has one.",
@@ -17969,7 +18073,7 @@ export const runtimeSchemas = {
   "StatusContradiction": {
     "$defs": {
       "Classification": {
-        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository or a\nprivate project — a classification only ever tightens.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
+        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository, or\na document's private project — a classification only ever tightens. A task's project\nnever tightens the task.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
         "oneOf": [
           {
             "const": "public",
@@ -18260,7 +18364,7 @@ export const runtimeSchemas = {
           "classification": {
             "$ref": "#/$defs/Classification",
             "default": "public",
-            "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's\nrepositories and its project before it decides where the task may be written, and\nnothing written here can loosen either."
+            "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's own\nrepositories — any private or unknown one makes the task private — before it decides\nwhere the task may be written, and nothing written here can loosen that. The project\na task is filed under never tightens it: a task's visibility is its own."
           },
           "content": {
             "description": "The long-form body, when the source has one.",
@@ -19375,7 +19479,7 @@ export const runtimeSchemas = {
   "Task": {
     "$defs": {
       "Classification": {
-        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository or a\nprivate project — a classification only ever tightens.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
+        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository, or\na document's private project — a classification only ever tightens. A task's project\nnever tightens the task.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
         "oneOf": [
           {
             "const": "public",
@@ -19557,7 +19661,7 @@ export const runtimeSchemas = {
       "classification": {
         "$ref": "#/$defs/Classification",
         "default": "public",
-        "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's\nrepositories and its project before it decides where the task may be written, and\nnothing written here can loosen either."
+        "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's own\nrepositories — any private or unknown one makes the task private — before it decides\nwhere the task may be written, and nothing written here can loosen that. The project\na task is filed under never tightens it: a task's visibility is its own."
       },
       "content": {
         "description": "The long-form body, when the source has one.",
@@ -20011,7 +20115,7 @@ export const runtimeSchemas = {
         "type": "object"
       },
       "Classification": {
-        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository or a\nprivate project — a classification only ever tightens.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
+        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository, or\na document's private project — a classification only ever tightens. A task's project\nnever tightens the task.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
         "oneOf": [
           {
             "const": "public",
@@ -20641,7 +20745,7 @@ export const runtimeSchemas = {
           "classification": {
             "$ref": "#/$defs/Classification",
             "default": "public",
-            "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's\nrepositories and its project before it decides where the task may be written, and\nnothing written here can loosen either."
+            "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's own\nrepositories — any private or unknown one makes the task private — before it decides\nwhere the task may be written, and nothing written here can loosen that. The project\na task is filed under never tightens it: a task's visibility is its own."
           },
           "content": {
             "description": "The long-form body, when the source has one.",
@@ -20982,7 +21086,7 @@ export const runtimeSchemas = {
         "type": "object"
       },
       "Classification": {
-        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository or a\nprivate project — a classification only ever tightens.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
+        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository, or\na document's private project — a classification only ever tightens. A task's project\nnever tightens the task.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
         "oneOf": [
           {
             "const": "public",
@@ -21612,7 +21716,7 @@ export const runtimeSchemas = {
           "classification": {
             "$ref": "#/$defs/Classification",
             "default": "public",
-            "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's\nrepositories and its project before it decides where the task may be written, and\nnothing written here can loosen either."
+            "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's own\nrepositories — any private or unknown one makes the task private — before it decides\nwhere the task may be written, and nothing written here can loosen that. The project\na task is filed under never tightens it: a task's visibility is its own."
           },
           "content": {
             "description": "The long-form body, when the source has one.",
@@ -22871,6 +22975,17 @@ export const runtimeSchemas = {
         "$ref": "#/$defs/GlobalId",
         "description": "The task whose status was set."
       },
+      "projection": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/GlobalId"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "The public projection the new status category was mirrored to — absent for a task\nwith none."
+      },
       "result": {
         "anyOf": [
           {
@@ -23185,7 +23300,7 @@ export const runtimeSchemas = {
   "TaskUpdateOutcome": {
     "$defs": {
       "Classification": {
-        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository or a\nprivate project — a classification only ever tightens.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
+        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository, or\na document's private project — a classification only ever tightens. A task's project\nnever tightens the task.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
         "oneOf": [
           {
             "const": "public",
@@ -23362,7 +23477,7 @@ export const runtimeSchemas = {
           "classification": {
             "$ref": "#/$defs/Classification",
             "default": "public",
-            "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's\nrepositories and its project before it decides where the task may be written, and\nnothing written here can loosen either."
+            "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's own\nrepositories — any private or unknown one makes the task private — before it decides\nwhere the task may be written, and nothing written here can loosen that. The project\na task is filed under never tightens it: a task's visibility is its own."
           },
           "content": {
             "description": "The long-form body, when the source has one.",
@@ -23604,7 +23719,7 @@ export const runtimeSchemas = {
         "type": "object"
       },
       "Classification": {
-        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository or a\nprivate project — a classification only ever tightens.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
+        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository, or\na document's private project — a classification only ever tightens. A task's project\nnever tightens the task.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
         "oneOf": [
           {
             "const": "public",
@@ -23989,7 +24104,7 @@ export const runtimeSchemas = {
           "classification": {
             "$ref": "#/$defs/Classification",
             "default": "public",
-            "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's\nrepositories and its project before it decides where the task may be written, and\nnothing written here can loosen either."
+            "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's own\nrepositories — any private or unknown one makes the task private — before it decides\nwhere the task may be written, and nothing written here can loosen that. The project\na task is filed under never tightens it: a task's visibility is its own."
           },
           "content": {
             "description": "The long-form body, when the source has one.",
@@ -24307,6 +24422,17 @@ export const runtimeSchemas = {
       "id": {
         "$ref": "#/$defs/GlobalId",
         "description": "The task updated."
+      },
+      "projection": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/GlobalId"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "The public projection a written status category was mirrored to — absent when the\nupdate wrote no status, and for a task with no projection."
       },
       "result": {
         "anyOf": [

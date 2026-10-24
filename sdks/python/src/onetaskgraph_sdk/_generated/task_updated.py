@@ -337,7 +337,7 @@ class Task(BaseModel):
     classification: Annotated[
         Classification,
         Field(
-            description="Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's\nrepositories and its project before it decides where the task may be written, and\nnothing written here can loosen either."
+            description="Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's own\nrepositories — any private or unknown one makes the task private — before it decides\nwhere the task may be written, and nothing written here can loosen that. The project\na task is filed under never tightens it: a task's visibility is its own."
         ),
     ] = Classification.ClassificationPublic
     content: Annotated[
@@ -467,6 +467,12 @@ class TaskUpdated(BaseModel):
         ),
     ] = None
     id: Annotated[GlobalId, Field(description="The task updated.")]
+    projection: Annotated[
+        GlobalId | None,
+        Field(
+            description="The public projection a written status category was mirrored to — absent when the\nupdate wrote no status, and for a task with no projection."
+        ),
+    ] = None
     result: Annotated[
         WriteResult | None,
         Field(

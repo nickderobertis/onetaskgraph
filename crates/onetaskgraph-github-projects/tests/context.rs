@@ -14,6 +14,9 @@ const PUBLISHED_CONTEXTS: &[(u64, u64)] = &[
     (2, 0x1d08_0c96_c984_edd5),
     // Version 3: an item carries the reason its issue was closed with.
     (3, 0x9311_d768_a006_7864),
+    // Version 4: `Classification`'s description says a task's project never tightens it; no
+    // field changed.
+    (4, 0xfa56_7c6f_0060_6940),
 ];
 
 /// FNV-1a over `value`'s JSON, whose object keys serde_json keeps sorted.

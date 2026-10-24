@@ -1815,13 +1815,15 @@ engine's write-back uses.
     that the plan's private voters place at, by their own repositories and the placement a
     private item takes. When those voters place at two different private sources and the
     plan has no home yet, the copy is refused before anything is written, naming each source
-    and the qualified ids of the items placing there. The public voters stay where their own repositories place them —
-    under the home's member project in each other source, whose write is screened like any
-    other.
+    and the qualified ids of the items placing there. Every task of the plan then lands
+    canonically beside that private home, and each public voter is seen where its own
+    repositories place it only through a neutral **public projection** — see [Public
+    projections of a private plan](#public-projections-of-a-private-plan).
   - With no voter at all, the home is the named destination. With `--no-tasks` only the
     project's own repositories can vote.
   - A `{classification: private, to: <source>}` entry keeps its precedence: a project holding
-    anything private goes there whole, with every task and document in it.
+    anything private goes there whole, with every task and document in it, its public tasks
+    projected where their own placement is.
   - **A home that already exists stays where it is**, found by the project's link or origin
     and naming it back: a task added later that routes elsewhere goes into a member project
     there. A private plan whose existing home sits in a source not declared private is refused
@@ -1896,8 +1898,9 @@ things decide where an item may be written, and one decides what it may say ther
 `public` or `private`. A folder of Markdown writes `classification: private` in the front
 matter and nothing while it is public; a hosted source keeps it under the reserved metadata key
 `onetaskgraph.classification`. An item written before it existed reads as public. It only ever
-tightens: an item naming a repository that is not public is private, an item filed under a
-private project is private, and an explicit `public` changes neither. A project is the strictest
+tightens: an item naming a repository that is not public is private, a document filed under a
+private project is private, and an explicit `public` changes neither — a task's project never
+tightens it (see below). A project is the strictest
 of its own classification, its tasks' and its documents', and a store writes it so — so a
 project stays private after the members that made it private are gone, and a copy never writes
 an item looser than the destination already holds it. `task create`, `document create` and
@@ -1954,13 +1957,23 @@ references among `paths` — and **passes it only by exiting 0 with `{"verdict":
 refusal names where the check stopped and never what it found; no command, a failure, or any
 other answer is unavailable, which never passes.
 
+**A task owns its classification.** Who may read a task is its own declaration and every
+repository it names, and nothing else: all-public repositories leave it public unless it says
+`private`, and any private or unknown one makes it private. The project it is filed under never
+tightens it, so a public task in a private coordination project is public — read, depended on,
+narrowly written and copied on its own as the public task it is, a copy on its own naming no
+private project it is filed under. The tightening runs the other way: a project holding any
+private task or document is private, and so is every document filed under a private project. A
+classification already recorded private — declared, or written by an earlier copy — stays
+private: no copy, re-copy or update loosens it.
+
 **When the boundary is active.** It is active when the configuration names a `write_policy`,
 when any source declares a `visibility`, or when a program linking the engine supplies its own
 policy. An inactive store still persists, copies and routes classification, and still refuses
 an explicitly private item anywhere not declared private — at a create, a copy, a route and a
 render — but it consults no repository's visibility, reads nothing extra before a narrow
-write, and does not read a project to learn whether an item filed under it inherits a private
-classification, so a store that has not opted in answers and spends exactly what it did before. **A
+write, and does not read a project to learn whether a document filed under it inherits a
+private classification, so a store that has not opted in answers and spends exactly what it did before. **A
 store that wants repositories screened has to configure `write_policy` or declare a
 visibility.** Active:
 
@@ -1969,8 +1982,8 @@ visibility.** Active:
   missing or failed check refuses it;
 - a narrow write (`task status set`, `project status set`, `priority set`, `content set`,
   `metadata set`, `update`, `comment add` and `edit`, `render`) to an item of a source not verified private reads the
-  item for its classification, with what it inherits — a task's or a document's project, a
-  project's tasks and documents — and refuses a private one; to a source verified private it
+  item for its classification, with what it inherits — a document's project, a project's
+  tasks and documents; a task inherits nothing — and refuses a private one; to a source verified private it
   reads nothing more.
 
 **Routing by classification.** A route entry may match on `classification` instead of
@@ -1980,10 +1993,72 @@ private, classification entries are tried before repository entries, and otherwi
 is the one written. A project holding anything private goes, with every task and document in
 it, wholly to the private source a classification entry names, whatever its tasks'
 repositories would say. Without one, its home goes where its private tasks' repositories route
-it, and its public tasks into a member project where theirs do — see [Which writes route, and
-where each item lands](#which-writes-route-and-where-each-item-lands); with no private source
-reachable, the whole copy is refused before anything is written. `sources route <SOURCE>
---classification private` answers where such an item would go.
+it — see [Which writes route, and where each item lands](#which-writes-route-and-where-each-item-lands);
+with no private source reachable, the whole copy is refused before anything is written. Either
+way every task of the plan lands canonically beside that private home, and its public tasks are
+seen publicly only through the views below. `sources route <SOURCE> --classification private`
+answers where such an item would go.
+
+**Public projections of a private plan.** A private coordination project copied, while the
+boundary is active, to a home declared private — `project copy PRIVATE_HOME --to
+PRIVATE_DESTINATION` — keeps every canonical task, edge, description, design document, approval
+and rendering provenance in that destination, and makes one **view** of each public task in the
+source its repositories route it to as public, when that is a source not declared private:
+
+- one project per such source, created under an opaque id (`pw-…`) and titled `Public work`,
+  naming the views' own public repositories and carrying one reserved key,
+  `onetaskgraph.allocation`, a random nonce derived from nothing private — and nothing else;
+- one task per public task, created under an opaque id (`pt-…`), carrying its screened title,
+  content, repositories and status, and depending only on the views of other public tasks — no
+  labels, priority, metadata, origin, copy link, delivery, member list, count or path of the
+  private plan;
+- every view put to the caller's check, every Markdown link in its content held to being a URL,
+  a fragment or one of its own image assets, and any raw HTML tag carrying an attribute — or a
+  `style` or `script` element — refused, since a view cannot read where such HTML points,
+  **before the copy writes anything**: a view naming private material, or carrying a link it
+  could not, refuses the whole copy.
+
+A view is a view, never another executable task: the engine reads and writes the canonical
+records, a view never enters its task enumeration, and a person's edit of a view changes nothing
+of the plan and is overwritten by the next copy, which takes every view's content from the
+canonical records again. The private destination project alone records which view is each
+canonical task's, at `onetaskgraph.public_projections`:
+
+```json
+{"schema_version": 1,
+ "tasks": [{"task": "vault:widget", "projection": "site:pt-57c4c9592576a5b1"}],
+ "projects": [{"source": "site", "allocation": "3f9c…", "project": "pw-0c1d2e3f4a5b6c7d"}]}
+```
+
+`task` is the canonical destination task and `projection` its view, both qualified, unique by
+either id, and a projection is never in a source declared private; a map that breaks any of that
+is refused rather than trusted. `projects`, absent when empty, names each public source's
+`Public work` project: the `allocation` it was created carrying, recorded before the create is
+sent, and the `project` id that source assigned it, recorded once it answers and before any view
+is filed under it; one entry per source, never a source declared private. A copy never carries the map anywhere, and records each view in
+it the moment the view is created, so a copy interrupted part way and run again finds every view
+it made — by the map, by its opaque id, or, at a destination that issues ids of its own, as the
+one task under the public project no map entry names with the view's title and repositories —
+rather than making a second. The public project is found by ownership alone: by the `project`
+its entry records, or — when the copy never learned that id, its
+create's answer lost or the copy ended first — as the one project, whatever its title,
+carrying its recorded `allocation` — refused, writing nothing, when that one is no longer a
+neutral `Public work` or when two carry it — created afresh, carrying that same allocation, only when none does. No other
+project is ever taken or altered, however much it looks like one: an unrelated empty `Public work`
+naming the same repositories is left as it is, so is a project a person moved a view into —
+that view is left where they put it, the next copy records a new view under the copy's own
+project, and a status is not mirrored to a view filed anywhere else — and so is one already
+sitting at the opaque
+id a create would ask for — a destination honouring that id would write over it, so the copy is
+refused, naming that project, before anything is written. A copy that fails takes back the project it asked
+for by its allocation even when the answer was lost; when the destination will not take it back,
+the private project keeps the allocation, is named among what is still there, and the next copy
+resumes into that project rather than making another. A view recorded private is refused rather than written public again,
+and every field a person adds to a view in public is taken off by the next copy. A canonical task
+with a view hands it every new status category — `task status set` and a `task update` naming a
+status each answer the view as `projection`, and a ticket the delivery rule moves moves its view —
+through the view's own screened status write; nothing but the category crosses, and a view's other
+fields change only with the next copy.
 
 **Every check runs before the first write.** A copy holds every item of every project to the
 boundary before it writes any, and each write reads its destination's reality immediately
@@ -2003,10 +2078,9 @@ own record. Between public items nothing is left out. While the boundary is acti
 into a source not declared private first reads, once per command, every item outside the copy
 that a carried dependency or delivery names in a source not declared private, and withholds
 its id when that item is private by its own record, its repositories, or what it inherits —
-a task the project it is filed under, a project every task and document it holds — whatever
-its source declares; a reference whose classification cannot be read — its source not
-configured, any of those reads failing, no such item, or a task filed under a project its
-source does not hold or cannot read — is refused before anything is written. A `--depends-on` or
+a project every task and document it holds, a document its project — whatever its source
+declares; a reference whose classification cannot be read — its source not configured, any of
+those reads failing, or no such item — is refused before anything is written. A `--depends-on` or
 `--delivers` naming such an item — or, while the boundary is active, an item of any other
 source read as private, with what it inherits, or one it cannot classify — is the caller asking
 for it to be written, so that write is refused before anything is written rather than quietly

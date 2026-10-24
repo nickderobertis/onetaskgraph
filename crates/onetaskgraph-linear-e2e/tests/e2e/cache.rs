@@ -343,7 +343,7 @@ fn a_projects_tasks_listed_then_their_forward_edges_are_answered_from_the_cache_
 fn edges_kept(cached: &Cached) -> Vec<String> {
     let mut kept: Vec<String> = cached
         .dir()
-        .map(|dir| walk(&dir.join("edges-v3")))
+        .map(|dir| walk(&dir.join("edges-v4")))
         .unwrap_or_default()
         .iter()
         .filter_map(|path| std::fs::read(path).ok())
@@ -945,14 +945,14 @@ fn every_linear_write_takes_the_entries_naming_its_item_out_of_service() {
             (
                 "project",
                 "linear:P-1",
-                "projects-v3",
+                "projects-v4",
                 words("project metadata set linear:P-1 caller.note \"noted\""),
                 "noted",
             ),
             (
                 "document",
                 "linear:D-1",
-                "documents-v3",
+                "documents-v4",
                 words("document metadata set linear:D-1 caller.note \"noted\""),
                 "noted",
             ),
@@ -1042,7 +1042,7 @@ fn a_cached_task_keeps_and_serves_its_opaque_far_end() {
                       "to": {"id": "linear:L-1", "kind": "task"}, "kind": "blocks"});
     assert_eq!(filled["items"], json!([edge]), "{filled}");
     let dir = cached.dir().expect("a cache");
-    let kept: Vec<String> = walk(&dir.join("edges-v3"))
+    let kept: Vec<String> = walk(&dir.join("edges-v4"))
         .iter()
         .map(|path| std::fs::read_to_string(path).expect("an entry"))
         .collect();

@@ -300,6 +300,12 @@ class TaskStatusSet(BaseModel):
         ),
     ] = None
     id: Annotated[GlobalId, Field(description="The task whose status was set.")]
+    projection: Annotated[
+        GlobalId | None,
+        Field(
+            description="The public projection the new status category was mirrored to — absent for a task\nwith none."
+        ),
+    ] = None
     result: Annotated[
         WriteResult | None,
         Field(

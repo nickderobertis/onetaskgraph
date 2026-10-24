@@ -301,7 +301,7 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 45);
+    assert_eq!(bundle["version"], 46);
     // Version 45: the opaque dependency endpoint, and a dependency read's `unanswered` naming a
     // designator no configured source is.
     assert!(
@@ -311,6 +311,18 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
         "{:#}",
         bundle["roots"]["QueryResponseOfQualifiedEdge"]["$defs"]
     );
+    // Version 46: the projection map a private destination project records, and the view a
+    // task's status set mirrored its category to.
+    assert_eq!(
+        bundle["roots"]["PublicProjections"]["required"],
+        serde_json::json!(["schema_version", "tasks"])
+    );
+    for root in ["TaskStatusSet", "TaskUpdated"] {
+        assert!(
+            bundle["roots"][root]["properties"]["projection"].is_object(),
+            "{root}"
+        );
+    }
     // Version 42: each closure item's `kind`, the project item a holding or a contradiction can
     // carry, and what `project status set` answers with.
     for root in ["IssueCompleted", "StatusReconciled"] {

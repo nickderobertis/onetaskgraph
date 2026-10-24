@@ -50,6 +50,10 @@ pub struct TaskStatusSet {
     /// fallback read included — absent for a write made without `--expect`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spent: Option<Spent>,
+    /// The public projection the new status category was mirrored to — absent for a task
+    /// with none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub projection: Option<GlobalId>,
 }
 
 /// What `project status set` and [`Engine::set_project_status`] answer with.
@@ -172,6 +176,7 @@ impl Engine {
                 &delivers,
             )
             .await;
+        let projection = self.mirror_status(id, &task, status.category).await?;
         Ok(TaskStatusSet {
             id: id.clone(),
             status,
@@ -179,6 +184,7 @@ impl Engine {
             result,
             fallback,
             spent,
+            projection,
         })
     }
 
@@ -356,31 +362,9 @@ impl Engine {
             .iter()
             .filter(|other| !self.withholds(&ticket.source, other, private))
             .collect();
-        // The ticket is held to what it inherits as well as its record: while the boundary is
-        // active, the project it is filed under.
-        let ticket_class = match &task.project {
-            Some(filed) if self.boundary_active() => {
-                match self
-                    .source_project_class(
-                        &GlobalId::new(ticket.source.clone(), filed.clone()),
-                        &mut std::collections::HashMap::new(),
-                    )
-                    .await
-                {
-                    Ok(inherited) => task.classification.strictest(inherited),
-                    // Unclassified is held private where the ticket's source is, and refused
-                    // anywhere else.
-                    Err(EngineError::ProjectUnclassified { .. })
-                        if self.declared(&ticket.source)
-                            == crate::config::SourceVisibility::Private =>
-                    {
-                        Classification::Private
-                    }
-                    Err(error) => return entry(failed(Some(from), &error), Vec::new()),
-                }
-            }
-            _ => task.classification,
-        };
+        // The ticket is held to its own record alone: a task inherits nothing from the project
+        // it is filed under.
+        let ticket_class = task.classification;
         if !written.iter().copied().eq(&held) {
             let list: Vec<TaskRef> = written
                 .iter()
@@ -437,13 +421,20 @@ impl Engine {
             return entry(failed(Some(from), &error), pruned);
         }
         match source.source().set_task_status(&ticket.native, to).await {
-            Ok(Some(status)) => entry(
-                DeliveryOutcome::Written {
-                    from,
-                    to: status.category,
-                },
-                pruned,
-            ),
+            // A ticket with a public projection hands it the category too; a mirror that could
+            // not be made is this ticket's failure, its own status written.
+            Ok(Some(status)) => {
+                match Box::pin(self.mirror_status(ticket, &task, status.category)).await {
+                    Ok(_) => entry(
+                        DeliveryOutcome::Written {
+                            from,
+                            to: status.category,
+                        },
+                        pruned,
+                    ),
+                    Err(error) => entry(failed(Some(from), &error), pruned),
+                }
+            }
             Ok(None) => entry(failed(Some(from), &no_such_task()), pruned),
             Err(error) => entry(failed(Some(from), &source_failed(source, error)), pruned),
         }
