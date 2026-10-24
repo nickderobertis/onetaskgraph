@@ -7,12 +7,17 @@ rather than letting a `KeyError` or a wrong type travel into arithmetic.
 
 from __future__ import annotations
 
+import builtins
 import dataclasses
 import json
 import types
 import typing
 from enum import Enum
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from _typeshed import DataclassInstance
 
 type Json = None | bool | int | float | str | list[Json] | dict[str, Json]
 
@@ -134,57 +139,59 @@ def _decode(kind: object, value: Json, where: str) -> object:
     supertype = getattr(kind, "__supertype__", None)
     if supertype is not None:
         return _decode(supertype, value, where)
-    origin, args = typing.get_origin(kind), typing.get_args(kind)
-    if origin in (types.UnionType, typing.Union):
-        if value is None and type(None) in args:
-            return None
-        inner = [a for a in args if a is not type(None)]
-        return _decode(inner[0], value, where)
-    if origin is tuple:
-        items = arr(value, where)
-        if len(args) == 2 and args[1] is Ellipsis:
+    args = typing.get_args(kind)
+    match typing.get_origin(kind):
+        case types.UnionType | typing.Union:
+            if value is None and type(None) in args:
+                return None
+            return _decode(next(a for a in args if a is not type(None)), value, where)
+        case builtins.tuple if len(args) == 2 and args[1] is Ellipsis:
+            items = arr(value, where)
             return tuple(_decode(args[0], v, f"{where}[{i}]") for i, v in enumerate(items))
-        if len(items) != len(args):
-            raise ShapeError(f"{where}: expected {len(args)} items, found {len(items)}")
-        return tuple(
-            _decode(a, v, f"{where}[{i}]") for i, (a, v) in enumerate(zip(args, items, strict=True))
-        )
-    if origin is dict:
-        mapping = obj(value, where)
-        return {
-            _decode(args[0], parse_key(args[0], k), where): _decode(args[1], v, f"{where}.{k}")
-            for k, v in mapping.items()
-        }
-    if isinstance(kind, type) and issubclass(kind, Enum):
-        try:
-            return kind(value)
-        except ValueError as error:
-            raise ShapeError(f"{where}: {error}") from error
-    if isinstance(kind, type) and dataclasses.is_dataclass(kind):
-        mapping = obj(value, where)
-        hints = typing.get_type_hints(kind)
-        values: dict[str, object] = {}
-        for f in dataclasses.fields(kind):
-            has_default = (
-                f.default is not dataclasses.MISSING or f.default_factory is not dataclasses.MISSING
-            )
-            if f.name not in mapping and has_default:
-                continue
-            values[f.name] = _decode(
-                hints[f.name], field(mapping, f.name, where), f"{where}.{f.name}"
-            )
-        return kind(**values)
-    match kind:
-        case type() if kind is bool:
+        case builtins.tuple:
+            items = arr(value, where)
+            if len(items) != len(args):
+                raise ShapeError(f"{where}: expected {len(args)} items, found {len(items)}")
+            pairs = enumerate(zip(args, items, strict=True))
+            return tuple(_decode(a, v, f"{where}[{i}]") for i, (a, v) in pairs)
+        case builtins.dict:
+            return {
+                _decode(args[0], parse_key(args[0], k), where): _decode(args[1], v, f"{where}.{k}")
+                for k, v in obj(value, where).items()
+            }
+        case None if isinstance(kind, type) and issubclass(kind, Enum):
+            try:
+                return kind(value)
+            except ValueError as error:
+                raise ShapeError(f"{where}: {error}") from error
+        case None if isinstance(kind, type) and dataclasses.is_dataclass(kind):
+            return _decode_dataclass(kind, obj(value, where), where)
+        case None if kind is bool:
             return flag(value, where)
-        case type() if kind is int:
+        case None if kind is int:
             return integer(value, where)
-        case type() if kind is float:
+        case None if kind is float:
             return number(value, where)
-        case type() if kind is str:
+        case None if kind is str:
             return text(value, where)
         case _:
             raise ShapeError(f"{where}: no decoder for {kind!r}")
+
+
+def _decode_dataclass(
+    kind: type[DataclassInstance], mapping: dict[str, Json], where: str
+) -> object:
+    """A dataclass from an object, a field with a default allowed to be absent."""
+    hints = typing.get_type_hints(kind)
+    values: dict[str, object] = {}
+    for f in dataclasses.fields(kind):
+        defaulted = (
+            f.default is not dataclasses.MISSING or f.default_factory is not dataclasses.MISSING
+        )
+        if f.name not in mapping and defaulted:
+            continue
+        values[f.name] = _decode(hints[f.name], field(mapping, f.name, where), f"{where}.{f.name}")
+    return kind(**values)
 
 
 def parse_key(kind: object, key: str) -> Json:

@@ -128,7 +128,8 @@ def read_payload(body: bytes) -> Operation:
     try:
         payload = obj(parse(body.decode(errors="replace"), "request"), "request")
         query = text(payload.get("query"), "request.query")
-        variables = obj(payload.get("variables") or {}, "request.variables")
+        raw = payload.get("variables")
+        variables = {} if raw is None else obj(raw, "request.variables")
         name = payload.get("operationName")
         if name is not None:
             name = text(name, "request.operationName")

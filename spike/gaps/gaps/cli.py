@@ -144,7 +144,7 @@ def executable(path: Path, hint: str) -> Path:
 def token() -> Token:
     """The test board's credential, refused when absent or malformed."""
     value = os.environ.get("GH_PROJECTS_TOKEN", "")
-    if not value or value.strip() != value or any(c.isspace() for c in value):
+    if not value or any(c.isspace() or not c.isprintable() for c in value):
         raise UsageError(
             "GH_PROJECTS_TOKEN is unset or malformed; export the test board's credential"
         )

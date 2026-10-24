@@ -137,7 +137,7 @@ def previous_reading(log: Path) -> Reading | None:
     return Reading(
         at=number(field(last, "at", "reading"), "reading.at"),
         rest_endpoint=bucket_of(field(last, "rest_endpoint", "reading"), "rest_endpoint"),
-        own=tuple(bucket_of(b, "reading.own[]") for b in arr(last.get("own") or [], "own")),
+        own=tuple(bucket_of(b, "reading.own[]") for b in arr(field(last, "own", "reading"), "own")),
         last_headers=None if headers is None else bucket_of(headers, "last_headers"),
     )
 

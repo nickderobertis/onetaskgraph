@@ -544,8 +544,10 @@ def consumed() -> Consumed:
     entries = [(run, records(run)) for run in runs("probe-")]
     all_records = [r for _, rs in entries for r in rs]
     free = {"dry run", "rateLimit", "GET /rate_limit"}
+    # A dry run states the price of the document it carries, not of itself, and moved `used` by
+    # nothing; it and the quota reads cost 0. Every other query costs what it stated, or 1.
     points = sum(
-        r.cost if r.cost is not None else (0 if r.op in free else 1)
+        0 if r.op in free else (r.cost if r.cost is not None else 1)
         for r in all_records
         if r.kind is not Kind.REST
     )

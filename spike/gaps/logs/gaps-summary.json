@@ -503,7 +503,7 @@
   "creations_sent": 110,
   "dry_runs": 81,
   "mutation_requests": 102,
-  "points": 324,
+  "points": 195,
   "rate_limit_reads": 96,
   "remaining_before_and_after": {
    "probe-alias-pricing-head-20261024T140959": [
@@ -1520,7 +1520,7 @@
     }
    ]
   },
-  "refusal_run": "proxy-refusal-head-20261024T152559",
+  "refusal_run": "proxy-refusal-head-20261024T153739",
   "union": {
    "commands": {
     "document-copy": [

@@ -8,7 +8,10 @@ and those budgets add up to, so a log, a budget or a price that changes is caugh
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
+import os
+import re
 from pathlib import Path
 
 from gaps import analysis, budgets, report
@@ -96,3 +99,68 @@ def test_the_seconds_estimates_are_the_baseline_less_what_the_plans_remove() -> 
     parent = summary.prices.parent_listing_seconds
     expected = round(wall - screening + 2 * 0.67 - reads + parent, 1)
     assert by_id["plan-approval-seconds"].attainable == expected
+
+
+def test_the_consumed_points_count_charges_and_mutations_and_never_a_dry_runs_quote() -> None:
+    """The consumed points count what was charged and every mutation, never a dry run's quote."""
+    summary = asyncio.run(report.build(PLAN_CHECKOUT, ONETASKGRAPH))
+    points = 0
+    for run in sorted(analysis.LOGS.glob("probe-*/requests.jsonl")):
+        for line in run.read_text().splitlines():
+            record = json.loads(line)
+            if record["kind"] == "rest" or record["op"] in ("dry run", "rateLimit"):
+                continue
+            points += record["cost"] if record["cost"] is not None else 1
+    assert summary.consumed.points == points
+
+
+def test_the_report_command_quotes_a_ruling_and_states_a_recorded_lint_run(tmp_path: Path) -> None:
+    """The report command quotes a ruling and states a recorded lint run."""
+    lint = tmp_path / "lint.json"
+    rule = {"name": "a_rule", "outcome": "fail", "violations": []}
+    lint.write_text(
+        json.dumps(
+            {"id": "run-9", "summary": {"total": 3, "passed": 2, "failed": 1}, "rules": [rule]}
+        )
+    )
+    ruling = tmp_path / "ruling.md"
+    ruling.write_text("Proceed,\nas planned.\n")
+    out = tmp_path / "answers.json"
+    command = [
+        PYTHON,
+        "-m",
+        "gaps.report",
+        "--answers",
+        str(out),
+        "--lint",
+        str(lint),
+        "--ruling",
+        str(ruling),
+    ]
+    done = spawn(command, gaps_env(tmp_path))
+    assert done.returncode == 0, done.err
+    findings = json.loads(out.read_text())["findings"]
+    assert findings[-1] == "**Manager ruling, as received.** Proceed, as planned."
+    assert "`run-9`" in findings[-2] and "Still failing: a_rule." in findings[-2]
+
+
+def test_the_answers_are_the_spike_report_templates_own_variables(tmp_path: Path) -> None:
+    """The answers are the spike-report template's own variables, read from the template."""
+    resolved = spawn(
+        [PLAN_CHECKOUT / ".venv/bin/onepipeline", "template", "resolve", "spike-report", "--json"],
+        dict(os.environ),
+    )
+    assert resolved.returncode == 0, resolved.err
+    loader = tmp_path / "loader.json"
+    loader.write_bytes(resolved.stdout)
+    listed = spawn(
+        [ONETASKGRAPH, "template", "variables", "--template-loader", loader, "--json"],
+        dict(os.environ),
+    )
+    assert listed.returncode == 0, listed.err
+    variables = {v["name"]: v for v in json.loads(listed.out)["variables"]}
+    assert set(variables) == {f.name for f in dataclasses.fields(report.Answers)}
+    keys = set(re.findall(r"`(\w+)` \(", variables["candidates"]["description"]))
+    summary = asyncio.run(report.build(PLAN_CHECKOUT, ONETASKGRAPH))
+    row = report.answers(summary, None, None).candidates[0]
+    assert set(row) == keys

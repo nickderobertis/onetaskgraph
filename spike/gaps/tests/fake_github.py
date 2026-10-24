@@ -29,8 +29,10 @@ class Chunking(Enum):
     """How the stand-in frames its answers."""
 
     NONE = "Content-Length"
+    LONGER_THAN_SENT = "a Content-Length longer than what is sent"
     WHOLE = "chunked"
     CUT_SHORT = "chunked, without its terminating chunk"
+    NO_FINAL_LINE = "chunked, its terminating chunk without the final empty line"
 
 
 @dataclass
@@ -234,10 +236,12 @@ def serve(board: Board) -> tuple[ThreadingHTTPServer, str]:
             for name, value in board.headers().items():
                 self.send_header(name, value)
             self.send_header("Content-Type", "application/json")
-            if board.chunked is Chunking.NONE:
-                self.send_header("Content-Length", str(len(body)))
+            if board.chunked in (Chunking.NONE, Chunking.LONGER_THAN_SENT):
+                extra = 10 if board.chunked is Chunking.LONGER_THAN_SENT else 0
+                self.send_header("Content-Length", str(len(body) + extra))
                 self.end_headers()
                 self.wfile.write(body)
+                self.close_connection = True
                 return
             # GitHub answers chunked; the stand-in does too, in two chunks, and when told to
             # cuts the answer short before its terminating chunk.
@@ -248,6 +252,8 @@ def serve(board: Board) -> tuple[ThreadingHTTPServer, str]:
                 self.wfile.write(f"{len(piece):x};ext=1\r\n".encode() + piece + b"\r\n")
             if board.chunked is Chunking.WHOLE:
                 self.wfile.write(b"0\r\n\r\n")
+            elif board.chunked is Chunking.NO_FINAL_LINE:
+                self.wfile.write(b"0\r\n")
             self.close_connection = True
 
         def do_GET(self) -> None:

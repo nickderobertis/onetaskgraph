@@ -1,9 +1,9 @@
 """The GitHub plugin's own GraphQL documents, and the shapes this spike prices built from them.
 
 `documents.json` beside this package is generated from the plugin crate by `generate`, which
-compiles a throwaway example printing the constants; `tests/test_documents.py` regenerates it
+compiles a throwaway example printing the constants; `tests/test_contracts.py` regenerates it
 and fails when the checked-in copy has drifted from the crate. The variable builders are held
-to each document's own declarations by `declared` in the same test.
+to each document's own declarations by `declared` in the same file.
 """
 
 from __future__ import annotations

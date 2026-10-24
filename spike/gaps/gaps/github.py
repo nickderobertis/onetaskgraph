@@ -266,6 +266,10 @@ def split_reply(raw: bytes) -> HttpReply:
         headers[name.strip().lower()] = value.strip()
     if headers.get("transfer-encoding", "").lower() == "chunked":
         body = dechunk(body)
+    elif "content-length" in headers:
+        declared = headers["content-length"]
+        if not declared.isdigit() or int(declared) != len(body):
+            raise GitHubError(f"an answer declaring {declared} bytes carried {len(body)}")
     return HttpReply(status=status, headers=headers, body=body)
 
 
@@ -279,6 +283,9 @@ def dechunk(body: bytes) -> bytes:
             raise GitHubError("a chunked answer with unreadable framing")
         size = int(size_text, 16)
         if size == 0:
+            # The last chunk is followed by optional trailers and one empty line.
+            if not (body.startswith(b"\r\n") or b"\r\n\r\n" in body):
+                raise GitHubError("a chunked answer without its final empty line")
             return out
         if len(body) < size + 2 or body[size : size + 2] != b"\r\n":
             raise GitHubError("a chunked answer cut short")
@@ -288,7 +295,7 @@ def dechunk(body: bytes) -> bytes:
 def graphql_error(value: Json, where: str) -> GraphQLError:
     """One `errors` entry, typed."""
     entry = obj(value, f"{where}.errors[]")
-    path = entry.get("path") or []
+    path = entry.get("path", [])
     return GraphQLError(
         type=str(entry.get("type") or "untyped"),
         path=tuple(str(p) for p in arr(path, f"{where}.errors[].path")),

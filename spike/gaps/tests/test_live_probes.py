@@ -9,13 +9,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 from pathlib import Path
 
 import pytest
 
-from gaps import allowance, board, placement, proc
-from gaps.github import Client, GitHubError, RateLimit, Token
+from gaps import allowance, board, cli, placement, proc
+from gaps.github import Client, GitHubError, Kind, RateLimit, RequestRecord, Token
 from gaps.json_shape import ShapeError, decode, load, load_lines, obj
 from gaps.placement import AddOutcome, PlacementResult
 from gaps.pricing import Named, PricingResult
@@ -72,6 +73,7 @@ def test_a_pricing_probe_prices_every_shape_the_analysis_names(
         ({}, "GH_PROJECTS_TOKEN"),
         ({"GH_PROJECTS_TOKEN": "t", "SPIKE_UPSTREAM": "https://api.github.com"}, "loopback"),
         ({"GH_PROJECTS_TOKEN": "t", "XDG_CACHE_HOME": "relative/cache"}, "absolute"),
+        ({"GH_PROJECTS_TOKEN": "t\x01ken"}, "GH_PROJECTS_TOKEN"),
     ],
 )
 def test_a_wrong_environment_exits_2_naming_what_is_wrong(
@@ -287,7 +289,13 @@ def test_a_reading_is_the_least_of_its_figures_and_ignores_headers_of_a_closed_w
 
 @pytest.mark.parametrize(
     ("framing", "status"),
-    [(fake_github.Chunking.WHOLE, 0), (fake_github.Chunking.CUT_SHORT, 1)],
+    [
+        (fake_github.Chunking.WHOLE, 0),
+        (fake_github.Chunking.CUT_SHORT, 1),
+        (fake_github.Chunking.NO_FINAL_LINE, 1),
+        (fake_github.Chunking.LONGER_THAN_SENT, 1),
+    ],
+    ids=lambda v: v.name if isinstance(v, fake_github.Chunking) else str(v),
 )
 def test_a_chunked_answer_is_read_whole_and_one_cut_short_is_refused(
     tmp_path: Path,
@@ -355,3 +363,28 @@ def test_under_forty_percent_the_burn_rate_decides_whether_to_pause(
 
     asyncio.run(gate())
     assert len(slept) == pauses
+
+
+def test_the_gate_reads_the_last_graphql_headers_of_the_latest_run_that_recorded_any(
+    tmp_path: Path,
+) -> None:
+    """The gate reads the last GraphQL headers of the latest run that recorded any."""
+    runs = tmp_path / "runs"
+
+    def run(name: str, records: list[RequestRecord], age: float) -> None:
+        directory = runs / name
+        directory.mkdir(parents=True)
+        log = directory / "requests.jsonl"
+        log.write_text("".join(json.dumps(r.to_json()) + "\n" for r in records))
+        os.utime(log, (time.time() - age, time.time() - age))
+
+    def record(end: float, remaining: int, resource: str) -> RequestRecord:
+        limits = RateLimit(5000, remaining, 5000 - remaining, 4102444800, resource)
+        return RequestRecord(1, Kind.QUERY, "q", end - 1, end, 200, None, (), limits, 1)
+
+    run("probe-a", [record(10, 3000, "graphql"), record(20, 2500, "graphql")], age=300)
+    run("probe-b", [record(30, 4900, "core")], age=100)
+    run("other-c", [record(40, 1, "graphql")], age=50)
+    chosen = cli.last_headers(runs)
+    assert chosen is not None and chosen.remaining == 2500
+    assert cli.last_headers(tmp_path / "none") is None

@@ -71,7 +71,8 @@ def from_tasks(listing: Json) -> tuple[Budget, ...]:
     out: list[Budget] = []
     for index, entry in enumerate(arr(obj(listing, "listing").get("items"), "items")):
         item = obj(obj(entry, f"items[{index}]").get("item"), f"items[{index}].item")
-        records = obj(item.get("metadata") or {}, "metadata").get("orchestrator.budgets") or []
+        metadata = obj(item.get("metadata", {}), f"items[{index}].metadata")
+        records = metadata.get("orchestrator.budgets", [])
         for number, record in enumerate(arr(records, "orchestrator.budgets")):
             out.append(decode(Budget, record, f"items[{index}].budgets[{number}]"))
     return tuple(sorted(out, key=lambda b: b.id))
