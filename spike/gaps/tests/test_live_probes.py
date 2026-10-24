@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from gaps import allowance, board, cli, placement, proc
+from gaps import allowance, analysis, board, cli, placement, proc
 from gaps.github import Client, GitHubError, Kind, RateLimit, RequestRecord, Token
 from gaps.json_shape import ShapeError, decode, load, load_lines, obj
 from gaps.placement import AddOutcome, PlacementResult
@@ -597,3 +597,69 @@ def test_an_interrupted_probe_whose_deletes_fail_records_what_it_left_and_stays_
     assert code == cli.INTERRUPTED, err
     assert "left behind" not in err and "interrupted" in err
     assert stand_in.issues and sorted(recorded(tmp_path)) == sorted(stand_in.issues)
+
+
+def test_a_price_is_read_against_its_own_window_through_interleaving_resets_and_gaps(
+    tmp_path: Path,
+) -> None:
+    """Rises are taken from the run's own log, each against the last answer of its window.
+
+    Two windows interleave, a third opens, one answer carries no headers and one is the REST
+    bucket's: only same-window GraphQL answers yield a rise, and each is the difference.
+    """
+    window_a, window_b, window_c = 4102444800, 4102448400, 4102452000
+    answers: list[dict[str, str]] = [
+        {"used": "10", "reset": str(window_a)},
+        {"used": "500", "reset": str(window_b)},
+        {"used": "12", "reset": str(window_a)},
+        {},
+        {"used": "503", "reset": str(window_b)},
+        {"used": "1", "reset": str(window_c)},
+        {"used": "13", "reset": str(window_a)},
+        {"used": "20", "reset": str(window_a), "resource": "core"},
+        {"used": "14", "reset": str(window_a)},
+    ]
+
+    async def ask() -> None:
+        pending = list(answers)
+
+        async def answer(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+            head = await reader.readuntil(b"\r\n\r\n")
+            length = next(
+                int(line.split(b":", 1)[1])
+                for line in head.split(b"\r\n")
+                if line.lower().startswith(b"content-length:")
+            )
+            await reader.readexactly(length)
+            figures = pending.pop(0)
+            headers = "".join(
+                f"x-ratelimit-{key}: {value}\r\n"
+                for key, value in (
+                    {"limit": "5000", "remaining": "4000", "resource": "graphql"} | figures
+                ).items()
+            )
+            body = b'{"data": {"viewer": {"login": "x"}}}'
+            writer.write(
+                f"HTTP/1.1 200 OK\r\n{headers if figures else ''}Content-Length: {len(body)}"
+                "\r\n\r\n".encode()
+                + body
+            )
+            await writer.drain()
+            writer.close()
+
+        server = await asyncio.start_server(answer, "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+        client = Client(
+            f"http://127.0.0.1:{port}/graphql", Token("t0ken"), log=run / "requests.jsonl"
+        )
+        try:
+            for n in range(len(answers)):
+                await client.graphql(f"q{n}", "query { viewer { login } }", {})
+        finally:
+            server.close()
+
+    run = tmp_path / "probe-alias-pricing-head-0"
+    run.mkdir()
+    asyncio.run(ask())
+    found = [(r.op, rise) for r, rise in analysis.rises(analysis.records(run))]
+    assert found == [("q2", 2), ("q4", 3), ("q6", 1), ("q8", 1)]
