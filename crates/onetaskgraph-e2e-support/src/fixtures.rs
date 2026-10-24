@@ -1129,6 +1129,8 @@ struct GitHubBoard {
     /// Operations this board refuses once after answering that many requests carrying them —
     /// so a journey can let a read's first pages land and refuse a later one.
     refusing_after: Vec<(&'static str, usize)>,
+    /// The `retry-after` the next request is refused `429 Too Many Requests` with, once.
+    rate_limit_next: Option<u64>,
     /// Items this board replaces after answering that many requests naming them by id — with
     /// another item, or with nothing — so a journey can let a command read one and then find it
     /// changed or gone.
@@ -1585,6 +1587,12 @@ impl GitHubBoardFields {
             .unwrap()
             .replacing
             .push((id.to_owned(), answered, replacement));
+    }
+
+    /// Refuse the next request `429 Too Many Requests`, naming a reset `retry_after` seconds
+    /// ahead, as GitHub's primary limit does; every request after it is answered as before.
+    pub fn rate_limit_next(&self, retry_after: u64) {
+        self.board.lock().unwrap().rate_limit_next = Some(retry_after);
     }
 
     /// Record that the issue `id` is blocked by each of `blockers`, beside whatever already
@@ -3319,6 +3327,7 @@ fn github_projects_board_at(
         owed_errors: Vec::new(),
         refusing: Vec::new(),
         refusing_after: Vec::new(),
+        rate_limit_next: None,
         replacing: Vec::new(),
         blocked_by: github_blockers(),
         counted_types: Vec::new(),
@@ -3468,6 +3477,13 @@ fn github_projects_board_at(
                     served.replacing[at].1 -= 1;
                 }
             }
+        }
+        if let Some(wait) = board.lock().unwrap().rate_limit_next.take() {
+            let body = r#"{"message":"API rate limit exceeded for this fixture"}"#;
+            return Some(format!(
+                "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nretry-after: {wait}\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            ));
         }
         {
             // Refusals named after the board was built join the ones it was built with.
@@ -6776,11 +6792,12 @@ fn linear_response(
     }
     // A dependency read of one direction: the two-direction read's answer, holding only the
     // members that document selects, as Linear answers exactly what is selected.
-    if let Some((wide, root, selected)) = linear_narrowed(operation) {
+    if let Some((wide, root)) = linear_narrowed(operation) {
+        let selected = selected_members(operation, root);
         let mut answer =
             linear_response(&json!({"query": wide, "variables": vars}), recorded, data)?;
         if let Some(item) = answer.get_mut(root).and_then(Value::as_object_mut) {
-            item.retain(|member, _| selected.contains(&member.as_str()));
+            item.retain(|member, _| selected.iter().any(|kept| kept == member));
         }
         return Ok(answer);
     }
@@ -7127,32 +7144,55 @@ fn linear_uncached(operation: &str) -> Option<&'static str> {
     }
 }
 
-/// The two-direction relations read a one-direction dependency read narrows, the root it
-/// reads, and the members of that root it selects.
+/// The two-direction relations read a one-direction dependency read narrows, and the root it
+/// reads; the members it selects of that root are read off the document itself, by
+/// [`selected_members`], so they cannot drift from what the plugin sends.
 // llmlint: ignore[code_lands_in_the_domain_that_owns_it] As `linear_uncached` below: the engine's own suite and the Linear suite both drive this loopback Linear, so recognising the one-direction dependency reads it is sent, and answering them, is part of answering a request here.
-fn linear_narrowed(
-    operation: &str,
-) -> Option<(&'static str, &'static str, &'static [&'static str])> {
+fn linear_narrowed(operation: &str) -> Option<(&'static str, &'static str)> {
     use onetaskgraph_linear::graphql;
     match operation {
-        graphql::ISSUE_DEPENDS_ON => Some((
-            graphql::ISSUE_RELATIONS,
-            "issue",
-            &["description", "relations"],
-        )),
-        graphql::ISSUE_DEPENDED_ON_BY => {
-            Some((graphql::ISSUE_RELATIONS, "issue", &["inverseRelations"]))
+        graphql::ISSUE_DEPENDS_ON | graphql::ISSUE_DEPENDED_ON_BY => {
+            Some((graphql::ISSUE_RELATIONS, "issue"))
         }
-        graphql::PROJECT_DEPENDS_ON => Some((
-            graphql::PROJECT_RELATIONS,
-            "project",
-            &["content", "relations"],
-        )),
-        graphql::PROJECT_DEPENDED_ON_BY => {
-            Some((graphql::PROJECT_RELATIONS, "project", &["inverseRelations"]))
+        graphql::PROJECT_DEPENDS_ON | graphql::PROJECT_DEPENDED_ON_BY => {
+            Some((graphql::PROJECT_RELATIONS, "project"))
         }
         _ => None,
     }
+}
+
+/// The members `document` selects directly under its root field `root`.
+fn selected_members(document: &str, root: &str) -> Vec<String> {
+    use graphql_parser::query::{Definition, OperationDefinition, Selection, SelectionSet};
+    let parsed = graphql_parser::parse_query::<String>(document).expect("a plugin document parses");
+    let fields = |set: &SelectionSet<'_, String>| -> Vec<String> {
+        set.items
+            .iter()
+            .filter_map(|item| match item {
+                Selection::Field(field) => {
+                    Some(field.alias.clone().unwrap_or_else(|| field.name.clone()))
+                }
+                _ => None,
+            })
+            .collect()
+    };
+    parsed
+        .definitions
+        .iter()
+        .find_map(|definition| match definition {
+            Definition::Operation(OperationDefinition::Query(query)) => query
+                .selection_set
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    Selection::Field(field) if field.name == root => {
+                        Some(fields(&field.selection_set))
+                    }
+                    _ => None,
+                }),
+            _ => None,
+        })
+        .expect("the document selects its root")
 }
 
 /// `nodes` as the first page of a `first:` connection the cache's documents select answers it:

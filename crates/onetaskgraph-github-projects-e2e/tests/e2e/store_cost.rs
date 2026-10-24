@@ -770,3 +770,89 @@ fn a_board_that_named_a_reset_is_sent_nothing_before_it_and_reached_after_it() {
     });
 }
 // llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+
+/// A board held off by the rate-limit memory is sent nothing before its reset even for a read
+/// its cache could answer: the memory stands in front of every call, as its rule says. The same
+/// pinned read is served from the cache, refused unsent during the hold, and served from the
+/// cache again after the reset.
+#[test]
+fn a_held_board_refuses_even_a_read_its_cache_holds_and_serves_it_after_the_reset() {
+    let sandbox = Sandbox::new();
+    let (mut block, board) = board_of(&sandbox, SHARED + 2, Vec::new());
+    block["pacing"]["retry_budget_ms"] = json!(0);
+    let cache = sandbox.subdirectory("cache");
+    sandbox.project_document(
+        &serde_json::to_string_pretty(&json!({"sources": {"board": {
+            "plugin": "github-projects", "config": block, "cache": {"enabled": true}}}}))
+        .expect("a document"),
+    );
+    let environment = onetaskgraph_core::Environment::from_pairs([
+        (
+            "XDG_CONFIG_HOME",
+            sandbox.config_home().to_string_lossy().into_owned(),
+        ),
+        ("XDG_CACHE_HOME", cache.to_string_lossy().into_owned()),
+    ]);
+    let loaded = onetaskgraph_core::config::load(
+        &sandbox.project(),
+        &environment,
+        &onetaskgraph_core::config::Layer::default(),
+    )
+    .expect("the configuration loads");
+    let engine = Engine::build(&loaded.config, &loaded.secrets);
+    let held: GlobalId = format!("board:{}", github_extra_task(0)).parse().unwrap();
+    let other: GlobalId = format!("board:{}", github_extra_task(1)).parse().unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let first = engine.task(&held).await.expect("an answer");
+        let pin = first.items[0]
+            .item
+            .version
+            .clone()
+            .expect("a read the cache keeps carries its version");
+        let pinned = |engine: &Engine| engine.pin(&held, &pin);
+        pinned(&engine);
+        let before = board.served().len();
+        let hit = engine.task(&held).await.expect("an answer");
+        assert!(hit.errors.is_empty(), "{:?}", hit.errors);
+        assert_eq!(
+            board.served().len(),
+            before,
+            "a pinned read the cache holds sends nothing"
+        );
+
+        board.rate_limit_next(2);
+        let limited = engine.task(&other).await.expect("an answer");
+        assert!(matches!(
+            limited.errors[0].error,
+            SourceError::RateLimited {
+                retry_after_seconds: Some(1..=2),
+                ..
+            }
+        ));
+        let before = board.served().len();
+        pinned(&engine);
+        let refused = engine.task(&held).await.expect("an answer");
+        match &refused.errors[0].error {
+            SourceError::RateLimited { message, .. } => {
+                assert!(message.as_deref().unwrap_or_default().contains("not sent"));
+            }
+            other => panic!("not held off: {other:?}"),
+        }
+        assert_eq!(board.served().len(), before, "nothing sent during the hold");
+
+        tokio::time::sleep(std::time::Duration::from_millis(2_300)).await;
+        pinned(&engine);
+        let after = engine.task(&held).await.expect("an answer");
+        assert!(after.errors.is_empty(), "{:?}", after.errors);
+        assert_eq!(after.items[0].item.version.as_deref(), Some(pin.as_str()));
+        assert_eq!(
+            board.served().len(),
+            before,
+            "served from the cache after the reset"
+        );
+    });
+}

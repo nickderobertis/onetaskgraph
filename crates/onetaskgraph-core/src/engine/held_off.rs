@@ -799,6 +799,7 @@ mod tests {
     struct Scripted {
         calls: Arc<AtomicU32>,
         answers: std::sync::Mutex<Vec<Option<SourceError>>>,
+        ended: Arc<AtomicU32>,
     }
 
     impl Scripted {
@@ -839,6 +840,10 @@ mod tests {
                 project_dependencies: DependencySupport::BothDirections,
                 max_page_size: 10,
             }
+        }
+        async fn end_command(&self) -> Result<(), SourceError> {
+            self.ended.fetch_add(1, Atomic::SeqCst);
+            Ok(())
         }
         async fn health(&self) -> Result<Health, SourceError> {
             self.next()?;
@@ -896,17 +901,27 @@ mod tests {
     }
 
     fn held(answers: Vec<Option<SourceError>>) -> (HeldOff, Arc<AtomicU32>, Arc<Manual>) {
+        let (source, calls, clock, _) = held_ending(answers);
+        (source, calls, clock)
+    }
+
+    /// [`held`], and the count of `end_command` calls the source received.
+    fn held_ending(
+        answers: Vec<Option<SourceError>>,
+    ) -> (HeldOff, Arc<AtomicU32>, Arc<Manual>, Arc<AtomicU32>) {
         let calls = Arc::new(AtomicU32::new(0));
+        let ended = Arc::new(AtomicU32::new(0));
         let clock = Arc::new(Manual::default());
         let source = HeldOff::new(
             SourceName::new("tracker").unwrap(),
             Box::new(Scripted {
                 calls: Arc::clone(&calls),
                 answers: std::sync::Mutex::new(answers),
+                ended: Arc::clone(&ended),
             }),
             clock.clone(),
         );
-        (source, calls, clock)
+        (source, calls, clock, ended)
     }
 
     fn block_on<T>(future: impl std::future::Future<Output = T>) -> T {
@@ -1022,5 +1037,78 @@ mod tests {
             assert_eq!(waits(source.get_task(&id).await), Some(30));
             assert_eq!(calls.load(Atomic::SeqCst), 2);
         });
+    }
+
+    #[test]
+    fn a_rate_limit_answered_inside_a_batch_starts_the_hold() {
+        let (source, calls, _) = held(vec![None, limited(Some(40))]);
+        let ids = [NativeId::from("T-1"), NativeId::from("T-2")];
+        block_on(async {
+            let batched = source.get_task_details(&ids, None).await;
+            assert!(batched[0].is_ok());
+            assert!(matches!(
+                batched[1],
+                Err(SourceError::RateLimited {
+                    retry_after_seconds: Some(40),
+                    ..
+                })
+            ));
+            assert_eq!(calls.load(Atomic::SeqCst), 2);
+            assert_eq!(waits(source.get_task(&ids[0]).await), Some(40));
+            assert_eq!(calls.load(Atomic::SeqCst), 2, "held by the batch's answer");
+        });
+    }
+
+    #[test]
+    fn a_reset_too_far_for_the_clock_holds_the_source_off_without_overflowing() {
+        let (source, calls, clock) = held(vec![limited(Some(u64::MAX))]);
+        let id = NativeId::from("T-1");
+        block_on(async {
+            clock.advance(5_000);
+            assert_eq!(waits(source.get_task(&id).await), Some(u64::MAX));
+            clock.advance(3_600_000);
+            assert!(waits(source.get_task(&id).await).is_some_and(|left| left > 1_000_000));
+            assert_eq!(calls.load(Atomic::SeqCst), 1);
+        });
+    }
+
+    #[test]
+    fn ending_a_command_reaches_the_source_during_a_hold() {
+        let (source, calls, _, ended) = held_ending(vec![limited(Some(30))]);
+        block_on(async {
+            waits(source.get_task(&NativeId::from("T-1")).await);
+            source
+                .end_command()
+                .await
+                .expect("dropping what it holds is no request");
+            assert_eq!(ended.load(Atomic::SeqCst), 1, "it reached the source");
+            assert_eq!(calls.load(Atomic::SeqCst), 1);
+        });
+    }
+
+    /// Every method of `TaskSource` is forwarded here, and nothing else: a method added to the
+    /// trait with a default would otherwise be answered by that default, bypassing both the
+    /// source and the hold.
+    #[test]
+    fn every_method_of_the_trait_is_forwarded() {
+        fn methods(text: &str, start: &str) -> std::collections::BTreeSet<String> {
+            let from = text.find(start).expect("the block");
+            let block = &text[from..from + text[from..].find("\n}\n").expect("its end")];
+            block
+                .lines()
+                .filter_map(|line| {
+                    let line = line.strip_prefix("    ")?;
+                    let line = line.strip_prefix("async ").unwrap_or(line);
+                    let name = line.strip_prefix("fn ")?;
+                    Some(name[..name.find(['(', '<'])?].to_owned())
+                })
+                .collect()
+        }
+        let declared = methods(
+            include_str!("../../../onetaskgraph-plugin-api/src/source.rs"),
+            "pub trait TaskSource",
+        );
+        let forwarded = methods(include_str!("held_off.rs"), "impl TaskSource for HeldOff");
+        assert_eq!(declared, forwarded);
     }
 }
