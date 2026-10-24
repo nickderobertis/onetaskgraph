@@ -91,8 +91,11 @@ class Idempotence:
     placed_items_after_add: int
 
     @property
-    def never_duplicated(self) -> bool:
-        """Every issue ended with one item, and every add returned it or refused as present."""
+    def one_item_each_after_settling(self) -> bool:
+        """Every issue read one item once the adds settled; every add returned it or refused.
+
+        A final reading: it cannot see a duplicate that existed only between two reads.
+        """
         return (
             set(self.racing_items_after_10s) == {1}
             and self.placed_items_after_add == 1

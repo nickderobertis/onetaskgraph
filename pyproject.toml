@@ -14,4 +14,4 @@ manifest-path = "crates/onetaskgraph/Cargo.toml"
 strip = true
 
 [tool.uv.workspace]
-members = ["sdks/python"]
+members = ["sdks/python", "spike/gaps"]

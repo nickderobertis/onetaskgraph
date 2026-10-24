@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 
 import pytest
 
+from gaps import proc
 from tests import fake_github
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
@@ -36,3 +38,13 @@ def gaps_env(tmp_path: Path, **extra: str) -> dict[str, str]:
 
 
 PYTHON = sys.executable
+
+
+def spawn(
+    argv: Sequence[str | Path],
+    env: dict[str, str],
+    stdin: bytes | None = None,
+    timeout: float = 600.0,
+) -> proc.Completed:
+    """Run a process to completion through the harness's own async process client."""
+    return asyncio.run(proc.run(list(argv), env=env, stdin=stdin, timeout=timeout))

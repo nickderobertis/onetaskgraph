@@ -43,6 +43,9 @@ class Reading:
     rest_endpoint: Bucket
     own: tuple[Bucket, ...]
     last_headers: Bucket | None
+    # Which fields GitHub's own `rateLimit` answered: the evidence the schema extension the
+    # spike validates its documents against is held to.
+    answered_fields: tuple[str, ...] = ()
 
     @property
     def least(self) -> Bucket:
@@ -75,9 +78,11 @@ async def read(client: Client, last_headers: RateLimit | None) -> Reading:
     resources = obj(answer.get("resources"), "rate_limit.resources")
     rest = bucket_of(resources.get("graphql"), "rate_limit.resources.graphql")
     own = []
+    answered: set[str] = set()
     for _ in range(OWN_READS):
         data = require(await client.graphql("rateLimit", RATE_QUERY, {}), "rateLimit")
         rate = obj(data.get("rateLimit"), "rateLimit")
+        answered |= set(rate)
         reset_at = text(rate.get("resetAt"), "rateLimit.resetAt").replace("Z", "+00:00")
         own.append(
             Bucket(
@@ -92,7 +97,13 @@ async def read(client: Client, last_headers: RateLimit | None) -> Reading:
         headers = Bucket(
             last_headers.limit, last_headers.used, last_headers.remaining, last_headers.reset
         )
-    return Reading(at=at, rest_endpoint=rest, own=tuple(own), last_headers=headers)
+    return Reading(
+        at=at,
+        rest_endpoint=rest,
+        own=tuple(own),
+        last_headers=headers,
+        answered_fields=tuple(sorted(answered)),
+    )
 
 
 @dataclass(frozen=True)

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-import subprocess
+import os
 from pathlib import Path
 
 import pytest
@@ -21,7 +21,7 @@ from gaps.budgets import Budget, Operation, Unit, from_tasks
 from gaps.documents import Doc
 from gaps.json_shape import Json, ShapeError, decode, encode
 from gaps.shim import USAGE
-from tests.conftest import PYTHON, REPO, gaps_env
+from tests.conftest import PYTHON, REPO, gaps_env, spawn
 
 ONEVCS = Path.home() / "ai-orchestrator/.venv/bin/onevcs"
 
@@ -116,26 +116,49 @@ def test_every_baseline_run_is_one_the_measurement_document_draws_on() -> None:
 
 
 @pytest.mark.parametrize(
-    ("query", "variables", "named"),
+    ("query", "variables", "destinations", "issues"),
     [
-        ("mutation($p: ID!) { a(input: {projectId: $p}) { x } }", {"p": "P1"}, {"P1"}),
-        ("mutation($p: ID!) { a(input: {projectId :  $p}) { x } }", {"p": "P1"}, {"P1"}),
+        ("mutation($p: ID!) { a(input: {projectId: $p}) { x } }", {"p": "P1"}, {"P1"}, set()),
         (
             'mutation { a(input: {repositoryId: "R1", projectV2Ids: ["P1", "P2"]}) { x } }',
             {},
             {"R1", "P1", "P2"},
+            set(),
         ),
-        ("mutation($i: In!) { a(input: $i) { x } }", {"i": {"repositoryId": "R2"}}, {"R2"}),
-        ("mutation { a(input: {projectId: P}) { x } }", {}, {"<unreadable>"}),
-        ("mutation($p: ID!) { a(input: {projectV2Ids: [$p]}) { x } }", {"p": "P3"}, {"P3"}),
-        ('mutation { a(input: {projectV2Ids: ["P1" }) { x } }', {}, {"<unreadable>"}),
+        ("mutation($i: In!) { a(input: $i) { x } }", {"i": {"repositoryId": "R2"}}, {"R2"}, set()),
+        ("mutation($p: ID!) { a(input: {projectV2Ids: [$p]}) { x } }", {"p": "P3"}, {"P3"}, set()),
+        ('mutation($r: ID = "R9") { a(input: {repositoryId: $r}) { x } }', {}, {"R9"}, set()),
+        (
+            'mutation { a(input: {parentIssueId: "I1", issueId: "I2"}) { x } }',
+            {},
+            set(),
+            {"I1", "I2"},
+        ),
     ],
 )
-def test_the_guard_reads_every_way_a_destination_can_be_named(
-    query: str, variables: dict[str, Json], named: set[str]
+def test_the_guard_reads_every_way_a_destination_or_an_issue_can_be_named(
+    query: str, variables: dict[str, Json], destinations: set[str], issues: set[str]
 ) -> None:
-    """The guard reads every way a destination can be named."""
-    assert guard.named_ids(query, variables) == named
+    """The guard reads every way a destination or an issue can be named, defaults included."""
+    executed = guard.operation(query, variables, None)
+    assert executed.mutation
+    assert executed.destinations == destinations and executed.issues == issues
+
+
+def test_the_guard_reads_a_mutation_hidden_by_a_comment_or_a_string() -> None:
+    """A mutation behind a `#` in an earlier string, or a field behind a comment, is read."""
+    hidden = (
+        'query Q { a(x: "#") { b } } mutation M { createIssue(#\n input: {}) { issue { id } }'
+        ' updateIssue(#\n input: {id: "I"}) { issue { id } } }'
+    )
+    executed = guard.operation(hidden, {}, "M")
+    assert executed.mutation
+    assert {f for _, f in executed.fields} == {"createIssue", "updateIssue"}
+    assert executed.issues == {"I"}
+    with pytest.raises(guard.Unreadable, match="2 operations"):
+        guard.operation(hidden, {}, None)
+    with pytest.raises(guard.Unreadable, match="not a GraphQL document"):
+        guard.operation("mutation { a(", {}, None)
 
 
 def test_the_shim_passes_onevcs_through_and_refuses_a_malformed_invocation(tmp_path: Path) -> None:
@@ -148,14 +171,10 @@ def test_the_shim_passes_onevcs_through_and_refuses_a_malformed_invocation(tmp_p
     log = tmp_path / "calls.jsonl"
     argv = [PYTHON, "-m", "gaps.shim", str(log), str(ONEVCS), "boundary", "inspect", "--input", "-"]
     env = gaps_env(tmp_path) | home.env()
-    done = subprocess.run(
-        argv, input=b'{"repository": "github.com/o/n"}', env=env, capture_output=True, check=False
-    )
+    done = spawn(argv, env, stdin=b'{"repository": "github.com/o/n"}')
     assert done.returncode == 0 and json.loads(done.stdout) == {"visibility": "public"}
     assert json.loads(log.read_text())["name"] == "inspect"
-    bad = subprocess.run(
-        [PYTHON, "-m", "gaps.shim", str(log)], env=env, capture_output=True, check=False
-    )
+    bad = spawn([PYTHON, "-m", "gaps.shim", str(log)], env)
     assert bad.returncode == USAGE and b"usage" in bad.stderr
 
 
@@ -231,12 +250,8 @@ def test_the_visibilities_are_the_pinned_schemas_own() -> None:
 
 def test_the_lint_record_model_reads_what_llmlint_itself_records() -> None:
     """The lint record model reads what llmlint itself records."""
-    done = subprocess.run(
-        ["llmlint", "history", "latest", "--format", "json"],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    done = spawn(["llmlint", "history", "latest", "--format", "json"], dict(os.environ))
+    assert done.returncode == 0, done.err
     lint = decode(report.Lint, json.loads(done.stdout), "llmlint history")
     assert lint.summary.total >= lint.summary.passed + lint.summary.failed
     assert all(rule.outcome for rule in lint.rules)
@@ -257,5 +272,5 @@ def test_an_unavailable_check_stays_unavailable_after_the_union() -> None:
     disagreeing = union.Variant(union.Plant.NONE, way, union.Way(1, 0, 1, Verdict.PASS, (), 0.0))
     assert not disagreeing.agrees
     screens = reach.Screens(0, 0, 0, 0.0, ())
-    copy = reach.ReachResult(reach.Case.PUBLIC, "", "", (), 0, False, 0, 0, screens)
+    copy = reach.ReachResult(reach.Case.PUBLIC, "", "", (), 0, False, 0, False, 0, screens)
     assert not union.UnionResult(copy=copy, commands={}).all_agree

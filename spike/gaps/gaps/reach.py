@@ -214,6 +214,18 @@ def unmark(dest: Path) -> int:
     return marked
 
 
+PRIVATE_MARKS = ("priv-linear", "priv-board", "SYN-1", PRIVATE.name)
+
+
+def names_private(dest: Path) -> bool:
+    """Whether any file the copy left names a private source, its item or its repository."""
+    return any(
+        any(mark in path.read_text(errors="replace") for mark in PRIVATE_MARKS)
+        for path in dest.rglob("*")
+        if path.is_file()
+    )
+
+
 def tree(root: Path) -> dict[str, str]:
     """Every file under `root` by its digest."""
     return {
@@ -259,6 +271,7 @@ class ReachResult:
     private_requests: int
     destination_changed: bool
     destination_files: int
+    destination_names_private: bool
     tasks_unmarked: int
     screens: Screens
 
@@ -353,6 +366,7 @@ async def run(run_dir: Path, case: Case, exe: Path, onevcs: Path) -> ReachResult
         private_requests=len(recorder.requests),
         destination_changed=before != after,
         destination_files=len(after),
+        destination_names_private=names_private(root / "dest"),
         tasks_unmarked=unmarked,
         screens=counted,
     )

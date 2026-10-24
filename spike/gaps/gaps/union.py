@@ -105,11 +105,13 @@ async def screen(
 ) -> Variant:
     """One variant of one command, per item and unioned."""
     checks = planted(checks, plant, term)
-    item_visibility = [await boundary.inspect(home, r) for r in repositories]
+    item_inspects = [await boundary.inspect_timed(home, r) for r in repositories]
     item_checks = [await boundary.check(home, c) for c in checks]
     distinct = sorted(set(repositories))
-    union_visibility = [await boundary.inspect(home, r) for r in distinct]
-    union_verdict, union_seconds = await boundary.check(home, boundary.union(checks))
+    union_inspects = [await boundary.inspect_timed(home, r) for r in distinct]
+    union_verdict, union_check = await boundary.check(home, boundary.union(checks))
+    item_visibility = [v for v, _ in item_inspects]
+    union_visibility = [v for v, _ in union_inspects]
     return Variant(
         plant=plant,
         per_item=Way(
@@ -118,7 +120,7 @@ async def screen(
             check=len(checks),
             verdict=strictest([v for v, _ in item_checks]),
             visibilities=tuple(item_visibility),
-            seconds=round(sum(s for _, s in item_checks), 3),
+            seconds=round(sum(s for _, s in item_inspects) + sum(s for _, s in item_checks), 3),
         ),
         unioned=Way(
             calls=len(distinct) + 1,
@@ -126,7 +128,7 @@ async def screen(
             check=1,
             verdict=union_verdict,
             visibilities=tuple(union_visibility),
-            seconds=round(union_seconds, 3),
+            seconds=round(sum(s for _, s in union_inspects) + union_check, 3),
         ),
     )
 

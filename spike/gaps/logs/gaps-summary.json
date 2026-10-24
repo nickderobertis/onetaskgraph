@@ -307,7 +307,7 @@
    "within": true
   },
   {
-   "arithmetic": "16.4 s measured \u2212 6.03 s screening (9 onevcs calls) + 2 calls \u00d7 0.67 s \u2212 2.12 s (2 ISSUE, 1 SUB_ISSUES) + 0.5179800987243652 s added = 10.1 s",
+   "arithmetic": "16.4 s measured \u2212 6.03 s screening (9 onevcs calls) + 2 calls \u00d7 0.67 s \u2212 2.12 s (2 ISSUE, 1 SUB_ISSUES) + 0.5004651546478271 s added = 10.1 s",
    "attainable": 10.1,
    "baseline": {
     "operation": "host approval",
@@ -500,11 +500,11 @@
   }
  ],
  "consumed": {
-  "creations_sent": 99,
-  "dry_runs": 54,
-  "mutation_requests": 91,
-  "points": 251,
-  "rate_limit_reads": 80,
+  "creations_sent": 110,
+  "dry_runs": 81,
+  "mutation_requests": 102,
+  "points": 324,
+  "rate_limit_reads": 96,
   "remaining_before_and_after": {
    "probe-alias-pricing-head-20261024T140959": [
     3452,
@@ -513,6 +513,10 @@
    "probe-alias-pricing-head-20261024T150708": [
     3371,
     3348
+   ],
+   "probe-alias-pricing-head-20261024T152151": [
+    2940,
+    2932
    ],
    "probe-placement-head-20261024T141321": [
     3273,
@@ -537,11 +541,15 @@
    "probe-placement-head-20261024T150916": [
     4975,
     3252
+   ],
+   "probe-placement-head-20261024T152217": [
+    2932,
+    2843
    ]
   },
-  "requests": 287,
-  "runs": 11,
-  "seconds": 377.4
+  "requests": 354,
+  "runs": 13,
+  "seconds": 447.6
  },
  "offline": {
   "reach": {
@@ -550,13 +558,14 @@
     "case": "reach-private-item",
     "destination_changed": false,
     "destination_files": 0,
+    "destination_names_private": false,
     "onevcs": "onevcs 0.56.5",
     "private_requests": 0,
     "screens": {
      "check": 0,
      "distinct_inspect_inputs": 1,
      "inspect": 16,
-     "seconds": 0.378,
+     "seconds": 0.226,
      "verdicts": [
       [
        "inspect",
@@ -578,7 +587,7 @@
       "output_says_withheld": false,
       "recorder_requests": [],
       "returncode": 1,
-      "seconds": 5.307,
+      "seconds": 3.77,
       "stderr_tail": [
        "onetaskgraph: src:reach-plan is private, and source dest is not declared private (it is declared public); a private item is written only to a source declared private whose backend agrees",
        "next: write it to a source declared `visibility: private`, give dest a `{classification: private, to: <source>}` route to one, or declare dest private if its backend is."
@@ -593,13 +602,14 @@
     "case": "reach-private-item",
     "destination_changed": false,
     "destination_files": 0,
+    "destination_names_private": false,
     "onevcs": "onevcs 0.56.5",
     "private_requests": 0,
     "screens": {
      "check": 0,
      "distinct_inspect_inputs": 1,
      "inspect": 16,
-     "seconds": 0.615,
+     "seconds": 0.283,
      "verdicts": [
       [
        "inspect",
@@ -621,7 +631,7 @@
       "output_says_withheld": false,
       "recorder_requests": [],
       "returncode": 1,
-      "seconds": 10.368,
+      "seconds": 4.085,
       "stderr_tail": [
        "onetaskgraph: src:reach-plan is private, and source dest is not declared private (it is declared public); a private item is written only to a source declared private whose backend agrees",
        "next: write it to a source declared `visibility: private`, give dest a `{classification: private, to: <source>}` route to one, or declare dest private if its backend is."
@@ -636,13 +646,14 @@
     "case": "reach-private-item",
     "destination_changed": false,
     "destination_files": 0,
+    "destination_names_private": false,
     "onevcs": "onevcs 0.56.5",
     "private_requests": 0,
     "screens": {
      "check": 0,
      "distinct_inspect_inputs": 1,
      "inspect": 16,
-     "seconds": 0.487,
+     "seconds": 0.343,
      "verdicts": [
       [
        "inspect",
@@ -664,7 +675,7 @@
       "output_says_withheld": false,
       "recorder_requests": [],
       "returncode": 1,
-      "seconds": 7.78,
+      "seconds": 3.954,
       "stderr_tail": [
        "onetaskgraph: src:reach-plan is private, and source dest is not declared private (it is declared public); a private item is written only to a source declared private whose backend agrees",
        "next: write it to a source declared `visibility: private`, give dest a `{classification: private, to: <source>}` route to one, or declare dest private if its backend is."
@@ -679,13 +690,14 @@
     "case": "reach-private-ref",
     "destination_changed": true,
     "destination_files": 10,
+    "destination_names_private": false,
     "onevcs": "onevcs 0.56.5",
     "private_requests": 1,
     "screens": {
      "check": 10,
      "distinct_inspect_inputs": 1,
      "inspect": 44,
-     "seconds": 1.114,
+     "seconds": 0.657,
      "verdicts": [
       [
        "check",
@@ -711,7 +723,7 @@
       "output_says_withheld": false,
       "recorder_requests": [
        {
-        "at": 1792853210.795155,
+        "at": 1792855482.7484677,
         "bytes": 56,
         "method": "POST",
         "operation": "query {",
@@ -720,7 +732,7 @@
        }
       ],
       "returncode": 0,
-      "seconds": 11.009,
+      "seconds": 7.899,
       "stderr_tail": [],
       "step": "project-copy"
      },
@@ -737,7 +749,7 @@
       "output_says_withheld": false,
       "recorder_requests": [],
       "returncode": 0,
-      "seconds": 4.878,
+      "seconds": 4.462,
       "stderr_tail": [],
       "step": "document-copy"
      }
@@ -749,13 +761,14 @@
     "case": "reach-private-ref",
     "destination_changed": false,
     "destination_files": 0,
+    "destination_names_private": false,
     "onevcs": "onevcs 0.56.5",
     "private_requests": 2,
     "screens": {
      "check": 9,
      "distinct_inspect_inputs": 1,
      "inspect": 26,
-     "seconds": 0.804,
+     "seconds": 0.546,
      "verdicts": [
       [
        "check",
@@ -781,7 +794,7 @@
       "output_says_withheld": false,
       "recorder_requests": [
        {
-        "at": 1792853164.473513,
+        "at": 1792855452.0356169,
         "bytes": 56,
         "method": "POST",
         "operation": "query {",
@@ -789,7 +802,7 @@
         "query_head": "{\"query\":\"query { organization { id } }\",\"variables\":{}}"
        },
        {
-        "at": 1792853168.2238889,
+        "at": 1792855453.6714828,
         "bytes": 1483,
         "method": "POST",
         "operation": "query <search>",
@@ -798,7 +811,7 @@
        }
       ],
       "returncode": 1,
-      "seconds": 12.546,
+      "seconds": 7.464,
       "stderr_tail": [
        "onetaskgraph: source priv-board could not do it: the source could not be reached: GitHub GraphQL returned HTTP 503 Service Unavailable",
        "next: fix what the source named above, then run the command again."
@@ -813,13 +826,14 @@
     "case": "reach-private-ref",
     "destination_changed": false,
     "destination_files": 0,
+    "destination_names_private": false,
     "onevcs": "onevcs 0.56.5",
     "private_requests": 1,
     "screens": {
      "check": 9,
      "distinct_inspect_inputs": 1,
      "inspect": 26,
-     "seconds": 1.199,
+     "seconds": 0.59,
      "verdicts": [
       [
        "check",
@@ -845,7 +859,7 @@
       "output_says_withheld": false,
       "recorder_requests": [
        {
-        "at": 1792853099.779635,
+        "at": 1792855424.422559,
         "bytes": 1483,
         "method": "POST",
         "operation": "query <search>",
@@ -854,7 +868,7 @@
        }
       ],
       "returncode": 1,
-      "seconds": 20.149,
+      "seconds": 7.802,
       "stderr_tail": [
        "onetaskgraph: source priv-board could not do it: the source could not be reached: GitHub GraphQL returned HTTP 503 Service Unavailable",
        "next: fix what the source named above, then run the command again."
@@ -869,13 +883,14 @@
     "case": "reach-public",
     "destination_changed": true,
     "destination_files": 10,
+    "destination_names_private": false,
     "onevcs": "onevcs 0.56.5",
     "private_requests": 0,
     "screens": {
      "check": 10,
      "distinct_inspect_inputs": 1,
      "inspect": 44,
-     "seconds": 1.177,
+     "seconds": 0.722,
      "verdicts": [
       [
        "check",
@@ -901,7 +916,7 @@
       "output_says_withheld": false,
       "recorder_requests": [],
       "returncode": 0,
-      "seconds": 10.475,
+      "seconds": 7.233,
       "stderr_tail": [],
       "step": "project-copy"
      },
@@ -918,7 +933,7 @@
       "output_says_withheld": false,
       "recorder_requests": [],
       "returncode": 0,
-      "seconds": 6.167,
+      "seconds": 4.525,
       "stderr_tail": [],
       "step": "document-copy"
      }
@@ -930,13 +945,14 @@
     "case": "reach-public",
     "destination_changed": false,
     "destination_files": 0,
+    "destination_names_private": false,
     "onevcs": "onevcs 0.56.5",
     "private_requests": 1,
     "screens": {
      "check": 9,
      "distinct_inspect_inputs": 1,
      "inspect": 26,
-     "seconds": 1.305,
+     "seconds": 0.64,
      "verdicts": [
       [
        "check",
@@ -962,7 +978,7 @@
       "output_says_withheld": false,
       "recorder_requests": [
        {
-        "at": 1792853141.6929255,
+        "at": 1792855440.3753555,
         "bytes": 1483,
         "method": "POST",
         "operation": "query <search>",
@@ -971,7 +987,7 @@
        }
       ],
       "returncode": 1,
-      "seconds": 22.66,
+      "seconds": 8.371,
       "stderr_tail": [
        "onetaskgraph: source priv-board could not do it: the source could not be reached: GitHub GraphQL returned HTTP 503 Service Unavailable",
        "next: fix what the source named above, then run the command again."
@@ -986,13 +1002,14 @@
     "case": "reach-public",
     "destination_changed": false,
     "destination_files": 0,
+    "destination_names_private": false,
     "onevcs": "onevcs 0.56.5",
     "private_requests": 1,
     "screens": {
      "check": 9,
      "distinct_inspect_inputs": 1,
      "inspect": 26,
-     "seconds": 1.182,
+     "seconds": 0.632,
      "verdicts": [
       [
        "check",
@@ -1018,7 +1035,7 @@
       "output_says_withheld": false,
       "recorder_requests": [
        {
-        "at": 1792853068.0847378,
+        "at": 1792855411.0677037,
         "bytes": 1483,
         "method": "POST",
         "operation": "query <search>",
@@ -1027,7 +1044,7 @@
        }
       ],
       "returncode": 1,
-      "seconds": 20.799,
+      "seconds": 8.305,
       "stderr_tail": [
        "onetaskgraph: source priv-board could not do it: the source could not be reached: GitHub GraphQL returned HTTP 503 Service Unavailable",
        "next: fix what the source named above, then run the command again."
@@ -1042,13 +1059,14 @@
     "case": "reach-recopy",
     "destination_changed": true,
     "destination_files": 10,
+    "destination_names_private": false,
     "onevcs": "onevcs 0.56.5",
     "private_requests": 0,
     "screens": {
      "check": 20,
      "distinct_inspect_inputs": 1,
      "inspect": 88,
-     "seconds": 1.698,
+     "seconds": 1.243,
      "verdicts": [
       [
        "check",
@@ -1074,7 +1092,7 @@
       "output_says_withheld": false,
       "recorder_requests": [],
       "returncode": 0,
-      "seconds": 8.168,
+      "seconds": 8.463,
       "stderr_tail": [],
       "step": "project-copy"
      },
@@ -1091,7 +1109,7 @@
       "output_says_withheld": false,
       "recorder_requests": [],
       "returncode": 0,
-      "seconds": 4.437,
+      "seconds": 3.803,
       "stderr_tail": [],
       "step": "document-copy"
      },
@@ -1108,7 +1126,7 @@
       "output_says_withheld": false,
       "recorder_requests": [],
       "returncode": 0,
-      "seconds": 8.242,
+      "seconds": 6.46,
       "stderr_tail": [],
       "step": "project-recopy"
      },
@@ -1125,7 +1143,7 @@
       "output_says_withheld": false,
       "recorder_requests": [],
       "returncode": 0,
-      "seconds": 4.827,
+      "seconds": 3.617,
       "stderr_tail": [],
       "step": "document-recopy"
      }
@@ -1137,13 +1155,14 @@
     "case": "reach-recopy-unmarked",
     "destination_changed": true,
     "destination_files": 10,
+    "destination_names_private": false,
     "onevcs": "onevcs 0.56.5",
     "private_requests": 1,
     "screens": {
      "check": 19,
      "distinct_inspect_inputs": 1,
      "inspect": 70,
-     "seconds": 1.557,
+     "seconds": 1.079,
      "verdicts": [
       [
        "check",
@@ -1169,7 +1188,7 @@
       "output_says_withheld": false,
       "recorder_requests": [],
       "returncode": 0,
-      "seconds": 8.557,
+      "seconds": 7.205,
       "stderr_tail": [],
       "step": "project-copy"
      },
@@ -1186,7 +1205,7 @@
       "output_says_withheld": false,
       "recorder_requests": [],
       "returncode": 0,
-      "seconds": 4.82,
+      "seconds": 3.751,
       "stderr_tail": [],
       "step": "document-copy"
      },
@@ -1203,7 +1222,7 @@
       "output_says_withheld": false,
       "recorder_requests": [
        {
-        "at": 1792853275.1168907,
+        "at": 1792855539.4184377,
         "bytes": 1483,
         "method": "POST",
         "operation": "query <search>",
@@ -1212,7 +1231,7 @@
        }
       ],
       "returncode": 1,
-      "seconds": 9.324,
+      "seconds": 8.812,
       "stderr_tail": [
        "onetaskgraph: source priv-board could not do it: the source could not be reached: GitHub GraphQL returned HTTP 503 Service Unavailable",
        "next: fix what the source named above, then run the command again."
@@ -1227,13 +1246,14 @@
     "case": "reach-unresolvable-ref",
     "destination_changed": false,
     "destination_files": 0,
+    "destination_names_private": false,
     "onevcs": "onevcs 0.56.5",
     "private_requests": 0,
     "screens": {
      "check": 0,
      "distinct_inspect_inputs": 1,
      "inspect": 26,
-     "seconds": 0.39,
+     "seconds": 0.325,
      "verdicts": [
       [
        "inspect",
@@ -1255,7 +1275,7 @@
       "output_says_withheld": false,
       "recorder_requests": [],
       "returncode": 1,
-      "seconds": 5.915,
+      "seconds": 5.622,
       "stderr_tail": [
        "onetaskgraph: src:reach-plan/t1 names ghost:G-1, whose classification could not be established (no source of that name is configured to read it from), and source dest is not declared private; an id that might name a private item is never written where it would name it, so nothing was written",
        "next: configure that item's source and make it readable, copy it along, take the reference off, or write to a source declared private."
@@ -1270,13 +1290,14 @@
     "case": "reach-unresolvable-ref",
     "destination_changed": false,
     "destination_files": 0,
+    "destination_names_private": false,
     "onevcs": "onevcs 0.56.5",
     "private_requests": 0,
     "screens": {
      "check": 0,
      "distinct_inspect_inputs": 1,
      "inspect": 26,
-     "seconds": 0.583,
+     "seconds": 0.37,
      "verdicts": [
       [
        "inspect",
@@ -1298,7 +1319,7 @@
       "output_says_withheld": false,
       "recorder_requests": [],
       "returncode": 1,
-      "seconds": 8.068,
+      "seconds": 5.056,
       "stderr_tail": [
        "onetaskgraph: src:reach-plan/t1 names ghost:G-1, whose classification could not be established (no source of that name is configured to read it from), and source dest is not declared private; an id that might name a private item is never written where it would name it, so nothing was written",
        "next: configure that item's source and make it readable, copy it along, take the reference off, or write to a source declared private."
@@ -1313,13 +1334,14 @@
     "case": "reach-unresolvable-ref",
     "destination_changed": false,
     "destination_files": 0,
+    "destination_names_private": false,
     "onevcs": "onevcs 0.56.5",
     "private_requests": 0,
     "screens": {
      "check": 0,
      "distinct_inspect_inputs": 1,
      "inspect": 26,
-     "seconds": 1.165,
+     "seconds": 0.524,
      "verdicts": [
       [
        "inspect",
@@ -1341,7 +1363,7 @@
       "output_says_withheld": false,
       "recorder_requests": [],
       "returncode": 1,
-      "seconds": 14.768,
+      "seconds": 6.108,
       "stderr_tail": [
        "onetaskgraph: src:reach-plan/t1 names ghost:G-1, whose classification could not be established (no source of that name is configured to read it from), and source dest is not declared private; an id that might name a private item is never written where it would name it, so nothing was written",
        "next: configure that item's source and make it readable, copy it along, take the reference off, or write to a source declared private."
@@ -1353,20 +1375,20 @@
    }
   },
   "reach_runs": {
-   "reach-private-item closure": "reach-private-item-closure-20261024T144635",
-   "reach-private-item head": "reach-private-item-head-20261024T144543",
-   "reach-private-item stock": "reach-private-item-stock-20261024T144429",
-   "reach-private-ref closure": "reach-private-ref-closure-20261024T144642",
-   "reach-private-ref head": "reach-private-ref-head-20261024T144555",
-   "reach-private-ref stock": "reach-private-ref-stock-20261024T144438",
-   "reach-public closure": "reach-public-closure-20261024T144617",
-   "reach-public head": "reach-public-head-20261024T144517",
-   "reach-public stock": "reach-public-stock-20261024T144406",
-   "reach-recopy closure": "reach-recopy-closure-20261024T144705",
-   "reach-recopy-unmarked closure": "reach-recopy-unmarked-closure-20261024T144732",
-   "reach-unresolvable-ref closure": "reach-unresolvable-ref-closure-20261024T144659",
-   "reach-unresolvable-ref head": "reach-unresolvable-ref-head-20261024T144608",
-   "reach-unresolvable-ref stock": "reach-unresolvable-ref-stock-20261024T144501"
+   "reach-private-item closure": "reach-private-item-closure-20261024T152432",
+   "reach-private-item head": "reach-private-item-head-20261024T152400",
+   "reach-private-item stock": "reach-private-item-stock-20261024T152331",
+   "reach-private-ref closure": "reach-private-ref-closure-20261024T152436",
+   "reach-private-ref head": "reach-private-ref-head-20261024T152405",
+   "reach-private-ref stock": "reach-private-ref-stock-20261024T152336",
+   "reach-public closure": "reach-public-closure-20261024T152419",
+   "reach-public head": "reach-public-head-20261024T152351",
+   "reach-public stock": "reach-public-stock-20261024T152322",
+   "reach-recopy closure": "reach-recopy-closure-20261024T152456",
+   "reach-recopy-unmarked closure": "reach-recopy-unmarked-closure-20261024T152519",
+   "reach-unresolvable-ref closure": "reach-unresolvable-ref-closure-20261024T152449",
+   "reach-unresolvable-ref head": "reach-unresolvable-ref-head-20261024T152414",
+   "reach-unresolvable-ref stock": "reach-unresolvable-ref-stock-20261024T152344"
   },
   "refusal": {
    "cases": [
@@ -1498,7 +1520,7 @@
     }
    ]
   },
-  "refusal_run": "proxy-refusal-head-20261024T151006",
+  "refusal_run": "proxy-refusal-head-20261024T152559",
   "union": {
    "commands": {
     "document-copy": [
@@ -1507,7 +1529,7 @@
        "calls": 19,
        "check": 1,
        "inspect": 18,
-       "seconds": 0.012,
+       "seconds": 0.308,
        "verdict": 0,
        "visibilities": [
         "public",
@@ -1535,7 +1557,7 @@
        "calls": 2,
        "check": 1,
        "inspect": 1,
-       "seconds": 0.012,
+       "seconds": 0.035,
        "verdict": 0,
        "visibilities": [
         "public"
@@ -1547,7 +1569,7 @@
        "calls": 19,
        "check": 1,
        "inspect": 18,
-       "seconds": 0.014,
+       "seconds": 0.284,
        "verdict": 1,
        "visibilities": [
         "public",
@@ -1575,7 +1597,7 @@
        "calls": 2,
        "check": 1,
        "inspect": 1,
-       "seconds": 0.012,
+       "seconds": 0.031,
        "verdict": 1,
        "visibilities": [
         "public"
@@ -1587,7 +1609,7 @@
        "calls": 19,
        "check": 1,
        "inspect": 18,
-       "seconds": 0.012,
+       "seconds": 0.266,
        "verdict": 1,
        "visibilities": [
         "public",
@@ -1615,7 +1637,7 @@
        "calls": 2,
        "check": 1,
        "inspect": 1,
-       "seconds": 0.016,
+       "seconds": 0.027,
        "verdict": 1,
        "visibilities": [
         "public"
@@ -1627,7 +1649,7 @@
        "calls": 19,
        "check": 1,
        "inspect": 18,
-       "seconds": 0.012,
+       "seconds": 0.32,
        "verdict": 1,
        "visibilities": [
         "public",
@@ -1655,7 +1677,7 @@
        "calls": 2,
        "check": 1,
        "inspect": 1,
-       "seconds": 0.013,
+       "seconds": 0.045,
        "verdict": 1,
        "visibilities": [
         "public"
@@ -1669,7 +1691,7 @@
        "calls": 35,
        "check": 9,
        "inspect": 26,
-       "seconds": 0.134,
+       "seconds": 0.611,
        "verdict": 0,
        "visibilities": [
         "public",
@@ -1705,7 +1727,7 @@
        "calls": 2,
        "check": 1,
        "inspect": 1,
-       "seconds": 0.029,
+       "seconds": 0.031,
        "verdict": 0,
        "visibilities": [
         "public"
@@ -1717,7 +1739,7 @@
        "calls": 35,
        "check": 9,
        "inspect": 26,
-       "seconds": 0.121,
+       "seconds": 0.521,
        "verdict": 1,
        "visibilities": [
         "public",
@@ -1753,7 +1775,7 @@
        "calls": 2,
        "check": 1,
        "inspect": 1,
-       "seconds": 0.021,
+       "seconds": 0.033,
        "verdict": 1,
        "visibilities": [
         "public"
@@ -1765,7 +1787,7 @@
        "calls": 35,
        "check": 9,
        "inspect": 26,
-       "seconds": 0.133,
+       "seconds": 0.557,
        "verdict": 1,
        "visibilities": [
         "public",
@@ -1801,7 +1823,7 @@
        "calls": 2,
        "check": 1,
        "inspect": 1,
-       "seconds": 0.014,
+       "seconds": 0.028,
        "verdict": 1,
        "visibilities": [
         "public"
@@ -1813,7 +1835,7 @@
        "calls": 35,
        "check": 9,
        "inspect": 26,
-       "seconds": 0.12,
+       "seconds": 0.475,
        "verdict": 1,
        "visibilities": [
         "public",
@@ -1849,7 +1871,7 @@
        "calls": 2,
        "check": 1,
        "inspect": 1,
-       "seconds": 0.017,
+       "seconds": 0.036,
        "verdict": 1,
        "visibilities": [
         "public"
@@ -1863,13 +1885,14 @@
     "case": "reach-public",
     "destination_changed": true,
     "destination_files": 10,
+    "destination_names_private": false,
     "onevcs": "onevcs 0.56.5",
     "private_requests": 0,
     "screens": {
      "check": 10,
      "distinct_inspect_inputs": 1,
      "inspect": 44,
-     "seconds": 0.971,
+     "seconds": 0.884,
      "verdicts": [
       [
        "check",
@@ -1895,7 +1918,7 @@
       "output_says_withheld": false,
       "recorder_requests": [],
       "returncode": 0,
-      "seconds": 8.568,
+      "seconds": 9.609,
       "stderr_tail": [],
       "step": "project-copy"
      },
@@ -1912,7 +1935,7 @@
       "output_says_withheld": false,
       "recorder_requests": [],
       "returncode": 0,
-      "seconds": 4.979,
+      "seconds": 5.431,
       "stderr_tail": [],
       "step": "document-copy"
      }
@@ -1920,7 +1943,7 @@
     "tasks_unmarked": 0
    }
   },
-  "union_run": "screen-union-closure-20261024T144755"
+  "union_run": "screen-union-closure-20261024T152539"
  },
  "placement": {
   "add_outcomes": [
@@ -1938,6 +1961,9 @@
    "returned the issue's one item",
    "refused: content already exists in this project",
    "returned the issue's one item",
+   "returned the issue's one item",
+   "returned the issue's one item",
+   "refused: content already exists in this project",
    "returned the issue's one item",
    "returned the issue's one item",
    "refused: content already exists in this project",
@@ -1991,20 +2017,29 @@
    0.537,
    0.537,
    0.537,
-   0.537
+   0.537,
+   0.523,
+   0.523,
+   0.523,
+   0.523,
+   0.523,
+   0.523,
+   0.523,
+   1.837
   ],
   "idempotent": true,
   "in_create_answers": 0,
-  "issues": 54,
+  "issues": 63,
   "polls": [
    2,
    2,
    2,
    2,
    2,
-   1
+   1,
+   2
   ],
-  "samples": 6
+  "samples": 7
  },
  "prices": {
   "charged": {
@@ -2076,7 +2111,9 @@
     2,
     3,
     1,
-    1
+    1,
+    2,
+    18
    ],
    "19": [
     5,
@@ -2106,7 +2143,11 @@
     1,
     2,
     1,
-    4
+    4,
+    1,
+    5,
+    3,
+    2
    ],
    "2": [
     4,
@@ -2114,6 +2155,7 @@
     1,
     3,
     2,
+    1,
     1,
     1,
     1,
@@ -2141,7 +2183,9 @@
     1,
     11,
     1,
-    1
+    1,
+    3,
+    19
    ],
    "8": [
     1,
@@ -2152,10 +2196,11 @@
     1,
     1,
     2,
-    1
+    1,
+    4
    ]
   },
-  "parent_listing_seconds": 0.5179800987243652,
+  "parent_listing_seconds": 0.5004651546478271,
   "placement_poll_costs": [
    1
   ],

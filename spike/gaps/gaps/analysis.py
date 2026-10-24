@@ -305,7 +305,7 @@ def placement() -> Placement:
         ),
         polls=tuple(r.placement.polls for r in results),
         in_create_answers=sum(r.board_items_in_create_answers for r in results),
-        idempotent=all(r.idempotence.never_duplicated for r in results),
+        idempotent=all(r.idempotence.one_item_each_after_settling for r in results),
         add_outcomes=tuple(
             o
             for r in results
@@ -554,6 +554,8 @@ def consumed() -> Consumed:
         if not (run / "quota.json").exists():
             continue
         quota = obj(load(run / "quota.json"), str(run))
+        if "before" not in quota or "after" not in quota:
+            continue
         before = decode(Reading, quota.get("before"), f"{run}/quota.json.before")
         after = decode(Reading, quota.get("after"), f"{run}/quota.json.after")
         remaining[run.name] = (before.least.remaining, after.least.remaining)

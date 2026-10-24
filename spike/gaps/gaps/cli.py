@@ -178,41 +178,48 @@ def publish(run: Path, out: Path, files: dict[str, Json]) -> Path:
 
 
 async def live(scenario: Scenario, where: Paths, run: Path, out: Path) -> Path:
-    """One quota-gated live probe through the guarded proxy."""
+    """One quota-gated live probe through the guarded proxy.
+
+    Whatever fails after the first request, the requests the run sent are published beside the
+    failure, with whatever quota readings it took: a failed run still spent the allowance.
+    """
     credential = token()
     scratch = board.scratch_board()
     log = run / "requests.jsonl"
-    async with relay(run, allowed=(), upstream=where.upstream) as reader:
-        client = Client(reader.endpoint, credential, log=log)
-        before = await allowance.gate(client, where.quota_log, run.name, last_headers(where.runs))
-        ids = board.board_ids(
-            await client.graphql(
+    readings: dict[str, Json] = {}
+    try:
+        async with relay(run, allowed=(), upstream=where.upstream) as reader:
+            client = Client(reader.endpoint, credential, log=log)
+            before = await allowance.gate(
+                client, where.quota_log, run.name, last_headers(where.runs)
+            )
+            readings["before"] = before.to_json()
+            context = await client.graphql(
                 "CREATION_CONTEXT", board.ids_query(), board.ids_variables(scratch)
             )
-        )
-    # The read-only pricing probe is allowed no write; the placement probe the test board, the
-    # issues it creates and an interrupted run's recorded leftovers.
-    state = placement.State(where.cache / "state" / "probe-issues.json")
-    writes = (ids.repository, ids.project) if scenario is Scenario.PLACEMENT else ()
-    leftovers = tuple(state.ids) if scenario is Scenario.PLACEMENT else ()
-    async with relay(run, writes, upstream=where.upstream, issues=leftovers) as writer:
-        client = Client(writer.endpoint, credential, log=log)
-        try:
-            match scenario:
-                case Scenario.PRICING:
-                    result = (await pricing.probe(client, scratch, ids.repository)).to_json()
-                case _:
-                    result = (await placement.probe(client, ids, state)).to_json()
-        except (GitHubError, ShapeError, placement.LeftBehind) as error:
-            # A failed probe still spent requests: its log is published beside the failure.
-            after = await allowance.read(client, None)
-            quota: Json = {"before": before.to_json(), "after": after.to_json()}
-            failure: Json = {"error": str(error)}
-            publish(run, out, {"failed.json": failure, "quota.json": quota})
-            raise MeasurementFailed(f"{scenario.value} failed: {error}") from error
-        after = await allowance.read(client, None)
-    quota = {"before": before.to_json(), "after": after.to_json()}
-    return publish(run, out, {"feasibility.json": result, "quota.json": quota})
+            ids = board.board_ids(context)
+        # The read-only pricing probe is allowed no write; the placement probe the test board,
+        # the issues it creates and an interrupted run's recorded leftovers.
+        state = placement.State(where.cache / "state" / "probe-issues.json")
+        writes = (ids.repository, ids.project) if scenario is Scenario.PLACEMENT else ()
+        leftovers = tuple(state.ids) if scenario is Scenario.PLACEMENT else ()
+        async with relay(run, writes, upstream=where.upstream, issues=leftovers) as writer:
+            client = Client(writer.endpoint, credential, log=log)
+            try:
+                match scenario:
+                    case Scenario.PRICING:
+                        result = (await pricing.probe(client, scratch, ids.repository)).to_json()
+                    case _:
+                        result = (await placement.probe(client, ids, state)).to_json()
+            finally:
+                readings["after"] = (await allowance.read(client, None)).to_json()
+    except (GitHubError, ShapeError, placement.LeftBehind) as error:
+        failed: dict[str, Json] = {"failed.json": {"error": str(error)}}
+        if readings:
+            failed["quota.json"] = readings
+        publish(run, out, failed)
+        raise MeasurementFailed(f"{scenario.value} failed: {error}") from error
+    return publish(run, out, {"feasibility.json": result, "quota.json": readings})
 
 
 async def offline(scenario: Scenario, build: Build, where: Paths, run: Path, out: Path) -> Path:

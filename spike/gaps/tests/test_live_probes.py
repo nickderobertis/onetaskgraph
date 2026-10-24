@@ -9,31 +9,24 @@ from __future__ import annotations
 
 import asyncio
 import json
-import subprocess
+import time
 from pathlib import Path
 
 import pytest
 
-from gaps import allowance, board, placement
+from gaps import allowance, board, placement, proc
 from gaps.github import Client, GitHubError, RateLimit, Token
 from gaps.json_shape import ShapeError, decode, load, load_lines, obj
 from gaps.placement import AddOutcome, PlacementResult
 from gaps.pricing import Named, PricingResult
 from gaps.relay import relay
 from tests import fake_github
-from tests.conftest import PYTHON, gaps_env
+from tests.conftest import PYTHON, gaps_env, spawn
 
 
-def run_gaps(tmp_path: Path, *args: str, **env: str) -> subprocess.CompletedProcess[str]:
+def run_gaps(tmp_path: Path, *args: str, **env: str) -> proc.Completed:
     """`python -m gaps <args>` with this test's cache and logs."""
-    return subprocess.run(
-        [PYTHON, "-m", "gaps", *args],
-        env=gaps_env(tmp_path, **env),
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=300,
-    )
+    return spawn([PYTHON, "-m", "gaps", *args], gaps_env(tmp_path, **env), timeout=300)
 
 
 def test_a_placement_probe_runs_end_to_end_and_deletes_every_issue_it_created(
@@ -42,15 +35,15 @@ def test_a_placement_probe_runs_end_to_end_and_deletes_every_issue_it_created(
     """A placement probe runs end to end and deletes every issue it created."""
     stand_in, url = github
     done = run_gaps(tmp_path, "probe-placement", SPIKE_UPSTREAM=url, GH_PROJECTS_TOKEN="t0ken")
-    assert done.returncode == 0, done.stderr
-    out = Path(done.stdout.strip())
-    assert done.stdout.count("\n") == 1 and out.parent == tmp_path / "logs"
+    assert done.returncode == 0, done.err
+    out = Path(done.out.strip())
+    assert done.out.count("\n") == 1 and out.parent == tmp_path / "logs"
     result = decode(PlacementResult, load(out / "feasibility.json"), "feasibility")
     assert result.placement.placed == result.placement.issues == 9
     assert result.placement.polls == 2
     assert result.board_items_in_create_answers == 0
     assert result.children_with_parent == 8
-    assert result.idempotence.never_duplicated
+    assert result.idempotence.one_item_each_after_settling
     assert result.coalesced_write_answered == result.coalesced_write_aliases == 19
     assert result.reference_resolution_children == 8
     assert result.cleanup.deleted == 11 and result.cleanup.left == 0
@@ -66,8 +59,8 @@ def test_a_pricing_probe_prices_every_shape_the_analysis_names(
     """A pricing probe prices every shape the analysis names."""
     _, url = github
     done = run_gaps(tmp_path, "probe-alias-pricing", SPIKE_UPSTREAM=url, GH_PROJECTS_TOKEN="t0ken")
-    assert done.returncode == 0, done.stderr
-    result = decode(PricingResult, load(Path(done.stdout.strip()) / "feasibility.json"), "p")
+    assert done.returncode == 0, done.err
+    result = decode(PricingResult, load(Path(done.out.strip()) / "feasibility.json"), "p")
     priced = {p.variant for p in result.dry_runs} | {p.variant for p in result.executed}
     assert {n.value for n in Named} <= priced
     assert {p.variant for p in result.executed} <= {p.variant for p in result.dry_runs}
@@ -87,7 +80,7 @@ def test_a_wrong_environment_exits_2_naming_what_is_wrong(
     """A wrong environment exits 2 naming what is wrong."""
     done = run_gaps(tmp_path, "probe-placement", **env)
     assert done.returncode == 2
-    assert said in done.stderr and done.stdout == ""
+    assert said in done.err and done.out == ""
 
 
 def test_an_unknown_scenario_exits_2(tmp_path: Path) -> None:
@@ -125,7 +118,7 @@ def test_an_add_refused_as_already_present_is_recorded_not_failed(
     result, _, _ = asyncio.run(probe(url, tmp_path))
     assert isinstance(result, PlacementResult)
     assert result.idempotence.placed_outcome is AddOutcome.REFUSED_ALREADY_EXISTS
-    assert result.idempotence.never_duplicated
+    assert result.idempotence.one_item_each_after_settling
     assert stand_in.issues == {}
 
 
@@ -191,7 +184,7 @@ def test_a_failed_probe_publishes_its_log_and_quota_beside_the_failure_and_exits
     stand_in, url = github
     stand_in.fail_deletes = True
     done = run_gaps(tmp_path, "probe-placement", SPIKE_UPSTREAM=url, GH_PROJECTS_TOKEN="t0ken")
-    assert done.returncode == 1 and "probe issue(s) left" in done.stderr
+    assert done.returncode == 1 and "probe issue(s) left" in done.err
     [run] = (tmp_path / "logs").iterdir()
     assert {p.name for p in run.iterdir()} == {"failed.json", "quota.json", "requests.jsonl"}
     assert "left" in json.loads((run / "failed.json").read_text())["error"]
@@ -204,7 +197,7 @@ def test_output_that_would_carry_identifying_text_is_refused_and_removed(
     stand_in, url = github
     stand_in.create_error = "see https://github.com/someone/somewhere/issues/7"
     done = run_gaps(tmp_path, "probe-placement", SPIKE_UPSTREAM=url, GH_PROJECTS_TOKEN="t0ken")
-    assert done.returncode == 1 and "identifying text" in done.stderr
+    assert done.returncode == 1 and "identifying text" in done.err
     assert not (tmp_path / "logs").exists() or not any((tmp_path / "logs").iterdir())
 
 
@@ -217,13 +210,13 @@ def test_the_launcher_reads_the_credential_file_and_keeps_an_exported_credential
     token_file.write_text('GH_PROJECTS_TOKEN="from-file"\n')
     launcher = [str(Path(__file__).resolve().parents[1] / "gaps.sh"), "probe-alias-pricing"]
     base = gaps_env(tmp_path, SPIKE_UPSTREAM=url, SPIKE_TOKEN_ENV=str(token_file))
-    first = subprocess.run(launcher, env=base, capture_output=True, text=True, check=False)
-    assert first.returncode == 0, first.stderr
+    first = spawn(launcher, base)
+    assert first.returncode == 0, first.err
     assert set(stand_in.tokens) == {"Bearer from-file"}
     stand_in.tokens.clear()
     exported = base | {"GH_PROJECTS_TOKEN": "exported"}
-    second = subprocess.run(launcher, env=exported, capture_output=True, text=True, check=False)
-    assert second.returncode == 0, second.stderr
+    second = spawn(launcher, exported)
+    assert second.returncode == 0, second.err
     assert set(stand_in.tokens) == {"Bearer exported"}
 
 
@@ -306,9 +299,13 @@ def test_a_chunked_answer_is_read_whole_and_one_cut_short_is_refused(
     stand_in, url = github
     stand_in.chunked = framing
     done = run_gaps(tmp_path, "probe-alias-pricing", SPIKE_UPSTREAM=url, GH_PROJECTS_TOKEN="t0ken")
-    assert done.returncode == status, done.stderr
+    assert done.returncode == status, done.err
     if status:
-        assert "HTTP 502" in done.stderr or "upstream" in done.stderr
+        assert "HTTP 502" in done.err
+        [run] = (tmp_path / "logs").iterdir()
+        assert (run / "failed.json").exists()
+        statuses = [obj(r, "r").get("status") for r in load_lines(run / "requests.jsonl")]
+        assert 502 in statuses
 
 
 def test_a_create_answered_malformed_in_part_still_deletes_every_issue_it_named(
@@ -320,3 +317,41 @@ def test_a_create_answered_malformed_in_part_still_deletes_every_issue_it_named(
     result, state, _ = asyncio.run(probe(url, tmp_path))
     assert isinstance(result, ShapeError)
     assert len(stand_in.issues) == 1 and state.ids == []
+
+
+@pytest.mark.parametrize(
+    ("burned", "resets_in", "pauses"),
+    [(10, 60, 0), (990, 3600, 1)],
+    ids=["burn resets the bucket first", "burn exhausts it first"],
+)
+def test_under_forty_percent_the_burn_rate_decides_whether_to_pause(
+    tmp_path: Path,
+    github: tuple[fake_github.Board, str],
+    burned: int,
+    resets_in: int,
+    pauses: int,
+) -> None:
+    """Under 40%, the timing spike's rule proceeds only when the burn resets the bucket first."""
+    stand_in, url = github
+    now = time.time()
+    stand_in.reset = int(now) + resets_in
+    stand_in.remaining = stand_in.used + 1000  # 20% of 5,000
+    earlier = allowance.Bucket(5000, stand_in.used - burned, 1000 + burned, stand_in.reset)
+    previous = allowance.Reading(now - 60, earlier, (earlier,), None)
+    log = tmp_path / "allowance.jsonl"
+    log.write_text(json.dumps({"event": "reading", "reading": previous.to_json()}) + "\n")
+    slept: list[float] = []
+
+    async def recover(seconds: float) -> None:
+        """Pause, and let the bucket recover meanwhile."""
+        slept.append(seconds)
+        stand_in.remaining = stand_in.used + 4000
+
+    async def gate() -> allowance.Reading:
+        """The gate through the real relay."""
+        async with relay(tmp_path, (), upstream=url) as proxy:
+            client = Client(proxy.endpoint, Token("t0ken"))
+            return await allowance.gate(client, log, "test", None, recover)
+
+    asyncio.run(gate())
+    assert len(slept) == pauses

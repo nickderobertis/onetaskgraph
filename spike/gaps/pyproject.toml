@@ -1,0 +1,31 @@
+[project]
+name = "spike-gaps"
+version = "0.0.0"
+description = "The board-copy-gaps feasibility spike's harness: live probes, synthetic cases and their analysis."
+requires-python = ">=3.13"
+dependencies = ["graphql-core>=3.2.6"]
+
+[dependency-groups]
+dev = ["pytest>=9.0", "ruff>=0.16.4", "ty>=0.0.74"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "ANN", "D"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.isort]
+known-first-party = ["gaps", "tests"]
+known-third-party = ["quota", "sanitize", "workload"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = [".", "../harness"]
+
+[tool.ty.environment]
+python-version = "3.13"
+python = "../../.venv"
+extra-paths = ["../harness"]

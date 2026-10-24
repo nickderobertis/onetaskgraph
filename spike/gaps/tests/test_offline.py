@@ -8,16 +8,16 @@ project's `build` target, which `test` depends on).
 from __future__ import annotations
 
 import os
-import subprocess
 from pathlib import Path
 
 import pytest
 
+from gaps import proc
 from gaps.json_shape import decode, load
 from gaps.reach import ReachResult
 from gaps.refusal import RefusalResult
 from gaps.union import Plant, UnionResult
-from tests.conftest import PYTHON, REPO, gaps_env
+from tests.conftest import PYTHON, REPO, gaps_env, spawn
 
 CACHE = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
 BINARIES = {
@@ -29,24 +29,17 @@ BINARIES = {
 }
 
 
-def run_case(
-    tmp_path: Path, scenario: str, build: str, **env: str
-) -> subprocess.CompletedProcess[str]:
+def run_case(tmp_path: Path, scenario: str, build: str, **env: str) -> proc.Completed:
     """One offline scenario through the entry point."""
-    return subprocess.run(
-        [PYTHON, "-m", "gaps", scenario, "--build", build],
-        env=gaps_env(tmp_path, **(BINARIES | env)),
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=600,
+    return spawn(
+        [PYTHON, "-m", "gaps", scenario, "--build", build], gaps_env(tmp_path, **(BINARIES | env))
     )
 
 
-def result(done: subprocess.CompletedProcess[str]) -> Path:
+def result(done: proc.Completed) -> Path:
     """The published result of a run that must have succeeded."""
-    assert done.returncode == 0, done.stderr
-    return Path(done.stdout.strip()) / "result.json"
+    assert done.returncode == 0, done.err
+    return Path(done.out.strip()) / "result.json"
 
 
 def test_on_head_an_unrelated_unavailable_private_board_fails_the_public_copy(
@@ -91,6 +84,7 @@ def test_with_the_closure_a_declared_private_reference_is_withheld_and_not_repor
     assert [s.returncode for s in reach.steps] == [0, 0]
     assert [q.operation for s in reach.steps for q in s.recorder_requests] == ["query {"]
     assert not any(s.output_names_the_reference or s.output_says_withheld for s in reach.steps)
+    assert reach.destination_files == 10 and not reach.destination_names_private
 
 
 def test_union_screening_agrees_with_per_item_screening_in_every_variant(tmp_path: Path) -> None:
@@ -115,7 +109,7 @@ def test_the_proxy_refuses_every_write_to_another_destination(tmp_path: Path) ->
 def test_a_missing_binary_exits_2_naming_it(tmp_path: Path) -> None:
     """A missing binary exits 2 naming it."""
     done = run_case(tmp_path, "reach-public", "head", SPIKE_HEAD_BINARY=str(tmp_path / "absent"))
-    assert done.returncode == 2 and "no executable" in done.stderr
+    assert done.returncode == 2 and "no executable" in done.err
 
 
 def test_with_the_closure_a_recopy_over_marked_tasks_asks_no_private_source(

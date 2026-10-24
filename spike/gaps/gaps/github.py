@@ -168,6 +168,30 @@ class Client:
             with self.log.open("a", encoding="utf-8") as out:
                 out.write(json.dumps(record.to_json(), sort_keys=True) + "\n")
 
+    def _record(
+        self,
+        kind: Kind,
+        op: str,
+        start: float,
+        end: float,
+        reply: HttpReply,
+        cost: int | None,
+        errors: tuple[str, ...],
+        aliases: int,
+    ) -> RequestRecord:
+        return RequestRecord(
+            seq=len(self.records) + 1,
+            kind=kind,
+            op=op,
+            start=start,
+            end=end,
+            status=reply.status,
+            cost=cost,
+            errors=errors,
+            limits=RateLimit.from_headers(reply.headers),
+            aliases=aliases,
+        )
+
     async def graphql(
         self, op: str, document: str, variables: dict[str, Json], aliases: int = 1
     ) -> Answer:
@@ -177,27 +201,29 @@ class Client:
         start = time.time()
         reply = await self._send("POST", "/graphql", payload)
         end = time.time()
-        if reply.status not in (200, 403):
-            raise GitHubError(f"{op}: HTTP {reply.status}")
-        body = obj(parse(reply.body.decode(errors="replace"), op), op)
-        errors = tuple(graphql_error(e, op) for e in arr(body.get("errors", []), f"{op}.errors"))
-        raw_data = body.get("data")
-        if raw_data is None and not errors:
-            raise GitHubError(f"{op}: an answer with neither data nor errors")
-        data = {} if raw_data is None else obj(raw_data, f"{op}.data")
+        # Every request is recorded before anything about its answer is refused, so a request
+        # GitHub or the guard answered unusably still counts in what the run spent.
+        try:
+            if reply.status not in (200, 403):
+                raise GitHubError(f"{op}: HTTP {reply.status}")
+            body = obj(parse(reply.body.decode(errors="replace"), op), op)
+            errors = tuple(
+                graphql_error(e, op) for e in arr(body.get("errors", []), f"{op}.errors")
+            )
+            raw_data = body.get("data")
+            if raw_data is None and not errors:
+                raise GitHubError(f"{op}: an answer with neither data nor errors")
+            data = {} if raw_data is None else obj(raw_data, f"{op}.data")
+        except (GitHubError, ShapeError) as error:
+            self._keep(
+                self._record(kind, op, start, end, reply, None, (type(error).__name__,), aliases)
+            )
+            raise
         rate = data.get("rateLimit")
         cost = rate.get("cost") if isinstance(rate, dict) else None
-        record = RequestRecord(
-            seq=len(self.records) + 1,
-            kind=kind,
-            op=op,
-            start=start,
-            end=end,
-            status=reply.status,
-            cost=cost if isinstance(cost, int) and not isinstance(cost, bool) else None,
-            errors=tuple(e.type for e in errors),
-            limits=RateLimit.from_headers(reply.headers),
-            aliases=aliases,
+        stated = cost if isinstance(cost, int) and not isinstance(cost, bool) else None
+        record = self._record(
+            kind, op, start, end, reply, stated, tuple(e.type for e in errors), aliases
         )
         self._keep(record)
         return Answer(data=data, errors=errors, record=record)

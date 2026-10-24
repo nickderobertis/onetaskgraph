@@ -174,13 +174,19 @@ async def make_home(root: Path, onevcs: Path, identities: tuple[Identity, ...]) 
 
 async def inspect(home: OnevcsHome, repository: str) -> Visibility:
     """`onevcs boundary inspect` of one repository."""
+    visibility, _ = await inspect_timed(home, repository)
+    return visibility
+
+
+async def inspect_timed(home: OnevcsHome, repository: str) -> tuple[Visibility, float]:
+    """`onevcs boundary inspect` of one repository, and the seconds it took."""
     done = await proc.check(
         [home.onevcs, "boundary", "inspect", "--input", "-"],
         stdin=json.dumps({"repository": repository}).encode(),
         env={"PATH": "/usr/bin:/bin"} | home.env(),
     )
     answer = obj(parse(done.out, "inspect"), "inspect")
-    return Visibility(text(answer.get("visibility"), "inspect.visibility"))
+    return Visibility(text(answer.get("visibility"), "inspect.visibility")), done.seconds
 
 
 async def check(home: OnevcsHome, request: CheckInput) -> tuple[Verdict, float]:

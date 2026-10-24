@@ -9,38 +9,40 @@
   "implicitDependencies": [
     "onetaskgraph"
   ],
-  "//": "The board-copy-gaps feasibility spike, preserved on its branch and never landed. Its tests drive target/debug/onetaskgraph and the prototype, so `test` depends on both builds and on `bootstrap`, which makes the project's own .venv from requirements.txt. `build` builds the reachability-closure prototype the offline tests run; the live probes are never a target, because they spend the test board's shared GitHub allowance and run only from spike/gaps/gaps.sh.",
+  "//": "The board-copy-gaps feasibility spike, preserved on its branch and never landed. Its tests drive target/debug/onetaskgraph and the prototype, so `test` depends on both builds; it is a member of the root uv workspace, so every target runs in the workspace's one environment, resolved by the root uv.lock. `build` builds the reachability-closure prototype the offline tests run; the live probes are never a target, because they spend the test board's shared GitHub allowance and run only from spike/gaps/gaps.sh.",
   "targets": {
     "bootstrap": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "uv venv -q --allow-existing --python 3.13 .venv && uv pip install -q --python .venv -r requirements.txt",
+        "command": "uv sync --frozen --inexact",
         "cwd": "spike/gaps"
       },
       "cache": false,
-      "//": "Uncached: it reaches PyPI and writes spike/gaps/.venv, outside the cacheable output set."
+      "//": "Uncached: it reaches PyPI and writes the workspace .venv. Inexact, so the other members' packages stay installed."
     },
     "format-check": {
       "executor": "nx:run-commands",
       "options": {
-        "command": ".venv/bin/ruff format --check spike/gaps"
+        "command": "uv run --frozen ruff format --check .",
+        "cwd": "spike/gaps"
       }
     },
     "lint": {
       "executor": "nx:run-commands",
       "options": {
-        "command": ".venv/bin/ruff check spike/gaps"
+        "command": "uv run --frozen ruff check .",
+        "cwd": "spike/gaps"
       }
     },
     "typecheck": {
       "executor": "nx:run-commands",
+      "options": {
+        "command": "uv run --frozen ty check gaps tests",
+        "cwd": "spike/gaps"
+      },
       "dependsOn": [
         "bootstrap"
-      ],
-      "options": {
-        "command": ".venv/bin/ty check gaps tests",
-        "cwd": "spike/gaps"
-      }
+      ]
     },
     "build": {
       "executor": "nx:run-commands",
@@ -58,7 +60,7 @@
         "bootstrap"
       ],
       "options": {
-        "command": ".venv/bin/pytest -q",
+        "command": "uv run --frozen pytest -q",
         "cwd": "spike/gaps"
       }
     }

@@ -5,11 +5,12 @@
 An async forwarder on loopback: it answers `POST /graphql` and `GET /rate_limit` by forwarding
 them to GitHub (or, for the tests, to the loopback stand-in `--upstream` names) and refuses
 everything else locally — every other path, every upload, every `CONNECT` tunnel. A mutation
-passes only when every field it calls is one the probes send, every repository or project id
-it names is `--allow`ed, and every issue it names is one a `createIssue` this proxy forwarded
-answered, or an `--allow-issue` leftover of an interrupted probe; with no `--allow`, no mutation
-passes. A board item a mutation names must be one an answer listed under such an issue. Each
-refusal is one line of `L`: the reason, never the request.
+passes only when every field it calls is one the probes send — the document parsed by
+graphql-core, as GitHub parses it — every repository or project id it names is `--allow`ed,
+and every issue it names is one a `createIssue` this proxy forwarded answered, or an
+`--allow-issue` leftover of an interrupted probe; with no `--allow`, no mutation passes. A
+board item a mutation names must be one an answer listed under such an issue. Each refusal is
+one line of `L`: the reason, never the request.
 """
 
 from __future__ import annotations
@@ -17,23 +18,21 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import re
 import ssl
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
 
+import graphql
+
 from gaps.github import GitHubError, split_reply
 from gaps.json_shape import Json, ShapeError, obj, parse, text
 
-GUARDED = re.compile(r"\b(repositoryId|projectId|projectV2Ids)\s*:\s*")
-ISSUES = re.compile(r"\b(issueId|blockingIssueId|contentId|subIssueId|parentIssueId)\s*:\s*")
-ITEMS = re.compile(r"\b(itemId)\s*:\s*")
-COMMENT = re.compile(r"#[^\n]*")
-STRING = re.compile(r'"(?:[^"\\]|\\.)*"')
-MUTATION = re.compile(r"\bmutation\b")
-LITERAL = re.compile(r'"((?:[^"\\]|\\.)*)"')
-MUTATION_FIELD = re.compile(r"(?:\w+\s*:\s*)?(\w+)\s*\(\s*input\s*:")
+DESTINATION_KEYS = frozenset({"repositoryId", "projectId", "projectV2Ids"})
+ISSUE_KEYS = frozenset(
+    {"issueId", "blockingIssueId", "contentId", "subIssueId", "parentIssueId", "id"}
+)
+ITEM_KEYS = frozenset({"itemId"})
 PROBE_MUTATIONS = frozenset(
     {
         "createIssue",
@@ -43,96 +42,104 @@ PROBE_MUTATIONS = frozenset(
         "deleteIssue",
     }
 )
-DESTINATION_KEYS = frozenset({"repositoryId", "projectId", "projectV2Ids"})
-ISSUE_KEYS = frozenset({"issueId", "blockingIssueId", "contentId", "subIssueId", "parentIssueId"})
-ITEM_KEYS = frozenset({"itemId"})
 GITHUB = "https://api.github.com"
 LOOPBACK = frozenset({"127.0.0.1", "localhost"})
 MAX_BODY = 4 * 1024 * 1024
 TIMEOUT = 120.0
-UNREADABLE = "<unreadable>"
 
 
-def _value_ids(value: Json) -> set[str]:
-    match value:
-        case list():
-            return {str(v) for v in value}
-        case None:
-            return set()
-        case _:
-            return {str(value)}
+class Unreadable(ValueError):
+    """A request the guard cannot read as one GraphQL operation."""
 
 
-def _named(pattern: re.Pattern[str], query: str, variables: dict[str, Json]) -> set[str]:
-    """Every id the fields `pattern` matches name in `query`, however written."""
-    names: set[str] = set()
-    for match in pattern.finditer(query):
-        rest = query[match.end() :]
-        if rest.startswith("$"):
-            variable = re.match(r"\$(\w+)", rest)
-            names |= _value_ids(variables.get(variable.group(1)) if variable else None)
-        elif rest.startswith("["):
-            end = rest.find("]")
-            if end < 0:
-                names.add(UNREADABLE)
-                continue
-            for entry in (e.strip() for e in rest[1:end].split(",") if e.strip()):
-                literal = LITERAL.fullmatch(entry)
-                if entry.startswith("$"):
-                    names |= _value_ids(variables.get(entry[1:]))
-                elif literal is not None:
-                    names.add(literal.group(1))
-                else:
-                    names.add(UNREADABLE)
-        elif (literal := LITERAL.match(rest)) is not None:
-            names.add(literal.group(1))
-        else:
-            names.add(UNREADABLE)
-    return names
+@dataclass(frozen=True)
+class Operation:
+    """What one GraphQL request would execute, read by GitHub's own grammar."""
+
+    mutation: bool
+    fields: tuple[tuple[str, str], ...]  # (alias, field) of every top-level field
+    destinations: frozenset[str]
+    issues: frozenset[str]
+    items: frozenset[str]
 
 
-def guarded_values(value: Json, keys: frozenset[str]) -> set[str]:
-    """Every value held under one of `keys`, at any depth of a variables object."""
+def _keyed(value: object, keys: frozenset[str]) -> set[str]:
+    """Every value held under one of `keys`, at any depth of a resolved argument value."""
     found: set[str] = set()
     match value:
         case dict():
             for key, inner in value.items():
-                found |= _value_ids(inner) if key in keys else guarded_values(inner, keys)
+                if key in keys:
+                    found |= {str(v) for v in inner} if isinstance(inner, list) else {str(inner)}
+                else:
+                    found |= _keyed(inner, keys)
         case list():
             for inner in value:
-                found |= guarded_values(inner, keys)
+                found |= _keyed(inner, keys)
         case _:
             pass
     return found
 
 
-def named_ids(query: str, variables: dict[str, Json]) -> set[str]:
-    """Every repository or project id a mutation names, however it is written."""
-    return _named(GUARDED, query, variables) | guarded_values(variables, DESTINATION_KEYS)
+def operation(query: str, variables: dict[str, Json], name: str | None) -> Operation:
+    """The operation a request executes: its kind, its fields and every id its arguments name.
 
-
-def named_issues(query: str, variables: dict[str, Json]) -> set[str]:
-    """Every issue id a mutation names, however it is written.
-
-    As the issue it writes, the issue blocking it, its parent, its sub-issue, or the content it
-    adds to a board.
+    The document is parsed by graphql-core, so comments, strings and block strings read as
+    GitHub reads them; a document defining several operations needs `operationName`; every
+    argument is resolved with the variables sent and each variable's declared default.
     """
-    return _named(ISSUES, query, variables) | guarded_values(variables, ISSUE_KEYS)
+    try:
+        document = graphql.parse(query)
+    except graphql.GraphQLError as error:
+        raise Unreadable(f"not a GraphQL document: {error.message}") from error
+    operations = [d for d in document.definitions if isinstance(d, graphql.OperationDefinitionNode)]
+    if name is not None:
+        operations = [o for o in operations if o.name is not None and o.name.value == name]
+    if len(operations) != 1:
+        raise Unreadable(f"{len(operations)} operations to choose from")
+    chosen = operations[0]
+    resolved: dict[str, object] = {}
+    for definition in chosen.variable_definitions or ():
+        variable = definition.variable.name.value
+        if variable in variables:
+            resolved[variable] = variables[variable]
+        elif definition.default_value is not None:
+            resolved[variable] = graphql.value_from_ast_untyped(definition.default_value)
+    fields: list[tuple[str, str]] = []
+    arguments: list[object] = []
+    for selection in chosen.selection_set.selections:
+        if not isinstance(selection, graphql.FieldNode):
+            raise Unreadable("a fragment at the root of an operation")
+        alias = selection.alias.value if selection.alias else selection.name.value
+        fields.append((alias, selection.name.value))
+        for argument in selection.arguments or ():
+            arguments.append(graphql.value_from_ast_untyped(argument.value, resolved))
+    return Operation(
+        mutation=chosen.operation is graphql.OperationType.MUTATION,
+        fields=tuple(fields),
+        destinations=frozenset(_keyed(arguments, DESTINATION_KEYS)),
+        issues=frozenset(_keyed(arguments, ISSUE_KEYS)),
+        items=frozenset(_keyed(arguments, ITEM_KEYS)),
+    )
 
 
-def named_items(query: str, variables: dict[str, Json]) -> set[str]:
-    """Every board item id a mutation names, however it is written."""
-    return _named(ITEMS, query, variables) | guarded_values(variables, ITEM_KEYS)
-
-
-def is_mutation(query: str) -> bool:
-    """Whether a document defines a mutation anywhere, comments and string values aside."""
-    return MUTATION.search(STRING.sub('""', COMMENT.sub("", query))) is not None
+def read_payload(body: bytes) -> Operation:
+    """A request body as the operation it executes."""
+    try:
+        payload = obj(parse(body.decode(errors="replace"), "request"), "request")
+        query = text(payload.get("query"), "request.query")
+        variables = obj(payload.get("variables") or {}, "request.variables")
+        name = payload.get("operationName")
+        if name is not None:
+            name = text(name, "request.operationName")
+    except ShapeError as error:
+        raise Unreadable(str(error)) from error
+    return operation(query, variables, name)
 
 
 @dataclass
 class Guard:
-    """What this proxy lets through, and the issues it has seen created."""
+    """What this proxy lets through, and the issues and items it has seen this run own."""
 
     destinations: frozenset[str]
     issues: set[str] = field(default_factory=set)
@@ -145,23 +152,20 @@ class Guard:
         if (method, path) != ("POST", "/graphql"):
             return f"this run sends no {method} {path.split('?')[0]}"
         try:
-            payload = obj(parse(body.decode(errors="replace"), "request"), "request")
-            query = text(payload.get("query"), "request.query")
-            variables = obj(payload.get("variables") or {}, "request.variables")
-        except ShapeError:
-            return "an unreadable request"
-        if not is_mutation(query):
+            executed = read_payload(body)
+        except Unreadable as error:
+            return f"an unreadable request ({error})"
+        if not executed.mutation:
             return None
         if not self.destinations:
             return "this run sends no writes"
-        fields = set(MUTATION_FIELD.findall(query))
-        if not fields or fields - PROBE_MUTATIONS:
+        if {f for _, f in executed.fields} - PROBE_MUTATIONS:
             return "a mutation this spike's probes never send"
-        if named_ids(query, variables) - self.destinations:
+        if executed.destinations - self.destinations:
             return "it names a repository or project outside the test board"
-        if named_issues(query, variables) - self.issues:
+        if executed.issues - self.issues:
             return "it names an issue this run did not create"
-        if named_items(query, variables) - self.items:
+        if executed.items - self.items:
             return "it names a board item of an issue this run did not create"
         return None
 
@@ -173,20 +177,20 @@ class Guard:
         this run owns.
         """
         try:
-            query = text(
-                obj(parse(request.decode(errors="replace"), "request"), "r").get("query"), "q"
-            )
-            answer = obj(parse(body.decode(errors="replace"), "answer"), "answer")
-            data = answer.get("data")
-        except ShapeError:
+            executed = read_payload(request)
+            data = obj(parse(body.decode(errors="replace"), "answer"), "answer").get("data")
+        except (Unreadable, ShapeError):
             return
         if not isinstance(data, dict):
             return
-        if is_mutation(query) and "createIssue" in MUTATION_FIELD.findall(query):
-            for value in data.values():
-                issue = value.get("issue") if isinstance(value, dict) else None
-                if isinstance(issue, dict) and isinstance(issue.get("id"), str):
-                    self.issues.add(text(issue.get("id"), "issue.id"))
+        if executed.mutation:
+            for alias, name in executed.fields:
+                answer = data.get(alias)
+                issue = answer.get("issue") if isinstance(answer, dict) else None
+                if name == "createIssue" and isinstance(issue, dict):
+                    found = issue.get("id")
+                    if isinstance(found, str):
+                        self.issues.add(found)
         for value in data.values():
             if isinstance(value, dict) and value.get("id") in self.issues:
                 connection = value.get("projectItems")

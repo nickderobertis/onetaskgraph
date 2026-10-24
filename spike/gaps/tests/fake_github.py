@@ -58,6 +58,7 @@ class Board:
     malformed_create: int | None = None
     create_error: str | None = None
     remaining: int = 4000
+    reset: int = 4102444800
     rest_remaining: int | None = None
     tokens: list[str] = field(default_factory=list)
     issues: dict[str, Issue] = field(default_factory=dict)
@@ -72,7 +73,7 @@ class Board:
             "x-ratelimit-limit": "5000",
             "x-ratelimit-remaining": str(self.remaining - self.used),
             "x-ratelimit-used": str(self.used),
-            "x-ratelimit-reset": "4102444800",
+            "x-ratelimit-reset": str(self.reset),
             "x-ratelimit-resource": "graphql",
         }
 
@@ -107,7 +108,7 @@ class Board:
             case "dry run":
                 return {"data": {"rateLimit": {"cost": 1}}}
             case "SpikeRateLimit":
-                reset = datetime.datetime(2100, 1, 1, tzinfo=datetime.UTC).isoformat()
+                reset = datetime.datetime.fromtimestamp(self.reset, datetime.UTC).isoformat()
                 rate = {"limit": 5000, "used": self.used, "remaining": self.remaining - self.used}
                 return {"data": {"rateLimit": rate | {"resetAt": reset.replace("+00:00", "Z")}}}
             case "CREATION_CONTEXT":
@@ -256,7 +257,7 @@ def serve(board: Board) -> tuple[ThreadingHTTPServer, str]:
                 if remaining is None:
                     remaining = board.remaining - board.used
                 bucket = {"limit": 5000, "used": 5000 - remaining, "remaining": remaining}
-                bucket["reset"] = 4102444800
+                bucket["reset"] = board.reset
                 self._send(200, {"resources": {"core": bucket, "graphql": bucket}})
 
         def do_POST(self) -> None:

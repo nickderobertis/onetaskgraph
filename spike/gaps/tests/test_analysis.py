@@ -9,13 +9,12 @@ from __future__ import annotations
 
 import asyncio
 import json
-import subprocess
 from pathlib import Path
 
 from gaps import analysis, budgets, report
 from gaps.budgets import Unit
 from gaps.json_shape import encode
-from tests.conftest import PYTHON, gaps_env
+from tests.conftest import PYTHON, gaps_env, spawn
 
 PLAN_CHECKOUT = Path.home() / "ai-orchestrator"
 ONETASKGRAPH = PLAN_CHECKOUT / ".venv/bin/onetaskgraph"
@@ -62,21 +61,13 @@ def test_the_report_command_writes_the_answers_and_refuses_an_unreadable_lint_re
     """The report command writes the answers and refuses an unreadable lint record."""
     out = tmp_path / "answers.json"
     command = [PYTHON, "-m", "gaps.report", "--answers", str(out)]
-    done = subprocess.run(
-        command, env=gaps_env(tmp_path), capture_output=True, text=True, check=False
-    )
-    assert done.returncode == 0, done.stderr
+    done = spawn(command, gaps_env(tmp_path))
+    assert done.returncode == 0, done.err
     assert len(json.loads(out.read_text())["candidates"]) == 16
     broken = tmp_path / "lint.json"
     broken.write_text('{"id": 1}')
-    refused = subprocess.run(
-        [*command, "--lint", str(broken)],
-        env=gaps_env(tmp_path),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert refused.returncode == 1 and "lint.json" in refused.stderr
+    refused = spawn([*command, "--lint", str(broken)], gaps_env(tmp_path))
+    assert refused.returncode == 1 and "lint.json" in refused.err
 
 
 def last_ms(run: str, op: str, count: int) -> float:

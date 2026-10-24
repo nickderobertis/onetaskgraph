@@ -10,8 +10,10 @@ from __future__ import annotations
 import graphql
 import pytest
 
-from gaps import allowance, board, documents, placement
+from gaps import allowance, analysis, board, documents, placement
 from gaps.documents import Doc
+from gaps.json_shape import decode, load, obj
+from gaps.pricing import PricingResult
 from tests.conftest import PACKAGE_ROOT, REPO
 
 PINNED = REPO / "crates/onetaskgraph-github-projects/tests/fixtures/schema.graphql"
@@ -80,7 +82,7 @@ def test_the_extension_adds_to_the_pinned_schema_and_redefines_none_of_it() -> N
         f.name.value
         for d in added
         if isinstance(d, graphql.ObjectTypeExtensionNode)
-        for f in d.fields
+        for f in d.fields or ()
     }
     assert extended == ["Query"] and not new_fields & query_fields
 
@@ -89,3 +91,30 @@ def test_an_invalid_document_is_caught() -> None:
     """A document naming a field the schema lacks is refused, so the gate can fail."""
     errors = graphql.validate(schema(), graphql.parse('query { user(login: "x") { id } }'), RULES)
     assert errors
+
+
+def test_the_extension_declares_only_what_github_itself_answered() -> None:
+    """The extension declares only rate-limit fields GitHub answered in the committed live runs.
+
+    Every live probe records which fields GitHub's own `rateLimit` answered, and the pricing
+    probe's dry runs each read `cost`; the extension may declare nothing beyond those.
+    """
+    answered: set[str] = set()
+    for run in analysis.runs("probe-"):
+        quota = run / "quota.json"
+        if quota.exists():
+            for reading in obj(load(quota), str(quota)).values():
+                answered |= set(decode(allowance.Reading, reading, str(quota)).answered_fields)
+    pricing = decode(
+        PricingResult, load(analysis.latest("probe-alias-pricing-") / "feasibility.json"), "p"
+    )
+    if pricing.dry_runs:
+        answered.add("cost")
+    added = graphql.parse(EXTENSION.read_text()).definitions
+    rate_limit = next(
+        d
+        for d in added
+        if isinstance(d, graphql.ObjectTypeDefinitionNode) and d.name.value == "RateLimit"
+    )
+    declared = {f.name.value for f in rate_limit.fields or ()}
+    assert declared and declared <= answered, declared - answered
