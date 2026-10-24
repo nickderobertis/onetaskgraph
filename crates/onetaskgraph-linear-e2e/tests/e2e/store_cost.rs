@@ -2,8 +2,9 @@
 //! workspaces of 60 and of 600 issues; and the engine's rate-limit memory over a Linear source.
 //!
 //! Every read is the compiled binary on a fresh process, as one command line is, except the
-//! re-read of a held task before its source's reset, which drives `onetaskgraph-core`'s own
-//! `Engine`: the memory it proves is held for the life of one engine. The `measure_*` journey
+//! rate-limit memory's journeys, which drive `onetaskgraph-core`'s own `Engine` — built from a
+//! configuration document as the binary builds one, on a clock the journey moves by hand where
+//! a reset has to pass — because the memory they prove is held for the life of one engine. The `measure_*` journey
 //! records `linear-requests-per-dependency-read` — the most any one source was sent in any case,
 //! at either scale — and `budget_runner::report` hands it to onebudgetspec, which alone judges it.
 
@@ -708,5 +709,186 @@ fn a_linear_rate_limit_naming_no_reset_holds_nothing_back() {
                 assert!(!said.contains("not sent"), "{said}");
                 assert_eq!(*sent.lock().unwrap(), asked, "every call reached Linear");
             }
+        });
+}
+
+/// A clock that moves only when a journey moves it, and whose every wait moves it at once.
+#[derive(Default)]
+struct Manual(std::sync::atomic::AtomicU64);
+
+impl Manual {
+    fn advance(&self, seconds: u64) {
+        self.0.fetch_add(
+            seconds.saturating_mul(1_000),
+            std::sync::atomic::Ordering::SeqCst,
+        );
+    }
+}
+
+impl onetaskgraph_plugin_api::Clock for Manual {
+    fn now(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(self.0.load(std::sync::atomic::Ordering::SeqCst))
+    }
+    fn sleep(
+        &self,
+        duration: std::time::Duration,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
+        self.0.fetch_add(
+            u64::try_from(duration.as_millis()).unwrap_or(u64::MAX),
+            std::sync::atomic::Ordering::SeqCst,
+        );
+        Box::pin(async {})
+    }
+}
+
+/// An engine built from a configuration document, as the binary builds one, over a loopback
+/// Linear workspace holding `L-1`, `L-2` and `L-3`, on a clock the journey moves by hand.
+fn held_engine() -> (Sandbox, LinearWorkspace, Engine, Arc<Manual>) {
+    let sandbox = Sandbox::new();
+    let held = ["L-1", "L-2", "L-3"]
+        .iter()
+        .map(|id| issue(id, json!({})))
+        .collect();
+    let (config, linear) = workspace(&sandbox, "org-work", held, 3);
+    sandbox.project_document(
+        &serde_json::to_string_pretty(&json!({"sources": {
+            "linear": {"plugin": "linear", "config": config}}}))
+        .expect("a document"),
+    );
+    let environment = onetaskgraph_core::Environment::from_pairs([
+        (
+            "XDG_CONFIG_HOME",
+            sandbox.config_home().to_string_lossy().into_owned(),
+        ),
+        (
+            "XDG_CACHE_HOME",
+            sandbox.subdirectory("cache").to_string_lossy().into_owned(),
+        ),
+    ]);
+    let loaded = onetaskgraph_core::config::load(
+        &sandbox.project(),
+        &environment,
+        &onetaskgraph_core::config::Layer::default(),
+    )
+    .expect("the configuration loads");
+    let clock = Arc::new(Manual::default());
+    let shared: onetaskgraph_plugin_api::SharedClock = clock.clone();
+    let engine = Engine::build_with_clock(&loaded.config, &loaded.secrets, &shared);
+    (sandbox, linear, engine, clock)
+}
+
+/// The reset a rate-limited answer names, or `None` for an answer that is not one; and
+/// whether the engine refused it without sending it.
+fn held_back(errors: &[onetaskgraph_core::SourceFailure]) -> Option<(Option<u64>, bool)> {
+    match &errors.first()?.error {
+        SourceError::RateLimited {
+            retry_after_seconds,
+            message,
+        } => Some((
+            *retry_after_seconds,
+            message.as_deref().unwrap_or_default().contains("not sent"),
+        )),
+        _ => None,
+    }
+}
+
+/// Through the engine the binary builds, on a hand-moved clock, over loopback Linear: a rate
+/// limit Linear answers inside a batched read starts the hold, keeping the later of the two
+/// resets that batch is answered with; a later call sends nothing and is told the seconds
+/// left; ending the command during the hold reaches the source and is not refused; and the
+/// first call at the reset reaches Linear and is answered.
+#[test]
+fn a_rate_limit_inside_a_batch_holds_linear_off_until_its_later_reset() {
+    let (_sandbox, linear, engine, clock) = held_engine();
+    let id = |native: &str| -> GlobalId { format!("linear:{native}").parse().unwrap() };
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            linear.rate_limit(&[None, Some(30), Some(10)]);
+            let batch = engine
+                .task_details(&[id("L-1"), id("L-2"), id("L-3")], false)
+                .await;
+            assert_eq!(batch.details[0].response.items.len(), 1, "L-1 is answered");
+            assert_eq!(
+                held_back(&batch.details[1].response.errors),
+                Some((Some(30), false)),
+                "Linear refused L-2, naming 30 seconds"
+            );
+            assert_eq!(
+                held_back(&batch.details[2].response.errors),
+                Some((Some(10), false)),
+                "and L-3, naming 10"
+            );
+            let sent = linear.served().len();
+            assert_eq!(sent, 3, "the batch sent each of its reads");
+
+            clock.advance(15);
+            let later = engine.task(&id("L-1")).await.expect("an answer");
+            assert_eq!(
+                held_back(&later.errors),
+                Some((Some(15), true)),
+                "refused here, with the later reset's 15 seconds left"
+            );
+            assert_eq!(
+                linear.served().len(),
+                sent,
+                "a call during the hold sends nothing"
+            );
+
+            engine
+                .end_command()
+                .await
+                .expect("ending a command during the hold reaches the source");
+            assert_eq!(linear.served().len(), sent, "and sends nothing either");
+
+            clock.advance(15);
+            let after = engine.task(&id("L-1")).await.expect("an answer");
+            assert!(after.errors.is_empty(), "{:?}", after.errors);
+            assert_eq!(after.items.len(), 1, "answered at the reset");
+            assert_eq!(
+                linear.served().len(),
+                sent + 1,
+                "the call at the reset reached Linear"
+            );
+        });
+}
+
+/// Through the same engine: a rate limit naming a wait of nothing holds nothing back, and one
+/// naming a reset past what the clock can represent holds the source off — far past any time
+/// the clock is moved to — without overflowing.
+#[test]
+fn a_reset_of_nothing_holds_nothing_and_an_oversized_one_holds_without_overflowing() {
+    let (_sandbox, linear, engine, clock) = held_engine();
+    let id: GlobalId = "linear:L-1".parse().unwrap();
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            linear.rate_limit(&[Some(0)]);
+            let refused = engine.task(&id).await.expect("an answer");
+            assert_eq!(held_back(&refused.errors), Some((Some(0), false)));
+            let answered = engine.task(&id).await.expect("an answer");
+            assert_eq!(
+                answered.items.len(),
+                1,
+                "a wait of nothing holds nothing back"
+            );
+            assert_eq!(linear.served().len(), 2);
+
+            // An hour into the engine's life, so the reset lies past what the clock's
+            // `Duration` can hold, not merely at its edge.
+            clock.advance(3_600);
+            linear.rate_limit(&[Some(u64::MAX)]);
+            let refused = engine.task(&id).await.expect("an answer");
+            assert_eq!(held_back(&refused.errors), Some((Some(u64::MAX), false)));
+            clock.advance(10 * 365 * 24 * 3_600);
+            let later = engine.task(&id).await.expect("an answer");
+            let (left, unsent) = held_back(&later.errors).expect("still held off");
+            assert!(unsent, "refused here");
+            assert!(left.is_some_and(|left| left > 1_000_000_000), "{left:?}");
+            assert_eq!(linear.served().len(), 3, "nothing sent ten years on");
         });
 }

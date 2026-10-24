@@ -85,7 +85,6 @@ impl HeldOff {
         })
     }
 
-    // llmlint: ignore-block[changed_behavior_has_e2e] The wrapper's own branches over its inner source — a hold started inside a batch, a wait of nothing, a reset past the clock's range, the later of two resets, end_command during a hold — are decided independent of any backend, and the unit tests below drive this real wrapper over a scripted source and a manual clock, the only deterministic way to reach a u64::MAX reset or overlapping resets without real-time waits. The journeys through both plugins (store_cost.rs in each e2e crate) cover the hold's start, the refusal of reads, writes and batches, a cache hit, recovery after the reset and a limit naming no reset.
     /// A batched read, refused for every id it names before the reset and each answer noted
     /// after it.
     async fn each_noted(
@@ -123,7 +122,6 @@ impl HeldOff {
         }
         answered
     }
-    // llmlint: ignore-end[changed_behavior_has_e2e]
 }
 
 #[async_trait::async_trait]
@@ -751,11 +749,9 @@ impl TaskSource for HeldOff {
         self.noted(self.inner.metering().await)
     }
 
-    // llmlint: ignore-block[changed_behavior_has_e2e] The wrapper's own branches over its inner source — a hold started inside a batch, a wait of nothing, a reset past the clock's range, the later of two resets, end_command during a hold — are decided independent of any backend, and the unit tests below drive this real wrapper over a scripted source and a manual clock, the only deterministic way to reach a u64::MAX reset or overlapping resets without real-time waits. The journeys through both plugins (store_cost.rs in each e2e crate) cover the hold's start, the refusal of reads, writes and batches, a cache hit, recovery after the reset and a limit naming no reset.
     async fn end_command(&self) -> Result<(), SourceError> {
         self.inner.end_command().await
     }
-    // llmlint: ignore-end[changed_behavior_has_e2e]
 
     async fn visibility(&self, target: &WriteTarget<'_>) -> Result<Visibility, SourceError> {
         self.refused()?;

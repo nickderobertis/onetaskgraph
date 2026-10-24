@@ -5424,6 +5424,7 @@ pub fn linear_workspace_failing(
         answers: Arc::new(Mutex::new(Vec::new())),
         hooks: Arc::new(Mutex::new(Vec::new())),
         bends: Arc::new(Mutex::new(Vec::new())),
+        limits: Arc::new(Mutex::new(std::collections::VecDeque::new())),
     };
     let config = linear_serve(sandbox, workspace.clone(), None, failing);
     (config, workspace)
@@ -5548,9 +5549,19 @@ pub struct LinearWorkspace {
     answers: Arc<Mutex<Vec<Value>>>,
     hooks: Arc<Mutex<Vec<LinearHook>>>,
     bends: Arc<Mutex<Vec<LinearBend>>>,
+    /// How each of the next requests is answered, in order: `Some(wait)` refused `429` naming
+    /// a reset `wait` seconds ahead, `None` answered as usual.
+    limits: Arc<Mutex<std::collections::VecDeque<Option<u64>>>>,
 }
 
 impl LinearWorkspace {
+    /// Answer each of the next requests by `script`, in order: `Some(wait)` is refused
+    /// `429 Too Many Requests` with `retry-after: wait`, as Linear's limiter answers, and `None`
+    /// is answered as it would have been. Every request after the script is answered as usual.
+    pub fn rate_limit(&self, script: &[Option<u64>]) {
+        self.limits.lock().unwrap().extend(script.iter().copied());
+    }
+
     /// Have this workspace rewrite its answer to each of the next `times` requests `matches`
     /// holds of through `bend`, given that request's variables and the `data` it would have
     /// answered — a Linear whose connections answer as no correct one does.
@@ -6051,6 +6062,7 @@ fn linear_server_over(
         answers: Arc::new(Mutex::new(Vec::new())),
         hooks: Arc::new(Mutex::new(Vec::new())),
         bends: Arc::new(Mutex::new(Vec::new())),
+        limits: Arc::new(Mutex::new(std::collections::VecDeque::new())),
     };
     linear_serve(sandbox, workspace, recorded, failing)
 }
@@ -6183,6 +6195,19 @@ fn linear_serve(
                     .map(|at| pending.remove(at))
                     .is_some()
             };
+            let limited = workspace.limits.lock().unwrap().pop_front().flatten();
+            if let Some(wait) = limited {
+                let body = json!({"errors":[{"message":"rate limited",
+                                             "extensions":{"code":"RATELIMITED"}}]});
+                let text = body.to_string();
+                answers.lock().unwrap().push(body);
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nretry-after: {wait}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}",
+                    text.len()
+                );
+                continue;
+            }
             if refused {
                 let text = json!({"errors":[{"message":LINEAR_REFUSED_WRITE}]}).to_string();
                 answers
