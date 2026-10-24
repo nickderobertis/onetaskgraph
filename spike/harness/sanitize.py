@@ -261,12 +261,24 @@ def write(run: Path, out: Path) -> Path:
             if re.fullmatch(r"project|task t[1-8]|document", label)
         }
         (out / "workload.json").write_text(json.dumps(workload, indent=1) + "\n")
-    for name in ("probes.json", "cleanup.json"):
+    for name in ("probes.json", "cleanup.json", "feasibility.json"):
         if (run / name).exists():
             (out / name).write_text(
                 json.dumps(redact(json.loads((run / name).read_text())), indent=1)
                 + "\n"
             )
+    found = leaks(out)
+    if found:
+        raise SystemExit(f"sanitize: {out} would carry identifying text: {found[:5]}")
+    return out
+
+
+def write_offline(run: Path, result: dict, out: Path) -> Path:
+    """An offline case's result, its sandbox paths written as `<run>`. Everything in it is
+    synthetic — the identities, the plan and the private doubles — so nothing else is cut."""
+    out.mkdir(parents=True, exist_ok=True)
+    text = json.dumps(result, indent=1, sort_keys=True).replace(str(run), "<run>")
+    (out / "result.json").write_text(text + "\n")
     found = leaks(out)
     if found:
         raise SystemExit(f"sanitize: {out} would carry identifying text: {found[:5]}")

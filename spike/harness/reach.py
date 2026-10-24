@@ -28,7 +28,6 @@ import hashlib
 import http.server
 import json
 import os
-import shutil
 import subprocess
 import threading
 import time
@@ -37,7 +36,12 @@ from pathlib import Path
 import workload
 
 HERE = Path(__file__).resolve().parent
-CASES = ("reach-public", "reach-private-item", "reach-private-ref", "reach-unresolvable-ref")
+CASES = (
+    "reach-public",
+    "reach-private-item",
+    "reach-private-ref",
+    "reach-unresolvable-ref",
+)
 PUBLIC = ("synthco", "public-widgets")
 PRIVATE = ("synthco", "secret-gadgets")
 PLAN = "reach-plan"
@@ -76,7 +80,9 @@ class Recorder:
                         "host": self.headers.get("Host"),
                         "operation": operation,
                         # Synthetic configuration only: the query's head names what was asked.
-                        "query_head": " ".join(body.decode(errors="replace").split())[:200],
+                        "query_head": " ".join(body.decode(errors="replace").split())[
+                            :200
+                        ],
                         "bytes": len(body),
                     }
                 )
@@ -117,10 +123,20 @@ def onevcs_home(root: Path, onevcs: Path) -> Path:
         checkout.mkdir(parents=True)
         (checkout / "README.md").write_text(f"# {name}\n")
         git = ["git", "-c", "user.name=Synthetic", "-c", "user.email=s@example.invalid"]
-        for args in (["init", "-q", "-b", "main"], ["add", "-A"], ["commit", "-qm", "synthetic"]):
+        for args in (
+            ["init", "-q", "-b", "main"],
+            ["add", "-A"],
+            ["commit", "-qm", "synthetic"],
+        ):
             subprocess.run(git + args, cwd=checkout, check=True, capture_output=True)
         subprocess.run(
-            [onevcs, "register", checkout, "--origin", f"https://github.com/{owner}/{name}.git"],
+            [
+                onevcs,
+                "register",
+                checkout,
+                "--origin",
+                f"https://github.com/{owner}/{name}.git",
+            ],
             env=dict(os.environ, ONEVCS_HOME=str(home)),
             check=True,
             capture_output=True,
@@ -151,11 +167,15 @@ def write_plan(root: Path, case: str) -> None:
         text = text.replace("\nstatus:", '\nclassification: "private"\nstatus:', 1)
     elif case == "reach-private-ref":
         text = text.replace(
-            '\nstatus:', '\ndepends_on: [{"id": "priv-linear:SYN-1", "item": "task"}]\nstatus:', 1
+            "\nstatus:",
+            '\ndepends_on: [{"id": "priv-linear:SYN-1", "item": "task"}]\nstatus:',
+            1,
         )
     elif case == "reach-unresolvable-ref":
         text = text.replace(
-            '\nstatus:', '\ndepends_on: [{"id": "ghost:G-1", "item": "task"}]\nstatus:', 1
+            "\nstatus:",
+            '\ndepends_on: [{"id": "ghost:G-1", "item": "task"}]\nstatus:',
+            1,
         )
     task.write_text(text)
 
@@ -165,16 +185,29 @@ def config(root: Path, recorder: str, shim: list[str]) -> dict:
         "default_sources": ["src"],
         "write_policy": {
             "visibility_command": shim + ["inspect", "--input", "-"],
-            "check_command": shim + ["check", "--destination", "public", "--input", "-"],
+            "check_command": shim
+            + ["check", "--destination", "public", "--input", "-"],
         },
         "sources": {
-            "src": {"plugin": "local-md", "config": {"root": str(root / "src")}, "visibility": "public"},
-            "dest": {"plugin": "local-md", "config": {"root": str(root / "dest")}, "visibility": "public"},
+            "src": {
+                "plugin": "local-md",
+                "config": {"root": str(root / "src")},
+                "visibility": "public",
+            },
+            "dest": {
+                "plugin": "local-md",
+                "config": {"root": str(root / "dest")},
+                "visibility": "public",
+            },
             # The unrelated private services: synthetic, configured, unavailable.
             "priv-linear": {
                 "plugin": "linear",
                 "visibility": "private",
-                "config": {"team": "SYN", "endpoint": f"{recorder}/graphql", "api_key_env": "SYN_LINEAR_KEY"},
+                "config": {
+                    "team": "SYN",
+                    "endpoint": f"{recorder}/graphql",
+                    "api_key_env": "SYN_LINEAR_KEY",
+                },
             },
             "priv-board": {
                 "plugin": "github-projects",
@@ -207,26 +240,53 @@ def run(run_dir: Path, case: str, exe: Path, onevcs: Path, python: str) -> dict:
     home = onevcs_home(root, onevcs)
     write_plan(root / "src", case)
     recorder = Recorder()
-    shim = [python, str(HERE / "screen_shim.py"), str(run_dir / "screen.jsonl"), str(onevcs), "boundary"]
-    (root / "onetaskgraph.yaml").write_text(json.dumps(config(root, recorder.url, shim), indent=1))
-    env = {k: v for k, v in os.environ.items() if not k.startswith(("ONETASKGRAPH_", "GH_", "LINEAR_"))}
+    shim = [
+        python,
+        str(HERE / "screen_shim.py"),
+        str(run_dir / "screen.jsonl"),
+        str(onevcs),
+        "boundary",
+    ]
+    (root / "onetaskgraph.yaml").write_text(
+        json.dumps(config(root, recorder.url, shim), indent=1)
+    )
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if not k.startswith(("ONETASKGRAPH_", "GH_", "LINEAR_"))
+    }
     env |= {
         "XDG_CONFIG_HOME": str(root / "xdg"),
         "ONEVCS_HOME": str(home),
         "SYN_LINEAR_KEY": "synthetic-placeholder",
         "SYN_GH_TOKEN": "synthetic-placeholder",
     }
-    version = subprocess.run([exe, "--version"], capture_output=True, text=True).stdout.strip()
+    version = subprocess.run(
+        [exe, "--version"], capture_output=True, text=True, check=False
+    ).stdout.strip()
     before = tree(root / "dest")
     steps = []
     try:
         for name, argv in (
-            ("project-copy", ["project", "copy", f"src:{PLAN}", "--to", "dest", "--json"]),
-            ("document-copy", ["document", "copy", f"src:{PLAN}-design", "--to", "dest", "--json"]),
+            (
+                "project-copy",
+                ["project", "copy", f"src:{PLAN}", "--to", "dest", "--json"],
+            ),
+            (
+                "document-copy",
+                ["document", "copy", f"src:{PLAN}-design", "--to", "dest", "--json"],
+            ),
         ):
             seen = len(recorder.requests)
             start = time.time()
-            done = subprocess.run([exe, *argv], cwd=root, env=env, capture_output=True, text=True)
+            done = subprocess.run(
+                [exe, *argv],
+                cwd=root,
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
             steps.append(
                 {
                     "step": name,
@@ -237,17 +297,29 @@ def run(run_dir: Path, case: str, exe: Path, onevcs: Path, python: str) -> dict:
                     "recorder_requests": recorder.requests[seen:],
                 }
             )
-            print(f"  {name}: exit {done.returncode}, {len(recorder.requests) - seen} request(s) to the private doubles", flush=True)
+            print(
+                f"  {name}: exit {done.returncode}, {len(recorder.requests) - seen} request(s) to the private doubles",
+                flush=True,
+            )
             if done.returncode not in (0, 4):
                 break
     finally:
         recorder.stop()
-    screens = [json.loads(line) for line in (run_dir / "screen.jsonl").read_text().splitlines()] if (run_dir / "screen.jsonl").exists() else []
+    screens = (
+        [
+            json.loads(line)
+            for line in (run_dir / "screen.jsonl").read_text().splitlines()
+        ]
+        if (run_dir / "screen.jsonl").exists()
+        else []
+    )
     after = tree(root / "dest")
     result = {
         "case": case,
         "binary": version,
-        "onevcs": subprocess.run([onevcs, "--version"], capture_output=True, text=True).stdout.strip(),
+        "onevcs": subprocess.run(
+            [onevcs, "--version"], capture_output=True, text=True, check=False
+        ).stdout.strip(),
         "steps": steps,
         "private_requests": len(recorder.requests),
         "destination_changed": before != after,
@@ -255,7 +327,9 @@ def run(run_dir: Path, case: str, exe: Path, onevcs: Path, python: str) -> dict:
         "screens": {
             "inspect": sum(1 for s in screens if s["name"] == "inspect"),
             "check": sum(1 for s in screens if s["name"] == "check"),
-            "distinct_inspect_inputs": len({s["input_sha256"] for s in screens if s["name"] == "inspect"}),
+            "distinct_inspect_inputs": len(
+                {s["input_sha256"] for s in screens if s["name"] == "inspect"}
+            ),
             "seconds": round(sum(s["end"] - s["start"] for s in screens), 3),
             "verdicts": sorted({(s["name"], s["returncode"]) for s in screens}),
         },

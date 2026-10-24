@@ -1,0 +1,551 @@
+{
+ "findings": [
+  {
+   "probe": "aliased createIssue x1 (Parent)",
+   "errors": [],
+   "limits": {
+    "x-ratelimit-limit": "5000",
+    "x-ratelimit-remaining": "3995",
+    "x-ratelimit-reset": "1792848477",
+    "x-ratelimit-resource": "graphql",
+    "x-ratelimit-used": "1005"
+   },
+   "board_item_in_answer": false
+  },
+  {
+   "probe": "aliased createIssue x8 (Children)",
+   "errors": [],
+   "limits": {
+    "x-ratelimit-limit": "5000",
+    "x-ratelimit-remaining": "3984",
+    "x-ratelimit-reset": "1792848477",
+    "x-ratelimit-resource": "graphql",
+    "x-ratelimit-used": "1016"
+   },
+   "board_items_in_answer": 0,
+   "children_with_parent": 8
+  },
+  {
+   "probe": "aliased createIssue x2 (Race)",
+   "errors": [],
+   "limits": {
+    "x-ratelimit-limit": "5000",
+    "x-ratelimit-remaining": "3966",
+    "x-ratelimit-reset": "1792848477",
+    "x-ratelimit-resource": "graphql",
+    "x-ratelimit-used": "1034"
+   }
+  },
+  {
+   "probe": "addProjectV2ItemById x3 (2 racing, 1 placed)",
+   "errors": [],
+   "limits": {
+    "x-ratelimit-limit": "5000",
+    "x-ratelimit-remaining": "3965",
+    "x-ratelimit-reset": "1792848477",
+    "x-ratelimit-resource": "graphql",
+    "x-ratelimit-used": "1035"
+   }
+  },
+  {
+   "probe": "one request of 19 aliased mutations: 9 field values + 10 blocked-by edges",
+   "answered": 0,
+   "errors": [
+    {
+     "type": null,
+     "path": [
+      "mutation ProbeCoalesced"
+     ],
+     "message": "Variable $x0 is declared by ProbeCoalesced but not used"
+    }
+   ],
+   "seconds": 0.522,
+   "limits": {
+    "x-ratelimit-limit": "5000",
+    "x-ratelimit-remaining": "3960",
+    "x-ratelimit-reset": "1792848477",
+    "x-ratelimit-resource": "graphql",
+    "x-ratelimit-used": "1040"
+   }
+  }
+ ],
+ "placement": {
+  "issues": 9,
+  "placed": 9,
+  "polls": 2,
+  "poll_costs": [
+   1
+  ],
+  "parent_seconds_after_its_answer": 8.453,
+  "children_seconds_after_their_answer": [
+   0.491,
+   0.491,
+   0.491,
+   0.491,
+   0.491,
+   0.491,
+   0.491,
+   1.536
+  ],
+  "max_seconds": 8.453,
+  "items_per_issue": [
+   1
+  ]
+ },
+ "idempotence": {
+  "racing_items_after_10s": [
+   1,
+   1
+  ],
+  "racing_item_is_the_added_one": [
+   true,
+   true
+  ],
+  "placed_items_after_add": 1,
+  "placed_add_returned_existing_item": true
+ },
+ "reference_resolution": {
+  "variant": "SUB_ISSUES of the parent",
+  "charged_cost": 1,
+  "errors": [],
+  "seconds": 1.016,
+  "limits": {
+   "x-ratelimit-limit": "5000",
+   "x-ratelimit-remaining": "4459",
+   "x-ratelimit-reset": "1792847127",
+   "x-ratelimit-resource": "graphql",
+   "x-ratelimit-used": "541"
+  },
+  "answer_shape": {
+   "node": {
+    "__typename": "str",
+    "id": "str",
+    "number": "int",
+    "title": "str",
+    "body": "str",
+    "url": "str",
+    "createdAt": "str",
+    "updatedAt": "str",
+    "state": "str",
+    "stateReason": null,
+    "repository": {
+     "nameWithOwner": "str"
+    },
+    "parent": null,
+    "subIssuesSummary": {
+     "total": "int"
+    },
+    "commentCount": {
+     "totalCount": "int"
+    },
+    "relationshipEvents": {
+     "totalCount": "int"
+    },
+    "labels": {
+     "nodes": [],
+     "pageInfo": {
+      "hasNextPage": "bool"
+     }
+    },
+    "projectItems": {
+     "nodes": [
+      {
+       "id": "str",
+       "updatedAt": "str",
+       "project": {
+        "id": "str",
+        "number": "int"
+       },
+       "fieldValues": {
+        "nodes": [
+         {},
+         {
+          "text": "str",
+          "field": {
+           "id": "str",
+           "name": "str"
+          }
+         },
+         {
+          "name": "str",
+          "field": {
+           "id": "str",
+           "name": "str",
+           "options": [
+            {
+             "id": "str",
+             "name": "str"
+            },
+            {
+             "id": "str",
+             "name": "str"
+            },
+            {
+             "id": "str",
+             "name": "str"
+            },
+            "... 4 items"
+           ]
+          }
+         },
+         "... 3 items"
+        ],
+        "pageInfo": {
+         "hasNextPage": "bool"
+        }
+       }
+      },
+      "... 1 items"
+     ],
+     "pageInfo": {
+      "hasNextPage": "bool",
+      "endCursor": "str"
+     }
+    },
+    "blockedBy": {
+     "nodes": [],
+     "pageInfo": {
+      "hasNextPage": "bool",
+      "endCursor": null
+     }
+    },
+    "subIssues": {
+     "pageInfo": {
+      "hasNextPage": "bool",
+      "endCursor": "str"
+     },
+     "nodes": [
+      {
+       "__typename": "str",
+       "id": "str",
+       "number": "int",
+       "title": "str",
+       "body": "str",
+       "url": "str",
+       "createdAt": "str",
+       "updatedAt": "str",
+       "state": "str",
+       "stateReason": null,
+       "repository": {
+        "nameWithOwner": "str"
+       },
+       "parent": {
+        "id": "str"
+       },
+       "subIssuesSummary": {
+        "total": "int"
+       },
+       "commentCount": {
+        "totalCount": "int"
+       },
+       "relationshipEvents": {
+        "totalCount": "int"
+       },
+       "labels": {
+        "nodes": [],
+        "pageInfo": {
+         "hasNextPage": "bool"
+        }
+       },
+       "projectItems": {
+        "nodes": [
+         {
+          "id": "str",
+          "updatedAt": "str",
+          "project": {
+           "id": "str",
+           "number": "int"
+          },
+          "fieldValues": {
+           "nodes": [
+            {},
+            {
+             "text": "str",
+             "field": {
+              "id": "str",
+              "name": "str"
+             }
+            },
+            {
+             "name": "str",
+             "field": {
+              "id": "str",
+              "name": "str",
+              "options": [
+               {
+                "id": "str",
+                "name": "str"
+               },
+               {
+                "id": "str",
+                "name": "str"
+               },
+               {
+                "id": "str",
+                "name": "str"
+               },
+               "... 4 items"
+              ]
+             }
+            },
+            "... 3 items"
+           ],
+           "pageInfo": {
+            "hasNextPage": "bool"
+           }
+          }
+         },
+         "... 1 items"
+        ],
+        "pageInfo": {
+         "hasNextPage": "bool",
+         "endCursor": "str"
+        }
+       },
+       "blockedBy": {
+        "nodes": [],
+        "pageInfo": {
+         "hasNextPage": "bool",
+         "endCursor": null
+        }
+       }
+      },
+      {
+       "__typename": "str",
+       "id": "str",
+       "number": "int",
+       "title": "str",
+       "body": "str",
+       "url": "str",
+       "createdAt": "str",
+       "updatedAt": "str",
+       "state": "str",
+       "stateReason": null,
+       "repository": {
+        "nameWithOwner": "str"
+       },
+       "parent": {
+        "id": "str"
+       },
+       "subIssuesSummary": {
+        "total": "int"
+       },
+       "commentCount": {
+        "totalCount": "int"
+       },
+       "relationshipEvents": {
+        "totalCount": "int"
+       },
+       "labels": {
+        "nodes": [],
+        "pageInfo": {
+         "hasNextPage": "bool"
+        }
+       },
+       "projectItems": {
+        "nodes": [
+         {
+          "id": "str",
+          "updatedAt": "str",
+          "project": {
+           "id": "str",
+           "number": "int"
+          },
+          "fieldValues": {
+           "nodes": [
+            {},
+            {
+             "text": "str",
+             "field": {
+              "id": "str",
+              "name": "str"
+             }
+            },
+            {
+             "name": "str",
+             "field": {
+              "id": "str",
+              "name": "str",
+              "options": [
+               {
+                "id": "str",
+                "name": "str"
+               },
+               {
+                "id": "str",
+                "name": "str"
+               },
+               {
+                "id": "str",
+                "name": "str"
+               },
+               "... 4 items"
+              ]
+             }
+            },
+            "... 3 items"
+           ],
+           "pageInfo": {
+            "hasNextPage": "bool"
+           }
+          }
+         },
+         "... 1 items"
+        ],
+        "pageInfo": {
+         "hasNextPage": "bool",
+         "endCursor": "str"
+        }
+       },
+       "blockedBy": {
+        "nodes": [],
+        "pageInfo": {
+         "hasNextPage": "bool",
+         "endCursor": null
+        }
+       }
+      },
+      {
+       "__typename": "str",
+       "id": "str",
+       "number": "int",
+       "title": "str",
+       "body": "str",
+       "url": "str",
+       "createdAt": "str",
+       "updatedAt": "str",
+       "state": "str",
+       "stateReason": null,
+       "repository": {
+        "nameWithOwner": "str"
+       },
+       "parent": {
+        "id": "str"
+       },
+       "subIssuesSummary": {
+        "total": "int"
+       },
+       "commentCount": {
+        "totalCount": "int"
+       },
+       "relationshipEvents": {
+        "totalCount": "int"
+       },
+       "labels": {
+        "nodes": [],
+        "pageInfo": {
+         "hasNextPage": "bool"
+        }
+       },
+       "projectItems": {
+        "nodes": [
+         {
+          "id": "str",
+          "updatedAt": "str",
+          "project": {
+           "id": "str",
+           "number": "int"
+          },
+          "fieldValues": {
+           "nodes": [
+            {},
+            {
+             "text": "str",
+             "field": {
+              "id": "str",
+              "name": "str"
+             }
+            },
+            {
+             "name": "str",
+             "field": {
+              "id": "str",
+              "name": "str",
+              "options": [
+               {
+                "id": "str",
+                "name": "str"
+               },
+               {
+                "id": "str",
+                "name": "str"
+               },
+               {
+                "id": "str",
+                "name": "str"
+               },
+               "... 4 items"
+              ]
+             }
+            },
+            "... 3 items"
+           ],
+           "pageInfo": {
+            "hasNextPage": "bool"
+           }
+          }
+         },
+         "... 1 items"
+        ],
+        "pageInfo": {
+         "hasNextPage": "bool",
+         "endCursor": "str"
+        }
+       },
+       "blockedBy": {
+        "nodes": [],
+        "pageInfo": {
+         "hasNextPage": "bool",
+         "endCursor": null
+        }
+       }
+      },
+      "... 8 items"
+     ]
+    }
+   }
+  }
+ },
+ "cleanup": {
+  "deleted": 0,
+  "refused": 0,
+  "errors": [
+   {
+    "type": "RESOURCE_LIMITS_EXCEEDED",
+    "path": [
+     "d7",
+     "clientMutationId"
+    ],
+    "message": "Resource limits for this query exceeded."
+   },
+   {
+    "type": "RESOURCE_LIMITS_EXCEEDED",
+    "path": [
+     "d8"
+    ],
+    "message": "Resource limits for this query exceeded."
+   },
+   {
+    "type": "RESOURCE_LIMITS_EXCEEDED",
+    "path": [
+     "d9"
+    ],
+    "message": "Resource limits for this query exceeded."
+   },
+   {
+    "type": "RESOURCE_LIMITS_EXCEEDED",
+    "path": [
+     "d10"
+    ],
+    "message": "Resource limits for this query exceeded."
+   }
+  ],
+  "limits": {
+   "x-ratelimit-limit": "5000",
+   "x-ratelimit-remaining": "3958",
+   "x-ratelimit-reset": "1792848477",
+   "x-ratelimit-resource": "graphql",
+   "x-ratelimit-used": "1042"
+  }
+ }
+}

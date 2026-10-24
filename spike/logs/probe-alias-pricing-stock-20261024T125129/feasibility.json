@@ -1,0 +1,903 @@
+{
+ "dry_runs": [
+  {
+   "variant": "ORIGIN_LOOKUPS asks=1",
+   "dry_run_cost": 1,
+   "errors": [],
+   "seconds": 0.555,
+   "limits": {
+    "x-ratelimit-limit": "5000",
+    "x-ratelimit-remaining": "4495",
+    "x-ratelimit-reset": "1792847127",
+    "x-ratelimit-resource": "graphql",
+    "x-ratelimit-used": "505"
+   }
+  },
+  {
+   "variant": "ORIGIN_LOOKUPS asks=2",
+   "dry_run_cost": 1,
+   "errors": [],
+   "seconds": 0.522,
+   "limits": {
+    "x-ratelimit-limit": "5000",
+    "x-ratelimit-remaining": "4126",
+    "x-ratelimit-reset": "1792848477",
+    "x-ratelimit-resource": "graphql",
+    "x-ratelimit-used": "874"
+   }
+  },
+  {
+   "variant": "ORIGIN_LOOKUPS asks=3",
+   "dry_run_cost": 1,
+   "errors": [],
+   "seconds": 0.597,
+   "limits": {
+    "x-ratelimit-limit": "5000",
+    "x-ratelimit-remaining": "4126",
+    "x-ratelimit-reset": "1792848477",
+    "x-ratelimit-resource": "graphql",
+    "x-ratelimit-used": "874"
+   }
+  },
+  {
+   "variant": "ORIGIN_LOOKUPS asks=4",
+   "dry_run_cost": 1,
+   "errors": [],
+   "seconds": 0.582,
+   "limits": {
+    "x-ratelimit-limit": "5000",
+    "x-ratelimit-remaining": "4495",
+    "x-ratelimit-reset": "1792847127",
+    "x-ratelimit-resource": "graphql",
+    "x-ratelimit-used": "505"
+   }
+  },
+  {
+   "variant": "ORIGIN_LOOKUPS asks=5",
+   "dry_run_cost": 1,
+   "errors": [],
+   "seconds": 0.566,
+   "limits": {
+    "x-ratelimit-limit": "5000",
+    "x-ratelimit-remaining": "4126",
+    "x-ratelimit-reset": "1792848477",
+    "x-ratelimit-resource": "graphql",
+    "x-ratelimit-used": "874"
+   }
+  },
+  {
+   "variant": "ORIGIN_LOOKUPS asks=6",
+   "dry_run_cost": 1,
+   "errors": [],
+   "seconds": 0.613,
+   "limits": {
+    "x-ratelimit-limit": "5000",
+    "x-ratelimit-remaining": "4495",
+    "x-ratelimit-reset": "1792847127",
+    "x-ratelimit-resource": "graphql",
+    "x-ratelimit-used": "505"
+   }
+  },
+  {
+   "variant": "ORIGIN_LOOKUPS asks=8",
+   "dry_run_cost": 2,
+   "errors": [],
+   "seconds": 0.582,
+   "limits": {
+    "x-ratelimit-limit": "5000",
+    "x-ratelimit-remaining": "4495",
+    "x-ratelimit-reset": "1792847127",
+    "x-ratelimit-resource": "graphql",
+    "x-ratelimit-used": "505"
+   }
+  },
+  {
+   "variant": "ORIGIN_LOOKUPS asks=10",
+   "dry_run_cost": 2,
+   "errors": [],
+   "seconds": 0.558,
+   "limits": {
+    "x-ratelimit-limit": "5000",
+    "x-ratelimit-remaining": "4495",
+    "x-ratelimit-reset": "1792847127",
+    "x-ratelimit-resource": "graphql",
+    "x-ratelimit-used": "505"
+   }
+  },
+  {
+   "variant": "ORIGIN_LOOKUPS asks=10 originFirst=1",
+   "dry_run_cost": 1,
+   "errors": [],
+   "seconds": 0.583,
+   "limits": {
+    "x-ratelimit-limit": "5000",
+    "x-ratelimit-remaining": "4126",
+    "x-ratelimit-reset": "1792848477",
+    "x-ratelimit-resource": "graphql",
+    "x-ratelimit-used": "874"
+   }
+  },
+  {
+   "variant": "ORIGIN_LOOKUP",
+   "dry_run_cost": 1,
+   "errors": [],
+   "seconds": 0.463,
+   "limits": {
+    "x-ratelimit-limit": "5000",
+    "x-ratelimit-remaining": "4126",
+    "x-ratelimit-reset": "1792848477",
+    "x-ratelimit-resource": "graphql",
+    "x-ratelimit-used": "874"
+   }
+  },
+  {
+   "variant": "CREATED_BOARD_ITEMS reads=1",
+   "dry_run_cost": 1,
+   "errors": [],
+   "seconds": 0.479,
+   "limits": {
+    "x-ratelimit-limit": "5000",
+    "x-ratelimit-remaining": "4495",
+    "x-ratelimit-reset": "1792847127",
+    "x-ratelimit-resource": "graphql",
+    "x-ratelimit-used": "505"
+   }
+  },
+  {
+   "variant": "CREATED_BOARD_ITEMS reads=2",
+   "dry_run_cost": 1,
+   "errors": [],
+   "seconds": 0.406,
+   "limits": {
+    "x-ratelimit-limit": "5000",
+    "x-ratelimit-remaining": "4126",
+    "x-ratelimit-reset": "1792848477",
+    "x-ratelimit-resource": "graphql",
+    "x-ratelimit-used": "874"
+   }
+  },
+  {
+   "variant": "CREATED_BOARD_ITEMS reads=9",
+   "dry_run_cost": 1,
+   "errors": [],
+   "seconds": 0.465,
+   "limits": {
+    "x-ratelimit-limit": "5000",
+    "x-ratelimit-remaining": "4126",
+    "x-ratelimit-reset": "1792848477",
+    "x-ratelimit-resource": "graphql",
+    "x-ratelimit-used": "874"
+   }
+  },
+  {
+   "variant": "CREATED_BOARD_ITEMS reads=10",
+   "dry_run_cost": 1,
+   "errors": [],
+   "seconds": 0.416,
+   "limits": {
+    "x-ratelimit-limit": "5000",
+    "x-ratelimit-remaining": "4126",
+    "x-ratelimit-reset": "1792848477",
+    "x-ratelimit-resource": "graphql",
+    "x-ratelimit-used": "874"
+   }
+  },
+  {
+   "variant": "CREATED_BOARD_ITEMS reads=21",
+   "dry_run_cost": 1,
+   "errors": [],
+   "seconds": 1.483,
+   "limits": {
+    "x-ratelimit-limit": "5000",
+    "x-ratelimit-remaining": "4126",
+    "x-ratelimit-reset": "1792848477",
+    "x-ratelimit-resource": "graphql",
+    "x-ratelimit-used": "874"
+   }
+  },
+  {
+   "variant": "SUB_ISSUES memberFirst=10",
+   "dry_run_cost": 1,
+   "errors": [],
+   "seconds": 0.464,
+   "limits": {
+    "x-ratelimit-limit": "5000",
+    "x-ratelimit-remaining": "4125",
+    "x-ratelimit-reset": "1792848477",
+    "x-ratelimit-resource": "graphql",
+    "x-ratelimit-used": "875"
+   }
+  },
+  {
+   "variant": "SUB_ISSUES memberFirst=23",
+   "dry_run_cost": 1,
+   "errors": [],
+   "seconds": 0.438,
+   "limits": {
+    "x-ratelimit-limit": "5000",
+    "x-ratelimit-remaining": "4494",
+    "x-ratelimit-reset": "1792847127",
+    "x-ratelimit-resource": "graphql",
+    "x-ratelimit-used": "506"
+   }
+  },
+  {
+   "variant": "SUB_ISSUES memberFirst=50",
+   "dry_run_cost": 3,
+   "errors": [],
+   "seconds": 0.773,
+   "limits": {
+    "x-ratelimit-limit": "5000",
+    "x-ratelimit-remaining": "4125",
+    "x-ratelimit-reset": "1792848477",
+    "x-ratelimit-resource": "graphql",
+    "x-ratelimit-used": "875"
+   }
+  },
+  {
+   "variant": "SUB_ISSUES memberFirst=100",
+   "dry_run_cost": 6,
+   "errors": [],
+   "seconds": 0.511,
+   "limits": {
+    "x-ratelimit-limit": "5000",
+    "x-ratelimit-remaining": "4125",
+    "x-ratelimit-reset": "1792848477",
+    "x-ratelimit-resource": "graphql",
+    "x-ratelimit-used": "875"
+   }
+  },
+  {
+   "variant": "ISSUE",
+   "dry_run_cost": 1,
+   "errors": [],
+   "seconds": 0.48,
+   "limits": {
+    "x-ratelimit-limit": "5000",
+    "x-ratelimit-remaining": "4125",
+    "x-ratelimit-reset": "1792848477",
+    "x-ratelimit-resource": "graphql",
+    "x-ratelimit-used": "875"
+   }
+  },
+  {
+   "variant": "SUB_ISSUES + ORIGIN_LOOKUPS asks=1",
+   "dry_run_cost": 2,
+   "errors": [],
+   "seconds": 0.577,
+   "limits": {
+    "x-ratelimit-limit": "5000",
+    "x-ratelimit-remaining": "4125",
+    "x-ratelimit-reset": "1792848477",
+    "x-ratelimit-resource": "graphql",
+    "x-ratelimit-used": "875"
+   }
+  },
+  {
+   "variant": "SUB_ISSUES + ORIGIN_LOOKUPS asks=10",
+   "dry_run_cost": 4,
+   "errors": [],
+   "seconds": 0.615,
+   "limits": {
+    "x-ratelimit-limit": "5000",
+    "x-ratelimit-remaining": "4124",
+    "x-ratelimit-reset": "1792848477",
+    "x-ratelimit-resource": "graphql",
+    "x-ratelimit-used": "876"
+   }
+  },
+  {
+   "variant": "SUB_ISSUES + CREATED_BOARD_ITEMS reads=1",
+   "dry_run_cost": 1,
+   "errors": [],
+   "seconds": 0.733,
+   "limits": {
+    "x-ratelimit-limit": "5000",
+    "x-ratelimit-remaining": "4123",
+    "x-ratelimit-reset": "1792848477",
+    "x-ratelimit-resource": "graphql",
+    "x-ratelimit-used": "877"
+   }
+  }
+ ],
+ "executed": [
+  {
+   "variant": "SUB_ISSUES + ORIGIN_LOOKUPS asks=1",
+   "charged_cost": 2,
+   "errors": [],
+   "seconds": 0.978,
+   "limits": {
+    "x-ratelimit-limit": "5000",
+    "x-ratelimit-remaining": "4119",
+    "x-ratelimit-reset": "1792848477",
+    "x-ratelimit-resource": "graphql",
+    "x-ratelimit-used": "881"
+   },
+   "answer_shape": {
+    "node": {
+     "__typename": "str"
+    },
+    "boardFields": {
+     "projectV2": {
+      "id": "str",
+      "fields": {
+       "nodes": [
+        {
+         "__typename": "str",
+         "id": "str",
+         "name": "str",
+         "dataType": "str"
+        },
+        {
+         "__typename": "str",
+         "id": "str",
+         "name": "str",
+         "dataType": "str"
+        },
+        {
+         "__typename": "str",
+         "id": "str",
+         "name": "str",
+         "options": [
+          {
+           "id": "str",
+           "name": "str"
+          },
+          {
+           "id": "str",
+           "name": "str"
+          },
+          {
+           "id": "str",
+           "name": "str"
+          },
+          "... 4 items"
+         ]
+        },
+        "... 14 items"
+       ],
+       "pageInfo": {
+        "hasNextPage": "bool"
+       }
+      }
+     }
+    },
+    "repository": {
+     "id": "str",
+     "databaseId": "int",
+     "nameWithOwner": "str"
+    },
+    "o0": {
+     "projectV2": {
+      "items": {
+       "nodes": [],
+       "pageInfo": {
+        "hasNextPage": "bool",
+        "endCursor": null
+       }
+      }
+     }
+    },
+    "s0": {
+     "pageInfo": {
+      "hasNextPage": "bool",
+      "endCursor": null
+     },
+     "nodes": []
+    }
+   }
+  },
+  {
+   "variant": "SUB_ISSUES + ORIGIN_LOOKUPS asks=10",
+   "charged_cost": 4,
+   "errors": [],
+   "seconds": 2.575,
+   "limits": {
+    "x-ratelimit-limit": "5000",
+    "x-ratelimit-remaining": "4114",
+    "x-ratelimit-reset": "1792848477",
+    "x-ratelimit-resource": "graphql",
+    "x-ratelimit-used": "886"
+   },
+   "answer_shape": {
+    "node": {
+     "__typename": "str"
+    },
+    "boardFields": {
+     "projectV2": {
+      "id": "str",
+      "fields": {
+       "nodes": [
+        {
+         "__typename": "str",
+         "id": "str",
+         "name": "str",
+         "dataType": "str"
+        },
+        {
+         "__typename": "str",
+         "id": "str",
+         "name": "str",
+         "dataType": "str"
+        },
+        {
+         "__typename": "str",
+         "id": "str",
+         "name": "str",
+         "options": [
+          {
+           "id": "str",
+           "name": "str"
+          },
+          {
+           "id": "str",
+           "name": "str"
+          },
+          {
+           "id": "str",
+           "name": "str"
+          },
+          "... 4 items"
+         ]
+        },
+        "... 14 items"
+       ],
+       "pageInfo": {
+        "hasNextPage": "bool"
+       }
+      }
+     }
+    },
+    "repository": {
+     "id": "str",
+     "databaseId": "int",
+     "nameWithOwner": "str"
+    },
+    "o0": {
+     "projectV2": {
+      "items": {
+       "nodes": [],
+       "pageInfo": {
+        "hasNextPage": "bool",
+        "endCursor": null
+       }
+      }
+     }
+    },
+    "s0": {
+     "pageInfo": {
+      "hasNextPage": "bool",
+      "endCursor": null
+     },
+     "nodes": []
+    },
+    "o1": {
+     "projectV2": {
+      "items": {
+       "nodes": [],
+       "pageInfo": {
+        "hasNextPage": "bool",
+        "endCursor": null
+       }
+      }
+     }
+    },
+    "s1": {
+     "pageInfo": {
+      "hasNextPage": "bool",
+      "endCursor": null
+     },
+     "nodes": []
+    },
+    "o2": {
+     "projectV2": {
+      "items": {
+       "nodes": [],
+       "pageInfo": {
+        "hasNextPage": "bool",
+        "endCursor": null
+       }
+      }
+     }
+    },
+    "s2": {
+     "pageInfo": {
+      "hasNextPage": "bool",
+      "endCursor": null
+     },
+     "nodes": []
+    },
+    "o3": {
+     "projectV2": {
+      "items": {
+       "nodes": [],
+       "pageInfo": {
+        "hasNextPage": "bool",
+        "endCursor": null
+       }
+      }
+     }
+    },
+    "s3": {
+     "pageInfo": {
+      "hasNextPage": "bool",
+      "endCursor": null
+     },
+     "nodes": []
+    },
+    "o4": {
+     "projectV2": {
+      "items": {
+       "nodes": [],
+       "pageInfo": {
+        "hasNextPage": "bool",
+        "endCursor": null
+       }
+      }
+     }
+    },
+    "s4": {
+     "pageInfo": {
+      "hasNextPage": "bool",
+      "endCursor": null
+     },
+     "nodes": []
+    },
+    "o5": {
+     "projectV2": {
+      "items": {
+       "nodes": [],
+       "pageInfo": {
+        "hasNextPage": "bool",
+        "endCursor": null
+       }
+      }
+     }
+    },
+    "s5": {
+     "pageInfo": {
+      "hasNextPage": "bool",
+      "endCursor": null
+     },
+     "nodes": []
+    },
+    "o6": {
+     "projectV2": {
+      "items": {
+       "nodes": [],
+       "pageInfo": {
+        "hasNextPage": "bool",
+        "endCursor": null
+       }
+      }
+     }
+    },
+    "s6": {
+     "pageInfo": {
+      "hasNextPage": "bool",
+      "endCursor": null
+     },
+     "nodes": []
+    },
+    "o7": {
+     "projectV2": {
+      "items": {
+       "nodes": [],
+       "pageInfo": {
+        "hasNextPage": "bool",
+        "endCursor": null
+       }
+      }
+     }
+    },
+    "s7": {
+     "pageInfo": {
+      "hasNextPage": "bool",
+      "endCursor": null
+     },
+     "nodes": []
+    },
+    "o8": {
+     "projectV2": {
+      "items": {
+       "nodes": [],
+       "pageInfo": {
+        "hasNextPage": "bool",
+        "endCursor": null
+       }
+      }
+     }
+    },
+    "s8": {
+     "pageInfo": {
+      "hasNextPage": "bool",
+      "endCursor": null
+     },
+     "nodes": []
+    },
+    "o9": {
+     "projectV2": {
+      "items": {
+       "nodes": [],
+       "pageInfo": {
+        "hasNextPage": "bool",
+        "endCursor": null
+       }
+      }
+     }
+    },
+    "s9": {
+     "pageInfo": {
+      "hasNextPage": "bool",
+      "endCursor": null
+     },
+     "nodes": []
+    }
+   }
+  },
+  {
+   "variant": "SUB_ISSUES + CREATED_BOARD_ITEMS reads=1",
+   "charged_cost": 1,
+   "errors": [],
+   "seconds": 0.532,
+   "limits": {
+    "x-ratelimit-limit": "5000",
+    "x-ratelimit-remaining": "4113",
+    "x-ratelimit-reset": "1792848477",
+    "x-ratelimit-resource": "graphql",
+    "x-ratelimit-used": "887"
+   },
+   "answer_shape": {
+    "node": {
+     "__typename": "str"
+    },
+    "i0": {}
+   }
+  },
+  {
+   "variant": "ORIGIN_LOOKUPS asks=10",
+   "charged_cost": 2,
+   "errors": [],
+   "seconds": 2.487,
+   "limits": {
+    "x-ratelimit-limit": "5000",
+    "x-ratelimit-remaining": "4111",
+    "x-ratelimit-reset": "1792848477",
+    "x-ratelimit-resource": "graphql",
+    "x-ratelimit-used": "889"
+   },
+   "answer_shape": {
+    "boardFields": {
+     "projectV2": {
+      "id": "str",
+      "fields": {
+       "nodes": [
+        {
+         "__typename": "str",
+         "id": "str",
+         "name": "str",
+         "dataType": "str"
+        },
+        {
+         "__typename": "str",
+         "id": "str",
+         "name": "str",
+         "dataType": "str"
+        },
+        {
+         "__typename": "str",
+         "id": "str",
+         "name": "str",
+         "options": [
+          {
+           "id": "str",
+           "name": "str"
+          },
+          {
+           "id": "str",
+           "name": "str"
+          },
+          {
+           "id": "str",
+           "name": "str"
+          },
+          "... 4 items"
+         ]
+        },
+        "... 14 items"
+       ],
+       "pageInfo": {
+        "hasNextPage": "bool"
+       }
+      }
+     }
+    },
+    "repository": {
+     "id": "str",
+     "databaseId": "int",
+     "nameWithOwner": "str"
+    },
+    "o0": {
+     "projectV2": {
+      "items": {
+       "nodes": [],
+       "pageInfo": {
+        "hasNextPage": "bool",
+        "endCursor": null
+       }
+      }
+     }
+    },
+    "s0": {
+     "pageInfo": {
+      "hasNextPage": "bool",
+      "endCursor": null
+     },
+     "nodes": []
+    },
+    "o1": {
+     "projectV2": {
+      "items": {
+       "nodes": [],
+       "pageInfo": {
+        "hasNextPage": "bool",
+        "endCursor": null
+       }
+      }
+     }
+    },
+    "s1": {
+     "pageInfo": {
+      "hasNextPage": "bool",
+      "endCursor": null
+     },
+     "nodes": []
+    },
+    "o2": {
+     "projectV2": {
+      "items": {
+       "nodes": [],
+       "pageInfo": {
+        "hasNextPage": "bool",
+        "endCursor": null
+       }
+      }
+     }
+    },
+    "s2": {
+     "pageInfo": {
+      "hasNextPage": "bool",
+      "endCursor": null
+     },
+     "nodes": []
+    },
+    "o3": {
+     "projectV2": {
+      "items": {
+       "nodes": [],
+       "pageInfo": {
+        "hasNextPage": "bool",
+        "endCursor": null
+       }
+      }
+     }
+    },
+    "s3": {
+     "pageInfo": {
+      "hasNextPage": "bool",
+      "endCursor": null
+     },
+     "nodes": []
+    },
+    "o4": {
+     "projectV2": {
+      "items": {
+       "nodes": [],
+       "pageInfo": {
+        "hasNextPage": "bool",
+        "endCursor": null
+       }
+      }
+     }
+    },
+    "s4": {
+     "pageInfo": {
+      "hasNextPage": "bool",
+      "endCursor": null
+     },
+     "nodes": []
+    },
+    "o5": {
+     "projectV2": {
+      "items": {
+       "nodes": [],
+       "pageInfo": {
+        "hasNextPage": "bool",
+        "endCursor": null
+       }
+      }
+     }
+    },
+    "s5": {
+     "pageInfo": {
+      "hasNextPage": "bool",
+      "endCursor": null
+     },
+     "nodes": []
+    },
+    "o6": {
+     "projectV2": {
+      "items": {
+       "nodes": [],
+       "pageInfo": {
+        "hasNextPage": "bool",
+        "endCursor": null
+       }
+      }
+     }
+    },
+    "s6": {
+     "pageInfo": {
+      "hasNextPage": "bool",
+      "endCursor": null
+     },
+     "nodes": []
+    },
+    "o7": {
+     "projectV2": {
+      "items": {
+       "nodes": [],
+       "pageInfo": {
+        "hasNextPage": "bool",
+        "endCursor": null
+       }
+      }
+     }
+    },
+    "s7": {
+     "pageInfo": {
+      "hasNextPage": "bool",
+      "endCursor": null
+     },
+     "nodes": []
+    },
+    "o8": {
+     "projectV2": {
+      "items": {
+       "nodes": [],
+       "pageInfo": {
+        "hasNextPage": "bool",
+        "endCursor": null
+       }
+      }
+     }
+    },
+    "s8": {
+     "pageInfo": {
+      "hasNextPage": "bool",
+      "endCursor": null
+     },
+     "nodes": []
+    },
+    "o9": {
+     "projectV2": {
+      "items": {
+       "nodes": [],
+       "pageInfo": {
+        "hasNextPage": "bool",
+        "endCursor": null
+       }
+      }
+     }
+    },
+    "s9": {
+     "pageInfo": {
+      "hasNextPage": "bool",
+      "endCursor": null
+     },
+     "nodes": []
+    }
+   }
+  }
+ ]
+}

@@ -140,10 +140,16 @@ def refusal(kind: str, body: bytes, writes: str, allowed: set[str]) -> str | Non
         payload = json.loads(body)
     except ValueError:
         return "an unparseable mutation"
-    names = set(guarded_ids(payload.get("variables")))
-    names |= set(
-        re.findall(r'(?:repositoryId|projectId):\s*"([^"]+)"', payload.get("query", ""))
-    )
+    variables = payload.get("variables") or {}
+    query = payload.get("query", "")
+    names = set(guarded_ids(variables))
+    names |= set(re.findall(r'(?:repositoryId|projectId):\s*"([^"]+)"', query))
+    # A guarded input field given a variable of any name: `projectId: $p`.
+    for variable in re.findall(
+        r"(?:repositoryId|projectId|projectV2Ids):\s*\$(\w+)", query
+    ):
+        value = variables.get(variable) if isinstance(variables, dict) else None
+        names |= {str(v) for v in (value if isinstance(value, list) else [value])}
     stray = names - allowed
     return (
         f"it names {len(stray)} repository or project id(s) outside the test board"

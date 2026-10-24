@@ -189,6 +189,21 @@ def test_a_mutation_naming_another_repository_never_leaves(proxy):
     assert [r["status"] for r in raw(directory)] == [403, 200]
 
 
+@pytest.mark.parametrize("proxy", [("allowed", ["R_scratch", "PVT_board"])], indirect=True)
+def test_a_guarded_field_given_a_variable_of_another_name_is_still_guarded(proxy):
+    url, _ = proxy
+    add = (
+        "mutation($p: ID!, $c: ID!) { addProjectV2ItemById(input: {projectId: $p, contentId: $c})"
+        " { item { id } } }"
+    )
+    status, answer = post(f"{url}/graphql", {"query": add, "variables": {"p": "PVT_other", "c": "I_1"}})
+    assert status == 403
+    assert answer["errors"][0]["type"] == "SPIKE_REFUSED"
+    assert StandIn.seen == []
+    status, _ = post(f"{url}/graphql", {"query": add, "variables": {"p": "PVT_board", "c": "I_1"}})
+    assert status == 200
+
+
 @pytest.mark.parametrize("proxy", [("none", [])], indirect=True)
 def test_a_read_only_run_sends_no_mutation_and_no_upload(proxy):
     url, _ = proxy

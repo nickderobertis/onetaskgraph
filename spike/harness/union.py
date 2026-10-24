@@ -46,13 +46,19 @@ def ask(onevcs: Path, home: Path, kind: str, document: dict) -> tuple[int, float
         capture_output=True,
         check=False,
     )
-    return done.returncode, time.time() - start, done.stdout.decode(errors="replace")[:200]
+    return (
+        done.returncode,
+        time.time() - start,
+        done.stdout.decode(errors="replace")[:200],
+    )
 
 
 def union_of(checks: list[dict]) -> dict:
     scopes = {json.dumps(c.get("scope"), sort_keys=True) for c in checks}
     if len(scopes) != 1:
-        raise ValueError(f"the checks carried {len(scopes)} different scopes; a union needs one")
+        raise ValueError(
+            f"the checks carried {len(scopes)} different scopes; a union needs one"
+        )
     out: dict = {"destination": "public", "text": [], "paths": [], "metadata": []}
     for check in checks:
         for key in ("text", "paths", "metadata"):
@@ -81,15 +87,19 @@ def replay(onevcs: Path, home: Path, inspects: list[dict], checks: list[dict]) -
     distinct = {json.dumps(i, sort_keys=True) for i in inspects}
     unioned = [ask(onevcs, home, "inspect", json.loads(i)) for i in sorted(distinct)]
     unioned.append(ask(onevcs, home, "check", union_of(checks)))
-    item_refused = any(code != 0 for code, _, _ in per_item[len(inspects):])
+    item_refused = any(code != 0 for code, _, _ in per_item[len(inspects) :])
     union_refused = unioned[-1][0] != 0
     return {
         "per_item": {
             "calls": len(per_item),
             "inspect": len(inspects),
             "check": len(checks),
-            "check_returncodes": sorted({code for code, _, _ in per_item[len(inspects):]}),
-            "inspect_answers": sorted({answer for _, _, answer in per_item[: len(inspects)]}),
+            "check_returncodes": sorted(
+                {code for code, _, _ in per_item[len(inspects) :]}
+            ),
+            "inspect_answers": sorted(
+                {answer for _, _, answer in per_item[: len(inspects)]}
+            ),
             "seconds": round(sum(s for _, s, _ in per_item), 3),
         },
         "unioned": {
@@ -113,10 +123,18 @@ def run(run_dir: Path, exe: Path, onevcs: Path, python: str) -> dict:
     boundary = copied["steps"][0]["seconds"]
     first_start = min(c["start"] for c in log)
     for call in log:
-        step = "project-copy" if call["start"] - first_start <= boundary else "document-copy"
+        step = (
+            "project-copy"
+            if call["start"] - first_start <= boundary
+            else "document-copy"
+        )
         commands.setdefault(step, []).append(call)
     term = f"{reach.PRIVATE[0]}/{reach.PRIVATE[1]}"
-    result: dict = {"copy": {k: copied[k] for k in ("binary", "onevcs", "private_requests", "screens")}}
+    result: dict = {
+        "copy": {
+            k: copied[k] for k in ("binary", "onevcs", "private_requests", "screens")
+        }
+    }
     result["copy"]["returncodes"] = [s["returncode"] for s in copied["steps"]]
     result["commands"] = {}
     for step, made in commands.items():
@@ -129,7 +147,9 @@ def run(run_dir: Path, exe: Path, onevcs: Path, python: str) -> dict:
             )
         result["commands"][step] = variants
     result["all_agree"] = all(
-        v["agrees"] for variants in result["commands"].values() for v in variants.values()
+        v["agrees"]
+        for variants in result["commands"].values()
+        for v in variants.values()
     )
     (run_dir / "union.json").write_text(json.dumps(result, indent=1))
     return result

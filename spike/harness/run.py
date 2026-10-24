@@ -41,7 +41,7 @@ import sanitize
 import workload
 
 CACHE = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / (
-    "board-copy-speed-2026-10-18"
+    os.environ.get("SPIKE_CACHE_NAME", "board-copy-speed-2026-10-18")
 )
 CLONE = Path(os.environ.get("SPIKE_HOST_CLONE") or CACHE / "ai-orchestrator")
 SPAN_BINARY = Path(
@@ -73,7 +73,30 @@ SCENARIOS = (
     "probes",
     "probe-body-limit",
     "cleanup",
+    # The feasibility spike (board-copy-gaps-2026-10-24): live, read-only and on the test board.
+    "probe-alias-pricing",
+    "probe-placement",
+    # Offline: synthetic sources, the real CLI and the real onevcs, no credential.
+    "reach-public",
+    "reach-private-item",
+    "reach-private-ref",
+    "reach-unresolvable-ref",
+    "screen-union",
+    "proxy-refusal",
 )
+OFFLINE = (
+    "reach-public",
+    "reach-private-item",
+    "reach-private-ref",
+    "reach-unresolvable-ref",
+    "screen-union",
+    "proxy-refusal",
+)
+HEAD_BINARY = Path(os.environ.get("SPIKE_HEAD_BINARY") or REPO / "target/debug/onetaskgraph")
+CLOSURE_BINARY = Path(
+    os.environ.get("SPIKE_CLOSURE_BINARY") or CACHE / "prototype/target/debug/onetaskgraph"
+)
+ONEVCS = Path(os.environ.get("SPIKE_ONEVCS") or Path.home() / "ai-orchestrator/.venv/bin/onevcs")
 UNREACHABLE = "http://127.0.0.1:9/graphql"
 HOST_XDG = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
 
@@ -88,6 +111,12 @@ def token() -> str:
 
 
 def binary(build: str) -> Path:
+    if build in ("head", "closure"):
+        path = HEAD_BINARY if build == "head" else CLOSURE_BINARY
+        if not path.exists():
+            hint = "cargo build -p onetaskgraph" if build == "head" else "spike/prototype/build.sh"
+            sys.exit(f"run.py: no {build} binary at {path}; run {hint}")
+        return path
     path = SPAN_BINARY if build == "span" else STOCK_BINARY
     if not path.exists():
         hint = (
@@ -590,13 +619,38 @@ DRAWS = {
     "plans-walk": ("graphql",),
     "plans-board-walk": ("graphql",),
     "plans-read": ("graphql",),
+    "probe-alias-pricing": ("graphql",),
+    "probe-placement": ("graphql",),
 }
+
+
+def run_offline(scenario: str, build: str, stamp: str) -> None:
+    """A synthetic case: no credential, no quota, nothing hosted but the loopback doubles."""
+    import reach
+    import union
+
+    name = f"{scenario}-{build}"
+    run = RUNS / f"{name}-{stamp}"
+    run.mkdir(parents=True)
+    print(f"{name}: raw logs in {run}", flush=True)
+    if scenario == "proxy-refusal":
+        import refusal
+
+        result = refusal.run(run, PYTHON, HERE / "proxy.py")
+    elif scenario == "screen-union":
+        result = union.run(run, binary(build), ONEVCS, PYTHON)
+    else:
+        result = reach.run(run, scenario, binary(build), ONEVCS, PYTHON)
+    out = sanitize.write_offline(run, result, LOGS / f"{name}-{stamp}")
+    print(f"{name}: sanitized result in {out}", flush=True)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("scenario", choices=SCENARIOS)
-    parser.add_argument("--build", choices=("stock", "span"), default="stock")
+    parser.add_argument(
+        "--build", choices=("stock", "span", "head", "closure"), default="stock"
+    )
     parser.add_argument("--no-sanitize", action="store_true")
     parser.add_argument(
         "--plan",
@@ -604,6 +658,9 @@ def main() -> None:
     )
     args = parser.parse_args()
     stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
+    if args.scenario in OFFLINE:
+        run_offline(args.scenario, args.build, stamp)
+        return
     label = args.scenario
     host_project = CACHE / "state" / HOST_PLAN / "md" / "projects" / f"{HOST_PLAN}.md"
     if (
@@ -649,6 +706,15 @@ def main() -> None:
             import probes
 
             probes.body_limit(run, proxy.endpoint, token(), TEST_OWNER, TEST_REPOSITORY)
+        elif args.scenario in ("probe-alias-pricing", "probe-placement"):
+            import feasibility
+
+            probe = (
+                feasibility.alias_pricing
+                if args.scenario == "probe-alias-pricing"
+                else feasibility.placement
+            )
+            probe(run, proxy.endpoint, token(), TEST_OWNER, TEST_NUMBER, TEST_REPOSITORY)
         elif args.scenario == "probes":
             import probes
 
