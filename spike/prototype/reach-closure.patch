@@ -1,0 +1,77 @@
+diff --git a/crates/onetaskgraph-core/src/engine/copy.rs b/crates/onetaskgraph-core/src/engine/copy.rs
+index 5776ac37..6ab3e3bf 100644
+--- a/crates/onetaskgraph-core/src/engine/copy.rs
++++ b/crates/onetaskgraph-core/src/engine/copy.rs
+@@ -1412,6 +1412,10 @@ struct Dependent {
+     origin: SourceName,
+     /// Its forward edges, as its source reported them.
+     edges: Vec<DependencyEdge>,
++    /// SPIKE PROTOTYPE: whether an earlier copy can have kept an edge of it on a private
++    /// source's side — the destination already held it, carrying a copy's record and not the
++    /// mark of every edge on its own record — so the sources that may record one are asked.
++    asks_recorders: bool,
+ }
+ 
+ /// What one task of a source declared private records once a copy has landed: what it held,
+@@ -1429,6 +1433,8 @@ struct Recording {
+ struct Recordings {
+     /// The destination ids of every task the copy landed somewhere not declared private.
+     decided: Dependents,
++    /// SPIKE PROTOTYPE: those of them an earlier copy can have recorded on a private side.
++    asked: Vec<GlobalId>,
+     /// One per task of a source declared private the copy landed or a landed edge names.
+     each: Vec<Recording>,
+ }
+@@ -4413,10 +4419,21 @@ impl Engine {
+                     };
+                     running.recorders.insert(id.to_string(), (id.clone(), held));
+                 } else {
++                    let asks_recorders = match item.held.as_ref().map(|held| &held.item) {
++                        Some(Item::Task(held)) => {
++                            held.metadata
++                                .contains_key(MetadataKey::COPIED_DESTINATION_VERSION_KEY)
++                                && !held.metadata.contains_key(MetadataKey::EDGES_ON_RECORD_KEY)
++                        }
++                        Some(_) => true,
++                        // Created by this copy: nothing earlier can have recorded it.
++                        None => !matches!(outcome.action, CopyAction::Created { .. }),
++                    };
+                     running.dependents.push(Dependent {
+                         destination: id.clone(),
+                         origin: item.source.source.clone(),
+                         edges: item.edges.clone(),
++                        asks_recorders,
+                     });
+                 }
+             }
+@@ -6766,6 +6783,12 @@ impl Engine {
+             .iter()
+             .map(|dependent| dependent.destination.clone())
+             .collect();
++        let asked: Vec<GlobalId> = running
++            .dependents
++            .iter()
++            .filter(|dependent| dependent.asks_recorders)
++            .map(|dependent| dependent.destination.clone())
++            .collect();
+         let mut named: BTreeMap<String, (GlobalId, Dependents)> = BTreeMap::new();
+         for dependent in &running.dependents {
+             let near = &dependent.destination.source;
+@@ -6819,7 +6842,7 @@ impl Engine {
+             named,
+             held: None,
+         }));
+-        Recordings { decided, each }
++        Recordings { decided, asked, each }
+     }
+ 
+     /// Write each of `recordings` whose task does not already record what it is to: one read
+@@ -6843,7 +6866,7 @@ impl Engine {
+         mut recordings: Recordings,
+         journal: &mut Journal,
+     ) -> Result<(), EngineError> {
+-        for dependent in recordings.decided.iter() {
++        for dependent in &recordings.asked {
+             for at in self.recorded_prerequisites(dependent).await? {
+                 if !recordings.each.iter().any(|recording| recording.at == at) {
+                     recordings.each.push(Recording {
