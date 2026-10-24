@@ -2044,3 +2044,223 @@ fn a_copy_whose_private_source_cannot_be_designated_withholds_the_edge() {
         [("notes:T-1".to_owned(), "plans:L-9".to_owned())]
     );
 }
+
+/// A dependency read walked a page at a time over a task whose recorded edges interleave
+/// native ids with opaque far ends that resolve and that do not answers, across its pages, every
+/// edge the one-page read does, once each and in its order — an opaque far end no source is
+/// taking no row from a page without the walk losing or repeating a neighbour — and names each
+/// unresolved designator exactly once over the whole walk.
+#[test]
+fn a_paged_dependency_read_over_resolved_and_unresolved_opaque_far_ends_loses_and_repeats_nothing()
+{
+    let sandbox = Sandbox::new();
+    let plans = designator("linear", "org-plans");
+    let nobody = designator("linear", "org-nobody-here");
+    let nowhere = designator("linear", "org-nowhere-either");
+    let notes = folder(
+        &sandbox,
+        "notes",
+        &[
+            (
+                "T-1",
+                &format!(
+                    "title: Ship\ndepends_on:\n  - T-2\n  - {{designator: {plans}, id: L-1, item: task}}\n  \
+                     - {{designator: {nobody}, id: L-8, item: task}}\n  - T-3\n  \
+                     - {{designator: {plans}, id: L-2, item: task}}\n  \
+                     - {{designator: {nowhere}, id: L-9, item: task}}\n  - T-4\n"
+                ),
+            ),
+            ("T-2", "title: Build\n"),
+            ("T-3", "title: Test\n"),
+            ("T-4", "title: Release\n"),
+        ],
+    );
+    let (plans_config, _plans_workspace) = workspace(
+        &sandbox,
+        "org-plans",
+        json!([
+            issue("L-1", "Review", json!({})),
+            issue("L-2", "Approve", json!({}))
+        ]),
+    );
+    sandbox.project_document(&configured(&json!({
+        "notes": {"plugin": "local-md", "config": {"root": notes}},
+        "plans": {"plugin": "linear", "config": plans_config},
+    })));
+    let whole = answered(&sandbox, &["task", "deps", "notes:T-1", "--json"], 0);
+    let everything = [
+        ("notes:T-1", "notes:T-2"),
+        ("notes:T-1", "plans:L-1"),
+        ("notes:T-1", "notes:T-3"),
+        ("notes:T-1", "plans:L-2"),
+        ("notes:T-1", "notes:T-4"),
+    ];
+    let mut expected: Vec<(String, String)> = everything
+        .iter()
+        .map(|(from, to)| ((*from).to_owned(), (*to).to_owned()))
+        .collect();
+    let mut answered_whole = edges(&whole);
+    answered_whole.sort();
+    expected.sort();
+    assert_eq!(answered_whole, expected, "{whole}");
+    let unresolved = |read: &Value| -> Vec<String> {
+        read.get("unanswered")
+            .and_then(Value::as_array)
+            .map(|entries| {
+                entries
+                    .iter()
+                    .map(|entry| {
+                        assert_eq!(entry["reason"], "not configured on this host", "{entry}");
+                        entry["designator"]
+                            .as_str()
+                            .expect("a designator")
+                            .to_owned()
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let mut named_whole = unresolved(&whole);
+    named_whole.sort();
+    let mut both = vec![nobody.clone(), nowhere.clone()];
+    both.sort();
+    assert_eq!(named_whole, both, "{whole}");
+
+    for limit in ["1", "2", "3"] {
+        let mut walked = Vec::new();
+        let mut named = Vec::new();
+        let mut token: Option<String> = None;
+        for _ in 0..=everything.len() + 2 {
+            let mut arguments = vec!["task", "deps", "notes:T-1", "--limit", limit, "--json"];
+            if let Some(token) = &token {
+                arguments.extend(["--page", token]);
+            }
+            let page = answered(&sandbox, &arguments, 0);
+            walked.extend(edges(&page));
+            named.extend(unresolved(&page));
+            match page["next"].as_str() {
+                Some(next) => token = Some(next.to_owned()),
+                None => {
+                    token = None;
+                    break;
+                }
+            }
+        }
+        assert!(token.is_none(), "limit {limit}: the walk ends");
+        assert_eq!(
+            walked,
+            edges(&whole),
+            "limit {limit}: every edge once, in the one-page read's order"
+        );
+        named.sort();
+        assert_eq!(
+            named, both,
+            "limit {limit}: each unresolved designator named once"
+        );
+    }
+}
+
+/// A task an earlier release copied onto a public folder — its record otherwise exactly what a
+/// copy now leaves, but without `onetaskgraph.edges_on_record` — is written once by the next
+/// copy, gaining that mark and the source version it copied under and nothing else — reported
+/// `unchanged`, because nothing it copied moved — and the copy after that writes nothing.
+#[test]
+fn a_current_copy_lacking_the_edges_on_record_mark_gains_it_once_and_nothing_else() {
+    const ALIAS: &str = "planning_vault-2026";
+    let sandbox = Sandbox::new();
+    let site = folder(&sandbox, "site", &[]);
+    let vault = folder(
+        &sandbox,
+        "vault",
+        &[
+            ("native", "title: Native\ndepends_on: [approve-plan]\n"),
+            ("approve-plan", "title: Approve the plan\n"),
+        ],
+    );
+    sandbox.project_document(&configured(&json!({
+        "site": {"plugin": "local-md", "config": {"root": site}, "visibility": "public"},
+        "vault": {"plugin": "local-md", "config": {"root": vault}, "visibility": "private",
+                  "public_alias": ALIAS},
+    })));
+    let copy = || {
+        answered(
+            &sandbox,
+            &["task", "copy", "vault:native", "--to", "site", "--json"],
+            0,
+        )
+    };
+    let first = copy();
+    let landed = first["items"][0]["destination"]
+        .as_str()
+        .expect("a destination")
+        .strip_prefix("site:")
+        .expect("a site id")
+        .to_owned();
+    let path = site.join("tasks").join(format!("{landed}.md"));
+    // The first copy records its link on the source, which moves the source's version; once
+    // the next copy has recorded that version, the counterpart is current and a copy leaves it.
+    copy();
+    let marked = std::fs::read_to_string(&path).expect("the copy");
+    let settled = copy();
+    assert_eq!(settled["items"][0]["action"], "unchanged", "{settled}");
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("the copy"),
+        marked,
+        "a current, marked copy is left as it is"
+    );
+    let mark = "  onetaskgraph.edges_on_record: 1\n";
+    assert_eq!(marked.matches(mark).count(), 1, "{marked}");
+    // What an earlier release left: the same record, without the mark.
+    let unmarked = marked.replacen(mark, "", 1);
+    std::fs::write(&path, &unmarked).expect("the earlier release's copy");
+
+    let second = copy();
+    assert_eq!(
+        second["items"][0]["destination"],
+        first["items"][0]["destination"]
+    );
+    // Bringing a copy's own record up to date is not a change of what it copied.
+    assert_eq!(second["items"][0]["action"], "unchanged", "{second}");
+    let rewritten = std::fs::read_to_string(&path).expect("the copy");
+    assert_eq!(
+        rewritten.matches(mark).count(),
+        1,
+        "the mark is back:\n{rewritten}"
+    );
+    // A copy that writes records the source version it copied under, which the first copy's
+    // link on the source has moved since; every other line is the earlier release's.
+    let source = answered(&sandbox, &["task", "show", "vault:native", "--json"], 0);
+    let version = source["items"][0]["item"]["version"]
+        .as_str()
+        .expect("the source's version");
+    let without_version = |text: &str| -> String {
+        text.lines()
+            .filter(|line| !line.contains("onetaskgraph.copied_version:"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    assert!(
+        rewritten.contains(&format!("onetaskgraph.copied_version: {version}\n")),
+        "the source version it copied under:\n{rewritten}"
+    );
+    assert_eq!(
+        without_version(&rewritten.replacen(mark, "", 1)),
+        without_version(&unmarked),
+        "nothing but the mark and the copied version was written"
+    );
+    assert_eq!(
+        std::fs::read_dir(site.join("tasks"))
+            .expect("the folder")
+            .count(),
+        1,
+        "the counterpart was rewritten, not duplicated"
+    );
+
+    let third = copy();
+    assert_eq!(third["items"][0]["action"], "unchanged", "{third}");
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("the copy"),
+        rewritten,
+        "a marked copy is not written again"
+    );
+}
