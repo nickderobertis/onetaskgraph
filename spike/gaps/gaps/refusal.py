@@ -42,6 +42,9 @@ INLINE_VARIABLE = (
     f'mutation($p: ID!) {{ createIssue(input: {{repositoryId: "{REPO_ID}", title: "x",'
     " projectV2Ids: [$p]}) { issue { id } } }"
 )
+IMPOSTOR = (
+    "mutation($input: CreateIssueInput!) { createIssue(input: $input) { issue { id: title } } }"
+)
 UNSENT = (
     "mutation($p: ID!, $i: ID!) { deleteProjectV2Item(input: {projectId: $p, itemId: $i})"
     " { deletedItemId } }"
@@ -221,6 +224,12 @@ CASES = (
         Allowed.NOTHING,
     ),
     Case("a read, with no write allowed", READ, {}, 200, Allowed.NOTHING),
+    Case(
+        "createIssue answering its title under the key the guard reads ids from",
+        IMPOSTOR,
+        {"input": {"repositoryId": REPO_ID, "title": "I_someone_else"}},
+        403,
+    ),
 )
 RAW = (
     RawCase(

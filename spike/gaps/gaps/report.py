@@ -28,14 +28,6 @@ from gaps.pricing import Named
 from gaps.proc import ProcessFailed
 
 BRANCH = "nick/board-copy-gaps-2026-10-24/spike-feasibility"
-WORKLOAD = (
-    "The brief's 10-item plan (one 50 KB project, eight 45–49 KB tasks with 10 blocked-by edges, "
-    "one 35 KB document with a 104,072-byte PNG) onto the test board the live crate declares. "
-    "Baseline at the 2,000-item reference size by the approved page-replacement arithmetic: no "
-    "baseline run sent a board or search page, so 0 pages are replaced and each figure is its "
-    "test-board figure; every prototype read is item- or parent-scoped, so none grows with the "
-    "board."
-)
 MEASURES = {
     Unit.POINTS: "GraphQL primary points of `project copy` then `document copy`",
     Unit.SECONDS: "wall seconds of `project copy` then `document copy`",
@@ -98,6 +90,19 @@ class Answers:
     visual_changes: tuple[str, ...]
 
 
+def workload_of(candidate: Candidate, summary: Summary) -> str:
+    """The plan's own workload for a budget, and what the baseline measured it as."""
+    w = summary.workload
+    return (
+        f"{candidate.budget.workload} Measured as: a {w.project_bytes:,}-byte project, {w.tasks} "
+        f"tasks of {w.task_bytes_least:,}–{w.task_bytes_most:,} bytes with {w.edges} blocked-by "
+        f"edges, and a {w.document_bytes:,}-byte document (the baseline's own `workload.json`). "
+        "At the plan's reference board size by the approved page-replacement arithmetic: no "
+        "baseline run sent a board or search page, so each figure is its test-board figure, and "
+        "every prototype read is item- or parent-scoped, so none grows with the board."
+    )
+
+
 def measure_of(candidate: Candidate) -> str:
     """What a candidate measures."""
     if candidate.budget.operation is Operation.HOST_APPROVAL:
@@ -119,7 +124,7 @@ def row(candidate: Candidate, summary: Summary) -> dict[str, str]:
     return {
         "budget": candidate.budget.id,
         "measure": measure_of(candidate),
-        "workload": WORKLOAD,
+        "workload": workload_of(candidate, summary),
         "achievable": (
             f"Baseline, observed on 0.11.0 (`{base.run}`): "
             f"{baseline_figure(base, candidate.budget.unit):g} {candidate.budget.unit.value}. "
@@ -201,9 +206,9 @@ def method(summary: Summary) -> str:
         "of "
         "its private sources are not in the baseline. Synthetic onevcs answers visibility by rule "
         "and "
-        "makes no GitHub refresh, so its call times are not the host's; the host's measured "
-        "0.62–0.67 s "
-        "a call is used for the seconds estimates. The synthetic destination is a folder, not a "
+        "makes no GitHub refresh, so its call times are not the host's; the host's slowest "
+        f"measured mean, {summary.onevcs_call_seconds} s a call, is used for the seconds "
+        "estimates. The synthetic destination is a folder, not a "
         "board. "
         "One baseline sample per operation. GitHub reports two interleaving GraphQL counters, so a "
         "mutation's price is the least rise in its own window. No 24-alias request was sent. "

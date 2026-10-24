@@ -48,6 +48,7 @@ class Budget:
     threshold: float
     unit: Unit
     repository: str
+    workload: str
 
     @property
     def operation(self) -> Operation:

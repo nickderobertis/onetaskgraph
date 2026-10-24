@@ -51,6 +51,8 @@ def test_a_placement_probe_runs_end_to_end_and_deletes_every_issue_it_created(
     assert result.reference_resolution_seconds is not None
     assert result.cleanup.deleted == 11 and result.cleanup.left == 0
     assert stand_in.issues == {}
+    assert max(stand_in.delete_batches) <= placement.DELETE_BATCH
+    assert sum(stand_in.delete_batches) == 11
     ops = [obj(line, "record").get("op") for line in load_lines(out / "requests.jsonl")]
     assert ops.count("ProbeNineteen") == placement.REPEATS
     assert {"before", "after"} <= set(json.loads((out / "quota.json").read_text()))
@@ -76,6 +78,7 @@ def test_a_pricing_probe_prices_every_shape_the_analysis_names(
         ({"GH_PROJECTS_TOKEN": "t", "SPIKE_UPSTREAM": "https://api.github.com"}, "loopback"),
         ({"GH_PROJECTS_TOKEN": "t", "XDG_CACHE_HOME": "relative/cache"}, "absolute"),
         ({"GH_PROJECTS_TOKEN": "t\x01ken"}, "GH_PROJECTS_TOKEN"),
+        ({"GH_PROJECTS_TOKEN": "t", "SPIKE_UPSTREAM": "http://127.0.0.1:bad"}, "port"),
     ],
 )
 def test_a_wrong_environment_exits_2_naming_what_is_wrong(

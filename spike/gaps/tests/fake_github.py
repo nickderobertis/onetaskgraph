@@ -111,6 +111,7 @@ class Board:
     reset: int = 4102444800
     rest_remaining: int | None = None
     tokens: list[str] = field(default_factory=list)
+    delete_batches: list[int] = field(default_factory=list)
     issues: dict[str, Issue] = field(default_factory=dict)
     used: int = 1000
     seen: list[str] = field(default_factory=list)
@@ -278,6 +279,7 @@ class Board:
 
     def delete(self, variables: dict[str, Json]) -> dict[str, object]:
         """Delete each aliased issue, or refuse every one when told to."""
+        self.delete_batches.append(len(variables))
         if self.fail_deletes:
             return {
                 "data": None,

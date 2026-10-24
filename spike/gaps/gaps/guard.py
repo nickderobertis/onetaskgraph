@@ -51,6 +51,11 @@ MAX_BODY = 4 * 1024 * 1024
 TIMEOUT = 120.0
 
 
+# The response keys the guard reads ownership from. A document aliasing any other field to one
+# of them (`issue { id: title }`) could make a value it chose read as an id, so it is refused.
+READ_KEYS = frozenset({"id", "issue", "projectItems", "nodes", "project"})
+
+
 class Unreadable(ValueError):
     """A request the guard cannot read as one GraphQL operation."""
 
@@ -85,6 +90,18 @@ def _keyed(value: object, keys: frozenset[str]) -> set[str]:
     return found
 
 
+def fields_in(document: graphql.DocumentNode) -> list[graphql.FieldNode]:
+    """Every field a document selects anywhere: operations, fragments and inline fragments."""
+    found: list[graphql.FieldNode] = []
+
+    class Collect(graphql.Visitor):
+        def enter_field(self, node: graphql.FieldNode, *_: object) -> None:
+            found.append(node)
+
+    graphql.visit(document, Collect())
+    return found
+
+
 def operation(query: str, variables: dict[str, Json], name: str | None) -> Operation:
     """The operation a request executes: its kind, its fields and every id its arguments name.
 
@@ -96,6 +113,18 @@ def operation(query: str, variables: dict[str, Json], name: str | None) -> Opera
         document = graphql.parse(query)
     except graphql.GraphQLError as error:
         raise Unreadable(f"not a GraphQL document: {error.message}") from error
+    impostor = next(
+        (
+            node.alias.value
+            for node in fields_in(document)
+            if node.alias is not None
+            and node.alias.value in READ_KEYS
+            and node.alias.value != node.name.value
+        ),
+        None,
+    )
+    if impostor is not None:
+        raise Unreadable(f"another field aliased as `{impostor}`, a key the guard reads")
     operations = [d for d in document.definitions if isinstance(d, graphql.OperationDefinitionNode)]
     if name is not None:
         operations = [o for o in operations if o.name is not None and o.name.value == name]

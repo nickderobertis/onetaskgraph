@@ -100,7 +100,15 @@ def test_the_seconds_estimates_are_the_baseline_less_what_the_plans_remove() -> 
     screening = round(sum(v for k, v in split.items() if "screening" in k), 2)
     reads = round(last_ms(host, "ISSUE", 2) + last_ms(host, "SUB_ISSUES", 1), 2)
     parent = summary.prices.parent_listing_seconds
-    expected = round(wall - screening + 2 * 0.67 - reads + parent, 1)
+    means = [
+        sum(v for k, v in run["split"].items() if "screening" in k)
+        / sum(run["screening_calls"].values())
+        for name, run in runs.items()
+        if name in analysis.BASELINE_RUNS.values() and run.get("screening_calls")
+    ]
+    per_call = round(max(means), 2)
+    assert summary.onevcs_call_seconds == per_call
+    expected = round(wall - screening + 2 * per_call - reads + parent, 1)
     assert by_id["plan-approval-seconds"].attainable == expected
 
 

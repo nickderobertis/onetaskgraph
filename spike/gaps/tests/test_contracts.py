@@ -190,8 +190,9 @@ def test_the_decoder_names_the_first_value_that_is_not_its_type() -> None:
         "threshold": 3,
         "unit": "points",
         "repository": "r",
+        "workload": "w",
     }
-    assert decode(Budget, record, "b") == Budget("x-first", "n", 3.0, Unit.POINTS, "r")
+    assert decode(Budget, record, "b") == Budget("x-first", "n", 3.0, Unit.POINTS, "r", "w")
     assert decode(Budget, encode(decode(Budget, record, "b")), "b").unit is Unit.POINTS
     with pytest.raises(ShapeError, match=r"b\.threshold: expected a number"):
         decode(Budget, record | {"threshold": "3"}, "b")
@@ -228,6 +229,7 @@ def test_a_budget_is_held_against_the_operation_its_id_names(
                                 "threshold": 1,
                                 "unit": "points",
                                 "repository": "r",
+                                "workload": "w",
                             }
                         ]
                     }
@@ -242,7 +244,7 @@ def test_a_budget_is_held_against_the_operation_its_id_names(
 def test_a_budget_naming_no_measured_operation_is_refused() -> None:
     """A budget naming no measured operation is refused."""
     with pytest.raises(ShapeError, match="names no operation"):
-        _ = Budget("plan-copy-spend", "n", 1, Unit.POINTS, "r").operation
+        _ = Budget("plan-copy-spend", "n", 1, Unit.POINTS, "r", "w").operation
 
 
 def test_the_visibilities_are_the_pinned_schemas_own() -> None:
@@ -349,3 +351,16 @@ def test_the_guards_input_table_is_the_pinned_schemas_and_every_id_it_allows_is_
         assert isinstance(input_type, graphql.GraphQLInputObjectType)
         assert allowed <= set(input_type.fields), (name, allowed - set(input_type.fields))
         assert _id_fields(input_type, allowed) <= classed, (name, _id_fields(input_type, allowed))
+
+
+def test_the_guard_refuses_an_alias_impersonating_a_key_it_reads() -> None:
+    """A field aliased as a key the guard reads ownership from is refused, fragments included."""
+    with pytest.raises(guard.Unreadable, match="aliased as `id`"):
+        guard.operation("mutation { createIssue(input: {}) { issue { id: title } } }", {}, None)
+    hidden = (
+        "mutation { createIssue(input: {}) { ...F } } fragment F on CreateIssuePayload"
+        " { issue: clientMutationId }"
+    )
+    with pytest.raises(guard.Unreadable, match="aliased as `issue`"):
+        guard.operation(hidden, {}, None)
+    assert guard.operation('query { i0: node(id: "I") { id } }', {}, None).fields

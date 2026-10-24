@@ -5,112 +5,128 @@
    "name": "Bare first copy secondary-limit writes",
    "repository": "github.com/nickderobertis/onetaskgraph",
    "threshold": 40.0,
-   "unit": "writes"
+   "unit": "writes",
+   "workload": "10 items: one 50 KB project, eight tasks of 45\u201349 KB with 10 dependency edges, one 35 KB design document with one 104,072-byte PNG and 19 field values; a 2,000-item destination board, repeated at 20,000 items for scaling; 3 manager sessions, no more than 4 workers."
   },
   {
    "id": "github-plan-copy-points-changed",
    "name": "Bare store changed copy points",
    "repository": "github.com/nickderobertis/onetaskgraph",
    "threshold": 4.0,
-   "unit": "points"
+   "unit": "points",
+   "workload": "10 items: one 50 KB project, eight tasks of 45\u201349 KB with 10 dependency edges, one 35 KB design document with one 104,072-byte PNG and 19 field values; a 2,000-item destination board, repeated at 20,000 items for scaling; 3 manager sessions, no more than 4 workers."
   },
   {
    "id": "github-plan-copy-points-first",
    "name": "Bare store first copy points",
    "repository": "github.com/nickderobertis/onetaskgraph",
    "threshold": 12.0,
-   "unit": "points"
+   "unit": "points",
+   "workload": "10 items: one 50 KB project, eight tasks of 45\u201349 KB with 10 dependency edges, one 35 KB design document with one 104,072-byte PNG and 19 field values; a 2,000-item destination board, repeated at 20,000 items for scaling; 3 manager sessions, no more than 4 workers."
   },
   {
    "id": "github-plan-copy-points-unchanged",
    "name": "Bare store unchanged copy points",
    "repository": "github.com/nickderobertis/onetaskgraph",
    "threshold": 3.0,
-   "unit": "points"
+   "unit": "points",
+   "workload": "10 items: one 50 KB project, eight tasks of 45\u201349 KB with 10 dependency edges, one 35 KB design document with one 104,072-byte PNG and 19 field values; a 2,000-item destination board, repeated at 20,000 items for scaling; 3 manager sessions, no more than 4 workers."
   },
   {
    "id": "github-plan-copy-seconds-changed",
    "name": "Bare store changed copy seconds",
    "repository": "github.com/nickderobertis/onetaskgraph",
    "threshold": 8.0,
-   "unit": "seconds"
+   "unit": "seconds",
+   "workload": "10 items: one 50 KB project, eight tasks of 45\u201349 KB with 10 dependency edges, one 35 KB design document with one 104,072-byte PNG and 19 field values; a 2,000-item destination board, repeated at 20,000 items for scaling; 3 manager sessions, no more than 4 workers."
   },
   {
    "id": "github-plan-copy-seconds-first",
    "name": "Bare store first copy seconds",
    "repository": "github.com/nickderobertis/onetaskgraph",
    "threshold": 32.0,
-   "unit": "seconds"
+   "unit": "seconds",
+   "workload": "10 items: one 50 KB project, eight tasks of 45\u201349 KB with 10 dependency edges, one 35 KB design document with one 104,072-byte PNG and 19 field values; a 2,000-item destination board, repeated at 20,000 items for scaling; 3 manager sessions, no more than 4 workers."
   },
   {
    "id": "github-plan-copy-seconds-unchanged",
    "name": "Bare store unchanged copy seconds",
    "repository": "github.com/nickderobertis/onetaskgraph",
    "threshold": 7.0,
-   "unit": "seconds"
+   "unit": "seconds",
+   "workload": "10 items: one 50 KB project, eight tasks of 45\u201349 KB with 10 dependency edges, one 35 KB design document with one 104,072-byte PNG and 19 field values; a 2,000-item destination board, repeated at 20,000 items for scaling; 3 manager sessions, no more than 4 workers."
   },
   {
    "id": "plan-approval-points",
    "name": "Host design approval points",
    "repository": "github.com/nickderobertis/ai-orchestrator",
    "threshold": 5.0,
-   "unit": "points"
+   "unit": "points",
+   "workload": "10 items: one 50 KB project, eight tasks of 45\u201349 KB with 10 dependency edges, one 35 KB design document with one 104,072-byte PNG and 19 field values; a 2,000-item destination board, repeated at 20,000 items for scaling; 3 manager sessions, no more than 4 workers."
   },
   {
    "id": "plan-approval-seconds",
    "name": "Host design approval seconds",
    "repository": "github.com/nickderobertis/ai-orchestrator",
    "threshold": 7.0,
-   "unit": "seconds"
+   "unit": "seconds",
+   "workload": "10 items: one 50 KB project, eight tasks of 45\u201349 KB with 10 dependency edges, one 35 KB design document with one 104,072-byte PNG and 19 field values; a 2,000-item destination board, repeated at 20,000 items for scaling; 3 manager sessions, no more than 4 workers."
   },
   {
    "id": "plan-copy-points-changed",
    "name": "Host changed copy points",
    "repository": "github.com/nickderobertis/ai-orchestrator",
    "threshold": 4.0,
-   "unit": "points"
+   "unit": "points",
+   "workload": "10 items: one 50 KB project, eight tasks of 45\u201349 KB with 10 dependency edges, one 35 KB design document with one 104,072-byte PNG and 19 field values; a 2,000-item destination board, repeated at 20,000 items for scaling; 3 manager sessions, no more than 4 workers."
   },
   {
    "id": "plan-copy-points-first",
    "name": "Host first copy points",
    "repository": "github.com/nickderobertis/ai-orchestrator",
    "threshold": 12.0,
-   "unit": "points"
+   "unit": "points",
+   "workload": "10 items: one 50 KB project, eight tasks of 45\u201349 KB with 10 dependency edges, one 35 KB design document with one 104,072-byte PNG and 19 field values; a 2,000-item destination board, repeated at 20,000 items for scaling; 3 manager sessions, no more than 4 workers."
   },
   {
    "id": "plan-copy-points-unchanged",
    "name": "Host unchanged copy points",
    "repository": "github.com/nickderobertis/ai-orchestrator",
    "threshold": 3.0,
-   "unit": "points"
+   "unit": "points",
+   "workload": "10 items: one 50 KB project, eight tasks of 45\u201349 KB with 10 dependency edges, one 35 KB design document with one 104,072-byte PNG and 19 field values; a 2,000-item destination board, repeated at 20,000 items for scaling; 3 manager sessions, no more than 4 workers."
   },
   {
    "id": "plan-copy-seconds-changed",
    "name": "Host changed copy seconds",
    "repository": "github.com/nickderobertis/ai-orchestrator",
    "threshold": 8.0,
-   "unit": "seconds"
+   "unit": "seconds",
+   "workload": "10 items: one 50 KB project, eight tasks of 45\u201349 KB with 10 dependency edges, one 35 KB design document with one 104,072-byte PNG and 19 field values; a 2,000-item destination board, repeated at 20,000 items for scaling; 3 manager sessions, no more than 4 workers."
   },
   {
    "id": "plan-copy-seconds-first",
    "name": "Host first copy seconds",
    "repository": "github.com/nickderobertis/ai-orchestrator",
    "threshold": 32.0,
-   "unit": "seconds"
+   "unit": "seconds",
+   "workload": "10 items: one 50 KB project, eight tasks of 45\u201349 KB with 10 dependency edges, one 35 KB design document with one 104,072-byte PNG and 19 field values; a 2,000-item destination board, repeated at 20,000 items for scaling; 3 manager sessions, no more than 4 workers."
   },
   {
    "id": "plan-copy-seconds-unchanged",
    "name": "Host unchanged copy seconds",
    "repository": "github.com/nickderobertis/ai-orchestrator",
    "threshold": 7.0,
-   "unit": "seconds"
+   "unit": "seconds",
+   "workload": "10 items: one 50 KB project, eight tasks of 45\u201349 KB with 10 dependency edges, one 35 KB design document with one 104,072-byte PNG and 19 field values; a 2,000-item destination board, repeated at 20,000 items for scaling; 3 manager sessions, no more than 4 workers."
   },
   {
    "id": "plan-copy-writes-first",
    "name": "Host first copy secondary-limit writes",
    "repository": "github.com/nickderobertis/ai-orchestrator",
    "threshold": 40.0,
-   "unit": "writes"
+   "unit": "writes",
+   "workload": "10 items: one 50 KB project, eight tasks of 45\u201349 KB with 10 dependency edges, one 35 KB design document with one 104,072-byte PNG and 19 field values; a 2,000-item destination board, repeated at 20,000 items for scaling; 3 manager sessions, no more than 4 workers."
   }
  ],
  "candidates": [
@@ -132,7 +148,8 @@
     "name": "Bare first copy secondary-limit writes",
     "repository": "github.com/nickderobertis/onetaskgraph",
     "threshold": 40.0,
-    "unit": "writes"
+    "unit": "writes",
+    "workload": "10 items: one 50 KB project, eight tasks of 45\u201349 KB with 10 dependency edges, one 35 KB design document with one 104,072-byte PNG and 19 field values; a 2,000-item destination board, repeated at 20,000 items for scaling; 3 manager sessions, no more than 4 workers."
    },
    "label": "observed, unchanged by the selected strategy",
    "limits": "GitHub's secondary limit is 80 content-creating requests a minute; the first copy creates 10 issues in 3 requests and uploads 1 asset. The total holds only while placement rides on createIssue(projectV2Ids): an addProjectV2ItemById per issue adds 10.",
@@ -156,7 +173,8 @@
     "name": "Bare store changed copy points",
     "repository": "github.com/nickderobertis/onetaskgraph",
     "threshold": 4.0,
-    "unit": "points"
+    "unit": "points",
+    "workload": "10 items: one 50 KB project, eight tasks of 45\u201349 KB with 10 dependency edges, one 35 KB design document with one 104,072-byte PNG and 19 field values; a 2,000-item destination board, repeated at 20,000 items for scaling; 3 manager sessions, no more than 4 workers."
    },
    "label": "estimate from observed prices",
    "limits": "GraphQL allows 5000 points an hour, shared with all host work: 3 operations an hour at 3 is 9 points (0.18%). Every price is GitHub's own (dry run, matched by the charge of each coalesced shape); a mutation request rose by its least observed amount whatever its aliases, up to 19.",
@@ -180,7 +198,8 @@
     "name": "Bare store first copy points",
     "repository": "github.com/nickderobertis/onetaskgraph",
     "threshold": 12.0,
-    "unit": "points"
+    "unit": "points",
+    "workload": "10 items: one 50 KB project, eight tasks of 45\u201349 KB with 10 dependency edges, one 35 KB design document with one 104,072-byte PNG and 19 field values; a 2,000-item destination board, repeated at 20,000 items for scaling; 3 manager sessions, no more than 4 workers."
    },
    "label": "estimate from observed prices",
    "limits": "GraphQL allows 5000 points an hour, shared with all host work: 3 operations an hour at 9 is 27 points (0.54%). Every price is GitHub's own (dry run, matched by the charge of each coalesced shape); a mutation request rose by its least observed amount whatever its aliases, up to 19.",
@@ -204,7 +223,8 @@
     "name": "Bare store unchanged copy points",
     "repository": "github.com/nickderobertis/onetaskgraph",
     "threshold": 3.0,
-    "unit": "points"
+    "unit": "points",
+    "workload": "10 items: one 50 KB project, eight tasks of 45\u201349 KB with 10 dependency edges, one 35 KB design document with one 104,072-byte PNG and 19 field values; a 2,000-item destination board, repeated at 20,000 items for scaling; 3 manager sessions, no more than 4 workers."
    },
    "label": "estimate from observed prices",
    "limits": "GraphQL allows 5000 points an hour, shared with all host work: 3 operations an hour at 2 is 6 points (0.12%). Every price is GitHub's own (dry run, matched by the charge of each coalesced shape); a mutation request rose by its least observed amount whatever its aliases, up to 19.",
@@ -228,10 +248,11 @@
     "name": "Bare store changed copy seconds",
     "repository": "github.com/nickderobertis/onetaskgraph",
     "threshold": 8.0,
-    "unit": "seconds"
+    "unit": "seconds",
+    "workload": "10 items: one 50 KB project, eight tasks of 45\u201349 KB with 10 dependency edges, one 35 KB design document with one 104,072-byte PNG and 19 field values; a 2,000-item destination board, repeated at 20,000 items for scaling; 3 manager sessions, no more than 4 workers."
    },
    "label": "estimate",
-   "limits": "Seconds warn on this host; one baseline sample each; host onevcs calls at 0.67 s.",
+   "limits": "Seconds warn on this host; one baseline sample each; host onevcs calls at 0.67 s, the baseline's slowest mean.",
    "within": true
   },
   {
@@ -252,10 +273,11 @@
     "name": "Bare store first copy seconds",
     "repository": "github.com/nickderobertis/onetaskgraph",
     "threshold": 32.0,
-    "unit": "seconds"
+    "unit": "seconds",
+    "workload": "10 items: one 50 KB project, eight tasks of 45\u201349 KB with 10 dependency edges, one 35 KB design document with one 104,072-byte PNG and 19 field values; a 2,000-item destination board, repeated at 20,000 items for scaling; 3 manager sessions, no more than 4 workers."
    },
    "label": "estimate",
-   "limits": "Seconds warn on this host; one baseline sample each; host onevcs calls at 0.67 s.",
+   "limits": "Seconds warn on this host; one baseline sample each; host onevcs calls at 0.67 s, the baseline's slowest mean.",
    "within": true
   },
   {
@@ -276,10 +298,11 @@
     "name": "Bare store unchanged copy seconds",
     "repository": "github.com/nickderobertis/onetaskgraph",
     "threshold": 7.0,
-    "unit": "seconds"
+    "unit": "seconds",
+    "workload": "10 items: one 50 KB project, eight tasks of 45\u201349 KB with 10 dependency edges, one 35 KB design document with one 104,072-byte PNG and 19 field values; a 2,000-item destination board, repeated at 20,000 items for scaling; 3 manager sessions, no more than 4 workers."
    },
    "label": "estimate",
-   "limits": "Seconds warn on this host; one baseline sample each; host onevcs calls at 0.67 s.",
+   "limits": "Seconds warn on this host; one baseline sample each; host onevcs calls at 0.67 s, the baseline's slowest mean.",
    "within": true
   },
   {
@@ -300,7 +323,8 @@
     "name": "Host design approval points",
     "repository": "github.com/nickderobertis/ai-orchestrator",
     "threshold": 5.0,
-    "unit": "points"
+    "unit": "points",
+    "workload": "10 items: one 50 KB project, eight tasks of 45\u201349 KB with 10 dependency edges, one 35 KB design document with one 104,072-byte PNG and 19 field values; a 2,000-item destination board, repeated at 20,000 items for scaling; 3 manager sessions, no more than 4 workers."
    },
    "label": "estimate from observed prices",
    "limits": "GraphQL allows 5000 points an hour, shared with all host work: 3 operations an hour at 5 is 15 points (0.30%). Every price is GitHub's own (dry run, matched by the charge of each coalesced shape); a mutation request rose by its least observed amount whatever its aliases, up to 19.",
@@ -324,10 +348,11 @@
     "name": "Host design approval seconds",
     "repository": "github.com/nickderobertis/ai-orchestrator",
     "threshold": 7.0,
-    "unit": "seconds"
+    "unit": "seconds",
+    "workload": "10 items: one 50 KB project, eight tasks of 45\u201349 KB with 10 dependency edges, one 35 KB design document with one 104,072-byte PNG and 19 field values; a 2,000-item destination board, repeated at 20,000 items for scaling; 3 manager sessions, no more than 4 workers."
    },
    "label": "estimate",
-   "limits": "Seconds warn on this host; one baseline sample each; host onevcs calls at 0.67 s.",
+   "limits": "Seconds warn on this host; one baseline sample each; host onevcs calls at 0.67 s, the baseline's slowest mean.",
    "within": false
   },
   {
@@ -348,7 +373,8 @@
     "name": "Host changed copy points",
     "repository": "github.com/nickderobertis/ai-orchestrator",
     "threshold": 4.0,
-    "unit": "points"
+    "unit": "points",
+    "workload": "10 items: one 50 KB project, eight tasks of 45\u201349 KB with 10 dependency edges, one 35 KB design document with one 104,072-byte PNG and 19 field values; a 2,000-item destination board, repeated at 20,000 items for scaling; 3 manager sessions, no more than 4 workers."
    },
    "label": "estimate from observed prices",
    "limits": "GraphQL allows 5000 points an hour, shared with all host work: 3 operations an hour at 3 is 9 points (0.18%). Every price is GitHub's own (dry run, matched by the charge of each coalesced shape); a mutation request rose by its least observed amount whatever its aliases, up to 19.",
@@ -372,7 +398,8 @@
     "name": "Host first copy points",
     "repository": "github.com/nickderobertis/ai-orchestrator",
     "threshold": 12.0,
-    "unit": "points"
+    "unit": "points",
+    "workload": "10 items: one 50 KB project, eight tasks of 45\u201349 KB with 10 dependency edges, one 35 KB design document with one 104,072-byte PNG and 19 field values; a 2,000-item destination board, repeated at 20,000 items for scaling; 3 manager sessions, no more than 4 workers."
    },
    "label": "estimate from observed prices",
    "limits": "GraphQL allows 5000 points an hour, shared with all host work: 3 operations an hour at 9 is 27 points (0.54%). Every price is GitHub's own (dry run, matched by the charge of each coalesced shape); a mutation request rose by its least observed amount whatever its aliases, up to 19.",
@@ -396,7 +423,8 @@
     "name": "Host unchanged copy points",
     "repository": "github.com/nickderobertis/ai-orchestrator",
     "threshold": 3.0,
-    "unit": "points"
+    "unit": "points",
+    "workload": "10 items: one 50 KB project, eight tasks of 45\u201349 KB with 10 dependency edges, one 35 KB design document with one 104,072-byte PNG and 19 field values; a 2,000-item destination board, repeated at 20,000 items for scaling; 3 manager sessions, no more than 4 workers."
    },
    "label": "estimate from observed prices",
    "limits": "GraphQL allows 5000 points an hour, shared with all host work: 3 operations an hour at 2 is 6 points (0.12%). Every price is GitHub's own (dry run, matched by the charge of each coalesced shape); a mutation request rose by its least observed amount whatever its aliases, up to 19.",
@@ -420,10 +448,11 @@
     "name": "Host changed copy seconds",
     "repository": "github.com/nickderobertis/ai-orchestrator",
     "threshold": 8.0,
-    "unit": "seconds"
+    "unit": "seconds",
+    "workload": "10 items: one 50 KB project, eight tasks of 45\u201349 KB with 10 dependency edges, one 35 KB design document with one 104,072-byte PNG and 19 field values; a 2,000-item destination board, repeated at 20,000 items for scaling; 3 manager sessions, no more than 4 workers."
    },
    "label": "estimate",
-   "limits": "Seconds warn on this host; one baseline sample each; host onevcs calls at 0.67 s.",
+   "limits": "Seconds warn on this host; one baseline sample each; host onevcs calls at 0.67 s, the baseline's slowest mean.",
    "within": false
   },
   {
@@ -444,10 +473,11 @@
     "name": "Host first copy seconds",
     "repository": "github.com/nickderobertis/ai-orchestrator",
     "threshold": 32.0,
-    "unit": "seconds"
+    "unit": "seconds",
+    "workload": "10 items: one 50 KB project, eight tasks of 45\u201349 KB with 10 dependency edges, one 35 KB design document with one 104,072-byte PNG and 19 field values; a 2,000-item destination board, repeated at 20,000 items for scaling; 3 manager sessions, no more than 4 workers."
    },
    "label": "estimate",
-   "limits": "Seconds warn on this host; one baseline sample each; host onevcs calls at 0.67 s.",
+   "limits": "Seconds warn on this host; one baseline sample each; host onevcs calls at 0.67 s, the baseline's slowest mean.",
    "within": false
   },
   {
@@ -468,10 +498,11 @@
     "name": "Host unchanged copy seconds",
     "repository": "github.com/nickderobertis/ai-orchestrator",
     "threshold": 7.0,
-    "unit": "seconds"
+    "unit": "seconds",
+    "workload": "10 items: one 50 KB project, eight tasks of 45\u201349 KB with 10 dependency edges, one 35 KB design document with one 104,072-byte PNG and 19 field values; a 2,000-item destination board, repeated at 20,000 items for scaling; 3 manager sessions, no more than 4 workers."
    },
    "label": "estimate",
-   "limits": "Seconds warn on this host; one baseline sample each; host onevcs calls at 0.67 s.",
+   "limits": "Seconds warn on this host; one baseline sample each; host onevcs calls at 0.67 s, the baseline's slowest mean.",
    "within": false
   },
   {
@@ -492,7 +523,8 @@
     "name": "Host first copy secondary-limit writes",
     "repository": "github.com/nickderobertis/ai-orchestrator",
     "threshold": 40.0,
-    "unit": "writes"
+    "unit": "writes",
+    "workload": "10 items: one 50 KB project, eight tasks of 45\u201349 KB with 10 dependency edges, one 35 KB design document with one 104,072-byte PNG and 19 field values; a 2,000-item destination board, repeated at 20,000 items for scaling; 3 manager sessions, no more than 4 workers."
    },
    "label": "observed, unchanged by the selected strategy",
    "limits": "GitHub's secondary limit is 80 content-creating requests a minute; the first copy creates 10 issues in 3 requests and uploads 1 asset. The total holds only while placement rides on createIssue(projectV2Ids): an addProjectV2ItemById per issue adds 10.",
@@ -1555,6 +1587,12 @@
      "status": 403
     },
     {
+     "case": "createIssue answering its title under the key the guard reads ids from",
+     "expected": 403,
+     "reached_upstream": 0,
+     "status": 403
+    },
+    {
      "case": "an asset upload",
      "expected": 403,
      "reached_upstream": 0,
@@ -1604,7 +1642,7 @@
     }
    ]
   },
-  "refusal_run": "proxy-refusal-head-20261024T163321",
+  "refusal_run": "proxy-refusal-head-20261024T171011",
   "union": {
    "commands": {
     "document-copy": [
@@ -2581,6 +2619,7 @@
   },
   "union_run": "screen-union-closure-20261024T161934"
  },
+ "onevcs_call_seconds": 0.67,
  "placement": {
   "add_outcomes": [
    "returned the issue's one item",
@@ -2917,5 +2956,13 @@
    "single origin lookup": 1,
    "sub-issue listing (23 members)": 1
   }
+ },
+ "workload": {
+  "document_bytes": 35617,
+  "edges": 10,
+  "project_bytes": 50205,
+  "task_bytes_least": 45234,
+  "task_bytes_most": 49330,
+  "tasks": 8
  }
 }

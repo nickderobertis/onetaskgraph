@@ -17,7 +17,8 @@ from pathlib import Path
 from gaps.allowance import Reading
 from gaps.budgets import Budget, Operation, Unit
 from gaps.github import Kind, RequestRecord
-from gaps.json_shape import ShapeError, decode, integer, load, load_lines, obj
+from gaps.harness import workload
+from gaps.json_shape import ShapeError, arr, decode, integer, load, load_lines, obj
 from gaps.placement import AddOutcome, PlacementResult
 from gaps.pricing import Named, PricingResult
 from gaps.reach import Case, ReachResult
@@ -40,7 +41,6 @@ BASELINE_RUNS = {
     Operation.HOST_UNCHANGED: "host-recopy-stock-20261024T100859",
     Operation.HOST_APPROVAL: "host-approve-stock-20261024T100947",
 }
-ONEVCS_CALL_SECONDS = 0.67  # the host's slowest measured mean per onevcs call (0.62–0.67 s)
 BURST_COPIES_AN_HOUR = 3
 
 
@@ -190,6 +190,36 @@ class Consumed:
 
 
 @dataclass(frozen=True)
+class Workload:
+    """The plan the baseline copied, as its own `workload.json` and the generator record it."""
+
+    project_bytes: int
+    tasks: int
+    task_bytes_least: int
+    task_bytes_most: int
+    edges: int
+    document_bytes: int
+
+
+def measured_workload() -> Workload:
+    """The bare first copy's rendered sizes, and the generator's edges."""
+    path = BASELINE / BASELINE_RUNS[Operation.BARE_FIRST] / "workload.json"
+    sizes = {
+        label: integer(arr(value, f"{path}.{label}")[0], f"{path}.{label}[0]")
+        for label, value in obj(load(path), str(path)).items()
+    }
+    tasks = [b for label, b in sizes.items() if label.startswith("task ")]
+    return Workload(
+        project_bytes=sizes["project"],
+        tasks=len(tasks),
+        task_bytes_least=min(tasks),
+        task_bytes_most=max(tasks),
+        edges=len(workload.TASK_EDGES),
+        document_bytes=sizes["document"],
+    )
+
+
+@dataclass(frozen=True)
 class Summary:
     """Everything the report states."""
 
@@ -199,6 +229,8 @@ class Summary:
     candidates: tuple[Candidate, ...]
     offline: Offline
     consumed: Consumed
+    workload: Workload
+    onevcs_call_seconds: float
 
 
 def runs(prefix: str) -> list[Path]:
@@ -452,7 +484,18 @@ def removed(base: Baseline, picks: tuple[tuple[str, int], ...]) -> tuple[float, 
     return round(total, 2), ", ".join(said)
 
 
-def seconds(base: Baseline, union_calls: int, parent_seconds: float) -> Figure:
+def onevcs_call_seconds(bases: dict[Operation, Baseline]) -> float:
+    """The slowest mean seconds a host onevcs call took in the baseline.
+
+    Screening time over calls, for every host operation that screened.
+    """
+    means = [b.screening_seconds / b.screening_calls for b in bases.values() if b.screening_calls]
+    if not means:
+        raise ShapeError("no baseline host operation screened anything")
+    return round(max(means), 2)
+
+
+def seconds(base: Baseline, union_calls: int, parent_seconds: float, per_call: float) -> Figure:
     """A seconds estimate: the baseline less the reads removed, its screening replaced."""
     cut, which = removed(base, REMOVED[base.operation])
     if base.operation not in SCREENED_CALLS_AFTER:
@@ -461,13 +504,11 @@ def seconds(base: Baseline, union_calls: int, parent_seconds: float) -> Figure:
     screened = SCREENED_CALLS_AFTER[base.operation]
     calls = union_calls if screened is None else screened
     added = parent_seconds if base.operation is Operation.HOST_APPROVAL else 0.0
-    after = round(
-        base.wall_seconds - base.screening_seconds + calls * ONEVCS_CALL_SECONDS - cut + added, 1
-    )
+    after = round(base.wall_seconds - base.screening_seconds + calls * per_call - cut + added, 1)
     return Figure(
         after,
         f"{base.wall_seconds} s measured − {base.screening_seconds} s screening "
-        f"({base.screening_calls} onevcs calls) + {calls} calls × {ONEVCS_CALL_SECONDS} s − {cut} "
+        f"({base.screening_calls} onevcs calls) + {calls} calls × {per_call} s − {cut} "
         "s "
         f"({which}) + {added} s added = {after} s",
     )
@@ -483,7 +524,12 @@ def hourly_allowance() -> int:
 
 
 def candidate(
-    budget: Budget, base: Baseline, prices_: Prices, union_calls: int, allowance: int
+    budget: Budget,
+    base: Baseline,
+    prices_: Prices,
+    union_calls: int,
+    allowance: int,
+    per_call: float,
 ) -> Candidate:
     """One budget's attainable figure, its arithmetic and its limits."""
     shape = prices_.shape
@@ -523,11 +569,12 @@ def candidate(
             )
             arithmetic = figure.arithmetic
         case Unit.SECONDS:
-            figure = seconds(base, union_calls, prices_.parent_listing_seconds)
+            figure = seconds(base, union_calls, prices_.parent_listing_seconds, per_call)
             label = "estimate"
             arithmetic = figure.arithmetic
             limits = (
-                "Seconds warn on this host; one baseline sample each; host onevcs calls at 0.67 s."
+                "Seconds warn on this host; one baseline sample each; host onevcs calls at "
+                f"{per_call} s, the baseline's slowest mean."
             )
     return Candidate(
         budget=budget,
@@ -619,6 +666,7 @@ def analyse(budgets: tuple[Budget, ...]) -> Summary:
     bases = baseline()
     found = offline()
     allowance = hourly_allowance()
+    per_call = onevcs_call_seconds(bases)
     union_calls = sum(
         next(v.unioned.calls for v in variants if v.plant is Plant.NONE)
         for variants in found.union.commands.values()
@@ -628,8 +676,11 @@ def analyse(budgets: tuple[Budget, ...]) -> Summary:
         prices=priced,
         placement=placement(),
         candidates=tuple(
-            candidate(b, bases[b.operation], priced, union_calls, allowance) for b in budgets
+            candidate(b, bases[b.operation], priced, union_calls, allowance, per_call)
+            for b in budgets
         ),
         offline=found,
         consumed=consumed(),
+        workload=measured_workload(),
+        onevcs_call_seconds=per_call,
     )

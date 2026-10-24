@@ -119,6 +119,12 @@ def paths() -> Paths:
         parts = urlsplit(upstream)
         if parts.scheme != "http" or parts.hostname not in ("127.0.0.1", "localhost"):
             raise UsageError(f"SPIKE_UPSTREAM may name only a loopback stand-in, not {upstream}")
+        try:
+            port = parts.port
+        except ValueError as error:
+            raise UsageError(f"SPIKE_UPSTREAM names no usable port: {upstream}") from error
+        if port is None:
+            raise UsageError(f"SPIKE_UPSTREAM names no port: {upstream}")
     return Paths(
         cache=cache,
         logs=absolute("SPIKE_GAPS_LOGS", LOGS),
