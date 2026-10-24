@@ -9,6 +9,16 @@ from typing import Annotated
 from pydantic import BaseModel, ConfigDict, Field, RootModel
 
 
+class Allocation(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="The random nonce a public projection project is created carrying.",
+            pattern="^[0-9a-f]{32}$",
+        ),
+    ]
+
+
 class GlobalId(RootModel[str]):
     root: Annotated[
         str,
@@ -58,7 +68,7 @@ class PublicProjectAllocation(BaseModel):
         extra="forbid",
     )
     allocation: Annotated[
-        str,
+        Allocation,
         Field(
             description="The nonce the project is created carrying, at [`PublicProjectAllocation::KEY`]."
         ),

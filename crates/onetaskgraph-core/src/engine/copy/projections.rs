@@ -20,10 +20,9 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use onetaskgraph_plugin_api::{
-    AssetPayload, Classification, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind,
-    ItemKind, ItemWrite, LabelFilter, MetadataKey, NativeId, Priority, Project, ProjectQuery,
-    Repository, SourceError, SourceName, Status, StatusCategory, Task, TextFields, TextQuery,
-    WriteTarget,
+    AssetPayload, Classification, DependencyEdge, DependencyEndpoint, DependencyKind, ItemKind,
+    ItemWrite, LabelFilter, MetadataKey, NativeId, Priority, Project, Repository, SourceError,
+    SourceName, Status, StatusCategory, Task, TextFields, TextQuery, WriteTarget,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -32,12 +31,13 @@ use sha2::{Digest, Sha256};
 
 use super::super::assets;
 use super::super::boundary::{Exposure, Outbound};
-use super::super::{Engine, EngineError};
+use super::super::fetch::unrepeated;
+use super::super::{Engine, EngineError, Filters, Paging, ProjectRequest};
 use super::{
     CopyOutcome, Creating, Item, Journal, Level, Planned, Undo, classification_of, create_refused,
     described, far_end,
 };
-use super::{Prior, refused, request_for};
+use super::{PROJECT_PAGE, Prior, refused, remove};
 use crate::GlobalId;
 use crate::config::SourceVisibility;
 use crate::resolve::ResolvedSource;
@@ -90,7 +90,7 @@ pub struct PublicProjectAllocation {
     /// The public source the project is in.
     pub source: SourceName,
     /// The nonce the project is created carrying, at [`PublicProjectAllocation::KEY`].
-    pub allocation: String,
+    pub allocation: Allocation,
     /// The id the source assigned the project, once it answered with one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<NativeId>,
@@ -99,11 +99,50 @@ pub struct PublicProjectAllocation {
 impl PublicProjectAllocation {
     /// The reserved metadata key a public projection project carries its allocation under.
     pub const KEY: &'static str = "onetaskgraph.allocation";
+}
+
+/// The language every [`Allocation`] is a word of: 128 bits as 32 lower-case hex digits.
+pub const ALLOCATION_PATTERN: &str = "^[0-9a-f]{32}$";
+
+/// The random nonce a public projection project is created carrying: 32 lower-case hex digits,
+/// derived from nothing private, so it names nothing but the project created behind it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct Allocation(String);
+
+impl Allocation {
+    /// Validate and wrap an allocation.
+    ///
+    /// # Errors
+    ///
+    /// A message naming `value` when it is not a word of [`ALLOCATION_PATTERN`].
+    pub fn new(value: impl Into<String>) -> Result<Self, String> {
+        let value = value.into();
+        // The language `ALLOCATION_PATTERN` states, hand-rolled; the unit test
+        // `an_allocation_is_exactly_what_its_pattern_states` holds the two to one rule.
+        if value.len() == 32
+            && value
+                .chars()
+                .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
+        {
+            Ok(Self(value))
+        } else {
+            Err(format!(
+                "allocation {value:?} is not 32 lower-case hex digits ({ALLOCATION_PATTERN})"
+            ))
+        }
+    }
+
+    /// The allocation as it is written.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 
     /// A fresh allocation: 128 bits from the process's own randomly keyed hashers, the clock
     /// and the process id, digested — a nonce that names nothing it came from.
     #[must_use]
-    pub fn fresh_nonce() -> String {
+    pub fn fresh() -> Self {
         use std::hash::{BuildHasher, Hasher};
         let mut digest = Sha256::new();
         for _ in 0..2 {
@@ -115,12 +154,42 @@ impl PublicProjectAllocation {
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |elapsed| elapsed.as_nanos());
         digest.update(now.to_le_bytes());
-        digest
-            .finalize()
-            .iter()
-            .take(16)
-            .map(|byte| format!("{byte:02x}"))
-            .collect()
+        Self(
+            digest
+                .finalize()
+                .iter()
+                .take(16)
+                .map(|byte| format!("{byte:02x}"))
+                .collect(),
+        )
+    }
+}
+
+impl TryFrom<String> for Allocation {
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, String> {
+        Self::new(value)
+    }
+}
+
+impl From<Allocation> for String {
+    fn from(allocation: Allocation) -> Self {
+        allocation.0
+    }
+}
+
+impl JsonSchema for Allocation {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "Allocation".into()
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "pattern": ALLOCATION_PATTERN,
+            "description": "The random nonce a public projection project is created carrying.",
+        })
     }
 }
 
@@ -174,13 +243,6 @@ impl TryFrom<Unchecked> for PublicProjections {
             if !sources.insert(entry.source.to_string()) {
                 return Err(format!(
                     "{} names a project in {} twice",
-                    Self::KEY,
-                    entry.source
-                ));
-            }
-            if entry.allocation.trim().is_empty() {
-                return Err(format!(
-                    "{} names an empty allocation for {}",
                     Self::KEY,
                     entry.source
                 ));
@@ -556,65 +618,6 @@ fn is_neutral(project: &Project) -> bool {
     project.title == PUBLIC_PROJECT_TITLE
         && project.classification == Classification::Public
         && project.content.as_deref().is_none_or(str::is_empty)
-}
-
-/// Every project `destination` holds carrying `allocation` at [`PublicProjectAllocation::KEY`],
-/// exactly — the public projection project created behind it, and never any other.
-///
-/// Asked through the source's own project listing narrowed to the neutral title, which a source
-/// that cannot apply returns wider and this narrows by the allocation alone; walked to its end.
-///
-/// # Errors
-///
-/// The source's own, and a refusal for a listing that hands back a cursor it handed out before.
-pub(super) async fn allocated(
-    destination: &ResolvedSource,
-    allocation: &str,
-) -> Result<Vec<NativeId>, SourceError> {
-    let query = ProjectQuery {
-        text: Some(TextQuery {
-            terms: PUBLIC_PROJECT_TITLE.to_owned(),
-            fields: TextFields::Title,
-        }),
-        labels: LabelFilter::default(),
-        statuses: Vec::new(),
-    };
-    let mut found = Vec::new();
-    let mut cursor: Option<Cursor> = None;
-    let mut visited: Vec<String> = Vec::new();
-    loop {
-        let page = destination
-            .source()
-            .query_projects(&query, &request_for(destination, cursor.clone()))
-            .await?;
-        found.extend(
-            page.items
-                .into_iter()
-                .filter(|project| {
-                    project.metadata.get(PublicProjectAllocation::KEY)
-                        == Some(&Value::String(allocation.to_owned()))
-                })
-                .map(|project| project.id),
-        );
-        match page.next {
-            None => return Ok(found),
-            Some(next) => {
-                let seen = next.0.clone();
-                if visited.contains(&seen) {
-                    return Err(SourceError::Refused {
-                        message: format!(
-                            "the projects of {} were being read for a public projection project's \
-                             allocation, and the listing handed back cursor {seen:?} it had handed \
-                             out before",
-                            destination.name()
-                        ),
-                    });
-                }
-                visited.push(seen);
-                cursor = Some(next);
-            }
-        }
-    }
 }
 
 /// The `(name, sha256)` of every asset in `assets`, in name order.
@@ -1086,9 +1089,7 @@ impl Engine {
             };
         }
         if let Some(entry) = &recorded {
-            let found = allocated(destination, &entry.allocation)
-                .await
-                .map_err(|error| refused(destination, error))?;
+            let found = self.allocated(destination, &entry.allocation).await?;
             match found.as_slice() {
                 [] => {}
                 [id] => {
@@ -1141,7 +1142,7 @@ impl Engine {
         // Nothing is there: create it, behind an allocation recorded before it is asked for.
         let entry = recorded.unwrap_or_else(|| PublicProjectAllocation {
             source: destination.name().clone(),
-            allocation: PublicProjectAllocation::fresh_nonce(),
+            allocation: Allocation::fresh(),
             project: None,
         });
         let entry = PublicProjectAllocation {
@@ -1151,7 +1152,7 @@ impl Engine {
         let mut project = public_project(opaque_id("pw", home), ordered);
         project.metadata.insert(
             PublicProjectAllocation::KEY.to_owned(),
-            Value::String(entry.allocation.clone()),
+            Value::String(entry.allocation.as_str().to_owned()),
         );
         let item = "the public projection project";
         self.at_write(
@@ -1173,7 +1174,7 @@ impl Engine {
         }
         journal.record(Undo::Allocated {
             at: destination.name().clone(),
-            allocation: NativeId(entry.allocation.clone()),
+            allocation: entry.allocation.clone(),
             home: home.clone(),
         });
         // A create's answer the source mangled is no uncertainty here: the allocation names what
@@ -1195,6 +1196,96 @@ impl Engine {
         self.record_project(at, home, map, &entry, &landed, journal)
             .await?;
         Ok(landed)
+    }
+
+    /// Every project `destination` holds carrying `allocation` at
+    /// [`PublicProjectAllocation::KEY`], exactly — the public projection project created behind
+    /// it, and never any other.
+    ///
+    /// Read through the engine's own project listing narrowed to the neutral title, paged by
+    /// its own token as a project's members are, and narrowed here by the allocation alone.
+    ///
+    /// # Errors
+    ///
+    /// The listing's own, and a source handing back the page it was asked for as its next.
+    pub(super) async fn allocated(
+        &self,
+        destination: &ResolvedSource,
+        allocation: &Allocation,
+    ) -> Result<Vec<NativeId>, EngineError> {
+        let mut request = ProjectRequest {
+            sources: vec![destination.name().clone()],
+            filters: Filters {
+                text: Some(TextQuery {
+                    terms: PUBLIC_PROJECT_TITLE.to_owned(),
+                    fields: TextFields::Title,
+                }),
+                labels: LabelFilter::default(),
+                statuses: Vec::new(),
+            },
+            paging: Paging {
+                limit: PROJECT_PAGE,
+                token: None,
+            },
+        };
+        let carried = Value::String(allocation.as_str().to_owned());
+        let mut found = Vec::new();
+        loop {
+            let asked = request.paging.token.clone();
+            let response = self.projects(&request).await?;
+            if let Some(failure) = response.errors.first() {
+                return Err(EngineError::SourceRefused {
+                    name: failure.source.to_string(),
+                    error: failure.error.clone(),
+                });
+            }
+            unrepeated(
+                response.next.as_ref(),
+                asked.as_ref(),
+                "the projects of a source were being read for a public projection project's \
+                 allocation",
+            )
+            .map_err(|error| refused(destination, error))?;
+            found.extend(
+                response
+                    .items
+                    .into_iter()
+                    .filter(|project| {
+                        project.item.metadata.get(PublicProjectAllocation::KEY) == Some(&carried)
+                    })
+                    .map(|project| project.item.id),
+            );
+            match response.next {
+                Some(token) => request.paging.token = Some(token),
+                None => return Ok(found),
+            }
+        }
+    }
+
+    /// Remove every project `destination` holds carrying `allocation`, answering what is still
+    /// there and why when it cannot: nothing named, when the listing that finds them failed.
+    pub(super) async fn take_back_allocated(
+        &self,
+        destination: &ResolvedSource,
+        allocation: &Allocation,
+    ) -> Result<(), (Vec<NativeId>, SourceError)> {
+        let found = self
+            .allocated(destination, allocation)
+            .await
+            .map_err(|problem| {
+                (
+                    Vec::new(),
+                    SourceError::Refused {
+                        message: problem.to_string(),
+                    },
+                )
+            })?;
+        for (at, id) in found.iter().enumerate() {
+            if let Err(problem) = remove(destination, Level::Project, id).await {
+                return Err((found[at..].to_vec(), problem));
+            }
+        }
+        Ok(())
     }
 
     /// Record on the private home `home` that `entry`'s project is `id`.
@@ -1601,7 +1692,7 @@ mod tests {
         let site = SourceName::new("site").expect("a source name");
         let pending = PublicProjectAllocation {
             source: site.clone(),
-            allocation: PublicProjectAllocation::fresh_nonce(),
+            allocation: Allocation::fresh(),
             project: None,
         };
         assert!(map.set_project(pending.clone()));
@@ -1616,7 +1707,7 @@ mod tests {
         let value = map.to_value();
         assert_eq!(
             value["projects"],
-            json!([{"source": "site", "allocation": pending.allocation, "project": "ISSUE-7"}])
+            json!([{"source": "site", "allocation": pending.allocation.as_str(), "project": "ISSUE-7"}])
         );
         assert_eq!(PublicProjections::parse(&value), Ok(map));
         let written_before = json!({"schema_version": 1, "tasks": []});
@@ -1628,11 +1719,35 @@ mod tests {
 
     #[test]
     fn a_fresh_allocation_is_new_every_time() {
-        let first = PublicProjectAllocation::fresh_nonce();
-        let second = PublicProjectAllocation::fresh_nonce();
-        assert_ne!(first, second);
-        assert_eq!(first.len(), 32);
-        assert!(first.chars().all(|c| c.is_ascii_hexdigit()), "{first}");
+        let first = Allocation::fresh();
+        assert_ne!(first, Allocation::fresh());
+        assert_eq!(Allocation::new(first.as_str()), Ok(first));
+    }
+
+    #[test]
+    fn an_allocation_is_exactly_what_its_pattern_states() {
+        let pattern = ALLOCATION_PATTERN
+            .strip_prefix("^[0-9a-f]{")
+            .and_then(|rest| rest.strip_suffix("}$"))
+            .and_then(|count| count.parse::<usize>().ok())
+            .expect("the pattern is a counted class of lower-case hex digits");
+        let held = |value: &str| {
+            value.len() == pattern
+                && value
+                    .chars()
+                    .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
+        };
+        for value in [
+            "0123456789abcdef0123456789abcdef",
+            "0123456789ABCDEF0123456789abcdef",
+            "0123456789abcdef0123456789abcde",
+            "0123456789abcdef0123456789abcdef0",
+            "0123456789abcdeg0123456789abcdef",
+            "",
+            " ",
+        ] {
+            assert_eq!(Allocation::new(value).is_ok(), held(value), "{value:?}");
+        }
     }
 
     #[test]
@@ -1665,23 +1780,23 @@ mod tests {
             ),
             (
                 json!({"schema_version": 1, "tasks": [], "projects": [
-                    {"source": "site", "allocation": "a1"},
-                    {"source": "site", "allocation": "a2", "project": "p"}]}),
+                    {"source": "site", "allocation": "0123456789abcdef0123456789abcdef"},
+                    {"source": "site", "allocation": "fedcba9876543210fedcba9876543210", "project": "p"}]}),
                 "names a project in site twice",
             ),
             (
                 json!({"schema_version": 1, "tasks": [], "projects": [
                     {"source": "site", "allocation": " "}]}),
-                "empty allocation for site",
+                "is not 32 lower-case hex digits",
             ),
             (
                 json!({"schema_version": 1, "tasks": [], "projects": [
-                    {"source": "site", "allocation": "a1", "project": ""}]}),
+                    {"source": "site", "allocation": "0123456789abcdef0123456789abcdef", "project": ""}]}),
                 "empty project for site",
             ),
             (
                 json!({"schema_version": 1, "tasks": [], "projects": [
-                    {"source": "site", "allocation": "a1", "via": "x"}]}),
+                    {"source": "site", "allocation": "0123456789abcdef0123456789abcdef", "via": "x"}]}),
                 "unknown field",
             ),
         ] {

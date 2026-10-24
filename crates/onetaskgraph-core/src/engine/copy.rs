@@ -1041,8 +1041,8 @@ enum Undo {
     Allocated {
         /// The public source it was asked of.
         at: SourceName,
-        /// The allocation it carries, as an id only this entry is ever looked up by.
-        allocation: NativeId,
+        /// The allocation it carries.
+        allocation: projections::Allocation,
         /// The private home whose map records the allocation: kept as it is when the project
         /// cannot be taken back, so the next copy still finds the project it made.
         home: GlobalId,
@@ -1057,11 +1057,12 @@ impl Undo {
         }
     }
 
-    /// The destination id this entry is about.
-    fn id(&self) -> &NativeId {
+    /// The destination id this entry is about: none for a project asked for behind an
+    /// allocation, whose id is what a lost answer withholds.
+    fn id(&self) -> Option<&NativeId> {
         match self {
-            Self::Created { id, .. } | Self::Updated { id, .. } => id,
-            Self::Allocated { allocation, .. } => allocation,
+            Self::Created { id, .. } | Self::Updated { id, .. } => Some(id),
+            Self::Allocated { .. } => None,
         }
     }
 
@@ -1170,9 +1171,12 @@ impl Journal {
     /// item written twice — once as it lands, once when its edges are repaired — was only
     /// ever one thing before this copy started, and that is what undoing it restores.
     fn record(&mut self, entry: Undo) {
-        if self.entries.iter().any(|held| {
-            held.at() == entry.at() && held.kind() == entry.kind() && held.id() == entry.id()
-        }) {
+        // Each allocation is fresh, so an entry for one is never a second write of an item.
+        if entry.id().is_some()
+            && self.entries.iter().any(|held| {
+                held.at() == entry.at() && held.kind() == entry.kind() && held.id() == entry.id()
+            })
+        {
             return;
         }
         self.entries.push(entry);
@@ -2294,7 +2298,12 @@ impl Engine {
         // allocation rather than making another, and named among what is still there.
         let mut kept: Vec<GlobalId> = Vec::new();
         for entry in journal.entries.iter().rev() {
-            let item = GlobalId::new(entry.at().clone(), entry.id().clone());
+            let item = match entry {
+                Undo::Created { at, id, .. } | Undo::Updated { at, id, .. } => {
+                    GlobalId::new(at.clone(), id.clone())
+                }
+                Undo::Allocated { home, .. } => home.clone(),
+            };
             if entry.kind() == Level::Project && kept.contains(&item) {
                 continue;
             }
@@ -2312,7 +2321,7 @@ impl Engine {
                     Undo::Updated { .. } => Ok(()),
                     Undo::Allocated {
                         allocation, home, ..
-                    } => match take_back_allocated(destination, &allocation.0).await {
+                    } => match self.take_back_allocated(destination, allocation).await {
                         Ok(()) => Ok(()),
                         Err((still, problem)) => {
                             for id in still {
@@ -2337,13 +2346,9 @@ impl Engine {
                 },
             };
             if let Err(problem) = outcome {
-                let id = match entry {
-                    Undo::Allocated { home, .. } => home.clone(),
-                    _ => item,
-                };
                 match &mut unrestored {
-                    Some((left_behind, _)) => left_behind.push(id),
-                    None => unrestored = Some((LeftBehind::new(id), problem)),
+                    Some((left_behind, _)) => left_behind.push(item),
+                    None => unrestored = Some((LeftBehind::new(item), problem)),
                 }
             }
         }
@@ -7915,23 +7920,6 @@ fn create_refused(
     } else {
         refused(destination, error)
     }
-}
-
-/// Remove every project `destination` holds carrying `allocation`, answering what is still
-/// there and why when it cannot: nothing named, when the listing that finds them failed.
-async fn take_back_allocated(
-    destination: &ResolvedSource,
-    allocation: &str,
-) -> Result<(), (Vec<NativeId>, SourceError)> {
-    let found = projections::allocated(destination, allocation)
-        .await
-        .map_err(|problem| (Vec::new(), problem))?;
-    for (at, id) in found.iter().enumerate() {
-        if let Err(problem) = remove(destination, Level::Project, id).await {
-            return Err((found[at..].to_vec(), problem));
-        }
-    }
-    Ok(())
 }
 
 /// Every forward edge at one item, walked to exhaustion one page at a time.

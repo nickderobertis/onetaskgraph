@@ -3132,7 +3132,7 @@ const FORTY_FIFTH_BUNDLE_SHAPE: [(&str, u64); 133] = [
     ("ProjectGraph", 0x566d04f80bf0ddbd),
     ("ProjectQuery", 0x65c1348867b92915),
     ("ProjectStatusSet", 0x0fc20a92f42562fe),
-    ("PublicProjections", 0x6408aacef8410dd4),
+    ("PublicProjections", 0xeff35b0daff22815),
     ("PublicWriteInput", 0x372b3adc968f9443),
     ("QualifiedDocument", 0xb88b9efba2358f7f),
     ("QualifiedEdge", 0xe24f9b34b618df17),

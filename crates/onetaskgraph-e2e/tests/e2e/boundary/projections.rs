@@ -2113,6 +2113,58 @@ fn a_copy_killed_after_its_public_project_and_before_recording_it_resumes_into_i
 }
 
 #[test]
+fn two_projects_carrying_the_recorded_allocation_refuse_the_copy_and_change_nothing() {
+    // The project the map records is gone, its views with it, and two projects now carry the
+    // allocation it was created behind — a hand copy of the file. Neither is the copy's to
+    // choose: it refuses, naming the count, and neither store changes.
+    let store = projecting_store();
+    private_rollout(&store);
+    let landed = copy_rollout(&store);
+    let map = projection_map(&store, &landed["plan:rollout"]);
+    let project = map["projects"][0]["project"]
+        .as_str()
+        .expect("the project the copy recorded")
+        .to_owned();
+    let made = record_file(&store, "projects", &format!("site:{project}"));
+    let text = std::fs::read_to_string(&made).expect("the public projection project");
+    assert!(
+        text.contains(
+            map["projects"][0]["allocation"]
+                .as_str()
+                .expect("an allocation")
+        ),
+        "the project carries its allocation:\n{text}"
+    );
+    std::fs::remove_file(&made).expect("the project removed");
+    for entry in map["tasks"].as_array().expect("the views") {
+        let view = entry["projection"].as_str().expect("a view");
+        std::fs::remove_file(record_file(&store, "tasks", view)).expect("the view removed");
+    }
+    for copy in ["dup-a", "dup-b"] {
+        std::fs::write(made.with_file_name(format!("{copy}.md")), &text).expect("a copy");
+    }
+    let (site, vault) = (tree(&store.folder("site")), tree(&store.folder("vault")));
+
+    let output = store.run(&["project", "copy", "plan:rollout", "--to", "vault"]);
+    assert_ne!(output.status.code(), Some(0), "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("holds 2 projects carrying the allocation"),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(
+        tree(&store.folder("site")),
+        site,
+        "the public side is as it was"
+    );
+    assert_eq!(
+        tree(&store.folder("vault")),
+        vault,
+        "the private side is as it was"
+    );
+}
+
+#[test]
 fn an_unrecorded_task_is_taken_as_a_view_only_when_it_alone_says_what_the_view_says() {
     for strays in [1_usize, 2] {
         let store = projecting_store();

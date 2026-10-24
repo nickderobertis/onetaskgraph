@@ -10545,6 +10545,11 @@ export const runtimeSchemas = {
   },
   "PublicProjections": {
     "$defs": {
+      "Allocation": {
+        "description": "The random nonce a public projection project is created carrying.",
+        "pattern": "^[0-9a-f]{32}$",
+        "type": "string"
+      },
       "GlobalId": {
         "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
         "type": "string"
@@ -10558,8 +10563,8 @@ export const runtimeSchemas = {
         "description": "The public projection project of one plan in one public source: the allocation recorded\nprivately before it was created, and the id the source assigned it, recorded before any\nview is filed under it.\n\nThe allocation is a random nonce, derived from nothing private, that the project itself\ncarries at [`PublicProjectAllocation::KEY`]: a copy that never learned the id — its create's\nanswer lost, or the copy ended before it recorded one — finds the project it made by that\nnonce alone, and never takes any other project.",
         "properties": {
           "allocation": {
-            "description": "The nonce the project is created carrying, at [`PublicProjectAllocation::KEY`].",
-            "type": "string"
+            "$ref": "#/$defs/Allocation",
+            "description": "The nonce the project is created carrying, at [`PublicProjectAllocation::KEY`]."
           },
           "project": {
             "anyOf": [
