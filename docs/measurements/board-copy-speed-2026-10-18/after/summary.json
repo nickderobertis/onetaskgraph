@@ -1,0 +1,2450 @@
+{
+ "inertness": {
+  "tb-changed": {
+   "differences": [],
+   "equal": true,
+   "span": "tb-changed-span-20261024T095909",
+   "stock": "tb-changed-stock-20261024T093934"
+  },
+  "tb-first": {
+   "differences": [],
+   "equal": true,
+   "span": "tb-first-span-20261024T101453",
+   "stock": "tb-first-stock-20261024T093842"
+  },
+  "tb-unchanged": {
+   "differences": [],
+   "equal": true,
+   "span": "tb-unchanged-span-20261024T095930",
+   "stock": "tb-unchanged-stock-20261024T093958"
+  }
+ },
+ "latency": {
+  "aliased mutations": {
+   "max_ms": 7140,
+   "mean_ms": 2929,
+   "median_ms": 2479,
+   "n": 21,
+   "p90_ms": 5674
+  },
+  "batched read": {
+   "max_ms": 2946,
+   "mean_ms": 736,
+   "median_ms": 338,
+   "n": 30,
+   "p90_ms": 2307
+  },
+  "item read": {
+   "max_ms": 2267,
+   "mean_ms": 576,
+   "median_ms": 458,
+   "n": 342,
+   "p90_ms": 860
+  },
+  "mutation": {
+   "max_ms": 5724,
+   "mean_ms": 1966,
+   "median_ms": 2023,
+   "n": 104,
+   "p90_ms": 2641
+  },
+  "upload: POST /user-attachments/assets": {
+   "max_ms": 1022,
+   "mean_ms": 916,
+   "median_ms": 919,
+   "n": 5,
+   "p90_ms": 964
+  }
+ },
+ "runs": {
+  "cleanup-stock-20261024T100425": {
+   "by_op": {
+    "CleanupDelete": {
+     "count": 30,
+     "kind": "mutation",
+     "points": 30,
+     "seconds": 71.39
+    },
+    "CleanupRead": {
+     "count": 48,
+     "kind": "item read",
+     "points": 48,
+     "seconds": 22.45
+    }
+   },
+   "content_creating": 0,
+   "graphql_bucket_by_headers": {
+    "first_remaining": 4139,
+    "least_remaining": 4051,
+    "limit": 5000,
+    "reset": 1792837608
+   },
+   "host_steps": {},
+   "issues_created": 0,
+   "mutation_fields": 30,
+   "mutations": 30,
+   "points": 78,
+   "refused_by_proxy": 0,
+   "requests": 78,
+   "screening_calls": {},
+   "screening_tunnels": 0,
+   "split": {},
+   "statuses": [
+    200
+   ],
+   "steps": [],
+   "store_calls": [],
+   "tunnels": 0,
+   "uploads": 0,
+   "walk_pages_by_phase": {},
+   "wall": 0
+  },
+  "cleanup-stock-20261024T101017": {
+   "by_op": {
+    "CleanupDelete": {
+     "count": 10,
+     "kind": "mutation",
+     "points": 10,
+     "seconds": 24.93
+    },
+    "CleanupRead": {
+     "count": 58,
+     "kind": "item read",
+     "points": 58,
+     "seconds": 28.36
+    }
+   },
+   "content_creating": 0,
+   "graphql_bucket_by_headers": {
+    "first_remaining": 3955,
+    "least_remaining": 3876,
+    "limit": 5000,
+    "reset": 1792837608
+   },
+   "host_steps": {},
+   "issues_created": 0,
+   "mutation_fields": 10,
+   "mutations": 10,
+   "points": 68,
+   "refused_by_proxy": 0,
+   "requests": 68,
+   "screening_calls": {},
+   "screening_tunnels": 0,
+   "split": {},
+   "statuses": [
+    200
+   ],
+   "steps": [],
+   "store_calls": [],
+   "tunnels": 0,
+   "uploads": 0,
+   "walk_pages_by_phase": {},
+   "wall": 0
+  },
+  "cleanup-stock-20261024T101809": {
+   "by_op": {
+    "CleanupDelete": {
+     "count": 20,
+     "kind": "mutation",
+     "points": 20,
+     "seconds": 51.72
+    },
+    "CleanupRead": {
+     "count": 78,
+     "kind": "item read",
+     "points": 78,
+     "seconds": 34.54
+    }
+   },
+   "content_creating": 0,
+   "graphql_bucket_by_headers": {
+    "first_remaining": 4854,
+    "least_remaining": 3445,
+    "limit": 5000,
+    "reset": 1792839905
+   },
+   "host_steps": {},
+   "issues_created": 0,
+   "mutation_fields": 20,
+   "mutations": 20,
+   "points": 98,
+   "refused_by_proxy": 0,
+   "requests": 98,
+   "screening_calls": {},
+   "screening_tunnels": 0,
+   "split": {},
+   "statuses": [
+    200
+   ],
+   "steps": [],
+   "store_calls": [],
+   "tunnels": 0,
+   "uploads": 0,
+   "walk_pages_by_phase": {},
+   "wall": 0
+  },
+  "cleanup-stock-20261024T102249": {
+   "by_op": {
+    "CleanupDelete": {
+     "count": 10,
+     "kind": "mutation",
+     "points": 10,
+     "seconds": 24.32
+    },
+    "CleanupRead": {
+     "count": 88,
+     "kind": "item read",
+     "points": 88,
+     "seconds": 38.48
+    }
+   },
+   "content_creating": 0,
+   "graphql_bucket_by_headers": {
+    "first_remaining": 3249,
+    "least_remaining": 3175,
+    "limit": 5000,
+    "reset": 1792837608
+   },
+   "host_steps": {},
+   "issues_created": 0,
+   "mutation_fields": 10,
+   "mutations": 10,
+   "points": 98,
+   "refused_by_proxy": 0,
+   "requests": 98,
+   "screening_calls": {},
+   "screening_tunnels": 0,
+   "split": {},
+   "statuses": [
+    200
+   ],
+   "steps": [],
+   "store_calls": [],
+   "tunnels": 0,
+   "uploads": 0,
+   "walk_pages_by_phase": {},
+   "wall": 0
+  },
+  "host-approve-stock-20261024T100947": {
+   "by_op": {
+    "CONNECT api.github.com": {
+     "count": 8,
+     "kind": "screening tunnel",
+     "points": 0,
+     "seconds": 0.0
+    },
+    "ISSUE": {
+     "count": 3,
+     "kind": "item read",
+     "points": 3,
+     "seconds": 1.86
+    },
+    "SUB_ISSUES": {
+     "count": 3,
+     "kind": "item read",
+     "points": 3,
+     "seconds": 4.05
+    },
+    "UPDATE_ISSUE": {
+     "count": 1,
+     "kind": "mutation",
+     "points": 1,
+     "seconds": 1.01
+    }
+   },
+   "content_creating": 0,
+   "graphql_bucket_by_headers": {
+    "first_remaining": 3960,
+    "least_remaining": 3956,
+    "limit": 5000,
+    "reset": 1792837608
+   },
+   "host_steps": {
+    "design_approval.approval_key": {
+     "calls": 1,
+     "seconds": 0.17
+    },
+    "design_approval.approve": {
+     "calls": 1,
+     "seconds": 14.71
+    },
+    "design_approval.asset_digests": {
+     "calls": 1,
+     "seconds": 0.0
+    },
+    "design_approval.body_digest": {
+     "calls": 1,
+     "seconds": 0.17
+    },
+    "design_approval.one_document": {
+     "calls": 1,
+     "seconds": 0.0
+    },
+    "design_approval.planned_rows": {
+     "calls": 1,
+     "seconds": 0.0
+    },
+    "design_approval.resolved_digest": {
+     "calls": 1,
+     "seconds": 0.02
+    },
+    "design_approval.resolved_loader": {
+     "calls": 1,
+     "seconds": 0.02
+    },
+    "design_approval.ungraphed": {
+     "calls": 1,
+     "seconds": 0.0
+    },
+    "design_chain.chosen": {
+     "calls": 1,
+     "seconds": 0.0
+    },
+    "design_chain.plan_repository": {
+     "calls": 1,
+     "seconds": 1.69
+    },
+    "plan_store.plan_listing": {
+     "calls": 1,
+     "seconds": 1.69
+    },
+    "plan_store.project_record": {
+     "calls": 1,
+     "seconds": 0.92
+    },
+    "plan_store.read_projects": {
+     "calls": 1,
+     "seconds": 0.1
+    },
+    "spike_plan.current_visual_report": {
+     "calls": 1,
+     "seconds": 0.0
+    }
+   },
+   "issues_created": 0,
+   "mutation_fields": 1,
+   "mutations": 1,
+   "points": 7,
+   "refused_by_proxy": 0,
+   "requests": 7,
+   "screening_calls": {
+    "check": 1,
+    "inspect": 8
+   },
+   "screening_tunnels": 8,
+   "split": {
+    "destination reads": 5.9,
+    "host-side steps": 1.75,
+    "unattributed inside the store process (stock wheel: no spans)": 1.73,
+    "write-boundary screening (onevcs)": 6.03,
+    "writes": 1.01
+   },
+   "statuses": [
+    200
+   ],
+   "steps": [
+    {
+     "returncode": 0,
+     "sequence": [
+      "SUB_ISSUES",
+      "ISSUE",
+      "SUB_ISSUES",
+      "ISSUE",
+      "ISSUE",
+      "SUB_ISSUES",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "UPDATE_ISSUE"
+     ],
+     "step": "approve-design",
+     "wall": 16.42
+    }
+   ],
+   "store_calls": [
+    {
+     "argv": "document list --project",
+     "seconds": 1.48
+    },
+    {
+     "argv": "project show plans:<id>",
+     "seconds": 0.92
+    },
+    {
+     "argv": "task list --project",
+     "seconds": 1.68
+    },
+    {
+     "argv": "config show --json",
+     "seconds": 0.02
+    },
+    {
+     "argv": "project list --source",
+     "seconds": 0.1
+    },
+    {
+     "argv": "document list --project",
+     "seconds": 0.05
+    },
+    {
+     "argv": "document metadata set",
+     "seconds": 10.43
+    }
+   ],
+   "tunnels": 0,
+   "uploads": 0,
+   "walk_pages_by_phase": {},
+   "wall": 16.42
+  },
+  "host-changed1-stock-20261024T102149": {
+   "by_op": {
+    "BOARD_FIELDS": {
+     "count": 1,
+     "kind": "item read",
+     "points": 1,
+     "seconds": 0.39
+    },
+    "CONNECT api.github.com": {
+     "count": 40,
+     "kind": "screening tunnel",
+     "points": 0,
+     "seconds": 0.0
+    },
+    "ISSUE": {
+     "count": 1,
+     "kind": "item read",
+     "points": 1,
+     "seconds": 0.66
+    },
+    "ORIGIN_LOOKUP": {
+     "count": 1,
+     "kind": "item read",
+     "points": 1,
+     "seconds": 0.63
+    },
+    "SUB_ISSUES": {
+     "count": 2,
+     "kind": "item read",
+     "points": 2,
+     "seconds": 3.37
+    },
+    "UPDATE_ISSUE": {
+     "count": 2,
+     "kind": "mutation",
+     "points": 2,
+     "seconds": 1.76
+    }
+   },
+   "content_creating": 0,
+   "graphql_bucket_by_headers": {
+    "first_remaining": 4775,
+    "least_remaining": 3254,
+    "limit": 5000,
+    "reset": 1792839905
+   },
+   "host_steps": {
+    "plan_copy._copy_options": {
+     "calls": 1,
+     "seconds": 0.0
+    },
+    "plan_copy._measure_documents": {
+     "calls": 1,
+     "seconds": 0.12
+    },
+    "plan_copy._report": {
+     "calls": 2,
+     "seconds": 0.0
+    },
+    "plan_review.bar_fingerprint": {
+     "calls": 3,
+     "seconds": 0.04
+    },
+    "plan_review.checklist_fingerprint": {
+     "calls": 1,
+     "seconds": 0.03
+    },
+    "plan_review.owned_by_node": {
+     "calls": 1,
+     "seconds": 0.0
+    },
+    "plan_review.plan_answers": {
+     "calls": 1,
+     "seconds": 0.0
+    },
+    "plan_review.plan_bar_fingerprint": {
+     "calls": 1,
+     "seconds": 0.04
+    },
+    "plan_review.plan_key": {
+     "calls": 1,
+     "seconds": 0.11
+    },
+    "plan_review.plan_unreviewed": {
+     "calls": 1,
+     "seconds": 0.16
+    },
+    "plan_review.review_key": {
+     "calls": 16,
+     "seconds": 0.17
+    },
+    "plan_review.unreviewed": {
+     "calls": 1,
+     "seconds": 0.1
+    },
+    "plan_store.plan_listing": {
+     "calls": 1,
+     "seconds": 0.08
+    },
+    "plan_store.project_record": {
+     "calls": 1,
+     "seconds": 0.09
+    },
+    "plan_store.read_plan": {
+     "calls": 1,
+     "seconds": 0.0
+    },
+    "plan_store.read_tasks": {
+     "calls": 1,
+     "seconds": 0.85
+    },
+    "task_body.document_bodies": {
+     "calls": 2,
+     "seconds": 0.0
+    },
+    "task_body.document_refusals": {
+     "calls": 1,
+     "seconds": 0.0
+    },
+    "task_body.measure": {
+     "calls": 2,
+     "seconds": 0.0
+    },
+    "task_body.serve": {
+     "calls": 2,
+     "seconds": 0.0
+    }
+   },
+   "issues_created": 0,
+   "mutation_fields": 2,
+   "mutations": 2,
+   "points": 7,
+   "refused_by_proxy": 0,
+   "requests": 7,
+   "screening_calls": {
+    "check": 10,
+    "inspect": 40
+   },
+   "screening_tunnels": 40,
+   "split": {
+    "destination reads": 5.05,
+    "host-side steps": 2.05,
+    "unattributed inside the store process (stock wheel: no spans)": 9.98,
+    "write-boundary screening (onevcs)": 33.4,
+    "writes": 1.76
+   },
+   "statuses": [
+    200
+   ],
+   "steps": [
+    {
+     "returncode": 0,
+     "sequence": [
+      "SUB_ISSUES",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "BOARD_FIELDS",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "SUB_ISSUES",
+      "ORIGIN_LOOKUP",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "ISSUE",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com"
+     ],
+     "step": "copy-plan",
+     "wall": 52.24
+    }
+   ],
+   "store_calls": [
+    {
+     "argv": "project show authoring:<id>",
+     "seconds": 0.09
+    },
+    {
+     "argv": "task list --project",
+     "seconds": 0.08
+    },
+    {
+     "argv": "task deps authoring:<id>",
+     "seconds": 0.08
+    },
+    {
+     "argv": "task deps authoring:<id>",
+     "seconds": 0.06
+    },
+    {
+     "argv": "task deps authoring:<id>",
+     "seconds": 0.1
+    },
+    {
+     "argv": "task deps authoring:<id>",
+     "seconds": 0.08
+    },
+    {
+     "argv": "task deps authoring:<id>",
+     "seconds": 0.11
+    },
+    {
+     "argv": "task deps authoring:<id>",
+     "seconds": 0.09
+    },
+    {
+     "argv": "task deps authoring:<id>",
+     "seconds": 0.1
+    },
+    {
+     "argv": "task deps authoring:<id>",
+     "seconds": 0.14
+    },
+    {
+     "argv": "document list --project",
+     "seconds": 0.11
+    },
+    {
+     "argv": "project copy authoring:<id>",
+     "seconds": 30.18
+    },
+    {
+     "argv": "document copy authoring:<id>",
+     "seconds": 18.98
+    }
+   ],
+   "tunnels": 0,
+   "uploads": 0,
+   "walk_pages_by_phase": {},
+   "wall": 52.24
+  },
+  "host-copy-stock-20261024T100745": {
+   "by_op": {
+    "ADD_BLOCKED_BYS": {
+     "count": 1,
+     "kind": "aliased mutations",
+     "points": 1,
+     "seconds": 2.48
+    },
+    "CONNECT api.github.com": {
+     "count": 40,
+     "kind": "screening tunnel",
+     "points": 0,
+     "seconds": 0.0
+    },
+    "CONNECT cafe.github.com": {
+     "count": 1,
+     "kind": "screening tunnel",
+     "points": 0,
+     "seconds": 0.0
+    },
+    "CONNECT github-production-user-asset-6210df.s3.amazonaws.com": {
+     "count": 1,
+     "kind": "upload",
+     "points": 0,
+     "seconds": 0.0
+    },
+    "CONNECT github.com": {
+     "count": 1,
+     "kind": "upload",
+     "points": 0,
+     "seconds": 0.0
+    },
+    "CREATED_BOARD_ITEMS": {
+     "count": 4,
+     "kind": "batched read",
+     "points": 4,
+     "seconds": 1.19
+    },
+    "CREATE_ISSUE": {
+     "count": 2,
+     "kind": "mutation",
+     "points": 2,
+     "seconds": 1.76
+    },
+    "CREATE_ISSUES": {
+     "count": 1,
+     "kind": "aliased mutations",
+     "points": 1,
+     "seconds": 7.14
+    },
+    "ISSUE": {
+     "count": 2,
+     "kind": "item read",
+     "points": 2,
+     "seconds": 0.8
+    },
+    "ORIGIN_LOOKUP": {
+     "count": 1,
+     "kind": "item read",
+     "points": 1,
+     "seconds": 0.54
+    },
+    "ORIGIN_LOOKUPS": {
+     "count": 2,
+     "kind": "batched read",
+     "points": 4,
+     "seconds": 3.16
+    },
+    "POST /user-attachments/assets": {
+     "count": 1,
+     "kind": "upload",
+     "points": 0,
+     "seconds": 0.82
+    },
+    "SUB_ISSUES": {
+     "count": 1,
+     "kind": "item read",
+     "points": 1,
+     "seconds": 1.51
+    },
+    "WRITE_FIELD_VALUES": {
+     "count": 1,
+     "kind": "aliased mutations",
+     "points": 1,
+     "seconds": 1.02
+    }
+   },
+   "content_creating": 4,
+   "graphql_bucket_by_headers": {
+    "first_remaining": 4044,
+    "least_remaining": 4025,
+    "limit": 5000,
+    "reset": 1792837608
+   },
+   "host_steps": {
+    "plan_copy._copy_options": {
+     "calls": 1,
+     "seconds": 0.0
+    },
+    "plan_copy._measure_documents": {
+     "calls": 1,
+     "seconds": 0.1
+    },
+    "plan_copy._report": {
+     "calls": 2,
+     "seconds": 0.0
+    },
+    "plan_review.bar_fingerprint": {
+     "calls": 3,
+     "seconds": 0.02
+    },
+    "plan_review.checklist_fingerprint": {
+     "calls": 1,
+     "seconds": 0.03
+    },
+    "plan_review.owned_by_node": {
+     "calls": 1,
+     "seconds": 0.0
+    },
+    "plan_review.plan_answers": {
+     "calls": 1,
+     "seconds": 0.0
+    },
+    "plan_review.plan_bar_fingerprint": {
+     "calls": 1,
+     "seconds": 0.03
+    },
+    "plan_review.plan_key": {
+     "calls": 1,
+     "seconds": 0.06
+    },
+    "plan_review.plan_unreviewed": {
+     "calls": 1,
+     "seconds": 0.09
+    },
+    "plan_review.review_key": {
+     "calls": 16,
+     "seconds": 0.13
+    },
+    "plan_review.unreviewed": {
+     "calls": 1,
+     "seconds": 0.09
+    },
+    "plan_store.plan_listing": {
+     "calls": 1,
+     "seconds": 0.07
+    },
+    "plan_store.project_record": {
+     "calls": 1,
+     "seconds": 0.07
+    },
+    "plan_store.read_plan": {
+     "calls": 1,
+     "seconds": 0.0
+    },
+    "plan_store.read_tasks": {
+     "calls": 1,
+     "seconds": 0.71
+    },
+    "task_body.document_bodies": {
+     "calls": 2,
+     "seconds": 0.0
+    },
+    "task_body.document_refusals": {
+     "calls": 1,
+     "seconds": 0.0
+    },
+    "task_body.measure": {
+     "calls": 2,
+     "seconds": 0.0
+    },
+    "task_body.serve": {
+     "calls": 2,
+     "seconds": 0.0
+    }
+   },
+   "issues_created": 10,
+   "mutation_fields": 24,
+   "mutations": 5,
+   "points": 17,
+   "refused_by_proxy": 0,
+   "requests": 16,
+   "screening_calls": {
+    "check": 10,
+    "inspect": 40
+   },
+   "screening_tunnels": 41,
+   "split": {
+    "asset upload": 0.82,
+    "destination reads": 7.2,
+    "host-side steps": 2.14,
+    "unattributed inside the store process (stock wheel: no spans)": 11.04,
+    "write-boundary screening (onevcs)": 30.8,
+    "writes": 12.41
+   },
+   "statuses": [
+    200,
+    201
+   ],
+   "steps": [
+    {
+     "returncode": 0,
+     "sequence": [
+      "ORIGIN_LOOKUPS",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT cafe.github.com",
+      "CONNECT api.github.com",
+      "CREATE_ISSUE",
+      "CREATE_ISSUES",
+      "CREATED_BOARD_ITEMS",
+      "CREATED_BOARD_ITEMS",
+      "WRITE_FIELD_VALUES",
+      "ADD_BLOCKED_BYS",
+      "SUB_ISSUES",
+      "ORIGIN_LOOKUP",
+      "ORIGIN_LOOKUPS",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "ISSUE",
+      "ISSUE",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "POST /user-attachments/assets",
+      "CONNECT github.com",
+      "CONNECT github-production-user-asset-6210df.s3.amazonaws.com",
+      "CREATE_ISSUE",
+      "CREATED_BOARD_ITEMS",
+      "CREATED_BOARD_ITEMS"
+     ],
+     "step": "copy-plan",
+     "wall": 64.41
+    }
+   ],
+   "store_calls": [
+    {
+     "argv": "project show authoring:<id>",
+     "seconds": 0.07
+    },
+    {
+     "argv": "task list --project",
+     "seconds": 0.07
+    },
+    {
+     "argv": "task deps authoring:<id>",
+     "seconds": 0.06
+    },
+    {
+     "argv": "task deps authoring:<id>",
+     "seconds": 0.08
+    },
+    {
+     "argv": "task deps authoring:<id>",
+     "seconds": 0.08
+    },
+    {
+     "argv": "task deps authoring:<id>",
+     "seconds": 0.07
+    },
+    {
+     "argv": "task deps authoring:<id>",
+     "seconds": 0.08
+    },
+    {
+     "argv": "task deps authoring:<id>",
+     "seconds": 0.1
+    },
+    {
+     "argv": "task deps authoring:<id>",
+     "seconds": 0.09
+    },
+    {
+     "argv": "task deps authoring:<id>",
+     "seconds": 0.07
+    },
+    {
+     "argv": "document list --project",
+     "seconds": 0.09
+    },
+    {
+     "argv": "project copy authoring:<id>",
+     "seconds": 39.45
+    },
+    {
+     "argv": "document copy authoring:<id>",
+     "seconds": 21.97
+    }
+   ],
+   "tunnels": 2,
+   "uploads": 1,
+   "walk_pages_by_phase": {},
+   "wall": 64.41
+  },
+  "host-copy-stock-20261024T102033": {
+   "by_op": {
+    "ADD_BLOCKED_BYS": {
+     "count": 1,
+     "kind": "aliased mutations",
+     "points": 1,
+     "seconds": 2.34
+    },
+    "CONNECT api.github.com": {
+     "count": 40,
+     "kind": "screening tunnel",
+     "points": 0,
+     "seconds": 0.0
+    },
+    "CONNECT cafe.github.com": {
+     "count": 1,
+     "kind": "screening tunnel",
+     "points": 0,
+     "seconds": 0.0
+    },
+    "CONNECT github-production-user-asset-6210df.s3.amazonaws.com": {
+     "count": 1,
+     "kind": "upload",
+     "points": 0,
+     "seconds": 0.0
+    },
+    "CONNECT github.com": {
+     "count": 1,
+     "kind": "upload",
+     "points": 0,
+     "seconds": 0.0
+    },
+    "CREATED_BOARD_ITEMS": {
+     "count": 4,
+     "kind": "batched read",
+     "points": 4,
+     "seconds": 1.01
+    },
+    "CREATE_ISSUE": {
+     "count": 2,
+     "kind": "mutation",
+     "points": 2,
+     "seconds": 1.74
+    },
+    "CREATE_ISSUES": {
+     "count": 1,
+     "kind": "aliased mutations",
+     "points": 1,
+     "seconds": 5.32
+    },
+    "ISSUE": {
+     "count": 2,
+     "kind": "item read",
+     "points": 2,
+     "seconds": 0.69
+    },
+    "ORIGIN_LOOKUP": {
+     "count": 1,
+     "kind": "item read",
+     "points": 1,
+     "seconds": 0.5
+    },
+    "ORIGIN_LOOKUPS": {
+     "count": 2,
+     "kind": "batched read",
+     "points": 4,
+     "seconds": 3.1
+    },
+    "POST /user-attachments/assets": {
+     "count": 1,
+     "kind": "upload",
+     "points": 0,
+     "seconds": 0.86
+    },
+    "SUB_ISSUES": {
+     "count": 1,
+     "kind": "item read",
+     "points": 1,
+     "seconds": 1.62
+    },
+    "WRITE_FIELD_VALUES": {
+     "count": 1,
+     "kind": "aliased mutations",
+     "points": 1,
+     "seconds": 1.15
+    }
+   },
+   "content_creating": 4,
+   "graphql_bucket_by_headers": {
+    "first_remaining": 3435,
+    "least_remaining": 3326,
+    "limit": 5000,
+    "reset": 1792837608
+   },
+   "host_steps": {
+    "plan_copy._copy_options": {
+     "calls": 1,
+     "seconds": 0.0
+    },
+    "plan_copy._measure_documents": {
+     "calls": 1,
+     "seconds": 0.09
+    },
+    "plan_copy._report": {
+     "calls": 2,
+     "seconds": 0.0
+    },
+    "plan_review.bar_fingerprint": {
+     "calls": 3,
+     "seconds": 0.02
+    },
+    "plan_review.checklist_fingerprint": {
+     "calls": 1,
+     "seconds": 0.02
+    },
+    "plan_review.owned_by_node": {
+     "calls": 1,
+     "seconds": 0.0
+    },
+    "plan_review.plan_answers": {
+     "calls": 1,
+     "seconds": 0.0
+    },
+    "plan_review.plan_bar_fingerprint": {
+     "calls": 1,
+     "seconds": 0.03
+    },
+    "plan_review.plan_key": {
+     "calls": 1,
+     "seconds": 0.06
+    },
+    "plan_review.plan_unreviewed": {
+     "calls": 1,
+     "seconds": 0.08
+    },
+    "plan_review.review_key": {
+     "calls": 16,
+     "seconds": 0.1
+    },
+    "plan_review.unreviewed": {
+     "calls": 1,
+     "seconds": 0.06
+    },
+    "plan_store.plan_listing": {
+     "calls": 1,
+     "seconds": 0.08
+    },
+    "plan_store.project_record": {
+     "calls": 1,
+     "seconds": 0.1
+    },
+    "plan_store.read_plan": {
+     "calls": 1,
+     "seconds": 0.0
+    },
+    "plan_store.read_tasks": {
+     "calls": 1,
+     "seconds": 0.79
+    },
+    "task_body.document_bodies": {
+     "calls": 2,
+     "seconds": 0.0
+    },
+    "task_body.document_refusals": {
+     "calls": 1,
+     "seconds": 0.0
+    },
+    "task_body.measure": {
+     "calls": 2,
+     "seconds": 0.0
+    },
+    "task_body.serve": {
+     "calls": 2,
+     "seconds": 0.0
+    }
+   },
+   "issues_created": 10,
+   "mutation_fields": 24,
+   "mutations": 5,
+   "points": 17,
+   "refused_by_proxy": 0,
+   "requests": 16,
+   "screening_calls": {
+    "check": 10,
+    "inspect": 40
+   },
+   "screening_tunnels": 41,
+   "split": {
+    "asset upload": 0.86,
+    "destination reads": 6.92,
+    "host-side steps": 2.09,
+    "unattributed inside the store process (stock wheel: no spans)": 11.4,
+    "write-boundary screening (onevcs)": 32.92,
+    "writes": 10.56
+   },
+   "statuses": [
+    200,
+    201
+   ],
+   "steps": [
+    {
+     "returncode": 0,
+     "sequence": [
+      "ORIGIN_LOOKUPS",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT cafe.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CREATE_ISSUE",
+      "CREATE_ISSUES",
+      "CREATED_BOARD_ITEMS",
+      "CREATED_BOARD_ITEMS",
+      "WRITE_FIELD_VALUES",
+      "ADD_BLOCKED_BYS",
+      "SUB_ISSUES",
+      "ORIGIN_LOOKUP",
+      "ORIGIN_LOOKUPS",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "ISSUE",
+      "ISSUE",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "POST /user-attachments/assets",
+      "CONNECT github.com",
+      "CONNECT github-production-user-asset-6210df.s3.amazonaws.com",
+      "CREATE_ISSUE",
+      "CREATED_BOARD_ITEMS",
+      "CREATED_BOARD_ITEMS"
+     ],
+     "step": "copy-plan",
+     "wall": 64.74
+    }
+   ],
+   "store_calls": [
+    {
+     "argv": "project show authoring:<id>",
+     "seconds": 0.1
+    },
+    {
+     "argv": "task list --project",
+     "seconds": 0.07
+    },
+    {
+     "argv": "task deps authoring:<id>",
+     "seconds": 0.08
+    },
+    {
+     "argv": "task deps authoring:<id>",
+     "seconds": 0.08
+    },
+    {
+     "argv": "task deps authoring:<id>",
+     "seconds": 0.09
+    },
+    {
+     "argv": "task deps authoring:<id>",
+     "seconds": 0.08
+    },
+    {
+     "argv": "task deps authoring:<id>",
+     "seconds": 0.09
+    },
+    {
+     "argv": "task deps authoring:<id>",
+     "seconds": 0.09
+    },
+    {
+     "argv": "task deps authoring:<id>",
+     "seconds": 0.1
+    },
+    {
+     "argv": "task deps authoring:<id>",
+     "seconds": 0.08
+    },
+    {
+     "argv": "document list --project",
+     "seconds": 0.08
+    },
+    {
+     "argv": "project copy authoring:<id>",
+     "seconds": 36.44
+    },
+    {
+     "argv": "document copy authoring:<id>",
+     "seconds": 25.27
+    }
+   ],
+   "tunnels": 2,
+   "uploads": 1,
+   "walk_pages_by_phase": {},
+   "wall": 64.74
+  },
+  "host-recopy-stock-20261024T100859": {
+   "by_op": {
+    "CONNECT api.github.com": {
+     "count": 40,
+     "kind": "screening tunnel",
+     "points": 0,
+     "seconds": 0.0
+    },
+    "ISSUE": {
+     "count": 1,
+     "kind": "item read",
+     "points": 1,
+     "seconds": 0.36
+    },
+    "ORIGIN_LOOKUP": {
+     "count": 1,
+     "kind": "item read",
+     "points": 1,
+     "seconds": 0.57
+    },
+    "SUB_ISSUES": {
+     "count": 2,
+     "kind": "item read",
+     "points": 2,
+     "seconds": 2.96
+    }
+   },
+   "content_creating": 0,
+   "graphql_bucket_by_headers": {
+    "first_remaining": 4010,
+    "least_remaining": 3963,
+    "limit": 5000,
+    "reset": 1792837608
+   },
+   "host_steps": {
+    "plan_copy._copy_options": {
+     "calls": 1,
+     "seconds": 0.0
+    },
+    "plan_copy._measure_documents": {
+     "calls": 1,
+     "seconds": 0.1
+    },
+    "plan_copy._report": {
+     "calls": 2,
+     "seconds": 0.0
+    },
+    "plan_review.bar_fingerprint": {
+     "calls": 3,
+     "seconds": 0.02
+    },
+    "plan_review.checklist_fingerprint": {
+     "calls": 1,
+     "seconds": 0.03
+    },
+    "plan_review.owned_by_node": {
+     "calls": 1,
+     "seconds": 0.0
+    },
+    "plan_review.plan_answers": {
+     "calls": 1,
+     "seconds": 0.0
+    },
+    "plan_review.plan_bar_fingerprint": {
+     "calls": 1,
+     "seconds": 0.03
+    },
+    "plan_review.plan_key": {
+     "calls": 1,
+     "seconds": 0.07
+    },
+    "plan_review.plan_unreviewed": {
+     "calls": 1,
+     "seconds": 0.1
+    },
+    "plan_review.review_key": {
+     "calls": 16,
+     "seconds": 0.11
+    },
+    "plan_review.unreviewed": {
+     "calls": 1,
+     "seconds": 0.06
+    },
+    "plan_store.plan_listing": {
+     "calls": 1,
+     "seconds": 0.09
+    },
+    "plan_store.project_record": {
+     "calls": 1,
+     "seconds": 0.08
+    },
+    "plan_store.read_plan": {
+     "calls": 1,
+     "seconds": 0.0
+    },
+    "plan_store.read_tasks": {
+     "calls": 1,
+     "seconds": 0.83
+    },
+    "task_body.document_bodies": {
+     "calls": 2,
+     "seconds": 0.0
+    },
+    "task_body.document_refusals": {
+     "calls": 1,
+     "seconds": 0.0
+    },
+    "task_body.measure": {
+     "calls": 2,
+     "seconds": 0.0
+    },
+    "task_body.serve": {
+     "calls": 2,
+     "seconds": 0.0
+    }
+   },
+   "issues_created": 0,
+   "mutation_fields": 0,
+   "mutations": 0,
+   "points": 4,
+   "refused_by_proxy": 0,
+   "requests": 4,
+   "screening_calls": {
+    "check": 10,
+    "inspect": 40
+   },
+   "screening_tunnels": 40,
+   "split": {
+    "destination reads": 3.89,
+    "host-side steps": 2.17,
+    "unattributed inside the store process (stock wheel: no spans)": 7.71,
+    "write-boundary screening (onevcs)": 30.93
+   },
+   "statuses": [
+    200
+   ],
+   "steps": [
+    {
+     "returncode": 0,
+     "sequence": [
+      "SUB_ISSUES",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "SUB_ISSUES",
+      "ORIGIN_LOOKUP",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "ISSUE",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com",
+      "CONNECT api.github.com"
+     ],
+     "step": "copy-plan",
+     "wall": 44.71
+    }
+   ],
+   "store_calls": [
+    {
+     "argv": "project show authoring:<id>",
+     "seconds": 0.08
+    },
+    {
+     "argv": "task list --project",
+     "seconds": 0.09
+    },
+    {
+     "argv": "task deps authoring:<id>",
+     "seconds": 0.1
+    },
+    {
+     "argv": "task deps authoring:<id>",
+     "seconds": 0.09
+    },
+    {
+     "argv": "task deps authoring:<id>",
+     "seconds": 0.1
+    },
+    {
+     "argv": "task deps authoring:<id>",
+     "seconds": 0.09
+    },
+    {
+     "argv": "task deps authoring:<id>",
+     "seconds": 0.08
+    },
+    {
+     "argv": "task deps authoring:<id>",
+     "seconds": 0.12
+    },
+    {
+     "argv": "task deps authoring:<id>",
+     "seconds": 0.09
+    },
+    {
+     "argv": "task deps authoring:<id>",
+     "seconds": 0.06
+    },
+    {
+     "argv": "document list --project",
+     "seconds": 0.1
+    },
+    {
+     "argv": "project copy authoring:<id>",
+     "seconds": 25.06
+    },
+    {
+     "argv": "document copy authoring:<id>",
+     "seconds": 16.49
+    }
+   ],
+   "tunnels": 0,
+   "uploads": 0,
+   "walk_pages_by_phase": {},
+   "wall": 44.71
+  },
+  "plans-read-stock-20261024T095948": {
+   "by_op": {
+    "SUB_ISSUES": {
+     "count": 2,
+     "kind": "item read",
+     "points": 2,
+     "seconds": 3.82
+    }
+   },
+   "content_creating": 0,
+   "graphql_bucket_by_headers": {
+    "first_remaining": 4153,
+    "least_remaining": 4152,
+    "limit": 5000,
+    "reset": 1792837608
+   },
+   "host_steps": {},
+   "issues_created": 0,
+   "mutation_fields": 0,
+   "mutations": 0,
+   "points": 2,
+   "refused_by_proxy": 0,
+   "requests": 2,
+   "screening_calls": {},
+   "screening_tunnels": 0,
+   "split": {
+    "destination reads": 3.82,
+    "unattributed inside the store process (stock wheel: no spans)": 0.35
+   },
+   "statuses": [
+    200
+   ],
+   "steps": [
+    {
+     "returncode": 0,
+     "sequence": [
+      "SUB_ISSUES"
+     ],
+     "step": "task-list-project",
+     "wall": 2.41
+    },
+    {
+     "returncode": 0,
+     "sequence": [
+      "SUB_ISSUES"
+     ],
+     "step": "document-list-project",
+     "wall": 1.76
+    }
+   ],
+   "store_calls": [],
+   "tunnels": 0,
+   "uploads": 0,
+   "walk_pages_by_phase": {},
+   "wall": 4.17
+  },
+  "tb-changed-span-20261024T095909": {
+   "by_op": {
+    "ORIGIN_LOOKUP": {
+     "count": 4,
+     "kind": "item read",
+     "points": 4,
+     "seconds": 3.37
+    },
+    "SUB_ISSUES": {
+     "count": 2,
+     "kind": "item read",
+     "points": 2,
+     "seconds": 2.85
+    },
+    "UPDATE_ISSUE": {
+     "count": 10,
+     "kind": "mutation",
+     "points": 10,
+     "seconds": 9.38
+    }
+   },
+   "content_creating": 0,
+   "graphql_bucket_by_headers": {
+    "first_remaining": 4185,
+    "least_remaining": 4157,
+    "limit": 5000,
+    "reset": 1792837608
+   },
+   "host_steps": {},
+   "issues_created": 0,
+   "mutation_fields": 10,
+   "mutations": 10,
+   "points": 16,
+   "refused_by_proxy": 0,
+   "requests": 16,
+   "screening_calls": {},
+   "screening_tunnels": 0,
+   "split": {
+    "CLI (configuration, engine build, output)": 0.09,
+    "asset upload": 0.0,
+    "body composition and rendering": 0.0,
+    "destination reads": 6.41,
+    "engine and local-source work": 0.08,
+    "reference rewriting": 0.06,
+    "unattributed": 0.11,
+    "writes": 9.79
+   },
+   "statuses": [
+    200
+   ],
+   "steps": [
+    {
+     "returncode": 0,
+     "sequence": [
+      "SUB_ISSUES",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE"
+     ],
+     "step": "project-copy",
+     "wall": 10.67
+    },
+    {
+     "returncode": 0,
+     "sequence": [
+      "SUB_ISSUES",
+      "ORIGIN_LOOKUP",
+      "ORIGIN_LOOKUP",
+      "ORIGIN_LOOKUP",
+      "ORIGIN_LOOKUP",
+      "UPDATE_ISSUE"
+     ],
+     "step": "document-copy",
+     "wall": 5.88
+    }
+   ],
+   "store_calls": [],
+   "tunnels": 0,
+   "uploads": 0,
+   "walk_pages_by_phase": {},
+   "wall": 16.55
+  },
+  "tb-changed-stock-20261024T093934": {
+   "by_op": {
+    "ORIGIN_LOOKUP": {
+     "count": 4,
+     "kind": "item read",
+     "points": 4,
+     "seconds": 3.27
+    },
+    "SUB_ISSUES": {
+     "count": 2,
+     "kind": "item read",
+     "points": 2,
+     "seconds": 3.55
+    },
+    "UPDATE_ISSUE": {
+     "count": 10,
+     "kind": "mutation",
+     "points": 10,
+     "seconds": 9.2
+    }
+   },
+   "content_creating": 0,
+   "graphql_bucket_by_headers": {
+    "first_remaining": 4665,
+    "least_remaining": 4525,
+    "limit": 5000,
+    "reset": 1792836302
+   },
+   "host_steps": {},
+   "issues_created": 0,
+   "mutation_fields": 10,
+   "mutations": 10,
+   "points": 16,
+   "refused_by_proxy": 0,
+   "requests": 16,
+   "screening_calls": {},
+   "screening_tunnels": 0,
+   "split": {
+    "destination reads": 6.82,
+    "unattributed inside the store process (stock wheel: no spans)": 1.95,
+    "writes": 9.2
+   },
+   "statuses": [
+    200
+   ],
+   "steps": [
+    {
+     "returncode": 0,
+     "sequence": [
+      "SUB_ISSUES",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE"
+     ],
+     "step": "project-copy",
+     "wall": 11.59
+    },
+    {
+     "returncode": 0,
+     "sequence": [
+      "SUB_ISSUES",
+      "ORIGIN_LOOKUP",
+      "ORIGIN_LOOKUP",
+      "ORIGIN_LOOKUP",
+      "ORIGIN_LOOKUP",
+      "UPDATE_ISSUE"
+     ],
+     "step": "document-copy",
+     "wall": 6.38
+    }
+   ],
+   "store_calls": [],
+   "tunnels": 0,
+   "uploads": 0,
+   "walk_pages_by_phase": {},
+   "wall": 17.97
+  },
+  "tb-changed1-span-20261024T101530": {
+   "by_op": {
+    "ORIGIN_LOOKUP": {
+     "count": 4,
+     "kind": "item read",
+     "points": 4,
+     "seconds": 3.34
+    },
+    "SUB_ISSUES": {
+     "count": 2,
+     "kind": "item read",
+     "points": 2,
+     "seconds": 3.71
+    },
+    "UPDATE_ISSUE": {
+     "count": 1,
+     "kind": "mutation",
+     "points": 1,
+     "seconds": 1.08
+    }
+   },
+   "content_creating": 0,
+   "graphql_bucket_by_headers": {
+    "first_remaining": 3659,
+    "least_remaining": 3654,
+    "limit": 5000,
+    "reset": 1792837608
+   },
+   "host_steps": {},
+   "issues_created": 0,
+   "mutation_fields": 1,
+   "mutations": 1,
+   "points": 7,
+   "refused_by_proxy": 0,
+   "requests": 7,
+   "screening_calls": {},
+   "screening_tunnels": 0,
+   "split": {
+    "CLI (configuration, engine build, output)": 0.07,
+    "body composition and rendering": 0.01,
+    "destination reads": 7.26,
+    "engine and local-source work": 0.12,
+    "reference rewriting": 0.02,
+    "unattributed": 0.09,
+    "writes": 1.09
+   },
+   "statuses": [
+    200
+   ],
+   "steps": [
+    {
+     "returncode": 0,
+     "sequence": [
+      "SUB_ISSUES",
+      "UPDATE_ISSUE"
+     ],
+     "step": "project-copy",
+     "wall": 3.48
+    },
+    {
+     "returncode": 0,
+     "sequence": [
+      "SUB_ISSUES",
+      "ORIGIN_LOOKUP",
+      "ORIGIN_LOOKUP",
+      "ORIGIN_LOOKUP",
+      "ORIGIN_LOOKUP"
+     ],
+     "step": "document-copy",
+     "wall": 5.19
+    }
+   ],
+   "store_calls": [],
+   "tunnels": 0,
+   "uploads": 0,
+   "walk_pages_by_phase": {},
+   "wall": 8.67
+  },
+  "tb-first-span-20261024T095836": {
+   "by_op": {
+    "ADD_BLOCKED_BYS": {
+     "count": 1,
+     "kind": "aliased mutations",
+     "points": 1,
+     "seconds": 2.48
+    },
+    "CONNECT github-production-user-asset-6210df.s3.amazonaws.com": {
+     "count": 1,
+     "kind": "upload",
+     "points": 0,
+     "seconds": 0.0
+    },
+    "CONNECT github.com": {
+     "count": 1,
+     "kind": "upload",
+     "points": 0,
+     "seconds": 0.0
+    },
+    "CREATED_BOARD_ITEMS": {
+     "count": 4,
+     "kind": "batched read",
+     "points": 4,
+     "seconds": 1.13
+    },
+    "CREATE_ISSUE": {
+     "count": 2,
+     "kind": "mutation",
+     "points": 2,
+     "seconds": 1.91
+    },
+    "CREATE_ISSUES": {
+     "count": 1,
+     "kind": "aliased mutations",
+     "points": 1,
+     "seconds": 5.89
+    },
+    "ISSUE": {
+     "count": 1,
+     "kind": "item read",
+     "points": 1,
+     "seconds": 0.38
+    },
+    "ORIGIN_LOOKUP": {
+     "count": 3,
+     "kind": "item read",
+     "points": 3,
+     "seconds": 2.47
+    },
+    "ORIGIN_LOOKUPS": {
+     "count": 2,
+     "kind": "batched read",
+     "points": 4,
+     "seconds": 2.63
+    },
+    "POST /user-attachments/assets": {
+     "count": 1,
+     "kind": "upload",
+     "points": 0,
+     "seconds": 1.02
+    },
+    "SUB_ISSUES": {
+     "count": 1,
+     "kind": "item read",
+     "points": 1,
+     "seconds": 2.27
+    },
+    "WRITE_FIELD_VALUES": {
+     "count": 3,
+     "kind": "aliased mutations",
+     "points": 3,
+     "seconds": 5.41
+    }
+   },
+   "content_creating": 4,
+   "graphql_bucket_by_headers": {
+    "first_remaining": 4603,
+    "least_remaining": 4196,
+    "limit": 5000,
+    "reset": 1792836302
+   },
+   "host_steps": {},
+   "issues_created": 10,
+   "mutation_fields": 35,
+   "mutations": 7,
+   "points": 20,
+   "refused_by_proxy": 0,
+   "requests": 19,
+   "screening_calls": {},
+   "screening_tunnels": 0,
+   "split": {
+    "CLI (configuration, engine build, output)": 0.11,
+    "asset upload": 2.1,
+    "body composition and rendering": 0.0,
+    "destination reads": 9.13,
+    "engine and local-source work": 2.36,
+    "reference rewriting": 0.02,
+    "unattributed": 0.06,
+    "writes": 15.99
+   },
+   "statuses": [
+    200,
+    201
+   ],
+   "steps": [
+    {
+     "returncode": 0,
+     "sequence": [
+      "ORIGIN_LOOKUPS",
+      "CREATE_ISSUE",
+      "CREATE_ISSUES",
+      "CREATED_BOARD_ITEMS",
+      "CREATED_BOARD_ITEMS",
+      "WRITE_FIELD_VALUES",
+      "WRITE_FIELD_VALUES",
+      "ADD_BLOCKED_BYS"
+     ],
+     "step": "project-copy",
+     "wall": 17.73
+    },
+    {
+     "returncode": 0,
+     "sequence": [
+      "SUB_ISSUES",
+      "ORIGIN_LOOKUP",
+      "ORIGIN_LOOKUP",
+      "ORIGIN_LOOKUP",
+      "ORIGIN_LOOKUPS",
+      "ISSUE",
+      "POST /user-attachments/assets",
+      "CONNECT github.com",
+      "CONNECT github-production-user-asset-6210df.s3.amazonaws.com",
+      "CREATE_ISSUE",
+      "CREATED_BOARD_ITEMS",
+      "CREATED_BOARD_ITEMS",
+      "WRITE_FIELD_VALUES"
+     ],
+     "step": "document-copy",
+     "wall": 12.03
+    }
+   ],
+   "store_calls": [],
+   "tunnels": 2,
+   "uploads": 1,
+   "walk_pages_by_phase": {},
+   "wall": 29.76
+  },
+  "tb-first-span-20261024T101453": {
+   "by_op": {
+    "ADD_BLOCKED_BYS": {
+     "count": 1,
+     "kind": "aliased mutations",
+     "points": 1,
+     "seconds": 3.2
+    },
+    "CONNECT github-production-user-asset-6210df.s3.amazonaws.com": {
+     "count": 1,
+     "kind": "upload",
+     "points": 0,
+     "seconds": 0.0
+    },
+    "CONNECT github.com": {
+     "count": 1,
+     "kind": "upload",
+     "points": 0,
+     "seconds": 0.0
+    },
+    "CREATED_BOARD_ITEMS": {
+     "count": 4,
+     "kind": "batched read",
+     "points": 4,
+     "seconds": 1.2
+    },
+    "CREATE_ISSUE": {
+     "count": 2,
+     "kind": "mutation",
+     "points": 2,
+     "seconds": 1.87
+    },
+    "CREATE_ISSUES": {
+     "count": 1,
+     "kind": "aliased mutations",
+     "points": 1,
+     "seconds": 5.45
+    },
+    "ISSUE": {
+     "count": 1,
+     "kind": "item read",
+     "points": 1,
+     "seconds": 0.53
+    },
+    "ORIGIN_LOOKUP": {
+     "count": 3,
+     "kind": "item read",
+     "points": 3,
+     "seconds": 3.12
+    },
+    "ORIGIN_LOOKUPS": {
+     "count": 2,
+     "kind": "batched read",
+     "points": 4,
+     "seconds": 3.4
+    },
+    "POST /user-attachments/assets": {
+     "count": 1,
+     "kind": "upload",
+     "points": 0,
+     "seconds": 0.92
+    },
+    "SUB_ISSUES": {
+     "count": 1,
+     "kind": "item read",
+     "points": 1,
+     "seconds": 1.44
+    },
+    "WRITE_FIELD_VALUES": {
+     "count": 3,
+     "kind": "aliased mutations",
+     "points": 3,
+     "seconds": 5.29
+    }
+   },
+   "content_creating": 4,
+   "graphql_bucket_by_headers": {
+    "first_remaining": 3684,
+    "least_remaining": 3661,
+    "limit": 5000,
+    "reset": 1792837608
+   },
+   "host_steps": {},
+   "issues_created": 10,
+   "mutation_fields": 34,
+   "mutations": 7,
+   "points": 20,
+   "refused_by_proxy": 0,
+   "requests": 19,
+   "screening_calls": {},
+   "screening_tunnels": 0,
+   "split": {
+    "CLI (configuration, engine build, output)": 0.16,
+    "asset upload": 1.85,
+    "body composition and rendering": 0.01,
+    "destination reads": 9.99,
+    "engine and local-source work": 3.07,
+    "reference rewriting": 0.04,
+    "unattributed": 0.09,
+    "writes": 16.05
+   },
+   "statuses": [
+    200,
+    201
+   ],
+   "steps": [
+    {
+     "returncode": 0,
+     "sequence": [
+      "ORIGIN_LOOKUPS",
+      "CREATE_ISSUE",
+      "CREATE_ISSUES",
+      "CREATED_BOARD_ITEMS",
+      "CREATED_BOARD_ITEMS",
+      "WRITE_FIELD_VALUES",
+      "WRITE_FIELD_VALUES",
+      "ADD_BLOCKED_BYS"
+     ],
+     "step": "project-copy",
+     "wall": 19.49
+    },
+    {
+     "returncode": 0,
+     "sequence": [
+      "SUB_ISSUES",
+      "ORIGIN_LOOKUP",
+      "ORIGIN_LOOKUP",
+      "ORIGIN_LOOKUP",
+      "ORIGIN_LOOKUPS",
+      "ISSUE",
+      "POST /user-attachments/assets",
+      "CONNECT github.com",
+      "CONNECT github-production-user-asset-6210df.s3.amazonaws.com",
+      "CREATE_ISSUE",
+      "CREATED_BOARD_ITEMS",
+      "CREATED_BOARD_ITEMS",
+      "WRITE_FIELD_VALUES"
+     ],
+     "step": "document-copy",
+     "wall": 11.77
+    }
+   ],
+   "store_calls": [],
+   "tunnels": 2,
+   "uploads": 1,
+   "walk_pages_by_phase": {},
+   "wall": 31.26
+  },
+  "tb-first-stock-20261024T093842": {
+   "by_op": {
+    "ADD_BLOCKED_BYS": {
+     "count": 1,
+     "kind": "aliased mutations",
+     "points": 1,
+     "seconds": 2.83
+    },
+    "CONNECT github-production-user-asset-6210df.s3.amazonaws.com": {
+     "count": 1,
+     "kind": "upload",
+     "points": 0,
+     "seconds": 0.0
+    },
+    "CONNECT github.com": {
+     "count": 1,
+     "kind": "upload",
+     "points": 0,
+     "seconds": 0.0
+    },
+    "CREATED_BOARD_ITEMS": {
+     "count": 4,
+     "kind": "batched read",
+     "points": 4,
+     "seconds": 1.16
+    },
+    "CREATE_ISSUE": {
+     "count": 2,
+     "kind": "mutation",
+     "points": 2,
+     "seconds": 2.32
+    },
+    "CREATE_ISSUES": {
+     "count": 1,
+     "kind": "aliased mutations",
+     "points": 1,
+     "seconds": 5.67
+    },
+    "ISSUE": {
+     "count": 1,
+     "kind": "item read",
+     "points": 1,
+     "seconds": 0.61
+    },
+    "ORIGIN_LOOKUP": {
+     "count": 3,
+     "kind": "item read",
+     "points": 3,
+     "seconds": 3.45
+    },
+    "ORIGIN_LOOKUPS": {
+     "count": 2,
+     "kind": "batched read",
+     "points": 4,
+     "seconds": 4.1
+    },
+    "POST /user-attachments/assets": {
+     "count": 1,
+     "kind": "upload",
+     "points": 0,
+     "seconds": 0.96
+    },
+    "SUB_ISSUES": {
+     "count": 1,
+     "kind": "item read",
+     "points": 1,
+     "seconds": 1.54
+    },
+    "WRITE_FIELD_VALUES": {
+     "count": 3,
+     "kind": "aliased mutations",
+     "points": 3,
+     "seconds": 5.84
+    }
+   },
+   "content_creating": 4,
+   "graphql_bucket_by_headers": {
+    "first_remaining": 4592,
+    "least_remaining": 4558,
+    "limit": 5000,
+    "reset": 1792837608
+   },
+   "host_steps": {},
+   "issues_created": 10,
+   "mutation_fields": 34,
+   "mutations": 7,
+   "points": 20,
+   "refused_by_proxy": 0,
+   "requests": 19,
+   "screening_calls": {},
+   "screening_tunnels": 0,
+   "split": {
+    "asset upload": 0.96,
+    "destination reads": 10.86,
+    "unattributed inside the store process (stock wheel: no spans)": 4.62,
+    "writes": 16.67
+   },
+   "statuses": [
+    200,
+    201
+   ],
+   "steps": [
+    {
+     "returncode": 0,
+     "sequence": [
+      "ORIGIN_LOOKUPS",
+      "CREATE_ISSUE",
+      "CREATE_ISSUES",
+      "CREATED_BOARD_ITEMS",
+      "CREATED_BOARD_ITEMS",
+      "WRITE_FIELD_VALUES",
+      "WRITE_FIELD_VALUES",
+      "ADD_BLOCKED_BYS"
+     ],
+     "step": "project-copy",
+     "wall": 20.18
+    },
+    {
+     "returncode": 0,
+     "sequence": [
+      "SUB_ISSUES",
+      "ORIGIN_LOOKUP",
+      "ORIGIN_LOOKUP",
+      "ORIGIN_LOOKUP",
+      "ORIGIN_LOOKUPS",
+      "ISSUE",
+      "POST /user-attachments/assets",
+      "CONNECT github.com",
+      "CONNECT github-production-user-asset-6210df.s3.amazonaws.com",
+      "CREATE_ISSUE",
+      "CREATED_BOARD_ITEMS",
+      "CREATED_BOARD_ITEMS",
+      "WRITE_FIELD_VALUES"
+     ],
+     "step": "document-copy",
+     "wall": 12.92
+    }
+   ],
+   "store_calls": [],
+   "tunnels": 2,
+   "uploads": 1,
+   "walk_pages_by_phase": {},
+   "wall": 33.11
+  },
+  "tb-unchanged-span-20261024T095930": {
+   "by_op": {
+    "ORIGIN_LOOKUP": {
+     "count": 4,
+     "kind": "item read",
+     "points": 4,
+     "seconds": 2.82
+    },
+    "SUB_ISSUES": {
+     "count": 2,
+     "kind": "item read",
+     "points": 2,
+     "seconds": 3.36
+    }
+   },
+   "content_creating": 0,
+   "graphql_bucket_by_headers": {
+    "first_remaining": 4577,
+    "least_remaining": 4154,
+    "limit": 5000,
+    "reset": 1792836302
+   },
+   "host_steps": {},
+   "issues_created": 0,
+   "mutation_fields": 0,
+   "mutations": 0,
+   "points": 6,
+   "refused_by_proxy": 0,
+   "requests": 6,
+   "screening_calls": {},
+   "screening_tunnels": 0,
+   "split": {
+    "CLI (configuration, engine build, output)": 0.09,
+    "body composition and rendering": 0.0,
+    "destination reads": 6.45,
+    "engine and local-source work": 0.09,
+    "reference rewriting": 0.02,
+    "unattributed": 0.07
+   },
+   "statuses": [
+    200
+   ],
+   "steps": [
+    {
+     "returncode": 0,
+     "sequence": [
+      "SUB_ISSUES"
+     ],
+     "step": "project-copy",
+     "wall": 2.05
+    },
+    {
+     "returncode": 0,
+     "sequence": [
+      "SUB_ISSUES",
+      "ORIGIN_LOOKUP",
+      "ORIGIN_LOOKUP",
+      "ORIGIN_LOOKUP",
+      "ORIGIN_LOOKUP"
+     ],
+     "step": "document-copy",
+     "wall": 4.67
+    }
+   ],
+   "store_calls": [],
+   "tunnels": 0,
+   "uploads": 0,
+   "walk_pages_by_phase": {},
+   "wall": 6.72
+  },
+  "tb-unchanged-stock-20261024T093958": {
+   "by_op": {
+    "ORIGIN_LOOKUP": {
+     "count": 4,
+     "kind": "item read",
+     "points": 4,
+     "seconds": 3.48
+    },
+    "SUB_ISSUES": {
+     "count": 2,
+     "kind": "item read",
+     "points": 2,
+     "seconds": 3.2
+    }
+   },
+   "content_creating": 0,
+   "graphql_bucket_by_headers": {
+    "first_remaining": 4522,
+    "least_remaining": 4517,
+    "limit": 5000,
+    "reset": 1792837608
+   },
+   "host_steps": {},
+   "issues_created": 0,
+   "mutation_fields": 0,
+   "mutations": 0,
+   "points": 6,
+   "refused_by_proxy": 0,
+   "requests": 6,
+   "screening_calls": {},
+   "screening_tunnels": 0,
+   "split": {
+    "destination reads": 6.68,
+    "unattributed inside the store process (stock wheel: no spans)": 0.96
+   },
+   "statuses": [
+    200
+   ],
+   "steps": [
+    {
+     "returncode": 0,
+     "sequence": [
+      "SUB_ISSUES"
+     ],
+     "step": "project-copy",
+     "wall": 2.0
+    },
+    {
+     "returncode": 0,
+     "sequence": [
+      "SUB_ISSUES",
+      "ORIGIN_LOOKUP",
+      "ORIGIN_LOOKUP",
+      "ORIGIN_LOOKUP",
+      "ORIGIN_LOOKUP"
+     ],
+     "step": "document-copy",
+     "wall": 5.65
+    }
+   ],
+   "store_calls": [],
+   "tunnels": 0,
+   "uploads": 0,
+   "walk_pages_by_phase": {},
+   "wall": 7.65
+  }
+ }
+}

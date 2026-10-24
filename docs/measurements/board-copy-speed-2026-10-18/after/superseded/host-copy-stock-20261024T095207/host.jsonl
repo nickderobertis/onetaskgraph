@@ -1,0 +1,54 @@
+{"argv": ["project", "show", "authoring:<id>", "--json", "--no-interactive"], "end": 1792835533.693, "kind": "store", "returncode": 0, "start": 1792835533.515}
+{"end": 1792835533.695, "kind": "step", "name": "plan_store.project_record", "start": 1792835533.514}
+{"argv": ["task", "list", "--project", "bcs-host", "--source", "authoring", "--json", "--no-interactive"], "end": 1792835533.932, "kind": "store", "returncode": 0, "start": 1792835533.701}
+{"end": 1792835533.937, "kind": "step", "name": "plan_store.plan_listing", "start": 1792835533.695}
+{"argv": ["task", "deps", "authoring:<id>", "--json", "--no-interactive"], "end": 1792835534.193, "kind": "store", "returncode": 0, "start": 1792835533.942}
+{"argv": ["task", "deps", "authoring:<id>", "--json", "--no-interactive"], "end": 1792835534.373, "kind": "store", "returncode": 0, "start": 1792835534.199}
+{"argv": ["task", "deps", "authoring:<id>", "--json", "--no-interactive"], "end": 1792835534.494, "kind": "store", "returncode": 0, "start": 1792835534.375}
+{"argv": ["task", "deps", "authoring:<id>", "--json", "--no-interactive"], "end": 1792835534.746, "kind": "store", "returncode": 0, "start": 1792835534.495}
+{"argv": ["task", "deps", "authoring:<id>", "--json", "--no-interactive"], "end": 1792835534.935, "kind": "store", "returncode": 0, "start": 1792835534.747}
+{"argv": ["task", "deps", "authoring:<id>", "--json", "--no-interactive"], "end": 1792835535.192, "kind": "store", "returncode": 0, "start": 1792835534.937}
+{"argv": ["task", "deps", "authoring:<id>", "--json", "--no-interactive"], "end": 1792835535.547, "kind": "store", "returncode": 0, "start": 1792835535.195}
+{"argv": ["task", "deps", "authoring:<id>", "--json", "--no-interactive"], "end": 1792835535.756, "kind": "store", "returncode": 0, "start": 1792835535.553}
+{"end": 1792835535.757, "kind": "step", "name": "plan_store.read_tasks", "start": 1792835533.695}
+{"end": 1792835535.768, "kind": "step", "name": "plan_review.bar_fingerprint", "start": 1792835535.757}
+{"end": 1792835535.781, "kind": "step", "name": "plan_review.review_key", "start": 1792835535.768}
+{"end": 1792835535.79, "kind": "step", "name": "plan_review.review_key", "start": 1792835535.781}
+{"end": 1792835535.801, "kind": "step", "name": "plan_review.review_key", "start": 1792835535.79}
+{"end": 1792835535.811, "kind": "step", "name": "plan_review.review_key", "start": 1792835535.801}
+{"end": 1792835535.82, "kind": "step", "name": "plan_review.review_key", "start": 1792835535.811}
+{"end": 1792835535.829, "kind": "step", "name": "plan_review.review_key", "start": 1792835535.82}
+{"end": 1792835535.835, "kind": "step", "name": "plan_review.review_key", "start": 1792835535.829}
+{"end": 1792835535.841, "kind": "step", "name": "plan_review.review_key", "start": 1792835535.835}
+{"end": 1792835535.841, "kind": "step", "name": "plan_review.unreviewed", "start": 1792835535.757}
+{"end": 1792835535.841, "kind": "step", "name": "plan_store.read_plan", "start": 1792835535.841}
+{"end": 1792835535.841, "kind": "step", "name": "plan_review.owned_by_node", "start": 1792835535.841}
+{"end": 1792835535.86, "kind": "step", "name": "plan_review.bar_fingerprint", "start": 1792835535.841}
+{"end": 1792835535.903, "kind": "step", "name": "plan_review.checklist_fingerprint", "start": 1792835535.861}
+{"end": 1792835535.909, "kind": "step", "name": "plan_review.plan_bar_fingerprint", "start": 1792835535.841}
+{"end": 1792835535.909, "kind": "step", "name": "plan_review.plan_answers", "start": 1792835535.909}
+{"end": 1792835535.925, "kind": "step", "name": "plan_review.bar_fingerprint", "start": 1792835535.909}
+{"end": 1792835535.954, "kind": "step", "name": "plan_review.review_key", "start": 1792835535.925}
+{"end": 1792835535.986, "kind": "step", "name": "plan_review.review_key", "start": 1792835535.955}
+{"end": 1792835536.017, "kind": "step", "name": "plan_review.review_key", "start": 1792835535.992}
+{"end": 1792835536.042, "kind": "step", "name": "plan_review.review_key", "start": 1792835536.018}
+{"end": 1792835536.072, "kind": "step", "name": "plan_review.review_key", "start": 1792835536.042}
+{"end": 1792835536.093, "kind": "step", "name": "plan_review.review_key", "start": 1792835536.072}
+{"end": 1792835536.129, "kind": "step", "name": "plan_review.review_key", "start": 1792835536.093}
+{"end": 1792835536.148, "kind": "step", "name": "plan_review.review_key", "start": 1792835536.129}
+{"end": 1792835536.162, "kind": "step", "name": "plan_review.plan_key", "start": 1792835535.909}
+{"end": 1792835536.163, "kind": "step", "name": "plan_review.plan_unreviewed", "start": 1792835535.841}
+{"argv": ["document", "list", "--project", "bcs-host", "--source", "authoring", "--json", "--no-interactive"], "end": 1792835536.442, "kind": "store", "returncode": 0, "start": 1792835536.164}
+{"end": 1792835536.443, "kind": "step", "name": "task_body.document_bodies", "start": 1792835536.443}
+{"end": 1792835536.444, "kind": "step", "name": "task_body.serve", "start": 1792835536.443}
+{"end": 1792835536.444, "kind": "step", "name": "task_body.measure", "start": 1792835536.444}
+{"end": 1792835536.444, "kind": "step", "name": "task_body.document_bodies", "start": 1792835536.444}
+{"end": 1792835536.445, "kind": "step", "name": "task_body.serve", "start": 1792835536.444}
+{"end": 1792835536.445, "kind": "step", "name": "task_body.measure", "start": 1792835536.445}
+{"end": 1792835536.445, "kind": "step", "name": "task_body.document_refusals", "start": 1792835536.444}
+{"end": 1792835536.445, "kind": "step", "name": "plan_copy._measure_documents", "start": 1792835536.163}
+{"end": 1792835536.446, "kind": "step", "name": "plan_copy._copy_options", "start": 1792835536.445}
+{"argv": ["project", "copy", "authoring:<id>", "--to", "plans", "--json", "--no-interactive"], "end": 1792835582.263, "kind": "store", "returncode": 0, "start": 1792835536.454}
+{"end": 1792835582.265, "kind": "step", "name": "plan_copy._report", "start": 1792835582.264}
+{"argv": ["document", "copy", "authoring:<id>", "--to", "plans", "--json", "--no-interactive"], "end": 1792835605.832, "kind": "store", "returncode": 0, "start": 1792835582.265}
+{"end": 1792835605.833, "kind": "step", "name": "plan_copy._report", "start": 1792835605.833}

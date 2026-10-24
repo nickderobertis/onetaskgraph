@@ -21,6 +21,12 @@ files:
     # apiece, which alone put a diff-scoped run past the harness's input limit.
     - "docs/screenshots/**"
     - "screenshots/fonts/**"
+    # Machine-written, sanitized measurement logs (timestamps, operation names, counts,
+    # costs, limit headers): megabytes of JSON lines that, like the screenshots above, would
+    # put a diff-scoped run past the harness's input limit. The Markdown evidence files beside
+    # them, which every figure is read from, stay judged.
+    - "docs/measurements/**/*.json"
+    - "docs/measurements/**/*.jsonl"
 rationales: true
 # No `agents` block: the harness/model are NOT pinned here. `oneharness.toml`
 # (composed alongside this file) selects them in fallback mode — codex + gpt-6.1-sol

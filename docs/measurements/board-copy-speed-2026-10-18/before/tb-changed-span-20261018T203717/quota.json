@@ -1,0 +1,36 @@
+{
+ "quota-after": {
+  "at": 1792355890.2620475,
+  "buckets": {
+   "core": {
+    "limit": 5000,
+    "remaining": 4421,
+    "reset": 1792357922,
+    "used": 579
+   },
+   "graphql": {
+    "limit": 5000,
+    "remaining": 4907,
+    "reset": 1792358121,
+    "used": 93
+   }
+  }
+ },
+ "quota-before": {
+  "at": 1792355838.0027037,
+  "buckets": {
+   "core": {
+    "limit": 5000,
+    "remaining": 3524,
+    "reset": 1792356112,
+    "used": 1476
+   },
+   "graphql": {
+    "limit": 5000,
+    "remaining": 2967,
+    "reset": 1792358118,
+    "used": 2033
+   }
+  }
+ }
+}
