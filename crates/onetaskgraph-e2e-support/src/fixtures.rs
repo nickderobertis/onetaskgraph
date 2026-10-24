@@ -3650,6 +3650,7 @@ pub fn github_projects_rate_limited(sandbox: &Sandbox, retry_after: Option<u64>)
 }
 
 /// [`github_projects_rate_limited`], and a count of the requests it was sent.
+// llmlint: ignore[code_lands_in_the_domain_that_owns_it] This is `github_projects_rate_limited` above with its request count exposed, and that helper now delegates here: AGENTS.md puts every loopback server and its constructors in this shared harness, once, so no suite copies one.
 pub fn github_projects_rate_limited_counted(
     sandbox: &Sandbox,
     retry_after: Option<u64>,
@@ -5316,6 +5317,7 @@ pub fn linear_rate_limited(sandbox: &Sandbox) -> (Value, Arc<Mutex<usize>>) {
 
 /// [`linear_rate_limited`], naming its reset `retry_after` seconds ahead on every refusal when
 /// it is given — what a source that remembers the reset is held to.
+// llmlint: ignore[code_lands_in_the_domain_that_owns_it] This is `linear_rate_limited` above naming its reset, and that helper now delegates here: AGENTS.md puts every loopback server and its constructors in this shared harness, once, so no suite copies one.
 pub fn linear_rate_limited_for(
     sandbox: &Sandbox,
     retry_after: Option<u64>,
@@ -7127,6 +7129,7 @@ fn linear_uncached(operation: &str) -> Option<&'static str> {
 
 /// The two-direction relations read a one-direction dependency read narrows, the root it
 /// reads, and the members of that root it selects.
+// llmlint: ignore[code_lands_in_the_domain_that_owns_it] As `linear_uncached` below: the engine's own suite and the Linear suite both drive this loopback Linear, so recognising the one-direction dependency reads it is sent, and answering them, is part of answering a request here.
 fn linear_narrowed(
     operation: &str,
 ) -> Option<(&'static str, &'static str, &'static [&'static str])> {

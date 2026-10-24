@@ -1630,11 +1630,11 @@ impl Engine {
         clock: &SharedClock,
     ) -> Self {
         let (ready, unavailable) = resolve_available_with_clock(config, secrets, clock);
-        let ready = ready.into_iter().map(|source| held_off(source, clock));
         let mut caches = BTreeMap::new();
         let located: BTreeMap<SourceName, crate::cache::CacheLocation> =
             crate::cache::locations(config).into_iter().collect();
         let ready: Vec<ResolvedSource> = ready
+            .into_iter()
             .map(|source| match located.get(source.name()) {
                 Some(location) => {
                     let name = source.name().clone();
@@ -1655,6 +1655,7 @@ impl Engine {
                 .chain(unavailable.into_iter().map(ConfiguredSource::Unavailable))
                 .collect(),
             config.selected_sources(),
+            clock,
         )
         .with_routes(config.routes())
         .with_incomplete(config.incomplete().clone())
@@ -1672,26 +1673,26 @@ impl Engine {
     ///
     /// Each ready source is put behind the engine's rate-limit memory on the system clock, as
     /// [`build_with_clock`](Self::build_with_clock) puts each one behind it on the clock it is
-    /// handed: see [`held_off`](self::held_off).
+    /// handed: see `held_off`.
     #[must_use]
     pub fn new(sources: Vec<ConfiguredSource>, selection: Vec<SourceName>) -> Self {
-        let clock = system_clock();
-        Self::assembled(
-            sources
-                .into_iter()
-                .map(|source| match source {
-                    ConfiguredSource::Ready(source) => {
-                        ConfiguredSource::Ready(held_off(source, &clock))
-                    }
-                    unavailable @ ConfiguredSource::Unavailable(_) => unavailable,
-                })
-                .collect(),
-            selection,
-        )
+        Self::assembled(sources, selection, &system_clock())
     }
 
-    /// An engine over `sources` exactly as they are handed in.
-    fn assembled(sources: Vec<ConfiguredSource>, selection: Vec<SourceName>) -> Self {
+    /// An engine over `sources`, each ready one behind the rate-limit memory on `clock` — the
+    /// one place every source is put there, so every call to it passes through.
+    fn assembled(
+        sources: Vec<ConfiguredSource>,
+        selection: Vec<SourceName>,
+        clock: &SharedClock,
+    ) -> Self {
+        let sources = sources
+            .into_iter()
+            .map(|source| match source {
+                ConfiguredSource::Ready(source) => ConfiguredSource::Ready(held_off(source, clock)),
+                unavailable @ ConfiguredSource::Unavailable(_) => unavailable,
+            })
+            .collect();
         Self {
             sources,
             selection,

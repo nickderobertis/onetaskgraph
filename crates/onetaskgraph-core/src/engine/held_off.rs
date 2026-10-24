@@ -10,10 +10,10 @@
 //! instant reaches the source again.
 //!
 //! It is implemented once, here, because every plugin's calls pass through it: the engine
-//! puts each ready source behind a [`HeldOff`] as it is built, inside the store's own cache
-//! when one is configured — so a read the cache answers is still answered, since it sends the
-//! source nothing. A rate limit naming no wait is passed through and remembered not at all:
-//! there is no instant to hold the source off until.
+//! puts each ready source behind a [`HeldOff`] as it is assembled — outside the store's own
+//! cache when one is configured, so every call before the reset fails locally, as the rule
+//! says, whatever would have answered it. A rate limit naming no wait is passed through and
+//! remembered not at all: there is no instant to hold the source off until.
 //!
 //! Every method of [`TaskSource`] is forwarded, the ones that cannot reach the source (the
 //! synchronous ones, and `end_command`, which only drops what the source holds) unconditionally.

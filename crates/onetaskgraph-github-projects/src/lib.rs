@@ -13861,13 +13861,31 @@ fn draft_slot(
             ),
         });
     }
-    let board = data.pointer("/board/projectV2/id").and_then(Value::as_str);
-    let held = board.is_some()
-        && nodes.iter().any(|node| {
-            node.pointer("/project/number").and_then(Value::as_u64)
-                == Some(u64::from(project_number))
-                && node.pointer("/project/id").and_then(Value::as_str) == board
-        });
+    let board = data
+        .pointer("/board/projectV2/id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| SourceError::Malformed {
+            message: format!(
+                "GitHub answered draft {} without this board's own id beside it",
+                id.0
+            ),
+        })?;
+    let mut held = false;
+    for node in nodes {
+        let project = node.get("project").ok_or_else(|| SourceError::Malformed {
+            message: format!("GitHub draft {} board item has no project", id.0),
+        })?;
+        let number = project
+            .get("number")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| SourceError::Malformed {
+                message: format!(
+                    "GitHub draft {} board item has no numeric project number",
+                    id.0
+                ),
+            })?;
+        held |= number == u64::from(project_number) && required_str(project, "id")? == board;
+    }
     if !held {
         return Ok(Some(None));
     }

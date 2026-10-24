@@ -6862,3 +6862,29 @@ async fn an_issue_read_with_its_comments_is_held_on_get_tasks_terms_over_real_ht
         );
     }
 }
+
+/// `ISSUE_RESOLVED` is `ISSUE` and `RESOLUTION` side by side and nothing else: both documents'
+/// variables, `ISSUE`'s `issue` selection and every root `RESOLUTION` selects, each byte for byte,
+/// so a change to either of the two is a change this one is held to.
+#[test]
+fn the_issue_read_carrying_the_resolution_is_exactly_both_documents() {
+    use onetaskgraph_linear::graphql;
+    let inner = |document: &str| {
+        let open = document.find('{').expect("a selection");
+        let close = document.rfind('}').expect("a selection");
+        document[open + 1..close].trim().to_owned()
+    };
+    let variables = |document: &str| {
+        let open = document.find('(').expect("variables");
+        let close = document.find(')').expect("variables");
+        document[open + 1..close].to_owned()
+    };
+    let composed = format!(
+        "query({},{}){{ {} {} }}",
+        variables(graphql::ISSUE),
+        variables(graphql::RESOLUTION),
+        inner(graphql::ISSUE),
+        inner(graphql::RESOLUTION)
+    );
+    assert_eq!(graphql::ISSUE_RESOLVED, composed);
+}

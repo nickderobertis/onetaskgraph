@@ -21432,3 +21432,130 @@ fn live_pair_fixture_child() {
         "main cleaned up its label"
     );
 }
+
+/// A draft's recorded edges are read off the dependency read's own answer: those of a draft
+/// whose one board item is this board's — named by its number and by the board id the same
+/// answer carries — and none of a draft on another board; and an answer that names another
+/// draft, more board items than GitHub links a draft to, a board item without its project's
+/// number or id, or no board id at all, is refused rather than read as a draft held elsewhere.
+#[tokio::test]
+async fn a_drafts_recorded_edges_ride_its_dependency_read_and_a_malformed_answer_is_refused() {
+    let body = "<!-- onetaskgraph.metadata\n{\"onetaskgraph.depends_on\":[{\"id\":\"elsewhere:T-9\",\"kind\":\"task\"}]}\n-->";
+    let answer = |draft: &str, items: Value, board: Value| {
+        json!({"data":{"node":{"__typename":"DraftIssue","id":draft,"body":body,
+            "projectV2Items":items},"board":board}})
+        .to_string()
+    };
+    let one =
+        |project: Value| json!({"nodes":[{"project":project}],"pageInfo":{"hasNextPage":false}});
+    let this_board = json!({"projectV2":{"id":"PVT_board"}});
+    let read = |served: String| async move {
+        configured(&served, json!({}))
+            .task_dependencies(
+                &NativeId("DI_1".to_owned()),
+                Direction::DependsOn,
+                &page(10),
+            )
+            .await
+    };
+
+    let held = read(raw_server(
+        "200 OK",
+        &answer(
+            "DI_1",
+            one(json!({"id":"PVT_board","number":7})),
+            this_board.clone(),
+        ),
+    ))
+    .await
+    .expect("this board's draft");
+    assert_eq!(held.items.len(), 1, "{held:?}");
+    assert_eq!(held.items[0].to.id(), "elsewhere:T-9");
+    assert!(held.next.is_none());
+
+    for (case, foreign) in [
+        (
+            "another board's number",
+            one(json!({"id":"PVT_board","number":8})),
+        ),
+        (
+            "another board's id",
+            one(json!({"id":"PVT_other","number":7})),
+        ),
+        (
+            "on no board",
+            json!({"nodes":[],"pageInfo":{"hasNextPage":false}}),
+        ),
+    ] {
+        let answered = read(raw_server(
+            "200 OK",
+            &answer("DI_1", foreign, this_board.clone()),
+        ))
+        .await
+        .unwrap_or_else(|error| panic!("{case}: {error}"));
+        assert!(answered.items.is_empty(), "{case}: {answered:?}");
+    }
+
+    for (case, served, said) in [
+        (
+            "another draft",
+            answer(
+                "DI_2",
+                one(json!({"id":"PVT_board","number":7})),
+                this_board.clone(),
+            ),
+            "different draft",
+        ),
+        (
+            "two board items",
+            answer(
+                "DI_1",
+                json!({"nodes":[{"project":{"id":"PVT_board","number":7}},
+                                {"project":{"id":"PVT_other","number":8}}],
+                       "pageInfo":{"hasNextPage":false}}),
+                this_board.clone(),
+            ),
+            "more board items",
+        ),
+        (
+            "a further page of board items",
+            answer(
+                "DI_1",
+                json!({"nodes":[{"project":{"id":"PVT_board","number":7}}],
+                       "pageInfo":{"hasNextPage":true}}),
+                this_board.clone(),
+            ),
+            "more board items",
+        ),
+        (
+            "a board item with no number",
+            answer("DI_1", one(json!({"id":"PVT_board"})), this_board.clone()),
+            "numeric project number",
+        ),
+        (
+            "a board item with no project",
+            answer(
+                "DI_1",
+                json!({"nodes":[{}],"pageInfo":{"hasNextPage":false}}),
+                this_board.clone(),
+            ),
+            "has no project",
+        ),
+        (
+            "no board id",
+            answer(
+                "DI_1",
+                one(json!({"id":"PVT_board","number":7})),
+                Value::Null,
+            ),
+            "own id",
+        ),
+    ] {
+        let refused = read(raw_server("200 OK", &served)).await.expect_err(case);
+        assert!(
+            matches!(refused, SourceError::Malformed { .. }),
+            "{case}: {refused:?}"
+        );
+        assert!(format!("{refused}").contains(said), "{case}: {refused}");
+    }
+}

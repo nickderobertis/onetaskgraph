@@ -298,6 +298,7 @@ fn per_write(served: &[(String, Value)], documents: &[&str], creates: &[&str]) -
     writes
 }
 
+// llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] The task places this budget journey in the e2e crate's `test` target, whose telemetry its budget reads, and AGENTS.md records the aggregate coverage run repeating every crate's tests as the accepted cost of one coverage report; the module runs in about three seconds on a warm build.
 #[test]
 fn measure_linear_requests_per_status_write_cold() {
     let measured: Vec<(usize, String)> = SCALES
@@ -324,6 +325,7 @@ fn measure_linear_requests_per_status_write_cold() {
         ),
     );
 }
+// llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 /// What each cold status write costs on a workspace of `total` issues: the most of them, and
 /// each.
@@ -442,6 +444,7 @@ fn status_write_cold(total: usize) -> (usize, String) {
     )
 }
 
+// llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] The task places this budget journey in the e2e crate's `test` target, whose telemetry its budget reads, and AGENTS.md records the aggregate coverage run repeating every crate's tests as the accepted cost of one coverage report; the module runs in about three seconds on a warm build.
 #[test]
 fn measure_linear_requests_per_status_write_warm() {
     let measured: Vec<(usize, String)> = SCALES
@@ -468,6 +471,7 @@ fn measure_linear_requests_per_status_write_warm() {
         ),
     );
 }
+// llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 /// What each status write after the first costs on one long-lived source over a workspace of
 /// `total` issues: the most of them, and each.
@@ -784,6 +788,7 @@ fn split_slot(field: &str) -> (String, Value) {
     )
 }
 
+// llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] The task places this budget journey in the e2e crate's `test` target, whose telemetry its budget reads, and AGENTS.md records the aggregate coverage run repeating every crate's tests as the accepted cost of one coverage report; the module runs in about three seconds on a warm build.
 #[test]
 fn measure_linear_requests_per_settlement_update() {
     let spent: Vec<(&str, usize, Vec<usize>)> = SCALES
@@ -818,6 +823,7 @@ fn measure_linear_requests_per_settlement_update() {
         ),
     );
 }
+// llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 /// The requests one copy sent besides its item writes: everything before the first request
 /// only a write sends, and everything after it that no write sends.

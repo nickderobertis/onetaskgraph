@@ -195,6 +195,7 @@ fn report_plan_copy() {
 // llmlint: ignore-end[budget_commands_measure_directly]
 // llmlint: ignore-end[tests_assert_real_behavior]
 
+// llmlint: ignore-block[tests_assert_real_behavior] As the block of `report_*` entries above: each is a report-only command entry point budgets.yaml selects, which reports nothing without ONEBUDGETSPEC_BUDGET_ID; `a_store_cost_report_hands_over_the_larger_scale_and_refuses_another_workload` below asserts what they hand over and refuse.
 // llmlint: ignore-block[budget_commands_measure_directly] Every budget of this crate selects its own report-only entry here, the harness-runner convention it landed with (report_visibility_reads, report_metadata_fields), and the task registering these three names each entry. Each reads only the telemetry `store_cost.rs` recorded during the crate's ordinary test run, refuses a recording of another workload, scale or figure, and hands the figure to onebudgetspec, which alone judges it.
 #[test]
 fn report_dependency_read() {
@@ -209,6 +210,7 @@ fn report_settlement_update() {
     report_store_cost(super::store_cost::SETTLEMENT_WORKLOAD);
 }
 // llmlint: ignore-end[budget_commands_measure_directly]
+// llmlint: ignore-end[tests_assert_real_behavior]
 
 fn report_store_cost(workload: &str) {
     let Some(budget) = selected() else {

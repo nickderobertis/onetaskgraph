@@ -286,15 +286,16 @@ fn dependency_cases(total: usize) -> (usize, String) {
         expected.push((format!("board:{near}"), "notes:T-9".to_owned()));
         expected.sort();
         assert_eq!(edges(&read), expected, "every native and recorded edge");
+        let sent = since(&board, from);
         assert_eq!(
-            since(&board, from),
+            sent,
             [graphql::ISSUE_DEPENDS_ON],
             "what it depends on is one request, asking for `blockedBy` alone"
         );
         cases.push(Case {
             name: format!("depends-on of an issue blocked by {blockers}, recording one more"),
-            per_source: vec![("board", 1)],
-            points: points(&[graphql::ISSUE_DEPENDS_ON.to_owned()]),
+            per_source: vec![("board", sent.len())],
+            points: points(&sent),
         });
 
         let from = board.served().len();
@@ -316,15 +317,16 @@ fn dependency_cases(total: usize) -> (usize, String) {
             edges(&reverse),
             [(format!("board:{near}"), format!("board:{}", blocking[0]))]
         );
+        let sent = since(&board, from);
         assert_eq!(
-            since(&board, from),
+            sent,
             [graphql::ISSUE_DEPENDED_ON_BY],
             "what depends on it is one request, asking for `blocking` alone"
         );
         cases.push(Case {
             name: "depended-on-by of one of its blockers".to_owned(),
-            per_source: vec![("board", 1)],
-            points: points(&[graphql::ISSUE_DEPENDED_ON_BY.to_owned()]),
+            per_source: vec![("board", sent.len())],
+            points: points(&sent),
         });
 
         let from = board.served().len();
@@ -333,15 +335,16 @@ fn dependency_cases(total: usize) -> (usize, String) {
             edges(&drafted),
             [("board:DRAFT-1".to_owned(), "notes:T-9".to_owned())]
         );
+        let sent = since(&board, from);
         assert_eq!(
-            since(&board, from),
+            sent,
             [graphql::ISSUE_DEPENDS_ON],
             "a draft's recorded edges ride on the same query: no draft read, no board read"
         );
         cases.push(Case {
             name: "depends-on of a draft recording one edge".to_owned(),
-            per_source: vec![("board", 1)],
-            points: points(&[graphql::ISSUE_DEPENDS_ON.to_owned()]),
+            per_source: vec![("board", sent.len())],
+            points: points(&sent),
         });
 
         let from = board.served().len();
@@ -520,6 +523,7 @@ fn dependency_cases(total: usize) -> (usize, String) {
     (most, detail)
 }
 
+// llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] The task places this budget journey in the e2e crate's `test` target, whose telemetry its budget reads, and AGENTS.md records the aggregate coverage run repeating every crate's tests as the accepted cost of one coverage report; the module runs in about three seconds on a warm build.
 #[test]
 fn measure_github_requests_per_dependency_read() {
     let scales: Vec<(&str, usize, String)> = SCALES
@@ -539,6 +543,7 @@ fn measure_github_requests_per_dependency_read() {
         &scales,
     );
 }
+// llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 /// A status write and a settlement on a fresh process over a board of `total` items: what
 /// each sent, every one checked to have landed and moved nothing else.
@@ -626,6 +631,7 @@ fn writes(total: usize) -> (usize, usize, String, String) {
     )
 }
 
+// llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] The task places this budget journey in the e2e crate's `test` target, whose telemetry its budget reads, and AGENTS.md records the aggregate coverage run repeating every crate's tests as the accepted cost of one coverage report; the module runs in about three seconds on a warm build.
 #[test]
 fn measure_github_requests_per_status_write_and_settlement() {
     let measured: Vec<(&str, usize, usize, String, String)> = SCALES
@@ -652,6 +658,7 @@ fn measure_github_requests_per_status_write_and_settlement() {
             .collect::<Vec<_>>(),
     );
 }
+// llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 
 /// The fixture's credential.
 struct Secrets;
@@ -664,6 +671,7 @@ impl SecretResolver for Secrets {
 /// Within one engine, a board that answered rate limited with a reset is sent nothing before
 /// that instant — every call before it fails locally, carrying the seconds left — and the call
 /// after it reaches the board again.
+// llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] The task places this budget journey in the e2e crate's `test` target, whose telemetry its budget reads, and AGENTS.md records the aggregate coverage run repeating every crate's tests as the accepted cost of one coverage report; the module runs in about three seconds on a warm build.
 #[test]
 fn a_board_that_named_a_reset_is_sent_nothing_before_it_and_reached_after_it() {
     let sandbox = Sandbox::new();
@@ -729,6 +737,27 @@ fn a_board_that_named_a_reset_is_sent_nothing_before_it_and_reached_after_it() {
             1,
             "a held node's re-read costs no request"
         );
+        // A write is held back as a read is: refused here, and never sent.
+        let write = engine
+            .update_task(
+                &id,
+                &onetaskgraph_plugin_api::TaskUpdate {
+                    status: Some(onetaskgraph_plugin_api::Status {
+                        category: onetaskgraph_plugin_api::StatusCategory::Done,
+                        name: String::new(),
+                    }),
+                    ..onetaskgraph_plugin_api::TaskUpdate::default()
+                },
+            )
+            .await;
+        match write {
+            Err(onetaskgraph_core::EngineError::SourceFailed {
+                error: SourceError::RateLimited { message, .. },
+                ..
+            }) => assert!(message.unwrap_or_default().contains("not sent")),
+            other => panic!("a write during the hold: {other:?}"),
+        }
+        assert_eq!(*sent.lock().unwrap(), 1, "the write was not sent");
 
         tokio::time::sleep(std::time::Duration::from_millis(2_300)).await;
         let after = engine.task(&id).await.expect("an answer");
@@ -740,3 +769,4 @@ fn a_board_that_named_a_reset_is_sent_nothing_before_it_and_reached_after_it() {
         );
     });
 }
+// llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
