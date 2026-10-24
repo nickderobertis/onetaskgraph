@@ -1667,6 +1667,12 @@
      "status": 403
     },
     {
+     "case": "a field value written as text rather than as a single-select option",
+     "expected": 403,
+     "reached_upstream": 0,
+     "status": 403
+    },
+    {
      "case": "createIssue on the test board carrying an input the probes never send",
      "expected": 403,
      "reached_upstream": 0,
@@ -1728,7 +1734,7 @@
     }
    ]
   },
-  "refusal_run": "proxy-refusal-head-20261024T171011",
+  "refusal_run": "proxy-refusal-head-20261024T175536",
   "union": {
    "commands": {
     "document-copy": [

@@ -10,6 +10,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import signal
+import threading
 import time
 from pathlib import Path
 
@@ -533,3 +535,65 @@ def test_an_unusable_answer_is_still_recorded_then_refused(tmp_path: Path, body:
     error, records = asyncio.run(ask())
     assert error is not None
     assert [(r.op, r.status, bool(r.errors)) for r in records] == [("unusable", 200, True)]
+
+
+async def interrupt(tmp_path: Path, url: str, stand_in: fake_github.Board) -> tuple[int, str]:
+    """Start a placement probe, SIGINT it once it has created an issue, and let it finish."""
+    hold = threading.Event()
+    stand_in.hold = hold
+    child = await asyncio.create_subprocess_exec(
+        PYTHON,
+        "-m",
+        "gaps",
+        "probe-placement",
+        env=gaps_env(tmp_path, SPIKE_UPSTREAM=url, GH_PROJECTS_TOKEN="t0ken"),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        async with asyncio.timeout(120):
+            while not stand_in.issues:
+                await asyncio.sleep(0.05)
+        child.send_signal(signal.SIGINT)
+        await asyncio.sleep(0.5)
+        hold.set()
+        async with asyncio.timeout(120):
+            _, err = await child.communicate()
+    finally:
+        hold.set()
+        if child.returncode is None:
+            child.kill()
+            await child.wait()
+    assert child.returncode is not None
+    return child.returncode, err.decode()
+
+
+def recorded(tmp_path: Path) -> list[str]:
+    """The probe issues an interrupted run left recorded for the next probe."""
+    state = tmp_path / "cache" / cli.CACHE_NAME / "state" / "probe-issues.json"
+    return [str(v) for v in json.loads(state.read_text())] if state.exists() else []
+
+
+def test_an_interrupted_probe_deletes_what_it_created_and_exits_130(
+    tmp_path: Path, github: tuple[fake_github.Board, str]
+) -> None:
+    """Ctrl-C after the first create: every issue is deleted and the run says it was interrupted."""
+    stand_in, url = github
+    code, err = asyncio.run(interrupt(tmp_path, url, stand_in))
+    assert code == cli.INTERRUPTED, err
+    assert "interrupted" in err
+    assert stand_in.issues == {} and sum(stand_in.delete_batches) >= 1
+    assert recorded(tmp_path) == []
+    assert not any((tmp_path / "logs").glob("*/feasibility.json"))
+
+
+def test_an_interrupted_probe_whose_deletes_fail_records_what_it_left_and_stays_interrupted(
+    tmp_path: Path, github: tuple[fake_github.Board, str]
+) -> None:
+    """Ctrl-C with deletes refused: the leftovers are recorded and the exit is still 130."""
+    stand_in, url = github
+    stand_in.fail_deletes = True
+    code, err = asyncio.run(interrupt(tmp_path, url, stand_in))
+    assert code == cli.INTERRUPTED, err
+    assert "left behind" not in err and "interrupted" in err
+    assert stand_in.issues and sorted(recorded(tmp_path)) == sorted(stand_in.issues)

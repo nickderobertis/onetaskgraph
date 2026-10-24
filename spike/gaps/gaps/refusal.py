@@ -76,6 +76,8 @@ FIELD = (
     ' itemId: $i, fieldId: "F", value: {singleSelectOptionId: "O"}}) { projectV2Item { id } } }'
 )
 
+FIELD_TEXT = FIELD.replace('value: {singleSelectOptionId: "O"}', 'value: {text: "free text"}')
+
 
 class Allowed(StrEnum):
     """Which guard a case is put to."""
@@ -207,6 +209,12 @@ CASES = (
     Case(
         "a field value on this run's issue's item on another board",
         FIELD,
+        {"p": PROJECT_ID, "i": FOREIGN_ITEM},
+        403,
+    ),
+    Case(
+        "a field value written as text rather than as a single-select option",
+        FIELD_TEXT,
         {"p": PROJECT_ID, "i": FOREIGN_ITEM},
         403,
     ),

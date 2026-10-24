@@ -18,6 +18,7 @@ interrupted probe's issues are deleted by the next one.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import time
 from dataclasses import dataclass, replace
@@ -247,25 +248,43 @@ def on_board(node: Json, project: str, where: str) -> tuple[ItemId, ...]:
     return tuple(out)
 
 
-async def create(
-    client: Client, state: State, inputs: list[dict[str, Json]], label: str, project: str
-) -> tuple[list[Created], float]:
-    """Create every input in one aliased request; answer each issue and when the answer came."""
-    answer = await client.graphql(
-        f"ProbeCreate{label}",
-        create_document(label, len(inputs)),
-        {f"c{k}": value for k, value in enumerate(inputs)},
-        aliases=len(inputs),
-    )
-    answered = [answer.data.get(f"c{k}") for k in range(len(inputs))]
+def created_ids(answer: Answer, count: int) -> tuple[list[Json], list[IssueId]]:
+    """A create answer's issues, and every id among them."""
+    answered = [answer.data.get(f"c{k}") for k in range(count)]
     issues = [i.get("issue") if isinstance(i, dict) else None for i in answered]
-    # Every id an answer carries is recorded before anything about the answer is refused, so a
-    # create answered in part, or malformed in part, still has each issue it made deleted.
     ids = [
         IssueId(found)
         for i in issues
         if isinstance(i, dict) and isinstance(found := i.get("id"), str)
     ]
+    return issues, ids
+
+
+async def create(
+    client: Client, state: State, inputs: list[dict[str, Json]], label: str, project: str
+) -> tuple[list[Created], float]:
+    """Create every input in one aliased request; answer each issue and when the answer came.
+
+    A create already sent may land whatever its caller does, so an interruption waits for its
+    answer and records every issue it made before the interruption goes on.
+    """
+    request = asyncio.ensure_future(
+        client.graphql(
+            f"ProbeCreate{label}",
+            create_document(label, len(inputs)),
+            {f"c{k}": value for k, value in enumerate(inputs)},
+            aliases=len(inputs),
+        )
+    )
+    try:
+        answer = await asyncio.shield(request)
+    except asyncio.CancelledError:
+        with contextlib.suppress(Exception):
+            state.add(created_ids(await request, len(inputs))[1])
+        raise
+    issues, ids = created_ids(answer, len(inputs))
+    # Every id an answer carries is recorded before anything about the answer is refused, so a
+    # create answered in part, or malformed in part, still has each issue it made deleted.
     state.add(ids)
     require(answer, f"ProbeCreate{label}")
     if len(ids) != len(inputs):
@@ -505,9 +524,15 @@ async def probe(client: Client, ids: BoardIds, state: State) -> PlacementResult:
         result = await _steps(client, ids, state)
     except BaseException as failure:
         cleanup = await delete(client, state, ids)
-        if cleanup.left or cleanup.errors:
-            left = f"{cleanup.left} probe issue(s) left behind after: {failure}"
-            raise LeftBehind(left) from failure
+        left = cleanup.left or cleanup.errors
+        # An interruption stays one, so the caller still sees it was interrupted; what it left
+        # is recorded in `state` for the next probe to delete either way.
+        if left and isinstance(failure, Exception):
+            raise LeftBehind(
+                f"{cleanup.left} probe issue(s) left behind after: {failure}"
+            ) from failure
+        if left:
+            failure.add_note(f"{cleanup.left} probe issue(s) left, recorded in {state.path}")
         raise
     cleanup = await delete(client, state, ids)
     if cleanup.left or cleanup.errors:

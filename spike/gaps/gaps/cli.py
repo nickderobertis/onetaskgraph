@@ -16,8 +16,9 @@ copy may have failed: that is its result, in `result.json`); 1 — the measureme
 taken or broke a guarantee the harness owes (GitHub or onevcs failed, probe issues were left
 behind, the union disagreed with the per-item verdicts, the proxy let a write through, or the
 sanitized output would carry identifying text); 2 — the invocation or the environment is
-wrong (an unknown scenario, a missing credential or binary, a cache path that is not absolute).
-Every diagnostic goes to standard error.
+wrong (an unknown scenario, a missing credential or binary, a cache path that is not absolute);
+130 — interrupted (SIGINT): a live probe deletes what it created first, and records any issue it
+could not delete for the next probe to delete. Every diagnostic goes to standard error.
 """
 
 from __future__ import annotations
@@ -47,6 +48,7 @@ LOGS = PACKAGE_ROOT / "logs"
 CACHE_NAME = "board-copy-gaps-2026-10-24"
 USAGE = 2
 FAILED = 1
+INTERRUPTED = 130
 
 
 class Scenario(StrEnum):
@@ -276,6 +278,12 @@ def main() -> None:
     except UsageError as error:
         sys.stderr.write(f"gaps: {error}\n")
         sys.exit(USAGE)
+    except KeyboardInterrupt:
+        sys.stderr.write(
+            "gaps: interrupted; any probe issue it could not delete is recorded under "
+            f"{paths().cache / 'state'} for the next probe\n"
+        )
+        sys.exit(INTERRUPTED)
     except (
         MeasurementFailed,
         GitHubError,

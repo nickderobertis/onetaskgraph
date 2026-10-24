@@ -316,20 +316,16 @@ def _named_type(kind: graphql.GraphQLType) -> graphql.GraphQLNamedType:
     return graphql.get_named_type(kind)
 
 
-def _id_fields(kind: graphql.GraphQLInputObjectType, allowed: frozenset[str] | None) -> set[str]:
-    """Every id-typed field `kind` declares (of `allowed` only), at any depth of its inputs."""
-    found: set[str] = set()
-    for name, input_field in kind.fields.items():
-        if allowed is not None and name not in allowed:
-            continue
-        match _named_type(input_field.type):
-            case graphql.GraphQLScalarType(name="ID"):
-                found.add(name)
-            case graphql.GraphQLInputObjectType() as inner:
-                found |= _id_fields(inner, None)
-            case _:
-                pass
-    return found
+def _input_path(
+    kind: graphql.GraphQLInputObjectType, path: str
+) -> tuple[str, graphql.GraphQLNamedType]:
+    """The last name of a dotted input path and the type it reaches, every step declared."""
+    current: graphql.GraphQLNamedType = kind
+    for part in path.split("."):
+        assert isinstance(current, graphql.GraphQLInputObjectType), path
+        assert part in current.fields, (kind.name, path)
+        current = _named_type(current.fields[part].type)
+    return path.rsplit(".", 1)[-1], current
 
 
 def test_the_guards_input_table_is_the_pinned_schemas_and_every_id_it_allows_is_classed() -> None:
@@ -349,8 +345,11 @@ def test_the_guards_input_table_is_the_pinned_schemas_and_every_id_it_allows_is_
         assert name in mutation.fields, name
         input_type = _named_type(mutation.fields[name].args["input"].type)
         assert isinstance(input_type, graphql.GraphQLInputObjectType)
-        assert allowed <= set(input_type.fields), (name, allowed - set(input_type.fields))
-        assert _id_fields(input_type, allowed) <= classed, (name, _id_fields(input_type, allowed))
+        for path in allowed:
+            leaf, kind = _input_path(input_type, path)
+            assert not isinstance(kind, graphql.GraphQLInputObjectType), (name, path)
+            if isinstance(kind, graphql.GraphQLScalarType) and kind.name == "ID":
+                assert leaf in classed, (name, path)
 
 
 def test_the_guard_refuses_an_alias_impersonating_a_key_it_reads() -> None:
@@ -364,3 +363,24 @@ def test_the_guard_refuses_an_alias_impersonating_a_key_it_reads() -> None:
     with pytest.raises(guard.Unreadable, match="aliased as `issue`"):
         guard.operation(hidden, {}, None)
     assert guard.operation('query { i0: node(id: "I") { id } }', {}, None).fields
+
+
+def test_the_guard_reads_nested_inputs_to_their_leaves_and_allows_only_the_option() -> None:
+    """A field write may carry a single-select option and nothing else under `value`."""
+    write = (
+        "mutation($v: ProjectV2FieldValue!) { updateProjectV2ItemFieldValue(input: "
+        '{projectId: "P", itemId: "PVTI_owned", fieldId: "F", value: $v})'
+        " { projectV2Item { id } } }"
+    )
+    owned = guard.Guard(frozenset({"P"}), items={"PVTI_owned"})
+
+    def refusal(value: object) -> str | None:
+        body = json.dumps({"query": write, "variables": {"v": value}}).encode()
+        return owned.refusal("POST", "/graphql", body)
+
+    assert refusal({"singleSelectOptionId": "O"}) is None
+    never = "an input field this spike's probes never send"
+    assert refusal({"text": "free text"}) == never
+    assert refusal({"singleSelectOptionId": "O", "number": 1}) == never
+    assert refusal({}) == never
+    assert refusal("O") == never

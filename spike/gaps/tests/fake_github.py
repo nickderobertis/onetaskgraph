@@ -112,6 +112,9 @@ class Board:
     rest_remaining: int | None = None
     tokens: list[str] = field(default_factory=list)
     delete_batches: list[int] = field(default_factory=list)
+    # Once set, every request after the first issue exists waits here until the event is set,
+    # so a test can interrupt a probe part way.
+    hold: threading.Event | None = None
     issues: dict[str, Issue] = field(default_factory=dict)
     used: int = 1000
     seen: list[str] = field(default_factory=list)
@@ -344,6 +347,8 @@ def serve(board: Board) -> tuple[ThreadingHTTPServer, str]:
             except ShapeError as error:
                 self._send(400, {"errors": [{"type": "BAD_REQUEST", "message": str(error)}]})
                 return
+            if board.hold is not None and board.issues:
+                board.hold.wait(60)
             with board.lock:
                 board.tokens.append(self.headers.get("Authorization", ""))
                 self._send(200, board.answer(query, variables))

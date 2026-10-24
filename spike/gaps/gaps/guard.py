@@ -28,13 +28,16 @@ import graphql
 from gaps.github import GitHubError, split_reply
 from gaps.json_shape import Json, ShapeError, obj, parse, text
 
-# Every mutation the probes send, and every input field each may carry: nothing else passes.
+# Every mutation the probes send, and every input field each may carry, a nested one spelled as
+# its dotted path (`value.singleSelectOptionId`): nothing else passes.
 # `tests/test_contracts.py` holds this table to the pinned schema's input types, and holds every
 # id-typed field it allows to one of the three ownership classes below or to `BOARD_SCOPED`.
 PROBE_INPUTS: dict[str, frozenset[str]] = {
     "createIssue": frozenset({"repositoryId", "title", "projectV2Ids", "parentIssueId"}),
     "addProjectV2ItemById": frozenset({"projectId", "contentId"}),
-    "updateProjectV2ItemFieldValue": frozenset({"projectId", "itemId", "fieldId", "value"}),
+    "updateProjectV2ItemFieldValue": frozenset(
+        {"projectId", "itemId", "fieldId", "value.singleSelectOptionId"}
+    ),
     "addBlockedBy": frozenset({"issueId", "blockingIssueId"}),
     "deleteIssue": frozenset({"issueId"}),
 }
@@ -70,6 +73,18 @@ class Operation:
     destinations: frozenset[str]
     issues: frozenset[str]
     items: frozenset[str]
+
+
+def input_keys(value: dict[str, object], prefix: str = "") -> set[str]:
+    """Every leaf of an input object as its dotted path; an empty nested object as `path.{}`."""
+    keys: set[str] = set()
+    for key, inner in value.items():
+        path = f"{prefix}{key}"
+        if isinstance(inner, dict):
+            keys |= input_keys(inner, f"{path}.") or {f"{path}.{{}}"}
+        else:
+            keys.add(path)
+    return keys
 
 
 def _keyed(value: object, keys: frozenset[str]) -> set[str]:
@@ -151,7 +166,7 @@ def operation(query: str, variables: dict[str, Json], name: str | None) -> Opera
             value = graphql.value_from_ast_untyped(argument.value, resolved)
             arguments.append(value)
             is_input = argument.name.value == "input" and isinstance(value, dict)
-            keys |= set(value) if is_input else {f"argument {argument.name.value}"}
+            keys |= input_keys(value) if is_input else {f"argument {argument.name.value}"}
         inputs.append((selection.name.value, frozenset(keys)))
     return Operation(
         mutation=chosen.operation is graphql.OperationType.MUTATION,
