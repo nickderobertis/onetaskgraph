@@ -42,7 +42,6 @@ BASELINE_RUNS = {
 }
 ONEVCS_CALL_SECONDS = 0.67  # the host's slowest measured mean per onevcs call (0.62–0.67 s)
 BURST_COPIES_AN_HOUR = 3
-GRAPHQL_POINTS_AN_HOUR = 5000
 
 
 class Shape(StrEnum):
@@ -422,7 +421,7 @@ REMOVED: dict[Operation, tuple[tuple[str, int], ...]] = {
 }
 # The onevcs calls each host operation still makes with union screening: `None` is the copy's
 # own measured union figure; a re-copy screens only the changed exposure, an unchanged one
-# writes and so screens nothing, an approval screens its one write.
+# writes nothing and so screens nothing, an approval screens its one write.
 SCREENED_CALLS_AFTER: dict[Operation, int | None] = {
     Operation.HOST_FIRST: None,
     Operation.HOST_CHANGED: 4,
@@ -464,7 +463,18 @@ def seconds(base: Baseline, union_calls: int, parent_seconds: float) -> Figure:
     )
 
 
-def candidate(budget: Budget, base: Baseline, prices_: Prices, union_calls: int) -> Candidate:
+def hourly_allowance() -> int:
+    """The GraphQL bucket's limit, as the latest live run's gate read it."""
+    for run in reversed(runs("probe-")):
+        quota = run / "quota.json"
+        if quota.exists() and "before" in (recorded := obj(load(quota), str(quota))):
+            return decode(Reading, recorded["before"], f"{quota}.before").least.limit
+    raise ShapeError(f"no live run under {LOGS} recorded a quota reading")
+
+
+def candidate(
+    budget: Budget, base: Baseline, prices_: Prices, union_calls: int, allowance: int
+) -> Candidate:
     """One budget's attainable figure, its arithmetic and its limits."""
     shape = prices_.shape
     match budget.unit:
@@ -480,11 +490,11 @@ def candidate(budget: Budget, base: Baseline, prices_: Prices, union_calls: int)
                 )
             burst = BURST_COPIES_AN_HOUR * figure.value
             limits = (
-                f"GraphQL allows {GRAPHQL_POINTS_AN_HOUR} points an hour, shared with all host "
+                f"GraphQL allows {allowance} points an hour, shared with all host "
                 "work: "
                 f"{BURST_COPIES_AN_HOUR} operations an hour at {figure.value:g} is {burst:g} "
                 "points "
-                f"({burst / GRAPHQL_POINTS_AN_HOUR:.2%}). Every price is GitHub's own (dry run, "
+                f"({burst / allowance:.2%}). Every price is GitHub's own (dry run, "
                 "matched "
                 "by the charge of each coalesced shape); a mutation request rose by its least "
                 "observed amount whatever its aliases, up to "
@@ -598,6 +608,7 @@ def analyse(budgets: tuple[Budget, ...]) -> Summary:
     priced = prices()
     bases = baseline()
     found = offline()
+    allowance = hourly_allowance()
     union_calls = sum(
         next(v.unioned.calls for v in variants if v.plant is Plant.NONE)
         for variants in found.union.commands.values()
@@ -606,7 +617,9 @@ def analyse(budgets: tuple[Budget, ...]) -> Summary:
         budgets=budgets,
         prices=priced,
         placement=placement(),
-        candidates=tuple(candidate(b, bases[b.operation], priced, union_calls) for b in budgets),
+        candidates=tuple(
+            candidate(b, bases[b.operation], priced, union_calls, allowance) for b in budgets
+        ),
         offline=found,
         consumed=consumed(),
     )

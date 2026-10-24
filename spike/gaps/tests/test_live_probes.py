@@ -405,3 +405,32 @@ def test_a_delete_answered_null_keeps_the_issue_recorded_for_the_next_probe(
     result, state, _ = asyncio.run(probe(url, tmp_path))
     assert isinstance(result, placement.LeftBehind)
     assert len(state.ids) == 11
+
+
+def test_a_request_lost_in_transport_is_still_recorded(tmp_path: Path) -> None:
+    """A request whose connection closes before any answer is still recorded, then refused."""
+
+    async def lose() -> tuple[GitHubError | None, list[RequestRecord]]:
+        """Send one request to a server that reads it and closes without answering."""
+
+        async def close(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+            await reader.readuntil(b"\r\n\r\n")
+            writer.close()
+
+        server = await asyncio.start_server(close, "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+        log = tmp_path / "requests.jsonl"
+        client = Client(f"http://127.0.0.1:{port}/graphql", Token("t0ken"), log=log)
+        try:
+            await client.graphql("lost", "query { viewer { login } }", {})
+        except GitHubError as error:
+            return error, client.records
+        finally:
+            server.close()
+        return None, client.records
+
+    error, records = asyncio.run(lose())
+    assert error is not None and "no answer" in str(error)
+    assert [(r.op, r.status) for r in records] == [("lost", 0)]
+    logged = [obj(line, "r").get("status") for line in load_lines(tmp_path / "requests.jsonl")]
+    assert logged == [0]

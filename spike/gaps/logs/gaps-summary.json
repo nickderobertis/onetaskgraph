@@ -1531,6 +1531,18 @@
      "status": 403
     },
     {
+     "case": "a mutation whose fields hide in a fragment at its root",
+     "expected": 403,
+     "reached_upstream": 0,
+     "status": 403
+    },
+    {
+     "case": "a body over the guard's ceiling",
+     "expected": 400,
+     "reached_upstream": 0,
+     "status": 400
+    },
+    {
      "case": "a negative Content-Length",
      "expected": 400,
      "reached_upstream": 0,
@@ -1550,7 +1562,7 @@
     }
    ]
   },
-  "refusal_run": "proxy-refusal-head-20261024T154252",
+  "refusal_run": "proxy-refusal-head-20261024T160203",
   "union": {
    "commands": {
     "document-copy": [

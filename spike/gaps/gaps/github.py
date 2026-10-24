@@ -209,7 +209,14 @@ class Client:
             request["operationName"] = operation_name
         payload = json.dumps(request).encode()
         start = time.time()
-        reply = await self._send("POST", "/graphql", payload)
+        try:
+            reply = await self._send("POST", "/graphql", payload)
+        except (OSError, TimeoutError, GitHubError) as error:
+            # Sent, perhaps charged, and lost in transport: recorded all the same.
+            lost = HttpReply(status=0, headers={}, body=b"")
+            failed = (type(error).__name__,)
+            self._keep(self._record(kind, op, start, time.time(), lost, None, failed, aliases))
+            raise GitHubError(f"{op}: no answer ({error})") from error
         end = time.time()
         # Every request is recorded before anything about its answer is refused, so a request
         # GitHub or the guard answered unusably still counts in what the run spent.

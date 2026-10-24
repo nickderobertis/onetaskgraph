@@ -128,6 +128,18 @@
    "status": 403
   },
   {
+   "case": "a mutation whose fields hide in a fragment at its root",
+   "expected": 403,
+   "reached_upstream": 0,
+   "status": 403
+  },
+  {
+   "case": "a body over the guard's ceiling",
+   "expected": 400,
+   "reached_upstream": 0,
+   "status": 400
+  },
+  {
    "case": "a negative Content-Length",
    "expected": 400,
    "reached_upstream": 0,

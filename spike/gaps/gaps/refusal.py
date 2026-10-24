@@ -84,6 +84,14 @@ class Case:
     operation_name: str | None = None
 
 
+ROOT_FRAGMENT = json.dumps(
+    {
+        "query": 'mutation { ...F } fragment F on Mutation { deleteIssue(input: {issueId: "I"})'
+        " { repository { id } } }"
+    }
+).encode()
+
+
 @dataclass(frozen=True)
 class RawCase:
     """One request a GraphQL client would never send, put to the guard byte for byte."""
@@ -198,6 +206,19 @@ RAW = (
         "a GraphQL body that is not JSON",
         b"POST /graphql HTTP/1.1\r\nHost: x\r\nContent-Length: 8\r\n\r\nnot json",
         403,
+    ),
+    RawCase(
+        "a mutation whose fields hide in a fragment at its root",
+        b"POST /graphql HTTP/1.1\r\nHost: x\r\nContent-Length: "
+        + str(len(ROOT_FRAGMENT)).encode()
+        + b"\r\n\r\n"
+        + ROOT_FRAGMENT,
+        403,
+    ),
+    RawCase(
+        "a body over the guard's ceiling",
+        b"POST /graphql HTTP/1.1\r\nHost: x\r\nContent-Length: 99999999\r\n\r\n",
+        400,
     ),
     RawCase(
         "a negative Content-Length",

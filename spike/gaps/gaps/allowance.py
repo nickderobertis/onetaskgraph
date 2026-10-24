@@ -18,6 +18,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from gaps.github import Client, RateLimit, require
+from gaps.harness import quota
 from gaps.json_shape import (
     Json,
     ShapeError,
@@ -31,7 +32,6 @@ from gaps.json_shape import (
     text,
 )
 
-OWN_READS = 3
 RATE_QUERY = "query SpikeRateLimit { rateLimit { limit used remaining resetAt } }"
 MIN_PAUSE = 30.0
 
@@ -95,7 +95,7 @@ async def read(client: Client, last_headers: RateLimit | None) -> Reading:
     rest = bucket_of(resources.get("graphql"), "rate_limit.resources.graphql")
     own = []
     answered: set[str] = set()
-    for _ in range(OWN_READS):
+    for _ in range(quota.OWN_READS):
         data = require(await client.graphql("rateLimit", RATE_QUERY, {}), "rateLimit")
         rate = obj(data.get("rateLimit"), "rateLimit")
         answered |= set(rate)
@@ -132,7 +132,6 @@ class Decision:
 
 def decide(now: Reading, previous: Reading | None) -> Decision:
     """The timing spike's 40% rule applied to the least figure of `now`."""
-    from gaps.harness import quota
 
     def shaped(reading: Reading) -> dict[str, Json]:
         return {"graphql": asdict(reading.least)}
