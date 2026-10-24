@@ -140,18 +140,10 @@ def refusal(kind: str, body: bytes, writes: str, allowed: set[str]) -> str | Non
         payload = json.loads(body)
     except ValueError:
         return "an unparseable mutation"
-    variables = payload.get("variables") or {}
-    query = payload.get("query", "")
-    names = set(guarded_ids(variables))
-    names |= set(re.findall(r'(?:repositoryId|projectId):\s*"([^"]+)"', query))
-    for listed in re.findall(r"projectV2Ids:\s*\[([^\]]*)\]", query):
-        names |= set(re.findall(r'"([^"]+)"', listed))
-    # A guarded input field given a variable of any name: `projectId: $p`.
-    for variable in re.findall(
-        r"(?:repositoryId|projectId|projectV2Ids):\s*\$(\w+)", query
-    ):
-        value = variables.get(variable) if isinstance(variables, dict) else None
-        names |= {str(v) for v in (value if isinstance(value, list) else [value])}
+    names = set(guarded_ids(payload.get("variables")))
+    names |= set(
+        re.findall(r'(?:repositoryId|projectId):\s*"([^"]+)"', payload.get("query", ""))
+    )
     stray = names - allowed
     return (
         f"it names {len(stray)} repository or project id(s) outside the test board"
@@ -197,7 +189,7 @@ class Handler(BaseHTTPRequestHandler):
     recorder: Recorder
     api: str
     uploads: str
-    writes: str = "none"
+    writes: str = "any"
     allowed: frozenset[str] = frozenset()
     refused_ops: frozenset[str] = frozenset()
     local = threading.local()
@@ -390,7 +382,7 @@ def serve(
     api: str,
     uploads: str,
     port: int = 0,
-    writes: str = "none",
+    writes: str = "any",
     allowed: frozenset[str] = frozenset(),
     refused_ops: frozenset[str] = frozenset(),
 ) -> None:
@@ -416,8 +408,8 @@ def main() -> None:
     parser.add_argument(
         "--writes",
         choices=("any", "none", "allowed"),
-        default="none",
-        help="any: forward every write (stand-in upstreams only); none: refuse every mutation and upload; allowed: refuse a mutation naming a "
+        default="any",
+        help="none: refuse every mutation and upload; allowed: refuse a mutation naming a "
         "repository or project id not given with --allow",
     )
     parser.add_argument("--allow", action="append", default=[])

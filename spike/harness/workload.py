@@ -447,14 +447,6 @@ def rewrite_bodies(root: Path, plan: str, variant: int) -> None:
         path.write_text(text[:end] + "\n" + content)
 
 
-def rewrite_one(root: Path, plan: str, number: int, variant: int) -> None:
-    """Replace one task's content, keeping its front matter and every other record whole."""
-    path = root / "tasks" / plan / f"t{number}.md"
-    text = path.read_text()
-    end = text.index("\n---\n", 4) + len("\n---\n")
-    path.write_text(text[:end] + "\n" + task_content(plan, number, variant))
-
-
 def main_args(
     root: Path,
     plan: str,

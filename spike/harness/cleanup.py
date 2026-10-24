@@ -12,7 +12,6 @@ the repository the item names; those issues are this spike's own and are deleted
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 from probes import Client
@@ -27,16 +26,13 @@ TITLES = (
     "Design: bcs-",
     "DESIGN: Design: bcs-",
     "bcs-probe",
-    "bcg-probe",  # the feasibility spike's probe-placement issues
 )
 
 
 def created_ids(runs: Path, state: Path) -> list[str]:
     """Every issue id a `createIssue` (or an aliased one) answered in any raw run log."""
     ids: list[str] = []
-    extra = [Path(p) for p in os.environ.get("SPIKE_EXTRA_RUNS", "").split()]
-    logs = sorted(runs.glob("*/proxy.jsonl")) + [l for e in extra for l in sorted(e.glob("*/proxy.jsonl"))]
-    for log in logs:
+    for log in sorted(runs.glob("*/proxy.jsonl")):
         bodies = log.with_suffix(".bodies")
         for line in log.read_text().splitlines():
             record = json.loads(line)

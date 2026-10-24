@@ -1,0 +1,59 @@
+{"argv": ["project", "list", "--source", "authoring", "--json", "--no-interactive"], "end": 1792356617.874, "kind": "store", "returncode": 0, "start": 1792356617.816}
+{"end": 1792356617.875, "kind": "step", "name": "plan_store.read_projects", "start": 1792356617.816}
+{"argv": ["task", "list", "--project", "bcs-host", "--source", "authoring", "--json", "--no-interactive"], "end": 1792356617.941, "kind": "store", "returncode": 0, "start": 1792356617.876}
+{"end": 1792356617.943, "kind": "step", "name": "plan_store.plan_listing", "start": 1792356617.816}
+{"argv": ["task", "deps", "authoring:<id>", "--json", "--no-interactive"], "end": 1792356618.003, "kind": "store", "returncode": 0, "start": 1792356617.944}
+{"argv": ["task", "deps", "authoring:<id>", "--json", "--no-interactive"], "end": 1792356618.063, "kind": "store", "returncode": 0, "start": 1792356618.004}
+{"argv": ["task", "deps", "authoring:<id>", "--json", "--no-interactive"], "end": 1792356618.122, "kind": "store", "returncode": 0, "start": 1792356618.064}
+{"argv": ["task", "deps", "authoring:<id>", "--json", "--no-interactive"], "end": 1792356618.182, "kind": "store", "returncode": 0, "start": 1792356618.123}
+{"argv": ["task", "deps", "authoring:<id>", "--json", "--no-interactive"], "end": 1792356618.241, "kind": "store", "returncode": 0, "start": 1792356618.183}
+{"argv": ["task", "deps", "authoring:<id>", "--json", "--no-interactive"], "end": 1792356618.302, "kind": "store", "returncode": 0, "start": 1792356618.242}
+{"argv": ["task", "deps", "authoring:<id>", "--json", "--no-interactive"], "end": 1792356618.366, "kind": "store", "returncode": 0, "start": 1792356618.303}
+{"argv": ["task", "deps", "authoring:<id>", "--json", "--no-interactive"], "end": 1792356618.426, "kind": "store", "returncode": 0, "start": 1792356618.367}
+{"end": 1792356618.426, "kind": "step", "name": "plan_store.read_tasks", "start": 1792356617.816}
+{"end": 1792356618.429, "kind": "step", "name": "plan_review.bar_fingerprint", "start": 1792356618.426}
+{"end": 1792356618.434, "kind": "step", "name": "plan_review.review_key", "start": 1792356618.43}
+{"end": 1792356618.439, "kind": "step", "name": "plan_review.review_key", "start": 1792356618.434}
+{"end": 1792356618.443, "kind": "step", "name": "plan_review.review_key", "start": 1792356618.439}
+{"end": 1792356618.447, "kind": "step", "name": "plan_review.review_key", "start": 1792356618.443}
+{"end": 1792356618.451, "kind": "step", "name": "plan_review.review_key", "start": 1792356618.447}
+{"end": 1792356618.456, "kind": "step", "name": "plan_review.review_key", "start": 1792356618.452}
+{"end": 1792356618.461, "kind": "step", "name": "plan_review.review_key", "start": 1792356618.456}
+{"end": 1792356618.465, "kind": "step", "name": "plan_review.review_key", "start": 1792356618.461}
+{"end": 1792356618.466, "kind": "step", "name": "plan_review.unreviewed", "start": 1792356618.426}
+{"argv": ["project", "show", "authoring:<id>", "--json", "--no-interactive"], "end": 1792356618.523, "kind": "store", "returncode": 0, "start": 1792356618.466}
+{"end": 1792356618.524, "kind": "step", "name": "plan_store.project_record", "start": 1792356618.466}
+{"end": 1792356618.524, "kind": "step", "name": "plan_store.read_plan", "start": 1792356618.466}
+{"argv": ["project", "show", "authoring:<id>", "--json", "--no-interactive"], "end": 1792356618.582, "kind": "store", "returncode": 0, "start": 1792356618.525}
+{"end": 1792356618.582, "kind": "step", "name": "plan_store.project_record", "start": 1792356618.524}
+{"end": 1792356618.583, "kind": "step", "name": "plan_review.owned_by_node", "start": 1792356618.583}
+{"end": 1792356618.586, "kind": "step", "name": "plan_review.bar_fingerprint", "start": 1792356618.583}
+{"end": 1792356618.599, "kind": "step", "name": "plan_review.checklist_fingerprint", "start": 1792356618.586}
+{"end": 1792356618.599, "kind": "step", "name": "plan_review.plan_bar_fingerprint", "start": 1792356618.583}
+{"end": 1792356618.599, "kind": "step", "name": "plan_review.plan_answers", "start": 1792356618.599}
+{"end": 1792356618.602, "kind": "step", "name": "plan_review.bar_fingerprint", "start": 1792356618.599}
+{"end": 1792356618.606, "kind": "step", "name": "plan_review.review_key", "start": 1792356618.602}
+{"end": 1792356618.61, "kind": "step", "name": "plan_review.review_key", "start": 1792356618.606}
+{"end": 1792356618.615, "kind": "step", "name": "plan_review.review_key", "start": 1792356618.611}
+{"end": 1792356618.619, "kind": "step", "name": "plan_review.review_key", "start": 1792356618.615}
+{"end": 1792356618.624, "kind": "step", "name": "plan_review.review_key", "start": 1792356618.619}
+{"end": 1792356618.628, "kind": "step", "name": "plan_review.review_key", "start": 1792356618.624}
+{"end": 1792356618.633, "kind": "step", "name": "plan_review.review_key", "start": 1792356618.629}
+{"end": 1792356618.638, "kind": "step", "name": "plan_review.review_key", "start": 1792356618.633}
+{"end": 1792356618.638, "kind": "step", "name": "plan_review.plan_key", "start": 1792356618.599}
+{"end": 1792356618.638, "kind": "step", "name": "plan_review.plan_unreviewed", "start": 1792356618.583}
+{"argv": ["document", "list", "--project", "bcs-host", "--source", "authoring", "--json", "--no-interactive"], "end": 1792356618.696, "kind": "store", "returncode": 0, "start": 1792356618.639}
+{"end": 1792356618.697, "kind": "step", "name": "task_body.document_bodies", "start": 1792356618.697}
+{"end": 1792356618.697, "kind": "step", "name": "task_body.serve", "start": 1792356618.697}
+{"end": 1792356618.697, "kind": "step", "name": "task_body.measure", "start": 1792356618.697}
+{"end": 1792356618.697, "kind": "step", "name": "task_body.document_bodies", "start": 1792356618.697}
+{"end": 1792356618.697, "kind": "step", "name": "task_body.serve", "start": 1792356618.697}
+{"end": 1792356618.697, "kind": "step", "name": "task_body.measure", "start": 1792356618.697}
+{"end": 1792356618.697, "kind": "step", "name": "task_body.document_refusals", "start": 1792356618.697}
+{"end": 1792356618.698, "kind": "step", "name": "plan_copy._measure_documents", "start": 1792356618.638}
+{"end": 1792356618.698, "kind": "step", "name": "plan_copy._copy_options", "start": 1792356618.698}
+{"argv": ["project", "copy", "authoring:<id>", "--to", "plans", "--json", "--no-interactive"], "end": 1792356696.329, "kind": "store", "returncode": 0, "start": 1792356618.698}
+{"end": 1792356696.33, "kind": "step", "name": "plan_copy._report", "start": 1792356696.33}
+{"argv": ["document", "list", "--project", "bcs-host", "--source", "authoring", "--json", "--no-interactive"], "end": 1792356696.391, "kind": "store", "returncode": 0, "start": 1792356696.331}
+{"argv": ["document", "copy", "authoring:<id>", "--to", "plans", "--json", "--no-interactive"], "end": 1792356715.578, "kind": "store", "returncode": 0, "start": 1792356696.393}
+{"end": 1792356715.579, "kind": "step", "name": "plan_copy._report", "start": 1792356715.579}

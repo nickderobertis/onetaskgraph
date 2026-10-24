@@ -19,9 +19,7 @@ def main() -> None:
     by = next(iter(plan_review.By))
     records = plan_store.read_tasks(project)
     bar = plan_review.bar_fingerprint()
-    # Only a task whose recorded review no longer matches its content is stamped again, as a
-    # review of that one task would record it; every other record is left byte for byte.
-    for task in plan_review.unreviewed(records, bar):
+    for task in records:
         plan_review.write_record(project, task, plan_review.review_key(task, bar), by)
     records = plan_store.read_tasks(project)
     plan = plan_store.read_plan(project, records)

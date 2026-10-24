@@ -41,7 +41,7 @@ import sanitize
 import workload
 
 CACHE = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / (
-    os.environ.get("SPIKE_CACHE_NAME", "board-copy-speed-2026-10-18")
+    "board-copy-speed-2026-10-18"
 )
 CLONE = Path(os.environ.get("SPIKE_HOST_CLONE") or CACHE / "ai-orchestrator")
 SPAN_BINARY = Path(
@@ -49,9 +49,7 @@ SPAN_BINARY = Path(
     or CACHE / "span-build/target/release/onetaskgraph"
 )
 STOCK_BINARY = CLONE / ".venv/bin/onetaskgraph"
-LOGS = Path(os.environ.get("SPIKE_LOGS") or REPO / "spike/logs")
-RUNS = CACHE / os.environ.get("SPIKE_RUNS_DIR", "runs")
-VERSION = os.environ.get("SPIKE_VERSION", "onetaskgraph 0.7.1")
+LOGS = REPO / "spike/logs"
 QUOTA_LOG = CACHE / "quota.jsonl"
 PYTHON = shutil.which("python3", path="/usr/bin:/bin") or sys.executable
 
@@ -60,50 +58,19 @@ TEST_OWNER = "nickderobertis"
 TEST_NUMBER = 1
 TEST_REPOSITORY = "nickderobertis/onetaskgraph-live-scratch"
 
-TB = ("tb-first", "tb-changed", "tb-changed1", "tb-unchanged")
+TB = ("tb-first", "tb-changed", "tb-unchanged")
 SCENARIOS = (
     *TB,
     "host-copy",
-    "host-changed1",
     "host-approve",
     "plans-walk",
     "plans-board-walk",
-    "plans-read",
     "tb-list-pages",
     "probes",
     "probe-body-limit",
     "cleanup",
-    # The feasibility spike (board-copy-gaps-2026-10-24): live, read-only and on the test board.
-    "probe-alias-pricing",
-    "probe-placement",
-    # Offline: synthetic sources, the real CLI and the real onevcs, no credential.
-    "reach-public",
-    "reach-private-item",
-    "reach-private-ref",
-    "reach-unresolvable-ref",
-    "screen-union",
-    "proxy-refusal",
-)
-OFFLINE = (
-    "reach-public",
-    "reach-private-item",
-    "reach-private-ref",
-    "reach-unresolvable-ref",
-    "screen-union",
-    "proxy-refusal",
-)
-HEAD_BINARY = Path(
-    os.environ.get("SPIKE_HEAD_BINARY") or REPO / "target/debug/onetaskgraph"
-)
-CLOSURE_BINARY = Path(
-    os.environ.get("SPIKE_CLOSURE_BINARY")
-    or CACHE / "prototype/target/debug/onetaskgraph"
-)
-ONEVCS = Path(
-    os.environ.get("SPIKE_ONEVCS") or Path.home() / "ai-orchestrator/.venv/bin/onevcs"
 )
 UNREACHABLE = "http://127.0.0.1:9/graphql"
-HOST_XDG = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
 
 
 def token() -> str:
@@ -116,16 +83,6 @@ def token() -> str:
 
 
 def binary(build: str) -> Path:
-    if build in ("head", "closure"):
-        path = HEAD_BINARY if build == "head" else CLOSURE_BINARY
-        if not path.exists():
-            hint = (
-                "cargo build -p onetaskgraph"
-                if build == "head"
-                else "spike/prototype/build.sh"
-            )
-            sys.exit(f"run.py: no {build} binary at {path}; run {hint}")
-        return path
     path = SPAN_BINARY if build == "span" else STOCK_BINARY
     if not path.exists():
         hint = (
@@ -137,8 +94,8 @@ def binary(build: str) -> Path:
     version = subprocess.run(
         [path, "--version"], capture_output=True, text=True, check=False
     ).stdout
-    if version.strip() != VERSION:
-        sys.exit(f"run.py: {path} is {version.strip()!r}, not {VERSION}")
+    if version.strip() != "onetaskgraph 0.7.1":
+        sys.exit(f"run.py: {path} is {version.strip()!r}, not onetaskgraph 0.7.1")
     return path
 
 
@@ -343,11 +300,6 @@ def tb_setup(build: str, scenario: str) -> tuple[Path, str]:
         )
         render_document(state, plan, "spike-md", state / "md", env, state)
         (state / "variant").write_text(str(variant))
-    elif scenario == "tb-changed1":
-        # One task's body changed, the document and every other record as they were.
-        variant = int((state / "variant").read_text()) + 1
-        workload.rewrite_one(state / "md", plan, 1, variant)
-        (state / "variant").write_text(str(variant))
     return state, plan
 
 
@@ -381,23 +333,6 @@ def run_tb(run: Path, scenario: str, build: str, proxy: Proxy) -> None:
 HOST_PLAN = "bcs-host"
 
 
-def unreachable_others() -> dict[str, str]:
-    """Every source the host's layers configure besides `plans` and `authoring`, pointed at an
-    endpoint that answers nothing (a Linear one also given a placeholder key): whatever a
-    recipe asked of one would fail rather than reach it. Names come from SPIKE_OTHER_SOURCES
-    (`name:plugin` pairs), so no source name is written into the harness."""
-    env: dict[str, str] = {}
-    for pair in os.environ.get("SPIKE_OTHER_SOURCES", "").split():
-        name, _, plugin = pair.partition(":")
-        key = name.upper().replace("-", "_")
-        env[f"ONETASKGRAPH_SOURCES__{key}__CONFIG__ENDPOINT"] = UNREACHABLE
-        if plugin == "linear":
-            env[f"ONETASKGRAPH_SOURCES__{key}__CONFIG__API_KEY_ENV"] = (
-                "SPIKE_NO_LINEAR_KEY"
-            )
-    return env
-
-
 def host_env(
     proxy: Proxy | None, run: Path | None, walk: bool = False
 ) -> dict[str, str]:
@@ -412,23 +347,17 @@ def host_env(
         ONETASKGRAPH_SOURCES__PLANS__CACHE__DIR=str(
             state / ("walk-cache" if walk else "cache")
         ),
+        ONETASKGRAPH_SOURCES__FOLLOWUPS__CONFIG__ENDPOINT=UNREACHABLE,
+        # `plans` routes `petsinc` tasks to the `hellopatient` Linear source, which a copy
+        # builds although no task of this plan routes there. The scratch process holds no
+        # Linear key, so it is built with a placeholder and an endpoint that answers nothing:
+        # whatever a copy asked of Linear would fail the copy rather than reach it.
+        ONETASKGRAPH_SOURCES__HELLOPATIENT__CONFIG__API_KEY_ENV="SPIKE_NO_LINEAR_KEY",
+        ONETASKGRAPH_SOURCES__HELLOPATIENT__CONFIG__ENDPOINT=UNREACHABLE,
         SPIKE_NO_LINEAR_KEY="placeholder",
-        **unreachable_others(),
         GH_PROJECTS_TOKEN=token(),
     )
-    # No onetaskgraph user layer: the host's private sources are never built or reached.
-    (state / "xdg-empty").mkdir(parents=True, exist_ok=True)
-    env["XDG_CONFIG_HOME"] = str(state / "xdg-empty")
     if not walk:
-        shim = [PYTHON, str(HERE / "inspect_shim.py"), "--xdg", HOST_XDG, "--log"]
-        shim += [str(run / "screen.jsonl") if run else "-"]
-        shim += [str(CLONE / ".venv/bin/onevcs"), "boundary"]
-        env["ONETASKGRAPH_WRITE_POLICY__VISIBILITY_COMMAND"] = ",".join(
-            shim + ["inspect", "--input", "-"]
-        )
-        env["ONETASKGRAPH_WRITE_POLICY__CHECK_COMMAND"] = ",".join(
-            shim + ["check", "--destination", "public", "--input", "-"]
-        )
         env["ONETASKGRAPH_SOURCES__PLANS__CONFIG__OWNER"] = TEST_OWNER
         env["ONETASKGRAPH_SOURCES__PLANS__CONFIG__PROJECT_NUMBER"] = str(TEST_NUMBER)
         env["ONETASKGRAPH_SOURCES__PLANS__CONFIG__REPOSITORY"] = TEST_REPOSITORY
@@ -450,17 +379,9 @@ def host_setup() -> None:
     )
     env = host_env(None, None)
     render_document(state, HOST_PLAN, "authoring", state / "md", env, CLONE)
-    stamp(env)
-
-
-def stamp(env: dict) -> None:
-    """Stamp the host plan's review records for its current content (no judged turn)."""
-    argv = ["uv", "run", "python", HERE / "stamp_reviews.py", f"authoring:{HOST_PLAN}"]
-    clean = {
-        k: v for k, v in env.items() if k not in ("SPIKE_HOST_AUDIT", "PYTHONPATH")
-    }
+    stamp = ["uv", "run", "python", HERE / "stamp_reviews.py", f"authoring:{HOST_PLAN}"]
     done = subprocess.run(
-        [str(a) for a in argv], env=clean, cwd=CLONE, capture_output=True, check=False
+        [str(a) for a in stamp], env=env, cwd=CLONE, capture_output=True, check=False
     )
     if done.returncode:
         sys.exit(
@@ -485,17 +406,7 @@ def run_host(run: Path, scenario: str, build: str, proxy: Proxy) -> None:
     host_setup()
     record_workload(run, CACHE / "state" / HOST_PLAN)
     env = host_env(proxy, run)
-    if scenario == "host-changed1":
-        state = CACHE / "state" / HOST_PLAN
-        variant = (
-            int((state / "variant").read_text()) + 1
-            if (state / "variant").exists()
-            else 1
-        )
-        workload.rewrite_one(state / "md", HOST_PLAN, 1, variant)
-        (state / "variant").write_text(str(variant))
-        stamp(env)
-    if scenario in ("host-copy", "host-changed1"):
+    if scenario == "host-copy":
         step(
             run,
             "copy-plan",
@@ -512,19 +423,6 @@ def run_walk(run: Path, build: str, proxy: Proxy, verb: str = "project") -> None
     env = host_env(proxy, None, walk=True)
     argv = [binary(build), verb, "list", "--source", "plans", "--json"]
     step(run, f"{verb}-list", argv, env, CLONE)
-
-
-def run_plans_read(run: Path, build: str, proxy: Proxy) -> None:
-    """The store's reads of one existing plan on the real `plans` board, every write refused:
-    `task list --project` and `document list --project` of the project SPIKE_PLANS_PROJECT
-    names (a qualified `plans:` id, read from the environment so none is written here)."""
-    project = os.environ.get("SPIKE_PLANS_PROJECT", "")
-    if not project.startswith("plans:"):
-        sys.exit("run.py: SPIKE_PLANS_PROJECT must name a plan's project on `plans`")
-    env = host_env(proxy, None, walk=True)
-    for verb in ("task", "document"):
-        argv = [binary(build), verb, "list", "--project", project, "--json"]
-        step(run, f"{verb}-list-project", argv, env, CLONE)
 
 
 def run_list_pages(run: Path, build: str, proxy: Proxy) -> None:
@@ -558,7 +456,9 @@ def header_floor(scenario: str) -> None:
     """Pause for the reset while the last GraphQL answer any run recorded, in the current
     window, left the bucket under the floor: the headers are what GitHub enforces, and the
     readings the gate takes have answered thousands of points too generously."""
-    logs = sorted(RUNS.glob("*/proxy.jsonl"), key=lambda p: p.stat().st_mtime)
+    logs = sorted(
+        (CACHE / "runs").glob("*/proxy.jsonl"), key=lambda p: p.stat().st_mtime
+    )
     for log in reversed(logs[-3:]):
         records = [
             json.loads(line) for line in log.read_text().splitlines() if line.strip()
@@ -587,47 +487,6 @@ def header_floor(scenario: str) -> None:
         return
 
 
-def last_headers() -> dict | None:
-    """The GraphQL bucket as the last real answer any run recorded reported it, while its
-    window is still open: `{limit, used, remaining, reset, at}`, or `None`."""
-    logs = sorted(RUNS.glob("*/proxy.jsonl"), key=lambda p: p.stat().st_mtime)
-    for log in reversed(logs[-3:]):
-        records = [
-            json.loads(line) for line in log.read_text().splitlines() if line.strip()
-        ]
-        graphql = [
-            r for r in records if r["limits"].get("x-ratelimit-resource") == "graphql"
-        ]
-        if not graphql:
-            continue
-        last = max(graphql, key=lambda r: r["end"])
-        reset = int(last["limits"]["x-ratelimit-reset"])
-        if reset <= time.time():
-            return None
-        return {
-            "limit": int(last["limits"]["x-ratelimit-limit"]),
-            "used": int(last["limits"]["x-ratelimit-used"]),
-            "remaining": int(last["limits"]["x-ratelimit-remaining"]),
-            "reset": reset,
-            "at": last["end"],
-        }
-    return None
-
-
-def corrected_read(token_value: str) -> dict:
-    """The corrected gate's reading: the least of `GET /rate_limit`, three GraphQL
-    `rateLimit` reads and the last real answer's `x-ratelimit-*` headers."""
-    out = quota.read(token_value)
-    headers = last_headers()
-    if headers is not None:
-        out["graphql (last headers)"] = {
-            k: headers[k] for k in ("limit", "used", "remaining", "reset")
-        }
-        if headers["remaining"] < out["graphql"]["remaining"]:
-            out["graphql"] = dict(out["graphql (last headers)"])
-    return out
-
-
 # --- driver -------------------------------------------------------------------------------
 
 DRAWS = {
@@ -635,44 +494,13 @@ DRAWS = {
     "probe-body-limit": ("graphql",),
     "plans-walk": ("graphql",),
     "plans-board-walk": ("graphql",),
-    "plans-read": ("graphql",),
-    "probe-alias-pricing": ("graphql",),
-    "probe-placement": ("graphql",),
 }
-
-
-def run_offline(scenario: str, build: str, stamp: str) -> None:
-    """A synthetic case: no credential, no quota, nothing hosted but the loopback doubles."""
-    import reach
-    import union
-
-    name = f"{scenario}-{build}"
-    run = RUNS / f"{name}-{stamp}"
-    run.mkdir(parents=True)
-    print(f"{name}: raw logs in {run}", flush=True)
-    # llmlint: ignore[structural_pattern_matching] This repository declares requires-python >=3.9 and ruff targets it; `match` is a syntax error there.
-    if scenario == "proxy-refusal":
-        import refusal
-
-        result = refusal.run(run, PYTHON, HERE / "proxy.py")
-    elif scenario == "screen-union":
-        result = union.run(run, binary(build), ONEVCS, PYTHON)
-    else:
-        result = reach.run(run, scenario, binary(build), ONEVCS, PYTHON)
-    out = sanitize.write_offline(run, result, LOGS / f"{name}-{stamp}")
-    print(f"{name}: sanitized result in {out}", flush=True)
-    if result.get("all_as_expected") is False or result.get("all_agree") is False:
-        sys.exit(
-            f"run.py: {name} recorded an outcome other than the expected one; read {out}/result.json"
-        )
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("scenario", choices=SCENARIOS)
-    parser.add_argument(
-        "--build", choices=("stock", "span", "head", "closure"), default="stock"
-    )
+    parser.add_argument("--build", choices=("stock", "span"), default="stock")
     parser.add_argument("--no-sanitize", action="store_true")
     parser.add_argument(
         "--plan",
@@ -680,9 +508,6 @@ def main() -> None:
     )
     args = parser.parse_args()
     stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
-    if args.scenario in OFFLINE:
-        run_offline(args.scenario, args.build, stamp)
-        return
     label = args.scenario
     host_project = CACHE / "state" / HOST_PLAN / "md" / "projects" / f"{HOST_PLAN}.md"
     if (
@@ -692,26 +517,15 @@ def main() -> None:
     ):
         label = "host-recopy"  # the plan is already on the board: an unchanged re-copy
     name = f"{label}-{args.build}"
-    run = RUNS / f"{name}-{stamp}"
+    run = CACHE / "runs" / f"{name}-{stamp}"
     run.mkdir(parents=True)
     print(f"{name}: raw logs in {run}", flush=True)
-    logged = len(QUOTA_LOG.read_text().splitlines()) if QUOTA_LOG.exists() else 0
     header_floor(name)
     reading = quota.gate(
-        token(),
-        QUOTA_LOG,
-        name,
-        DRAWS.get(args.scenario, quota.BUCKETS),
-        reader=corrected_read,
+        token(), QUOTA_LOG, name, DRAWS.get(args.scenario, quota.BUCKETS)
     )
-    events = [
-        json.loads(line)
-        for line in QUOTA_LOG.read_text().splitlines()[logged:]
-        if line.strip()
-    ]
-    (run / "quota-events.json").write_text(json.dumps(events))
     (run / "quota-before.json").write_text(json.dumps(reading))
-    walk = args.scenario in ("plans-walk", "plans-board-walk", "plans-read")
+    walk = args.scenario in ("plans-walk", "plans-board-walk")
     # The BOARD walk of `plans` is `task list`'s first half; its search half is refused, so
     # exactly the BOARD pages the manager allowed leave, and the command then fails.
     refused = ("SEARCH_ISSUES",) if args.scenario == "plans-board-walk" else ()
@@ -721,31 +535,18 @@ def main() -> None:
     try:
         if args.scenario in TB:
             run_tb(run, args.scenario, args.build, proxy)
-        elif args.scenario in ("host-copy", "host-changed1", "host-approve"):
+        elif args.scenario in ("host-copy", "host-approve"):
             run_host(run, args.scenario, args.build, proxy)
         elif args.scenario == "plans-walk":
             run_walk(run, args.build, proxy)
         elif args.scenario == "plans-board-walk":
             run_walk(run, args.build, proxy, verb="task")
-        elif args.scenario == "plans-read":
-            run_plans_read(run, args.build, proxy)
         elif args.scenario == "tb-list-pages":
             run_list_pages(run, args.build, proxy)
         elif args.scenario == "probe-body-limit":
             import probes
 
             probes.body_limit(run, proxy.endpoint, token(), TEST_OWNER, TEST_REPOSITORY)
-        elif args.scenario in ("probe-alias-pricing", "probe-placement"):
-            import feasibility
-
-            probe = (
-                feasibility.alias_pricing
-                if args.scenario == "probe-alias-pricing"
-                else feasibility.placement
-            )
-            probe(
-                run, proxy.endpoint, token(), TEST_OWNER, TEST_NUMBER, TEST_REPOSITORY
-            )
         elif args.scenario == "probes":
             import probes
 

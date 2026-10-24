@@ -1,0 +1,33 @@
+{
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "name": "spike-gaps",
+  "projectType": "application",
+  "tags": ["lang:python", "layer:spike"],
+  "implicitDependencies": ["onetaskgraph"],
+  "//": "The board-copy-gaps feasibility spike, preserved on its branch and never landed. Its tests drive target/debug/onetaskgraph and the prototype build, so `test` depends on both builds; the live probes are never a target, because they spend the test board's shared GitHub allowance and run only from spike/gaps.sh.",
+  "targets": {
+    "format-check": {
+      "executor": "nx:run-commands",
+      "options": { "command": ".venv/bin/ruff format --check spike/gaps" }
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "options": { "command": ".venv/bin/ruff check spike/gaps" }
+    },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": { "command": "../../.venv/bin/ty check gaps tests", "cwd": "spike/gaps" }
+    },
+    "prototype": {
+      "executor": "nx:run-commands",
+      "options": { "command": "bash spike/gaps/prototype/build.sh" },
+      "cache": false,
+      "//": "Uncached: it builds into a clone under the user's cache directory, outside the cacheable output set."
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["onetaskgraph:build", "prototype"],
+      "options": { "command": "../../.venv/bin/pytest -q", "cwd": "spike/gaps" }
+    }
+  }
+}

@@ -20,9 +20,7 @@ from collections import defaultdict
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-import os
-
-LOGS = Path(os.environ.get("SPIKE_LOGS") or HERE.parent / "logs")
+LOGS = HERE.parent / "logs"
 
 WALK = {"BOARD", "SEARCH_ISSUES"}
 REWRITING = {
@@ -44,7 +42,6 @@ CATEGORIES = (
     "body composition and rendering",
     "engine and local-source work",
     "CLI (configuration, engine build, output)",
-    "write-boundary screening (onevcs)",
     "unattributed inside the store process (stock wheel: no spans)",
     "host-side steps",
     "unattributed",
@@ -55,18 +52,7 @@ CONTENT_CREATING = {
     "ADD_COMMENT",
     "ADD_COMMENT_WHOLE",
     "POST /user-attachments/assets",
-    "CREATE_ISSUES",
 }
-CREATES = {"CREATE_ISSUE", "CREATE_ISSUES"}
-BATCHED = {
-    "ORIGIN_LOOKUPS",
-    "CREATED_BOARD_ITEMS",
-    "ISSUE_DETAILS",
-    "ISSUE_COPY_DETAILS",
-    "ISSUES_BY_REFERENCE",
-}
-ALIASED = {"CREATE_ISSUES", "WRITE_FIELD_VALUES", "ADD_BLOCKED_BYS", "CLOSE_ISSUES"}
-SCREENING_HOSTS = {"api.github.com", "cafe.github.com"}
 
 
 def lines(path: Path) -> list[dict]:
@@ -77,8 +63,6 @@ def lines(path: Path) -> list[dict]:
 
 def request_kind(request: dict) -> str:
     if request["kind"] == "tunnel":
-        if request["host"] in SCREENING_HOSTS:
-            return "screening tunnel"
         return "upload"
     if request["path"] == "/user-attachments/assets" or request["op"].startswith(
         "GET /repos"
@@ -87,11 +71,7 @@ def request_kind(request: dict) -> str:
     if request["op"] in WALK:
         return "board or search page"
     if request["kind"] == "mutation":
-        if request["op"] in ALIASED or request.get("mutations", 1) > 1:
-            return "aliased mutations"
         return "mutation"
-    if request["op"] in BATCHED:
-        return "batched read"
     return "item read"
 
 
@@ -103,7 +83,6 @@ def request_category(request: dict | None) -> str:
         "upload": "asset upload",
         "board or search page": "whole-board walk pages",
         "mutation": "writes",
-        "aliased mutations": "writes",
     }.get(kind, "destination reads")
 
 
@@ -228,10 +207,6 @@ def attribute(run: Path) -> dict:
                         "unattributed inside the store process (stock wheel: no spans)",
                     )
                 )
-    for screen in lines(run / "screen.jsonl"):
-        intervals.append(
-            (screen["start"], screen["end"], "write-boundary screening (onevcs)")
-        )
     split: dict[str, float] = defaultdict(float)
     for step in steps:
         for category, seconds in sweep(intervals, step["start"], step["end"]).items():
@@ -296,25 +271,7 @@ def run_summary(run: Path, prices: dict) -> dict:
         },
         "steps": per_step,
         "requests": sum(1 for r in requests if r["kind"] != "tunnel"),
-        "tunnels": sum(
-            1 for r in requests if request_kind(r) == "upload" and r["kind"] == "tunnel"
-        ),
-        "screening_tunnels": sum(
-            1 for r in requests if request_kind(r) == "screening tunnel"
-        ),
-        "screening_calls": dict(
-            sorted(
-                (name, sum(1 for s in lines(run / "screen.jsonl") if s["name"] == name))
-                for name in {s["name"] for s in lines(run / "screen.jsonl")}
-            )
-        ),
-        "issues_created": sum(
-            r.get("mutations", 1) for r in requests if r["op"] in CREATES
-        ),
-        "uploads": sum(1 for r in requests if r["op"] == "POST /user-attachments/assets"),
-        "mutation_fields": sum(
-            r.get("mutations", 1) for r in requests if r["kind"] == "mutation"
-        ),
+        "tunnels": sum(1 for r in requests if r["kind"] == "tunnel"),
         "points": sum(points(r, prices) for r in requests),
         "content_creating": sum(1 for r in requests if r["op"] in CONTENT_CREATING),
         "mutations": sum(1 for r in requests if r["kind"] == "mutation"),
@@ -420,9 +377,7 @@ def inertness(runs: dict[str, dict]) -> dict[str, dict]:
 
 def main() -> None:
     dirs = [Path(a) for a in sys.argv[1:]] or sorted(
-        p
-        for p in LOGS.iterdir()
-        if p.is_dir() and p.name != "superseded" and (p / "steps.jsonl").exists()
+        p for p in LOGS.iterdir() if p.is_dir() and p.name != "superseded"
     )
     prices_path = LOGS / "pricing.json"
     prices = json.loads(prices_path.read_text()) if prices_path.exists() else {}

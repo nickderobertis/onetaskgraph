@@ -26,7 +26,7 @@ HERE = Path(__file__).resolve().parent
 CACHE = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / (
     "board-copy-speed-2026-10-18"
 )
-OUT = Path(os.environ.get("SPIKE_LOGS") or HERE.parent / "logs") / "pricing.json"
+OUT = HERE.parent / "logs" / "pricing.json"
 
 
 def dry_run(document: str) -> str:
@@ -93,7 +93,7 @@ def main() -> None:
     token = os.environ.get("GH_PROJECTS_TOKEN", "").strip()
     if not token:
         sys.exit("pricing.py: GH_PROJECTS_TOKEN is not set")
-    queries, rises = samples(CACHE / os.environ.get("SPIKE_RUNS_DIR", "runs"))
+    queries, rises = samples(CACHE / "runs")
     prices = json.loads(OUT.read_text()) if OUT.exists() else {}
     for op, document in sorted(queries.items()):
         if op in prices and prices[op].get("method") == "dry run":

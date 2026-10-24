@@ -108,11 +108,7 @@ def request(record: dict) -> dict:
             if re.fullmatch(r"[A-Z_]{1,40}|untyped", e)
         ],
         "limits": limits(record.get("limits", {})),
-    } | (
-        {"mutations": int(record["mutations"])}
-        if isinstance(record.get("mutations"), int)
-        else {}
-    )
+    }
 
 
 def span(record: dict) -> dict:
@@ -209,20 +205,6 @@ def write(run: Path, out: Path) -> Path:
     if (run / "host.jsonl").exists():
         dump(out / "host.jsonl", [host(r) for r in lines(run / "host.jsonl")])
     dump(out / "steps.jsonl", [step(r) for r in lines(run / "steps.jsonl")])
-    if (run / "screen.jsonl").exists():
-        dump(
-            out / "screen.jsonl",
-            [
-                {
-                    "kind": "screen",
-                    "name": r["name"] if r["name"] in ("inspect", "check") else "other",
-                    "start": round(float(r["start"]), 3),
-                    "end": round(float(r["end"]), 3),
-                    "returncode": int(r["returncode"]),
-                }
-                for r in lines(run / "screen.jsonl")
-            ],
-        )
     quota = {}
     for name in ("quota-before.json", "quota-after.json"):
         if (run / name).exists():
@@ -241,17 +223,6 @@ def write(run: Path, out: Path) -> Path:
                     for b, v in raw["buckets"].items()
                 },
             }
-    if (run / "quota-events.json").exists():
-        quota["gate"] = [
-            {
-                "event": e["event"],
-                "at": e["at"],
-                **({"seconds": float(e["seconds"]), "buckets": [str(b) for b in e["buckets"]]} if e["event"] == "pause" else {}),
-                **({"buckets": {b: {k: int(v[k]) for k in LIMIT_FIELDS} | ({"readings": [int(r) for r in v["readings"]]} if "readings" in v else {}) for b, v in e["buckets"].items()},
-                    "verdicts": {b: bool(v["proceed"]) for b, v in e["verdicts"].items()}} if e["event"] == "reading" else {}),
-            }
-            for e in json.loads((run / "quota-events.json").read_text())
-        ]
     (out / "quota.json").write_text(json.dumps(quota, indent=1, sort_keys=True) + "\n")
     if (run / "workload.json").exists():
         sizes = json.loads((run / "workload.json").read_text())
@@ -261,24 +232,12 @@ def write(run: Path, out: Path) -> Path:
             if re.fullmatch(r"project|task t[1-8]|document", label)
         }
         (out / "workload.json").write_text(json.dumps(workload, indent=1) + "\n")
-    for name in ("probes.json", "cleanup.json", "feasibility.json"):
+    for name in ("probes.json", "cleanup.json"):
         if (run / name).exists():
             (out / name).write_text(
                 json.dumps(redact(json.loads((run / name).read_text())), indent=1)
                 + "\n"
             )
-    found = leaks(out)
-    if found:
-        raise SystemExit(f"sanitize: {out} would carry identifying text: {found[:5]}")
-    return out
-
-
-def write_offline(run: Path, result: dict, out: Path) -> Path:
-    """An offline case's result, its sandbox paths written as `<run>`. Everything in it is
-    synthetic — the identities, the plan and the private doubles — so nothing else is cut."""
-    out.mkdir(parents=True, exist_ok=True)
-    text = json.dumps(result, indent=1, sort_keys=True).replace(str(run), "<run>")
-    (out / "result.json").write_text(text + "\n")
     found = leaks(out)
     if found:
         raise SystemExit(f"sanitize: {out} would carry identifying text: {found[:5]}")

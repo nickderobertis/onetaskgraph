@@ -1,0 +1,79 @@
+{
+ "after": {
+  "at": 1792851355.4358697,
+  "last_headers": null,
+  "least": {
+   "limit": 5000,
+   "remaining": 3082,
+   "reset": 1792852092,
+   "used": 1918
+  },
+  "own": [
+   {
+    "limit": 5000,
+    "remaining": 4863,
+    "reset": 1792854350,
+    "used": 137
+   },
+   {
+    "limit": 5000,
+    "remaining": 3082,
+    "reset": 1792852092,
+    "used": 1918
+   },
+   {
+    "limit": 5000,
+    "remaining": 3082,
+    "reset": 1792852092,
+    "used": 1918
+   }
+  ],
+  "rest_endpoint": {
+   "limit": 5000,
+   "remaining": 4863,
+   "reset": 1792854350,
+   "used": 137
+  }
+ },
+ "before": {
+  "at": 1792851305.4042568,
+  "last_headers": {
+   "limit": 5000,
+   "remaining": 3112,
+   "reset": 1792852092,
+   "used": 1888
+  },
+  "least": {
+   "limit": 5000,
+   "remaining": 3110,
+   "reset": 1792852092,
+   "used": 1890
+  },
+  "own": [
+   {
+    "limit": 5000,
+    "remaining": 4870,
+    "reset": 1792854350,
+    "used": 130
+   },
+   {
+    "limit": 5000,
+    "remaining": 4870,
+    "reset": 1792854350,
+    "used": 130
+   },
+   {
+    "limit": 5000,
+    "remaining": 3110,
+    "reset": 1792852092,
+    "used": 1890
+   }
+  ],
+  "rest_endpoint": {
+   "limit": 5000,
+   "remaining": 4870,
+   "reset": 1792854350,
+   "used": 130
+  }
+ }
+}

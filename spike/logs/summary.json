@@ -1,0 +1,2044 @@
+{
+ "inertness": {
+  "tb-changed": {
+   "differences": [],
+   "equal": true,
+   "span": "tb-changed-span-20261018T203717",
+   "stock": "tb-changed-stock-20261018T203638"
+  },
+  "tb-first": {
+   "differences": [],
+   "equal": true,
+   "span": "tb-first-span-20261018T203458",
+   "stock": "tb-first-stock-20261018T203321"
+  },
+  "tb-unchanged": {
+   "differences": [],
+   "equal": true,
+   "span": "tb-unchanged-span-20261018T203848",
+   "stock": "tb-unchanged-stock-20261018T203810"
+  }
+ },
+ "latency": {
+  "BOARD page (plans)": {
+   "max_ms": 9222,
+   "mean_ms": 6948,
+   "median_ms": 6425,
+   "n": 20,
+   "p90_ms": 8893
+  },
+  "BOARD page (test board)": {
+   "max_ms": 8398,
+   "mean_ms": 4551,
+   "median_ms": 4430,
+   "n": 13,
+   "p90_ms": 4878
+  },
+  "SEARCH_ISSUES page (plans)": {
+   "max_ms": 8710,
+   "mean_ms": 6791,
+   "median_ms": 6737,
+   "n": 10,
+   "p90_ms": 8526
+  },
+  "SEARCH_ISSUES page (test board)": {
+   "max_ms": 12875,
+   "mean_ms": 5036,
+   "median_ms": 4665,
+   "n": 25,
+   "p90_ms": 5378
+  },
+  "item read": {
+   "max_ms": 1544,
+   "mean_ms": 554,
+   "median_ms": 489,
+   "n": 176,
+   "p90_ms": 787
+  },
+  "mutation": {
+   "max_ms": 4967,
+   "mean_ms": 1082,
+   "median_ms": 860,
+   "n": 228,
+   "p90_ms": 2029
+  },
+  "upload: GET /repos/{owner}/{repo}": {
+   "max_ms": 590,
+   "mean_ms": 526,
+   "median_ms": 511,
+   "n": 3,
+   "p90_ms": 511
+  },
+  "upload: POST /user-attachments/assets": {
+   "max_ms": 1020,
+   "mean_ms": 927,
+   "median_ms": 908,
+   "n": 3,
+   "p90_ms": 908
+  }
+ },
+ "runs": {
+  "cleanup-stock-20261018T210922": {
+   "by_op": {
+    "CleanupDelete": {
+     "count": 30,
+     "kind": "mutation",
+     "points": 30,
+     "seconds": 77.54
+    },
+    "CleanupRead": {
+     "count": 79,
+     "kind": "item read",
+     "points": 79,
+     "seconds": 38.55
+    }
+   },
+   "content_creating": 0,
+   "graphql_bucket_by_headers": {
+    "first_remaining": 4996,
+    "least_remaining": 4651,
+    "limit": 5000,
+    "reset": 1792361720
+   },
+   "host_steps": {},
+   "mutations": 30,
+   "points": 109,
+   "refused_by_proxy": 0,
+   "requests": 109,
+   "split": {},
+   "statuses": [
+    200
+   ],
+   "steps": [],
+   "store_calls": [],
+   "tunnels": 0,
+   "walk_pages_by_phase": {},
+   "wall": 0
+  },
+  "host-approve-stock-20261018T205238": {
+   "by_op": {
+    "ISSUE": {
+     "count": 3,
+     "kind": "item read",
+     "points": 3,
+     "seconds": 2.36
+    },
+    "SEARCH_ISSUES": {
+     "count": 1,
+     "kind": "board or search page",
+     "points": 5,
+     "seconds": 4.2
+    },
+    "SUB_ISSUES": {
+     "count": 2,
+     "kind": "item read",
+     "points": 2,
+     "seconds": 2.72
+    },
+    "UPDATE_ISSUE": {
+     "count": 1,
+     "kind": "mutation",
+     "points": 1,
+     "seconds": 1.43
+    }
+   },
+   "content_creating": 0,
+   "graphql_bucket_by_headers": {
+    "first_remaining": 1351,
+    "least_remaining": 1294,
+    "limit": 5000,
+    "reset": 1792358118
+   },
+   "host_steps": {
+    "design_approval.approval_key": {
+     "calls": 1,
+     "seconds": 0.0
+    },
+    "design_approval.approve": {
+     "calls": 1,
+     "seconds": 11.4
+    },
+    "design_approval.asset_digests": {
+     "calls": 1,
+     "seconds": 0.0
+    },
+    "design_approval.body_digest": {
+     "calls": 1,
+     "seconds": 0.0
+    },
+    "design_approval.one_document": {
+     "calls": 1,
+     "seconds": 0.0
+    },
+    "design_approval.planned_rows": {
+     "calls": 1,
+     "seconds": 0.0
+    },
+    "design_approval.resolved_digest": {
+     "calls": 1,
+     "seconds": 0.02
+    },
+    "design_approval.resolved_loader": {
+     "calls": 1,
+     "seconds": 0.02
+    },
+    "design_approval.ungraphed": {
+     "calls": 1,
+     "seconds": 1.02
+    },
+    "design_chain.chosen": {
+     "calls": 1,
+     "seconds": 0.0
+    },
+    "design_chain.plan_repository": {
+     "calls": 1,
+     "seconds": 5.82
+    },
+    "plan_store.plan_listing": {
+     "calls": 1,
+     "seconds": 5.82
+    },
+    "plan_store.project_record": {
+     "calls": 1,
+     "seconds": 0.87
+    },
+    "plan_store.read_projects": {
+     "calls": 2,
+     "seconds": 4.39
+    },
+    "spike_plan.current_visual_report": {
+     "calls": 1,
+     "seconds": 0.93
+    }
+   },
+   "mutations": 1,
+   "points": 11,
+   "refused_by_proxy": 0,
+   "requests": 7,
+   "split": {
+    "destination reads": 5.07,
+    "host-side steps": 1.1,
+    "unattributed inside the store process (stock wheel: no spans)": 0.67,
+    "whole-board walk pages": 4.2,
+    "writes": 1.43
+   },
+   "statuses": [
+    200
+   ],
+   "steps": [
+    {
+     "returncode": 0,
+     "sequence": [
+      "SUB_ISSUES",
+      "ISSUE",
+      "SEARCH_ISSUES",
+      "SUB_ISSUES",
+      "ISSUE",
+      "ISSUE",
+      "UPDATE_ISSUE"
+     ],
+     "step": "approve-design",
+     "wall": 12.46
+    }
+   ],
+   "store_calls": [
+    {
+     "argv": "document list --project",
+     "seconds": 1.42
+    },
+    {
+     "argv": "project show plans:<id>",
+     "seconds": 0.87
+    },
+    {
+     "argv": "project list --source",
+     "seconds": 0.06
+    },
+    {
+     "argv": "project list --source",
+     "seconds": 4.33
+    },
+    {
+     "argv": "task list --project",
+     "seconds": 1.48
+    },
+    {
+     "argv": "document show plans:<id>",
+     "seconds": 1.02
+    },
+    {
+     "argv": "document metadata set",
+     "seconds": 2.19
+    }
+   ],
+   "tunnels": 0,
+   "walk_pages_by_phase": {
+    "outside copy": 1
+   },
+   "wall": 12.46
+  },
+  "host-copy-stock-20261018T205013": {
+   "by_op": {
+    "ADD_BLOCKED_BY": {
+     "count": 10,
+     "kind": "mutation",
+     "points": 10,
+     "seconds": 6.01
+    },
+    "ADD_SUB_ISSUE": {
+     "count": 9,
+     "kind": "mutation",
+     "points": 9,
+     "seconds": 6.48
+    },
+    "ADD_TO_BOARD": {
+     "count": 10,
+     "kind": "mutation",
+     "points": 10,
+     "seconds": 9.2
+    },
+    "BOARD": {
+     "count": 1,
+     "kind": "board or search page",
+     "points": 2,
+     "seconds": 4.88
+    },
+    "CONNECT github-production-user-asset-6210df.s3.amazonaws.com": {
+     "count": 1,
+     "kind": "upload",
+     "points": 0,
+     "seconds": 0.0
+    },
+    "CONNECT github.com": {
+     "count": 1,
+     "kind": "upload",
+     "points": 0,
+     "seconds": 0.0
+    },
+    "CREATE_ISSUE": {
+     "count": 10,
+     "kind": "mutation",
+     "points": 10,
+     "seconds": 7.03
+    },
+    "CREATION_CONTEXT": {
+     "count": 1,
+     "kind": "item read",
+     "points": 1,
+     "seconds": 0.29
+    },
+    "GET /repos/{owner}/{repo}": {
+     "count": 1,
+     "kind": "upload",
+     "points": 0,
+     "seconds": 0.48
+    },
+    "ISSUE": {
+     "count": 2,
+     "kind": "item read",
+     "points": 2,
+     "seconds": 1.2
+    },
+    "ORIGIN_LOOKUP": {
+     "count": 8,
+     "kind": "item read",
+     "points": 8,
+     "seconds": 4.58
+    },
+    "POST /user-attachments/assets": {
+     "count": 1,
+     "kind": "upload",
+     "points": 0,
+     "seconds": 0.91
+    },
+    "REPOSITORY": {
+     "count": 1,
+     "kind": "item read",
+     "points": 1,
+     "seconds": 0.22
+    },
+    "SEARCH_ISSUES": {
+     "count": 2,
+     "kind": "board or search page",
+     "points": 10,
+     "seconds": 8.25
+    },
+    "UPDATE_FIELD": {
+     "count": 1,
+     "kind": "mutation",
+     "points": 1,
+     "seconds": 0.72
+    },
+    "UPDATE_FIELDS": {
+     "count": 9,
+     "kind": "mutation",
+     "points": 9,
+     "seconds": 9.09
+    }
+   },
+   "content_creating": 11,
+   "graphql_bucket_by_headers": {
+    "first_remaining": 1674,
+    "least_remaining": 1500,
+    "limit": 5000,
+    "reset": 1792358118
+   },
+   "host_steps": {
+    "plan_copy._copy_options": {
+     "calls": 1,
+     "seconds": 0.0
+    },
+    "plan_copy._measure_documents": {
+     "calls": 1,
+     "seconds": 0.06
+    },
+    "plan_copy._report": {
+     "calls": 2,
+     "seconds": 0.0
+    },
+    "plan_review.bar_fingerprint": {
+     "calls": 3,
+     "seconds": 0.01
+    },
+    "plan_review.checklist_fingerprint": {
+     "calls": 1,
+     "seconds": 0.01
+    },
+    "plan_review.owned_by_node": {
+     "calls": 1,
+     "seconds": 0.0
+    },
+    "plan_review.plan_answers": {
+     "calls": 1,
+     "seconds": 0.0
+    },
+    "plan_review.plan_bar_fingerprint": {
+     "calls": 1,
+     "seconds": 0.02
+    },
+    "plan_review.plan_key": {
+     "calls": 1,
+     "seconds": 0.04
+    },
+    "plan_review.plan_unreviewed": {
+     "calls": 1,
+     "seconds": 0.06
+    },
+    "plan_review.review_key": {
+     "calls": 16,
+     "seconds": 0.07
+    },
+    "plan_review.unreviewed": {
+     "calls": 1,
+     "seconds": 0.04
+    },
+    "plan_store.plan_listing": {
+     "calls": 1,
+     "seconds": 0.13
+    },
+    "plan_store.project_record": {
+     "calls": 2,
+     "seconds": 0.12
+    },
+    "plan_store.read_plan": {
+     "calls": 1,
+     "seconds": 0.06
+    },
+    "plan_store.read_projects": {
+     "calls": 1,
+     "seconds": 0.06
+    },
+    "plan_store.read_tasks": {
+     "calls": 1,
+     "seconds": 0.61
+    },
+    "task_body.document_bodies": {
+     "calls": 2,
+     "seconds": 0.0
+    },
+    "task_body.document_refusals": {
+     "calls": 1,
+     "seconds": 0.0
+    },
+    "task_body.measure": {
+     "calls": 2,
+     "seconds": 0.0
+    },
+    "task_body.serve": {
+     "calls": 2,
+     "seconds": 0.0
+    }
+   },
+   "mutations": 49,
+   "points": 73,
+   "refused_by_proxy": 0,
+   "requests": 66,
+   "split": {
+    "asset upload": 1.38,
+    "destination reads": 6.29,
+    "host-side steps": 1.29,
+    "unattributed inside the store process (stock wheel: no spans)": 38.31,
+    "whole-board walk pages": 13.13,
+    "writes": 38.52
+   },
+   "statuses": [
+    200,
+    201
+   ],
+   "steps": [
+    {
+     "returncode": 0,
+     "sequence": [
+      "SEARCH_ISSUES",
+      "ORIGIN_LOOKUP",
+      "ORIGIN_LOOKUP",
+      "ORIGIN_LOOKUP",
+      "ORIGIN_LOOKUP",
+      "ORIGIN_LOOKUP",
+      "ORIGIN_LOOKUP",
+      "ORIGIN_LOOKUP",
+      "ORIGIN_LOOKUP",
+      "CREATION_CONTEXT",
+      "CREATE_ISSUE",
+      "ADD_TO_BOARD",
+      "UPDATE_FIELDS",
+      "CREATE_ISSUE",
+      "ADD_TO_BOARD",
+      "UPDATE_FIELDS",
+      "ADD_SUB_ISSUE",
+      "CREATE_ISSUE",
+      "ADD_TO_BOARD",
+      "UPDATE_FIELDS",
+      "ADD_SUB_ISSUE",
+      "ADD_BLOCKED_BY",
+      "CREATE_ISSUE",
+      "ADD_TO_BOARD",
+      "UPDATE_FIELDS",
+      "ADD_SUB_ISSUE",
+      "ADD_BLOCKED_BY",
+      "CREATE_ISSUE",
+      "ADD_TO_BOARD",
+      "UPDATE_FIELDS",
+      "ADD_SUB_ISSUE",
+      "ADD_BLOCKED_BY",
+      "CREATE_ISSUE",
+      "ADD_TO_BOARD",
+      "UPDATE_FIELDS",
+      "ADD_SUB_ISSUE",
+      "ADD_BLOCKED_BY",
+      "ADD_BLOCKED_BY",
+      "CREATE_ISSUE",
+      "ADD_TO_BOARD",
+      "UPDATE_FIELDS",
+      "ADD_SUB_ISSUE",
+      "ADD_BLOCKED_BY",
+      "CREATE_ISSUE",
+      "ADD_TO_BOARD",
+      "UPDATE_FIELDS",
+      "ADD_SUB_ISSUE",
+      "ADD_BLOCKED_BY",
+      "ADD_BLOCKED_BY",
+      "CREATE_ISSUE",
+      "ADD_TO_BOARD",
+      "UPDATE_FIELDS",
+      "ADD_SUB_ISSUE",
+      "ADD_BLOCKED_BY",
+      "ADD_BLOCKED_BY",
+      "ISSUE",
+      "BOARD",
+      "SEARCH_ISSUES",
+      "ISSUE",
+      "GET /repos/{owner}/{repo}",
+      "POST /user-attachments/assets",
+      "CONNECT github.com",
+      "CONNECT github-production-user-asset-6210df.s3.amazonaws.com",
+      "REPOSITORY",
+      "CREATE_ISSUE",
+      "ADD_TO_BOARD",
+      "UPDATE_FIELD",
+      "ADD_SUB_ISSUE"
+     ],
+     "step": "copy-plan",
+     "wall": 98.93
+    }
+   ],
+   "store_calls": [
+    {
+     "argv": "project list --source",
+     "seconds": 0.06
+    },
+    {
+     "argv": "task list --project",
+     "seconds": 0.07
+    },
+    {
+     "argv": "task deps authoring:<id>",
+     "seconds": 0.06
+    },
+    {
+     "argv": "task deps authoring:<id>",
+     "seconds": 0.06
+    },
+    {
+     "argv": "task deps authoring:<id>",
+     "seconds": 0.06
+    },
+    {
+     "argv": "task deps authoring:<id>",
+     "seconds": 0.06
+    },
+    {
+     "argv": "task deps authoring:<id>",
+     "seconds": 0.06
+    },
+    {
+     "argv": "task deps authoring:<id>",
+     "seconds": 0.06
+    },
+    {
+     "argv": "task deps authoring:<id>",
+     "seconds": 0.06
+    },
+    {
+     "argv": "task deps authoring:<id>",
+     "seconds": 0.06
+    },
+    {
+     "argv": "project show authoring:<id>",
+     "seconds": 0.06
+    },
+    {
+     "argv": "project show authoring:<id>",
+     "seconds": 0.06
+    },
+    {
+     "argv": "document list --project",
+     "seconds": 0.06
+    },
+    {
+     "argv": "project copy authoring:<id>",
+     "seconds": 77.63
+    },
+    {
+     "argv": "document list --project",
+     "seconds": 0.06
+    },
+    {
+     "argv": "document copy authoring:<id>",
+     "seconds": 19.19
+    }
+   ],
+   "tunnels": 2,
+   "walk_pages_by_phase": {
+    "outside copy": 3
+   },
+   "wall": 98.93
+  },
+  "host-recopy-stock-20261018T205156": {
+   "by_op": {
+    "BOARD": {
+     "count": 2,
+     "kind": "board or search page",
+     "points": 4,
+     "seconds": 7.31
+    },
+    "ISSUE": {
+     "count": 13,
+     "kind": "item read",
+     "points": 13,
+     "seconds": 7.15
+    },
+    "SEARCH_ISSUES": {
+     "count": 2,
+     "kind": "board or search page",
+     "points": 10,
+     "seconds": 8.04
+    },
+    "UPDATE_ISSUE": {
+     "count": 9,
+     "kind": "mutation",
+     "points": 9,
+     "seconds": 9.71
+    }
+   },
+   "content_creating": 0,
+   "graphql_bucket_by_headers": {
+    "first_remaining": 1490,
+    "least_remaining": 1361,
+    "limit": 5000,
+    "reset": 1792358118
+   },
+   "host_steps": {
+    "plan_copy._copy_options": {
+     "calls": 1,
+     "seconds": 0.0
+    },
+    "plan_copy._measure_documents": {
+     "calls": 1,
+     "seconds": 0.07
+    },
+    "plan_copy._report": {
+     "calls": 2,
+     "seconds": 0.0
+    },
+    "plan_review.bar_fingerprint": {
+     "calls": 3,
+     "seconds": 0.01
+    },
+    "plan_review.checklist_fingerprint": {
+     "calls": 1,
+     "seconds": 0.01
+    },
+    "plan_review.owned_by_node": {
+     "calls": 1,
+     "seconds": 0.0
+    },
+    "plan_review.plan_answers": {
+     "calls": 1,
+     "seconds": 0.0
+    },
+    "plan_review.plan_bar_fingerprint": {
+     "calls": 1,
+     "seconds": 0.02
+    },
+    "plan_review.plan_key": {
+     "calls": 1,
+     "seconds": 0.04
+    },
+    "plan_review.plan_unreviewed": {
+     "calls": 1,
+     "seconds": 0.06
+    },
+    "plan_review.review_key": {
+     "calls": 16,
+     "seconds": 0.07
+    },
+    "plan_review.unreviewed": {
+     "calls": 1,
+     "seconds": 0.04
+    },
+    "plan_store.plan_listing": {
+     "calls": 1,
+     "seconds": 0.14
+    },
+    "plan_store.project_record": {
+     "calls": 2,
+     "seconds": 0.12
+    },
+    "plan_store.read_plan": {
+     "calls": 1,
+     "seconds": 0.06
+    },
+    "plan_store.read_projects": {
+     "calls": 1,
+     "seconds": 0.06
+    },
+    "plan_store.read_tasks": {
+     "calls": 1,
+     "seconds": 0.67
+    },
+    "task_body.document_bodies": {
+     "calls": 2,
+     "seconds": 0.0
+    },
+    "task_body.document_refusals": {
+     "calls": 1,
+     "seconds": 0.0
+    },
+    "task_body.measure": {
+     "calls": 2,
+     "seconds": 0.0
+    },
+    "task_body.serve": {
+     "calls": 2,
+     "seconds": 0.0
+    }
+   },
+   "mutations": 9,
+   "points": 36,
+   "refused_by_proxy": 0,
+   "requests": 26,
+   "split": {
+    "destination reads": 7.15,
+    "host-side steps": 1.24,
+    "unattributed inside the store process (stock wheel: no spans)": 7.73,
+    "whole-board walk pages": 15.34,
+    "writes": 9.7
+   },
+   "statuses": [
+    200
+   ],
+   "steps": [
+    {
+     "returncode": 0,
+     "sequence": [
+      "ISSUE",
+      "ISSUE",
+      "ISSUE",
+      "ISSUE",
+      "ISSUE",
+      "ISSUE",
+      "ISSUE",
+      "ISSUE",
+      "ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "BOARD",
+      "SEARCH_ISSUES",
+      "ISSUE",
+      "ISSUE",
+      "ISSUE",
+      "BOARD",
+      "SEARCH_ISSUES",
+      "ISSUE"
+     ],
+     "step": "copy-plan",
+     "wall": 41.16
+    }
+   ],
+   "store_calls": [
+    {
+     "argv": "project list --source",
+     "seconds": 0.06
+    },
+    {
+     "argv": "task list --project",
+     "seconds": 0.07
+    },
+    {
+     "argv": "task deps authoring:<id>",
+     "seconds": 0.07
+    },
+    {
+     "argv": "task deps authoring:<id>",
+     "seconds": 0.06
+    },
+    {
+     "argv": "task deps authoring:<id>",
+     "seconds": 0.07
+    },
+    {
+     "argv": "task deps authoring:<id>",
+     "seconds": 0.06
+    },
+    {
+     "argv": "task deps authoring:<id>",
+     "seconds": 0.08
+    },
+    {
+     "argv": "task deps authoring:<id>",
+     "seconds": 0.06
+    },
+    {
+     "argv": "task deps authoring:<id>",
+     "seconds": 0.07
+    },
+    {
+     "argv": "task deps authoring:<id>",
+     "seconds": 0.06
+    },
+    {
+     "argv": "project show authoring:<id>",
+     "seconds": 0.06
+    },
+    {
+     "argv": "project show authoring:<id>",
+     "seconds": 0.06
+    },
+    {
+     "argv": "document list --project",
+     "seconds": 0.06
+    },
+    {
+     "argv": "project copy authoring:<id>",
+     "seconds": 29.41
+    },
+    {
+     "argv": "document list --project",
+     "seconds": 0.07
+    },
+    {
+     "argv": "document copy authoring:<id>",
+     "seconds": 9.6
+    }
+   ],
+   "tunnels": 0,
+   "walk_pages_by_phase": {
+    "outside copy": 4
+   },
+   "wall": 41.16
+  },
+  "plans-board-walk-stock-20261018T210253": {
+   "by_op": {
+    "BOARD": {
+     "count": 20,
+     "kind": "board or search page",
+     "points": 40,
+     "seconds": 138.96
+    }
+   },
+   "content_creating": 0,
+   "graphql_bucket_by_headers": {
+    "first_remaining": 4784,
+    "least_remaining": 279,
+    "limit": 5000,
+    "reset": 1792358121
+   },
+   "host_steps": {},
+   "mutations": 0,
+   "points": 40,
+   "refused_by_proxy": 1,
+   "requests": 20,
+   "split": {
+    "unattributed inside the store process (stock wheel: no spans)": 2.0,
+    "whole-board walk pages": 138.96
+   },
+   "statuses": [
+    200
+   ],
+   "steps": [
+    {
+     "returncode": 4,
+     "sequence": [
+      "BOARD",
+      "BOARD",
+      "BOARD",
+      "BOARD",
+      "BOARD",
+      "BOARD",
+      "BOARD",
+      "BOARD",
+      "BOARD",
+      "BOARD",
+      "BOARD",
+      "BOARD",
+      "BOARD",
+      "BOARD",
+      "BOARD",
+      "BOARD",
+      "BOARD",
+      "BOARD",
+      "BOARD",
+      "BOARD"
+     ],
+     "step": "task-list",
+     "wall": 140.96
+    }
+   ],
+   "store_calls": [],
+   "tunnels": 0,
+   "walk_pages_by_phase": {
+    "outside copy": 20
+   },
+   "wall": 140.96
+  },
+  "plans-walk-stock-20261018T205305": {
+   "by_op": {
+    "SEARCH_ISSUES": {
+     "count": 10,
+     "kind": "board or search page",
+     "points": 50,
+     "seconds": 67.91
+    }
+   },
+   "content_creating": 0,
+   "graphql_bucket_by_headers": {
+    "first_remaining": 1258,
+    "least_remaining": 1157,
+    "limit": 5000,
+    "reset": 1792358118
+   },
+   "host_steps": {},
+   "mutations": 0,
+   "points": 50,
+   "refused_by_proxy": 0,
+   "requests": 10,
+   "split": {
+    "unattributed inside the store process (stock wheel: no spans)": 1.31,
+    "whole-board walk pages": 67.91
+   },
+   "statuses": [
+    200
+   ],
+   "steps": [
+    {
+     "returncode": 0,
+     "sequence": [
+      "SEARCH_ISSUES",
+      "SEARCH_ISSUES",
+      "SEARCH_ISSUES",
+      "SEARCH_ISSUES",
+      "SEARCH_ISSUES",
+      "SEARCH_ISSUES",
+      "SEARCH_ISSUES",
+      "SEARCH_ISSUES",
+      "SEARCH_ISSUES",
+      "SEARCH_ISSUES"
+     ],
+     "step": "project-list",
+     "wall": 69.22
+    }
+   ],
+   "store_calls": [],
+   "tunnels": 0,
+   "walk_pages_by_phase": {
+    "outside copy": 10
+   },
+   "wall": 69.22
+  },
+  "probe-body-limit-stock-20261018T212430": {
+   "by_op": {
+    "CreateAscii66000": {
+     "count": 1,
+     "kind": "mutation",
+     "points": 1,
+     "seconds": 0.67
+    },
+    "CreateWide77KB": {
+     "count": 1,
+     "kind": "mutation",
+     "points": 1,
+     "seconds": 1.12
+    },
+    "ProbeDelete": {
+     "count": 1,
+     "kind": "mutation",
+     "points": 1,
+     "seconds": 2.0
+    },
+    "ProbeRepo": {
+     "count": 1,
+     "kind": "item read",
+     "points": 1,
+     "seconds": 0.49
+    }
+   },
+   "content_creating": 0,
+   "graphql_bucket_by_headers": {
+    "first_remaining": 3933,
+    "least_remaining": 3927,
+    "limit": 5000,
+    "reset": 1792361720
+   },
+   "host_steps": {},
+   "mutations": 3,
+   "points": 4,
+   "refused_by_proxy": 0,
+   "requests": 4,
+   "split": {},
+   "statuses": [
+    200
+   ],
+   "steps": [],
+   "store_calls": [],
+   "tunnels": 0,
+   "walk_pages_by_phase": {},
+   "wall": 0
+  },
+  "probes-stock-20261018T205744": {
+   "by_op": {
+    "Aliased": {
+     "count": 1,
+     "kind": "mutation",
+     "points": 1,
+     "seconds": 3.73
+    },
+    "CreatePlain": {
+     "count": 4,
+     "kind": "mutation",
+     "points": 4,
+     "seconds": 2.85
+    },
+    "CreateWithParentIssueId": {
+     "count": 1,
+     "kind": "mutation",
+     "points": 1,
+     "seconds": 1.01
+    },
+    "CreateWithProjectV2Ids": {
+     "count": 1,
+     "kind": "mutation",
+     "points": 1,
+     "seconds": 0.88
+    },
+    "ProbeAdd": {
+     "count": 2,
+     "kind": "mutation",
+     "points": 2,
+     "seconds": 1.59
+    },
+    "ProbeDelete": {
+     "count": 9,
+     "kind": "mutation",
+     "points": 9,
+     "seconds": 23.73
+    },
+    "ProbeIds": {
+     "count": 1,
+     "kind": "item read",
+     "points": 1,
+     "seconds": 0.47
+    },
+    "ProbeItems": {
+     "count": 1,
+     "kind": "item read",
+     "points": 1,
+     "seconds": 0.5
+    }
+   },
+   "content_creating": 0,
+   "graphql_bucket_by_headers": {
+    "first_remaining": 958,
+    "least_remaining": 895,
+    "limit": 5000,
+    "reset": 1792358118
+   },
+   "host_steps": {},
+   "mutations": 18,
+   "points": 20,
+   "refused_by_proxy": 0,
+   "requests": 20,
+   "split": {},
+   "statuses": [
+    200
+   ],
+   "steps": [],
+   "store_calls": [],
+   "tunnels": 0,
+   "walk_pages_by_phase": {},
+   "wall": 0
+  },
+  "tb-changed-span-20261018T203717": {
+   "by_op": {
+    "BOARD": {
+     "count": 2,
+     "kind": "board or search page",
+     "points": 4,
+     "seconds": 11.84
+    },
+    "ISSUE": {
+     "count": 11,
+     "kind": "item read",
+     "points": 11,
+     "seconds": 9.58
+    },
+    "SEARCH_ISSUES": {
+     "count": 2,
+     "kind": "board or search page",
+     "points": 10,
+     "seconds": 12.32
+    },
+    "UPDATE_ISSUE": {
+     "count": 10,
+     "kind": "mutation",
+     "points": 10,
+     "seconds": 10.44
+    }
+   },
+   "content_creating": 0,
+   "graphql_bucket_by_headers": {
+    "first_remaining": 2966,
+    "least_remaining": 2860,
+    "limit": 5000,
+    "reset": 1792358118
+   },
+   "host_steps": {},
+   "mutations": 10,
+   "points": 35,
+   "refused_by_proxy": 0,
+   "requests": 25,
+   "split": {
+    "CLI (configuration, engine build, output)": 0.04,
+    "asset upload": 0.0,
+    "body composition and rendering": 0.0,
+    "destination reads": 9.66,
+    "engine and local-source work": 0.68,
+    "pacing waits": 6.0,
+    "reference rewriting": 0.02,
+    "unattributed": 0.03,
+    "whole-board walk pages": 24.34,
+    "writes": 10.5
+   },
+   "statuses": [
+    200
+   ],
+   "steps": [
+    {
+     "returncode": 0,
+     "sequence": [
+      "ISSUE",
+      "ISSUE",
+      "ISSUE",
+      "ISSUE",
+      "ISSUE",
+      "ISSUE",
+      "ISSUE",
+      "ISSUE",
+      "ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "BOARD",
+      "SEARCH_ISSUES"
+     ],
+     "step": "project-copy",
+     "wall": 40.4
+    },
+    {
+     "returncode": 0,
+     "sequence": [
+      "ISSUE",
+      "BOARD",
+      "SEARCH_ISSUES",
+      "ISSUE",
+      "UPDATE_ISSUE"
+     ],
+     "step": "document-copy",
+     "wall": 10.88
+    }
+   ],
+   "store_calls": [],
+   "tunnels": 0,
+   "walk_pages_by_phase": {
+    "copy.counterparts": 2,
+    "copy.orphans": 2
+   },
+   "wall": 51.28
+  },
+  "tb-changed-stock-20261018T203638": {
+   "by_op": {
+    "BOARD": {
+     "count": 2,
+     "kind": "board or search page",
+     "points": 4,
+     "seconds": 8.14
+    },
+    "ISSUE": {
+     "count": 11,
+     "kind": "item read",
+     "points": 11,
+     "seconds": 6.27
+    },
+    "SEARCH_ISSUES": {
+     "count": 2,
+     "kind": "board or search page",
+     "points": 10,
+     "seconds": 7.88
+    },
+    "UPDATE_ISSUE": {
+     "count": 10,
+     "kind": "mutation",
+     "points": 10,
+     "seconds": 9.75
+    }
+   },
+   "content_creating": 0,
+   "graphql_bucket_by_headers": {
+    "first_remaining": 3051,
+    "least_remaining": 2969,
+    "limit": 5000,
+    "reset": 1792358118
+   },
+   "host_steps": {},
+   "mutations": 10,
+   "points": 35,
+   "refused_by_proxy": 0,
+   "requests": 25,
+   "split": {
+    "destination reads": 6.27,
+    "unattributed inside the store process (stock wheel: no spans)": 6.67,
+    "whole-board walk pages": 16.01,
+    "writes": 9.75
+   },
+   "statuses": [
+    200
+   ],
+   "steps": [
+    {
+     "returncode": 0,
+     "sequence": [
+      "ISSUE",
+      "ISSUE",
+      "ISSUE",
+      "ISSUE",
+      "ISSUE",
+      "ISSUE",
+      "ISSUE",
+      "ISSUE",
+      "ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "BOARD",
+      "SEARCH_ISSUES"
+     ],
+     "step": "project-copy",
+     "wall": 27.88
+    },
+    {
+     "returncode": 0,
+     "sequence": [
+      "ISSUE",
+      "BOARD",
+      "SEARCH_ISSUES",
+      "ISSUE",
+      "UPDATE_ISSUE"
+     ],
+     "step": "document-copy",
+     "wall": 10.82
+    }
+   ],
+   "store_calls": [],
+   "tunnels": 0,
+   "walk_pages_by_phase": {
+    "outside copy": 4
+   },
+   "wall": 38.7
+  },
+  "tb-first-span-20261018T203458": {
+   "by_op": {
+    "ADD_BLOCKED_BY": {
+     "count": 10,
+     "kind": "mutation",
+     "points": 10,
+     "seconds": 6.17
+    },
+    "ADD_SUB_ISSUE": {
+     "count": 9,
+     "kind": "mutation",
+     "points": 9,
+     "seconds": 5.99
+    },
+    "ADD_TO_BOARD": {
+     "count": 10,
+     "kind": "mutation",
+     "points": 10,
+     "seconds": 10.57
+    },
+    "BOARD": {
+     "count": 1,
+     "kind": "board or search page",
+     "points": 2,
+     "seconds": 3.6
+    },
+    "CONNECT github-production-user-asset-6210df.s3.amazonaws.com": {
+     "count": 1,
+     "kind": "upload",
+     "points": 0,
+     "seconds": 0.0
+    },
+    "CONNECT github.com": {
+     "count": 1,
+     "kind": "upload",
+     "points": 0,
+     "seconds": 0.0
+    },
+    "CREATE_ISSUE": {
+     "count": 10,
+     "kind": "mutation",
+     "points": 10,
+     "seconds": 7.84
+    },
+    "CREATION_CONTEXT": {
+     "count": 1,
+     "kind": "item read",
+     "points": 1,
+     "seconds": 0.26
+    },
+    "GET /repos/{owner}/{repo}": {
+     "count": 1,
+     "kind": "upload",
+     "points": 0,
+     "seconds": 0.51
+    },
+    "ISSUE": {
+     "count": 1,
+     "kind": "item read",
+     "points": 1,
+     "seconds": 0.31
+    },
+    "ORIGIN_LOOKUP": {
+     "count": 8,
+     "kind": "item read",
+     "points": 8,
+     "seconds": 4.81
+    },
+    "POST /user-attachments/assets": {
+     "count": 1,
+     "kind": "upload",
+     "points": 0,
+     "seconds": 0.85
+    },
+    "REPOSITORY": {
+     "count": 1,
+     "kind": "item read",
+     "points": 1,
+     "seconds": 0.24
+    },
+    "SEARCH_ISSUES": {
+     "count": 2,
+     "kind": "board or search page",
+     "points": 10,
+     "seconds": 10.03
+    },
+    "UPDATE_FIELD": {
+     "count": 1,
+     "kind": "mutation",
+     "points": 1,
+     "seconds": 0.56
+    },
+    "UPDATE_FIELDS": {
+     "count": 9,
+     "kind": "mutation",
+     "points": 9,
+     "seconds": 9.27
+    }
+   },
+   "content_creating": 11,
+   "graphql_bucket_by_headers": {
+    "first_remaining": 3179,
+    "least_remaining": 3058,
+    "limit": 5000,
+    "reset": 1792358118
+   },
+   "host_steps": {},
+   "mutations": 49,
+   "points": 72,
+   "refused_by_proxy": 0,
+   "requests": 65,
+   "split": {
+    "CLI (configuration, engine build, output)": 0.04,
+    "asset upload": 2.55,
+    "body composition and rendering": 0.0,
+    "destination reads": 6.07,
+    "engine and local-source work": 0.17,
+    "pacing waits": 35.3,
+    "reference rewriting": 0.01,
+    "unattributed": 0.03,
+    "whole-board walk pages": 13.72,
+    "writes": 40.57
+   },
+   "statuses": [
+    200,
+    201
+   ],
+   "steps": [
+    {
+     "returncode": 0,
+     "sequence": [
+      "SEARCH_ISSUES",
+      "ORIGIN_LOOKUP",
+      "ORIGIN_LOOKUP",
+      "ORIGIN_LOOKUP",
+      "ORIGIN_LOOKUP",
+      "ORIGIN_LOOKUP",
+      "ORIGIN_LOOKUP",
+      "ORIGIN_LOOKUP",
+      "ORIGIN_LOOKUP",
+      "CREATION_CONTEXT",
+      "CREATE_ISSUE",
+      "ADD_TO_BOARD",
+      "UPDATE_FIELDS",
+      "CREATE_ISSUE",
+      "ADD_TO_BOARD",
+      "UPDATE_FIELDS",
+      "ADD_SUB_ISSUE",
+      "CREATE_ISSUE",
+      "ADD_TO_BOARD",
+      "UPDATE_FIELDS",
+      "ADD_SUB_ISSUE",
+      "ADD_BLOCKED_BY",
+      "CREATE_ISSUE",
+      "ADD_TO_BOARD",
+      "UPDATE_FIELDS",
+      "ADD_SUB_ISSUE",
+      "ADD_BLOCKED_BY",
+      "CREATE_ISSUE",
+      "ADD_TO_BOARD",
+      "UPDATE_FIELDS",
+      "ADD_SUB_ISSUE",
+      "ADD_BLOCKED_BY",
+      "CREATE_ISSUE",
+      "ADD_TO_BOARD",
+      "UPDATE_FIELDS",
+      "ADD_SUB_ISSUE",
+      "ADD_BLOCKED_BY",
+      "ADD_BLOCKED_BY",
+      "CREATE_ISSUE",
+      "ADD_TO_BOARD",
+      "UPDATE_FIELDS",
+      "ADD_SUB_ISSUE",
+      "ADD_BLOCKED_BY",
+      "CREATE_ISSUE",
+      "ADD_TO_BOARD",
+      "UPDATE_FIELDS",
+      "ADD_SUB_ISSUE",
+      "ADD_BLOCKED_BY",
+      "ADD_BLOCKED_BY",
+      "CREATE_ISSUE",
+      "ADD_TO_BOARD",
+      "UPDATE_FIELDS",
+      "ADD_SUB_ISSUE",
+      "ADD_BLOCKED_BY",
+      "ADD_BLOCKED_BY"
+     ],
+     "step": "project-copy",
+     "wall": 81.93
+    },
+    {
+     "returncode": 0,
+     "sequence": [
+      "BOARD",
+      "SEARCH_ISSUES",
+      "ISSUE",
+      "GET /repos/{owner}/{repo}",
+      "POST /user-attachments/assets",
+      "CONNECT github.com",
+      "CONNECT github-production-user-asset-6210df.s3.amazonaws.com",
+      "REPOSITORY",
+      "CREATE_ISSUE",
+      "ADD_TO_BOARD",
+      "UPDATE_FIELD",
+      "ADD_SUB_ISSUE"
+     ],
+     "step": "document-copy",
+     "wall": 16.54
+    }
+   ],
+   "store_calls": [],
+   "tunnels": 2,
+   "walk_pages_by_phase": {
+    "copy.scan": 3
+   },
+   "wall": 98.47
+  },
+  "tb-first-stock-20261018T203321": {
+   "by_op": {
+    "ADD_BLOCKED_BY": {
+     "count": 10,
+     "kind": "mutation",
+     "points": 10,
+     "seconds": 8.39
+    },
+    "ADD_SUB_ISSUE": {
+     "count": 9,
+     "kind": "mutation",
+     "points": 9,
+     "seconds": 6.55
+    },
+    "ADD_TO_BOARD": {
+     "count": 10,
+     "kind": "mutation",
+     "points": 10,
+     "seconds": 8.29
+    },
+    "BOARD": {
+     "count": 1,
+     "kind": "board or search page",
+     "points": 2,
+     "seconds": 4.36
+    },
+    "CONNECT github-production-user-asset-6210df.s3.amazonaws.com": {
+     "count": 1,
+     "kind": "upload",
+     "points": 0,
+     "seconds": 0.0
+    },
+    "CONNECT github.com": {
+     "count": 1,
+     "kind": "upload",
+     "points": 0,
+     "seconds": 0.0
+    },
+    "CREATE_ISSUE": {
+     "count": 10,
+     "kind": "mutation",
+     "points": 10,
+     "seconds": 6.89
+    },
+    "CREATION_CONTEXT": {
+     "count": 1,
+     "kind": "item read",
+     "points": 1,
+     "seconds": 0.32
+    },
+    "GET /repos/{owner}/{repo}": {
+     "count": 1,
+     "kind": "upload",
+     "points": 0,
+     "seconds": 0.59
+    },
+    "ISSUE": {
+     "count": 1,
+     "kind": "item read",
+     "points": 1,
+     "seconds": 0.44
+    },
+    "ORIGIN_LOOKUP": {
+     "count": 8,
+     "kind": "item read",
+     "points": 8,
+     "seconds": 4.86
+    },
+    "POST /user-attachments/assets": {
+     "count": 1,
+     "kind": "upload",
+     "points": 0,
+     "seconds": 1.02
+    },
+    "REPOSITORY": {
+     "count": 1,
+     "kind": "item read",
+     "points": 1,
+     "seconds": 0.23
+    },
+    "SEARCH_ISSUES": {
+     "count": 2,
+     "kind": "board or search page",
+     "points": 10,
+     "seconds": 6.04
+    },
+    "UPDATE_FIELD": {
+     "count": 1,
+     "kind": "mutation",
+     "points": 1,
+     "seconds": 0.88
+    },
+    "UPDATE_FIELDS": {
+     "count": 9,
+     "kind": "mutation",
+     "points": 9,
+     "seconds": 8.49
+    }
+   },
+   "content_creating": 11,
+   "graphql_bucket_by_headers": {
+    "first_remaining": 3283,
+    "least_remaining": 3184,
+    "limit": 5000,
+    "reset": 1792358118
+   },
+   "host_steps": {},
+   "mutations": 49,
+   "points": 72,
+   "refused_by_proxy": 0,
+   "requests": 65,
+   "split": {
+    "asset upload": 1.61,
+    "destination reads": 5.84,
+    "unattributed inside the store process (stock wheel: no spans)": 37.58,
+    "whole-board walk pages": 10.41,
+    "writes": 39.49
+   },
+   "statuses": [
+    200,
+    201
+   ],
+   "steps": [
+    {
+     "returncode": 0,
+     "sequence": [
+      "SEARCH_ISSUES",
+      "ORIGIN_LOOKUP",
+      "ORIGIN_LOOKUP",
+      "ORIGIN_LOOKUP",
+      "ORIGIN_LOOKUP",
+      "ORIGIN_LOOKUP",
+      "ORIGIN_LOOKUP",
+      "ORIGIN_LOOKUP",
+      "ORIGIN_LOOKUP",
+      "CREATION_CONTEXT",
+      "CREATE_ISSUE",
+      "ADD_TO_BOARD",
+      "UPDATE_FIELDS",
+      "CREATE_ISSUE",
+      "ADD_TO_BOARD",
+      "UPDATE_FIELDS",
+      "ADD_SUB_ISSUE",
+      "CREATE_ISSUE",
+      "ADD_TO_BOARD",
+      "UPDATE_FIELDS",
+      "ADD_SUB_ISSUE",
+      "ADD_BLOCKED_BY",
+      "CREATE_ISSUE",
+      "ADD_TO_BOARD",
+      "UPDATE_FIELDS",
+      "ADD_SUB_ISSUE",
+      "ADD_BLOCKED_BY",
+      "CREATE_ISSUE",
+      "ADD_TO_BOARD",
+      "UPDATE_FIELDS",
+      "ADD_SUB_ISSUE",
+      "ADD_BLOCKED_BY",
+      "CREATE_ISSUE",
+      "ADD_TO_BOARD",
+      "UPDATE_FIELDS",
+      "ADD_SUB_ISSUE",
+      "ADD_BLOCKED_BY",
+      "ADD_BLOCKED_BY",
+      "CREATE_ISSUE",
+      "ADD_TO_BOARD",
+      "UPDATE_FIELDS",
+      "ADD_SUB_ISSUE",
+      "ADD_BLOCKED_BY",
+      "CREATE_ISSUE",
+      "ADD_TO_BOARD",
+      "UPDATE_FIELDS",
+      "ADD_SUB_ISSUE",
+      "ADD_BLOCKED_BY",
+      "ADD_BLOCKED_BY",
+      "CREATE_ISSUE",
+      "ADD_TO_BOARD",
+      "UPDATE_FIELDS",
+      "ADD_SUB_ISSUE",
+      "ADD_BLOCKED_BY",
+      "ADD_BLOCKED_BY"
+     ],
+     "step": "project-copy",
+     "wall": 78.77
+    },
+    {
+     "returncode": 0,
+     "sequence": [
+      "BOARD",
+      "SEARCH_ISSUES",
+      "ISSUE",
+      "GET /repos/{owner}/{repo}",
+      "POST /user-attachments/assets",
+      "CONNECT github.com",
+      "CONNECT github-production-user-asset-6210df.s3.amazonaws.com",
+      "REPOSITORY",
+      "CREATE_ISSUE",
+      "ADD_TO_BOARD",
+      "UPDATE_FIELD",
+      "ADD_SUB_ISSUE"
+     ],
+     "step": "document-copy",
+     "wall": 16.16
+    }
+   ],
+   "store_calls": [],
+   "tunnels": 2,
+   "walk_pages_by_phase": {
+    "outside copy": 3
+   },
+   "wall": 94.93
+  },
+  "tb-list-pages-stock-20261018T205548": {
+   "by_op": {
+    "SEARCH_ISSUES": {
+     "count": 8,
+     "kind": "board or search page",
+     "points": 40,
+     "seconds": 51.11
+    }
+   },
+   "content_creating": 0,
+   "graphql_bucket_by_headers": {
+    "first_remaining": 1094,
+    "least_remaining": 1039,
+    "limit": 5000,
+    "reset": 1792358118
+   },
+   "host_steps": {},
+   "mutations": 0,
+   "points": 40,
+   "refused_by_proxy": 0,
+   "requests": 8,
+   "split": {
+    "unattributed inside the store process (stock wheel: no spans)": 0.69,
+    "whole-board walk pages": 51.11
+   },
+   "statuses": [
+    200
+   ],
+   "steps": [
+    {
+     "returncode": 0,
+     "sequence": [
+      "SEARCH_ISSUES"
+     ],
+     "step": "page-1",
+     "wall": 4.61
+    },
+    {
+     "returncode": 0,
+     "sequence": [
+      "SEARCH_ISSUES"
+     ],
+     "step": "page-2",
+     "wall": 4.82
+    },
+    {
+     "returncode": 0,
+     "sequence": [
+      "SEARCH_ISSUES"
+     ],
+     "step": "page-3",
+     "wall": 4.97
+    },
+    {
+     "returncode": 0,
+     "sequence": [
+      "SEARCH_ISSUES"
+     ],
+     "step": "page-4",
+     "wall": 4.76
+    },
+    {
+     "returncode": 0,
+     "sequence": [
+      "SEARCH_ISSUES"
+     ],
+     "step": "page-5",
+     "wall": 9.23
+    },
+    {
+     "returncode": 0,
+     "sequence": [
+      "SEARCH_ISSUES"
+     ],
+     "step": "page-6",
+     "wall": 12.96
+    },
+    {
+     "returncode": 0,
+     "sequence": [
+      "SEARCH_ISSUES"
+     ],
+     "step": "page-7",
+     "wall": 5.46
+    },
+    {
+     "returncode": 0,
+     "sequence": [
+      "SEARCH_ISSUES"
+     ],
+     "step": "page-8",
+     "wall": 4.99
+    }
+   ],
+   "store_calls": [],
+   "tunnels": 0,
+   "walk_pages_by_phase": {
+    "outside copy": 8
+   },
+   "wall": 51.8
+  },
+  "tb-unchanged-span-20261018T203848": {
+   "by_op": {
+    "BOARD": {
+     "count": 2,
+     "kind": "board or search page",
+     "points": 4,
+     "seconds": 9.84
+    },
+    "ISSUE": {
+     "count": 11,
+     "kind": "item read",
+     "points": 11,
+     "seconds": 6.43
+    },
+    "SEARCH_ISSUES": {
+     "count": 2,
+     "kind": "board or search page",
+     "points": 10,
+     "seconds": 10.03
+    },
+    "UPDATE_ISSUE": {
+     "count": 9,
+     "kind": "mutation",
+     "points": 9,
+     "seconds": 8.65
+    }
+   },
+   "content_creating": 0,
+   "graphql_bucket_by_headers": {
+    "first_remaining": 2806,
+    "least_remaining": 2674,
+    "limit": 5000,
+    "reset": 1792358118
+   },
+   "host_steps": {},
+   "mutations": 9,
+   "points": 34,
+   "refused_by_proxy": 0,
+   "requests": 24,
+   "split": {
+    "CLI (configuration, engine build, output)": 0.05,
+    "body composition and rendering": 0.0,
+    "destination reads": 6.51,
+    "engine and local-source work": 0.25,
+    "pacing waits": 6.0,
+    "reference rewriting": 0.03,
+    "unattributed": 0.03,
+    "whole-board walk pages": 20.01,
+    "writes": 8.71
+   },
+   "statuses": [
+    200
+   ],
+   "steps": [
+    {
+     "returncode": 0,
+     "sequence": [
+      "ISSUE",
+      "ISSUE",
+      "ISSUE",
+      "ISSUE",
+      "ISSUE",
+      "ISSUE",
+      "ISSUE",
+      "ISSUE",
+      "ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "BOARD",
+      "SEARCH_ISSUES"
+     ],
+     "step": "project-copy",
+     "wall": 29.78
+    },
+    {
+     "returncode": 0,
+     "sequence": [
+      "ISSUE",
+      "BOARD",
+      "SEARCH_ISSUES",
+      "ISSUE"
+     ],
+     "step": "document-copy",
+     "wall": 11.81
+    }
+   ],
+   "store_calls": [],
+   "tunnels": 0,
+   "walk_pages_by_phase": {
+    "copy.counterparts": 2,
+    "copy.orphans": 2
+   },
+   "wall": 41.59
+  },
+  "tb-unchanged-stock-20261018T203810": {
+   "by_op": {
+    "BOARD": {
+     "count": 2,
+     "kind": "board or search page",
+     "points": 4,
+     "seconds": 9.19
+    },
+    "ISSUE": {
+     "count": 11,
+     "kind": "item read",
+     "points": 11,
+     "seconds": 6.27
+    },
+    "SEARCH_ISSUES": {
+     "count": 2,
+     "kind": "board or search page",
+     "points": 10,
+     "seconds": 8.0
+    },
+    "UPDATE_ISSUE": {
+     "count": 9,
+     "kind": "mutation",
+     "points": 9,
+     "seconds": 6.88
+    }
+   },
+   "content_creating": 0,
+   "graphql_bucket_by_headers": {
+    "first_remaining": 2857,
+    "least_remaining": 2807,
+    "limit": 5000,
+    "reset": 1792358118
+   },
+   "host_steps": {},
+   "mutations": 9,
+   "points": 34,
+   "refused_by_proxy": 0,
+   "requests": 24,
+   "split": {
+    "destination reads": 6.27,
+    "unattributed inside the store process (stock wheel: no spans)": 6.57,
+    "whole-board walk pages": 17.18,
+    "writes": 6.88
+   },
+   "statuses": [
+    200
+   ],
+   "steps": [
+    {
+     "returncode": 0,
+     "sequence": [
+      "ISSUE",
+      "ISSUE",
+      "ISSUE",
+      "ISSUE",
+      "ISSUE",
+      "ISSUE",
+      "ISSUE",
+      "ISSUE",
+      "ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "UPDATE_ISSUE",
+      "BOARD",
+      "SEARCH_ISSUES"
+     ],
+     "step": "project-copy",
+     "wall": 27.2
+    },
+    {
+     "returncode": 0,
+     "sequence": [
+      "ISSUE",
+      "BOARD",
+      "SEARCH_ISSUES",
+      "ISSUE"
+     ],
+     "step": "document-copy",
+     "wall": 9.71
+    }
+   ],
+   "store_calls": [],
+   "tunnels": 0,
+   "walk_pages_by_phase": {
+    "outside copy": 4
+   },
+   "wall": 36.91
+  }
+ }
+}

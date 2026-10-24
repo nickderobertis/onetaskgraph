@@ -1,0 +1,49 @@
+{
+ "board_items_in_create_answers": 0,
+ "children_with_parent": 8,
+ "cleanup": {
+  "already_gone": 0,
+  "deleted": 11,
+  "errors": [],
+  "left": 0,
+  "refused": 0
+ },
+ "coalesced_write_aliases": 19,
+ "coalesced_write_answered": 19,
+ "coalesced_write_seconds": 4.327,
+ "idempotence": {
+  "placed_items_after_add": 1,
+  "placed_outcome": "returned the issue's one item",
+  "racing_items_after_10s": [
+   1,
+   1
+  ],
+  "racing_outcomes": [
+   "returned the issue's one item",
+   "returned the issue's one item"
+  ]
+ },
+ "placement": {
+  "children_seconds_after_their_answer": [
+   0.482,
+   0.482,
+   0.482,
+   0.482,
+   0.482,
+   0.482,
+   0.482,
+   1.622
+  ],
+  "issues": 9,
+  "items_per_issue": [
+   1
+  ],
+  "placed": 9,
+  "poll_costs": [
+   1
+  ],
+  "polls": 2
+ },
+ "reference_resolution_children": 8,
+ "reference_resolution_cost": 1
+}
