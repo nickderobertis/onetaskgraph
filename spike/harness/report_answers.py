@@ -28,6 +28,10 @@ MEASURES = {
     "seconds": "wall seconds of the same commands",
     "writes": "individual mutations, aliased ones counted one each, plus uploads, of the first copy",
 }
+APPROVAL = {
+    "points": "GraphQL primary points of the four store commands `just approve-design` runs",
+    "seconds": "wall seconds of `just approve-design`",
+}
 GRAPHQL_HOUR = 5000
 
 
@@ -73,7 +77,11 @@ def candidates(summary: dict) -> list[dict]:
         out.append(
             {
                 "budget": c["budget"],
-                "measure": MEASURES[c["unit"]],
+                "measure": (
+                    APPROVAL[c["unit"]]
+                    if "approval" in c["budget"]
+                    else MEASURES[c["unit"]]
+                ),
                 "workload": WORKLOAD,
                 "achievable": (
                     f"Baseline, observed on 0.11.0 (`{c['baseline_run']}`): {c['baseline']} {c['unit']}. "
@@ -89,6 +97,10 @@ def candidates(summary: dict) -> list[dict]:
 
 def method(summary: dict) -> str:
     prices = summary["prices"]
+    allowance = "; ".join(
+        f"`{name}` {figures['graphql_before']} → {figures['graphql_after']}"
+        for name, figures in summary["consumed"]["runs"].items()
+    )
     return (
         "**Live, on the test board only**, through the timing spike's recording proxy, which refuses any "
         "write naming another repository or project. The proxy now also refuses one named through a "
@@ -104,7 +116,8 @@ def method(summary: dict) -> str:
         "values and 10 blocked-by edges as one request. It times a parent-scoped sub-issue read, measures "
         "the `x-ratelimit-used` rise of each mutation request, and deletes every issue it created. "
         "(3) The baseline is not re-run: it is the cached, sanitized 0.11.0 re-measurement in "
-        "`docs/measurements/board-copy-speed-2026-10-18/after/`.\n\n"
+        "`docs/measurements/board-copy-speed-2026-10-18/after/`. GraphQL points remaining of 5,000 "
+        f"(the gate's least reading before, `rateLimit` after) for each live run: {allowance}.\n\n"
         "**Offline, synthetic**: the real CLI (0.11.0 wheel `stock`, main `acd090b4` `head`, and `closure`, "
         "head plus the prototype patch) and the host's real onevcs 0.56.5. onevcs runs against an onevcs "
         "home holding only invented identities (`synthco/public-widgets` public, `synthco/secret-gadgets` "
@@ -271,7 +284,9 @@ def findings(summary: dict, ruling: str | None) -> list[str]:
 
 def main() -> None:
     summary = json.loads(SUMMARY.read_text())
-    ruling = Path(sys.argv[2]).read_text().strip() if len(sys.argv) > 2 else None
+    ruling = (
+        " ".join(Path(sys.argv[2]).read_text().split()) if len(sys.argv) > 2 else None
+    )
     answers = {
         "spike": "spike-feasibility",
         "branch": BRANCH,
