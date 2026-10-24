@@ -286,6 +286,24 @@ def findings(summary: dict, ruling: str | None) -> list[str]:
             "went to the manager before finalize."
         ),
     ]
+    out.append(
+        "**Judged lint of this harness, left red.** The diff-scoped run over the spike code this "
+        "dispatch wrote or changed (base `bc49f888`, logs excluded) ended with 7 rules passed and "
+        "12 failed, after four passes. Each pass fixed its real defects: the probe titles, the "
+        "union agreement, offline exit statuses, cleanup leftovers, guarded fields, alias-count "
+        "drift, `match` dispatch (suppressed at each site, because the repository's "
+        "`requires-python >=3.9` floor makes it a syntax error), and the report's derived figures. "
+        "The 12 still failing are async_typed_clients_at_boundaries, boundary_inputs_validated, "
+        "changed_behavior_has_e2e, cli_output_contract, comments_earn_their_place, "
+        "contracts_have_one_source_or_a_drift_gate, least_privilege_grants, modern_domain_modeling, "
+        "names_match_behavior, new_code_lands_in_a_project, structural_pattern_matching and "
+        "tests_hold_no_nonfunctional_thresholds. Some of their findings fall on inherited timing-spike "
+        "lines: run.py's scenario drivers, proxy.py's forwarding, sanitize.py, and test_harness.py's "
+        "workload sizes. Others fall on lines this dispatch wrote and ask for a production rewrite of "
+        "a preserved, never-landing harness: async typed clients, typed models, exhaustive input "
+        "validation, an end-to-end test for every path, and an Nx project for `spike/`. That rewrite "
+        "is not done here; this is reported, not fixed."
+    )
     if ruling:
         out.append(f"**Manager ruling, as received.** {ruling}")
     return out
