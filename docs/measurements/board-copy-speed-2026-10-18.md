@@ -36,8 +36,7 @@ warn, and the quota bars are strict.
 
 - **Versions.** onetaskgraph **0.11.0**: the `onetaskgraph-cli` 0.11.0 wheel. It is what
   `config/onetaskgraph.version` and `uv.lock` name at ai-orchestrator `origin/main`
-  `46644351` ("perf(deps): adopt plan store 0.11.0 with warn-only approval budgets"), the
-  landing of `aio-adopt-copy-speed`. onepipeline **0.86.0** and onepipeline-ui **0.48.1**,
+  `46644351` ("perf(deps): adopt plan store 0.11.0 with warn-only approval budgets"). onepipeline **0.86.0** and onepipeline-ui **0.48.1**,
   as `config/onepipeline.version` and `config/onepipeline-ui.version` name them at that
   commit. The clone's `onepipeline --version` answered 0.86.0. `onevcs` was 0.56.5, as the
   clone's environment installed it.
@@ -56,8 +55,8 @@ warn, and the quota bars are strict.
   each of the three test-board scenarios the stock run and the span run sent the same
   operations, in the same order and number, in both processes
   (`after/summary.json` `inertness`). Inside one aliased `WRITE_FIELD_VALUES` the stock
-  first copy wrote two field values and the span run three. The extra value was a `Status`
-  that the store writes only when the new board item does not already hold it. The span
+  first copy wrote two field values and the span run three. The extra value was one more `Status`
+  write, and how many the store sends depends on what the board reported each new item holding. The span
   build's figures are used for every test-board scenario, as the spike used them.
 - **When.** 2026-10-24, 09:38–10:23 UTC, on the test board (owner `nickderobertis`,
   project 1, issues in `nickderobertis/onetaskgraph-live-scratch`) and, for one read-only
@@ -291,8 +290,8 @@ The onetaskgraph figures were reported by
 `cargo test -p onetaskgraph-github-projects-e2e --all-features --locked --test e2e --
 budget_runner::report_plan_copy --exact --nocapture`, over the telemetry its `plan_copy::`
 tests recorded. The ai-orchestrator figure was reported by `python -m tests.budget_telemetry`
-over its `test-host` journey's telemetry. Those commands came from a clone outside this
-host's registered checkouts, because the suite refuses to run inside one.
+over its `test-host` journey's telemetry. ai-orchestrator's ran from a clone outside this host's
+registered checkouts, because its suite refuses to read inside one.
 
 Every budget charges each request the latency of its kind. The two repositories' tables hold
 the same nine values. They are set beside the spike report's measured means, and beside this
