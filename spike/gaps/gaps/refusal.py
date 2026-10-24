@@ -49,6 +49,11 @@ UNSENT = (
 DELETE = "mutation($i: ID!) { deleteIssue(input: {issueId: $i}) { repository { id } } }"
 READ = "query { viewer { login } }"
 READ_AN_ISSUE = 'query { x: node(id: "I_returned_by_a_read") { id } }'
+READ_ITEMS = (
+    'query { x: node(id: "I_returned_by_a_read") { ... on Issue { id projectItems(first: 5)'
+    " { nodes { id } } } } }"
+)
+FOREIGN_ITEM = "PVTI_listed_under_a_foreign_issue"
 TWO_OPERATIONS = (
     "query Q { viewer { login } } mutation M($i: CreateIssueInput!) {"
     " createIssue(input: $i) { issue { id } } }"
@@ -177,6 +182,13 @@ CASES = (
     ),
     Case("a variable defaulting to another repository", DEFAULTED, {}, 403),
     Case("deleteIssue of an issue a read answered", DELETE, {"i": RETURNED}, 403),
+    Case("a read listing a foreign issue's board item", READ_ITEMS, {}, 200),
+    Case(
+        "a field value on the board item that read listed",
+        FIELD,
+        {"p": PROJECT_ID, "i": FOREIGN_ITEM},
+        403,
+    ),
     Case(
         "createIssue naming only the test board",
         CREATE,
@@ -260,6 +272,17 @@ class RefusalResult:
         return obj(encode(self), "refusal") | {"all_as_expected": self.all_as_expected}
 
 
+def fields_of(selection_set: graphql.SelectionSetNode | None) -> set[str]:
+    """Every field a selection set selects, inline fragments' included."""
+    found: set[str] = set()
+    for selection in selection_set.selections if selection_set else ():
+        if isinstance(selection, graphql.FieldNode):
+            found.add(selection.name.value)
+        elif isinstance(selection, graphql.InlineFragmentNode):
+            found |= fields_of(selection.selection_set)
+    return found
+
+
 def answer_for(body: bytes) -> dict[str, object]:
     """The stand-in's answer, shaped by the request's own selection.
 
@@ -278,15 +301,16 @@ def answer_for(body: bytes) -> dict[str, object]:
             if not isinstance(selection, graphql.FieldNode):
                 continue
             alias = (selection.alias or selection.name).value
-            selected = {
-                s.name.value
-                for s in (selection.selection_set.selections if selection.selection_set else ())
-                if isinstance(s, graphql.FieldNode)
-            }
+            selected = fields_of(selection.selection_set)
             if selection.name.value == "createIssue":
                 data[alias] = {"issue": {"id": MADE}}
             elif "id" in selected:
                 data[alias] = {"id": RETURNED}
+                if "projectItems" in selected:
+                    data[alias] = {
+                        "id": RETURNED,
+                        "projectItems": {"nodes": [{"id": FOREIGN_ITEM}]},
+                    }
     return data
 
 

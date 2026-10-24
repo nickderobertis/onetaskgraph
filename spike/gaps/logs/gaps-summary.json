@@ -307,7 +307,7 @@
    "within": true
   },
   {
-   "arithmetic": "16.4 s measured \u2212 6.03 s screening (9 onevcs calls) + 2 calls \u00d7 0.67 s \u2212 2.12 s (2 ISSUE, 1 SUB_ISSUES) + 0.5235323905944824 s added = 10.1 s",
+   "arithmetic": "16.4 s measured \u2212 6.03 s screening (9 onevcs calls) + 2 calls \u00d7 0.67 s \u2212 2.12 s (2 ISSUE, 1 SUB_ISSUES) + 0.5468974113464355 s added = 10.1 s",
    "attainable": 10.1,
    "baseline": {
     "operation": "host approval",
@@ -501,13 +501,13 @@
  ],
  "consumed": {
   "creations_sent": 121,
-  "dry_runs": 108,
+  "dry_runs": 135,
   "issues_left_by_the_last_placement": 0,
-  "least_share_before": 0.586,
+  "least_share_before": 0.544,
   "mutation_requests": 113,
   "pauses": 0,
-  "points": 224,
-  "rate_limit_reads": 112,
+  "points": 238,
+  "rate_limit_reads": 120,
   "remaining_before_and_after": {
    "probe-alias-pricing-head-20261024T140959": [
     3452,
@@ -524,6 +524,10 @@
    "probe-alias-pricing-head-20261024T155059": [
     3855,
     3838
+   ],
+   "probe-alias-pricing-head-20261024T161024": [
+    2721,
+    2707
    ],
    "probe-placement-head-20261024T141321": [
     3273,
@@ -558,10 +562,10 @@
     3769
    ]
   },
-  "requests": 420,
-  "runs": 15,
-  "runs_recording_pauses": 2,
-  "seconds": 516.7
+  "requests": 463,
+  "runs": 16,
+  "runs_recording_pauses": 3,
+  "seconds": 544.6
  },
  "offline": {
   "reach": {
@@ -1501,6 +1505,18 @@
      "status": 403
     },
     {
+     "case": "a read listing a foreign issue's board item",
+     "expected": 200,
+     "reached_upstream": 1,
+     "status": 200
+    },
+    {
+     "case": "a field value on the board item that read listed",
+     "expected": 403,
+     "reached_upstream": 0,
+     "status": 403
+    },
+    {
      "case": "createIssue naming only the test board",
      "expected": 200,
      "reached_upstream": 1,
@@ -1562,7 +1578,7 @@
     }
    ]
   },
-  "refusal_run": "proxy-refusal-head-20261024T160203",
+  "refusal_run": "proxy-refusal-head-20261024T161055",
   "union": {
    "commands": {
     "document-copy": [
@@ -2264,7 +2280,7 @@
     1
    ]
   },
-  "parent_listing_seconds": 0.5235323905944824,
+  "parent_listing_seconds": 0.5468974113464355,
   "placement_poll_costs": [
    1
   ],

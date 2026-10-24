@@ -193,7 +193,8 @@ class Guard:
                     if isinstance(found, str):
                         self.issues.add(found)
         for value in data.values():
-            if isinstance(value, dict) and value.get("id") in self.issues:
+            owner = value.get("id") if isinstance(value, dict) else None
+            if isinstance(value, dict) and isinstance(owner, str) and owner in self.issues:
                 connection = value.get("projectItems")
                 nodes = connection.get("nodes") if isinstance(connection, dict) else None
                 for node in nodes if isinstance(nodes, list) else []:

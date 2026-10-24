@@ -16,6 +16,9 @@ import threading
 from dataclasses import dataclass, field
 from enum import Enum
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+import graphql
 
 from gaps.json_shape import Json, ShapeError, obj, parse, text
 
@@ -33,6 +36,41 @@ class Chunking(Enum):
     WHOLE = "chunked"
     CUT_SHORT = "chunked, without its terminating chunk"
     NO_FINAL_LINE = "chunked, its terminating chunk without the final empty line"
+
+
+def _type_ref(node: graphql.TypeNode) -> dict[str, object]:
+    match node:
+        case graphql.NonNullTypeNode():
+            return {"kind": "NON_NULL", "name": None, "ofType": _type_ref(node.type)}
+        case graphql.ListTypeNode():
+            return {"kind": "LIST", "name": None, "ofType": _type_ref(node.type)}
+        case graphql.NamedTypeNode():
+            return {"kind": "SCALAR", "name": node.name.value, "ofType": None}
+        case _:
+            raise TypeError(node)
+
+
+def introspected_rate_limit() -> dict[str, object]:
+    """The introspection answer GitHub gives, built from the extension the spike checks in."""
+    extension = Path(__file__).resolve().parents[1] / "github-schema-extension.graphql"
+    definitions = graphql.parse(extension.read_text()).definitions
+    rate = next(d for d in definitions if isinstance(d, graphql.ObjectTypeDefinitionNode))
+    query = next(d for d in definitions if isinstance(d, graphql.ObjectTypeExtensionNode))
+    field_defs = [{"name": f.name.value, "type": _type_ref(f.type)} for f in rate.fields or ()]
+    rate_limit = next(f for f in query.fields or () if f.name.value == "rateLimit")
+    arguments = [
+        {
+            "name": a.name.value,
+            "type": _type_ref(a.type),
+            "defaultValue": None if a.default_value is None else graphql.print_ast(a.default_value),
+        }
+        for a in rate_limit.arguments or ()
+    ]
+    query_field = {"name": "rateLimit", "type": _type_ref(rate_limit.type), "args": arguments}
+    return {
+        "rateLimitType": {"fields": field_defs},
+        "queryType": {"queryType": {"fields": [query_field]}},
+    }
 
 
 @dataclass
@@ -110,6 +148,8 @@ class Board:
         match op:
             case "dry run":
                 return {"data": {"rateLimit": {"cost": 1}}}
+            case "SpikeRateLimitSchema":
+                return {"data": introspected_rate_limit()}
             case "SpikeRateLimit":
                 reset = datetime.datetime.fromtimestamp(self.reset, datetime.UTC).isoformat()
                 rate = {"limit": 5000, "used": self.used, "remaining": self.remaining - self.used}

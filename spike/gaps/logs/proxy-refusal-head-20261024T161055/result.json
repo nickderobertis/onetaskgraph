@@ -98,6 +98,18 @@
    "status": 403
   },
   {
+   "case": "a read listing a foreign issue's board item",
+   "expected": 200,
+   "reached_upstream": 1,
+   "status": 200
+  },
+  {
+   "case": "a field value on the board item that read listed",
+   "expected": 403,
+   "reached_upstream": 0,
+   "status": 403
+  },
+  {
    "case": "createIssue naming only the test board",
    "expected": 200,
    "reached_upstream": 1,

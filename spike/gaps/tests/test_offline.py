@@ -105,7 +105,7 @@ def test_the_proxy_refuses_every_write_to_another_destination(tmp_path: Path) ->
     """The proxy refuses every write to another destination."""
     refusal = decode(RefusalResult, load(result(run_case(tmp_path, "proxy-refusal", "head"))), "r")
     assert refusal.all_as_expected
-    assert [o.reached_upstream for o in refusal.cases].count(1) == 4
+    assert [o.reached_upstream for o in refusal.cases].count(1) == 5
 
 
 def test_a_missing_binary_exits_2_naming_it(tmp_path: Path) -> None:

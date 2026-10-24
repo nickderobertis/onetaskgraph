@@ -16,8 +16,8 @@ from enum import StrEnum
 from gaps import documents
 from gaps.board import ScratchBoard
 from gaps.documents import Doc
-from gaps.github import Answer, Client, GitHubError
-from gaps.json_shape import Json, ShapeError, encode, integer, obj
+from gaps.github import Answer, Client, GitHubError, require
+from gaps.json_shape import Json, ShapeError, arr, encode, integer, obj, text
 
 
 class Named(StrEnum):
@@ -56,12 +56,45 @@ class Price:
     seconds: float
 
 
+# GitHub's own description of what the spike's schema extension declares: the `RateLimit`
+# type's fields and `Query.rateLimit`'s arguments and type, by introspection.
+INTROSPECTION = (
+    'query SpikeRateLimitSchema { rateLimitType: __type(name: "RateLimit") { fields { name'
+    " type { ...TypeRef } } } queryType: __schema { queryType { fields { name type { ...TypeRef }"
+    " args { name defaultValue type { ...TypeRef } } } } } }"
+    " fragment TypeRef on __Type { kind name ofType { kind name ofType { kind name } } }"
+)
+
+
+@dataclass(frozen=True)
+class SchemaField:
+    """One field or argument as GitHub's introspection describes it."""
+
+    name: str
+    type: str
+    default: str | None = None
+
+
+@dataclass(frozen=True)
+class RateLimitSchema:
+    """GitHub's own `RateLimit` and `Query.rateLimit`."""
+
+    fields: tuple[SchemaField, ...]
+    query_type: str
+    arguments: tuple[SchemaField, ...]
+
+
 @dataclass(frozen=True)
 class PricingResult:
-    """Every dry-run price, and every charge of a coalesced shape sent for real."""
+    """Every price the probe read, and GitHub's own description of its rate limit.
+
+    Dry-run prices, the charge of every coalesced shape sent for real, and the introspected
+    `RateLimit`, absent from runs recorded before the probe asked for it.
+    """
 
     dry_runs: tuple[Price, ...]
     executed: tuple[Price, ...]
+    rate_limit_schema: RateLimitSchema | None = None
 
     def to_json(self) -> Json:
         """The result as `feasibility.json` holds it."""
@@ -156,4 +189,46 @@ async def probe(client: Client, board: ScratchBoard, anchor: str) -> PricingResu
             "charged read", documents.charged(shape.document), shape.variables
         )
         executed.append(Price(shape.variant, cost_of(answer, shape.variant), answer.seconds))
-    return PricingResult(dry_runs=tuple(dry), executed=tuple(executed))
+    schema = rate_limit_schema(await client.graphql("schema", INTROSPECTION, {}))
+    return PricingResult(dry_runs=tuple(dry), executed=tuple(executed), rate_limit_schema=schema)
+
+
+def type_name(value: Json, where: str) -> str:
+    """An introspected type reference written as SDL writes it: `Int!`, `[ID!]`."""
+    entry = obj(value, where)
+    match text(entry.get("kind"), f"{where}.kind"):
+        case "NON_NULL":
+            return type_name(entry.get("ofType"), f"{where}.ofType") + "!"
+        case "LIST":
+            return "[" + type_name(entry.get("ofType"), f"{where}.ofType") + "]"
+        case _:
+            return text(entry.get("name"), f"{where}.name")
+
+
+def schema_field(value: Json, where: str) -> SchemaField:
+    """One introspected field or argument."""
+    entry = obj(value, where)
+    default = entry.get("defaultValue")
+    return SchemaField(
+        name=text(entry.get("name"), f"{where}.name"),
+        type=type_name(entry.get("type"), f"{where}.type"),
+        default=None if default is None else text(default, f"{where}.defaultValue"),
+    )
+
+
+def rate_limit_schema(answer: Answer) -> RateLimitSchema:
+    """GitHub's introspection answer, as the schema extension writes the same things."""
+    data = require(answer, "SpikeRateLimitSchema")
+    type_fields = arr(obj(data.get("rateLimitType"), "rateLimitType").get("fields"), "fields")
+    schema = obj(obj(data.get("queryType"), "queryType").get("queryType"), "queryType")
+    query = next(
+        obj(f, "field")
+        for f in arr(schema.get("fields"), "queryType.fields")
+        if isinstance(f, dict) and f.get("name") == "rateLimit"
+    )
+    fields = sorted((schema_field(f, "RateLimit.field") for f in type_fields), key=lambda f: f.name)
+    return RateLimitSchema(
+        fields=tuple(fields),
+        query_type=type_name(query.get("type"), "rateLimit.type"),
+        arguments=tuple(schema_field(a, "rateLimit.arg") for a in arr(query.get("args"), "args")),
+    )

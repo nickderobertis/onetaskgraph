@@ -10,6 +10,7 @@ from __future__ import annotations
 import builtins
 import dataclasses
 import json
+import math
 import types
 import typing
 from enum import Enum
@@ -88,6 +89,8 @@ def number(value: Json, where: str) -> float:
     """`value` as a number (a boolean is not one)."""
     if isinstance(value, bool) or not isinstance(value, int | float):
         raise ShapeError(f"{where}: expected a number, found {type(value).__name__}")
+    if not math.isfinite(value):
+        raise ShapeError(f"{where}: expected a finite number, found {value}")
     return float(value)
 
 

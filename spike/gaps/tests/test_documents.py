@@ -50,6 +50,7 @@ def sent() -> dict[str, str]:
     )
     out["board ids"] = board.ids_query()
     out["rate limit"] = allowance.RATE_QUERY
+    out["rate limit schema"] = pricing.INTROSPECTION
     out["create"] = placement.create_document("Children", 8)
     out["placement read"] = placement.placed_document(9)
     out["add"] = placement.add_document()
@@ -122,3 +123,32 @@ def test_the_extension_declares_only_what_github_itself_answered() -> None:
     )
     declared = {f.name.value for f in rate_limit.fields or ()}
     assert declared and declared <= answered, declared - answered
+
+
+def test_the_extension_is_what_github_describes_by_introspection() -> None:
+    """The extension's types, nullability and arguments are what GitHub itself described.
+
+    The pricing probe asks GitHub's introspection for `RateLimit` and `Query.rateLimit` on every
+    run; the latest run that recorded the answer is the authority this file is held to.
+    """
+    schemas = [
+        decode(PricingResult, load(run / "feasibility.json"), str(run)).rate_limit_schema
+        for run in analysis.runs("probe-alias-pricing-")
+    ]
+    described = [s for s in schemas if s is not None][-1]
+    definitions = graphql.parse(EXTENSION.read_text()).definitions
+    rate = next(d for d in definitions if isinstance(d, graphql.ObjectTypeDefinitionNode))
+    query = next(d for d in definitions if isinstance(d, graphql.ObjectTypeExtensionNode))
+    declared = {f.name.value: graphql.print_ast(f.type) for f in rate.fields or ()}
+    answered = {f.name: f.type for f in described.fields}
+    assert {name: answered.get(name) for name in declared} == declared
+    rate_limit = next(f for f in query.fields or () if f.name.value == "rateLimit")
+    assert graphql.print_ast(rate_limit.type) == described.query_type
+    arguments = {
+        a.name.value: (
+            graphql.print_ast(a.type),
+            a.default_value and graphql.print_ast(a.default_value),
+        )
+        for a in rate_limit.arguments or ()
+    }
+    assert arguments == {a.name: (a.type, a.default) for a in described.arguments}
