@@ -6711,6 +6711,7 @@ fn linear_response(
         // dependency read's are the ones `linear_narrowed` does.
         && linear_uncached(operation).is_none()
         && linear_narrowed(operation).is_none()
+        && operation != graphql::ISSUE_RESOLVED
     {
         return Err("unknown GraphQL operation");
     }
@@ -6728,6 +6729,24 @@ fn linear_response(
         let mut answer =
             linear_response(&json!({"query": plain, "variables": vars}), recorded, data)?;
         linear_widen(operation, &mut answer, data, &vars);
+        return Ok(answer);
+    }
+    // An issue read beside the resolution a status write needs: each answered as it is
+    // answered alone, side by side under their own roots.
+    if operation == graphql::ISSUE_RESOLVED {
+        let mut answer = linear_response(
+            &json!({"query": graphql::ISSUE, "variables": {"id": vars["id"]}}),
+            recorded,
+            data,
+        )?;
+        let resolution = linear_response(
+            &json!({"query": graphql::RESOLUTION, "variables": {"key": vars["key"]}}),
+            recorded,
+            data,
+        )?;
+        for (root, value) in resolution.as_object().into_iter().flatten() {
+            answer[root] = value.clone();
+        }
         return Ok(answer);
     }
     // A dependency read of one direction: the two-direction read's answer, holding only the

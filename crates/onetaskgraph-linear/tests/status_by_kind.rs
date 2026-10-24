@@ -270,6 +270,17 @@ impl Workspace {
             graphql::ISSUE => {
                 json!({"issue": held.issues.iter().find(|issue| issue["id"] == id)})
             }
+            // The issue beside the resolution, each answered as it is alone.
+            graphql::ISSUE_RESOLVED => {
+                let teams = if variables["key"] == json!(held.team) {
+                    json!([{"id":format!("TEAM-{}", held.team),"states":{"nodes":held.states,"pageInfo":{"hasNextPage":held.more_states}}}])
+                } else {
+                    json!([])
+                };
+                json!({"issue": held.issues.iter().find(|issue| issue["id"] == id),
+                       "teams":{"nodes":teams},
+                       "projectStatuses":{"nodes":held.statuses,"pageInfo":{"hasNextPage":held.more_statuses}}})
+            }
             graphql::PROJECT => {
                 json!({"project": held.projects.iter().find(|project| project["id"] == id)})
             }
@@ -448,6 +459,7 @@ fn read_request(stream: &mut std::net::TcpStream) -> Option<Value> {
 fn document_name(query: &str) -> &'static str {
     [
         ("RESOLUTION", graphql::RESOLUTION),
+        ("ISSUE_RESOLVED", graphql::ISSUE_RESOLVED),
         ("ISSUE", graphql::ISSUE),
         ("PROJECT", graphql::PROJECT),
         ("ISSUE_RELATIONS", graphql::ISSUE_RELATIONS),
@@ -1207,10 +1219,11 @@ async fn refused_settlement_task_and_project_writes_resolve_again_before_their_r
             if retry {
                 result.unwrap();
                 let requests = workspace.names_since(from);
+                // A settlement resolves again inside the read of its issue.
                 assert_eq!(
                     requests
                         .iter()
-                        .filter(|name| **name == "RESOLUTION")
+                        .filter(|name| matches!(**name, "RESOLUTION" | "ISSUE_RESOLVED"))
                         .count(),
                     1,
                     "{operation}: {requests:?}"

@@ -599,6 +599,10 @@ pub mod graphql {
     /// against, once per instance, and a cold write already sends this. It adds one object
     /// and one property — 1.1 points by the model above — to the document's score.
     pub const RESOLUTION: &str = "query($key:String!){ organization{id} teams(first:2,filter:{key:{eqIgnoreCase:$key}}){nodes{id states(first:250){nodes{id name type} pageInfo{hasNextPage}}}} projectStatuses(first:250){nodes{id name type position} pageInfo{hasNextPage}} }";
+    /// [`ISSUE`] and [`RESOLUTION`] in one request: what an update naming a status reads its
+    /// issue with while this instance holds no resolution yet, so a fresh source's settlement
+    /// costs its read and its mutation and no lookup between them.
+    pub const ISSUE_RESOLVED: &str = "query($id:String!,$key:String!){ issue(id:$id){ id identifier title description url createdAt updatedAt archivedAt state{name type} priority labels{nodes{id name color}} project{id} } organization{id} teams(first:2,filter:{key:{eqIgnoreCase:$key}}){nodes{id states(first:250){nodes{id name type} pageInfo{hasNextPage}}}} projectStatuses(first:250){nodes{id name type position} pageInfo{hasNextPage}} }";
     /// Create a workflow state on the configured team, for `sources fields --apply`.
     pub const WORKFLOW_STATE_CREATE: &str = "mutation($input:WorkflowStateCreateInput!){ workflowStateCreate(input:$input){success workflowState{id name type}} }";
     /// Create a workspace project status, for `sources fields --apply`.
@@ -2463,7 +2467,12 @@ impl LinearSource {
                 task,
             }));
         }
-        let Some((before, description)) = self.issue_held(id, Read::ForWrite).await? else {
+        let held = if update.status.is_some() && self.held_vocabulary().is_none() {
+            self.issue_resolving(id).await?
+        } else {
+            self.issue_held(id, Read::ForWrite).await?
+        };
+        let Some((before, description)) = held else {
             return Ok(None);
         };
         let (visible, held) = metadata_description(description)?;
@@ -4537,6 +4546,34 @@ impl LinearSource {
             Read::ForWrite => ISSUE,
         };
         let data = self.send(document, json!({"id":id.0})).await?;
+        Ok(optional(&data, "issue", |v| {
+            Ok((
+                map_task(v, &self.name, &self.statuses, self.spelling())?,
+                optional_string(v, "description")?,
+            ))
+        })?
+        .filter(|(task, _)| self.in_scope(task.project.as_ref())))
+    }
+
+    /// [`Self::issue_held`] for a write, with the resolution a status write needs read in the
+    /// same request — [`graphql::ISSUE_RESOLVED`] — and held as [`Self::vocabulary`] holds it,
+    /// only when it read completely. A source with no team configured reads the issue alone,
+    /// and its status write is refused as it always was.
+    async fn issue_resolving(
+        &self,
+        id: &NativeId,
+    ) -> Result<Option<(Task, Option<String>)>, SourceError> {
+        let Some(team) = self.team.as_ref() else {
+            return self.issue_held(id, Read::ForWrite).await;
+        };
+        let data = self
+            .send(graphql::ISSUE_RESOLVED, json!({"id":id.0,"key":team.0}))
+            .await?;
+        let read = std::sync::Arc::new(Vocabulary::read(&data, &self.name, &team.0)?);
+        *self
+            .vocabulary
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(read);
         Ok(optional(&data, "issue", |v| {
             Ok((
                 map_task(v, &self.name, &self.statuses, self.spelling())?,

@@ -326,6 +326,7 @@ fn pinned_schema_checks_selected_fields_arguments_and_fixture_keys() {
         (graphql::VIEWER, None),
         (graphql::ORGANIZATION, None),
         (graphql::ISSUE, None),
+        (graphql::ISSUE_RESOLVED, None),
         (graphql::PROJECT, None),
         (graphql::ISSUES, Some(include_str!("fixtures/issues.json"))),
         (

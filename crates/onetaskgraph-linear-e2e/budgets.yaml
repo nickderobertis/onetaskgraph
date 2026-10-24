@@ -5,8 +5,10 @@ schema_version: 1
 budgets:
   - id: linear-requests-per-status-write-cold
     description: >-
-      The requests one status write sends on a fresh source instance, as one command line is.
-      It protects headroom on the production Linear key every manager of a host shares.
+      The requests one status write sends on a fresh source instance, as one command line is,
+      the larger over a workspace of 60 issues and of 600. Two: the mutation takes a state id,
+      so a fresh source reads its team's states first. It protects headroom on the production
+      Linear key every manager of a host shares.
     labels: [linear]
     measure: reported
     command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
@@ -15,8 +17,9 @@ budgets:
     threshold: 2
   - id: linear-requests-per-status-write-warm
     description: >-
-      The requests each status write after the first sends on one long-lived source instance.
-      It protects headroom on the production Linear key every manager of a host shares.
+      The requests each status write after the first sends on one long-lived source instance,
+      the larger over a workspace of 60 issues and of 600. It protects headroom on the
+      production Linear key every manager of a host shares.
     labels: [linear]
     measure: reported
     command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
@@ -26,18 +29,22 @@ budgets:
   - id: linear-requests-per-settlement-update-cold
     description: >-
       The requests the first update of a status and one metadata key sends on a fresh source
-      instance. It protects headroom on the production Linear key every manager of a host shares.
+      instance, the larger over a workspace of 60 issues and of 600. Two: the issue is read,
+      with the team's states in the same request, so the person's text around the metadata
+      slot is kept. It protects headroom on the production Linear key every manager of a host
+      shares.
     labels: [linear]
     measure: reported
     command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
     unit: requests
     direction: max
-    threshold: 3
+    threshold: 2
   - id: linear-requests-per-settlement-update-warm
     description: >-
       The requests each later update of a status and one metadata key sends on one long-lived
-      source instance. It protects headroom on the production Linear key every manager of a host
-      shares.
+      source instance, the larger over a workspace of 60 issues and of 600. Two: the issue is
+      read so the person's text around the metadata slot is kept. It protects headroom on the
+      production Linear key every manager of a host shares.
     labels: [linear]
     measure: reported
     command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
