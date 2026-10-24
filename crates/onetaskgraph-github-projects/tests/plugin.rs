@@ -21558,4 +21558,62 @@ async fn a_drafts_recorded_edges_ride_its_dependency_read_and_a_malformed_answer
         );
         assert!(format!("{refused}").contains(said), "{case}: {refused}");
     }
+    // Every other shape this answer can come in wrong, each refused as malformed: a draft id
+    // that is missing or not a string, board items without their nodes or page, a page whose
+    // `hasNextPage` is not a boolean, a project id missing or not a string, a body that is not
+    // a string, and a metadata slot that does not hold JSON.
+    let node = |draft: Value| json!({"data":{"node":draft,"board":this_board}}).to_string();
+    let well = || {
+        json!({"__typename":"DraftIssue","id":"DI_1","body":body,
+               "projectV2Items":one(json!({"id":"PVT_board","number":7}))})
+    };
+    let with = |pointer: &str, replaced: Value| {
+        let mut draft = well();
+        *draft.pointer_mut(pointer).expect("the member") = replaced;
+        draft
+    };
+    let without = |pointer: &str, member: &str| {
+        let mut draft = well();
+        draft
+            .pointer_mut(pointer)
+            .and_then(Value::as_object_mut)
+            .expect("the parent")
+            .remove(member);
+        draft
+    };
+    for (case, draft) in [
+        ("no draft id", without("", "id")),
+        ("a draft id that is no string", with("/id", json!(7))),
+        ("no board item nodes", without("/projectV2Items", "nodes")),
+        (
+            "board item nodes that are no array",
+            with("/projectV2Items/nodes", json!({})),
+        ),
+        ("no board item page", without("/projectV2Items", "pageInfo")),
+        (
+            "a page that is no boolean",
+            with("/projectV2Items/pageInfo/hasNextPage", json!("no")),
+        ),
+        (
+            "no project id",
+            without("/projectV2Items/nodes/0/project", "id"),
+        ),
+        (
+            "a project id that is no string",
+            with("/projectV2Items/nodes/0/project/id", json!(1)),
+        ),
+        ("a body that is no string", with("/body", json!(["text"]))),
+        (
+            "a slot that holds no JSON",
+            with("/body", json!("<!-- onetaskgraph.metadata\n{not json\n-->")),
+        ),
+    ] {
+        let refused = read(raw_server("200 OK", &node(draft)))
+            .await
+            .expect_err(case);
+        assert!(
+            matches!(refused, SourceError::Malformed { .. }),
+            "{case}: {refused:?}"
+        );
+    }
 }
