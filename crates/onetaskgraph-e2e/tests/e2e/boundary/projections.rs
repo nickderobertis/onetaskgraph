@@ -1470,6 +1470,71 @@ fn a_project_a_person_moved_a_view_into_is_never_adopted_or_written() {
 }
 
 #[test]
+fn the_copy_s_own_project_made_not_neutral_or_removed_refuses_a_mirror_and_a_recopy() {
+    let store = projecting_store();
+    private_rollout(&store);
+    let landed = copy_rollout(&store);
+    let widget = &landed["plan:widget"];
+    let view = view_of(&store, &landed, widget);
+    let neutral = filed_under(&store, &view);
+    let made = record_file(&store, "projects", &format!("site:{neutral}"));
+    let held = std::fs::read_to_string(&made).expect("the public projection project");
+    assert!(held.contains("title: Public work"), "{held}");
+    let edited = held.replace("title: Public work", "title: Roadmap");
+
+    // Renamed by a person, it is no public projection project any more: the canonical status
+    // lands, the view is not written, and a recopy neither writes into it nor makes another.
+    std::fs::write(&made, &edited).expect("the project renamed");
+    let (kind, said) = store.refused(&["task", "status", "set", widget, "done"]);
+    assert_eq!(kind, "projection-not-mirrored", "{said}");
+    assert!(said.contains("not a public projection project"), "{said}");
+    assert_eq!(shown(&store, "task", widget)["status"]["category"], "done");
+    assert_eq!(shown(&store, "task", &view)["status"]["category"], "todo");
+    let before = store.tree();
+    let (kind, said) = store.refused(&["project", "copy", "plan:rollout", "--to", "vault"]);
+    assert_eq!(kind, "projections-malformed", "{said}");
+    assert!(
+        said.contains(&format!(
+            "site:{neutral} is recorded as the public projection project"
+        )),
+        "{said}"
+    );
+    assert_eq!(store.tree(), before, "the copy is taken back whole");
+
+    // Removed, a view still filed under it has no project to be a view of.
+    std::fs::remove_file(&made).expect("the project removed");
+    let (kind, said) = store.refused(&["task", "status", "set", widget, "todo"]);
+    assert_eq!(kind, "projection-not-mirrored", "{said}");
+    assert!(said.contains("not a public projection project"), "{said}");
+    assert_eq!(shown(&store, "task", widget)["status"]["category"], "todo");
+
+    // Found again by its allocation alone — at another id, given prose of its own — it is still
+    // not one.
+    let elsewhere = made.with_file_name("roadmap.md");
+    std::fs::write(
+        &elsewhere,
+        format!("{}\nTheir own plans.\n", held.trim_end()),
+    )
+    .expect("their project, carrying the allocation");
+    let before = store.tree();
+    let (kind, said) = store.refused(&["project", "copy", "plan:rollout", "--to", "vault"]);
+    assert_eq!(kind, "projections-malformed", "{said}");
+    assert!(
+        said.contains("site:roadmap is recorded as the public projection project"),
+        "{said}"
+    );
+    assert_eq!(store.tree(), before, "nothing is written into it");
+
+    // Put back as the copy made it, the copy and the mirror both go on.
+    std::fs::remove_file(&elsewhere).expect("theirs removed");
+    std::fs::write(&made, &held).expect("the project put back");
+    copy_rollout(&store);
+    assert_eq!(view_of(&store, &landed, widget), view, "the same view");
+    store.ok(&["task", "status", "set", widget, "done"]);
+    assert_eq!(shown(&store, "task", &view)["status"]["category"], "done");
+}
+
+#[test]
 fn a_view_a_person_took_out_of_its_project_is_left_and_a_new_view_is_recorded() {
     let store = projecting_store();
     private_rollout(&store);
