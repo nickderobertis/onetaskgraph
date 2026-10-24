@@ -235,6 +235,7 @@ budgets:
     unit: requests
     direction: max
     threshold: 2
+  # llmlint: ignore[budgets_track_product_owner_outcomes] The user ruled that every store operation the engine uses carries its own per-backend request bound, paired with the engine's backend-agnostic store-operation budgets (its hold loop with the dependency reads, each dispatch with the status writes); a session or hourly total cannot show one operation's requests regressing, which is what this bound is for.
   - id: github-requests-per-settlement-update
     description: >-
       The requests one update of a status and one metadata key on one issue item sends through the

@@ -592,6 +592,15 @@ fn a_linear_source_that_named_a_reset_is_sent_nothing_before_it_and_reached_afte
             other => panic!("a write during the hold: {other:?}"),
         }
         assert_eq!(*sent.lock().unwrap(), 1, "the write was not sent");
+        // A batched read is refused for every id it names, and none of them is sent.
+        let batched = engine
+            .task_details(&[id.clone(), "linear:L-2".parse().unwrap()], false)
+            .await;
+        assert_eq!(batched.details.len(), 2);
+        for detail in &batched.details {
+            assert!(limit(&detail.response.errors).1.contains("not sent"));
+        }
+        assert_eq!(*sent.lock().unwrap(), 1, "the batch was not sent");
 
         tokio::time::sleep(std::time::Duration::from_millis(2_300)).await;
         let (_, said) = limit(&engine.task(&id).await.expect("an answer").errors);
@@ -604,3 +613,39 @@ fn a_linear_source_that_named_a_reset_is_sent_nothing_before_it_and_reached_afte
     });
 }
 // llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+
+/// A rate limit that names no reset holds the source off not at all: every call is sent.
+#[test]
+fn a_linear_rate_limit_naming_no_reset_holds_nothing_back() {
+    let sandbox = Sandbox::new();
+    let (config, sent) = linear_rate_limited_for(&sandbox, None);
+    let name = SourceName::new("linear").unwrap();
+    let secrets = onetaskgraph_core::Secrets::load(onetaskgraph_core::Environment::from_pairs([(
+        "LINEAR_API_KEY",
+        "fixture-key",
+    )]))
+    .expect("an environment with no credentials file");
+    let source = onetaskgraph_linear::Plugin
+        .build(&name, &config, &secrets)
+        .expect("the Linear source builds");
+    let engine = Engine::new(
+        vec![ConfiguredSource::Ready(ResolvedSource::adopt(
+            name.clone(),
+            source,
+        ))],
+        vec![name],
+    );
+    let id: GlobalId = "linear:L-1".parse().unwrap();
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            for asked in 1..=2 {
+                let (wait, said) = limit(&engine.task(&id).await.expect("an answer").errors);
+                assert_eq!(wait, None);
+                assert!(!said.contains("not sent"), "{said}");
+                assert_eq!(*sent.lock().unwrap(), asked, "every call reached Linear");
+            }
+        });
+}

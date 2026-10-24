@@ -110,7 +110,13 @@ impl HeldOff {
         }) = &answered
             && *seconds > 0
         {
-            let reset = self.clock.now() + Duration::from_secs(*seconds);
+            // A wait too long for the clock to represent holds the source off for as long as
+            // it can say, rather than overflowing.
+            let reset = self
+                .clock
+                .now()
+                .checked_add(Duration::from_secs(*seconds))
+                .unwrap_or(Duration::MAX);
             let mut until = self.until();
             *until = Some(until.map_or(reset, |held| held.max(reset)));
         }
@@ -943,7 +949,7 @@ mod tests {
                 Some(20),
                 "the whole seconds left, rounded up"
             );
-            // Every call, not only the one refused: a write, and a batched read, each id.
+            // Every call, not only the kind refused: a listing, and a batched read, each id.
             assert!(matches!(
                 source
                     .labels(&PageRequest {

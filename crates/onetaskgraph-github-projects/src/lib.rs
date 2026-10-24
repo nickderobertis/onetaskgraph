@@ -13884,7 +13884,8 @@ fn draft_slot(
                     id.0
                 ),
             })?;
-        held |= number == u64::from(project_number) && required_str(project, "id")? == board;
+        let project_id = required_str(project, "id")?;
+        held |= number == u64::from(project_number) && project_id == board;
     }
     if !held {
         return Ok(Some(None));
