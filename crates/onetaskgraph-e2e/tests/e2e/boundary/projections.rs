@@ -255,8 +255,11 @@ fn a_private_plan_lands_whole_in_its_private_destination_with_neutral_views_of_i
     );
     assert_eq!(canonical_widget["priority"], "high", "{canonical_widget:#}");
     let located = shown_widget["location"]["path"].as_str().expect("a path");
+    // `local-md` reports the location under its canonicalized root, which on Windows is
+    // spelled with the `\\?\` prefix.
+    let site = std::fs::canonicalize(store.folder("site")).expect("the public folder resolves");
     assert!(
-        std::path::Path::new(located).starts_with(store.folder("site")),
+        std::path::Path::new(located).starts_with(&site),
         "the view's place is its own source's: {located}"
     );
     // A view depends only on another view: the widget's dependency on the private producer is
