@@ -5,16 +5,16 @@
    "as copied": {
     "agrees": true,
     "per_item": {
-     "calls": 18,
+     "calls": 19,
      "check": 1,
      "check_returncodes": [
       0
      ],
-     "inspect": 17,
+     "inspect": 18,
      "inspect_answers": [
       "{\"visibility\":\"public\"}\n"
      ],
-     "seconds": 0.226
+     "seconds": 0.332
     },
     "unioned": {
      "calls": 2,
@@ -24,22 +24,22 @@
      "inspect_answers": [
       "{\"visibility\":\"public\"}\n"
      ],
-     "seconds": 0.023
+     "seconds": 0.04
     }
    },
    "planted in metadata": {
     "agrees": true,
     "per_item": {
-     "calls": 18,
+     "calls": 19,
      "check": 1,
      "check_returncodes": [
       1
      ],
-     "inspect": 17,
+     "inspect": 18,
      "inspect_answers": [
       "{\"visibility\":\"public\"}\n"
      ],
-     "seconds": 0.291
+     "seconds": 0.373
     },
     "unioned": {
      "calls": 2,
@@ -49,22 +49,22 @@
      "inspect_answers": [
       "{\"visibility\":\"public\"}\n"
      ],
-     "seconds": 0.03
+     "seconds": 0.037
     }
    },
    "planted in paths": {
     "agrees": true,
     "per_item": {
-     "calls": 18,
+     "calls": 19,
      "check": 1,
      "check_returncodes": [
       1
      ],
-     "inspect": 17,
+     "inspect": 18,
      "inspect_answers": [
       "{\"visibility\":\"public\"}\n"
      ],
-     "seconds": 0.353
+     "seconds": 0.367
     },
     "unioned": {
      "calls": 2,
@@ -74,22 +74,22 @@
      "inspect_answers": [
       "{\"visibility\":\"public\"}\n"
      ],
-     "seconds": 0.032
+     "seconds": 0.022
     }
    },
    "planted in text": {
     "agrees": true,
     "per_item": {
-     "calls": 18,
+     "calls": 19,
      "check": 1,
      "check_returncodes": [
       1
      ],
-     "inspect": 17,
+     "inspect": 18,
      "inspect_answers": [
       "{\"visibility\":\"public\"}\n"
      ],
-     "seconds": 0.316
+     "seconds": 0.391
     },
     "unioned": {
      "calls": 2,
@@ -99,7 +99,7 @@
      "inspect_answers": [
       "{\"visibility\":\"public\"}\n"
      ],
-     "seconds": 0.038
+     "seconds": 0.053
     }
    }
   },
@@ -107,16 +107,16 @@
    "as copied": {
     "agrees": true,
     "per_item": {
-     "calls": 36,
+     "calls": 35,
      "check": 9,
      "check_returncodes": [
       0
      ],
-     "inspect": 27,
+     "inspect": 26,
      "inspect_answers": [
       "{\"visibility\":\"public\"}\n"
      ],
-     "seconds": 0.646
+     "seconds": 0.847
     },
     "unioned": {
      "calls": 2,
@@ -126,23 +126,23 @@
      "inspect_answers": [
       "{\"visibility\":\"public\"}\n"
      ],
-     "seconds": 0.033
+     "seconds": 0.063
     }
    },
    "planted in metadata": {
     "agrees": true,
     "per_item": {
-     "calls": 36,
+     "calls": 35,
      "check": 9,
      "check_returncodes": [
       0,
       1
      ],
-     "inspect": 27,
+     "inspect": 26,
      "inspect_answers": [
       "{\"visibility\":\"public\"}\n"
      ],
-     "seconds": 0.622
+     "seconds": 0.841
     },
     "unioned": {
      "calls": 2,
@@ -152,23 +152,23 @@
      "inspect_answers": [
       "{\"visibility\":\"public\"}\n"
      ],
-     "seconds": 0.038
+     "seconds": 0.077
     }
    },
    "planted in paths": {
     "agrees": true,
     "per_item": {
-     "calls": 36,
+     "calls": 35,
      "check": 9,
      "check_returncodes": [
       0,
       1
      ],
-     "inspect": 27,
+     "inspect": 26,
      "inspect_answers": [
       "{\"visibility\":\"public\"}\n"
      ],
-     "seconds": 0.46
+     "seconds": 0.643
     },
     "unioned": {
      "calls": 2,
@@ -178,23 +178,23 @@
      "inspect_answers": [
       "{\"visibility\":\"public\"}\n"
      ],
-     "seconds": 0.024
+     "seconds": 0.064
     }
    },
    "planted in text": {
     "agrees": true,
     "per_item": {
-     "calls": 36,
+     "calls": 35,
      "check": 9,
      "check_returncodes": [
       0,
       1
      ],
-     "inspect": 27,
+     "inspect": 26,
      "inspect_answers": [
       "{\"visibility\":\"public\"}\n"
      ],
-     "seconds": 0.598
+     "seconds": 0.719
     },
     "unioned": {
      "calls": 2,
@@ -204,7 +204,7 @@
      "inspect_answers": [
       "{\"visibility\":\"public\"}\n"
      ],
-     "seconds": 0.025
+     "seconds": 0.063
     }
    }
   }
@@ -221,7 +221,7 @@
    "check": 10,
    "distinct_inspect_inputs": 1,
    "inspect": 44,
-   "seconds": 0.869,
+   "seconds": 0.889,
    "verdicts": [
     [
      "check",

@@ -542,6 +542,12 @@ def offline() -> dict:
                     "inspect": r["screens"]["inspect"],
                     "check": r["screens"]["check"],
                 },
+                "output_names_the_reference": any(
+                    s.get("output_names_the_reference", False) for s in r["steps"]
+                ),
+                "output_says_withheld": any(
+                    s.get("output_says_withheld", False) for s in r["steps"]
+                ),
                 "refusal": next(
                     (
                         s["stderr_tail"][0]

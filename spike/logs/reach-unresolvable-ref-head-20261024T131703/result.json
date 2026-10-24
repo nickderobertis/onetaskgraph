@@ -9,7 +9,7 @@
   "check": 0,
   "distinct_inspect_inputs": 1,
   "inspect": 26,
-  "seconds": 0.407,
+  "seconds": 0.23,
   "verdicts": [
    [
     "inspect",
@@ -27,9 +27,11 @@
     "dest",
     "--json"
    ],
+   "output_names_the_reference": false,
+   "output_says_withheld": false,
    "recorder_requests": [],
    "returncode": 1,
-   "seconds": 2.593,
+   "seconds": 2.355,
    "stderr_tail": [
     "onetaskgraph: src:reach-plan/t1 names ghost:G-1, whose classification could not be established (no source of that name is configured to read it from), and source dest is not declared private; an id that might name a private item is never written where it would name it, so nothing was written",
     "next: configure that item's source and make it readable, copy it along, take the reference off, or write to a source declared private."

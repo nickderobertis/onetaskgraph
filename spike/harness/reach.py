@@ -294,6 +294,14 @@ def run(run_dir: Path, case: str, exe: Path, onevcs: Path, python: str) -> dict:
                     "returncode": done.returncode,
                     "seconds": round(time.time() - start, 3),
                     "stderr_tail": done.stderr.strip().splitlines()[-6:],
+                    # Whether the command's own output says anything of the private
+                    # reference: its id, its source, or the word the engine withholds with.
+                    "output_names_the_reference": any(
+                        word in done.stdout + done.stderr
+                        for word in ("priv-linear", "SYN-1")
+                    ),
+                    "output_says_withheld": "withh"
+                    in (done.stdout + done.stderr).lower(),
                     "recorder_requests": recorder.requests[seen:],
                 }
             )

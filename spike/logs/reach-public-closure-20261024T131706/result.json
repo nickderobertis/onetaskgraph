@@ -1,15 +1,15 @@
 {
  "binary": "onetaskgraph 0.11.1",
- "case": "reach-private-ref",
+ "case": "reach-public",
  "destination_changed": true,
  "destination_files": 10,
  "onevcs": "onevcs 0.56.5",
- "private_requests": 1,
+ "private_requests": 0,
  "screens": {
   "check": 10,
   "distinct_inspect_inputs": 1,
   "inspect": 44,
-  "seconds": 0.947,
+  "seconds": 0.431,
   "verdicts": [
    [
     "check",
@@ -31,19 +31,11 @@
     "dest",
     "--json"
    ],
-   "recorder_requests": [
-    {
-     "at": 1792847541.0717266,
-     "bytes": 56,
-     "host": "127.0.0.1:36195",
-     "method": "POST",
-     "operation": "query {",
-     "path": "/graphql",
-     "query_head": "{\"query\":\"query { organization { id } }\",\"variables\":{}}"
-    }
-   ],
+   "output_names_the_reference": false,
+   "output_says_withheld": false,
+   "recorder_requests": [],
    "returncode": 0,
-   "seconds": 3.969,
+   "seconds": 3.112,
    "stderr_tail": [],
    "step": "project-copy"
   },
@@ -56,9 +48,11 @@
     "dest",
     "--json"
    ],
+   "output_names_the_reference": false,
+   "output_says_withheld": false,
    "recorder_requests": [],
    "returncode": 0,
-   "seconds": 1.873,
+   "seconds": 1.36,
    "stderr_tail": [],
    "step": "document-copy"
   }
