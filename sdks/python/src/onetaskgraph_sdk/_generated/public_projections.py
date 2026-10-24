@@ -18,6 +18,15 @@ class GlobalId(RootModel[str]):
     ]
 
 
+class NativeId(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="A source's own opaque identifier for one item.\n\nDeliberately unvalidated: a native id is whatever the upstream system says it\nis, colons included. The engine parses a qualified id by splitting on the\n*first* colon precisely so this stays true."
+        ),
+    ]
+
+
 class PublicProjection(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -34,10 +43,44 @@ class PublicProjection(BaseModel):
     ]
 
 
+class SourceName(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="The name a configuration document gives one configured source.",
+            pattern="^[a-z0-9][a-z0-9-]*$",
+        ),
+    ]
+
+
+class PublicProjectAllocation(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    allocation: Annotated[
+        str,
+        Field(
+            description="The nonce the project is created carrying, at [`PublicProjectAllocation::KEY`]."
+        ),
+    ]
+    project: Annotated[
+        NativeId | None,
+        Field(description="The id the source assigned the project, once it answered with one."),
+    ] = None
+    source: Annotated[SourceName, Field(description="The public source the project is in.")]
+
+
 class PublicProjections(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
+    projects: Annotated[
+        list[PublicProjectAllocation],
+        Field(
+            description="One entry per public source the plan's views are filed in, unique by source: the\nallocation its public projection project is created under, and the id that source\nassigned it once it answered.",
+            validate_default=True,
+        ),
+    ] = []
     schema_version: Annotated[
         int,
         Field(description="The version of this shape; 1 is the only one.", ge=1, le=1),

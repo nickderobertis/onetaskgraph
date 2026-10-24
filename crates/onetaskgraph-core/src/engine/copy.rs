@@ -1035,13 +1035,25 @@ enum Undo {
         /// What was there before.
         prior: Prior,
     },
+    /// The copy asked for a public projection project carrying `allocation` — recorded before
+    /// the create was sent, so a project stored under an id the answer never said is still
+    /// found, and taken back, by the allocation alone.
+    Allocated {
+        /// The public source it was asked of.
+        at: SourceName,
+        /// The allocation it carries, as an id only this entry is ever looked up by.
+        allocation: NativeId,
+        /// The private home whose map records the allocation: kept as it is when the project
+        /// cannot be taken back, so the next copy still finds the project it made.
+        home: GlobalId,
+    },
 }
 
 impl Undo {
     /// The source this entry was written to.
     fn at(&self) -> &SourceName {
         match self {
-            Self::Created { at, .. } | Self::Updated { at, .. } => at,
+            Self::Created { at, .. } | Self::Updated { at, .. } | Self::Allocated { at, .. } => at,
         }
     }
 
@@ -1049,6 +1061,7 @@ impl Undo {
     fn id(&self) -> &NativeId {
         match self {
             Self::Created { id, .. } | Self::Updated { id, .. } => id,
+            Self::Allocated { allocation, .. } => allocation,
         }
     }
 
@@ -1061,6 +1074,7 @@ impl Undo {
     fn kind(&self) -> Level {
         match self {
             Self::Created { kind, .. } => *kind,
+            Self::Allocated { .. } => Level::Project,
             // Read off what was there, for the reason the variant carries no `kind` of
             // its own: two spellings of one fact can disagree, and this one cannot.
             Self::Updated { prior, .. } => prior.item.level(),
@@ -2225,7 +2239,7 @@ impl Engine {
             .iter()
             .filter_map(|entry| match entry {
                 Undo::Created { at, kind, id } => Some((at, *kind, id)),
-                Undo::Updated { .. } => None,
+                Undo::Updated { .. } | Undo::Allocated { .. } => None,
             })
             .collect();
         // The ids and the refusal are one value rather than two, because they are one
@@ -2275,7 +2289,15 @@ impl Engine {
                 }
             }
         }
+        // A private home whose map records the allocation of a public projection project that
+        // could not be taken back: left as it is, so the next copy finds that project by its
+        // allocation rather than making another, and named among what is still there.
+        let mut kept: Vec<GlobalId> = Vec::new();
         for entry in journal.entries.iter().rev() {
+            let item = GlobalId::new(entry.at().clone(), entry.id().clone());
+            if entry.kind() == Level::Project && kept.contains(&item) {
+                continue;
+            }
             let outcome = match self.writable(entry.at()) {
                 Err(failed) => Err(SourceError::Refused {
                     message: failed.to_string(),
@@ -2288,10 +2310,37 @@ impl Engine {
                         restore(destination, id, prior).await
                     }
                     Undo::Updated { .. } => Ok(()),
+                    Undo::Allocated {
+                        allocation, home, ..
+                    } => match take_back_allocated(destination, &allocation.0).await {
+                        Ok(()) => Ok(()),
+                        Err((still, problem)) => {
+                            for id in still {
+                                let id = GlobalId::new(entry.at().clone(), id);
+                                match &mut unrestored {
+                                    Some((left_behind, _)) => left_behind.push(id),
+                                    None => {
+                                        unrestored = Some((LeftBehind::new(id), problem.clone()));
+                                    }
+                                }
+                            }
+                            kept.push(home.clone());
+                            match &mut unrestored {
+                                Some((left_behind, _)) => {
+                                    left_behind.push(home.clone());
+                                    Ok(())
+                                }
+                                None => Err(problem),
+                            }
+                        }
+                    },
                 },
             };
             if let Err(problem) = outcome {
-                let id = GlobalId::new(entry.at().clone(), entry.id().clone());
+                let id = match entry {
+                    Undo::Allocated { home, .. } => home.clone(),
+                    _ => item,
+                };
                 match &mut unrestored {
                     Some((left_behind, _)) => left_behind.push(id),
                     None => unrestored = Some((LeftBehind::new(id), problem)),
@@ -7866,6 +7915,23 @@ fn create_refused(
     } else {
         refused(destination, error)
     }
+}
+
+/// Remove every project `destination` holds carrying `allocation`, answering what is still
+/// there and why when it cannot: nothing named, when the listing that finds them failed.
+async fn take_back_allocated(
+    destination: &ResolvedSource,
+    allocation: &str,
+) -> Result<(), (Vec<NativeId>, SourceError)> {
+    let found = projections::allocated(destination, allocation)
+        .await
+        .map_err(|problem| (Vec::new(), problem))?;
+    for (at, id) in found.iter().enumerate() {
+        if let Err(problem) = remove(destination, Level::Project, id).await {
+            return Err((found[at..].to_vec(), problem));
+        }
+    }
+    Ok(())
 }
 
 /// Every forward edge at one item, walked to exhaustion one page at a time.

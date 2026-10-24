@@ -1821,11 +1821,78 @@ fn public_project_of_views(
     projects.into_iter().next().expect("the project")
 }
 
-#[test]
-fn a_board_copy_interrupted_after_its_public_project_and_before_its_views_makes_neither_twice() {
-    // A board issues its own ids, so the public project's opaque id finds nothing there. The
-    // board stores the project and drops the connection before answering: the copy ends with
-    // the project made and no view under it, and the next copy finds that project again.
+/// Every `Public work` project `source` holds, by qualified id, read through the binary.
+fn public_work_projects(store: &Store, source: &str) -> Vec<String> {
+    let answer: Value = serde_json::from_str(&store.ok(&[
+        "project", "list", "--source", source, "--limit", "500", "--json",
+    ]))
+    .expect("a project listing");
+    assert!(answer["next"].is_null(), "one page holds them: {answer:#}");
+    answer["items"]
+        .as_array()
+        .expect("the projects")
+        .iter()
+        .filter(|project| project["item"]["title"] == "Public work")
+        .map(|project| project["id"].as_str().expect("a qualified id").to_owned())
+        .collect()
+}
+
+/// Make, through the binary, a `Public work` project in `source` naming `repository` and
+/// holding nothing — exactly what a copy's public projection project looks like, and made by
+/// somebody else — answering its qualified id and how it reads.
+fn unrelated_public_work(store: &Store, source: &str, repository: &str) -> (String, Value) {
+    let before = public_work_projects(store, source);
+    store.ok(&[
+        "project",
+        "create",
+        source,
+        "--id",
+        "somebody-else",
+        "--title",
+        "Public work",
+        "--repository",
+        repository,
+        "--body-file",
+        &store.body(""),
+    ]);
+    let made: Vec<String> = public_work_projects(store, source)
+        .into_iter()
+        .filter(|id| !before.contains(id))
+        .collect();
+    assert_eq!(made.len(), 1, "one unrelated project was made: {made:?}");
+    let id = made[0].clone();
+    let shown_before = shown(store, "project", &id);
+    (id, shown_before)
+}
+
+/// Assert the unrelated project `id` reads exactly as `before`, holds no task and is not the
+/// project any view of the plan is filed under.
+fn assert_unrelated_untouched(
+    store: &Store,
+    id: &str,
+    before: &Value,
+    landed: Option<&BTreeMap<String, String>>,
+    source: &str,
+) {
+    assert_eq!(&shown(store, "project", id), before, "{id} was changed");
+    let held: Value = serde_json::from_str(&store.ok(&[
+        "task",
+        "list",
+        "--source",
+        source,
+        "--project",
+        id,
+        "--json",
+    ]))
+    .expect("a task listing");
+    assert_eq!(held["items"], json!([]), "{id} was given a task");
+    if let Some(landed) = landed {
+        assert_ne!(public_project_of_views(store, landed, source), id);
+    }
+}
+
+/// A store whose public work routes to a loopback board holding nothing yet.
+fn board_store() -> (Store, crate::fixtures::GitHubBoardFields) {
     let mut handle = None;
     let store = Store::laid(Some(registered_with_board), |sandbox| {
         let (config, board) = crate::fixtures::github_projects_with_items(sandbox, Vec::new());
@@ -1835,52 +1902,101 @@ fn a_board_copy_interrupted_after_its_public_project_and_before_its_views_makes_
             "vault": {"routes": [{"repositories": [BOARD_REPOSITORY], "to": "board"}]},
         })
     });
-    let board = handle.expect("the board");
     private_rollout_of(&store, BOARD_REPOSITORY);
-    let creates = |board: &crate::fixtures::GitHubBoardFields, title: &str| {
+    (store, handle.expect("the board"))
+}
+
+#[test]
+fn an_unrelated_public_work_project_on_a_board_is_never_taken_by_a_copy() {
+    // Somebody else's empty `Public work` project naming the very repository the views do is
+    // on the board before the first copy: the copy makes its own and never touches theirs.
+    let (store, _board) = board_store();
+    let (theirs, before) = unrelated_public_work(&store, "board", BOARD_REPOSITORY);
+    let landed = copy_rollout(&store);
+    assert_unrelated_untouched(&store, &theirs, &before, Some(&landed), "board");
+    assert_eq!(public_work_projects(&store, "board").len(), 2);
+    let again = copy_rollout(&store);
+    assert_unrelated_untouched(&store, &theirs, &before, Some(&again), "board");
+    assert_eq!(
+        public_work_projects(&store, "board").len(),
+        2,
+        "a repeat made none"
+    );
+}
+
+#[test]
+fn a_board_copy_whose_project_create_answer_is_lost_takes_the_project_back_and_resumes_once() {
+    // The board stores the copy's public project and drops the connection before answering.
+    // The project carries its allocation, so taking the copy back finds and removes it, and
+    // the copies after make exactly one — never the unrelated one beside it.
+    let (store, board) = board_store();
+    let (theirs, before) = unrelated_public_work(&store, "board", BOARD_REPOSITORY);
+    board.drop_response_once("createIssue(input:$input)");
+    let output = store.run(&["project", "copy", "plan:rollout", "--to", "vault"]);
+    assert_ne!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(
+        public_work_projects(&store, "board"),
+        vec![theirs.clone()],
+        "the copy took its own project back:\n{}",
+        stderr(&output)
+    );
+    assert_unrelated_untouched(&store, &theirs, &before, None, "board");
+
+    for _ in 0..2 {
+        let landed = copy_rollout(&store);
+        assert_eq!(public_work_projects(&store, "board").len(), 2);
+        assert_unrelated_untouched(&store, &theirs, &before, Some(&landed), "board");
+    }
+}
+
+#[test]
+fn a_board_copy_interrupted_with_its_project_left_behind_resumes_into_that_project_alone() {
+    // The create's answer is lost and the board then refuses to take the project back: the
+    // board is left holding two empty `Public work` projects naming one repository — the
+    // copy's and somebody else's. Resuming adopts the one carrying the copy's allocation and
+    // makes no third, however often it runs.
+    let (store, board) = board_store();
+    let (theirs, before) = unrelated_public_work(&store, "board", BOARD_REPOSITORY);
+    board.drop_response_once("createIssue(input:$input)");
+    board.refuse_once("deleteIssue(input:$input)");
+    let output = store.run(&["project", "copy", "plan:rollout", "--to", "vault"]);
+    assert_ne!(output.status.code(), Some(0), "{}", stderr(&output));
+    let left: Vec<String> = public_work_projects(&store, "board")
+        .into_iter()
+        .filter(|id| id != &theirs)
+        .collect();
+    assert_eq!(left.len(), 1, "the copy's own project is left: {left:?}");
+    assert!(
+        stderr(&output).contains("board:"),
+        "the refusal names what is still there:\n{}",
+        stderr(&output)
+    );
+
+    let creates = |board: &crate::fixtures::GitHubBoardFields| {
         board
             .served()
             .iter()
             .filter(|(document, variables)| {
                 document.contains("createIssue(input:$input)")
-                    && variables["input"]["title"] == title
+                    && variables["input"]["title"] == "Public work"
             })
             .count()
     };
-    // The first issue the copy creates is the public project, before any view.
-    board.drop_response_once("createIssue(input:$input)");
-    let output = store.run(&["project", "copy", "plan:rollout", "--to", "vault"]);
-    assert_ne!(output.status.code(), Some(0), "{}", stderr(&output));
-    assert_eq!(
-        creates(&board, "Public work"),
-        1,
-        "the board stored the project"
-    );
-    assert_eq!(
-        creates(&board, "Add retry to the widget") + creates(&board, "Document the retry"),
-        0,
-        "and the copy ended before any view"
-    );
-
-    let landed = copy_rollout(&store);
-    assert_eq!(
-        creates(&board, "Public work"),
-        1,
-        "no copy made the project twice"
-    );
-    assert_eq!(creates(&board, "Add retry to the widget"), 1);
-    assert_eq!(creates(&board, "Document the retry"), 1);
-    let project = public_project_of_views(&store, &landed, "board");
-    assert_eq!(shown(&store, "project", &project)["title"], "Public work");
-    let again = copy_rollout(&store);
-    assert_eq!(creates(&board, "Public work"), 1, "nor did a repeat");
-    assert_eq!(public_project_of_views(&store, &again, "board"), project);
+    let made = creates(&board);
+    for _ in 0..2 {
+        let landed = copy_rollout(&store);
+        assert_eq!(creates(&board), made, "no copy made another project");
+        assert_eq!(public_project_of_views(&store, &landed, "board"), left[0]);
+        assert_unrelated_untouched(&store, &theirs, &before, Some(&landed), "board");
+    }
+    assert_eq!(public_work_projects(&store, "board").len(), 2);
 }
 
 #[test]
-fn a_linear_copy_interrupted_after_its_public_project_and_before_its_views_makes_neither_twice() {
-    // Linear issues its own ids too: the project it stored, whose answer came back empty, is
-    // found again by the next copy rather than made a second time.
+fn a_linear_copy_whose_project_create_answer_is_lost_takes_the_project_back_and_resumes_once() {
+    // Linear issues its own ids too, and answers the project create with nothing in it: the
+    // project it stored carries the copy's allocation, so the copy takes it back, and the next
+    // copies make exactly one — beside an unrelated empty `Public work` they never touch.
     let mut handle = None;
     let store = Store::laid(Some(registered), |sandbox| {
         let (mut config, workspace) =
@@ -1895,13 +2011,7 @@ fn a_linear_copy_interrupted_after_its_public_project_and_before_its_views_makes
     });
     let workspace = handle.expect("the workspace");
     private_rollout(&store);
-    let count = |workspace: &crate::fixtures::LinearWorkspace, operation: &str| {
-        workspace
-            .served()
-            .iter()
-            .filter(|(document, _)| document.contains(operation))
-            .count()
-    };
+    let (theirs, before) = unrelated_public_work(&store, "tracker", OPEN);
     workspace.bend_answers(
         |document, _| document.contains("projectCreate"),
         1,
@@ -1910,104 +2020,96 @@ fn a_linear_copy_interrupted_after_its_public_project_and_before_its_views_makes
     let output = store.run(&["project", "copy", "plan:rollout", "--to", "vault"]);
     assert_ne!(output.status.code(), Some(0), "{}", stderr(&output));
     assert_eq!(
-        count(&workspace, "projectCreate"),
-        1,
-        "Linear stored the project"
+        public_work_projects(&store, "tracker"),
+        vec![theirs.clone()],
+        "the copy took its own project back:\n{}",
+        stderr(&output)
     );
-    assert_eq!(count(&workspace, "issueCreate"), 0, "and no view");
 
-    let landed = copy_rollout(&store);
-    assert_eq!(
-        count(&workspace, "projectCreate"),
-        1,
-        "no copy made it twice"
-    );
-    assert_eq!(count(&workspace, "issueCreate"), 2, "one create per view");
-    let project = public_project_of_views(&store, &landed, "tracker");
-    assert_eq!(shown(&store, "project", &project)["title"], "Public work");
-    copy_rollout(&store);
-    assert_eq!(count(&workspace, "projectCreate"), 1, "nor did a repeat");
-    assert_eq!(count(&workspace, "issueCreate"), 2);
+    for _ in 0..2 {
+        let landed = copy_rollout(&store);
+        assert_eq!(public_work_projects(&store, "tracker").len(), 2);
+        assert_unrelated_untouched(&store, &theirs, &before, Some(&landed), "tracker");
+    }
+    let issue_creates = workspace
+        .served()
+        .iter()
+        .filter(|(document, _)| document.contains("issueCreate"))
+        .count();
+    assert_eq!(issue_creates, 2, "one create per view");
 }
 
-/// Record on `site` a `Public work` project `id` naming `repository`, as a copy that ended
-/// before filing a view under it leaves one.
-fn planted_public_project(store: &Store, id: &str, repository: &str) {
+#[test]
+fn a_copy_killed_after_its_public_project_and_before_recording_it_resumes_into_it_alone() {
+    // `site` is reached over the plugin protocol through a relay that ends the engine the moment
+    // the public project is written — after the allocation is recorded privately, before the
+    // project's id is. An unrelated empty `Public work` naming the same repository is beside it.
+    let relay =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/e2e/rewriting_relay.py");
+    let store = Store::laid(Some(registered), |sandbox| {
+        let marker_text = sandbox.project().join("interrupted").display().to_string();
+        let site = sandbox.subdirectory("site");
+        std::fs::create_dir_all(&site).expect("the site folder");
+        json!({
+            "vault": {"routes": [{"repositories": ["github.com/openco/*"], "to": "site"}]},
+            "site": {"plugin": "subprocess", "visibility": "public", "config": {
+                "command": crate::document_store::interpreter().to_string_lossy(),
+                "args": [relay.to_string_lossy()],
+                "settings": {
+                    "host": onetaskgraph_e2e_support::source_binary(),
+                    "interrupt": "write_project", "interrupt_skip": 0,
+                    "interrupt_marker": marker_text,
+                    "kind": "local-md", "config": {"root": site},
+                },
+            }},
+        })
+    });
+    private_rollout(&store);
+    // Somebody else's, written straight into the folder so the relay's one interruption is
+    // the copy's own project write.
     store.record(
         "site",
         "projects",
-        id,
-        &format!("title: Public work\nstatus: todo\nrepositories: [{repository}]"),
+        "somebody-else",
+        &format!("title: Public work\nstatus: todo\nrepositories: [{OPEN}]"),
         "",
     );
-}
-
-/// The project every view of the plan is filed under, by its id on `site`.
-fn views_project_on_site(store: &Store, landed: &BTreeMap<String, String>) -> String {
-    public_project_of_views(store, landed, "site")
-        .trim_start_matches("site:")
-        .to_owned()
-}
-
-#[test]
-fn an_unrecorded_public_project_past_the_first_page_is_found_rather_than_made_again() {
-    // Sixty `Public work` projects of another repository come first; the one this plan's copy
-    // made and never filed a view under is on the next page, and is the one taken.
-    let store = projecting_store();
-    for n in 0..60 {
-        planted_public_project(&store, &format!("a{n:02}"), SHOP);
-    }
-    planted_public_project(&store, "zz", OPEN);
-    private_rollout(&store);
-    let landed = copy_rollout(&store);
-    assert_eq!(views_project_on_site(&store, &landed), "zz");
-    let made: Vec<String> = files_under(&store, "site")
-        .into_iter()
-        .filter(|path| path.contains("pw-"))
-        .collect();
-    assert!(
-        made.is_empty(),
-        "no second public project was made: {made:?}"
+    let theirs = "site:somebody-else".to_owned();
+    let before = shown(&store, "project", &theirs);
+    let interrupted = store.run(&["project", "copy", "plan:rollout", "--to", "vault"]);
+    assert_ne!(
+        interrupted.status.code(),
+        Some(0),
+        "the engine was ended part way"
     );
-}
+    assert!(
+        store.sandbox.project().join("interrupted").exists(),
+        "the relay ended it"
+    );
+    let left = public_work_projects(&store, "site");
+    assert_eq!(left.len(), 2, "the copy's project and theirs: {left:?}");
+    let homes: Value =
+        serde_json::from_str(&store.ok(&["project", "list", "--source", "vault", "--json"]))
+            .expect("a project listing");
+    let recorded = &homes["items"][0]["item"];
+    assert!(
+        recorded["metadata"]["onetaskgraph.public_projections"]["projects"][0]["allocation"]
+            .is_string(),
+        "the allocation was recorded before the project was asked for: {recorded:#}"
+    );
 
-#[test]
-fn a_public_project_holding_a_task_or_matched_twice_is_never_taken_and_left_as_it_was() {
-    // A matching project somebody's task sits under is not one a copy made and lost; two empty
-    // matching projects are ambiguous. Either way the copy makes its own and touches neither.
-    for occupied in [true, false] {
-        let store = projecting_store();
-        planted_public_project(&store, "held-a", OPEN);
-        if occupied {
-            store.record(
-                "site",
-                "tasks",
-                "theirs",
-                &format!(
-                    "title: Their own work\nstatus: todo\nproject: held-a\nrepositories: [{OPEN}]"
-                ),
-                PLAIN,
-            );
-        } else {
-            planted_public_project(&store, "held-b", OPEN);
-        }
-        let before = tree(&store.folder("site"));
-        private_rollout(&store);
+    for _ in 0..2 {
         let landed = copy_rollout(&store);
-        let project = views_project_on_site(&store, &landed);
-        assert!(
-            project.starts_with("pw-"),
-            "occupied {occupied}: filed under {project}"
+        assert_eq!(
+            public_work_projects(&store, "site").len(),
+            2,
+            "no third project"
         );
-        let after = tree(&store.folder("site"));
-        for (path, bytes) in &before {
-            assert_eq!(
-                after.get(path),
-                Some(bytes),
-                "occupied {occupied}: {path} was changed"
-            );
-        }
+        let ours: Vec<&String> = left.iter().filter(|id| **id != theirs).collect();
+        assert_eq!(&public_project_of_views(&store, &landed, "site"), ours[0]);
+        assert_unrelated_untouched(&store, &theirs, &before, Some(&landed), "site");
     }
+    assert_site_neutral(&store);
 }
 
 #[test]

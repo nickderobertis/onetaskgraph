@@ -10549,6 +10549,40 @@ export const runtimeSchemas = {
         "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
         "type": "string"
       },
+      "NativeId": {
+        "description": "A source's own opaque identifier for one item.\n\nDeliberately unvalidated: a native id is whatever the upstream system says it\nis, colons included. The engine parses a qualified id by splitting on the\n*first* colon precisely so this stays true.",
+        "type": "string"
+      },
+      "PublicProjectAllocation": {
+        "additionalProperties": false,
+        "description": "The public projection project of one plan in one public source: the allocation recorded\nprivately before it was created, and the id the source assigned it, recorded before any\nview is filed under it.\n\nThe allocation is a random nonce, derived from nothing private, that the project itself\ncarries at [`PublicProjectAllocation::KEY`]: a copy that never learned the id — its create's\nanswer lost, or the copy ended before it recorded one — finds the project it made by that\nnonce alone, and never takes any other project.",
+        "properties": {
+          "allocation": {
+            "description": "The nonce the project is created carrying, at [`PublicProjectAllocation::KEY`].",
+            "type": "string"
+          },
+          "project": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/NativeId"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The id the source assigned the project, once it answered with one."
+          },
+          "source": {
+            "$ref": "#/$defs/SourceName",
+            "description": "The public source the project is in."
+          }
+        },
+        "required": [
+          "source",
+          "allocation"
+        ],
+        "type": "object"
+      },
       "PublicProjection": {
         "additionalProperties": false,
         "description": "One canonical task and its public projection.",
@@ -10567,12 +10601,25 @@ export const runtimeSchemas = {
           "projection"
         ],
         "type": "object"
+      },
+      "SourceName": {
+        "description": "The name a configuration document gives one configured source.",
+        "pattern": "^[a-z0-9][a-z0-9-]*$",
+        "type": "string"
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "additionalProperties": false,
     "description": "The private destination project's map from each canonical task to its public projection.\n\nEvery value of it holds to the shape: its `schema_version` is\n[`PublicProjections::SCHEMA_VERSION`] and its entries are unique by both ids. Deserializing\none is held to both — [`PublicProjections::parse`] names what is wrong — and the entries\nchange only through [`PublicProjections::set`] and [`PublicProjections::retain`], which keep\nthem so. Written back with [`PublicProjections::to_value`].",
     "properties": {
+      "projects": {
+        "default": [],
+        "description": "One entry per public source the plan's views are filed in, unique by source: the\nallocation its public projection project is created under, and the id that source\nassigned it once it answered.",
+        "items": {
+          "$ref": "#/$defs/PublicProjectAllocation"
+        },
+        "type": "array"
+      },
       "schema_version": {
         "description": "The version of this shape; 1 is the only one.",
         "format": "uint32",

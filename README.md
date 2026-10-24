@@ -2005,7 +2005,8 @@ and rendering provenance in that destination, and makes one **view** of each pub
 source its repositories route it to as public, when that is a source not declared private:
 
 - one project per such source, created under an opaque id (`pw-…`) and titled `Public work`,
-  naming the views' own public repositories and nothing else;
+  naming the views' own public repositories and carrying one reserved key,
+  `onetaskgraph.allocation`, a random nonce derived from nothing private — and nothing else;
 - one task per public task, created under an opaque id (`pt-…`), carrying its screened title,
   content, repositories and status, and depending only on the views of other public tasks — no
   labels, priority, metadata, origin, copy link, delivery, member list, count or path of the
@@ -2023,20 +2024,29 @@ canonical records again. The private destination project alone records which vie
 canonical task's, at `onetaskgraph.public_projections`:
 
 ```json
-{"schema_version": 1, "tasks": [{"task": "vault:widget", "projection": "site:pt-57c4c9592576a5b1"}]}
+{"schema_version": 1,
+ "tasks": [{"task": "vault:widget", "projection": "site:pt-57c4c9592576a5b1"}],
+ "projects": [{"source": "site", "allocation": "3f9c…", "project": "pw-0c1d2e3f4a5b6c7d"}]}
 ```
 
 `task` is the canonical destination task and `projection` its view, both qualified, unique by
 either id, and a projection is never in a source declared private; a map that breaks any of that
-is refused rather than trusted. A copy never carries the map anywhere, and records each view in
+is refused rather than trusted. `projects`, absent when empty, names each public source's
+`Public work` project: the `allocation` it was created carrying, recorded before the create is
+sent, and the `project` id that source assigned it, recorded once it answers and before any view
+is filed under it; one entry per source, never a source declared private. A copy never carries the map anywhere, and records each view in
 it the moment the view is created, so a copy interrupted part way and run again finds every view
 it made — by the map, by its opaque id, or, at a destination that issues ids of its own, as the
 one task under the public project no map entry names with the view's title and repositories —
-rather than making a second. The public project is found the same way: under a view the map
-names, by its opaque id, or, at a destination that issues ids of its own, as the one `Public work`
-project there naming exactly the views' repositories and holding no task, so a copy ended after
-it made that project and before any view under it makes neither twice. Two such projects are
-ambiguous, and neither is taken. A view recorded private is refused rather than written public again,
+rather than making a second. The public project is found by ownership alone: under a view the
+map names, by the `project` its entry records, or — when the copy never learned that id, its
+create's answer lost or the copy ended first — as the one project carrying its recorded
+`allocation`, created afresh, carrying that same allocation, only when none does. No other
+project is ever taken or altered, however much it looks like one: an unrelated empty `Public work`
+naming the same repositories is left as it is. A copy that fails takes back the project it asked
+for by its allocation even when the answer was lost; when the destination will not take it back,
+the private project keeps the allocation, is named among what is still there, and the next copy
+resumes into that project rather than making another. A view recorded private is refused rather than written public again,
 and every field a person adds to a view in public is taken off by the next copy. A canonical task
 with a view hands it every new status category — `task status set` and a `task update` naming a
 status each answer the view as `projection`, and a ticket the delivery rule moves moves its view —

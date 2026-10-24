@@ -6310,6 +6310,15 @@ name: string
 export type ProjectStatusSet = GeneratedProjectStatusSet.ProjectStatusSet;
 export namespace GeneratedPublicProjections {
 /**
+ * A source's own opaque identifier for one item.
+ *
+ * Deliberately unvalidated: a native id is whatever the upstream system says it
+ * is, colons included. The engine parses a qualified id by splitting on the
+ * *first* colon precisely so this stays true.
+ */
+export type NativeId = string
+
+/**
  * The private destination project's map from each canonical task to its public projection.
  *
  * Every value of it holds to the shape: its `schema_version` is
@@ -6320,6 +6329,12 @@ export namespace GeneratedPublicProjections {
  */
 export interface PublicProjections {
 /**
+ * One entry per public source the plan's views are filed in, unique by source: the
+ * allocation its public projection project is created under, and the id that source
+ * assigned it once it answered.
+ */
+projects?: PublicProjectAllocation[]
+/**
  * The version of this shape; 1 is the only one.
  */
 schema_version: number
@@ -6327,6 +6342,30 @@ schema_version: number
  * One entry per canonical task that has a public projection, unique by both ids.
  */
 tasks: PublicProjection[]
+}
+/**
+ * The public projection project of one plan in one public source: the allocation recorded
+ * privately before it was created, and the id the source assigned it, recorded before any
+ * view is filed under it.
+ *
+ * The allocation is a random nonce, derived from nothing private, that the project itself
+ * carries at [`PublicProjectAllocation::KEY`]: a copy that never learned the id — its create's
+ * answer lost, or the copy ended before it recorded one — finds the project it made by that
+ * nonce alone, and never takes any other project.
+ */
+export interface PublicProjectAllocation {
+/**
+ * The nonce the project is created carrying, at [`PublicProjectAllocation::KEY`].
+ */
+allocation: string
+/**
+ * The id the source assigned the project, once it answered with one.
+ */
+project?: (NativeId | null)
+/**
+ * The public source the project is in.
+ */
+source: string
 }
 /**
  * One canonical task and its public projection.

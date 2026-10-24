@@ -20,9 +20,10 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use onetaskgraph_plugin_api::{
-    AssetPayload, Classification, DependencyEdge, DependencyEndpoint, DependencyKind, ItemKind,
-    ItemWrite, LabelFilter, MetadataKey, NativeId, Priority, Project, Repository, SourceName,
-    Status, StatusCategory, Task, TextFields, TextQuery, WriteTarget,
+    AssetPayload, Classification, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind,
+    ItemKind, ItemWrite, LabelFilter, MetadataKey, NativeId, Priority, Project, ProjectQuery,
+    Repository, SourceError, SourceName, Status, StatusCategory, Task, TextFields, TextQuery,
+    WriteTarget,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -31,12 +32,12 @@ use sha2::{Digest, Sha256};
 
 use super::super::assets;
 use super::super::boundary::{Exposure, Outbound};
-use super::super::{Engine, EngineError, Filters, Paging, ProjectRequest};
+use super::super::{Engine, EngineError};
 use super::{
     CopyOutcome, Creating, Item, Journal, Level, Planned, Undo, classification_of, create_refused,
     described, far_end,
 };
-use super::{PROJECT_PAGE, Prior, refused};
+use super::{Prior, refused, request_for};
 use crate::GlobalId;
 use crate::config::SourceVisibility;
 use crate::resolve::ResolvedSource;
@@ -57,6 +58,12 @@ pub struct PublicProjections {
     schema_version: u32,
     /// One entry per canonical task that has a public projection, unique by both ids.
     tasks: Vec<PublicProjection>,
+    /// One entry per public source the plan's views are filed in, unique by source: the
+    /// allocation its public projection project is created under, and the id that source
+    /// assigned it once it answered. Absent when empty, so a map recording none reads and
+    /// writes exactly as one written before this member existed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    projects: Vec<PublicProjectAllocation>,
 }
 
 /// One canonical task and its public projection.
@@ -67,6 +74,54 @@ pub struct PublicProjection {
     pub task: GlobalId,
     /// Its public counterpart, qualified: a view in a source not declared private.
     pub projection: GlobalId,
+}
+
+/// The public projection project of one plan in one public source: the allocation recorded
+/// privately before it was created, and the id the source assigned it, recorded before any
+/// view is filed under it.
+///
+/// The allocation is a random nonce, derived from nothing private, that the project itself
+/// carries at [`PublicProjectAllocation::KEY`]: a copy that never learned the id — its create's
+/// answer lost, or the copy ended before it recorded one — finds the project it made by that
+/// nonce alone, and never takes any other project.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PublicProjectAllocation {
+    /// The public source the project is in.
+    pub source: SourceName,
+    /// The nonce the project is created carrying, at [`PublicProjectAllocation::KEY`].
+    pub allocation: String,
+    /// The id the source assigned the project, once it answered with one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<NativeId>,
+}
+
+impl PublicProjectAllocation {
+    /// The reserved metadata key a public projection project carries its allocation under.
+    pub const KEY: &'static str = "onetaskgraph.allocation";
+
+    /// A fresh allocation: 128 bits from the process's own randomly keyed hashers, the clock
+    /// and the process id, digested — a nonce that names nothing it came from.
+    #[must_use]
+    pub fn fresh_nonce() -> String {
+        use std::hash::{BuildHasher, Hasher};
+        let mut digest = Sha256::new();
+        for _ in 0..2 {
+            let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+            hasher.write_u32(std::process::id());
+            digest.update(hasher.finish().to_le_bytes());
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_nanos());
+        digest.update(now.to_le_bytes());
+        digest
+            .finalize()
+            .iter()
+            .take(16)
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
 }
 
 /// The private destination project's map from each canonical task to its public projection,
@@ -81,6 +136,11 @@ struct Unchecked {
     schema_version: u32,
     /// One entry per canonical task that has a public projection, unique by both ids.
     tasks: Vec<PublicProjection>,
+    /// One entry per public source the plan's views are filed in, unique by source: the
+    /// allocation its public projection project is created under, and the id that source
+    /// assigned it once it answered.
+    #[serde(default)]
+    projects: Vec<PublicProjectAllocation>,
 }
 
 impl TryFrom<Unchecked> for PublicProjections {
@@ -109,9 +169,38 @@ impl TryFrom<Unchecked> for PublicProjections {
                 ));
             }
         }
+        let mut sources = BTreeSet::new();
+        for entry in &map.projects {
+            if !sources.insert(entry.source.to_string()) {
+                return Err(format!(
+                    "{} names a project in {} twice",
+                    Self::KEY,
+                    entry.source
+                ));
+            }
+            if entry.allocation.trim().is_empty() {
+                return Err(format!(
+                    "{} names an empty allocation for {}",
+                    Self::KEY,
+                    entry.source
+                ));
+            }
+            if entry
+                .project
+                .as_ref()
+                .is_some_and(|project| project.0.trim().is_empty())
+            {
+                return Err(format!(
+                    "{} names an empty project for {}",
+                    Self::KEY,
+                    entry.source
+                ));
+            }
+        }
         Ok(Self {
             schema_version: map.schema_version,
             tasks: map.tasks,
+            projects: map.projects,
         })
     }
 }
@@ -121,6 +210,7 @@ impl Default for PublicProjections {
         Self {
             schema_version: Self::SCHEMA_VERSION,
             tasks: Vec::new(),
+            projects: Vec::new(),
         }
     }
 }
@@ -195,6 +285,29 @@ impl PublicProjections {
             projection: projection.clone(),
         });
         true
+    }
+
+    /// The public projection project the map records in `source`.
+    #[must_use]
+    pub fn project_in(&self, source: &SourceName) -> Option<&PublicProjectAllocation> {
+        self.projects.iter().find(|entry| &entry.source == source)
+    }
+
+    /// Record `entry` as its source's project, in place of any it recorded, answering whether
+    /// the map changed.
+    pub fn set_project(&mut self, entry: PublicProjectAllocation) -> bool {
+        if self.project_in(&entry.source) == Some(&entry) {
+            return false;
+        }
+        self.projects.retain(|held| held.source != entry.source);
+        self.projects.push(entry);
+        true
+    }
+
+    /// Every public projection project the map records, in the order they were recorded.
+    #[must_use]
+    pub fn projects(&self) -> &[PublicProjectAllocation] {
+        &self.projects
     }
 
     /// Keep only the entries `keep` answers `true` for, answering whether any was dropped.
@@ -443,6 +556,65 @@ fn is_neutral(project: &Project) -> bool {
     project.title == PUBLIC_PROJECT_TITLE
         && project.classification == Classification::Public
         && project.content.as_deref().is_none_or(str::is_empty)
+}
+
+/// Every project `destination` holds carrying `allocation` at [`PublicProjectAllocation::KEY`],
+/// exactly — the public projection project created behind it, and never any other.
+///
+/// Asked through the source's own project listing narrowed to the neutral title, which a source
+/// that cannot apply returns wider and this narrows by the allocation alone; walked to its end.
+///
+/// # Errors
+///
+/// The source's own, and a refusal for a listing that hands back a cursor it handed out before.
+pub(super) async fn allocated(
+    destination: &ResolvedSource,
+    allocation: &str,
+) -> Result<Vec<NativeId>, SourceError> {
+    let query = ProjectQuery {
+        text: Some(TextQuery {
+            terms: PUBLIC_PROJECT_TITLE.to_owned(),
+            fields: TextFields::Title,
+        }),
+        labels: LabelFilter::default(),
+        statuses: Vec::new(),
+    };
+    let mut found = Vec::new();
+    let mut cursor: Option<Cursor> = None;
+    let mut visited: Vec<String> = Vec::new();
+    loop {
+        let page = destination
+            .source()
+            .query_projects(&query, &request_for(destination, cursor.clone()))
+            .await?;
+        found.extend(
+            page.items
+                .into_iter()
+                .filter(|project| {
+                    project.metadata.get(PublicProjectAllocation::KEY)
+                        == Some(&Value::String(allocation.to_owned()))
+                })
+                .map(|project| project.id),
+        );
+        match page.next {
+            None => return Ok(found),
+            Some(next) => {
+                let seen = next.0.clone();
+                if visited.contains(&seen) {
+                    return Err(SourceError::Refused {
+                        message: format!(
+                            "the projects of {} were being read for a public projection project's \
+                             allocation, and the listing handed back cursor {seen:?} it had handed \
+                             out before",
+                            destination.name()
+                        ),
+                    });
+                }
+                visited.push(seen);
+                cursor = Some(next);
+            }
+        }
+    }
 }
 
 /// The `(name, sha256)` of every asset in `assets`, in name order.
@@ -736,7 +908,7 @@ impl Engine {
             let destination = self.writable(&to)?;
             let ordered = projecting.ordered(&to);
             let project = self
-                .land_public_project(destination, &home, &ordered, &canonical, &map, journal)
+                .land_public_project(destination, &home, &ordered, &canonical, &mut map, journal)
                 .await?;
             let mut views: HashMap<GlobalId, NativeId> = HashMap::new();
             // The tasks under the public project no map entry names, listed once when a view is
@@ -834,21 +1006,38 @@ impl Engine {
                 ));
             }
         }
+        for entry in map.projects() {
+            if self.declared(&entry.source) == SourceVisibility::Private {
+                return Err(format!(
+                    "the public projection project in {} is in a source declared private, and \
+                     a projection is public",
+                    entry.source
+                ));
+            }
+        }
         Ok(map)
     }
 
     /// The public project the views of one plan in `destination` are filed under: the one an
-    /// existing view already sits under, else the one this plan's opaque id names, created
-    /// when it is not there.
+    /// existing view already sits under, else the one `map` records there — by the id the
+    /// source assigned it, or, when the copy never learned that id, by the allocation it was
+    /// created carrying — else the one this plan's opaque id names, created when none is
+    /// there. No other project is ever taken, whatever it says.
+    ///
+    /// A project is created only behind its allocation: recorded privately on the home before
+    /// the create is sent, carried by the project, and journaled, so a copy that cannot finish
+    /// takes it back even when the create's answer was lost, and a copy that was ended finds it
+    /// again. The id the source assigns is recorded before any view is filed under it.
     async fn land_public_project(
         &self,
         destination: &ResolvedSource,
         home: &GlobalId,
         ordered: &[&Projected],
         canonical: &HashMap<GlobalId, GlobalId>,
-        map: &PublicProjections,
+        map: &mut PublicProjections,
         journal: &mut Journal,
     ) -> Result<NativeId, EngineError> {
+        let at = self.writable(&home.source)?;
         for task in ordered {
             let Some(projection) = canonical
                 .get(&task.source)
@@ -873,32 +1062,97 @@ impl Engine {
                 };
             }
         }
-        let id = opaque_id("pw", home);
-        if let Some(held) = destination
-            .source()
-            .get_project(&id)
-            .await
-            .map_err(|error| refused(destination, error))?
+        let not_one = |id: &NativeId| EngineError::ProjectionsMalformed {
+            project: home.clone(),
+            why: format!(
+                "{}:{id} is recorded as the public projection project, and is not one",
+                destination.name()
+            ),
+        };
+        let recorded = map.project_in(destination.name()).cloned();
+        if let Some(PublicProjectAllocation {
+            project: Some(id), ..
+        }) = &recorded
+            && let Some(held) = destination
+                .source()
+                .get_project(id)
+                .await
+                .map_err(|error| refused(destination, error))?
         {
-            if !is_neutral(&held) {
-                return Err(EngineError::ProjectionsMalformed {
-                    project: home.clone(),
-                    why: format!(
-                        "{}:{id} holds the id its public projection project is made under, and is \
-                         not one",
-                        destination.name()
-                    ),
-                });
+            return if is_neutral(&held) {
+                Ok(id.clone())
+            } else {
+                Err(not_one(id))
+            };
+        }
+        if let Some(entry) = &recorded {
+            let found = allocated(destination, &entry.allocation)
+                .await
+                .map_err(|error| refused(destination, error))?;
+            match found.as_slice() {
+                [] => {}
+                [id] => {
+                    let held = destination
+                        .source()
+                        .get_project(id)
+                        .await
+                        .map_err(|error| refused(destination, error))?;
+                    if !held.as_ref().is_some_and(is_neutral) {
+                        return Err(not_one(id));
+                    }
+                    self.record_project(at, home, map, entry, id, journal)
+                        .await?;
+                    return Ok(id.clone());
+                }
+                [first, ..] => {
+                    return Err(EngineError::ProjectionsMalformed {
+                        project: home.clone(),
+                        why: format!(
+                            "{} holds {} projects carrying the allocation recorded for its public \
+                             projection project, {}:{first} among them, and only one may",
+                            destination.name(),
+                            found.len(),
+                            destination.name()
+                        ),
+                    });
+                }
             }
-            return Ok(id);
+        } else {
+            let id = opaque_id("pw", home);
+            if let Some(held) = destination
+                .source()
+                .get_project(&id)
+                .await
+                .map_err(|error| refused(destination, error))?
+            {
+                if !is_neutral(&held) {
+                    return Err(EngineError::ProjectionsMalformed {
+                        project: home.clone(),
+                        why: format!(
+                            "{}:{id} holds the id its public projection project is made under, \
+                             and is not one",
+                            destination.name()
+                        ),
+                    });
+                }
+                return Ok(id);
+            }
         }
-        let project = public_project(id, ordered);
-        if let Some(found) = self
-            .unrecorded_public_project(destination, &project.repositories)
-            .await?
-        {
-            return Ok(found);
-        }
+        // Nothing is there: create it, behind an allocation recorded before it is asked for.
+        let entry = recorded.unwrap_or_else(|| PublicProjectAllocation {
+            source: destination.name().clone(),
+            allocation: PublicProjectAllocation::fresh_nonce(),
+            project: None,
+        });
+        let entry = PublicProjectAllocation {
+            project: None,
+            ..entry
+        };
+        let mut project = public_project(opaque_id("pw", home), ordered);
+        project.metadata.insert(
+            PublicProjectAllocation::KEY.to_owned(),
+            Value::String(entry.allocation.clone()),
+        );
         let item = "the public projection project";
         self.at_write(
             destination,
@@ -914,6 +1168,16 @@ impl Engine {
             .check_status_write(ItemKind::Project, project.status.category, None)
             .await
             .map_err(|error| refused(destination, error))?;
+        if map.set_project(entry.clone()) {
+            self.record_projections(at, home, map, journal).await?;
+        }
+        journal.record(Undo::Allocated {
+            at: destination.name().clone(),
+            allocation: NativeId(entry.allocation.clone()),
+            home: home.clone(),
+        });
+        // A create's answer the source mangled is no uncertainty here: the allocation names what
+        // it stored, so taking the copy back takes the project with it.
         let landed = destination
             .source()
             .write_project(&ItemWrite {
@@ -922,82 +1186,34 @@ impl Engine {
                 depends_on: Vec::new(),
             })
             .await
-            .map_err(|error| create_refused(destination, Creating::Project, error))?;
+            .map_err(|error| refused(destination, error))?;
         journal.record(Undo::Created {
             at: destination.name().clone(),
             kind: Level::Project,
             id: landed.clone(),
         });
+        self.record_project(at, home, map, &entry, &landed, journal)
+            .await?;
         Ok(landed)
     }
 
-    /// The public projection project a copy made in `destination` and never learned the id
-    /// of — its create's answer lost, or the copy ended before it filed a view there, at a
-    /// destination that issues ids of its own and so ignores the opaque one — found by what it
-    /// says: the one neutral project there naming exactly `repositories` and holding no task.
-    /// Two such projects are ambiguous, and neither is taken.
-    ///
-    /// Asked only when no view of the plan is recorded in `destination` and nothing is held
-    /// under the opaque id, so a plan with views there never lists its projects.
-    async fn unrecorded_public_project(
+    /// Record on the private home `home` that `entry`'s project is `id`.
+    async fn record_project(
         &self,
-        destination: &ResolvedSource,
-        repositories: &[Repository],
-    ) -> Result<Option<NativeId>, EngineError> {
-        let mut request = ProjectRequest {
-            sources: vec![destination.name().clone()],
-            filters: Filters {
-                text: Some(TextQuery {
-                    terms: PUBLIC_PROJECT_TITLE.to_owned(),
-                    fields: TextFields::Title,
-                }),
-                labels: LabelFilter::default(),
-                statuses: Vec::new(),
-            },
-            paging: Paging {
-                limit: PROJECT_PAGE,
-                token: None,
-            },
-        };
-        let mut neutral = Vec::new();
-        loop {
-            let response = self.projects(&request).await?;
-            if let Some(failure) = response.errors.first() {
-                return Err(EngineError::SourceRefused {
-                    name: failure.source.to_string(),
-                    error: failure.error.clone(),
-                });
-            }
-            neutral.extend(
-                response
-                    .items
-                    .into_iter()
-                    .map(|project| project.item)
-                    .filter(|project| is_neutral(project) && project.repositories == repositories)
-                    .map(|project| project.id),
-            );
-            match response.next {
-                Some(token) if request.paging.token.as_ref() != Some(&token) => {
-                    request.paging.token = Some(token);
-                }
-                _ => break,
-            }
+        at: &ResolvedSource,
+        home: &GlobalId,
+        map: &mut PublicProjections,
+        entry: &PublicProjectAllocation,
+        id: &NativeId,
+        journal: &mut Journal,
+    ) -> Result<(), EngineError> {
+        if map.set_project(PublicProjectAllocation {
+            project: Some(id.clone()),
+            ..entry.clone()
+        }) {
+            self.record_projections(at, home, map, journal).await?;
         }
-        let mut empty = Vec::new();
-        for id in neutral {
-            let held = GlobalId::new(destination.name().clone(), id.clone());
-            if self
-                .project_member_tasks(&held, "for a public projection project")
-                .await?
-                .is_empty()
-            {
-                empty.push(id);
-            }
-        }
-        Ok(match <[NativeId; 1]>::try_from(empty) {
-            Ok([found]) => Some(found),
-            Err(_) => None,
-        })
+        Ok(())
     }
 
     /// Why a view `projection` filed under `project`, of `destination`, may not be written —
@@ -1377,6 +1593,49 @@ mod tests {
     }
 
     #[test]
+    fn a_map_records_each_public_project_by_its_allocation_and_omits_none() {
+        let mut map = PublicProjections::default();
+        assert!(map.set(&id("vault:a"), &id("site:pt-1")));
+        let before = map.to_value();
+        assert!(before.get("projects").is_none(), "{before}");
+        let site = SourceName::new("site").expect("a source name");
+        let pending = PublicProjectAllocation {
+            source: site.clone(),
+            allocation: PublicProjectAllocation::fresh_nonce(),
+            project: None,
+        };
+        assert!(map.set_project(pending.clone()));
+        assert!(!map.set_project(pending.clone()));
+        let landed = PublicProjectAllocation {
+            project: Some(NativeId("ISSUE-7".to_owned())),
+            ..pending.clone()
+        };
+        assert!(map.set_project(landed.clone()));
+        assert_eq!(map.projects(), std::slice::from_ref(&landed));
+        assert_eq!(map.project_in(&site), Some(&landed));
+        let value = map.to_value();
+        assert_eq!(
+            value["projects"],
+            json!([{"source": "site", "allocation": pending.allocation, "project": "ISSUE-7"}])
+        );
+        assert_eq!(PublicProjections::parse(&value), Ok(map));
+        let written_before = json!({"schema_version": 1, "tasks": []});
+        assert_eq!(
+            PublicProjections::parse(&written_before).map(|map| map.to_value()),
+            Ok(written_before)
+        );
+    }
+
+    #[test]
+    fn a_fresh_allocation_is_new_every_time() {
+        let first = PublicProjectAllocation::fresh_nonce();
+        let second = PublicProjectAllocation::fresh_nonce();
+        assert_ne!(first, second);
+        assert_eq!(first.len(), 32);
+        assert!(first.chars().all(|c| c.is_ascii_hexdigit()), "{first}");
+    }
+
+    #[test]
     fn a_malformed_map_is_refused_naming_what_is_wrong() {
         for (value, said) in [
             (
@@ -1403,6 +1662,27 @@ mod tests {
                     {"task": "vault:a", "projection": "site:1"},
                     {"task": "vault:b", "projection": "site:1"}]}),
                 "names projection site:1 twice",
+            ),
+            (
+                json!({"schema_version": 1, "tasks": [], "projects": [
+                    {"source": "site", "allocation": "a1"},
+                    {"source": "site", "allocation": "a2", "project": "p"}]}),
+                "names a project in site twice",
+            ),
+            (
+                json!({"schema_version": 1, "tasks": [], "projects": [
+                    {"source": "site", "allocation": " "}]}),
+                "empty allocation for site",
+            ),
+            (
+                json!({"schema_version": 1, "tasks": [], "projects": [
+                    {"source": "site", "allocation": "a1", "project": ""}]}),
+                "empty project for site",
+            ),
+            (
+                json!({"schema_version": 1, "tasks": [], "projects": [
+                    {"source": "site", "allocation": "a1", "via": "x"}]}),
+                "unknown field",
             ),
         ] {
             let error = PublicProjections::parse(&value).expect_err("refused");

@@ -187,6 +187,12 @@ impl Store {
     }
 }
 
+/// A public record's text, less the one reserved key a public projection project carries: the
+/// random allocation it was created behind, which names nothing private.
+fn public_text(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes).replace("onetaskgraph.allocation:", "allocation:")
+}
+
 /// One local-md folder declared `visibility`.
 fn folder(sandbox: &Sandbox, name: &str, visibility: &str) -> Value {
     json!({
@@ -786,7 +792,7 @@ fn a_mixed_project_and_everything_in_it_goes_wholly_to_the_private_source_its_ro
     let elsewhere = tree(&store.folder("elsewhere"));
     assert_eq!(elsewhere.len(), 2, "{:?}", elsewhere.keys());
     for (path, bytes) in &elsewhere {
-        let text = String::from_utf8_lossy(bytes);
+        let text = public_text(bytes);
         for named in ["goal", "Private half", "plan:", "vault", "onetaskgraph."] {
             assert!(!text.contains(named), "{path} names {named}:\n{text}");
         }
@@ -864,7 +870,7 @@ fn a_private_document_alone_takes_its_project_and_every_public_task_in_it_to_the
         on_site.keys()
     );
     for (path, bytes) in &on_site {
-        let text = String::from_utf8_lossy(bytes);
+        let text = public_text(bytes);
         for named in ["goal", "Design", "plan:", "vault", "onetaskgraph."] {
             assert!(!text.contains(named), "{path} names {named}:\n{text}");
         }
@@ -1149,7 +1155,7 @@ fn a_mixed_plan_homes_whole_in_the_private_source_and_its_public_work_is_seen_th
     );
     // Nothing there names the private source, its work or where its home is.
     for (path, bytes) in tree(&store.folder("site")) {
-        let text = String::from_utf8(bytes).expect("a text record");
+        let text = public_text(&bytes);
         for named in [
             "vault",
             "Quiet work",
