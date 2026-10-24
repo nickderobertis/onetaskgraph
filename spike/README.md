@@ -1,9 +1,30 @@
-# Board copy speed: the timing spike's harness
+# Board copy: the timing spike's harness, extended by the feasibility spike
 
-Throwaway measurement for `authoring:board-copy-speed-2026-10-18`, kept on the branch
-`nick/board-copy-speed-2026-10-18/spike-copy-timing` as evidence and as the starting
-point the implementing tasks grow into their budgets. Nothing here lands. The report is
-the document `board-copy-speed-2026-10-18-spike-copy-timing-report` of that plan.
+Throwaway measurement, kept as evidence and as the starting point the implementing tasks grow
+into their budgets. Nothing here lands. It was written for `authoring:board-copy-speed-2026-10-18`
+(branch `nick/board-copy-speed-2026-10-18/spike-copy-timing`, report
+`board-copy-speed-2026-10-18-spike-copy-timing-report`), and the feasibility spike of
+`authoring:board-copy-gaps-2026-10-24` extended it on `nick/board-copy-gaps-2026-10-24/spike-feasibility`
+(report `board-copy-gaps-2026-10-24-spike-feasibility-report`). Runs and state now go under
+`${XDG_CACHE_HOME:-$HOME/.cache}/board-copy-gaps-2026-10-24/` unless `SPIKE_CACHE_NAME` names
+the timing spike's directory. The timing spike's own logs are in
+`docs/measurements/board-copy-speed-2026-10-18/`.
+
+## The feasibility spike's scenarios
+
+| Scenario | What it measures |
+| --- | --- |
+| `probe-alias-pricing` | read-only: GitHub's dry-run price of the plugin's documents at each alias count, plus coalesced and parent-scoped shapes, each charged once for real |
+| `probe-placement` | 9 disposable issues created as a coalesced first copy creates them: when each lands on the board, `addProjectV2ItemById` racing GitHub's placement, one 19-alias field-and-edge write, the charge of a 19-alias request, then deletes them |
+| `reach-public`, `reach-private-item`, `reach-private-ref`, `reach-unresolvable-ref` | offline (`harness/reach.py`): the real CLI and real onevcs over synthetic identities, copying a public plan while two synthetic private sources answer 503 |
+| `screen-union` | offline (`harness/union.py`): the public copy's onevcs calls replayed per item, then deduplicated and unioned, then with a private term planted |
+| `proxy-refusal` | offline (`harness/refusal.py`): the proxy refusing every write naming a destination other than the test board |
+
+`--build head` runs `target/debug/onetaskgraph` of this checkout and `--build closure` the
+prototype that `spike/prototype/build.sh` builds from `spike/prototype/reach-closure.patch`.
+`--build stock` offline needs `SPIKE_HOST_CLONE` and `SPIKE_VERSION` naming a 0.11.0 wheel.
+`python3 harness/gaps.py` writes `logs/gaps-summary.json` from the committed logs, and
+`python3 harness/report_answers.py <out.json> [<ruling>]` writes the report's answers.
 
 ## One command, one measurement
 
