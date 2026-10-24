@@ -1,6 +1,6 @@
 {
-  "id": "20261024T171725Z-5a07d",
-  "timestamp": "2026-10-24T17:17:25Z",
+  "id": "20261024T172133Z-c313a",
+  "timestamp": "2026-10-24T17:21:33Z",
   "llmlint_version": "0.4.11",
   "command": "lint",
   "cwd": "/home/whoop/.onevcs/workspaces/github.com-nickderobertis-onetaskgraph-9c94c67fcf19/pool/1/worktree",
@@ -20,11 +20,11 @@
   ],
   "summary": {
     "total": 56,
-    "passed": 23,
+    "passed": 24,
     "failed": 0,
     "skipped": 22,
     "ignored": 0,
-    "not_relevant": 11,
+    "not_relevant": 10,
     "errored": 0
   },
   "rules": [
@@ -36,14 +36,14 @@
     },
     {
       "name": "async_typed_clients_at_boundaries",
-      "rationale": "GitHub calls use the typed async Client, forwarding uses asyncio streams, and external command calls use proc.run with typed Completed results.",
+      "rationale": "GitHub calls use the typed async Client, forwarding uses asyncio streams, and CLI, git, cargo, and onevcs calls use async subprocess wrappers returning Completed.",
       "outcome": "pass",
       "votes_total": 1,
       "votes_hold": 1
     },
     {
       "name": "boundary_inputs_validated",
-      "rationale": "JSON shape helpers validate decoded inputs, argparse constrains commands, paths and credentials are checked, GraphQL operations are parsed, and HTTP framing is checked before forwarding or consumption.",
+      "rationale": "json_shape validates consumed JSON fields; CLI paths, credentials, endpoints, HTTP framing, GraphQL operations, and mutation ownership are checked before use.",
       "outcome": "pass",
       "votes_total": 1,
       "votes_hold": 1
@@ -57,21 +57,21 @@
     },
     {
       "name": "budget_descriptions_durable_and_terse",
-      "rationale": "No target declares a budget description; budgets.py decodes candidate records from plan tasks.",
+      "rationale": "No target declares a budget description; budgets.py reads candidate records and test_contracts.py supplies decoder fixtures.",
       "outcome": "not_relevant",
       "votes_total": 0,
       "votes_hold": 0
     },
     {
       "name": "budgets_reuse_gate_telemetry",
-      "rationale": "The analysis tests validate feasibility estimates from committed logs; they introduce no executable budget measuring gate behavior.",
-      "outcome": "not_relevant",
-      "votes_total": 0,
-      "votes_hold": 0
+      "rationale": "The tests exercise candidate measurements; test_analysis.py recomputes figures from committed baseline and probe logs without repeating live measurements.",
+      "outcome": "pass",
+      "votes_total": 1,
+      "votes_hold": 1
     },
     {
       "name": "budgets_scoped_to_minimal_tree",
-      "rationale": "The targets analyze exploratory plan candidates and recorded probes; no budgets.yaml command runs or reads these files.",
+      "rationale": "The targets analyse plan candidate records; none declares executable budgets or serves a budgets.yaml measurement command.",
       "outcome": "not_relevant",
       "votes_total": 0,
       "votes_hold": 0
@@ -84,7 +84,7 @@
     },
     {
       "name": "changed_behavior_has_e2e",
-      "rationale": "The probe, offline, analysis, document, and contract suites exercise subprocess entry points, guarded requests, cleanup recovery, output publication, and report generation; structural substitutions explain why full integration was declined.",
+      "rationale": "test_live_probes.py, test_offline.py, and test_analysis.py exercise probe results, refusal, cleanup recovery, copy variants, and report output; exceptional structural proofs explain their limits.",
       "outcome": "pass",
       "votes_total": 1,
       "votes_hold": 1
@@ -97,35 +97,35 @@
     },
     {
       "name": "cli_output_contract",
-      "rationale": "The measurement CLI documents success, failure, and usage statuses, sends diagnostics to stderr, and prints only the published path on success; report and shim outputs have separate documented contracts.",
+      "rationale": "cli.py documents statuses 0/1/2, writes diagnostics to stderr, and prints only the result path on success; report.py writes JSON artifacts separately, and shim.py preserves subprocess streams and status.",
       "outcome": "pass",
       "votes_total": 1,
       "votes_hold": 1
     },
     {
       "name": "code_lands_in_the_domain_that_owns_it",
-      "rationale": "The new clients, models, helpers, and experiments reside together in spike-gaps, the project owning this feasibility measurement.",
+      "rationale": "New helpers and models remain within the spike-gaps feasibility project, alongside the probes, analysis, and tests that own their behavior.",
       "outcome": "pass",
       "votes_total": 1,
       "votes_hold": 1
     },
     {
       "name": "comments_earn_their_place",
-      "rationale": "Comments explain quota counters, ownership checks, partial-create cleanup, schema exceptions, and measurement limitations; docstrings document callable contracts.",
+      "rationale": "Comments explain quota accounting, ownership checks, cleanup guarantees, compatibility defaults, and test constraints; docstrings document public contracts.",
       "outcome": "pass",
       "votes_total": 1,
       "votes_hold": 1
     },
     {
       "name": "contracts_have_one_source_or_a_drift_gate",
-      "rationale": "Contract tests regenerate plugin documents, check variable declarations and mutation inputs, read board constants and boundary fields, and reconcile schema, baseline, lint, and report representations with their authorities.",
+      "rationale": "Contract tests reconcile plugin documents, variable declarations, scratch destinations, boundary fields, baseline runs, lint records, and report variables; schema tests reconcile the GraphQL extension with recorded introspection.",
       "outcome": "pass",
       "votes_total": 1,
       "votes_hold": 1
     },
     {
       "name": "crates_stay_in_one_cargo_workspace",
-      "rationale": "project.json defines a Python spike and builds an existing Rust workspace in a scratch clone; it introduces no Rust crate project.",
+      "rationale": "project.json defines a Python application; it adds or changes no Rust crate project, manifest, lockfile, or toolchain.",
       "outcome": "not_relevant",
       "votes_total": 0,
       "votes_hold": 0
@@ -162,14 +162,14 @@
     },
     {
       "name": "expensive_tests_stay_behind_their_own_edge",
-      "rationale": "spike-gaps owns its suite and depends on onetaskgraph, whose compiled binary its offline journeys exercise.",
+      "rationale": "spike-gaps owns its subprocess suite; its onetaskgraph dependency and both build dependencies produce binaries the tests exercise.",
       "outcome": "pass",
       "votes_total": 1,
       "votes_hold": 1
     },
     {
       "name": "external_service_suite_stays_out_of_the_affected_tier",
-      "rationale": "The wired probe tests use loopback GitHub stand-ins; actual GitHub probes run separately through gaps.sh.",
+      "rationale": "The test target uses loopback GitHub substitutes, synthetic onevcs identities, committed logs, and local authoring records; real GitHub probes run separately through gaps.sh.",
       "outcome": "not_relevant",
       "votes_total": 0,
       "votes_hold": 0
@@ -188,7 +188,7 @@
     },
     {
       "name": "least_privilege_grants",
-      "rationale": "Guard.refusal restricts mutations to five probe operations, allowed destinations, created issues, and their allowed board items; pricing receives no write grant.",
+      "rationale": "Guard restricts writes to five mutation kinds, approved input fields, scratch destinations, owned issues, and owned board items; pricing receives no write grant.",
       "outcome": "pass",
       "votes_total": 1,
       "votes_hold": 1
@@ -207,7 +207,7 @@
     },
     {
       "name": "modern_domain_modeling",
-      "rationale": "Dataclasses model requests, measurements, budgets, results, and reports; enums model scenarios and outcomes, while NewType distinguishes tokens and GitHub identifiers.",
+      "rationale": "Measurements, requests, outcomes, budgets, and screening results use dataclasses and enums; credentials and GitHub identifiers use NewType, with dictionaries retained for JSON payloads and mappings.",
       "outcome": "pass",
       "votes_total": 1,
       "votes_hold": 1
@@ -220,42 +220,42 @@
     },
     {
       "name": "names_match_behavior",
-      "rationale": "Scenario and build enums, request models, allowance decisions, placement outcomes, and analysis functions describe their implemented responsibilities.",
+      "rationale": "Scenario, result, ownership, pricing, and screening names match their implementations and documented measurement scope.",
       "outcome": "pass",
       "votes_total": 1,
       "votes_hold": 1
     },
     {
       "name": "new_code_lands_in_a_project",
-      "rationale": "Every added file in scope lies beneath spike/gaps/project.json, which declares spike-gaps and its execution targets.",
+      "rationale": "spike/gaps/project.json declares spike-gaps and covers every newly added source, script, and test in scope.",
       "outcome": "pass",
       "votes_total": 1,
       "votes_hold": 1
     },
     {
       "name": "new_command_or_client_gets_its_own_project",
-      "rationale": "The gaps command and probes have their own spike-gaps Nx project and Python workspace member.",
+      "rationale": "The gaps command and GitHub probes belong to the separate spike-gaps Nx project and Python workspace member.",
       "outcome": "pass",
       "votes_total": 1,
       "votes_hold": 1
     },
     {
       "name": "new_projects_keep_the_graph_uniform",
-      "rationale": "project.json declares build, lint, test, typecheck and format-check, with lang:python and layer:spike tags.",
+      "rationale": "spike-gaps declares build, lint, test, and typecheck targets with lang:python and layer:spike tags.",
       "outcome": "pass",
       "votes_total": 1,
       "votes_hold": 1
     },
     {
       "name": "no_hardcoded_secrets",
-      "rationale": "Live credentials come from GH_PROJECTS_TOKEN or its environment file; literal credentials belong exclusively to synthetic loopback services.",
+      "rationale": "Live credentials come from GH_PROJECTS_TOKEN or SPIKE_TOKEN_ENV; embedded tokens belong exclusively to synthetic loopback tests.",
       "outcome": "pass",
       "votes_total": 1,
       "votes_hold": 1
     },
     {
       "name": "no_injection_from_untrusted_input",
-      "rationale": "Subprocesses use create_subprocess_exec argument arrays, data uses JSON decoding, and no shell execution, eval, exec, or unsafe deserialization appears.",
+      "rationale": "Subprocesses receive argument vectors through create_subprocess_exec, JSON uses ordinary parsing, and no shell execution, eval, exec, or unsafe deserialization consumes external input.",
       "outcome": "pass",
       "votes_total": 1,
       "votes_hold": 1
@@ -268,7 +268,7 @@
     },
     {
       "name": "no_redundant_instruction_pointers",
-      "rationale": "No ancestor AGENTS.md reference path reaches spike/gaps/README.md.",
+      "rationale": "spike/gaps/README.md is not reachable through reference links from an applicable AGENTS.md or CLAUDE.md.",
       "outcome": "not_relevant",
       "votes_total": 0,
       "votes_hold": 0
@@ -293,7 +293,7 @@
     },
     {
       "name": "onebudgetspec_is_the_only_judge",
-      "rationale": "The candidate decoder and feasibility tests are not commands producing figures for an executable budget.",
+      "rationale": "The candidate-budget reader and report tests are feasibility analysis, not declarations or measurement code invoked by a budget command.",
       "outcome": "not_relevant",
       "votes_total": 0,
       "votes_hold": 0
@@ -306,21 +306,21 @@
     },
     {
       "name": "projects_stay_in_one_js_workspace",
-      "rationale": "spike-gaps is tagged lang:python and adds no TypeScript project configuration.",
+      "rationale": "spike-gaps is tagged lang:python and introduces no TypeScript project.",
       "outcome": "not_relevant",
       "votes_total": 0,
       "votes_hold": 0
     },
     {
       "name": "projects_stay_in_one_uv_workspace",
-      "rationale": "The root manifest includes spike/gaps, its distribution declares its dependencies, and uv.lock resolves it alongside both existing distributions without another lockfile.",
+      "rationale": "The root workspace adds spike/gaps, which has its own pyproject.toml and resolves through root uv.lock; the reused timing harness is not a separate distribution.",
       "outcome": "pass",
       "votes_total": 1,
       "votes_hold": 1
     },
     {
       "name": "protocol_based_seams",
-      "rationale": "No swappable object dependency is declared; the injected sleep function uses Callable, and service substitutions occur across HTTP or subprocess boundaries.",
+      "rationale": "No pluggable object interface is introduced; substitutes operate across HTTP or subprocess boundaries, and the injectable sleep dependency has a structural Callable annotation.",
       "outcome": "not_relevant",
       "votes_total": 0,
       "votes_hold": 0
@@ -345,35 +345,35 @@
     },
     {
       "name": "structural_pattern_matching",
-      "rationale": "Shape and value dispatch use match in JSON decoding, GraphQL handling, scenario execution, budget calculations, and test-service behavior; remaining conditionals express guards or independent predicates.",
+      "rationale": "Shape and value dispatch uses match/case in decoding, scenario selection, AST handling, and test responses; remaining conditionals express independent guards.",
       "outcome": "pass",
       "votes_total": 1,
       "votes_hold": 1
     },
     {
       "name": "suppressions_justified",
-      "rationale": "The target files contain no type-system escape hatches or linter suppression directives.",
+      "rationale": "The targets contain no linter or type-checker suppression directives or in-language type-system escape hatches.",
       "outcome": "not_relevant",
       "votes_total": 0,
       "votes_hold": 0
     },
     {
       "name": "test_tiers_split_by_project_not_by_marker",
-      "rationale": "The spike suite belongs to spike-gaps and runs through plain pytest without deselecting markers or environment-based tier skips.",
+      "rationale": "The subprocess suite lives in spike-gaps, whose test target runs pytest without marker deselection or environment-based tier skips.",
       "outcome": "pass",
       "votes_total": 1,
       "votes_hold": 1
     },
     {
       "name": "tests_assert_real_behavior",
-      "rationale": "Every test asserts returned data, subprocess results, recorded state, schema validity, or an expected exception.",
+      "rationale": "Every test asserts returned data, command status, recorded requests, filesystem state, schema agreement, or an expected exception.",
       "outcome": "pass",
       "votes_total": 1,
       "votes_hold": 1
     },
     {
       "name": "tests_hold_no_nonfunctional_thresholds",
-      "rationale": "Count assertions check exact actions or enforced batching; timing assertions verify recorded arithmetic and configured backoff, without performance bounds.",
+      "rationale": "Count assertions describe exact actions and state; timing assertions verify recorded arithmetic or configured backoff, and quota assertions verify the gate's own enforced policy.",
       "outcome": "pass",
       "votes_total": 1,
       "votes_hold": 1
@@ -386,7 +386,7 @@
     },
     {
       "name": "tool_output_is_signal",
-      "rationale": "Both launchers are quiet on success; their explicit errors identify missing uv or an incompatible patch and give concrete recovery steps.",
+      "rationale": "Both launchers are quiet on success; their explicit failures identify missing uv or an incompatible patch and provide concrete recovery instructions.",
       "outcome": "pass",
       "votes_total": 1,
       "votes_hold": 1
@@ -707,12 +707,12 @@
       }
     ],
     "optimization": {
-      "billed_tokens": 145060,
-      "baseline_billed_tokens": 236310,
-      "saved_billed_tokens": 91250,
-      "per_rule_tokens": 2664328,
-      "baseline_per_rule_tokens": 4017270,
-      "saved_per_rule_tokens": 1352942
+      "billed_tokens": 145182,
+      "baseline_billed_tokens": 236498,
+      "saved_billed_tokens": 91316,
+      "per_rule_tokens": 2666534,
+      "baseline_per_rule_tokens": 4020466,
+      "saved_per_rule_tokens": 1353932
     }
   }
 }
