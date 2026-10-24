@@ -1,0 +1,247 @@
+{
+ "findings": [
+  {
+   "probe": "createIssue WithProjectV2Ids",
+   "shape": {
+    "data": {
+     "createIssue": {
+      "issue": {
+       "id": "str",
+       "number": "int",
+       "projectItems": {
+        "totalCount": "int",
+        "nodes": []
+       }
+      }
+     }
+    }
+   },
+   "errors": [],
+   "limits": {
+    "x-ratelimit-limit": "5000",
+    "x-ratelimit-remaining": "956",
+    "x-ratelimit-reset": "1792358118",
+    "x-ratelimit-resource": "graphql",
+    "x-ratelimit-used": "4044"
+   }
+  },
+  {
+   "probe": "projectItems of the projectV2Ids issue, 3 s later",
+   "shape": {
+    "data": {
+     "node": {
+      "projectItems": {
+       "totalCount": "int",
+       "nodes": [
+        {
+         "id": "str",
+         "project": {
+          "id": "str"
+         }
+        },
+        "... 1 items"
+       ]
+      }
+     }
+    }
+   },
+   "on_board": true,
+   "limits": {
+    "x-ratelimit-limit": "5000",
+    "x-ratelimit-remaining": "947",
+    "x-ratelimit-reset": "1792358118",
+    "x-ratelimit-resource": "graphql",
+    "x-ratelimit-used": "4053"
+   }
+  },
+  {
+   "probe": "createIssue WithParentIssueId",
+   "shape": {
+    "data": {
+     "createIssue": {
+      "issue": {
+       "id": "str",
+       "number": "int",
+       "parent": {
+        "id": "str"
+       }
+      }
+     }
+    }
+   },
+   "errors": [],
+   "limits": {
+    "x-ratelimit-limit": "5000",
+    "x-ratelimit-remaining": "945",
+    "x-ratelimit-reset": "1792358118",
+    "x-ratelimit-resource": "graphql",
+    "x-ratelimit-used": "4055"
+   }
+  },
+  {
+   "probe": "createIssue Plain",
+   "shape": {
+    "data": {
+     "createIssue": {
+      "issue": {
+       "id": "str",
+       "number": "int"
+      }
+     }
+    }
+   },
+   "errors": [],
+   "limits": {
+    "x-ratelimit-limit": "5000",
+    "x-ratelimit-remaining": "941",
+    "x-ratelimit-reset": "1792358118",
+    "x-ratelimit-resource": "graphql",
+    "x-ratelimit-used": "4059"
+   }
+  },
+  {
+   "probe": "createIssue Plain",
+   "shape": {
+    "data": {
+     "createIssue": {
+      "issue": {
+       "id": "str",
+       "number": "int"
+      }
+     }
+    }
+   },
+   "errors": [],
+   "limits": {
+    "x-ratelimit-limit": "5000",
+    "x-ratelimit-remaining": "940",
+    "x-ratelimit-reset": "1792358118",
+    "x-ratelimit-resource": "graphql",
+    "x-ratelimit-used": "4060"
+   }
+  },
+  {
+   "probe": "createIssue Plain",
+   "shape": {
+    "data": {
+     "createIssue": {
+      "issue": {
+       "id": "str",
+       "number": "int"
+      }
+     }
+    }
+   },
+   "errors": [],
+   "limits": {
+    "x-ratelimit-limit": "5000",
+    "x-ratelimit-remaining": "939",
+    "x-ratelimit-reset": "1792358118",
+    "x-ratelimit-resource": "graphql",
+    "x-ratelimit-used": "4061"
+   }
+  },
+  {
+   "probe": "createIssue Plain",
+   "shape": {
+    "data": {
+     "createIssue": {
+      "issue": {
+       "id": "str",
+       "number": "int"
+      }
+     }
+    }
+   },
+   "errors": [],
+   "limits": {
+    "x-ratelimit-limit": "5000",
+    "x-ratelimit-remaining": "933",
+    "x-ratelimit-reset": "1792358118",
+    "x-ratelimit-resource": "graphql",
+    "x-ratelimit-used": "4067"
+   }
+  },
+  {
+   "probe": "one request of eleven aliased mutations",
+   "shape": {
+    "data": {
+     "c1": {
+      "issue": {
+       "id": "str"
+      }
+     },
+     "c2": {
+      "issue": {
+       "id": "str"
+      }
+     },
+     "c3": {
+      "issue": {
+       "id": "str"
+      }
+     },
+     "a1": {
+      "item": {
+       "id": "str"
+      }
+     },
+     "a2": {
+      "item": {
+       "id": "str"
+      }
+     },
+     "a3": {
+      "item": {
+       "id": "str"
+      }
+     },
+     "u1": {
+      "projectV2Item": {
+       "id": "str"
+      }
+     },
+     "u2": {
+      "projectV2Item": {
+       "id": "str"
+      }
+     },
+     "u3": {
+      "projectV2Item": {
+       "id": "str"
+      }
+     },
+     "s1": {
+      "issue": {
+       "id": "str"
+      },
+      "subIssue": {
+       "id": "str"
+      }
+     },
+     "b1": {
+      "issue": {
+       "id": "str"
+      },
+      "blockingIssue": {
+       "id": "str"
+      }
+     }
+    }
+   },
+   "errors": [],
+   "limits": {
+    "x-ratelimit-limit": "5000",
+    "x-ratelimit-remaining": "921",
+    "x-ratelimit-reset": "1792358118",
+    "x-ratelimit-resource": "graphql",
+    "x-ratelimit-used": "4079"
+   }
+  },
+  {
+   "probe": "deleteIssue of every probe issue",
+   "deleted": 9,
+   "failed": 0
+  }
+ ]
+}

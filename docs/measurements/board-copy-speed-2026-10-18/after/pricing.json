@@ -1,0 +1,91 @@
+{
+ "ADD_BLOCKED_BYS": {
+  "method": "smallest header rise",
+  "observations": 3,
+  "points": 1
+ },
+ "BOARD_FIELDS": {
+  "method": "dry run",
+  "points": 1,
+  "variables": {
+   "nestedFirst": 50
+  }
+ },
+ "CREATED_BOARD_ITEMS": {
+  "method": "dry run",
+  "points": 1,
+  "variables": {
+   "boardItems": 3
+  }
+ },
+ "CREATE_ISSUE": {
+  "method": "smallest header rise, the spike's 40 observations (this run's one observation, 4, carried other sessions' points)",
+  "observations": 40,
+  "points": 1
+ },
+ "CREATE_ISSUES": {
+  "method": "smallest header rise",
+  "observations": 3,
+  "points": 1
+ },
+ "CleanupDelete": {
+  "method": "smallest header rise",
+  "observations": 61,
+  "points": 1
+ },
+ "CleanupRead": {
+  "method": "dry run",
+  "points": 1,
+  "variables": {}
+ },
+ "DELETE_ISSUE": {
+  "method": "one per mutation, as every other single mutation measured",
+  "points": 1
+ },
+ "ISSUE": {
+  "method": "dry run",
+  "points": 1,
+  "variables": {
+   "boardItems": 3,
+   "first": 100,
+   "nestedFirst": 50
+  }
+ },
+ "ORIGIN_LOOKUP": {
+  "method": "dry run",
+  "points": 1,
+  "variables": {
+   "boardItems": 3,
+   "nestedFirst": 50,
+   "originFirst": 3
+  }
+ },
+ "ORIGIN_LOOKUPS": {
+  "method": "dry run",
+  "points": 2,
+  "variables": {
+   "boardItems": 3,
+   "nestedFirst": 50,
+   "originFirst": 3
+  }
+ },
+ "SUB_ISSUES": {
+  "method": "dry run",
+  "points": 1,
+  "variables": {
+   "boardItems": 3,
+   "memberFirst": 23,
+   "nestedFirst": 50
+  }
+ },
+ "UPDATE_ISSUE": {
+  "method": "smallest header rise",
+  "observations": 18,
+  "points": 1
+ },
+ "WRITE_FIELD_VALUES": {
+  "method": "smallest header rise",
+  "observations": 6,
+  "points": 1
+ }
+}
