@@ -2107,6 +2107,76 @@ fn a_linear_copy_whose_project_create_answer_is_lost_takes_the_project_back_and_
 }
 
 #[test]
+fn a_linear_create_answered_with_an_empty_id_is_never_recorded_and_the_copy_is_taken_back() {
+    // Linear stores the public project and answers its create with an empty id. The plugin
+    // refuses that answer, so the id is journaled nowhere and recorded nowhere: the copy takes
+    // the project back by its allocation, and the next copy makes exactly one, recorded under
+    // the id Linear gave it. A view's create answered the same way is refused and recorded
+    // nowhere either.
+    let mut handle = None;
+    let store = Store::laid(Some(registered), |sandbox| {
+        let (mut config, workspace) =
+            crate::fixtures::linear_workspace(sandbox, crate::fixtures::dataset());
+        config["status_mapping"] = crate::fixtures::linear_default_mapping();
+        handle = Some(workspace);
+        sandbox.secrets_file("LINEAR_API_KEY=fixture-key\n");
+        json!({
+            "tracker": {"plugin": "linear", "config": config, "visibility": "public"},
+            "vault": {"routes": [{"repositories": ["github.com/openco/*"], "to": "tracker"}]},
+        })
+    });
+    let workspace = handle.expect("the workspace");
+    private_rollout(&store);
+    workspace.bend_answers(
+        |document, _| document.contains("projectCreate"),
+        1,
+        |_, data| data["projectCreate"]["project"]["id"] = json!(""),
+    );
+    let output = store.run(&["project", "copy", "plan:rollout", "--to", "vault"]);
+    assert_ne!(output.status.code(), Some(0), "{}", stdout(&output));
+    assert!(
+        public_work_projects(&store, "tracker").is_empty(),
+        "the copy took its project back:\n{}",
+        stderr(&output)
+    );
+
+    let landed = copy_rollout(&store);
+    let made = public_work_projects(&store, "tracker");
+    assert_eq!(made.len(), 1, "{made:?}");
+    let map = projection_map(&store, &landed["plan:rollout"]);
+    assert_eq!(
+        format!(
+            "tracker:{}",
+            map["projects"][0]["project"].as_str().unwrap_or_default()
+        ),
+        made[0],
+        "{map:#}"
+    );
+
+    store.record(
+        "plan",
+        "tasks",
+        "tune",
+        &format!("title: Tune the retry\nstatus: todo\nproject: rollout\nrepositories: [{OPEN}]"),
+        PLAIN,
+    );
+    workspace.bend_answers(
+        |document, variables| {
+            document.contains("issueCreate") && variables.to_string().contains("Tune the retry")
+        },
+        1,
+        |_, data| data["issueCreate"]["issue"]["id"] = json!(""),
+    );
+    let output = store.run(&["project", "copy", "plan:rollout", "--to", "vault"]);
+    assert_ne!(output.status.code(), Some(0), "{}", stdout(&output));
+    assert_eq!(
+        projection_map(&store, &landed["plan:rollout"]),
+        map,
+        "nothing was recorded of the refused view"
+    );
+}
+
+#[test]
 fn a_copy_killed_after_its_public_project_and_before_recording_it_resumes_into_it_alone() {
     // `site` is reached over the plugin protocol through a relay that ends the engine the moment
     // the public project is written — after the allocation is recorded privately, before the

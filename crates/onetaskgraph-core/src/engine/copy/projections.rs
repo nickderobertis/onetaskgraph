@@ -620,6 +620,21 @@ fn is_neutral(project: &Project) -> bool {
         && project.content.as_deref().is_none_or(str::is_empty)
 }
 
+/// `id` as a create or a write of `method` answered it, held to naming something: an empty id
+/// can be neither journaled nor recorded in the map, which refuses one when it is read back.
+///
+/// # Errors
+///
+/// [`SourceError::Malformed`] naming `method`, for an id that is empty or only whitespace.
+fn answered_id(id: NativeId, method: &str) -> Result<NativeId, SourceError> {
+    if id.0.trim().is_empty() {
+        return Err(SourceError::Malformed {
+            message: format!("{method} answered an empty id"),
+        });
+    }
+    Ok(id)
+}
+
 /// The `(name, sha256)` of every asset in `assets`, in name order.
 fn digests(assets: &[AssetPayload]) -> Vec<(String, String)> {
     let mut digests: Vec<(String, String)> = assets
@@ -1187,6 +1202,7 @@ impl Engine {
                 depends_on: Vec::new(),
             })
             .await
+            .and_then(|landed| answered_id(landed, "write_project"))
             .map_err(|error| refused(destination, error))?;
         journal.record(Undo::Created {
             at: destination.name().clone(),
@@ -1507,6 +1523,7 @@ impl Engine {
                 .await
                 .map(|written| written.id)
         }
+        .and_then(|landed| answered_id(landed, "write_task"))
         .map_err(|error| match target {
             None => create_refused(destination, Creating::Task, error),
             Some(_) => refused(destination, error),
@@ -1715,6 +1732,22 @@ mod tests {
             PublicProjections::parse(&written_before).map(|map| map.to_value()),
             Ok(written_before)
         );
+    }
+
+    #[test]
+    fn an_answered_id_that_names_nothing_is_refused_naming_the_method() {
+        assert_eq!(
+            answered_id(NativeId("ISSUE-7".to_owned()), "write_task"),
+            Ok(NativeId("ISSUE-7".to_owned()))
+        );
+        for empty in ["", "  "] {
+            let refused = answered_id(NativeId(empty.to_owned()), "write_project");
+            assert!(
+                matches!(&refused, Err(SourceError::Malformed { message })
+                    if message == "write_project answered an empty id"),
+                "{empty:?}: {refused:?}"
+            );
+        }
     }
 
     #[test]
