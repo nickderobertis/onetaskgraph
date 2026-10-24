@@ -2044,7 +2044,9 @@ map names, by the `project` its entry records, or — when the copy never learne
 create's answer lost or the copy ended first — as the one project carrying its recorded
 `allocation`, created afresh, carrying that same allocation, only when none does. No other
 project is ever taken or altered, however much it looks like one: an unrelated empty `Public work`
-naming the same repositories is left as it is. A copy that fails takes back the project it asked
+naming the same repositories is left as it is, and so is one already sitting at the opaque
+id a create would ask for — a destination honouring that id would write over it, so the copy is
+refused, naming that project, before anything is written. A copy that fails takes back the project it asked
 for by its allocation even when the answer was lost; when the destination will not take it back,
 the private project keeps the allocation, is named among what is still there, and the next copy
 resumes into that project rather than making another. A view recorded private is refused rather than written public again,

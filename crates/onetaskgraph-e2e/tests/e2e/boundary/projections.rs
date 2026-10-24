@@ -1331,6 +1331,52 @@ fn an_opaque_project_id_another_project_already_holds_is_refused_and_the_copy_ta
 }
 
 #[test]
+fn a_neutral_project_at_the_id_a_copy_would_request_is_never_adopted_for_its_id_alone() {
+    // A folder of Markdown honours the id a create asks for, so a project already there reads
+    // exactly as the copy's own would — neutral title, no prose, public — and is still somebody
+    // else's: nothing this copy recorded names it, and it carries no allocation of the copy's.
+    let first = projecting_store();
+    private_rollout(&first);
+    let landed = copy_rollout(&first);
+    let neutral = shown(
+        &first,
+        "task",
+        &view_of(&first, &landed, &landed["plan:widget"]),
+    )["project"]
+        .as_str()
+        .expect("filed under the neutral project")
+        .to_owned();
+
+    let store = projecting_store();
+    private_rollout(&store);
+    store.record(
+        "site",
+        "projects",
+        &neutral,
+        "title: Public work\nstatus: todo",
+        "",
+    );
+    let occupant = record_file(&store, "projects", &format!("site:{neutral}"));
+    let held = std::fs::read(&occupant).expect("the occupant is on disk");
+    let before = store.tree();
+    let (kind, said) = store.refused(&["project", "copy", "plan:rollout", "--to", "vault"]);
+    assert_eq!(kind, "projections-malformed", "{said}");
+    assert!(said.contains(&neutral), "{said}");
+    assert!(
+        said.contains("nothing this copy recorded names it"),
+        "{said}"
+    );
+    assert_eq!(
+        std::fs::read(&occupant).expect("the occupant is still there"),
+        held,
+        "the project at the requested id is left byte for byte"
+    );
+    assert_eq!(store.tree(), before, "and nothing else is written either");
+    let tasks = tasks_of(&store, "site");
+    assert!(tasks.is_empty(), "no view is filed under it: {tasks:?}");
+}
+
+#[test]
 fn a_view_filed_under_a_project_that_is_not_neutral_is_refused_by_a_copy_and_a_mirror() {
     let store = projecting_store();
     private_rollout(&store);

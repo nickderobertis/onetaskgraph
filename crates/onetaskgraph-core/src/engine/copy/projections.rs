@@ -1039,8 +1039,8 @@ impl Engine {
     /// The public project the views of one plan in `destination` are filed under: the one an
     /// existing view already sits under, else the one `map` records there — by the id the
     /// source assigned it, or, when the copy never learned that id, by the allocation it was
-    /// created carrying — else the one this plan's opaque id names, created when none is
-    /// there. No other project is ever taken, whatever it says.
+    /// created carrying — else one created under this plan's opaque id. No other project is ever
+    /// taken, whatever it says: one already at that id is refused, never adopted for its id.
     ///
     /// A project is created only behind its allocation: recorded privately on the home before
     /// the create is sent, carried by the project, and journaled, so a copy that cannot finish
@@ -1133,26 +1133,27 @@ impl Engine {
                     });
                 }
             }
-        } else {
-            let id = opaque_id("pw", home);
-            if let Some(held) = destination
-                .source()
-                .get_project(&id)
-                .await
-                .map_err(|error| refused(destination, error))?
-            {
-                if !is_neutral(&held) {
-                    return Err(EngineError::ProjectionsMalformed {
-                        project: home.clone(),
-                        why: format!(
-                            "{}:{id} holds the id its public projection project is made under, \
-                             and is not one",
-                            destination.name()
-                        ),
-                    });
-                }
-                return Ok(id);
-            }
+        }
+        // The id a create asks for is no claim on what already sits at it: a project there that no
+        // record of this copy names and that carries none of its allocation is somebody else's,
+        // however neutral it reads, and a destination honouring the id would write over it.
+        let requested = opaque_id("pw", home);
+        if destination
+            .source()
+            .get_project(&requested)
+            .await
+            .map_err(|error| refused(destination, error))?
+            .is_some()
+        {
+            return Err(EngineError::ProjectionsMalformed {
+                project: home.clone(),
+                why: format!(
+                    "{}:{requested} holds the id its public projection project is made under, and \
+                     nothing this copy recorded names it; move or remove that project, then copy \
+                     again",
+                    destination.name()
+                ),
+            });
         }
         // Nothing is there: create it, behind an allocation recorded before it is asked for.
         let entry = recorded.unwrap_or_else(|| PublicProjectAllocation {
@@ -1164,7 +1165,7 @@ impl Engine {
             project: None,
             ..entry
         };
-        let mut project = public_project(opaque_id("pw", home), ordered);
+        let mut project = public_project(requested, ordered);
         project.metadata.insert(
             PublicProjectAllocation::KEY.to_owned(),
             Value::String(entry.allocation.as_str().to_owned()),
