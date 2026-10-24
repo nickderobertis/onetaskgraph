@@ -139,7 +139,7 @@ fn far_end(given: &str) -> Result<DependencyEndpoint, Failure> {
                  `<source>:<native id>`."
             ),
         ),
-        EndpointRefusal::Malformed(_) => Failure::decided(
+        EndpointRefusal::Malformed => Failure::decided(
             "invalid-dependency",
             "--depends-on: the object is no dependency endpoint\n\
              next: give `{\"id\": \"<source>:<native id>\", \"kind\": \"task\"}` or a qualified \

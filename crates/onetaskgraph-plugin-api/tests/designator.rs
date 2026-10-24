@@ -117,6 +117,26 @@ fn a_caller_endpoint_with_another_key_is_refused_naming_the_key() {
     assert_eq!(accepted.kind, ItemKind::Project);
 }
 
+/// An object of the three keys that is still no endpoint is refused as malformed, and the
+/// refusal repeats nothing it was given — not an unknown `kind`, not an id of the wrong type.
+#[test]
+fn a_malformed_caller_endpoint_is_refused_without_repeating_it() {
+    let designator = Designator::of_backend("linear", "org").expect("a plugin kind");
+    for given in [
+        json!({"designator": designator.as_str(), "id": "uuid-1", "kind": "Secret launch plan"}),
+        json!({"designator": designator.as_str(), "id": ["Secret launch plan"], "kind": "task"}),
+        json!({"designator": "Secret launch plan", "id": "uuid-1", "kind": "task"}),
+        json!({"id": "board:uuid-1", "kind": "Secret launch plan"}),
+    ] {
+        let refused = DependencyEndpoint::from_value(&given).expect_err("malformed");
+        assert_eq!(refused, EndpointRefusal::Malformed, "{given}");
+        assert!(
+            !refused.to_string().contains("Secret launch plan"),
+            "{given}: {refused}"
+        );
+    }
+}
+
 /// A recorded opaque far end is read as a cross-tracker edge, never refused as one the near
 /// backend could relate natively.
 #[test]

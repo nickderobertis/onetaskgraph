@@ -1162,8 +1162,9 @@ impl DependencyEndpoint {
         {
             return Err(EndpointRefusal::Key(key.clone()));
         }
-        serde_json::from_value(value.clone())
-            .map_err(|error| EndpointRefusal::Malformed(error.to_string()))
+        // Serde's diagnostic can repeat what it was given — an unknown `kind`, an id — so it is
+        // not carried.
+        serde_json::from_value(value.clone()).map_err(|_| EndpointRefusal::Malformed)
     }
 
     /// Builds an endpoint from a source-native id, whose contents are deliberately opaque.
@@ -1290,8 +1291,11 @@ pub enum EndpointRefusal {
     )]
     Key(String),
     /// It is none of the three forms.
-    #[error("not a dependency endpoint: {0}")]
-    Malformed(String),
+    #[error(
+        "not a dependency endpoint: give a native id, a qualified `<source>:<native id>`, or an \
+         object of `designator`, `id` and `kind`"
+    )]
+    Malformed,
 }
 
 impl std::fmt::Display for DependencyEndpoint {
