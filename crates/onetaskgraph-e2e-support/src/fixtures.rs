@@ -1591,6 +1591,7 @@ impl GitHubBoardFields {
 
     /// Refuse the next request `429 Too Many Requests`, naming a reset `retry_after` seconds
     /// ahead, as GitHub's primary limit does; every request after it is answered as before.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board's own answer to its next request, which only its server loop here answers: that state is private to the loopback, so a suite can set it only through this handle, as `block`, `edit_body` and `refuse_once` set the rest; the GitHub Projects and Linear suites are what drive it.
     pub fn rate_limit_next(&self, retry_after: u64) {
         self.board.lock().unwrap().rate_limit_next = Some(retry_after);
     }
@@ -5558,6 +5559,7 @@ impl LinearWorkspace {
     /// Answer each of the next requests by `script`, in order: `Some(wait)` is refused
     /// `429 Too Many Requests` with `retry-after: wait`, as Linear's limiter answers, and `None`
     /// is answered as it would have been. Every request after the script is answered as usual.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback Linear's own answers to its next requests, which only its server loop here answers: that state is private to the loopback, so a suite can set it only through this handle, as `block`, `edit_body` and `refuse_once` set the rest; the GitHub Projects and Linear suites are what drive it.
     pub fn rate_limit(&self, script: &[Option<u64>]) {
         self.limits.lock().unwrap().extend(script.iter().copied());
     }
