@@ -1,0 +1,549 @@
+diff --git a/crates/onetaskgraph-core/src/engine/copy.rs b/crates/onetaskgraph-core/src/engine/copy.rs
+index a030b381..d66d8e76 100644
+--- a/crates/onetaskgraph-core/src/engine/copy.rs
++++ b/crates/onetaskgraph-core/src/engine/copy.rs
+@@ -1545,6 +1545,7 @@ impl Engine {
+     /// destination refuses the write — including a field or a metadata key it cannot
+     /// carry, which it names rather than dropping.
+     pub async fn copy(&self, request: &CopyRequest) -> Result<CopyReport, EngineError> {
++    let _spike_span = ::onetaskgraph_plugin_api::spike_span::enter("copy.copy");
+         let _expecting = self.expecting_copy(request)?;
+         // Before anything is read: `--create` says there is nothing to look for, and the other
+         // two say how to look.
+@@ -1650,6 +1651,7 @@ impl Engine {
+         request: &CopyRequest,
+         journal: &mut Journal,
+     ) -> Result<(CopyReport, Vec<Deliverer>), EngineError> {
++    let _spike_span = ::onetaskgraph_plugin_api::spike_span::enter("copy.copy_all");
+         let mut running = Running::default();
+         // The whole copied set, established before anything is written. For a project
+         // copy that means reading every named project's membership first: the set is the
+@@ -1814,6 +1816,7 @@ impl Engine {
+         running: Running,
+         journal: &mut Journal,
+     ) -> Result<(), EngineError> {
++    let _spike_span = ::onetaskgraph_plugin_api::spike_span::enter("copy.repair");
+         if request.dry_run {
+             return Ok(());
+         }
+@@ -1866,6 +1869,7 @@ impl Engine {
+     /// a destination that is not as they left it will copy again over a tree nobody
+     /// described.
+     async fn undo(&self, journal: Journal, error: EngineError) -> EngineError {
++    let _spike_span = ::onetaskgraph_plugin_api::spike_span::enter("copy.undo");
+         let created: Vec<(&SourceName, Level, &NativeId)> = journal
+             .entries
+             .iter()
+@@ -1967,6 +1971,7 @@ impl Engine {
+         no_link: bool,
+         journal: &mut Journal,
+     ) -> Result<(), EngineError> {
++    let _spike_span = ::onetaskgraph_plugin_api::spike_span::enter("copy.link");
+         for entry in linking {
+             let slot = items
+                 .iter_mut()
+@@ -2158,6 +2163,7 @@ impl Engine {
+         running: &mut Running,
+         journal: &mut Journal,
+     ) -> Result<Vec<CopyOutcome>, EngineError> {
++    let _spike_span = ::onetaskgraph_plugin_api::spike_span::enter("copy.copy_projects");
+         let mut plans = Vec::new();
+         for (id, members) in projects {
+             if self.routes.routes(&request.destination) {
+@@ -2386,6 +2392,7 @@ impl Engine {
+         running: &mut Running,
+         journal: &mut Journal,
+     ) -> Result<Vec<CopyOutcome>, EngineError> {
++    let _spike_span = ::onetaskgraph_plugin_api::spike_span::enter("copy.copy_project");
+         let (carries_tasks, walks_orphans) = match request.scope {
+             CopyScope::Projects { tasks } => (tasks, tasks),
+             CopyScope::Members(_) => (true, false),
+@@ -2650,6 +2657,7 @@ impl Engine {
+     /// `task list --project <home> --members` reads it, so a home copied on takes its members'
+     /// tasks with it and the destination's own routes file each one.
+     async fn project_members(&self, project: &GlobalId) -> Result<Vec<GlobalId>, EngineError> {
++    let _spike_span = ::onetaskgraph_plugin_api::spike_span::enter("copy.project_members");
+         Ok(self
+             .project_tasks(project, FOR_A_COPY, true)
+             .await?
+@@ -2680,6 +2688,7 @@ impl Engine {
+         reading: &str,
+         members: bool,
+     ) -> Result<Vec<Qualified<Task>>, EngineError> {
++    let _spike_span = ::onetaskgraph_plugin_api::spike_span::enter("copy.project_tasks");
+         let mut request = TaskRequest {
+             sources: vec![project.source.clone()],
+             filters: Filters::default(),
+@@ -2740,6 +2749,7 @@ impl Engine {
+         &self,
+         project: &GlobalId,
+     ) -> Result<Vec<Qualified<Document>>, EngineError> {
++    let _spike_span = ::onetaskgraph_plugin_api::spike_span::enter("copy.project_documents");
+         let mut request = DocumentRequest {
+             sources: vec![project.source.clone()],
+             filters: DocumentFilters::default(),
+@@ -2810,6 +2820,7 @@ impl Engine {
+         planned: &mut [Planned],
+         counts: &mut Counted,
+     ) -> Result<(), EngineError> {
++    let _spike_span = ::onetaskgraph_plugin_api::spike_span::enter("copy.rewrite_references");
+         // Read at the source, once per project rather than once per document: several
+         // documents of one project is the ordinary case.
+         let mut by_project: BTreeMap<String, Vec<Referent>> = BTreeMap::new();
+@@ -2908,6 +2919,7 @@ impl Engine {
+     /// The project record itself, every task filed under it, and every document filed under
+     /// it. All three are reads this engine already knows how to make.
+     async fn referents(&self, project: &GlobalId) -> Result<Vec<Referent>, EngineError> {
++    let _spike_span = ::onetaskgraph_plugin_api::spike_span::enter("copy.referents");
+         let source = self.readable(&project.source)?;
+         let mut referents = Vec::new();
+         if let Some(held) = source
+@@ -2963,6 +2975,7 @@ impl Engine {
+         destination: &ResolvedSource,
+         levels: &[Level],
+     ) -> Result<Counterparts, EngineError> {
++    let _spike_span = ::onetaskgraph_plugin_api::spike_span::enter("copy.counterparts");
+         let mut found = Counterparts::default();
+         for level in levels {
+             // Every cursor this level has already been sent. `unrepeated` below catches a
+@@ -3071,6 +3084,7 @@ impl Engine {
+         at_destination: &NativeId,
+         copied: &[GlobalId],
+     ) -> Result<Vec<CopyOutcome>, EngineError> {
++    let _spike_span = ::onetaskgraph_plugin_api::spike_span::enter("copy.orphans");
+         let mut orphans = Vec::new();
+         let mut cursor: Option<Cursor> = None;
+         loop {
+@@ -3130,6 +3144,7 @@ impl Engine {
+         running: &mut Running,
+         journal: &mut Journal,
+     ) -> Result<Vec<CopyOutcome>, EngineError> {
++    let _spike_span = ::onetaskgraph_plugin_api::spike_span::enter("copy.copy_items");
+         // Only a document's own content names other records, and only once every document
+         // of this call has been read: the destination is walked once for all of them, and
+         // the content the rest of this call lands is the rewritten one — which is what
+@@ -3444,6 +3459,7 @@ impl Engine {
+         read: Read,
+         running: &mut Running,
+     ) -> Result<Planned, EngineError> {
++    let _spike_span = ::onetaskgraph_plugin_api::spike_span::enter("copy.plan_read");
+         let id = read.source.clone();
+         let classification = self.copied_classification(request, &read, running).await?;
+         let placement = match &read.item {
+@@ -3732,6 +3748,7 @@ impl Engine {
+         planned: impl Iterator<Item = &'a Planned>,
+         running: &mut Running,
+     ) -> Result<(), EngineError> {
++    let _spike_span = ::onetaskgraph_plugin_api::spike_span::enter("copy.preflight_copy");
+         let planned: Vec<&Planned> = planned.collect();
+         for item in &planned {
+             note_private(running, item);
+@@ -3787,6 +3804,7 @@ impl Engine {
+         item: &Planned,
+         running: &mut Running,
+     ) -> Result<(), EngineError> {
++    let _spike_span = ::onetaskgraph_plugin_api::spike_span::enter("copy.classify_references");
+         if self.declared(&item.to) == crate::config::SourceVisibility::Private {
+             return Ok(());
+         }
+@@ -3887,6 +3905,7 @@ impl Engine {
+         id: &GlobalId,
+         running: &mut Running,
+     ) -> Result<Read, EngineError> {
++    let _spike_span = ::onetaskgraph_plugin_api::spike_span::enter("copy.read_for_copy");
+         if kind != Level::Task || !reads_comments(request) {
+             return self.read(kind, id).await;
+         }
+@@ -3938,6 +3957,7 @@ impl Engine {
+     /// Nothing for a copy that reads no comment, which reads each task by itself as it always
+     /// did.
+     async fn prefetch(&self, request: &CopyRequest, ids: &[GlobalId], running: &mut Running) {
++    let _spike_span = ::onetaskgraph_plugin_api::spike_span::enter("copy.prefetch");
+         if !reads_comments(request) {
+             return;
+         }
+@@ -4060,6 +4080,7 @@ impl Engine {
+         aimed: Option<(Target, Option<Prior>)>,
+         home_members: &mut HashMap<String, Vec<GlobalId>>,
+     ) -> Result<Planned, EngineError> {
++    let _spike_span = ::onetaskgraph_plugin_api::spike_span::enter("copy.aim");
+         let Read {
+             source: id,
+             item,
+@@ -4228,6 +4249,7 @@ impl Engine {
+         item: &Item,
+         withheld: bool,
+     ) -> Result<(Target, Option<Prior>), EngineError> {
++    let _spike_span = ::onetaskgraph_plugin_api::spike_span::enter("copy.target");
+         let (title, metadata) = described(item);
+         // A caller asserting there is nothing to find is believed, and nothing is looked for —
+         // unless the item itself says otherwise, by naming a counterpart at the destination.
+@@ -4351,6 +4373,7 @@ impl Engine {
+         kind: Level,
+         wanted: &Wanted,
+     ) -> Result<Option<NativeId>, EngineError> {
++    let _spike_span = ::onetaskgraph_plugin_api::spike_span::enter("copy.scan");
+         let mut cursor: Option<Cursor> = None;
+         let tasks = wanted.task_query(&destination.source().capabilities());
+         loop {
+@@ -4430,6 +4453,7 @@ impl Engine {
+         pointing: Pointing<'_>,
+         journal: &mut Journal,
+     ) -> Result<(CopyOutcome, Option<Prior>), EngineError> {
++    let _spike_span = ::onetaskgraph_plugin_api::spike_span::enter("copy.land");
+         let Pointing { edges, delivers } = pointing;
+         let (target, found) = match &item.target {
+             Target::Update { id, found } => (Some(id.clone()), Some(*found)),
+@@ -4559,6 +4583,7 @@ impl Engine {
+         plan: &comments::CommentPlan,
+         journal: &mut Journal,
+     ) -> Result<(), EngineError> {
++    let _spike_span = ::onetaskgraph_plugin_api::spike_span::enter("copy.write_comments");
+         let at = destination.name().clone();
+         let gone = || EngineError::NoSuchTask {
+             id: GlobalId::new(at.clone(), task.clone()).to_string(),
+@@ -4990,6 +5015,7 @@ impl Engine {
+         mut recordings: Recordings,
+         journal: &mut Journal,
+     ) -> Result<(), EngineError> {
++    let _spike_span = ::onetaskgraph_plugin_api::spike_span::enter("copy.record_dependents");
+         for dependent in recordings.decided.iter() {
+             for at in self.recorded_prerequisites(dependent).await? {
+                 if !recordings.each.iter().any(|recording| recording.at == at) {
+@@ -5079,6 +5105,7 @@ impl Engine {
+         homes: BTreeMap<String, Home>,
+         journal: &mut Journal,
+     ) -> Result<(), EngineError> {
++    let _spike_span = ::onetaskgraph_plugin_api::spike_span::enter("copy.record_members");
+         for home in homes.into_values().filter(|home| home.grew) {
+             let at = self.writable(&home.id.source)?;
+             let Some(prior) = self.prior(at, Level::Project, &home.id.native).await? else {
+@@ -5201,6 +5228,7 @@ impl Engine {
+         kind: Level,
+         id: &NativeId,
+     ) -> Result<Option<Prior>, EngineError> {
++    let _spike_span = ::onetaskgraph_plugin_api::spike_span::enter("copy.prior");
+         self.prior_reading(destination, kind, id, false).await
+     }
+ 
+@@ -5308,6 +5336,7 @@ impl Engine {
+         prior: Option<Prior>,
+         journal: &mut Journal,
+     ) -> Result<NativeId, EngineError> {
++    let _spike_span = ::onetaskgraph_plugin_api::spike_span::enter("copy.write");
+         let created_kind = item.item.level();
+         let suggested = target
+             .clone()
+@@ -5475,6 +5504,7 @@ pub(super) const PROJECT_PAGE: std::num::NonZeroU32 =
+ /// work itself. That holds when only one of a source's two readings failed as well, since
+ /// a difference needs both ends.
+ pub(super) async fn readings(sources: &[&ResolvedSource]) -> Vec<Option<Metering>> {
++    let _spike_span = ::onetaskgraph_plugin_api::spike_span::enter("copy.readings");
+     let mut read = Vec::with_capacity(sources.len());
+     for source in sources {
+         read.push(source.source().metering().await.ok().flatten());
+@@ -6103,6 +6133,7 @@ fn stops_a_location(character: Option<char>) -> bool {
+ /// rather than removed or guessed at, and so is every character of the content that is not
+ /// a rewritten reference. Nothing is added and nothing is reformatted.
+ fn substitute(content: &str, table: &[(String, Resolution)]) -> (String, Counted) {
++    let _spike_span = ::onetaskgraph_plugin_api::spike_span::enter("copy.substitute");
+     let mut written = String::with_capacity(content.len());
+     let mut counts = Counted::default();
+     let mut at = 0;
+@@ -6257,6 +6288,7 @@ fn outgoing(
+     delivers: &[TaskRef],
+     held: Option<&Prior>,
+ ) -> Item {
++    let _spike_span = ::onetaskgraph_plugin_api::spike_span::enter("copy.outgoing");
+     let own = held.map(|held| described(&held.item).1);
+     let carried = |metadata: &BTreeMap<String, Value>| carried(metadata, origin, own);
+     // Never looser than the destination already holds it: a project once private stays
+@@ -6418,6 +6450,7 @@ fn carried(
+     origin: &Origin,
+     own: Option<&BTreeMap<String, Value>>,
+ ) -> BTreeMap<String, Value> {
++    let _spike_span = ::onetaskgraph_plugin_api::spike_span::enter("copy.carried");
+     let mut carried = own.cloned().unwrap_or_default();
+     carried.remove(MetadataKey::TEMPLATE_KEY);
+     carried.remove(ItemKind::METADATA_KEY);
+diff --git a/crates/onetaskgraph-core/src/engine/delivery.rs b/crates/onetaskgraph-core/src/engine/delivery.rs
+index bff9803e..84f95228 100644
+--- a/crates/onetaskgraph-core/src/engine/delivery.rs
++++ b/crates/onetaskgraph-core/src/engine/delivery.rs
+@@ -187,6 +187,7 @@ impl Engine {
+         now: &[GlobalId],
+         before: &[GlobalId],
+     ) -> Vec<Delivered> {
++    let _spike_span = ::onetaskgraph_plugin_api::spike_span::enter("copy.deliver");
+         let mut tickets: Vec<(&GlobalId, bool)> = Vec::new();
+         for ticket in now {
+             if !tickets.iter().any(|(held, _)| *held == ticket) {
+diff --git a/crates/onetaskgraph-github-projects/src/assets.rs b/crates/onetaskgraph-github-projects/src/assets.rs
+index a343ae03..d08d62c8 100644
+--- a/crates/onetaskgraph-github-projects/src/assets.rs
++++ b/crates/onetaskgraph-github-projects/src/assets.rs
+@@ -145,6 +145,7 @@ impl GitHubProjectsSource {
+         repository: Option<&Repository>,
+         assets: &AssetWrite,
+     ) -> Result<AssetUploads, SourceError> {
++    let _spike_span = ::onetaskgraph_plugin_api::spike_span::enter("upload_assets");
+         for asset in &assets.assets {
+             asset.checked()?;
+         }
+@@ -266,6 +267,15 @@ impl GitHubProjectsSource {
+         operation: AssetOperation,
+     ) -> Result<Vec<u8>, SourceError> {
+         let mutation = matches!(operation, AssetOperation::Upload);
++        let _spike_span = ::onetaskgraph_plugin_api::spike_span::enter_with(
++            "asset_request",
++            &[("operation", match operation {
++                AssetOperation::Repository => "repository",
++                AssetOperation::Upload => "upload",
++                AssetOperation::Verification => "verification",
++                AssetOperation::Read => "read",
++            })],
++        );
+         let request = request
+             .bearer_auth(self.token.expose_secret())
+             .build()
+@@ -287,7 +297,11 @@ impl GitHubProjectsSource {
+         let mut backoff = self.pacing.retry_backoff;
+         loop {
+             if mutation {
+-                self.clock.sleep(self.reserve_mutation_slot()).await;
++                let spacing = self.reserve_mutation_slot();
++                let _spike_span = (!spacing.is_zero())
++                    .then(|| ::onetaskgraph_plugin_api::spike_span::enter_with("pacing_wait", &[("op", "upload")]))
++                    .flatten();
++                self.clock.sleep(spacing).await;
+             }
+             let response = self
+                 .asset_client
+@@ -403,7 +417,19 @@ impl GitHubProjectsSource {
+                         self.pacing.retry_budget,
+                     ));
+                 }
+-                self.clock.sleep(wait).await;
++                {
++                    let _spike_span = ::onetaskgraph_plugin_api::spike_span::enter_with(
++                        "retry_wait",
++                        &[
++                            ("op", "asset"),
++                            ("limiter", match limited.limiter {
++                                Limiter::Primary => "primary",
++                                Limiter::Secondary => "secondary",
++                            }),
++                        ],
++                    );
++                    self.clock.sleep(wait).await;
++                }
+                 waited += wait;
+                 waits += 1;
+                 backoff = backoff.saturating_mul(2);
+diff --git a/crates/onetaskgraph-github-projects/src/lib.rs b/crates/onetaskgraph-github-projects/src/lib.rs
+index c160805d..626d6ccf 100644
+--- a/crates/onetaskgraph-github-projects/src/lib.rs
++++ b/crates/onetaskgraph-github-projects/src/lib.rs
+@@ -4333,6 +4333,7 @@ impl GitHubProjectsSource {
+             if is_mutation(query) {
+                 let spacing = self.reserve_mutation_slot();
+                 if !spacing.is_zero() {
++                    let _spike_span = ::onetaskgraph_plugin_api::spike_span::enter_with("pacing_wait", &[("op", &::onetaskgraph_plugin_api::spike_span::operation(query))]);
+                     self.clock.sleep(spacing).await;
+                 }
+             }
+@@ -4365,7 +4366,19 @@ impl GitHubProjectsSource {
+                     self.pacing.retry_budget,
+                 ));
+             }
+-            self.clock.sleep(wait).await;
++            {
++                let _spike_span = ::onetaskgraph_plugin_api::spike_span::enter_with(
++                    "retry_wait",
++                    &[
++                        ("op", &::onetaskgraph_plugin_api::spike_span::operation(query)),
++                        ("limiter", match limited.limiter {
++                            Limiter::Primary => "primary",
++                            Limiter::Secondary => "secondary",
++                        }),
++                    ],
++                );
++                self.clock.sleep(wait).await;
++            }
+             waited += wait;
+             waits += 1;
+             backoff = backoff.saturating_mul(2);
+@@ -4455,6 +4468,14 @@ impl GitHubProjectsSource {
+         variables: &Value,
+         number: u32,
+     ) -> Result<Value, Attempt> {
++        let _spike_span = ::onetaskgraph_plugin_api::spike_span::enter_with(
++            "send_once",
++            &[
++                ("op", &::onetaskgraph_plugin_api::spike_span::operation(query)),
++                ("kind", if is_mutation(query) { "mutation" } else { "query" }),
++                ("attempt", &number.to_string()),
++            ],
++        );
+         let executed = self.ledger.priced_document(query);
+         let Attempted {
+             result,
+@@ -11684,6 +11705,7 @@ fn slot_span(body: &str) -> Result<Option<SlotSpan>, SourceError> {
+ /// or alone in an empty body — and a body with no slot that is given no metadata is
+ /// returned as it is.
+ fn with_slot(body: &str, metadata: &BTreeMap<String, Value>) -> Result<String, SourceError> {
++    let _spike_span = ::onetaskgraph_plugin_api::spike_span::enter("with_slot");
+     let encoded = if metadata.is_empty() {
+         None
+     } else {
+@@ -11757,6 +11779,7 @@ fn compose_body(
+     content: Option<&str>,
+     metadata: &BTreeMap<String, Value>,
+ ) -> Result<Option<String>, SourceError> {
++    let _spike_span = ::onetaskgraph_plugin_api::spike_span::enter("compose_body");
+     let visible = content.unwrap_or_default();
+     if metadata.is_empty() {
+         return Ok((!visible.is_empty()).then(|| visible.to_owned()));
+diff --git a/crates/onetaskgraph-plugin-api/src/lib.rs b/crates/onetaskgraph-plugin-api/src/lib.rs
+index 7a225d77..b316a4d0 100644
+--- a/crates/onetaskgraph-plugin-api/src/lib.rs
++++ b/crates/onetaskgraph-plugin-api/src/lib.rs
+@@ -15,6 +15,7 @@
+ #![deny(missing_docs)]
+ 
+ mod asset;
++pub mod spike_span;
+ mod cache;
+ mod capability;
+ mod clock;
+diff --git a/crates/onetaskgraph-plugin-api/src/spike_span.rs b/crates/onetaskgraph-plugin-api/src/spike_span.rs
+new file mode 100644
+index 00000000..54ee499a
+--- /dev/null
++++ b/crates/onetaskgraph-plugin-api/src/spike_span.rs
+@@ -0,0 +1,105 @@
++//! Timing-only spans for the board-copy-speed spike. Inert unless `SPIKE_SPAN_LOG`
++//! names a file: then each span appends one JSON line with its name, wall-clock start and
++//! end in microseconds since the Unix epoch, and the attributes it was opened with. Nothing
++//! else reads it, and nothing it records is a board's content.
++
++use std::fs::{File, OpenOptions};
++use std::io::Write;
++use std::sync::atomic::{AtomicU64, Ordering};
++use std::sync::{Mutex, OnceLock};
++use std::time::{SystemTime, UNIX_EPOCH};
++
++fn sink() -> Option<&'static Mutex<File>> {
++    static SINK: OnceLock<Option<Mutex<File>>> = OnceLock::new();
++    SINK.get_or_init(|| {
++        let path = std::env::var_os("SPIKE_SPAN_LOG")?;
++        OpenOptions::new()
++            .create(true)
++            .append(true)
++            .open(path)
++            .ok()
++            .map(Mutex::new)
++    })
++    .as_ref()
++}
++
++fn now_us() -> u64 {
++    SystemTime::now()
++        .duration_since(UNIX_EPOCH)
++        .map_or(0, |since| u64::try_from(since.as_micros()).unwrap_or(u64::MAX))
++}
++
++static NEXT: AtomicU64 = AtomicU64::new(1);
++
++/// An open span; it is written when dropped.
++pub struct Span {
++    id: u64,
++    name: &'static str,
++    attrs: Vec<(&'static str, String)>,
++    start: u64,
++}
++
++/// Open a span, or nothing at all when no log is named.
++#[must_use]
++pub fn enter(name: &'static str) -> Option<Span> {
++    sink()?;
++    Some(Span {
++        id: NEXT.fetch_add(1, Ordering::Relaxed),
++        name,
++        attrs: Vec::new(),
++        start: now_us(),
++    })
++}
++
++/// Open a span carrying attributes.
++#[must_use]
++pub fn enter_with(name: &'static str, attrs: &[(&'static str, &str)]) -> Option<Span> {
++    let mut span = enter(name)?;
++    span.attrs = attrs.iter().map(|(k, v)| (*k, (*v).to_owned())).collect();
++    Some(span)
++}
++
++/// Add an attribute to a span already open.
++pub fn attr(span: &mut Option<Span>, key: &'static str, value: &str) {
++    if let Some(span) = span {
++        span.attrs.push((key, value.to_owned()));
++    }
++}
++
++/// The operation name a GraphQL document declares, or `anonymous`.
++#[must_use]
++pub fn operation(document: &str) -> String {
++    let mut words = document
++        .split(|c: char| c.is_whitespace() || c == '(' || c == '{')
++        .filter(|word| !word.is_empty());
++    while let Some(word) = words.next() {
++        if word == "query" || word == "mutation" {
++            return words
++                .next()
++                .map_or_else(|| "anonymous".to_owned(), str::to_owned);
++        }
++    }
++    "anonymous".to_owned()
++}
++
++impl Drop for Span {
++    fn drop(&mut self) {
++        let Some(sink) = sink() else { return };
++        let end = now_us();
++        let attrs: serde_json::Map<String, serde_json::Value> = self
++            .attrs
++            .iter()
++            .map(|(k, v)| ((*k).to_owned(), serde_json::Value::String(v.clone())))
++            .collect();
++        let line = serde_json::json!({
++            "id": self.id,
++            "span": self.name,
++            "start_us": self.start,
++            "end_us": end,
++            "attrs": attrs,
++        });
++        if let Ok(mut file) = sink.lock() {
++            let _ = writeln!(file, "{line}");
++        }
++    }
++}
+diff --git a/crates/onetaskgraph/src/main.rs b/crates/onetaskgraph/src/main.rs
+index 47796df4..d35394ff 100644
+--- a/crates/onetaskgraph/src/main.rs
++++ b/crates/onetaskgraph/src/main.rs
+@@ -66,6 +66,7 @@ const EXIT_PARTIAL: u8 = 4;
+ /// I/O at once, which one thread interleaves, not several sources computing at once.
+ #[tokio::main(flavor = "current_thread")]
+ async fn main() -> ExitCode {
++    let _spike_span = ::onetaskgraph_plugin_api::spike_span::enter("process");
+     let cli = Cli::parse();
+     if let Command::PluginServe { source } = &cli.command {
+         let input = io::BufReader::new(io::stdin().lock());
+@@ -157,6 +158,7 @@ fn failed(failure: &Failure, output: OutputFormat) -> ExitCode {
+ /// a closed reader is the same failure whichever verb was writing, and one path is one
+ /// path to get right.
+ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result<u8, Failure> {
++    let _spike_span = ::onetaskgraph_plugin_api::spike_span::enter("cli.run");
+     // One match over every verb rather than a pre-dispatch and a second match: two
+     // matches over one enum means one of them owes an answer for arms it never receives,
+     // and an arm nothing can reach is an arm nothing checks. The engine is built inside
