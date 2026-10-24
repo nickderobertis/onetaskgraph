@@ -32,6 +32,7 @@ class Doc(StrEnum):
     CREATED_BOARD_ITEMS = "CREATED_BOARD_ITEMS"
     SUB_ISSUES = "SUB_ISSUES"
     ISSUE = "ISSUE"
+    CREATION_CONTEXT = "CREATION_CONTEXT"
 
 
 def snapshot(path: Path = SNAPSHOT) -> dict[Doc, str]:

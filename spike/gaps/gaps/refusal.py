@@ -44,8 +44,15 @@ UNSENT = (
     "mutation($p: ID!, $i: ID!) { deleteProjectV2Item(input: {projectId: $p, itemId: $i})"
     " { deletedItemId } }"
 )
-DELETE = "mutation($i: ID!) { deleteIssue(input: {issueId: $i}) { clientMutationId } }"
+DELETE = "mutation($i: ID!) { deleteIssue(input: {issueId: $i}) { repository { id } } }"
 READ = "query { viewer { login } }"
+READ_AN_ISSUE = 'query { x: node(id: "I_returned_by_a_read") { id } }'
+RETURNED = "I_returned_by_a_read"
+COMMENTED = "# a comment first\n" + DELETE
+FIELD = (
+    "mutation($p: ID!, $i: ID!) { updateProjectV2ItemFieldValue(input: {projectId: $p,"
+    ' itemId: $i, fieldId: "F", value: {singleSelectOptionId: "O"}}) { projectV2Item { id } } }'
+)
 
 
 class Allowed(StrEnum):
@@ -117,6 +124,26 @@ CASES = (
         403,
     ),
     Case("deleteIssue of an issue this run did not create", DELETE, {"i": "I_someone_else"}, 403),
+    Case(
+        "a mutation behind a comment, of an issue this run did not create",
+        COMMENTED,
+        {"i": "I_someone_else"},
+        403,
+    ),
+    Case(
+        "createIssue under a parent this run did not create",
+        CREATE,
+        {"input": {"repositoryId": REPO_ID, "title": "x", "parentIssueId": "I_someone_else"}},
+        403,
+    ),
+    Case(
+        "a field value on a board item of an issue this run did not create",
+        FIELD,
+        {"p": PROJECT_ID, "i": "PVTI_someone_else"},
+        403,
+    ),
+    Case("a read answering an issue", READ_AN_ISSUE, {}, 200),
+    Case("deleteIssue of an issue a read answered", DELETE, {"i": RETURNED}, 403),
     Case(
         "createIssue naming only the test board",
         CREATE,
@@ -204,7 +231,11 @@ class StandIn:
             )
             body = await reader.readexactly(length)
             self.seen.append(lines[0])
-            made = {"createIssue": {"issue": {"id": MADE}}} if b"createIssue" in body else {}
+            made: dict[str, object] = {}
+            if b"createIssue" in body:
+                made = {"createIssue": {"issue": {"id": MADE}}}
+            elif RETURNED.encode() in body:
+                made = {"x": {"issue": {"id": RETURNED}}}
             payload = json.dumps({"data": made}).encode()
             writer.write(
                 b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n"

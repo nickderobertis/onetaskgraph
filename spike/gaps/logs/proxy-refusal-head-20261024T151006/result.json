@@ -1,0 +1,131 @@
+{
+ "all_as_expected": true,
+ "cases": [
+  {
+   "case": "createIssue in another repository",
+   "expected": 403,
+   "reached_upstream": 0,
+   "status": 403
+  },
+  {
+   "case": "addProjectV2ItemById to another project",
+   "expected": 403,
+   "reached_upstream": 0,
+   "status": 403
+  },
+  {
+   "case": "createIssue on the test repository placed on another project",
+   "expected": 403,
+   "reached_upstream": 0,
+   "status": 403
+  },
+  {
+   "case": "projectV2Ids written inline, naming another project",
+   "expected": 403,
+   "reached_upstream": 0,
+   "status": 403
+  },
+  {
+   "case": "projectV2Ids written inline around a variable naming another project",
+   "expected": 403,
+   "reached_upstream": 0,
+   "status": 403
+  },
+  {
+   "case": "aliased request, second mutation in another repository",
+   "expected": 403,
+   "reached_upstream": 0,
+   "status": 403
+  },
+  {
+   "case": "a mutation the probes never send, on the test board",
+   "expected": 403,
+   "reached_upstream": 0,
+   "status": 403
+  },
+  {
+   "case": "deleteIssue of an issue this run did not create",
+   "expected": 403,
+   "reached_upstream": 0,
+   "status": 403
+  },
+  {
+   "case": "a mutation behind a comment, of an issue this run did not create",
+   "expected": 403,
+   "reached_upstream": 0,
+   "status": 403
+  },
+  {
+   "case": "createIssue under a parent this run did not create",
+   "expected": 403,
+   "reached_upstream": 0,
+   "status": 403
+  },
+  {
+   "case": "a field value on a board item of an issue this run did not create",
+   "expected": 403,
+   "reached_upstream": 0,
+   "status": 403
+  },
+  {
+   "case": "a read answering an issue",
+   "expected": 200,
+   "reached_upstream": 1,
+   "status": 200
+  },
+  {
+   "case": "deleteIssue of an issue a read answered",
+   "expected": 403,
+   "reached_upstream": 0,
+   "status": 403
+  },
+  {
+   "case": "createIssue naming only the test board",
+   "expected": 200,
+   "reached_upstream": 1,
+   "status": 200
+  },
+  {
+   "case": "deleteIssue of the issue this run just created",
+   "expected": 200,
+   "reached_upstream": 1,
+   "status": 200
+  },
+  {
+   "case": "an asset upload",
+   "expected": 403,
+   "reached_upstream": 0,
+   "status": 403
+  },
+  {
+   "case": "a CONNECT tunnel",
+   "expected": 403,
+   "reached_upstream": 0,
+   "status": 403
+  },
+  {
+   "case": "a GraphQL body that is not JSON",
+   "expected": 403,
+   "reached_upstream": 0,
+   "status": 403
+  },
+  {
+   "case": "a negative Content-Length",
+   "expected": 400,
+   "reached_upstream": 0,
+   "status": 400
+  },
+  {
+   "case": "createIssue naming only the test board, with no write allowed",
+   "expected": 403,
+   "reached_upstream": 0,
+   "status": 403
+  },
+  {
+   "case": "a read, with no write allowed",
+   "expected": 200,
+   "reached_upstream": 1,
+   "status": 200
+  }
+ ]
+}

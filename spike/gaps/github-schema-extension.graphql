@@ -1,0 +1,18 @@
+# What this spike asks GitHub beyond the plugin's own vocabulary, which
+# crates/onetaskgraph-github-projects/tests/fixtures/schema.graphql pins: the GraphQL rate
+# limit, read before and after every probe and asked for beside every priced document.
+# Copied from GitHub's published reference (docs.github.com/en/graphql/reference/objects#ratelimit
+# and /queries#ratelimit), reduced to the members this spike selects. tests/test_documents.py
+# validates every document the spike sends against the pinned subset extended by this file, and
+# refuses an extension that redefines anything the subset already pins.
+type RateLimit {
+  cost: Int!
+  limit: Int!
+  remaining: Int!
+  resetAt: DateTime!
+  used: Int!
+}
+
+extend type Query {
+  rateLimit(dryRun: Boolean = false): RateLimit
+}

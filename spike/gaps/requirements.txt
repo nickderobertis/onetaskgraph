@@ -1,0 +1,6 @@
+# The spike-gaps harness's test and type-check environment, made by the project's `bootstrap`
+# target in spike/gaps/.venv. graphql-core validates every document the spike sends against the
+# GitHub schema the plugin pins; pytest and ty are the versions the repository's own .venv runs.
+graphql-core==3.2.6
+pytest==9.1.1
+ty==0.0.74

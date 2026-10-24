@@ -2,32 +2,65 @@
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
   "name": "spike-gaps",
   "projectType": "application",
-  "tags": ["lang:python", "layer:spike"],
-  "implicitDependencies": ["onetaskgraph"],
-  "//": "The board-copy-gaps feasibility spike, preserved on its branch and never landed. Its tests drive target/debug/onetaskgraph and the prototype, so `test` depends on both builds. `build` builds the reachability-closure prototype the offline tests run; the live probes are never a target, because they spend the test board's shared GitHub allowance and run only from spike/gaps/gaps.sh.",
+  "tags": [
+    "lang:python",
+    "layer:spike"
+  ],
+  "implicitDependencies": [
+    "onetaskgraph"
+  ],
+  "//": "The board-copy-gaps feasibility spike, preserved on its branch and never landed. Its tests drive target/debug/onetaskgraph and the prototype, so `test` depends on both builds and on `bootstrap`, which makes the project's own .venv from requirements.txt. `build` builds the reachability-closure prototype the offline tests run; the live probes are never a target, because they spend the test board's shared GitHub allowance and run only from spike/gaps/gaps.sh.",
   "targets": {
+    "bootstrap": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "uv venv -q --allow-existing --python 3.13 .venv && uv pip install -q --python .venv -r requirements.txt",
+        "cwd": "spike/gaps"
+      },
+      "cache": false,
+      "//": "Uncached: it reaches PyPI and writes spike/gaps/.venv, outside the cacheable output set."
+    },
     "format-check": {
       "executor": "nx:run-commands",
-      "options": { "command": ".venv/bin/ruff format --check spike/gaps" }
+      "options": {
+        "command": ".venv/bin/ruff format --check spike/gaps"
+      }
     },
     "lint": {
       "executor": "nx:run-commands",
-      "options": { "command": ".venv/bin/ruff check spike/gaps" }
+      "options": {
+        "command": ".venv/bin/ruff check spike/gaps"
+      }
     },
     "typecheck": {
       "executor": "nx:run-commands",
-      "options": { "command": "../../.venv/bin/ty check gaps tests", "cwd": "spike/gaps" }
+      "dependsOn": [
+        "bootstrap"
+      ],
+      "options": {
+        "command": ".venv/bin/ty check gaps tests",
+        "cwd": "spike/gaps"
+      }
     },
     "build": {
       "executor": "nx:run-commands",
-      "options": { "command": "bash spike/gaps/prototype/build.sh" },
+      "options": {
+        "command": "bash spike/gaps/prototype/build.sh"
+      },
       "cache": false,
       "//": "Uncached: it builds into a clone under the user's cache directory, outside the cacheable output set."
     },
     "test": {
       "executor": "nx:run-commands",
-      "dependsOn": ["onetaskgraph:build", "build"],
-      "options": { "command": "../../.venv/bin/pytest -q", "cwd": "spike/gaps" }
+      "dependsOn": [
+        "onetaskgraph:build",
+        "build",
+        "bootstrap"
+      ],
+      "options": {
+        "command": ".venv/bin/pytest -q",
+        "cwd": "spike/gaps"
+      }
     }
   }
 }

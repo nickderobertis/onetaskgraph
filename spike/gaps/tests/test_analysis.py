@@ -77,3 +77,31 @@ def test_the_report_command_writes_the_answers_and_refuses_an_unreadable_lint_re
         check=False,
     )
     assert refused.returncode == 1 and "lint.json" in refused.stderr
+
+
+def last_ms(run: str, op: str, count: int) -> float:
+    """The seconds the last `count` requests of `op` took in a baseline run, read raw."""
+    path = analysis.BASELINE / run / "requests.jsonl"
+    lines = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    return sum([r["ms"] for r in lines if r["op"] == op][-count:]) / 1000
+
+
+def test_the_seconds_estimates_are_the_baseline_less_what_the_plans_remove() -> None:
+    """The seconds estimates are the baseline less what the plans remove, recomputed raw."""
+    summary = asyncio.run(report.build(PLAN_CHECKOUT, ONETASKGRAPH))
+    by_id = {c.budget.id: c for c in summary.candidates}
+    runs = json.loads((analysis.BASELINE / "summary.json").read_text())["runs"]
+
+    bare = "tb-unchanged-span-20261024T095930"
+    wall = round(sum(runs[bare]["split"].values()), 1)
+    expected = round(wall - round(last_ms(bare, "ORIGIN_LOOKUP", 4), 2), 1)
+    assert by_id["github-plan-copy-seconds-unchanged"].attainable == expected
+
+    host = "host-approve-stock-20261024T100947"
+    split = runs[host]["split"]
+    wall = round(sum(split.values()), 1)
+    screening = round(sum(v for k, v in split.items() if "screening" in k), 2)
+    reads = round(last_ms(host, "ISSUE", 2) + last_ms(host, "SUB_ISSUES", 1), 2)
+    parent = summary.prices.parent_listing_seconds
+    expected = round(wall - screening + 2 * 0.67 - reads + parent, 1)
+    assert by_id["plan-approval-seconds"].attainable == expected

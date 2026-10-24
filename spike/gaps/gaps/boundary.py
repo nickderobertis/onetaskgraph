@@ -17,7 +17,7 @@ from enum import IntEnum, StrEnum
 from pathlib import Path
 
 from gaps import proc
-from gaps.json_shape import Json, ShapeError, arr, load, obj, parse, text
+from gaps.json_shape import Json, ShapeError, arr, field, load, obj, parse, text
 
 REPO = Path(__file__).resolve().parents[3]
 PINNED_SCHEMA = REPO / "crates/onetaskgraph-core/src/engine/boundary/onevcs-boundary-schema-v1.json"
@@ -95,7 +95,7 @@ class CheckInput:
             for name in merged_fields()
         }
         scope = entry.get("scope")
-        destination = Visibility(text(entry.get("destination", "public"), f"{where}.destination"))
+        destination = Visibility(text(field(entry, "destination", where), f"{where}.destination"))
         return cls(
             arrays=arrays,
             scope=None if scope is None else tuple(text(s, "scope[]") for s in arr(scope, "scope")),

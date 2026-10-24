@@ -156,6 +156,76 @@ class State:
         self.path.write_text(json.dumps(self.ids))
 
 
+def create_document(label: str, count: int) -> str:
+    """`count` aliased `createIssue`, each answering its issue, parent and board items."""
+    defs = ", ".join(f"$c{k}: CreateIssueInput!" for k in range(count))
+    aliases = " ".join(
+        f"c{k}: createIssue(input: $c{k}) {{ issue {{ id parent {{ id }} {ITEMS} }} }}"
+        for k in range(count)
+    )
+    return f"mutation ProbeCreate{label}({defs}) {{ {aliases} }}"
+
+
+def placed_document(count: int) -> str:
+    """One aliased read of `count` issues' board items, with its stated cost."""
+    aliases = " ".join(
+        f"i{k}: node(id: $id{k}) {{ ... on Issue {{ id {ITEMS} }} }}" for k in range(count)
+    )
+    defs = ", ".join(f"$id{k}: ID!" for k in range(count))
+    return f"query ProbePlaced({defs}) {{ rateLimit {{ cost }} {aliases} }}"
+
+
+ADD_ALIASES = ("a", "b", "c")
+
+
+def add_document() -> str:
+    """Three aliased `addProjectV2ItemById`: two racing GitHub's placement, one after it."""
+    adds = " ".join(
+        f"{a}: addProjectV2ItemById(input: {{projectId: $p, contentId: ${a}}}) {{ item {{ id }} }}"
+        for a in ADD_ALIASES
+    )
+    return f"mutation ProbeAdd($p: ID!, $a: ID!, $b: ID!, $c: ID!) {{ {adds} }}"
+
+
+def coalesced_document(items: int, used: list[int]) -> str:
+    """Every field value of `items` items and every plan edge, as one request."""
+    defs = ["$p: ID!", "$f: ID!", "$o: String!"]
+    defs += [f"$i{k}: ID!" for k in range(items)] + [f"$x{k}: ID!" for k in used]
+    writes = [field_write(f"v{k}", f"i{k}") for k in range(items)]
+    writes += [
+        f"e{n}: addBlockedBy(input: {{issueId: $x{t}, blockingIssueId: $x{b}}})"
+        " { issue { id } }"
+        for n, (t, b) in enumerate(EDGES)
+    ]
+    return f"mutation ProbeCoalesced({', '.join(defs)}) {{ {' '.join(writes)} }}"
+
+
+def nineteen_document() -> str:
+    """`NINETEEN` aliased field values in one request."""
+    defs = ["$p: ID!", "$f: ID!", "$o: String!"] + [f"$i{k}: ID!" for k in range(NINETEEN)]
+    writes = " ".join(field_write(f"v{k}", f"i{k}") for k in range(NINETEEN))
+    return f"mutation ProbeNineteen({', '.join(defs)}) {{ {writes} }}"
+
+
+def own_document(count: int) -> str:
+    """One aliased read of `count` issues' titles and repositories."""
+    reads = " ".join(
+        f"r{k}: node(id: $r{k}) {{ ... on Issue {{ id title repository {{ id }} }} }}"
+        for k in range(count)
+    )
+    return f"query ProbeOwn({', '.join(f'$r{k}: ID!' for k in range(count))}) {{ {reads} }}"
+
+
+def delete_document(count: int) -> str:
+    """`count` aliased `deleteIssue`."""
+    aliases = " ".join(
+        f"d{k}: deleteIssue(input: {{issueId: $d{k}}}) {{ repository {{ id }} }}"
+        for k in range(count)
+    )
+    defs = ", ".join(f"$d{k}: ID!" for k in range(count))
+    return f"mutation ProbeDelete({defs}) {{ {aliases} }}"
+
+
 def on_board(node: Json, project: str, where: str) -> tuple[ItemId, ...]:
     """The items of `project` an issue's `projectItems` lists."""
     if node is None:
@@ -174,19 +244,21 @@ async def create(
     client: Client, state: State, inputs: list[dict[str, Json]], label: str, project: str
 ) -> tuple[list[Created], float]:
     """Create every input in one aliased request; answer each issue and when the answer came."""
-    defs = ", ".join(f"$c{k}: CreateIssueInput!" for k in range(len(inputs)))
-    aliases = " ".join(
-        f"c{k}: createIssue(input: $c{k}) {{ issue {{ id parent {{ id }} {ITEMS} }} }}"
-        for k in range(len(inputs))
-    )
     answer = await client.graphql(
         f"ProbeCreate{label}",
-        f"mutation ProbeCreate{label}({defs}) {{ {aliases} }}",
+        create_document(label, len(inputs)),
         {f"c{k}": value for k, value in enumerate(inputs)},
         aliases=len(inputs),
     )
-    issues = [obj(answer.data.get(f"c{k}") or {}, f"c{k}").get("issue") for k in range(len(inputs))]
-    ids = [IssueId(text(obj(i, "issue").get("id"), "issue.id")) for i in issues if i is not None]
+    answered = [answer.data.get(f"c{k}") for k in range(len(inputs))]
+    issues = [i.get("issue") if isinstance(i, dict) else None for i in answered]
+    # Every id an answer carries is recorded before anything about the answer is refused, so a
+    # create answered in part, or malformed in part, still has each issue it made deleted.
+    ids = [
+        IssueId(found)
+        for i in issues
+        if isinstance(i, dict) and isinstance(found := i.get("id"), str)
+    ]
     state.add(ids)
     require(answer, f"ProbeCreate{label}")
     if len(ids) != len(inputs):
@@ -211,13 +283,9 @@ async def read_items(
     client: Client, issues: list[IssueId], project: str
 ) -> tuple[dict[IssueId, tuple[ItemId, ...]], int]:
     """One aliased read of every issue's board items, and what GitHub charged for it."""
-    aliases = " ".join(
-        f"i{k}: node(id: $id{k}) {{ ... on Issue {{ {ITEMS} }} }}" for k in range(len(issues))
-    )
-    defs = ", ".join(f"$id{k}: ID!" for k in range(len(issues)))
     answer = await client.graphql(
         "ProbePlaced",
-        f"query ProbePlaced({defs}) {{ rateLimit {{ cost }} {aliases} }}",
+        placed_document(len(issues)),
         {f"id{k}": issue for k, issue in enumerate(issues)},
         aliases=len(issues),
     )
@@ -272,25 +340,15 @@ async def race(client: Client, state: State, ids: BoardIds, placed: IssueId) -> 
         for k in range(1, RACERS + 1)
     ]
     racers, _ = await create(client, state, inputs, "Race", ids.project)
-    aliases = ("a", "b", "c")
-    document = (
-        "mutation ProbeAdd($p: ID!, $a: ID!, $b: ID!, $c: ID!) { "
-        + " ".join(
-            f"{a}: addProjectV2ItemById(input: {{projectId: $p, contentId: ${a}}})"
-            " { item { id } }"
-            for a in aliases
-        )
-        + " }"
-    )
     variables: dict[str, Json] = {"p": ids.project, "a": racers[0].issue, "b": racers[1].issue}
     variables["c"] = placed
-    answer = await client.graphql("ProbeAdd", document, variables, aliases=3)
+    answer = await client.graphql("ProbeAdd", add_document(), variables, aliases=len(ADD_ALIASES))
     await asyncio.sleep(RACE_SETTLE)
     targets = [racers[0].issue, racers[1].issue, placed]
     after, _ = await read_items(client, targets, ids.project)
     outcomes = [
         add_outcome(answer, alias, after[issue])
-        for alias, issue in zip(aliases, targets, strict=True)
+        for alias, issue in zip(ADD_ALIASES, targets, strict=True)
     ]
     return Idempotence(
         racing_outcomes=tuple(outcomes[:RACERS]),
@@ -332,34 +390,23 @@ async def coalesced_write(
 ) -> CoalescedWrite:
     """Every field value and every edge as one request."""
     used = sorted({k for edge in EDGES for k in edge})
-    defs = ["$p: ID!", "$f: ID!", "$o: String!"]
-    defs += [f"$i{k}: ID!" for k in range(len(items))] + [f"$x{k}: ID!" for k in used]
-    writes = [field_write(f"v{k}", f"i{k}") for k in range(len(items))]
-    writes += [
-        f"e{n}: addBlockedBy(input: {{issueId: $x{t}, blockingIssueId: $x{b}}})"
-        " { issue { id } }"
-        for n, (t, b) in enumerate(EDGES)
-    ]
     variables: dict[str, Json] = {"p": ids.project, "f": ids.status_field, "o": ids.first_option}
     variables |= {f"i{k}": v for k, v in enumerate(items)} | {f"x{k}": issues[k] for k in used}
     answer = await client.graphql(
         "ProbeCoalesced",
-        f"mutation ProbeCoalesced({', '.join(defs)}) {{ {' '.join(writes)} }}",
+        coalesced_document(len(items), used),
         variables,
-        aliases=len(writes),
+        aliases=len(items) + len(EDGES),
     )
     data = require(answer, "ProbeCoalesced")
     answered = sum(1 for value in data.values() if value)
-    return CoalescedWrite(answered=answered, aliases=len(writes), seconds=answer.seconds)
+    aliases = len(items) + len(EDGES)
+    return CoalescedWrite(answered=answered, aliases=aliases, seconds=answer.seconds)
 
 
 async def nineteen(client: Client, ids: BoardIds, items: list[ItemId]) -> None:
     """`REPEATS` requests of 19 aliased field values, which the analysis prices by their rise."""
-    defs = ["$p: ID!", "$f: ID!", "$o: String!"] + [f"$i{k}: ID!" for k in range(NINETEEN)]
-    document = (
-        f"mutation ProbeNineteen({', '.join(defs)}) "
-        f"{{ {' '.join(field_write(f'v{k}', f'i{k}') for k in range(NINETEEN))} }}"
-    )
+    document = nineteen_document()
     variables: dict[str, Json] = {"p": ids.project, "f": ids.status_field, "o": ids.first_option}
     variables |= {f"i{k}": items[k % len(items)] for k in range(NINETEEN)}
     for _ in range(REPEATS):
@@ -380,13 +427,9 @@ async def delete(client: Client, state: State, ids: BoardIds) -> Cleanup:
     recorded = list(dict.fromkeys(state.ids))
     if not recorded:
         return Cleanup(0, 0, 0, 0, ())
-    reads = " ".join(
-        f"r{k}: node(id: $r{k}) {{ ... on Issue {{ id title repository {{ id }} }} }}"
-        for k in range(len(recorded))
-    )
     answer = await client.graphql(
         "ProbeOwn",
-        f"query ProbeOwn({', '.join(f'$r{k}: ID!' for k in range(len(recorded)))}) {{ {reads} }}",
+        own_document(len(recorded)),
         {f"r{k}": v for k, v in enumerate(recorded)},
     )
     not_found = {e.path[0] for e in answer.errors if e.type == "NOT_FOUND" and e.path}
@@ -407,14 +450,9 @@ async def delete(client: Client, state: State, ids: BoardIds) -> Cleanup:
     errors: list[str] = []
     for start in range(0, len(own), DELETE_BATCH):
         batch = own[start : start + DELETE_BATCH]
-        aliases = " ".join(
-            f"d{k}: deleteIssue(input: {{issueId: $d{k}}}) {{ clientMutationId }}"
-            for k in range(len(batch))
-        )
-        defs = ", ".join(f"$d{k}: ID!" for k in range(len(batch)))
         result = await client.graphql(
             "ProbeDelete",
-            f"mutation ProbeDelete({defs}) {{ {aliases} }}",
+            delete_document(len(batch)),
             {f"d{k}": v for k, v in enumerate(batch)},
             aliases=len(batch),
         )

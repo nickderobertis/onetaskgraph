@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import NewType
 
+from gaps import documents
+from gaps.documents import Doc
 from gaps.github import Answer, require
 from gaps.json_shape import Json, ShapeError, arr, obj, text
 
@@ -65,31 +67,41 @@ class BoardIds:
     first_option: OptionId
 
 
-IDS_QUERY = (
-    "query ProbeIds($owner: String!, $name: String!, $number: Int!) {"
-    " repository(owner: $owner, name: $name) { id }"
-    " user(login: $owner) { projectV2(number: $number) { id"
-    ' field(name: "Status") { ... on ProjectV2SingleSelectField { id options { id name } } } } } }'
-)
+def ids_query() -> str:
+    """The plugin's own `CREATION_CONTEXT` document: the board, its fields and the repository."""
+    return documents.snapshot()[Doc.CREATION_CONTEXT]
 
 
 def ids_variables(board: ScratchBoard) -> dict[str, Json]:
-    """The variables `IDS_QUERY` is sent with."""
-    return {"owner": board.owner, "name": board.repository_name, "number": board.number}
+    """The variables `ids_query` is sent with."""
+    return {
+        "owner": board.owner,
+        "number": board.number,
+        "nestedFirst": 50,
+        "repositoryOwner": board.repository.partition("/")[0],
+        "repositoryName": board.repository_name,
+    }
 
 
 def board_ids(answer: Answer) -> BoardIds:
-    """The ids `IDS_QUERY` answered, refusing an answer missing any of them."""
-    data = require(answer, "ProbeIds")
-    repository = obj(data.get("repository"), "ProbeIds.repository")
-    project = obj(obj(data.get("user"), "ProbeIds.user").get("projectV2"), "ProbeIds.projectV2")
-    status = obj(project.get("field"), "ProbeIds.projectV2.field")
-    options = arr(status.get("options"), "ProbeIds.field.options")
+    """The ids `ids_query` answered, refusing an answer missing any of them."""
+    data = require(answer, "CREATION_CONTEXT")
+    repository = obj(data.get("repository"), "CREATION_CONTEXT.repository")
+    owner = obj(data.get("boardFields"), "CREATION_CONTEXT.boardFields")
+    project = obj(owner.get("projectV2"), "CREATION_CONTEXT.projectV2")
+    fields = arr(obj(project.get("fields"), "projectV2.fields").get("nodes"), "fields.nodes")
+    status = next(
+        (obj(f, "field") for f in fields if isinstance(f, dict) and f.get("name") == "Status"),
+        None,
+    )
+    if status is None:
+        raise ShapeError("CREATION_CONTEXT: the board has no Status field")
+    options = arr(status.get("options"), "Status.options")
     if not options:
-        raise ShapeError("ProbeIds: the Status field has no option to write")
+        raise ShapeError("CREATION_CONTEXT: the Status field has no option to write")
     return BoardIds(
         repository=RepositoryId(text(repository.get("id"), "repository.id")),
         project=ProjectId(text(project.get("id"), "projectV2.id")),
-        status_field=FieldId(text(status.get("id"), "field.id")),
+        status_field=FieldId(text(status.get("id"), "Status.id")),
         first_option=OptionId(text(obj(options[0], "options[0]").get("id"), "options[0].id")),
     )

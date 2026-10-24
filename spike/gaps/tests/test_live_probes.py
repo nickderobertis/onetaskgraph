@@ -16,7 +16,7 @@ import pytest
 
 from gaps import allowance, board, placement
 from gaps.github import Client, GitHubError, RateLimit, Token
-from gaps.json_shape import decode, load, load_lines, obj
+from gaps.json_shape import ShapeError, decode, load, load_lines, obj
 from gaps.placement import AddOutcome, PlacementResult
 from gaps.pricing import Named, PricingResult
 from gaps.relay import relay
@@ -111,7 +111,7 @@ async def probe(
         client = Client(proxy.endpoint, Token("t0ken"))
         try:
             return await placement.probe(client, ids, state), state, client
-        except (GitHubError, placement.LeftBehind) as error:
+        except (GitHubError, ShapeError, placement.LeftBehind) as error:
             return error, state, client
 
 
@@ -290,3 +290,33 @@ def test_a_reading_is_the_least_of_its_figures_and_ignores_headers_of_a_closed_w
         read(RateLimit(limit=5000, remaining=10, used=4990, reset=1, resource="graphql"))
     )
     assert closed.least.remaining > 10
+
+
+@pytest.mark.parametrize(
+    ("framing", "status"),
+    [(fake_github.Chunking.WHOLE, 0), (fake_github.Chunking.CUT_SHORT, 1)],
+)
+def test_a_chunked_answer_is_read_whole_and_one_cut_short_is_refused(
+    tmp_path: Path,
+    github: tuple[fake_github.Board, str],
+    framing: fake_github.Chunking,
+    status: int,
+) -> None:
+    """A chunked answer is read whole, and one cut short is refused rather than half read."""
+    stand_in, url = github
+    stand_in.chunked = framing
+    done = run_gaps(tmp_path, "probe-alias-pricing", SPIKE_UPSTREAM=url, GH_PROJECTS_TOKEN="t0ken")
+    assert done.returncode == status, done.stderr
+    if status:
+        assert "HTTP 502" in done.stderr or "upstream" in done.stderr
+
+
+def test_a_create_answered_malformed_in_part_still_deletes_every_issue_it_named(
+    tmp_path: Path, github: tuple[fake_github.Board, str]
+) -> None:
+    """A create answered malformed in part still deletes every issue its answer named."""
+    stand_in, url = github
+    stand_in.malformed_create = 0
+    result, state, _ = asyncio.run(probe(url, tmp_path))
+    assert isinstance(result, ShapeError)
+    assert len(stand_in.issues) == 1 and state.ids == []

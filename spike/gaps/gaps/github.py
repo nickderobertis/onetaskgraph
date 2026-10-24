@@ -1,7 +1,7 @@
-"""A small async, typed GitHub client that speaks only to the recording proxy on loopback.
+"""A small async, typed GitHub client that speaks only to the guard on loopback.
 
-Every live request of this spike leaves through `spike/harness/proxy.py`, which forwards to
-GitHub and refuses any write naming another destination, so this client opens plain HTTP/1.1
+Every live request of this spike leaves through `gaps.guard`, which forwards to GitHub and
+refuses any write it does not allow, so this client opens plain HTTP/1.1
 connections to `127.0.0.1` and nothing else; an endpoint that is not loopback is refused when
 the client is made. Each answer is recorded as a `RequestRecord` — timings, the operation's
 name, its stated cost, error types and the rate-limit headers — and never a body, so the log
@@ -180,8 +180,11 @@ class Client:
         if reply.status not in (200, 403):
             raise GitHubError(f"{op}: HTTP {reply.status}")
         body = obj(parse(reply.body.decode(errors="replace"), op), op)
-        errors = tuple(graphql_error(e, op) for e in arr(body.get("errors") or [], op))
-        data = obj(body.get("data") or {}, f"{op}.data")
+        errors = tuple(graphql_error(e, op) for e in arr(body.get("errors", []), f"{op}.errors"))
+        raw_data = body.get("data")
+        if raw_data is None and not errors:
+            raise GitHubError(f"{op}: an answer with neither data nor errors")
+        data = {} if raw_data is None else obj(raw_data, f"{op}.data")
         rate = data.get("rateLimit")
         cost = rate.get("cost") if isinstance(rate, dict) else None
         record = RequestRecord(

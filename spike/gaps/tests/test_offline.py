@@ -2,7 +2,7 @@
 
 `head` is this checkout's `target/debug/onetaskgraph` (Nx builds it before this target), and
 `closure` the prototype `spike/gaps/prototype/build.sh` builds into the user's cache (the
-`prototype` target, which `test` depends on).
+project's `build` target, which `test` depends on).
 """
 
 from __future__ import annotations
@@ -109,7 +109,7 @@ def test_the_proxy_refuses_every_write_to_another_destination(tmp_path: Path) ->
     """The proxy refuses every write to another destination."""
     refusal = decode(RefusalResult, load(result(run_case(tmp_path, "proxy-refusal", "head"))), "r")
     assert refusal.all_as_expected
-    assert [o.reached_upstream for o in refusal.cases].count(1) == 3
+    assert [o.reached_upstream for o in refusal.cases].count(1) == 4
 
 
 def test_a_missing_binary_exits_2_naming_it(tmp_path: Path) -> None:

@@ -186,7 +186,9 @@ async def live(scenario: Scenario, where: Paths, run: Path, out: Path) -> Path:
         client = Client(reader.endpoint, credential, log=log)
         before = await allowance.gate(client, where.quota_log, run.name, last_headers(where.runs))
         ids = board.board_ids(
-            await client.graphql("ProbeIds", board.IDS_QUERY, board.ids_variables(scratch))
+            await client.graphql(
+                "CREATION_CONTEXT", board.ids_query(), board.ids_variables(scratch)
+            )
         )
     # The read-only pricing probe is allowed no write; the placement probe the test board, the
     # issues it creates and an interrupted run's recorded leftovers.

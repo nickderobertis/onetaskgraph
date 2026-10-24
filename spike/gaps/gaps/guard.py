@@ -8,7 +8,8 @@ everything else locally — every other path, every upload, every `CONNECT` tunn
 passes only when every field it calls is one the probes send, every repository or project id
 it names is `--allow`ed, and every issue it names is one a `createIssue` this proxy forwarded
 answered, or an `--allow-issue` leftover of an interrupted probe; with no `--allow`, no mutation
-passes. Each refusal is one line of `L`: the reason, never the request.
+passes. A board item a mutation names must be one an answer listed under such an issue. Each
+refusal is one line of `L`: the reason, never the request.
 """
 
 from __future__ import annotations
@@ -26,7 +27,11 @@ from gaps.github import GitHubError, split_reply
 from gaps.json_shape import Json, ShapeError, obj, parse, text
 
 GUARDED = re.compile(r"\b(repositoryId|projectId|projectV2Ids)\s*:\s*")
-ISSUES = re.compile(r"\b(issueId|blockingIssueId|contentId|subIssueId)\s*:\s*")
+ISSUES = re.compile(r"\b(issueId|blockingIssueId|contentId|subIssueId|parentIssueId)\s*:\s*")
+ITEMS = re.compile(r"\b(itemId)\s*:\s*")
+COMMENT = re.compile(r"#[^\n]*")
+STRING = re.compile(r'"(?:[^"\\]|\\.)*"')
+MUTATION = re.compile(r"\bmutation\b")
 LITERAL = re.compile(r'"((?:[^"\\]|\\.)*)"')
 MUTATION_FIELD = re.compile(r"(?:\w+\s*:\s*)?(\w+)\s*\(\s*input\s*:")
 PROBE_MUTATIONS = frozenset(
@@ -39,7 +44,10 @@ PROBE_MUTATIONS = frozenset(
     }
 )
 DESTINATION_KEYS = frozenset({"repositoryId", "projectId", "projectV2Ids"})
-ISSUE_KEYS = frozenset({"issueId", "blockingIssueId", "contentId", "subIssueId"})
+ISSUE_KEYS = frozenset({"issueId", "blockingIssueId", "contentId", "subIssueId", "parentIssueId"})
+ITEM_KEYS = frozenset({"itemId"})
+GITHUB = "https://api.github.com"
+LOOPBACK = frozenset({"127.0.0.1", "localhost"})
 MAX_BODY = 4 * 1024 * 1024
 TIMEOUT = 120.0
 UNREADABLE = "<unreadable>"
@@ -104,8 +112,22 @@ def named_ids(query: str, variables: dict[str, Json]) -> set[str]:
 
 
 def named_issues(query: str, variables: dict[str, Json]) -> set[str]:
-    """Every issue id a mutation names, however it is written."""
+    """Every issue id a mutation names, however it is written.
+
+    As the issue it writes, the issue blocking it, its parent, its sub-issue, or the content it
+    adds to a board.
+    """
     return _named(ISSUES, query, variables) | guarded_values(variables, ISSUE_KEYS)
+
+
+def named_items(query: str, variables: dict[str, Json]) -> set[str]:
+    """Every board item id a mutation names, however it is written."""
+    return _named(ITEMS, query, variables) | guarded_values(variables, ITEM_KEYS)
+
+
+def is_mutation(query: str) -> bool:
+    """Whether a document defines a mutation anywhere, comments and string values aside."""
+    return MUTATION.search(STRING.sub('""', COMMENT.sub("", query))) is not None
 
 
 @dataclass
@@ -114,6 +136,7 @@ class Guard:
 
     destinations: frozenset[str]
     issues: set[str] = field(default_factory=set)
+    items: set[str] = field(default_factory=set)
 
     def refusal(self, method: str, path: str, body: bytes) -> str | None:
         """Why a request must not leave, or `None`."""
@@ -127,7 +150,7 @@ class Guard:
             variables = obj(payload.get("variables") or {}, "request.variables")
         except ShapeError:
             return "an unreadable request"
-        if not query.lstrip().startswith("mutation"):
+        if not is_mutation(query):
             return None
         if not self.destinations:
             return "this run sends no writes"
@@ -138,19 +161,39 @@ class Guard:
             return "it names a repository or project outside the test board"
         if named_issues(query, variables) - self.issues:
             return "it names an issue this run did not create"
+        if named_items(query, variables) - self.items:
+            return "it names a board item of an issue this run did not create"
         return None
 
-    def learn(self, body: bytes) -> None:
-        """Record every issue a forwarded `createIssue` answered."""
+    def learn(self, request: bytes, body: bytes) -> None:
+        """Record what a forwarded answer proves this run owns.
+
+        An issue is owned only when a `createIssue` this proxy forwarded answered it, never
+        because a read returned it; a board item only when an answer lists it under an issue
+        this run owns.
+        """
         try:
+            query = text(
+                obj(parse(request.decode(errors="replace"), "request"), "r").get("query"), "q"
+            )
             answer = obj(parse(body.decode(errors="replace"), "answer"), "answer")
-            data = obj(answer.get("data") or {}, "answer.data")
+            data = answer.get("data")
         except ShapeError:
             return
+        if not isinstance(data, dict):
+            return
+        if is_mutation(query) and "createIssue" in MUTATION_FIELD.findall(query):
+            for value in data.values():
+                issue = value.get("issue") if isinstance(value, dict) else None
+                if isinstance(issue, dict) and isinstance(issue.get("id"), str):
+                    self.issues.add(text(issue.get("id"), "issue.id"))
         for value in data.values():
-            issue = value.get("issue") if isinstance(value, dict) else None
-            if isinstance(issue, dict) and isinstance(issue.get("id"), str):
-                self.issues.add(text(issue.get("id"), "issue.id"))
+            if isinstance(value, dict) and value.get("id") in self.issues:
+                connection = value.get("projectItems")
+                nodes = connection.get("nodes") if isinstance(connection, dict) else None
+                for node in nodes if isinstance(nodes, list) else []:
+                    if isinstance(node, dict) and isinstance(node.get("id"), str):
+                        self.items.add(text(node.get("id"), "item.id"))
 
 
 @dataclass(frozen=True)
@@ -267,7 +310,7 @@ class Proxy:
         except (OSError, GitHubError, TimeoutError) as error:
             await respond(writer, 502, JSON_TYPE, refused_body(f"upstream: {error}"))
             return
-        self.guard.learn(body)
+        self.guard.learn(request.body, body)
         await respond(writer, status, headers, body)
 
 
@@ -286,11 +329,12 @@ def main() -> None:
     parser.add_argument("--port-file", type=Path, required=True)
     parser.add_argument("--allow", action="append", default=[])
     parser.add_argument("--allow-issue", action="append", default=[])
-    parser.add_argument("--upstream", default="https://api.github.com")
+    parser.add_argument("--upstream", default=GITHUB)
     args = parser.parse_args()
     target = urlsplit(args.upstream)
-    if target.scheme != "https" and target.hostname not in ("127.0.0.1", "localhost"):
-        parser.error("--upstream is GitHub over HTTPS, or a loopback stand-in")
+    loopback = target.scheme == "http" and target.hostname in LOOPBACK
+    if args.upstream.rstrip("/") != GITHUB and not loopback:
+        parser.error(f"--upstream is {GITHUB}, or a loopback stand-in over plain HTTP")
     guard = Guard(frozenset(args.allow), set(args.allow_issue))
     asyncio.run(serve(Proxy(guard, args.upstream, args.log), args.port_file))
 

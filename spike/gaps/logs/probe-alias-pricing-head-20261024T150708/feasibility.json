@@ -1,0 +1,171 @@
+{
+ "dry_runs": [
+  {
+   "cost": 1,
+   "seconds": 0.49802470207214355,
+   "variant": "ORIGIN_LOOKUPS asks=1"
+  },
+  {
+   "cost": 1,
+   "seconds": 0.5872831344604492,
+   "variant": "ORIGIN_LOOKUPS asks=2"
+  },
+  {
+   "cost": 1,
+   "seconds": 0.5812318325042725,
+   "variant": "ORIGIN_LOOKUPS asks=3"
+  },
+  {
+   "cost": 1,
+   "seconds": 0.595353364944458,
+   "variant": "ORIGIN_LOOKUPS asks=4"
+  },
+  {
+   "cost": 1,
+   "seconds": 0.6024825572967529,
+   "variant": "ORIGIN_LOOKUPS asks=5"
+  },
+  {
+   "cost": 1,
+   "seconds": 0.6184415817260742,
+   "variant": "ORIGIN_LOOKUPS asks=6"
+  },
+  {
+   "cost": 2,
+   "seconds": 0.5600650310516357,
+   "variant": "ORIGIN_LOOKUPS asks=8"
+  },
+  {
+   "cost": 2,
+   "seconds": 0.5616223812103271,
+   "variant": "ORIGIN_LOOKUPS asks=10"
+  },
+  {
+   "cost": 1,
+   "seconds": 0.6538832187652588,
+   "variant": "ORIGIN_LOOKUPS asks=10 originFirst=1"
+  },
+  {
+   "cost": 2,
+   "seconds": 0.600369930267334,
+   "variant": "ORIGIN_LOOKUPS asks=10 originFirst=2"
+  },
+  {
+   "cost": 1,
+   "seconds": 0.49132561683654785,
+   "variant": "ORIGIN_LOOKUP"
+  },
+  {
+   "cost": 1,
+   "seconds": 0.44364166259765625,
+   "variant": "CREATED_BOARD_ITEMS reads=1"
+  },
+  {
+   "cost": 1,
+   "seconds": 0.43175292015075684,
+   "variant": "CREATED_BOARD_ITEMS reads=2"
+  },
+  {
+   "cost": 1,
+   "seconds": 0.43236589431762695,
+   "variant": "CREATED_BOARD_ITEMS reads=9"
+  },
+  {
+   "cost": 1,
+   "seconds": 0.47449469566345215,
+   "variant": "CREATED_BOARD_ITEMS reads=10"
+  },
+  {
+   "cost": 1,
+   "seconds": 0.4687190055847168,
+   "variant": "CREATED_BOARD_ITEMS reads=21"
+  },
+  {
+   "cost": 1,
+   "seconds": 0.44350337982177734,
+   "variant": "SUB_ISSUES memberFirst=10"
+  },
+  {
+   "cost": 1,
+   "seconds": 0.534775972366333,
+   "variant": "SUB_ISSUES memberFirst=23"
+  },
+  {
+   "cost": 3,
+   "seconds": 0.4705545902252197,
+   "variant": "SUB_ISSUES memberFirst=50"
+  },
+  {
+   "cost": 6,
+   "seconds": 0.44477391242980957,
+   "variant": "SUB_ISSUES memberFirst=100"
+  },
+  {
+   "cost": 1,
+   "seconds": 0.5083434581756592,
+   "variant": "ISSUE"
+  },
+  {
+   "cost": 2,
+   "seconds": 0.5772595405578613,
+   "variant": "SUB_ISSUES + ORIGIN_LOOKUPS asks=1"
+  },
+  {
+   "cost": 4,
+   "seconds": 0.6247670650482178,
+   "variant": "SUB_ISSUES + ORIGIN_LOOKUPS asks=10"
+  },
+  {
+   "cost": 2,
+   "seconds": 0.49967050552368164,
+   "variant": "SUB_ISSUES + ORIGIN_LOOKUP"
+  },
+  {
+   "cost": 2,
+   "seconds": 0.4643263816833496,
+   "variant": "SUB_ISSUES through the item's parent"
+  },
+  {
+   "cost": 1,
+   "seconds": 0.45882296562194824,
+   "variant": "SUB_ISSUES through the item's parent, item trimmed"
+  },
+  {
+   "cost": 1,
+   "seconds": 0.5163922309875488,
+   "variant": "SUB_ISSUES + CREATED_BOARD_ITEMS reads=1"
+  }
+ ],
+ "executed": [
+  {
+   "cost": 2,
+   "seconds": 1.0843396186828613,
+   "variant": "SUB_ISSUES + ORIGIN_LOOKUPS asks=1"
+  },
+  {
+   "cost": 4,
+   "seconds": 2.9656288623809814,
+   "variant": "SUB_ISSUES + ORIGIN_LOOKUPS asks=10"
+  },
+  {
+   "cost": 2,
+   "seconds": 0.8316652774810791,
+   "variant": "SUB_ISSUES + ORIGIN_LOOKUP"
+  },
+  {
+   "cost": 2,
+   "seconds": 0.4754796028137207,
+   "variant": "SUB_ISSUES through the item's parent"
+  },
+  {
+   "cost": 1,
+   "seconds": 0.5179800987243652,
+   "variant": "SUB_ISSUES through the item's parent, item trimmed"
+  },
+  {
+   "cost": 1,
+   "seconds": 0.5299098491668701,
+   "variant": "SUB_ISSUES + CREATED_BOARD_ITEMS reads=1"
+  }
+ ]
+}
