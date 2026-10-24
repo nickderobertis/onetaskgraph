@@ -4949,6 +4949,7 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         let page = GitHubBoard::membership_page(board.memberships(item), offset, first);
         return json!({"node":{"projectItems":page}});
     }
+    // llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] How the loopback board answers the two one-direction dependency documents, which its request loop serves from its private state; it lives beside `GitHubBoard` for the reason that type records, and a GitHub suite could not add an answer from outside it.
     // A dependency read of one direction, answering exactly what its document selects: what
     // an item is blocked by, with its body — a draft's body with the one board item it is,
     // beside this board's own id — or what an issue blocks.
@@ -4996,6 +4997,7 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
             return json!({ "node": node });
         }
     }
+    // llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
     // One draft by its own id, with the one board item GitHub links it to.
     if query.contains("on DraftIssue{") && query.contains("projectV2Items(") {
         let id = variables["id"].as_str().expect("a node id").to_owned();
@@ -6799,6 +6801,7 @@ fn linear_response(
         linear_widen(operation, &mut answer, data, &vars);
         return Ok(answer);
     }
+    // llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] How the loopback Linear answers a document Linear's own plugin sends, which this harness's one request loop serves from the fixture's data; every loopback server lives here by the agreed e2e layout, as `GitHubBoard` records, so a Linear suite could not add an answer from outside it.
     // An issue read beside the resolution a status write needs: each answered as it is
     // answered alone, side by side under their own roots.
     if operation == graphql::ISSUE_RESOLVED {
@@ -6817,6 +6820,7 @@ fn linear_response(
         }
         return Ok(answer);
     }
+    // llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
     // A dependency read of one direction: the two-direction read's answer, holding only the
     // members that document selects, as Linear answers exactly what is selected.
     if let Some((wide, root)) = linear_narrowed(operation) {

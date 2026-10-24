@@ -152,6 +152,7 @@ MANIFEST = {
         "facets": {},
         "least": 1,
     },
+    # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This table is the one place every fixture under crates/*/tests/fixtures is named, by design: the check refuses a fixture it was never told about, so a plugin's fixture is registered here rather than in a table of that plugin's own the check could not see.
     "crates/onetaskgraph-github-projects/tests/fixtures/dependencies-depends-on.json": {
         "items": ["data", "node", "blockedBy", "nodes"],
         "id": ["id"],
@@ -170,6 +171,7 @@ MANIFEST = {
         "facets": {},
         "least": 1,
     },
+    # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
     "crates/onetaskgraph-github-projects/tests/fixtures/issue-board-items.json": {
         "items": ["data", "node", "projectItems", "nodes"],
         "id": ["id"],
