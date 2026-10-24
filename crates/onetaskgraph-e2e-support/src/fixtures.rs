@@ -4976,9 +4976,9 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
                 if !forward {
                     return json!({"node":{"__typename":"DraftIssue"}});
                 }
-                return json!({"node":{"__typename":"DraftIssue","id":id,"body":near["body"],
-                    "projectV2Items":{"nodes":[{"project":{"id":"PVT-board","number":7}}],
-                                      "pageInfo":{"hasNextPage":false}}},
+                return json!({"node":{"__typename":"DraftIssue","id":id,"body":near["body"]},
+                    "draft":{"projectV2Items":{"nodes":[{"project":{"id":"PVT-board","number":7}}],
+                                               "pageInfo":{"hasNextPage":false}}},
                     "board":board_root});
             }
             let (connection, blocking) = if forward {

@@ -1378,13 +1378,21 @@ pub mod graphql {
     /// board draft's `body` too, with the one board item GitHub links a draft to and, aliased
     /// `board`, this board's own id, so a draft's recorded edges are read off this same answer
     /// and only when that item is this board's: no draft read and no board read follow it.
+    ///
+    /// The draft's board item is asked for under a root of its own, aliased `draft`, rather
+    /// than beside its `body` under `node`. GitHub counts the type-conditional fragments of
+    /// one selection as the largest of them — `blockedBy`'s 100 alone, where this workspace's
+    /// calculation adds the draft's 3 — while separate roots are summed by both, so this is
+    /// the spelling whose node count GitHub and the calculation agree on. Both price it at
+    /// one point; the credentialed lane's reconciliation is what holds the two to that.
     pub const ISSUE_DEPENDS_ON: &str = concat!(
         r#"query($id:ID!,$first:Int!,$after:String,$owner:String!,$number:Int!,$boardItems:Int!){
       node(id:$id){__typename
       ... on Issue{body
         blockedBy(first:$first,after:$after){nodes{...Related}pageInfo{hasNextPage endCursor}}
       }
-      ... on DraftIssue{id body projectV2Items(first:$boardItems){nodes{project{id number}}pageInfo{hasNextPage}}}}
+      ... on DraftIssue{id body}}
+      draft:node(id:$id){... on DraftIssue{projectV2Items(first:$boardItems){nodes{project{id number}}pageInfo{hasNextPage}}}}
       board:repositoryOwner(login:$owner){... on ProjectV2Owner{projectV2(number:$number){id}}}}"#,
         related_issue!()
     );
@@ -13832,8 +13840,10 @@ fn draft_slot(
     let Some(draft) = data
         .get("node")
         .filter(|node| node.get("__typename").and_then(Value::as_str) == Some("DraftIssue"))
-        .filter(|node| node.get("projectV2Items").is_some())
     else {
+        return Ok(None);
+    };
+    let Some(items) = data.pointer("/draft/projectV2Items") else {
         return Ok(None);
     };
     if required_str(draft, "id")? != id.0 {
@@ -13841,7 +13851,6 @@ fn draft_slot(
             message: format!("GitHub answered a different draft for {}", id.0),
         });
     }
-    let items = &draft["projectV2Items"];
     let nodes = items
         .get("nodes")
         .and_then(Value::as_array)

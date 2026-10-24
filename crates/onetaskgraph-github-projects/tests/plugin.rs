@@ -1796,8 +1796,8 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
                 } else {
                     Vec::new()
                 };
-                return json!({"node":{"__typename":item.typename,"id":id,"body":item.body.clone(),
-                    "projectV2Items":{"nodes":boards,"pageInfo":{"hasNextPage":false}}},
+                return json!({"node":{"__typename":item.typename,"id":id,"body":item.body.clone()},
+                    "draft":{"projectV2Items":{"nodes":boards,"pageInfo":{"hasNextPage":false}}},
                     "board":board});
             }
             if forward {
@@ -21442,8 +21442,8 @@ fn live_pair_fixture_child() {
 async fn a_drafts_recorded_edges_ride_its_dependency_read_and_a_malformed_answer_is_refused() {
     let body = "<!-- onetaskgraph.metadata\n{\"onetaskgraph.depends_on\":[{\"id\":\"elsewhere:T-9\",\"kind\":\"task\"}]}\n-->";
     let answer = |draft: &str, items: Value, board: Value| {
-        json!({"data":{"node":{"__typename":"DraftIssue","id":draft,"body":body,
-            "projectV2Items":items},"board":board}})
+        json!({"data":{"node":{"__typename":"DraftIssue","id":draft,"body":body},
+            "draft":{"projectV2Items":items},"board":board}})
         .to_string()
     };
     let one =
@@ -21562,7 +21562,15 @@ async fn a_drafts_recorded_edges_ride_its_dependency_read_and_a_malformed_answer
     // that is missing or not a string, board items without their nodes or page, a page whose
     // `hasNextPage` is not a boolean, a project id missing or not a string, a body that is not
     // a string, and a metadata slot that does not hold JSON.
-    let node = |draft: Value| json!({"data":{"node":draft,"board":this_board}}).to_string();
+    // The draft's board item is answered under the document's own `draft` root, beside the
+    // `node` that carries its id and body.
+    let node = |mut draft: Value| {
+        let items = draft
+            .as_object_mut()
+            .and_then(|draft| draft.remove("projectV2Items"));
+        json!({"data":{"node":draft,"draft":{"projectV2Items":items},"board":this_board}})
+            .to_string()
+    };
     let well = || {
         json!({"__typename":"DraftIssue","id":"DI_1","body":body,
                "projectV2Items":one(json!({"id":"PVT_board","number":7}))})
