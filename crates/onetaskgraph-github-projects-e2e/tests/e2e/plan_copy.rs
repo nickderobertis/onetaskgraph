@@ -1326,6 +1326,133 @@ fn a_task_taken_out_of_the_plan_is_reported_orphaned_and_left_as_it_was() {
     }
 }
 
+/// The three ways a page of a project's members can answer one member short of what a full read
+/// of it says, by what each journey below calls it: with no body, with a metadata slot that does
+/// not parse, and with no repository.
+fn members_page_misanswers() -> [(&'static str, &'static str, Value); 3] {
+    [
+        ("with no body", "body", Value::Null),
+        (
+            "with a metadata slot that does not parse",
+            "body",
+            json!("Moved by hand.\n\n<!-- onetaskgraph.metadata\n{\"onetaskgraph.origin\":\n-->"),
+        ),
+        ("with no repository", "repository", Value::Null),
+    ]
+}
+
+/// The issue of the board's own history a person files under the copied project in the journeys
+/// below: a task copied from elsewhere, whose record names no repository list, so its own
+/// repository is what says who may read it.
+const FILED_BY_HAND: &str = "BG-3";
+
+/// The screened plan copied as a project onto a small board, with [`FILED_BY_HAND`] then filed
+/// under that project by a person, and the board's id for the project.
+fn screened_project_with_a_member_filed_by_hand() -> (Plan, String) {
+    let plan = Plan::screened(20, Vec::new(), None);
+    let copied = success(&plan.run(&["project", "copy", "notes:P", "--to", "board", "--json"]));
+    let project = landed(&copied, "notes:P");
+    plan.github.file_under(FILED_BY_HAND, Some(&project));
+    (plan, project)
+}
+
+/// Hold the requests a document copy sent the board, `sent`, to having read the members page
+/// beside its origin lookup and then read `project`'s members in full, as the listing of a
+/// project's tasks reads them.
+fn fell_back_to_the_full_members_read(how: &str, sent: &[Call], project: &str) {
+    let query = |call: &Call| -> Value { serde_json::from_slice(&call.bytes).unwrap() };
+    let page = sent
+        .iter()
+        .position(|call| {
+            call.path == "/graphql"
+                && query(call)["query"] == graphql::ORIGIN_LOOKUPS_WITH_MEMBERS
+                && query(call)["variables"]["project"] == project
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "a member {how}: the copy asked for no members page of {project}: {:?}",
+                tally(sent)
+            )
+        });
+    assert!(
+        sent[page + 1..].iter().any(|call| call.path == "/graphql"
+            && query(call)["query"] == graphql::SUB_ISSUES
+            && query(call)["variables"]["id"] == project),
+        "a member {how}: the copy did not read {project}'s members in full after the page: {:?}",
+        tally(sent)
+    );
+}
+
+/// A document copy screened onto a public board, under a project a person filed a member under
+/// from a private repository, never lands public on the account of a members page that
+/// answers that member short of what reading it says: with the page carrying no body for it, a
+/// slot that does not parse or no repository, the copy reads the members in full, finds the
+/// private one, and is refused with nothing written.
+#[test]
+fn a_document_under_a_member_the_members_page_misanswers_is_classified_from_the_full_read() {
+    let (owner, _) = SCREENED_REPOSITORY;
+    let private = format!("{owner}/secret-gadgets");
+    for (how, field, value) in members_page_misanswers() {
+        let (mut plan, project) = screened_project_with_a_member_filed_by_hand();
+        plan.screening
+            .as_mut()
+            .expect("the plan screens its writes")
+            .0
+            .private(owner, "secret-gadgets");
+        plan.github.transfer(FILED_BY_HAND, &private);
+        plan.github
+            .misanswer_in_members_page(FILED_BY_HAND, field, value);
+        let before = plan.board.calls().len();
+        let output = plan.run(&["document", "copy", "notes:D", "--to", "board", "--json"]);
+        let sent = plan.board.calls()[before..].to_vec();
+        assert_ne!(
+            output.status.code(),
+            Some(0),
+            "a member {how}: the document landed public beside a private member\n{}\n{}",
+            stdout(&output),
+            stderr(&output)
+        );
+        let written: Vec<String> = sent
+            .iter()
+            .filter(|call| call.creating)
+            .map(operation)
+            .collect();
+        assert!(
+            written.is_empty(),
+            "a member {how}: the refused copy wrote {written:?}\n{}",
+            stderr(&output)
+        );
+        fell_back_to_the_full_members_read(how, &sent, &project);
+        assert!(
+            stderr(&output).contains("private"),
+            "a member {how}: the refusal says the document is private: {}",
+            stderr(&output)
+        );
+    }
+}
+
+/// The same misanswered members page under a project whose members are all public: the copy
+/// reads them in full, classifies the document from what that read says, and lands it.
+#[test]
+fn a_document_under_public_members_the_members_page_misanswers_lands_after_the_full_read() {
+    for (how, field, value) in members_page_misanswers() {
+        let (plan, project) = screened_project_with_a_member_filed_by_hand();
+        plan.github
+            .misanswer_in_members_page(FILED_BY_HAND, field, value);
+        let before = plan.board.calls().len();
+        let document =
+            success(&plan.run(&["document", "copy", "notes:D", "--to", "board", "--json"]));
+        let sent = plan.board.calls()[before..].to_vec();
+        fell_back_to_the_full_members_read(how, &sent, &project);
+        let landed = landed(&document, "notes:D");
+        assert_eq!(
+            plan.github.item(&landed).unwrap()["parent"],
+            json!(project),
+            "a member {how}: the document lands under its project"
+        );
+    }
+}
+
 #[test]
 fn the_board_holds_each_request_for_the_spikes_mean_latency_of_its_kind() {
     // A first copy of the plan sends item reads, batched reads, single and aliased mutations,

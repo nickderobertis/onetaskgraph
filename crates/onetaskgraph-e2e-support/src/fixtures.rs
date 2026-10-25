@@ -1254,6 +1254,10 @@ struct GitHubBoard {
     /// once its delay has passed since the create was answered, as GitHub places one: until
     /// then it is an issue on no board, and `addProjectV2ItemById` files it at once.
     placement: Option<BoardPlacement>,
+    /// Each member a page of a project's members beside a batched origin lookup answers short of
+    /// what the board holds — its id, the field and the value that page gives it — while every
+    /// other read of it answers the board's own record.
+    members_page_misanswers: Vec<(String, &'static str, Value)>,
     /// The repository, `owner/name`, this board's issues are created in and its source is
     /// configured with.
     repository: String,
@@ -1843,6 +1847,23 @@ impl GitHubBoardFields {
     /// has filed them: each issue on no board yet.
     pub fn file_created_items_after(&self, reads: usize) {
         self.board.lock().unwrap().unfiled_board_item_reads = reads;
+    }
+
+    /// Answer the member `id` in every page of a project's members
+    /// [`ORIGIN_LOOKUPS_WITH_MEMBERS`](onetaskgraph_github_projects::graphql::ORIGIN_LOOKUPS_WITH_MEMBERS)
+    /// carries with its `field` — `body` or `repository` — as `value`, while every full read of
+    /// it answers what the board holds: a trimmed page that says less about a member, or
+    /// something malformed, than a read of the same member does.
+    pub fn misanswer_in_members_page(&self, id: &str, field: &'static str, value: Value) {
+        assert!(
+            matches!(field, "body" | "repository"),
+            "a members page carries a member's body and repository, not {field}"
+        );
+        self.board
+            .lock()
+            .unwrap()
+            .members_page_misanswers
+            .push((id.to_owned(), field, value));
     }
 
     // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board's own placement state, which every read of it answers from, beside `file_created_items_after`: the board is this shared harness's, so a suite can only set it through this handle.
@@ -3503,6 +3524,7 @@ fn github_projects_board_at(
         files_without_status: false,
         unfiled_board_item_reads: 0,
         placement: None,
+        members_page_misanswers: Vec::new(),
         repository: "nickderobertis/onetaskgraph".to_owned(),
         omits_sub_issue_list: false,
         status_snapshot_page_size: None,
@@ -4067,8 +4089,14 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
             .iter()
             .take(first)
             .map(|item| {
-                json!({"id": item["id"], "body": item["body"], "parent": {"id": project},
-                       "repository": item["repo"].as_str().map(|repo| json!({"nameWithOwner": repo}))})
+                let mut node = json!({"id": item["id"], "body": item["body"], "parent": {"id": project},
+                       "repository": item["repo"].as_str().map(|repo| json!({"nameWithOwner": repo}))});
+                for (id, field, value) in &held.members_page_misanswers {
+                    if item["id"] == json!(id) {
+                        node[*field] = value.clone();
+                    }
+                }
+                node
             })
             .collect();
         answer["members"] = if held.items.iter().any(|item| item["id"] == *project) {
