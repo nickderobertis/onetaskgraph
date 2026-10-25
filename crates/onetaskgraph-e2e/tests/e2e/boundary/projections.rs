@@ -807,14 +807,18 @@ fn views_that_depend_on_each_other_are_both_landed_with_both_edges() {
 
 #[test]
 fn a_view_carries_an_anchor_naming_only_itself_and_the_in_page_links_to_it() {
-    // What a plan-task template writes before a budget: an anchor carrying only an id, and a
-    // link to it as GitHub renders that id — and the same anchor by `name`, in capitals,
-    // unquoted, self-closing and cut off before its `>`, which CommonMark shows as text. None
-    // names a destination or loads anything.
+    // What a plan-task template writes before a budget: an anchor carrying only an id, with a
+    // link whose fragment is exactly that id, and one spelled as the plan's design document
+    // spells it — and the same anchor by `name`, in capitals, unquoted, self-closing and cut off
+    // before its `>`, which CommonMark shows as text. None names a destination or loads
+    // anything. What this holds is the store's half: every byte of each anchor and each link
+    // reaches the view, so the fragment still names the anchor beside it; how a renderer then
+    // spells the anchor's id is the renderer's, and nothing here asserts it.
     const BUDGETED: &str = "<a id=\"library-copy-seconds\"></a>\n\n\
                             | Budget | Limit |\n|---|---|\n| library copy seconds | 30 |\n\n\
-                            Held to [the budget](#user-content-library-copy-seconds), \
-                            <a name='retry_2.b'></a>and the retry below, \
+                            Held to [the budget](#library-copy-seconds) — in the design document \
+                            [the budget](#user-content-library-copy-seconds) — \
+                            <a name='retry_2.b'></a>and [the retry](#retry_2.b) below, \
                             <A ID=top></A> and <a id=\"end\" />. Truncated: <a id=\"cut\"";
     let store = projecting_store();
     private_rollout(&store);
@@ -837,6 +841,19 @@ fn a_view_carries_an_anchor_naming_only_itself_and_the_in_page_links_to_it() {
         BUDGETED,
         "the view carries the anchors as written"
     );
+    // Each in-page link and the anchor its fragment names exactly, both in the one view.
+    for (anchor, link) in [
+        (
+            "<a id=\"library-copy-seconds\"></a>",
+            "[the budget](#library-copy-seconds)",
+        ),
+        ("<a name='retry_2.b'></a>", "[the retry](#retry_2.b)"),
+    ] {
+        assert!(
+            content.contains(anchor) && content.contains(link),
+            "{anchor} and {link} in the view:\n{content}"
+        );
+    }
     assert_site_neutral(&store);
 }
 
