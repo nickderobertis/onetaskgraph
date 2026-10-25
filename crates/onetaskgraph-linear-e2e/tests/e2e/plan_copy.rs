@@ -867,15 +867,32 @@ fn items_created_and_rendered_in_linear_record_what_linear_stores_and_rerender_o
             }
         };
         let loader_path = project_or(&loader_path);
-        // The same template, answers and assets over unedited content: nothing is written.
+        // The same template, answers and assets over unedited content: nothing is written, and
+        // the render answers the item as Linear holds it, not the rendering it composed.
         let before = plan.show(kind, &id);
-        let unchanged = render(&loader_path, "one", &first);
+        let mut arguments: Vec<String> = [
+            kind,
+            "render",
+            &id,
+            "--template-loader",
+            &loader_path,
+            "--var",
+            "goal=one",
+            "--no-interactive",
+        ]
+        .iter()
+        .map(|&argument| argument.to_owned())
+        .collect();
+        arguments.extend(assets(&first));
+        let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
+        let (answer, unchanged) = plan.json(&arguments);
         assert_eq!(
             unchanged.mutations(),
             Vec::<String>::new(),
             "{kind}: {before:#}\n{:#}",
             plan.show(kind, &id)
         );
+        answers_as_held(kind, &answer, &before);
         // Each change re-renders it — one write and at most its one follow-up — and it reads
         // back verifiable.
         let mut changes: Vec<(&str, Change<'_>)> = vec![
@@ -955,22 +972,35 @@ fn items_created_and_rendered_in_linear_record_what_linear_stores_and_rerender_o
     );
     let qualified = format!("dest:{document}");
     verifiable(&plan, "document", &qualified);
-    let unchanged = rendering(
-        &plan,
-        &[
-            "document",
-            "render",
-            &qualified,
-            "--template-loader",
-            &loader_path,
-            "--var",
-            "goal=three",
-            "--asset",
-            &first,
-            "--no-interactive",
-        ],
-    );
+    let before = plan.show("document", &qualified);
+    let (answer, unchanged) = plan.json(&[
+        "document",
+        "render",
+        &qualified,
+        "--template-loader",
+        &loader_path,
+        "--var",
+        "goal=three",
+        "--asset",
+        &first,
+        "--no-interactive",
+    ]);
     assert_eq!(unchanged.mutations(), Vec::<String>::new());
+    answers_as_held("document", &answer, &before);
+}
+
+/// Assert an unchanged render's `answer` names the item as `held` reads: unchanged, its content
+/// and the `body_digest` its record keeps of it — which, where Linear rewrote the rendering, are
+/// not the rendering the render composed.
+fn answers_as_held(kind: &str, answer: &Value, held: &Value) {
+    let content = held["content"].as_str().expect("content");
+    assert_eq!(answer["changed"], json!(false), "{kind}: {answer}");
+    assert_eq!(answer["body"], held["content"], "{kind}: {answer}");
+    assert_eq!(
+        answer["body_digest"], held["metadata"]["onetaskgraph.template"]["body_digest"],
+        "{kind}: {answer}"
+    );
+    assert_eq!(answer["body_digest"], sha256(content), "{kind}: {answer}");
 }
 
 #[test]

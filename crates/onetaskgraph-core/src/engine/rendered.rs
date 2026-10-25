@@ -1417,6 +1417,18 @@ impl Engine {
                 });
             }
         }
+        // An item that is this rendering already is answered as it stands — the content it holds
+        // and the digest its record keeps of it — which is not the content just composed where
+        // its source rewrote what it was sent.
+        if !changed && let Some(held) = &regeneration.provenance {
+            return Ok(Regenerated {
+                id: id.clone(),
+                digest: provenance.digest,
+                body_digest: held.body_digest.clone(),
+                changed,
+                body: regeneration.content.clone(),
+            });
+        }
         Ok(Regenerated {
             id: id.clone(),
             digest: provenance.digest,
