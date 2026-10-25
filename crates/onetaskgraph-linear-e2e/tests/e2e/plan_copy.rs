@@ -1303,3 +1303,36 @@ fn a_follow_up_write_linear_refuses_fails_its_write_and_a_copy_leaves_nothing_be
     assert_eq!(sent.mutations(), ["issueUpdate", "issueUpdate"]);
     assert_eq!(sent.reads_after_a_write(), Vec::<String>::new());
 }
+
+#[test]
+fn a_follow_up_write_answered_for_another_item_fails_the_copy_and_leaves_nothing_behind() {
+    use onetaskgraph_linear::graphql;
+    let plan = Plan::new(LinearMarkdown::Measured);
+    let held = &plan.journey.workspace.held;
+    held.bend_answers(
+        |query, _| query == graphql::ISSUE_REWRITE,
+        1,
+        |_, data| data["issueUpdate"]["issue"]["id"] = json!("T-ELSEWHERE"),
+    );
+    let (refused, sent) = plan.run(&["task", "copy", &plan.tasks[0], "--to", "dest"]);
+    assert_ne!(refused.status.code(), Some(0), "{}", stdout(&refused));
+    let said = stderr(&refused);
+    assert!(
+        said.contains("dest") && said.contains("T-ELSEWHERE"),
+        "the refusal names the source and the item the answer named: {said}"
+    );
+    assert!(
+        sent.mutations().iter().any(|root| root == "issueDelete"),
+        "{:?}",
+        sent.mutations()
+    );
+    assert_eq!(
+        held.issue_titled("Plan task 0"),
+        None,
+        "the issue the copy created is taken back"
+    );
+    assert!(
+        plan.show("task", &plan.tasks[0])["metadata"]["onetaskgraph.copies"].is_null(),
+        "no link names an item the copy took back"
+    );
+}
