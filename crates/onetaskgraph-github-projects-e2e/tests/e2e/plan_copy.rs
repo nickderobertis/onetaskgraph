@@ -1203,6 +1203,27 @@ fn scenarios_of(plan: &Plan, screened: bool) -> Measured {
     )
 }
 
+/// What a copy that `sent` these requests sent, but for its reads of whether its creates are
+/// on the board yet, once those reads are held to the plugin's own bound: at least one when it
+/// created anything — the project's issue and its tasks' are read together — and at most the
+/// six reads and one after a fallback add it allows each create request.
+/// How many of them a copy needs is when GitHub placed its creates, which a clock other copies
+/// advance too moves, so a test comparing two copies compares everything else exactly.
+fn placement_read_bounded(copy: &str, sent: &BTreeMap<String, usize>) -> BTreeMap<String, usize> {
+    const PLACEMENT: &str = "reading the board items of the issues a copy created";
+    let mut shape = sent.clone();
+    let reads = shape.remove(PLACEMENT).unwrap_or(0);
+    let creates: usize = ["creating an issue", "creating several issues together"]
+        .iter()
+        .filter_map(|create| sent.get(*create))
+        .sum();
+    assert!(
+        (creates.min(1)..=7 * creates).contains(&reads),
+        "{copy} read its creates' placement {reads} times after {creates} create requests: {sent:?}"
+    );
+    shape
+}
+
 #[test]
 fn a_plan_copy_reads_what_the_plan_holds_whatever_the_board_has_accumulated() {
     // Each scenario on a board of 2,000 items and of 20,000, with no write policy and with
@@ -1254,16 +1275,26 @@ fn a_plan_copy_reads_what_the_plan_holds_whatever_the_board_has_accumulated() {
             "screening the {scenario}'s writes changed what it sent the board"
         );
         // Each of three managers copying at once sends, for its own commands, exactly what one
-        // alone does.
+        // alone does — but for how many times it reads whether its creates are on the board yet,
+        // which is when GitHub placed them on a clock three managers advance together, and is
+        // held to the plugin's own bound rather than to a lone copy's count.
         for (manager, (sent, _)) in managers.iter().enumerate() {
             assert_eq!(
-                sent[index], small[index],
+                placement_read_bounded(&format!("manager {manager}'s {scenario}"), &sent[index]),
+                placement_read_bounded(&format!("the lone {scenario}"), &small[index]),
                 "manager {manager}'s {scenario}, beside two others, sent what one alone does"
             );
         }
         for (manager, (sent, _)) in managers_screened.iter().enumerate() {
             assert_eq!(
-                sent[index], small_screened[index],
+                placement_read_bounded(
+                    &format!("manager {manager}'s screened {scenario}"),
+                    &sent[index]
+                ),
+                placement_read_bounded(
+                    &format!("the lone screened {scenario}"),
+                    &small_screened[index]
+                ),
                 "manager {manager}'s screened {scenario}, beside two others, sent what one \
                  alone does"
             );

@@ -15,7 +15,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
     io::{Read, Write},
-    net::{TcpListener, TcpStream},
+    net::TcpListener,
     sync::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -1394,6 +1394,9 @@ pub struct GitHubBoardFields {
     endpoint: String,
     board: Arc<Mutex<GitHubBoard>>,
     connections: Arc<AtomicUsize>,
+    /// The one connection [`Self::graphql`] and [`Self::own`] keep to the board, as the
+    /// product's own client keeps one, rather than a connection closed after every request.
+    client: Arc<Mutex<loopback::Upstream>>,
 }
 
 impl GitHubBoardFields {
@@ -1911,7 +1914,7 @@ impl GitHubBoardFields {
     /// Send this board one GraphQL request, as the product sends one, and answer its `data`:
     /// what a journey replaying a recorded request sequence drives the board with.
     pub fn graphql(&self, query: &str, variables: &Value) -> Value {
-        graphql_over_http(&self.endpoint, query, variables)
+        self.graphql_over_http(query, variables)
     }
 
     /// Answer the next read of a project's sub-issues beside a copy's batch with no list of
@@ -2524,41 +2527,75 @@ impl GitHubBoardFields {
     /// what a person opening that board would see.
     #[must_use]
     pub fn own(&self) -> Value {
-        graphql_over_http(
-            &self.endpoint,
+        self.graphql_over_http(
             "query($id:ID!){node(id:$id){... on ProjectV2{title shortDescription readme}}}",
             &json!({"id":"PVT-board"}),
         )["node"]
             .clone()
     }
+
+    /// One GraphQL request to this board, sent as the product itself sends one, over the
+    /// connection this handle keeps to it, and the `data` it is answered with.
+    ///
+    /// A connection that ends or is reset before the answer arrives — which a Windows host
+    /// reports as `ConnectionReset` (`os error 10054`) — is answered here rather than
+    /// panicking the journey: the request is sent again on a fresh connection when the
+    /// board never recorded it, or when it is a read, which a second sending cannot change.
+    /// A mutation the board recorded and whose answer was lost is the one case that cannot
+    /// be retried without being applied twice, and it fails naming that.
+    fn graphql_over_http(&self, query: &str, variables: &Value) -> Value {
+        const ATTEMPTS: usize = 3;
+        let address = self
+            .endpoint
+            .strip_prefix("http://")
+            .and_then(|rest| rest.split('/').next())
+            .expect("a fixture endpoint spelled http://host:port/graphql");
+        let body = json!({"query":query,"variables":variables}).to_string();
+        let request = format!(
+            "POST /graphql HTTP/1.1\r\nHost: {address}\r\nauthorization: Bearer test-token\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        let mutation = query.trim_start().starts_with("mutation");
+        for _ in 0..ATTEMPTS {
+            let recorded = self.board.lock().unwrap().documents.len();
+            let response = self
+                .client
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .forward(request.as_bytes());
+            if response.is_empty() {
+                // `forward` dropped the connection that failed, and has said why on standard
+                // error; the next attempt opens another.
+                let reached = self.board.lock().unwrap().documents.len() > recorded;
+                assert!(
+                    !(reached && mutation),
+                    "the board recorded a mutation and its answer was lost: sending it again \
+                     would apply it twice ({query})"
+                );
+                continue;
+            }
+            let at = response
+                .windows(4)
+                .position(|window| window == b"\r\n\r\n")
+                .expect("HTTP header terminator")
+                + 4;
+            let answered: Value =
+                serde_json::from_slice(&response[at..]).expect("fixture response JSON");
+            return answered["data"].clone();
+        }
+        panic!("the board answered none of {ATTEMPTS} sendings of {query}")
+    }
 }
 
-/// One GraphQL request to a fixture endpoint, sent as the product itself sends one.
-fn graphql_over_http(endpoint: &str, query: &str, variables: &Value) -> Value {
+/// The connection a [`GitHubBoardFields`] keeps to the board at `endpoint`, opened by its
+/// first request.
+fn board_client(endpoint: &str) -> Arc<Mutex<loopback::Upstream>> {
     let address = endpoint
         .strip_prefix("http://")
         .and_then(|rest| rest.split('/').next())
+        .and_then(|address| address.parse().ok())
         .expect("a fixture endpoint spelled http://host:port/graphql");
-    let body = json!({"query":query,"variables":variables}).to_string();
-    let mut stream = TcpStream::connect(address).expect("fixture connection");
-    stream
-        .write_all(
-            format!(
-                "POST /graphql HTTP/1.1\r\nHost: {address}\r\nauthorization: Bearer test-token\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            )
-            .as_bytes(),
-        )
-        .expect("fixture request");
-    let mut response = Vec::new();
-    stream.read_to_end(&mut response).expect("fixture response");
-    let at = response
-        .windows(4)
-        .position(|window| window == b"\r\n\r\n")
-        .expect("HTTP header terminator")
-        + 4;
-    let answered: Value = serde_json::from_slice(&response[at..]).expect("fixture response JSON");
-    answered["data"].clone()
+    Arc::new(Mutex::new(loopback::Upstream::new(address)))
 }
 
 impl GitHubBoard {
@@ -3566,6 +3603,7 @@ fn github_projects_board_at(
     let watched = Arc::clone(&board);
     let connections = Arc::<AtomicUsize>::default();
     let hooked = GitHubBoardFields {
+        client: board_client(&endpoint),
         endpoint: endpoint.clone(),
         board: Arc::clone(&board),
         connections: Arc::clone(&connections),
@@ -3774,6 +3812,7 @@ fn github_projects_board_at(
     (
         github_projects_block_at(&endpoint),
         GitHubBoardFields {
+            client: board_client(&endpoint),
             endpoint,
             board: watched,
             connections,
