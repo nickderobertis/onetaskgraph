@@ -90,6 +90,13 @@ impl Kind {
         if query == graphql::SEARCH_ISSUES {
             return Self::SearchPage;
         }
+        // The read of where GitHub placed the issues a copy created names several ids, but
+        // selects each one's board item and status alone: 0.11's own trace of it on the real
+        // board (`docs/measurements/board-copy-speed-2026-10-18/after/tb-first-span-20261024T095836`)
+        // answered in 212 to 385 ms, an item read's time rather than a batched detail read's.
+        if query == graphql::CREATED_BOARD_ITEMS {
+            return Self::ItemRead;
+        }
         let named: std::collections::BTreeSet<&str> = request["variables"]
             .as_object()
             .into_iter()
@@ -249,6 +256,10 @@ pub(super) struct Call {
     pub kind: Kind,
     /// The virtual time the board released its answer, after holding it for its latency.
     pub answered: Duration,
+    /// The wall-clock time the request arrived, since the Unix epoch: what orders it against
+    /// what happened outside the board — a boundary command the binary ran — which the
+    /// simulated clock, standing still while the binary works, cannot.
+    pub wall: Duration,
 }
 
 #[derive(Default)]
@@ -485,6 +496,9 @@ impl Board {
                         creating,
                         kind,
                         answered: at,
+                        wall: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default(),
                     });
                 }
             }

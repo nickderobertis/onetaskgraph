@@ -4892,6 +4892,16 @@ impl Engine {
             return Ok(class);
         }
         let source = self.readable(&project.source)?;
+        // Classified afresh, the project's members are listed before the project is read: a
+        // source whose listing carries the project issue itself answers the read from it.
+        let listed = if cached.is_none()
+            && self.boundary_active()
+            && source.source().capabilities().projects.is_native()
+        {
+            Some(self.project_member_tasks(project, FOR_A_COPY).await?)
+        } else {
+            None
+        };
         let held = if source.source().capabilities().projects.is_native() {
             source
                 .source()
@@ -4928,7 +4938,10 @@ impl Engine {
             known.insert(project.clone(), class);
             return Ok(class);
         }
-        let tasks = self.project_member_tasks(project, FOR_A_COPY).await?;
+        let tasks = match listed {
+            Some(tasks) => tasks,
+            None => self.project_member_tasks(project, FOR_A_COPY).await?,
+        };
         let class = self
             .project_class(source, project, &held, tasks.iter().map(|task| &task.item))
             .await?;

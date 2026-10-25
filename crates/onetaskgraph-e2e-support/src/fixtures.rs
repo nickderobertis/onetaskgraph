@@ -1252,6 +1252,9 @@ struct GitHubBoard {
     /// once its delay has passed since the create was answered, as GitHub places one: until
     /// then it is an issue on no board, and `addProjectV2ItemById` files it at once.
     placement: Option<BoardPlacement>,
+    /// The repository, `owner/name`, this board's issues are created in and its source is
+    /// configured with.
+    repository: String,
     /// Whether the next read of a project's sub-issues beside a copy's batch answers them with
     /// no list at all.
     omits_sub_issue_list: bool,
@@ -1864,6 +1867,20 @@ impl GitHubBoardFields {
         if let Some(placement) = &mut self.board.lock().unwrap().placement {
             for (_, delay, due) in &mut placement.waiting {
                 due.get_or_insert(now + *delay);
+            }
+        }
+    }
+
+    /// Hold every issue of this board in `repository`, `owner/name`, and create every new one
+    /// there: what a journey configuring its source with that repository sets, so no answer
+    /// names another.
+    pub fn use_repository(&self, repository: &str) {
+        let mut guard = self.board.lock().unwrap();
+        let board = &mut *guard;
+        let before = std::mem::replace(&mut board.repository, repository.to_owned());
+        for item in board.items.iter_mut().chain(board.pending.iter_mut()) {
+            if item["repo"] == json!(before) {
+                item["repo"] = json!(repository);
             }
         }
     }
@@ -2589,6 +2606,13 @@ impl GitHubBoard {
     /// The next moment this board stamps anything with — a comment, an issue's `updatedAt`, a
     /// board item's — a second after the one before, so no two changes share one, unless a
     /// journey holds the clock.
+    /// The owner half of [`Self::repository`].
+    fn repository_owner(&self) -> &str {
+        self.repository
+            .split_once('/')
+            .map_or(self.repository.as_str(), |(owner, _)| owner)
+    }
+
     /// Place every issue whose placement delay has passed: from here on it is on the board.
     fn settle_placements(&mut self) {
         let Some(placement) = &mut self.placement else {
@@ -3476,6 +3500,7 @@ fn github_projects_board_at(
         files_without_status: false,
         unfiled_board_item_reads: 0,
         placement: None,
+        repository: "nickderobertis/onetaskgraph".to_owned(),
         omits_sub_issue_list: false,
         status_snapshot_page_size: None,
         status_field_present: true,
@@ -4052,7 +4077,7 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
                 let held = board.lock().unwrap();
                 assert_eq!(variables["owner"], "fixture-owner");
                 assert_eq!(variables["number"], 7);
-                assert_eq!(variables["repositoryOwner"], "nickderobertis");
+                assert_eq!(variables["repositoryOwner"], held.repository_owner());
                 result.insert(
                     "boardFields".into(),
                     json!({"projectV2":{"id":"PVT-board","fields":held.fields()}}),
@@ -4065,7 +4090,7 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
                 result.insert(
                     "repository".into(),
                     json!({"id":id,"databaseId":123_456,
-                           "nameWithOwner":"nickderobertis/onetaskgraph"}),
+                           "nameWithOwner":held.repository}),
                 );
             }
             for slot in 0..onetaskgraph_github_projects::ORIGIN_BATCH {
@@ -4638,8 +4663,8 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         return json!({"node":{"__typename":"Issue","comments":comments}});
     }
     if query.contains("repository(owner:$owner,name:$name)") {
-        assert_eq!(variables["owner"], "nickderobertis");
-        return json!({"repository":{"id":"REPO-1","nameWithOwner":"nickderobertis/onetaskgraph"}});
+        assert_eq!(variables["owner"], board.repository_owner());
+        return json!({"repository":{"id":"REPO-1","nameWithOwner":board.repository}});
     }
     if query.contains("createIssue(input:$input)") {
         assert_eq!(input["repositoryId"], "REPO-1");
@@ -4650,7 +4675,7 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         let at = board.tick();
         let mut created = json!({"item":format!("ITEM-{id}"),"id":id,"type":"Issue",
             "title":input["title"],"body":input["body"],"state":"OPEN","reason":null,
-            "parent":Value::Null,"repo":"nickderobertis/onetaskgraph","status":"Todo",
+            "parent":Value::Null,"repo":board.repository,"status":"Todo",
             "origin":"","labels":[],"updatedAt":at});
         if board.files_without_status {
             created["status"] = Value::Null;
@@ -5058,9 +5083,9 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
     if query == onetaskgraph_github_projects::graphql::CREATION_CONTEXT {
         assert_eq!(variables["owner"], "fixture-owner");
         assert_eq!(variables["number"], 7);
-        assert_eq!(variables["repositoryOwner"], "nickderobertis");
+        assert_eq!(variables["repositoryOwner"], board.repository_owner());
         return json!({"boardFields":{"projectV2":{"id":"PVT-board","fields":board.fields()}},
-                      "repository":{"id":"REPO-1","nameWithOwner":"nickderobertis/onetaskgraph"}});
+                      "repository":{"id":"REPO-1","nameWithOwner":board.repository}});
     }
     if query.contains("boardFields:repositoryOwner") {
         assert_eq!(variables["owner"], "fixture-owner");

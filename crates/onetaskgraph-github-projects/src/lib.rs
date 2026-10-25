@@ -6312,6 +6312,14 @@ impl GitHubProjectsSource {
                 None => {
                     // Held only once the walk has ended, so one failing part way holds
                     // nothing and every read it would have answered is made.
+                    // The project issue the first page carried answers the next read of the
+                    // project by its id in this command, as a read of it made now would: what
+                    // classifying a project for a write reads straight after its members.
+                    if let Some(parent) = &parent {
+                        self.read_ahead()?
+                            .entry(parent.id.clone())
+                            .or_insert_with(|| Some(parent.clone()));
+                    }
                     let mut carried = self.carried()?;
                     for item in parent.into_iter().chain(children.iter().cloned()) {
                         carried.insert(item.id.clone(), item);

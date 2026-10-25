@@ -244,15 +244,17 @@ pub struct BoundaryCall {
     pub input: Value,
     /// What it exited with.
     pub exit: Option<i64>,
+    /// The wall-clock time it finished, since the Unix epoch.
+    pub finished: std::time::Duration,
 }
 
-const RECORDER: &str = r#"import json, subprocess, sys
+const RECORDER: &str = r#"import json, subprocess, sys, time
 log, command = sys.argv[1], sys.argv[2:]
 document = sys.stdin.buffer.read()
 ran = subprocess.run(command, input=document, capture_output=True)
 with open(log, "a", encoding="utf-8", newline="\n") as record:
     record.write(json.dumps({"command": command[2], "input": json.loads(document),
-                             "exit": ran.returncode}) + "\n")
+                             "exit": ran.returncode, "finished": time.time()}) + "\n")
 sys.stdout.buffer.write(ran.stdout)
 sys.stdout.flush()
 sys.exit(ran.returncode)
@@ -328,6 +330,9 @@ impl BoundaryRecord {
                     command: call["command"].as_str().expect("its command").to_owned(),
                     input: call["input"].clone(),
                     exit: call["exit"].as_i64(),
+                    finished: std::time::Duration::from_secs_f64(
+                        call["finished"].as_f64().expect("when it finished"),
+                    ),
                 }
             })
             .collect()
