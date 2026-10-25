@@ -237,6 +237,22 @@ impl TaskSource for HeldOff {
         self.noted(self.inner.read_ahead_origins_for_copy(origins).await)
     }
 
+    async fn member_classifications(
+        &self,
+        project: &NativeId,
+    ) -> Result<
+        Option<
+            Vec<(
+                onetaskgraph_plugin_api::Classification,
+                Vec<onetaskgraph_plugin_api::Repository>,
+            )>,
+        >,
+        SourceError,
+    > {
+        self.refused()?;
+        self.noted(self.inner.member_classifications(project).await)
+    }
+
     fn create_batch_limit(&self) -> usize {
         self.inner.create_batch_limit()
     }

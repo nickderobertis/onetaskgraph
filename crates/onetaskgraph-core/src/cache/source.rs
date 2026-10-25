@@ -1078,14 +1078,28 @@ impl TaskSource for CachedSource {
             })
             .cloned()
             .collect();
-        if unserved.is_empty() {
-            return Ok(());
-        }
+        // Handed on even when the cache answers every id: what the source holds back for the
+        // read ahead — the origins asked just before — is sent by this call.
         self.inner.read_ahead_for_copy(&unserved).await
     }
 
     async fn read_ahead_origins_for_copy(&self, origins: &[String]) -> Result<(), SourceError> {
         self.inner.read_ahead_origins_for_copy(origins).await
+    }
+
+    async fn member_classifications(
+        &self,
+        project: &NativeId,
+    ) -> Result<
+        Option<
+            Vec<(
+                onetaskgraph_plugin_api::Classification,
+                Vec<onetaskgraph_plugin_api::Repository>,
+            )>,
+        >,
+        SourceError,
+    > {
+        self.inner.member_classifications(project).await
     }
 
     fn create_batch_limit(&self) -> usize {

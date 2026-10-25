@@ -693,6 +693,11 @@ from each of a copy's source ids and holds each answer for that origin's next qu
 source the engine answers it by its default, reading nothing ahead, so each origin query crosses
 as its own `query_tasks`, `query_projects` or `query_documents`, as above.
 
+Nor is `TaskSource::member_classifications`, the classification and repositories of each member
+of a project, which a write the public boundary screens reads of that project. For a hosted source
+the engine answers it by its default, none, so the members cross as the project's own
+`query_tasks` and `query_documents`, as they always did.
+
 ### 4.4a `get_task_detail`
 
 Only a plugin that declared `task_details: true` (§3.13) and `comments` `"native"` (§4.2) is

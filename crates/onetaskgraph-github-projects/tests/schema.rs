@@ -340,6 +340,7 @@ fn pinned_schema_checks_selected_fields_arguments_types_fragments_and_fixture_ke
         (graphql::REPOSITORY, None, None),
         (graphql::CREATION_CONTEXT, None, None),
         (graphql::ORIGIN_LOOKUPS, None, None),
+        (graphql::ORIGIN_LOOKUPS_WITH_MEMBERS, None, None),
         (graphql::CREATED_BOARD_ITEMS, None, None),
         (graphql::CREATE_ISSUES, None, None),
         (graphql::WRITE_FIELD_VALUES, None, None),

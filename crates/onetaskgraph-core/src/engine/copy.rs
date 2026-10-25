@@ -4920,12 +4920,22 @@ impl Engine {
             return Ok(class);
         }
         let source = self.readable(&project.source)?;
-        // Classified afresh, the project's members are listed before the project is read: a
-        // source whose listing carries the project issue itself answers the read from it.
-        let listed = if cached.is_none()
+        // Classified afresh, the project's members are read before the project is: first by
+        // the source's own classification-only read, when it holds one for this command, and
+        // otherwise by listing them, a listing that may carry the project issue itself.
+        let afresh = cached.is_none()
             && self.boundary_active()
-            && source.source().capabilities().projects.is_native()
-        {
+            && source.source().capabilities().projects.is_native();
+        let classified = if afresh {
+            source
+                .source()
+                .member_classifications(&project.native)
+                .await
+                .map_err(|error| refused(source, error))?
+        } else {
+            None
+        };
+        let listed = if afresh && classified.is_none() {
             Some(self.project_member_tasks(project, FOR_A_COPY).await?)
         } else {
             None
@@ -4963,6 +4973,14 @@ impl Engine {
             // Read again, its record may have tightened since; nothing loosens it.
             let class =
                 class.strictest(self.classify(held.classification, &held.repositories).await);
+            known.insert(project.clone(), class);
+            return Ok(class);
+        }
+        if let Some(members) = classified {
+            let mut class = self.classify(held.classification, &held.repositories).await;
+            for (declared, repositories) in &members {
+                class = class.strictest(self.classify(*declared, repositories).await);
+            }
             known.insert(project.clone(), class);
             return Ok(class);
         }
@@ -5424,6 +5442,8 @@ impl Engine {
         // project a new document is filed under is answered by that one request rather than
         // read on its own before the document is created there.
         let mut project_origins: Vec<(SourceName, GlobalId)> = Vec::new();
+        // Each destination a document's project is read at for a screened write's classification.
+        let mut screened_homes: Vec<SourceName> = Vec::new();
         for read in reads {
             let metadata = described(&read.item).1;
             if read.item.level() == Level::Project {
@@ -5530,6 +5550,14 @@ impl Engine {
                 }
                 if let Some(link) = link_of(&running.source_projects[&qualified].metadata, there) {
                     project_origins.push((there.clone(), qualified.clone()));
+                    // A write the boundary screens there reads who may read that project, so
+                    // the project is named to the read ahead even alone: a source may carry its
+                    // members' classification beside the origins it is asked.
+                    if self.boundary_active()
+                        && self.declared(there) != crate::config::SourceVisibility::Private
+                    {
+                        screened_homes.push(there.clone());
+                    }
                     want(there, link.native.clone());
                     homes.push((
                         there.clone(),
@@ -5558,6 +5586,8 @@ impl Engine {
                     .await;
             }
         }
+        let asked_there: Vec<SourceName> = origins.iter().map(|(name, _)| name.clone()).collect();
+        let asked_origins_at = asked_there.clone();
         for (name, mut asked) in origins {
             for (there, origin) in &project_origins {
                 let spelled = origin.to_string();
@@ -5573,12 +5603,28 @@ impl Engine {
         }
         // One counterpart of a task or a document copied on its own is read by its own read,
         // which costs what a batch of one does and carries what a write of it needs besides; a
-        // project copy reads what its cache could not answer together, however few.
+        // project copy reads what its cache could not answer together, however few, and so is a
+        // document's project a screened write there classifies the document by. Every
+        // destination asked about origins above is handed its read ahead, empty or not, since a
+        // source may hold those origins back to send with it.
         let projects = matches!(request.scope, CopyScope::Projects { .. });
-        for (name, natives) in wanted
-            .into_iter()
-            .filter(|(_, natives)| natives.len() > 1 || (projects && !natives.is_empty()))
-        {
+        for (name, natives) in &mut wanted {
+            let kept = natives.len() > 1
+                || (projects && !natives.is_empty())
+                || screened_homes.contains(name);
+            if !kept {
+                natives.clear();
+            }
+        }
+        for name in asked_there {
+            if !wanted.iter().any(|(there, _)| there == &name) {
+                wanted.push((name, Vec::new()));
+            }
+        }
+        for (name, natives) in wanted {
+            if natives.is_empty() && !asked_origins_at.contains(&name) {
+                continue;
+            }
             if let Ok(there) = self.writable(&name) {
                 // Nothing is decided by it: each read it would have answered is made as before.
                 let _ = there.source().read_ahead_for_copy(&natives).await;

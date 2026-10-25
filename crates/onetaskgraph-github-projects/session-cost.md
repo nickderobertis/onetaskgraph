@@ -1326,3 +1326,19 @@ several origins` request goes from 9,200 nodes to **3,100**, so (a) goes 18,463 
 (h) and (i) 10,571 → **4,471**, and (j) 9,263 → **3,163**; no request count moves.
 **`session-cost.txt`** moves on that document's reconciliation, 9,200 → **3,100**, and its node
 total, 269,187 → **263,087**.
+
+## A screened document copy's lookup carries its project's members
+
+Where the public boundary screens a document's first copy onto a board, the document is held to
+who may read its project — the project's members' classification as much as its own — and the
+batched origin lookup is sent as `ORIGIN_LOOKUPS_WITH_MEMBERS`: the same lookup, with a page of
+that project's members trimmed to their id, parent, body and repository. GitHub's own dry run
+prices it at the one point the lookup costs alone
+(`docs/measurements/board-copy-gaps-2026-10-24/coalesced-members-dry-run`), and the plugin's
+model agrees, so the separate listing of the members the screened copy sent is gone. A page that
+says there is more, or any member it cannot read, is no answer, and the members are listed whole
+as before.
+
+**`session-cost.txt`** moves on one line and its totals: the live journey reconciles the new
+document's node count once (**3,123**), so requests go 215 → **216** and nodes 263,087 →
+**266,210**.

@@ -1230,13 +1230,24 @@ fn a_plan_copy_reads_what_the_plan_holds_whatever_the_board_has_accumulated() {
             small_screened[index], large_screened[index],
             "the screened {scenario} sent different requests on a board of {SMALL} and of {LARGE}"
         );
-        // Screening sends the board nothing but listings of the destination project's members,
-        // which a document's classification reads, beside the project issue they carry; how
-        // many is the points budgets' to judge, from the telemetry recorded below.
-        let mut unlisted = small_screened[index].clone();
-        unlisted.remove("reading a project's tasks");
-        let mut expected = small[index].clone();
-        expected.remove("reading a project's tasks");
+        // Screening sends the board nothing more but what a document's classification reads of
+        // the destination project's members: a listing of them, or the page of them its
+        // batched origin lookup carries in place of that lookup alone. How many is the points
+        // budgets' to judge, from the telemetry recorded below.
+        let lookup =
+            "looking up the items copied from several origins, and what creating one reads";
+        let unscreened_shape = |sent: &BTreeMap<String, usize>| {
+            let mut shape = sent.clone();
+            shape.remove("reading a project's tasks");
+            if let Some(coalesced) = shape.remove(
+                "looking up the items copied from several origins, with a project's members",
+            ) {
+                *shape.entry(lookup.to_owned()).or_default() += coalesced;
+            }
+            shape
+        };
+        let unlisted = unscreened_shape(&small_screened[index]);
+        let expected = unscreened_shape(&small[index]);
         assert_eq!(
             expected, unlisted,
             "screening the {scenario}'s writes changed what it sent the board"
@@ -1970,4 +1981,74 @@ fn the_loopback_board_answers_0_11s_measured_copies_as_github_answered_them() {
         "every issue placed"
     );
     assert_eq!(every.len(), 10);
+}
+
+/// The plan's project copied onto the board on its own, attached to the clock, as the first
+/// command of a plan copy sends it: the board ids of the plan's records.
+fn project_landed(plan: &Plan) -> Counterparts {
+    let (report, _) = plan.measured(&["project", "copy", "notes:P", "--to", "board", "--json"]);
+    let mut at = Counterparts::new();
+    at.insert("P".into(), landed(&report, "notes:P"));
+    for n in 1..=TASKS {
+        at.insert(format!("T-{n}"), landed(&report, &format!("notes:T-{n}")));
+    }
+    at
+}
+
+/// The coalesced lookup's own name for what it sends.
+const COALESCED: &str =
+    "looking up the items copied from several origins, with a project's members";
+
+#[test]
+fn a_documents_first_screened_copy_classifies_its_project_by_the_members_its_lookup_carries() {
+    // The project lands, and then a person records one of its tasks on the board as changing a
+    // private repository. The document's first copy reads its project's members in the same
+    // request as its origins, finds the project private by what it holds, and is refused
+    // before anything is sent — the members read nowhere else.
+    let mut plan = Plan::screened(SMALL, Vec::new(), None);
+    let at = project_landed(&plan);
+    plan.screening
+        .as_mut()
+        .expect("a screened plan")
+        .0
+        .private("synthco", "secret-gadgets");
+    record_repository(&plan, &at["T-3"], "github.com/synthco/secret-gadgets");
+    let (output, calls) =
+        plan.measured_output(&["document", "copy", "notes:D", "--to", "board", "--json"]);
+    assert_ne!(output.status.code(), Some(0), "{}", stdout(&output));
+    let sent = tally(&calls);
+    assert_eq!(sent.get(COALESCED), Some(&1), "{sent:?}");
+    assert!(
+        !sent.contains_key("reading a project's tasks"),
+        "the members came with the lookup: {sent:?}"
+    );
+    assert!(
+        calls.iter().all(|call| !call.creating),
+        "a refused copy sent {sent:?}"
+    );
+    let failure: Value = serde_json::from_str(&stdout(&output)).expect("a failure document");
+    assert_eq!(
+        failure["failure"]["kind"], "not-private-destination",
+        "{failure}"
+    );
+}
+
+#[test]
+fn a_documents_first_screened_copy_lists_its_projects_members_whole_when_the_page_has_more() {
+    // The project holds more members than the page the lookup carries: that page is no answer
+    // about all of them, so the copy lists the members whole before it is held to them, and
+    // lands.
+    let plan = Plan::screened(SMALL, Vec::new(), None);
+    let at = project_landed(&plan);
+    for n in 1..=20 {
+        plan.github
+            .file_under(&format!("BG-{n}"), Some(at["P"].as_str()));
+    }
+    let (_, calls) = plan.measured(&["document", "copy", "notes:D", "--to", "board", "--json"]);
+    let sent = tally(&calls);
+    assert_eq!(sent.get(COALESCED), Some(&1), "{sent:?}");
+    assert!(
+        sent.contains_key("reading a project's tasks"),
+        "the members were listed whole: {sent:?}"
+    );
 }

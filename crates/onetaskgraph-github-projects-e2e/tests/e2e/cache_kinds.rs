@@ -20,6 +20,16 @@ use crate::cache::Cached;
 /// The one request a project or a document read by id sends: the issue by its own id.
 const READ_BY_ID: &str = graphql::ISSUE;
 
+/// The one read by id of an item of `kind`: a document is read with its project and the
+/// project's members beside it.
+fn read_by_id(kind: &str) -> &'static str {
+    if kind == "document" {
+        graphql::DOCUMENT_IN_PROJECT
+    } else {
+        READ_BY_ID
+    }
+}
+
 /// `<kind> show <id>`, pinned to `pin` when one is given.
 pub(crate) fn show(
     cached: &Cached,
@@ -131,7 +141,11 @@ fn a_pinned_project_read_is_answered_from_its_entry_and_a_newer_pin_from_the_boa
 fn a_pinned_document_read_serves_its_fields_and_manifest_from_its_entry() {
     let cached = Cached::new();
     let (first, sent) = show(&cached, "document", "board:D-1", None);
-    assert_eq!(sent, [READ_BY_ID], "a cold read is the one read by id");
+    assert_eq!(
+        sent,
+        [read_by_id("document")],
+        "a cold read is the one read by id"
+    );
     let held = version(&first);
 
     let (pinned, sent) = show(&cached, "document", "board:D-1", Some(&held));
@@ -148,7 +162,7 @@ fn a_pinned_document_read_serves_its_fields_and_manifest_from_its_entry() {
         .edit_body("D-1", "the engine core, reviewed again");
     let newer = listed(&cached, "document", "board:D-1");
     let (current, sent) = show(&cached, "document", "board:D-1", Some(&newer));
-    assert_eq!(sent, [READ_BY_ID], "a newer pin misses");
+    assert_eq!(sent, [read_by_id("document")], "a newer pin misses");
     assert_eq!(
         current["items"][0]["item"]["content"],
         "the engine core, reviewed again"
@@ -165,7 +179,7 @@ fn a_pin_the_board_cannot_order_beside_the_entry_is_the_one_read() {
         let elsewhere = held.replace("nickderobertis/onetaskgraph", "acme/other");
         assert_ne!(elsewhere, held);
         let (_, sent) = show(&cached, kind, id, Some(&elsewhere));
-        assert_eq!(sent, [READ_BY_ID], "{kind}: an unordered pin");
+        assert_eq!(sent, [read_by_id(kind)], "{kind}: an unordered pin");
         // A token from before gh3 — what 0.6.0 gave — is never ordered either.
         let rest = held
             .strip_prefix(onetaskgraph_github_projects::change_token::PREFIX)
@@ -173,10 +187,10 @@ fn a_pin_the_board_cannot_order_beside_the_entry_is_the_one_read() {
         let parts: Vec<&str> = rest.splitn(6, '|').collect();
         let gh2 = format!("gh2|{}|{}", parts[..4].join("|"), parts[5]);
         let (_, sent) = show(&cached, kind, id, Some(&gh2));
-        assert_eq!(sent, [READ_BY_ID], "{kind}: a gh2 pin");
+        assert_eq!(sent, [read_by_id(kind)], "{kind}: a gh2 pin");
         // And a value that is no token at all.
         let (_, sent) = show(&cached, kind, id, Some("not-a-token"));
-        assert_eq!(sent, [READ_BY_ID], "{kind}: no token");
+        assert_eq!(sent, [read_by_id(kind)], "{kind}: no token");
         // The entry still answers the pin it holds.
         let (_, sent) = show(&cached, kind, id, Some(&held));
         assert_eq!(sent, Vec::<String>::new(), "{kind}: the held pin");
@@ -191,7 +205,7 @@ fn an_item_read_too_soon_after_its_change_gives_no_token_and_fills_no_entry() {
     cached.board.read_as_it_changes(true);
     for (kind, id) in [("project", "board:P-2"), ("document", "board:D-2")] {
         let (shown, sent) = show(&cached, kind, id, None);
-        assert_eq!(sent, [READ_BY_ID]);
+        assert_eq!(sent, [read_by_id(kind)]);
         assert!(
             shown["items"][0]["item"].get("version").is_none(),
             "{kind}: no token while it settles: {shown}"
@@ -620,11 +634,11 @@ fn an_entry_the_cache_directory_will_not_replace_is_served_to_no_pin_after_its_i
         let (current, sent) = show(&cached, kind, id, Some(&newer));
         let (older, sent_older) = show(&cached, kind, id, Some(&held));
         std::fs::set_permissions(&entries, std::fs::Permissions::from_mode(0o755)).unwrap();
-        assert_eq!(sent, [READ_BY_ID], "{kind}: a newer pin misses");
+        assert_eq!(sent, [read_by_id(kind)], "{kind}: a newer pin misses");
         assert_eq!(current["items"][0]["item"]["title"], renamed);
         assert_eq!(
             sent_older,
-            [READ_BY_ID],
+            [read_by_id(kind)],
             "{kind}: the entry at the older version is no longer served, even to its own pin"
         );
         assert_eq!(

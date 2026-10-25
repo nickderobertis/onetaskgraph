@@ -21824,6 +21824,11 @@ async fn a_batched_origin_lookup_of_one_carrier_each_still_finds_every_duplicate
             "work:ENG-3".to_owned(),
         ])
         .await
+        .expect("the origins, held for the read ahead");
+    assert!(fixture.operations().is_empty(), "held until the read ahead");
+    source
+        .read_ahead_for_copy(&[])
+        .await
         .expect("one batched lookup");
     let batched = fixture.operations();
     assert_eq!(batched.len(), 1, "{batched:?}");

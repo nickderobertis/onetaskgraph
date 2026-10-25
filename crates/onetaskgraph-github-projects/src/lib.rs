@@ -1519,19 +1519,15 @@ pub mod graphql {
         };
     }
 
-    /// The first page of [`ORIGIN_LOOKUP`] for up to [`ORIGIN_BATCH`](super::ORIGIN_BATCH)
-    /// origins a copy is about to look for, and everything creating an item then reads —
-    /// the board's own id and field definitions, as [`CREATION_CONTEXT`] reads them, and the node
-    /// id and the numeric id of the repository an issue is created in — in one request.
-    ///
-    /// What a copy reads before it writes anything, so that finding none of its records on the
-    /// board and creating every one costs this read and the writes. An origin whose page says
-    /// there is more is left to its own [`ORIGIN_LOOKUP`]. The repository's numeric id is what an
-    /// image upload names, so a copy carrying assets needs no `GET /repos/{owner}/{repo}` either.
-    pub const ORIGIN_LOOKUPS: &str = concat!(
-        r#"query($owner:String!,$number:Int!,$type:SearchType!,$lookupFirst:Int!,$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!,$repositoryOwner:String!,$repositoryName:String!,$filter0:String!,$filter1:String!,$filter2:String!,$filter3:String!,$filter4:String!,$filter5:String!,$filter6:String!,$filter7:String!,$filter8:String!,$filter9:String!,$search0:String!,$search1:String!,$search2:String!,$search3:String!,$search4:String!,$search5:String!,$search6:String!,$search7:String!,$search8:String!,$search9:String!,$ask0:Boolean!,$ask1:Boolean!,$ask2:Boolean!,$ask3:Boolean!,$ask4:Boolean!,$ask5:Boolean!,$ask6:Boolean!,$ask7:Boolean!,$ask8:Boolean!,$ask9:Boolean!"#,
-        relationship_events_variable!(),
-        r#"){
+    /// [`ORIGIN_LOOKUPS`], with `$extra_variables` declared after its own and `$extra_fields`
+    /// selected beside them: one spelling of the batched lookup for the documents that send it.
+    macro_rules! origin_lookups {
+        ($extra_variables:literal, $extra_fields:literal) => {
+            concat!(
+                r#"query($owner:String!,$number:Int!,$type:SearchType!,$lookupFirst:Int!,$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!,$repositoryOwner:String!,$repositoryName:String!,$filter0:String!,$filter1:String!,$filter2:String!,$filter3:String!,$filter4:String!,$filter5:String!,$filter6:String!,$filter7:String!,$filter8:String!,$filter9:String!,$search0:String!,$search1:String!,$search2:String!,$search3:String!,$search4:String!,$search5:String!,$search6:String!,$search7:String!,$search8:String!,$search9:String!,$ask0:Boolean!,$ask1:Boolean!,$ask2:Boolean!,$ask3:Boolean!,$ask4:Boolean!,$ask5:Boolean!,$ask6:Boolean!,$ask7:Boolean!,$ask8:Boolean!,$ask9:Boolean!"#,
+                relationship_events_variable!(),
+                $extra_variables,
+                r#"){
       boardFields:repositoryOwner(login:$owner){
         ... on ProjectV2Owner{projectV2(number:$number){id
           fields(first:$nestedFirst){nodes{
@@ -1541,18 +1537,46 @@ pub mod graphql {
         }}
       }
       repository(owner:$repositoryOwner,name:$repositoryName){id databaseId nameWithOwner}"#,
-        origin_lookup_alias!(0),
-        origin_lookup_alias!(1),
-        origin_lookup_alias!(2),
-        origin_lookup_alias!(3),
-        origin_lookup_alias!(4),
-        origin_lookup_alias!(5),
-        origin_lookup_alias!(6),
-        origin_lookup_alias!(7),
-        origin_lookup_alias!(8),
-        origin_lookup_alias!(9),
-        "\n    }",
-        board_issue!()
+                $extra_fields,
+                origin_lookup_alias!(0),
+                origin_lookup_alias!(1),
+                origin_lookup_alias!(2),
+                origin_lookup_alias!(3),
+                origin_lookup_alias!(4),
+                origin_lookup_alias!(5),
+                origin_lookup_alias!(6),
+                origin_lookup_alias!(7),
+                origin_lookup_alias!(8),
+                origin_lookup_alias!(9),
+                "\n    }",
+                board_issue!()
+            )
+        };
+    }
+
+    /// The first page of [`ORIGIN_LOOKUP`] for up to [`ORIGIN_BATCH`](super::ORIGIN_BATCH)
+    /// origins a copy is about to look for, and everything creating an item then reads —
+    /// the board's own id and field definitions, as [`CREATION_CONTEXT`] reads them, and the node
+    /// id and the numeric id of the repository an issue is created in — in one request.
+    ///
+    /// What a copy reads before it writes anything, so that finding none of its records on the
+    /// board and creating every one costs this read and the writes. An origin whose page says
+    /// there is more is left to its own [`ORIGIN_LOOKUP`]. The repository's numeric id is what an
+    /// image upload names, so a copy carrying assets needs no `GET /repos/{owner}/{repo}` either.
+    pub const ORIGIN_LOOKUPS: &str = origin_lookups!("", "");
+
+    /// [`ORIGIN_LOOKUPS`], with a page of the members of the project `$project` beside it, each
+    /// trimmed to what classifying it reads — its id, its parent, its body and its repository,
+    /// and no connection under it.
+    ///
+    /// What a document copy sends where the public boundary screens its write: the document is
+    /// held to who may read its project, which is its members' classification as much as the
+    /// project's own, and this request carries both the project — among the origins it asks —
+    /// and its members. GitHub's own dry run prices it at the one point [`ORIGIN_LOOKUPS`]
+    /// costs alone (`docs/measurements/board-copy-gaps-2026-10-24/coalesced-members-dry-run`).
+    pub const ORIGIN_LOOKUPS_WITH_MEMBERS: &str = origin_lookups!(
+        ",$project:ID!,$memberFirst:Int!",
+        "\n      members:node(id:$project){... on Issue{subIssues(first:$memberFirst){pageInfo{hasNextPage endCursor} nodes{id body parent{id} repository{nameWithOwner}}}}}"
     );
 
     /// One slot `<n>` of a copy's aliased writes: `$<prefix><n>` is its input and `$send<n>`
@@ -2081,7 +2105,7 @@ pub mod graphql {
     /// `documents_are_all_inventoried` reads this file back and fails naming any `pub
     /// const` here that this list omits, so the two cannot part — which is the same guard
     /// `CATEGORIES` carries, in the one shape available to a set of `&str` constants.
-    pub const DOCUMENTS: [(&str, &str); 53] = [
+    pub const DOCUMENTS: [(&str, &str); 54] = [
         (SEARCH_ISSUES, "searching this board's issues"),
         (ISSUE, "reading one issue"),
         (
@@ -2118,6 +2142,10 @@ pub mod graphql {
         (
             ORIGIN_LOOKUPS,
             "looking up the items copied from several origins, and what creating one reads",
+        ),
+        (
+            ORIGIN_LOOKUPS_WITH_MEMBERS,
+            "looking up the items copied from several origins, with a project's members",
         ),
         (CREATE_ISSUES, "creating several issues together"),
         (
@@ -3819,6 +3847,15 @@ pub struct GitHubProjectsSource {
     /// [`TaskSource::end_command`]. So a read answered from it is the copy's own
     /// read-before-write, made in the same request as the others' rather than on its own.
     read_ahead: Mutex<BTreeMap<NativeId, Option<Resolved>>>,
+    /// The origins [`TaskSource::read_ahead_origins_for_copy`] was asked about and has not sent
+    /// yet: held for the [`TaskSource::read_ahead_for_copy`] that follows it, which sends them —
+    /// beside the members of the one project it names, when it names one — or for the next
+    /// request this source makes, whichever comes first.
+    pending_origins: Mutex<Vec<String>>,
+    /// Each project's members as a lookup carrying them read them in this command, trimmed to
+    /// their classification and repositories, taken by [`TaskSource::member_classifications`]
+    /// of that project and by nothing else, and cleared by [`TaskSource::end_command`].
+    member_classes: Mutex<BTreeMap<NativeId, Vec<MemberClass>>>,
     /// Every item a listing of one project's members carried whole in this command — the
     /// project issue and each of its sub-issues — kept for [`TaskSource::read_ahead_for_copy`]
     /// alone, which takes each one it is asked for into [`Self::read_ahead`] instead of reading
@@ -4991,6 +5028,8 @@ impl GitHubProjectsSource {
             narrowed_cache: Mutex::new(BTreeMap::new()),
             resolved_cache: Mutex::new(BTreeMap::new()),
             read_ahead: Mutex::new(BTreeMap::new()),
+            pending_origins: Mutex::new(Vec::new()),
+            member_classes: Mutex::new(BTreeMap::new()),
             carried: Mutex::new(BTreeMap::new()),
             held_cache: Mutex::new(BTreeMap::new()),
             children_cache: Mutex::new(BTreeMap::new()),
@@ -5025,6 +5064,10 @@ impl GitHubProjectsSource {
     /// attempt. A duplicate write would come from replaying one of those, and none is
     /// replayed.
     async fn graphql(&self, query: &str, variables: Value) -> Result<Value, SourceError> {
+        // Origins held back for a read ahead that never came are sent before anything else.
+        if query != graphql::ORIGIN_LOOKUPS && query != graphql::ORIGIN_LOOKUPS_WITH_MEMBERS {
+            Box::pin(self.send_pending_origins(None)).await?;
+        }
         if !self.expected.journaling() {
             return self.graphql_sent(query, variables).await;
         }
@@ -6670,6 +6713,7 @@ impl GitHubProjectsSource {
     /// Completed with what this process wrote, its own record winning over the index's copy
     /// of the same item: see [`Self::with_own_writes`].
     async fn narrowed(&self, query: &TaskQuery) -> Result<Option<Vec<Resolved>>, SourceError> {
+        self.send_pending_origins(None).await?;
         let asked = match (&query.origin, narrowing_qualifiers(query)) {
             (Some(origin), _) => Narrowing::Origin(origin.clone()),
             (None, Some(qualifiers)) => Narrowing::Search(match query.commented_since {
@@ -10332,9 +10376,9 @@ impl GitHubProjectsSource {
     /// [`TaskSource::read_ahead_origins_for_copy`]. An origin whose answer runs past its first
     /// page is left to its own lookup.
     async fn origins_ahead(&self, origins: &[String]) -> Result<(), SourceError> {
-        let Some(repository) = self.repository.clone() else {
+        if self.repository.is_none() {
             return Ok(());
-        };
+        }
         let unasked: Vec<&String> = {
             let held = self.narrowed_cache()?;
             let mut unasked: Vec<&String> = Vec::new();
@@ -10350,6 +10394,131 @@ impl GitHubProjectsSource {
         if unasked.is_empty() {
             return Ok(());
         }
+        // One batch is held back for the read ahead that follows, which may carry a project's
+        // members beside it in the same request.
+        if unasked.len() <= ORIGIN_BATCH {
+            let mut pending =
+                self.pending_origins
+                    .lock()
+                    .map_err(|_| SourceError::Unavailable {
+                        message:
+                            "origins held for a read ahead were left inconsistent; run the command \
+                          again"
+                                .into(),
+                    })?;
+            for origin in unasked {
+                if !pending.contains(origin) {
+                    pending.push(origin.clone());
+                }
+            }
+            return Ok(());
+        }
+        let unasked: Vec<String> = unasked.into_iter().cloned().collect();
+        self.send_origin_lookups(&unasked, None).await
+    }
+
+    /// Hold, for [`TaskSource::member_classifications`] of `project`, each member's
+    /// classification and repositories as the members page `data` carries them — when that page
+    /// is every member, each one names `project` as its parent, and every record it holds is
+    /// readable. Any other page holds nothing, so the members are read as they always were.
+    fn hold_member_classes(&self, project: &NativeId, data: &Value) -> Result<(), SourceError> {
+        let Some(page) = data
+            .pointer("/members/subIssues")
+            .filter(|page| !page.is_null())
+        else {
+            return Ok(());
+        };
+        if page
+            .pointer("/pageInfo/hasNextPage")
+            .and_then(Value::as_bool)
+            != Some(false)
+        {
+            return Ok(());
+        }
+        let Some(nodes) = page.get("nodes").and_then(Value::as_array) else {
+            return Ok(());
+        };
+        let mut members = Vec::with_capacity(nodes.len());
+        for node in nodes {
+            if node.pointer("/parent/id").and_then(Value::as_str) != Some(project.0.as_str()) {
+                return Ok(());
+            }
+            let Some(Ok((_, slot))) = node
+                .get("body")
+                .map(|body| metadata_body(body.as_str().map(str::to_owned)))
+            else {
+                return Ok(());
+            };
+            // A project filed under this one is no member a task or document listing names.
+            if slot
+                .get(ItemKind::METADATA_KEY)
+                .is_some_and(|kind| kind == "project")
+            {
+                continue;
+            }
+            let Ok(classification) = Classification::from_metadata(&slot) else {
+                return Ok(());
+            };
+            let repositories = if slot.contains_key(Repository::METADATA_KEY) {
+                let Ok(repositories) = Repository::from_metadata(&slot) else {
+                    return Ok(());
+                };
+                repositories
+            } else {
+                let own = node
+                    .pointer("/repository/nameWithOwner")
+                    .and_then(Value::as_str)
+                    .map(|origin| {
+                        Repository::try_from(format!("{}/{origin}", RepositoryTarget::HOST))
+                    })
+                    .transpose();
+                let Ok(own) = own else {
+                    return Ok(());
+                };
+                own.into_iter().collect()
+            };
+            members.push((classification, repositories));
+        }
+        self.member_classes
+            .lock()
+            .map_err(|_| SourceError::Unavailable {
+                message: "a project's members held for its classification were left \
+                          inconsistent; run the command again"
+                    .into(),
+            })?
+            .insert(project.clone(), members);
+        Ok(())
+    }
+
+    /// Send every origin held back for the read ahead, beside the members of `members` when it
+    /// names a project — or nothing, when none is held.
+    async fn send_pending_origins(&self, members: Option<&NativeId>) -> Result<(), SourceError> {
+        let pending = std::mem::take(&mut *self.pending_origins.lock().map_err(|_| {
+            SourceError::Unavailable {
+                message: "origins held for a read ahead were left inconsistent; run the command \
+                          again"
+                    .into(),
+            }
+        })?);
+        if pending.is_empty() {
+            return Ok(());
+        }
+        self.send_origin_lookups(&pending, members).await
+    }
+
+    /// [`graphql::ORIGIN_LOOKUPS`] of `unasked`, [`ORIGIN_BATCH`] to a request — the first one
+    /// [`graphql::ORIGIN_LOOKUPS_WITH_MEMBERS`], carrying the members of `members`, when it names
+    /// a project — holding each origin's answer and, from a members page that is the whole of
+    /// them, each member's classification.
+    async fn send_origin_lookups(
+        &self,
+        unasked: &[String],
+        members: Option<&NativeId>,
+    ) -> Result<(), SourceError> {
+        let Some(repository) = self.repository.clone() else {
+            return Ok(());
+        };
+        let mut members = members;
         for chunk in unasked.chunks(ORIGIN_BATCH) {
             let mut variables = json!({"owner":self.owner,"number":self.project_number,
                 "type":"ISSUE","lookupFirst":ORIGIN_LOOKUPS_PAGE_SIZE,"nestedFirst":NESTED_PAGE_SIZE,
@@ -10364,8 +10533,20 @@ impl GitHubProjectsSource {
                 );
                 variables[format!("ask{slot}")] = json!(slot < chunk.len());
             }
-            let data = self.graphql(graphql::ORIGIN_LOOKUPS, variables).await?;
+            let project = members.take();
+            let document = match project {
+                Some(project) => {
+                    variables["project"] = json!(project.0);
+                    variables["memberFirst"] = json!(MEMBER_PAGE_SIZE);
+                    graphql::ORIGIN_LOOKUPS_WITH_MEMBERS
+                }
+                None => graphql::ORIGIN_LOOKUPS,
+            };
+            let data = self.graphql(document, variables).await?;
             self.fields_read(&data)?;
+            if let Some(project) = project {
+                self.hold_member_classes(project, &data)?;
+            }
             if let Some(node) = data.get("repository").filter(|value| !value.is_null()) {
                 let id = required_nonblank_str(node, "id")?.to_owned();
                 self.repository_cache()?.insert(repository.clone(), id);
@@ -13207,6 +13388,21 @@ impl TaskSource for GitHubProjectsSource {
         self.origins_ahead(origins).await
     }
 
+    async fn member_classifications(
+        &self,
+        project: &NativeId,
+    ) -> Result<Option<Vec<(Classification, Vec<Repository>)>>, SourceError> {
+        Ok(self
+            .member_classes
+            .lock()
+            .map_err(|_| SourceError::Unavailable {
+                message: "a project's members held for its classification were left \
+                          inconsistent; run the command again"
+                    .into(),
+            })?
+            .remove(project))
+    }
+
     /// The issue's own web address, as the `createIssue` that made it in this command answered
     /// it: a task, a project and a document are each an issue here.
     fn written_location(
@@ -13735,6 +13931,23 @@ impl TaskSource for GitHubProjectsSource {
     /// so each of its ids is read on its own and answered as that read answers; a draft, and an
     /// answer naming another issue than the one asked for, are left to their own reads too.
     async fn read_ahead_for_copy(&self, ids: &[NativeId]) -> Result<(), SourceError> {
+        // The origins asked just before go out now, beside the members of the one project this
+        // names when it names one; a project those origins answered whole is held for its next
+        // read by id rather than read again here.
+        let hinted = match ids {
+            [one] => Some(one),
+            _ => None,
+        };
+        self.send_pending_origins(hinted).await?;
+        if let Some(project) = hinted {
+            let answered = self.resolved_cache()?.get(project).cloned();
+            if let Some(answered) = answered
+                && answered.kind == BoardKind::Work(ItemKind::Project)
+            {
+                self.read_ahead()?.insert(project.clone(), Some(answered));
+                return Ok(());
+            }
+        }
         let mut unread: Vec<NativeId> = Vec::new();
         // Read whole by a listing of its project in this command, which a mutation naming it
         // would have dropped: held as a batch would have held it, once every batch is answered.
@@ -14031,6 +14244,8 @@ impl TaskSource for GitHubProjectsSource {
         clear(&self.search_next);
         clear(&self.resolved_cache);
         clear(&self.read_ahead);
+        clear(&self.pending_origins);
+        clear(&self.member_classes);
         clear(&self.carried);
         clear(&self.held_cache);
         clear(&self.children_cache);
@@ -14041,6 +14256,10 @@ impl TaskSource for GitHubProjectsSource {
         Ok(())
     }
 }
+
+/// One member of a project as a classification-only read answers it: its classification and
+/// the repositories its work changes.
+type MemberClass = (Classification, Vec<Repository>);
 
 /// Each project's sub-issues as one command read them, keyed by the selector they were asked
 /// for under, beside the project that selector named; see `children_cache`.

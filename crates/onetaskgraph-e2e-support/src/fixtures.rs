@@ -4044,6 +4044,42 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         }
         return answer;
     }
+    // The batched origin lookup with a page of one project's members beside it: the lookup
+    // answered exactly as on its own, and the members as GitHub lists a project's sub-issues,
+    // trimmed to what the read selects of each.
+    if query == onetaskgraph_github_projects::graphql::ORIGIN_LOOKUPS_WITH_MEMBERS {
+        let mut answer = github_answer(
+            board,
+            onetaskgraph_github_projects::graphql::ORIGIN_LOOKUPS,
+            variables,
+        );
+        let held = board.lock().unwrap();
+        let project = &variables["project"];
+        let first = usize::try_from(variables["memberFirst"].as_u64().expect("memberFirst"))
+            .expect("memberFirst fits usize");
+        let children: Vec<&Value> = held
+            .items
+            .iter()
+            .chain(&held.pending)
+            .filter(|item| item["parent"] == *project)
+            .collect();
+        let nodes: Vec<Value> = children
+            .iter()
+            .take(first)
+            .map(|item| {
+                json!({"id": item["id"], "body": item["body"], "parent": {"id": project},
+                       "repository": item["repo"].as_str().map(|repo| json!({"nameWithOwner": repo}))})
+            })
+            .collect();
+        answer["members"] = if held.items.iter().any(|item| item["id"] == *project) {
+            json!({"subIssues": {"nodes": nodes,
+                "pageInfo": {"hasNextPage": children.len() > first,
+                             "endCursor": first.min(children.len()).to_string()}}})
+        } else {
+            Value::Null
+        };
+        return answer;
+    }
     board.lock().unwrap().counted_types = TimelineEvent::counted_by(query);
     if query == onetaskgraph_github_projects::graphql::PROJECT_VISIBILITY {
         let mut held = board.lock().unwrap();
