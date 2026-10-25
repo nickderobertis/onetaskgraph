@@ -3008,8 +3008,13 @@ impl LocalMdSource {
         d: Direction,
         p: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
-        let edges = self
-            .parse_work_records(kind, &ProjectFilter::Any)?
+        // Every edge a file holds is `from` that file's own record, so what one item depends on
+        // is in its file alone; what depends on it can be in any file, and is scanned for.
+        let records = match d {
+            Direction::DependsOn => self.find(kind, id)?.into_iter().collect(),
+            Direction::DependedOnBy => self.parse_work_records(kind, &ProjectFilter::Any)?,
+        };
+        let edges = records
             .into_iter()
             .flat_map(|x| x.dependencies)
             .filter(|e| match d {
