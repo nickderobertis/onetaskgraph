@@ -221,6 +221,7 @@ class Github:
         self.fields: list[Field | dict] = [{'id': FieldId('status'), 'name': 'Status'}]
         self.fields_next_page = False
         self.field_delete_answer = None
+        self.field_delete_status = 200
         # Every way a request or a served body departed from GitHub's description.
         self.unpinned: list[str] = []
 
@@ -379,6 +380,9 @@ class Github:
                         if identity == state.origin_field.get('id'):
                             state.origin_field.clear()
                             state.origin_values.clear()
+                        if state.field_delete_status != 200:
+                            self.reply({}, state.field_delete_status)
+                            return
                         if state.field_delete_answer is not None:
                             self.reply(state.field_delete_answer)
                             return
@@ -1022,6 +1026,58 @@ class Journeys(unittest.TestCase):
                     self.assertEqual(state.writes, [Write('POST', FieldDelete(field))])
                 else:
                     self.assertFalse(state.writes)
+
+    def test_a_malformed_field_listing_fails_closed(self):
+        # The field connection is read before anything is deleted, so every defect in it
+        # refuses the whole pass with nothing written — a finished run's field included.
+        connection = lambda body: body['data']['board']['projectV2']
+        for fault, transform, refusal in (
+                ('no fields', lambda body: connection(body).pop('fields'), 'board fields missing'),
+                ('no pageInfo', lambda body: connection(body)['fields'].pop('pageInfo'), 'board fields pageInfo missing'),
+                ('undecodable pageInfo', lambda body: connection(body)['fields'].__setitem__('pageInfo', {'hasNextPage': 'no'}),
+                 'board fields pageInfo missing'),
+                ('no nodes', lambda body: connection(body)['fields'].pop('nodes'), 'board field nodes missing'),
+                ('undecodable nodes', lambda body: connection(body)['fields'].__setitem__('nodes', {}), 'board field nodes missing'),
+                ('numeric id', lambda body: connection(body)['fields']['nodes'].append({'id': 7, 'name': LABEL + 'ci-1-1-1'}),
+                 'missing or undecodable id'),
+                ('empty id', lambda body: connection(body)['fields']['nodes'].append({'id': '', 'name': LABEL + 'ci-1-1-1'}), 'invalid id'),
+                ('control in id', lambda body: connection(body)['fields']['nodes'].append({'id': 'a\nb', 'name': LABEL + 'ci-1-1-1'}),
+                 'invalid id')):
+            with self.subTest(fault=fault):
+                state = Github()
+                state.field(f'ci-123-1-{NOW - DAY}')
+                state.status[RunId(123)] = Status.COMPLETED
+                state.board_transform = transform
+                result = state.run()
+                self.assert_failed(result)
+                self.assertIn(refusal, result.stderr)
+                self.assertFalse(state.writes)
+
+    def test_a_refused_field_delete_stops_the_pass(self):
+        # Two finished runs' fields: the first delete is refused, so the second is never sent.
+        for fault in ('http 500', 'errors', 'no data', 'empty data', 'null payload'):
+            with self.subTest(fault=fault):
+                state = Github()
+                first = state.field(f'ci-123-1-{NOW - DAY}')
+                state.field(f'ci-124-1-{NOW - DAY}')
+                state.status[RunId(123)] = Status.COMPLETED
+                state.status[RunId(124)] = Status.COMPLETED
+                match fault:
+                    case 'http 500':
+                        state.field_delete_status = 500
+                    case 'errors':
+                        state.field_delete_answer = {'errors': [{'message': 'refused'}]}
+                    case 'no data':
+                        state.field_delete_answer = {'data': None}
+                    case 'empty data':
+                        state.field_delete_answer = {'data': {}}
+                    case 'null payload':
+                        state.field_delete_answer = {'data': {'deleteProjectV2Field': None}}
+                before = copy.deepcopy(state.fields)
+                result = state.run()
+                self.assert_failed(result)
+                self.assertEqual(state.writes, [Write('POST', FieldDelete(first))])
+                self.assertEqual(state.fields, before)
 
     def test_a_cancelled_run_removes_its_own_artifacts_alone(self):
         state = Github()

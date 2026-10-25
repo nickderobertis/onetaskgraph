@@ -7,7 +7,7 @@
 //! The pre-flight is the real one — `journey::preflight_board`, the call the credentialed
 //! lane makes before it writes anything — recording into a real session record, which is what
 //! makes it judge the board against the registered workload. What stands in for GitHub is a
-//! local HTTP server holding a board of the registered size, one stamped field more, and the
+//! local HTTP server holding a board of the registered size, two stamped fields more, and the
 //! Actions run that stamp names.
 //!
 //! A field whose run reads `completed` — a cancelled run does — is removed and the board is
