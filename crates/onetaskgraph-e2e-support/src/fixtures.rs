@@ -4103,7 +4103,7 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
                 let one = json!({"type": variables["type"],
                     "filter": variables[format!("filter{slot}")],
                     "search": variables[format!("search{slot}")],
-                    "originFirst": variables["originFirst"],
+                    "originFirst": variables["lookupFirst"],
                     "itemsAfter": null, "searchAfter": null});
                 let answer = board.lock().unwrap().origin_lookup(&one);
                 result.insert(format!("o{slot}"), answer["originItems"].clone());

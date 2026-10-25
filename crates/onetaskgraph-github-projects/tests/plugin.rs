@@ -1728,7 +1728,7 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
                 let one = json!({"owner":variables["owner"],"number":variables["number"],
                     "type":variables["type"],"filter":variables[format!("filter{slot}")],
                     "search":variables[format!("search{slot}")],
-                    "originFirst":variables["originFirst"],"itemsAfter":null,"searchAfter":null,
+                    "originFirst":variables["lookupFirst"],"itemsAfter":null,"searchAfter":null,
                     "nestedFirst":variables["nestedFirst"],"boardItems":variables["boardItems"],
                     "duplicates":variables["duplicates"]});
                 let answered = answer(state, documents::ORIGIN_LOOKUP, &one);
@@ -21790,5 +21790,81 @@ async fn a_document_read_whose_page_names_another_parent_leaves_the_members_to_t
         fixture.operations(),
         ["documentInProject", "projectTasks"],
         "the members are listed on their own"
+    );
+}
+
+#[tokio::test]
+async fn a_batched_origin_lookup_of_one_carrier_each_still_finds_every_duplicate_and_every_page() {
+    // The batch asks a page of one carrier of each origin. An origin with one carrier is
+    // answered by it, with no request of its own; one with two — a duplicate — and one with
+    // five each say there is more, and are left to their own lookup, which walks every page of
+    // three and finds them all.
+    let mut items = vec![
+        Item::issue("I_dup_a", "first")
+            .status("Todo")
+            .carrying("work:ENG-1"),
+        Item::issue("I_dup_b", "second")
+            .status("Todo")
+            .carrying("work:ENG-1"),
+        Item::issue("I_single", "single")
+            .status("Todo")
+            .carrying("work:ENG-2"),
+    ];
+    items.extend((0..5).map(|index| {
+        Item::issue(&format!("I_many_{index}"), "many")
+            .status("Todo")
+            .carrying("work:ENG-3")
+    }));
+    let fixture = board(items);
+    let source = source(&fixture);
+    source
+        .read_ahead_origins_for_copy(&[
+            "work:ENG-1".to_owned(),
+            "work:ENG-2".to_owned(),
+            "work:ENG-3".to_owned(),
+        ])
+        .await
+        .expect("one batched lookup");
+    let batched = fixture.operations();
+    assert_eq!(batched.len(), 1, "{batched:?}");
+    let firsts: Vec<Value> = fixture
+        .state
+        .lock()
+        .unwrap()
+        .bindings
+        .iter()
+        .filter_map(|(_, variables)| variables.get("lookupFirst").cloned())
+        .collect();
+    assert_eq!(firsts, [json!(1)], "a page of one carrier each");
+
+    let single = selected_tasks(source.as_ref(), &origin_query("work:ENG-2")).await;
+    assert_eq!(single, ["I_single"]);
+    assert_eq!(fixture.operations().len(), 1, "answered by the batch alone");
+
+    let mut duplicate = selected_tasks(source.as_ref(), &origin_query("work:ENG-1")).await;
+    duplicate.sort();
+    assert_eq!(
+        duplicate,
+        ["I_dup_a", "I_dup_b"],
+        "both carriers of the duplicate"
+    );
+    assert_eq!(
+        fixture.requests("originItems"),
+        1,
+        "one page of three holds both"
+    );
+
+    let mut many = selected_tasks(source.as_ref(), &origin_query("work:ENG-3")).await;
+    many.sort();
+    assert_eq!(
+        many,
+        (0..5)
+            .map(|index| format!("I_many_{index}"))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        fixture.requests("originItems"),
+        3,
+        "two pages more, of three and of two"
     );
 }

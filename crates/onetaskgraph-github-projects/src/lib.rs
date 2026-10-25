@@ -304,7 +304,7 @@
 //!
 //! | Verb | Requests / points | Documents |
 //! | --- | --- | --- |
-//! | new copy | 4 / 5 | ORIGIN_LOOKUPS (the origin, the board's fields and the repository's node and numeric ids together; two points), CREATE_ISSUE filing the issue on the board and under its project, CREATED_BOARD_ITEMS once GitHub has added it, WRITE_FIELD_VALUES |
+//! | new copy | 4 | ORIGIN_LOOKUPS (the origin, the board's fields and the repository's node and numeric ids together, a page of one carrier for each origin), CREATE_ISSUE filing the issue on the board and under its project, CREATED_BOARD_ITEMS once GitHub has added it, WRITE_FIELD_VALUES |
 //! | copy --create | 4 | CREATION_CONTEXT, CREATE_ISSUE, CREATED_BOARD_ITEMS, WRITE_FIELD_VALUES: the new copy with no origin to ask about |
 //! | bound copy | 3 | ISSUE (with the board's fields and the issue's `blockedBy`, so no BOARD_FIELDS or ISSUE_DEPENDENCIES), UPDATE_FIELDS when a board field differs, then UPDATE_ISSUE last carrying only the title, body or state that differs — none, when nothing does |
 //! | bound copy, filed under a project | 4 | the bound copy's three, and one ISSUE of the destination project its link names, read once per command |
@@ -779,6 +779,15 @@ const BOARD_ITEMS_PAGE_SIZE: u32 = 3;
 /// and a copy makes one lookup per item it has no link for: at three, ten lookups cost fewer
 /// worst-case nodes than the one whole-board read they replaced.
 const ORIGIN_PAGE_SIZE: u32 = 3;
+/// How many carriers of each origin the batched [`graphql::ORIGIN_LOOKUPS`] asks each of its two
+/// connections for: one, the one carrier an origin names.
+///
+/// A second carrier still shows: the page then says there is more, and that origin is left to
+/// its own [`graphql::ORIGIN_LOOKUP`], which walks every page at `ORIGIN_PAGE_SIZE` — so a
+/// duplicate is found exactly as before, by the lookup that reads all of them. The feasibility
+/// spike (`board-copy-gaps-2026-10-24-spike-feasibility-report`) priced the batch of ten
+/// origins at two points with a first page of three and at one with a first page of one.
+const ORIGIN_LOOKUPS_PAGE_SIZE: u32 = 1;
 
 /// How many of one project's sub-issues one [`graphql::SUB_ISSUES`] page asks for: the most
 /// one point buys, since every row carries six connections GitHub charges for once per row.
@@ -790,11 +799,11 @@ pub use github_graphql_node_count::{NodeCountError, Variables};
 
 /// The largest value this source can bind to each page-size variable its documents name.
 ///
-/// Every `first:` in [`graphql`] reads one of these five, and each is capped at the
+/// Every `first:` in [`graphql`] reads one of these six, and each is capped at the
 /// constant above it wherever a caller's own limit could reach it — `$first` at
 /// [`MAX_PAGE_SIZE`], `$nestedFirst` at `NESTED_PAGE_SIZE`, `$boardItems` at
-/// `BOARD_ITEMS_PAGE_SIZE`, `$originFirst` at `ORIGIN_PAGE_SIZE`, `$memberFirst` at
-/// [`MEMBER_PAGE_SIZE`]. So this is the worst case a caller can drive this source to,
+/// `BOARD_ITEMS_PAGE_SIZE`, `$originFirst` at `ORIGIN_PAGE_SIZE`, `$lookupFirst` at
+/// `ORIGIN_LOOKUPS_PAGE_SIZE`, `$memberFirst` at [`MEMBER_PAGE_SIZE`]. So this is the worst case a caller can drive this source to,
 /// not one configuration of it, which is what makes a bound computed under it a bound on
 /// every read.
 pub fn largest_page_sizes() -> Variables {
@@ -803,6 +812,7 @@ pub fn largest_page_sizes() -> Variables {
         ("nestedFirst".to_owned(), NESTED_PAGE_SIZE),
         ("boardItems".to_owned(), BOARD_ITEMS_PAGE_SIZE),
         ("originFirst".to_owned(), ORIGIN_PAGE_SIZE),
+        ("lookupFirst".to_owned(), ORIGIN_LOOKUPS_PAGE_SIZE),
         ("memberFirst".to_owned(), MEMBER_PAGE_SIZE),
     ])
 }
@@ -1493,7 +1503,7 @@ pub mod graphql {
                 stringify!($n),
                 ":repositoryOwner(login:$owner) @include(if:$ask",
                 stringify!($n),
-                "){... on ProjectV2Owner{projectV2(number:$number){items(first:$originFirst,query:$filter",
+                "){... on ProjectV2Owner{projectV2(number:$number){items(first:$lookupFirst,query:$filter",
                 stringify!($n),
                 "){nodes{id updatedAt ",
                 board_item_values!(),
@@ -1502,7 +1512,7 @@ pub mod graphql {
                 stringify!($n),
                 ":search(query:$search",
                 stringify!($n),
-                ",type:$type,first:$originFirst) @include(if:$ask",
+                ",type:$type,first:$lookupFirst) @include(if:$ask",
                 stringify!($n),
                 "){pageInfo{hasNextPage endCursor} nodes{__typename ...BoardIssue}}"
             )
@@ -1519,7 +1529,7 @@ pub mod graphql {
     /// there is more is left to its own [`ORIGIN_LOOKUP`]. The repository's numeric id is what an
     /// image upload names, so a copy carrying assets needs no `GET /repos/{owner}/{repo}` either.
     pub const ORIGIN_LOOKUPS: &str = concat!(
-        r#"query($owner:String!,$number:Int!,$type:SearchType!,$originFirst:Int!,$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!,$repositoryOwner:String!,$repositoryName:String!,$filter0:String!,$filter1:String!,$filter2:String!,$filter3:String!,$filter4:String!,$filter5:String!,$filter6:String!,$filter7:String!,$filter8:String!,$filter9:String!,$search0:String!,$search1:String!,$search2:String!,$search3:String!,$search4:String!,$search5:String!,$search6:String!,$search7:String!,$search8:String!,$search9:String!,$ask0:Boolean!,$ask1:Boolean!,$ask2:Boolean!,$ask3:Boolean!,$ask4:Boolean!,$ask5:Boolean!,$ask6:Boolean!,$ask7:Boolean!,$ask8:Boolean!,$ask9:Boolean!"#,
+        r#"query($owner:String!,$number:Int!,$type:SearchType!,$lookupFirst:Int!,$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!,$repositoryOwner:String!,$repositoryName:String!,$filter0:String!,$filter1:String!,$filter2:String!,$filter3:String!,$filter4:String!,$filter5:String!,$filter6:String!,$filter7:String!,$filter8:String!,$filter9:String!,$search0:String!,$search1:String!,$search2:String!,$search3:String!,$search4:String!,$search5:String!,$search6:String!,$search7:String!,$search8:String!,$search9:String!,$ask0:Boolean!,$ask1:Boolean!,$ask2:Boolean!,$ask3:Boolean!,$ask4:Boolean!,$ask5:Boolean!,$ask6:Boolean!,$ask7:Boolean!,$ask8:Boolean!,$ask9:Boolean!"#,
         relationship_events_variable!(),
         r#"){
       boardFields:repositoryOwner(login:$owner){
@@ -10342,7 +10352,7 @@ impl GitHubProjectsSource {
         }
         for chunk in unasked.chunks(ORIGIN_BATCH) {
             let mut variables = json!({"owner":self.owner,"number":self.project_number,
-                "type":"ISSUE","originFirst":ORIGIN_PAGE_SIZE,"nestedFirst":NESTED_PAGE_SIZE,
+                "type":"ISSUE","lookupFirst":ORIGIN_LOOKUPS_PAGE_SIZE,"nestedFirst":NESTED_PAGE_SIZE,
                 "boardItems":BOARD_ITEMS_PAGE_SIZE,"duplicates":true,
                 "repositoryOwner":repository.owner,"repositoryName":repository.name});
             for slot in 0..ORIGIN_BATCH {

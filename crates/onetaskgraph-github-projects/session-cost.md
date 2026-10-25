@@ -676,7 +676,7 @@ node count, **not points**:
 |                    | (h) found by searching | (g) found by the link |
 | ------------------ | ---------------------: | --------------------: |
 | **requests**       |                      4 |                     3 |
-| **node count**     |                  10571 |                   912 |
+| **node count**     |                   4471 |                   912 |
 
 (h) asks the board once for the item whose origin is the task and once for the item whose
 origin is the project the task is filed under (`looking up the items copied from one origin`,
@@ -1311,3 +1311,18 @@ rather than a read of each after it. It is priced at one point, as `ISSUE` is.
 **4** of the new document at 21,404 nodes), and the session reconciles the new document's node
 count once (**5,351**). Requests go 214 → **215**, the reconciliation; nodes go 244,256 →
 **269,187**.
+
+## A batched origin lookup asks one carrier of each origin
+
+`ORIGIN_LOOKUPS` asks each origin's two connections for a page of one carrier (`$lookupFirst`,
+`ORIGIN_LOOKUPS_PAGE_SIZE`) where it asked for three. An origin names one item, and a second
+still shows: that page then says there is more, and the origin is left to its own
+`ORIGIN_LOOKUP`, which walks every page of three as before — so a duplicate is found exactly as
+it was. The board-copy feasibility spike priced ten origins at two points with a page of three
+and at one with a page of one, and the plugin's own model now agrees: one point.
+
+**`copy-cost.txt`** moves on (a), (h), (i) and (j): each `looking up the items copied from
+several origins` request goes from 9,200 nodes to **3,100**, so (a) goes 18,463 → **6,263**,
+(h) and (i) 10,571 → **4,471**, and (j) 9,263 → **3,163**; no request count moves.
+**`session-cost.txt`** moves on that document's reconciliation, 9,200 → **3,100**, and its node
+total, 269,187 → **263,087**.

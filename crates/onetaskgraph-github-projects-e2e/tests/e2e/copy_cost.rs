@@ -1003,7 +1003,7 @@ fn follow_up_writes_resolve_each_item_once_and_batch_the_copy_fields() {
     // Requests, then points where the two differ: a new copy's one read of its origin and of
     // what creating reads costs two points, where each of the two reads it replaced cost one.
     for (verb, sent, expected, priced) in [
-        ("new copy", &new_calls, 4, 5),
+        ("new copy", &new_calls, 4, 4),
         ("copy --create", &create_calls, 4, 4),
         ("bound copy", &bound_calls, 3, 3),
         ("comment", &comment_calls, 2, 2),

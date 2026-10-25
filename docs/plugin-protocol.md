@@ -2626,7 +2626,7 @@ plugin's crate documentation to the same figures.
 
 | Verb | Requests / points | Documents |
 | --- | --- | --- |
-| new copy | 4 / 5 | ORIGIN_LOOKUPS (the origin, the board's fields and the repository's node and numeric ids together; two points), CREATE_ISSUE filing the issue on the board and under its project, CREATED_BOARD_ITEMS once GitHub has added it, WRITE_FIELD_VALUES |
+| new copy | 4 | ORIGIN_LOOKUPS (the origin, the board's fields and the repository's node and numeric ids together, a page of one carrier for each origin), CREATE_ISSUE filing the issue on the board and under its project, CREATED_BOARD_ITEMS once GitHub has added it, WRITE_FIELD_VALUES |
 | copy --create | 4 | CREATION_CONTEXT, CREATE_ISSUE, CREATED_BOARD_ITEMS, WRITE_FIELD_VALUES: the new copy with no origin to ask about |
 | bound copy | 3 | ISSUE (with the board's fields and the issue's `blockedBy`), UPDATE_FIELDS when a board field differs, then UPDATE_ISSUE last carrying only the title, body or state that differs — none, when nothing does |
 | bound copy, filed under a project | 4 | the bound copy's three, and one ISSUE of the destination project its link names, read once per command |
