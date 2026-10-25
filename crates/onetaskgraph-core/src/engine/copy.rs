@@ -1436,6 +1436,11 @@ struct Dependent {
     origin: SourceName,
     /// Its forward edges, as its source reported them.
     edges: Vec<DependencyEdge>,
+    /// Whether an earlier copy can have kept an edge of it on a private source's side: the
+    /// destination already held it, carrying a copy's record and not the mark of every edge on
+    /// its own record — the rule [`Engine::reads_recorded_for`] applies to a dependency read.
+    /// Only then are the sources that may record one asked about it.
+    asks_recorders: bool,
 }
 
 /// What one task of a source declared private records once a copy has landed: what it held,
@@ -1453,6 +1458,9 @@ struct Recording {
 struct Recordings {
     /// The destination ids of every task the copy landed somewhere not declared private.
     decided: Dependents,
+    /// Those of them an earlier copy can have recorded on a private side, which alone the
+    /// sources that may record one are asked about.
+    asked: Vec<GlobalId>,
     /// One per task of a source declared private the copy landed or a landed edge names.
     each: Vec<Recording>,
 }
@@ -2192,6 +2200,7 @@ impl Engine {
             let destination = self.writable(&entry.item.to)?;
             let edges = self.shown_edges(
                 &entry.item.to,
+                &entry.item.source,
                 mapped_edges(
                     &entry.item.edges,
                     &entry.item.source.source,
@@ -3225,6 +3234,7 @@ impl Engine {
             Target::Update { id: target, .. } => {
                 let settled = self.shown_edges(
                     &home_source,
+                    &id,
                     mapped_edges(
                         &project.edges,
                         &id.source,
@@ -3236,6 +3246,7 @@ impl Engine {
                 );
                 let first = self.shown_edges(
                     &home_source,
+                    &id,
                     mapped_edges(
                         &project.edges,
                         &id.source,
@@ -4296,6 +4307,7 @@ impl Engine {
             };
             let edges = self.shown_edges(
                 &item.to,
+                &item.source,
                 mapped_edges(
                     &item.edges,
                     &item.source.source,
@@ -4454,6 +4466,7 @@ impl Engine {
             let destination = self.writable(&item.to)?;
             let edges = self.shown_edges(
                 &item.to,
+                &item.source,
                 mapped_edges(
                     &item.edges,
                     &item.source.source,
@@ -4511,10 +4524,23 @@ impl Engine {
                     };
                     running.recorders.insert(id.to_string(), (id.clone(), held));
                 } else {
+                    // A task this copy created is never asked about: nothing earlier can have
+                    // recorded it, and an earlier copy that kept an edge of a task on a private
+                    // side took the mark off it in the same write.
+                    let asks_recorders = match item.held.as_ref().map(|held| &held.item) {
+                        Some(Item::Task(held)) => {
+                            held.metadata
+                                .contains_key(MetadataKey::COPIED_DESTINATION_VERSION_KEY)
+                                && !held.metadata.contains_key(MetadataKey::EDGES_ON_RECORD_KEY)
+                        }
+                        Some(_) => true,
+                        None => !matches!(outcome.action, CopyAction::Created { .. }),
+                    };
                     running.dependents.push(Dependent {
                         destination: id.clone(),
                         origin: item.source.source.clone(),
                         edges: item.edges.clone(),
+                        asks_recorders,
                     });
                 }
             }
@@ -4628,6 +4654,7 @@ impl Engine {
                     let item = &planned[*index];
                     let edges = resolved(&self.shown_edges(
                         &item.to,
+                        &item.source,
                         mapped_edges(
                             &item.edges,
                             &item.source.source,
@@ -4743,6 +4770,7 @@ impl Engine {
         ));
         let edges = resolved(&self.shown_edges(
             &item.to,
+            &item.source,
             mapped_edges(
                 &item.edges,
                 &item.source.source,
@@ -5019,9 +5047,13 @@ impl Engine {
     /// learned that source's designator and its id is the item's native id (see
     /// [`Engine::opaque_designator`]), and left out otherwise. One not resolvable yet stays
     /// `None`.
+    ///
+    /// Every edge left out is noted against `near`, the item it is an edge of, for
+    /// [`Engine::take_withheld_edges`].
     fn shown_edges(
         &self,
         destination: &SourceName,
+        near: &GlobalId,
         edges: Vec<Option<DependencyEdge>>,
         private: &[GlobalId],
     ) -> Vec<Option<DependencyEdge>> {
@@ -5036,7 +5068,19 @@ impl Engine {
                 else {
                     return Some(Some(edge));
                 };
-                let designator = self.opaque_designator(&far)?;
+                let Some(designator) = self.opaque_designator(&far) else {
+                    let reason =
+                        if self.declared(&far.source) == crate::config::SourceVisibility::Private {
+                            format!("its source {} is declared private", far.source)
+                        } else {
+                            "it is classified private".to_owned()
+                        };
+                    self.boundary.withheld(format!(
+                        "withheld {near}'s dependency on {far} from {destination}: {reason}, and \
+                         its source named no tracker an opaque reference to it could point into"
+                    ));
+                    return None;
+                };
                 edge.to = DependencyEndpoint::opaque(designator, far.native.0, edge.to.kind)
                     .expect("a far end's native id is not empty");
                 Some(Some(edge))
@@ -6975,7 +7019,17 @@ impl Engine {
             named,
             held: None,
         }));
-        Recordings { decided, each }
+        let asked = running
+            .dependents
+            .iter()
+            .filter(|dependent| dependent.asks_recorders)
+            .map(|dependent| dependent.destination.clone())
+            .collect();
+        Recordings {
+            decided,
+            asked,
+            each,
+        }
     }
 
     /// Write each of `recordings` whose task does not already record what it is to: one read
@@ -6999,7 +7053,7 @@ impl Engine {
         mut recordings: Recordings,
         journal: &mut Journal,
     ) -> Result<(), EngineError> {
-        for dependent in recordings.decided.iter() {
+        for dependent in &recordings.asked {
             for at in self.recorded_prerequisites(dependent).await? {
                 if !recordings.each.iter().any(|recording| recording.at == at) {
                     recordings.each.push(Recording {

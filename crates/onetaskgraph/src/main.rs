@@ -1494,6 +1494,11 @@ async fn copy(out: &mut impl Write, loaded: &Loaded, request: &CopyRequest) -> R
         .copy(request)
         .await
         .map_err(|error| write_failed(&engine, &error))?;
+    // Each dependency the copy left out because it names something private, said where a
+    // person reads it and kept out of the machine output, which is unchanged by it.
+    for line in engine.take_withheld_edges() {
+        eprintln!("onetaskgraph: {line}");
+    }
     let rendered = match loaded.config.output() {
         OutputFormat::Text => render::copied(&report),
         OutputFormat::Json => json(&report, "the copy")?,

@@ -396,6 +396,9 @@ pub(crate) struct Boundary {
     scope: Option<Vec<String>>,
     /// What the policy has answered in this command, until [`Engine::end_command`].
     screened: Arc<std::sync::Mutex<Screened>>,
+    /// One line per dependency edge a write left out because it names something private,
+    /// until [`Engine::take_withheld_edges`] takes them.
+    withheld: Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 /// What one command has learned from the policy, so it asks nothing twice: each repository's
@@ -421,6 +424,7 @@ impl Default for Boundary {
             policy: Arc::new(MissingWritePolicy),
             scope: None,
             screened: Arc::default(),
+            withheld: Arc::default(),
         }
     }
 }
@@ -442,6 +446,7 @@ impl Boundary {
             },
             scope: None,
             screened: Arc::default(),
+            withheld: Arc::default(),
         }
     }
 
@@ -450,6 +455,15 @@ impl Boundary {
     pub(crate) fn forget(&self) {
         if let Ok(mut screened) = self.screened.lock() {
             *screened = Screened::default();
+        }
+    }
+
+    /// Note one edge a write left out, once however often it is shown.
+    pub(crate) fn withheld(&self, line: String) {
+        if let Ok(mut withheld) = self.withheld.lock()
+            && !withheld.contains(&line)
+        {
+            withheld.push(line);
         }
     }
 
@@ -701,6 +715,20 @@ impl Engine {
     pub fn with_term_scope(mut self, scope: Option<Vec<String>>) -> Self {
         self.boundary.scope = scope;
         self
+    }
+
+    /// Take the edges a copy left out of what it wrote because each names something private —
+    /// an item of a source declared private, or one classified private, whose source named no
+    /// tracker an opaque reference could point into — one line each, naming the item, the far
+    /// end and why, in the order they were left out. What the command line prints on standard
+    /// error after a copy; nothing is left to take afterwards.
+    #[must_use]
+    pub fn take_withheld_edges(&self) -> Vec<String> {
+        self.boundary
+            .withheld
+            .lock()
+            .map(|mut withheld| std::mem::take(&mut *withheld))
+            .unwrap_or_default()
     }
 
     /// Whether the boundary is active for this engine (see the module documentation).
