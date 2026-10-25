@@ -933,9 +933,8 @@ async fn remove_live_origin_field(token: &str, project_id: &str) -> Result<(), S
     Err("live origin field cleanup left the temporary field behind".to_owned())
 }
 
-/// One artifact this lane wrote: its board item, the issue behind it when there is one, and
-/// its title.
-type Artifact = (String, Option<String>, String);
+/// One artifact this lane wrote: its board item, and the issue behind it when there is one.
+type Artifact = (String, Option<String>);
 
 async fn artifact_item_ids(
     token: &str,
@@ -975,7 +974,6 @@ async fn artifact_item_ids(
                         .ok_or_else(|| "live artifact has no project item id".to_owned())?
                         .to_owned(),
                     issue,
-                    title.to_owned(),
                 ));
             }
         }
@@ -1024,7 +1022,7 @@ async fn remove_live_artifacts(
             return Ok(());
         }
         refused.clear();
-        for (item_id, issue_id, _) in item_ids {
+        for (item_id, issue_id) in item_ids {
             let taken = match graphql_variables(
                 token,
                 "mutation($input:DeleteProjectV2ItemInput!){deleteProjectV2Item(input:$input){deletedItemId}}",
@@ -1070,7 +1068,7 @@ async fn remove_live_artifacts(
         artifact_item_ids(token, project_id, matches)
             .await?
             .into_iter()
-            .map(|(item, _, _)| item)
+            .map(|(item, _)| item)
             .collect::<Vec<_>>()
             .join(", "),
         if refused.is_empty() {
@@ -1668,6 +1666,7 @@ pub async fn preflight_board(
     token: &str,
     owner: &str,
     project_number: u32,
+    repository: &str,
 ) -> Result<String, String> {
     let response = graphql_variables(
         token,
@@ -1702,7 +1701,7 @@ pub async fn preflight_board(
         Some(items)
             if items > onetaskgraph_github_live::quota::reference_workload().initial_items =>
         {
-            clear_finished_runs_items(token, &project_id).await?
+            clear_finished_runs_items(token, &project_id, repository).await?
         }
         _ => 0,
     };
@@ -1742,63 +1741,156 @@ async fn owning_run_completed(token: &str, run: u64) -> Result<(), String> {
     }
 }
 
+/// A board item the pre-flight may remove: its id, the issue behind it, and its title.
+struct ResidueItem {
+    item: String,
+    issue: String,
+    title: String,
+}
+
+/// Every CI-stamped issue on the board in `repository`, the one this lane writes its issues
+/// to, walked to exhaustion; any other item — a draft, a pull request, an issue of another
+/// repository, whatever its title says — is nobody's residue to read.
+async fn ci_stamped_issues(
+    token: &str,
+    project_id: &str,
+    repository: &str,
+) -> Result<Vec<(u64, ResidueItem)>, String> {
+    let mut after = Value::Null;
+    let mut found = Vec::new();
+    for _ in 0..100 {
+        let response = graphql_variables(
+            token,
+            "query($id:ID!,$after:String){node(id:$id){... on ProjectV2{items(first:100,after:$after){nodes{id content{__typename ... on Issue{id title repository{nameWithOwner}}}} pageInfo{hasNextPage endCursor}}}}}",
+            "residue item lookup",
+            json!({"id":project_id,"after":after}),
+        )
+        .await?;
+        let connection = response
+            .pointer("/data/node/items")
+            .ok_or("residue item lookup returned no items connection")?;
+        for node in connection
+            .get("nodes")
+            .and_then(Value::as_array)
+            .ok_or("residue item lookup nodes is not an array")?
+        {
+            let content = node.get("content").unwrap_or(&Value::Null);
+            if content.get("__typename").and_then(Value::as_str) != Some("Issue")
+                || content
+                    .pointer("/repository/nameWithOwner")
+                    .and_then(Value::as_str)
+                    != Some(repository)
+            {
+                continue;
+            }
+            let Some(run) = content
+                .get("title")
+                .and_then(Value::as_str)
+                .and_then(artifact_stamp)
+                .and_then(CiStamp::read)
+                .map(|stamp| stamp.run().run_id())
+            else {
+                continue;
+            };
+            // Both ids go into removals, so each is held to what the janitor admits of one.
+            let usable = |value: Option<&Value>| {
+                value
+                    .and_then(Value::as_str)
+                    .filter(|id| !id.is_empty() && !id.chars().any(char::is_control))
+                    .map(str::to_owned)
+            };
+            let (Some(item), Some(issue)) = (usable(node.get("id")), usable(content.get("id")))
+            else {
+                return Err(format!(
+                    "the board answered a stamped issue without usable ids: {node}"
+                ));
+            };
+            found.push((
+                run,
+                ResidueItem {
+                    item,
+                    issue,
+                    title: content["title"].as_str().unwrap_or_default().to_owned(),
+                },
+            ));
+        }
+        if connection
+            .pointer("/pageInfo/hasNextPage")
+            .and_then(Value::as_bool)
+            != Some(true)
+        {
+            return Ok(found);
+        }
+        let next = connection
+            .pointer("/pageInfo/endCursor")
+            .and_then(Value::as_str)
+            .filter(|next| after.as_str() != Some(next))
+            .ok_or("residue item lookup has no advancing cursor")?;
+        after = Value::String(next.to_owned());
+    }
+    Err("residue item lookup did not end within 100 pages".to_owned())
+}
+
 /// Removes every board item a CI stamp names whose run reads `completed` — and the issue
 /// behind it — and says which; answers how many items it removed.
 ///
-/// The same rule as [`clear_finished_runs_fields`], and the same removal the lane's own
-/// cleanup makes ([`remove_live_artifacts`]), so a run's items go exactly as its own cleanup
-/// would have taken them. An item whose run is still going or cannot be read is left on the
-/// board, said to be kept, and counted. Machine stamps are their machine's lock sweep's.
+/// The same rule as [`clear_finished_runs_fields`], over the janitor's candidates: an issue in
+/// the repository this lane writes to, whose title carries a CI stamp. Each is taken off the
+/// board and then deleted, as the lane's own cleanup takes its artifacts. An item whose run is
+/// still going or cannot be read is left on the board, said to be kept, and counted.
 ///
 /// # Errors
 ///
-/// The board could not be listed, or an item or its issue would not be removed.
-pub async fn clear_finished_runs_items(token: &str, project_id: &str) -> Result<u64, String> {
-    let ci_run = |title: &str| {
-        artifact_stamp(title)
-            .and_then(CiStamp::read)
-            .map(|stamp| stamp.run().run_id())
-    };
-    let mut stamped: BTreeMap<u64, Vec<String>> = BTreeMap::new();
-    for (_, _, title) in
-        artifact_item_ids(token, project_id, &|title| ci_run(title).is_some()).await?
-    {
-        if let Some(run) = ci_run(&title) {
-            stamped.entry(run).or_default().push(title);
+/// The board could not be listed, or GitHub refused or did not confirm a removal.
+pub async fn clear_finished_runs_items(
+    token: &str,
+    project_id: &str,
+    repository: &str,
+) -> Result<u64, String> {
+    let mut stamped: BTreeMap<u64, Vec<ResidueItem>> = BTreeMap::new();
+    for (run, item) in ci_stamped_issues(token, project_id, repository).await? {
+        stamped.entry(run).or_default().push(item);
+    }
+    let mut removed = 0;
+    for (run, items) in stamped {
+        if let Err(why) = owning_run_completed(token, run).await {
+            for item in items {
+                say(&format!(
+                    "board pre-flight kept item {}: run {run} {why}, so nothing shows it is \
+                     residue, and it is counted",
+                    item.title
+                ));
+            }
+            continue;
+        }
+        for item in items {
+            let answer = graphql_variables(
+                token,
+                "mutation($input:DeleteProjectV2ItemInput!){deleteProjectV2Item(input:$input){deletedItemId}}",
+                "residue item removal",
+                json!({"input":{"projectId":project_id,"itemId":item.item}}),
+            )
+            .await?;
+            if answer
+                .pointer("/data/deleteProjectV2Item/deletedItemId")
+                .and_then(Value::as_str)
+                != Some(item.item.as_str())
+            {
+                return Err(format!(
+                    "residue item removal: GitHub did not confirm removing {}: {answer}",
+                    item.title
+                ));
+            }
+            delete_issue(token, &item.issue).await?;
+            removed += 1;
+            say(&format!(
+                "board pre-flight removed item {} and its issue: residue of run {run}, which \
+                 reads completed, so it is not counted",
+                item.title
+            ));
         }
     }
-    let mut finished = std::collections::BTreeSet::new();
-    let mut removed = Vec::new();
-    for (run, titles) in stamped {
-        match owning_run_completed(token, run).await {
-            Ok(()) => {
-                finished.insert(run);
-                removed.extend(titles.into_iter().map(|title| (run, title)));
-            }
-            Err(why) => {
-                for title in titles {
-                    say(&format!(
-                        "board pre-flight kept item {title}: run {run} {why}, so nothing shows \
-                         it is residue, and it is counted"
-                    ));
-                }
-            }
-        }
-    }
-    if finished.is_empty() {
-        return Ok(0);
-    }
-    remove_live_artifacts(token, project_id, &|title| {
-        ci_run(title).is_some_and(|run| finished.contains(&run))
-    })
-    .await?;
-    for (run, title) in &removed {
-        say(&format!(
-            "board pre-flight removed item {title} and its issue: residue of run {run}, which \
-             reads completed, so it is not counted"
-        ));
-    }
-    Ok(u64::try_from(removed.len()).expect("a board's items fit u64"))
+    Ok(removed)
 }
 
 /// Removes every board field a CI stamp names whose run reads `completed`, and says which.
@@ -4661,7 +4753,7 @@ pub async fn run(nomination: Nomination) {
         .unwrap_or_else(|error| {
             panic!("the GitHub Projects live lane cannot use this board: {error}")
         });
-    let project_id = preflight_board(&token, &owner, project_number)
+    let project_id = preflight_board(&token, &owner, project_number, &repository)
         .await
         .unwrap_or_else(|error| panic!("GitHub Projects live board lookup failed: {error}"));
     assert!(source.health().await.unwrap().reachable);

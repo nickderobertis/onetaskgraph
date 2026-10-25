@@ -520,7 +520,7 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   holds the step's shape; the two lane guards exempt that one step). The lane's board
   pre-flight (`journey::preflight_board`) removes a stamped field whose run reads
   `completed` before it counts the board — and, when the board holds more items than the
-  registered workload, such a run's items and their issues — says so, and keeps and counts
+  registered workload, such a run's issues in the lane's repository and their items — says so, and keeps and counts
   any other, because one leftover field from a cancelled run once held every branch red.
   Within the workload's items it lists nothing, so an ordinary session's requests are as
   they were.

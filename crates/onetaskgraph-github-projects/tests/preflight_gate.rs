@@ -38,6 +38,8 @@ mod journey;
 mod lane;
 
 const TOKEN: &str = "test-token";
+/// The repository the lane writes its issues to.
+const REPOSITORY: &str = "acme/work";
 /// The run the leftover fields name, and the two fields it left.
 const LEFTOVER_RUN: u64 = 40_170_293_588;
 const LEFTOVER: &str = "otg-live-ci-40170293588-1-1792911749637960";
@@ -68,10 +70,13 @@ enum Removal {
     NamingAnother,
 }
 
+type Item = (String, Option<(String, String)>, String);
+
 /// The board, the run statuses GitHub reports and every request the pre-flight sent.
 struct Board {
-    /// Each item's id, the issue behind it (none for a draft) and its title.
-    items: Vec<(String, Option<String>, String)>,
+    /// Each item: its id, the issue behind it and that issue's repository (none for a
+    /// draft), and its title.
+    items: Vec<Item>,
     /// Each field as GitHub answers it under the measurement's two fragments.
     fields: Vec<Value>,
     more_fields: bool,
@@ -99,7 +104,7 @@ fn board(scenario: &str) -> Board {
     fields.push(json!({"id":"FIELD_leftover_2","name":SECOND_LEFTOVER}));
     let drafts = |count: usize| {
         (0..count)
-            .map(|n| {
+            .map(|n| -> Item {
                 (
                     format!("PVTI_draft_{n}"),
                     None,
@@ -128,19 +133,29 @@ fn board(scenario: &str) -> Board {
     board.runs.insert(LEFTOVER_RUN, status);
     match scenario {
         "completed" | "in-progress" | "unreadable" | "unknown-status" => {}
-        // 82 of the board's own and 10 a completed run left, a document among them, and 3 a
-        // run still going left: 95 raw, 85 once the completed run's are gone.
+        // 80 of the board's own; 10 issues a completed run left, a document among them; 3 a run
+        // still going left; and, under the completed run's stamp, a draft and an issue of
+        // another repository, which are nobody's residue: 95 raw, 85 once the 10 are gone.
         "items-completed" => {
-            board.items = drafts(82);
+            board.items = drafts(80);
             board.items.extend(stamped_items(LEFTOVER_RUN, 10));
             board.items.extend(stamped_items(ACTIVE_RUN, 3));
+            board.items.extend(not_residue());
             board.runs.insert(ACTIVE_RUN, Some("in_progress"));
         }
-        // 82 of the board's own and 10 a run still going left: 92, all counted.
-        "items-active" => {
+        // 82 of the board's own and 10 a run still going, unreadable or undecodable left: 92,
+        // all counted.
+        "items-active" | "items-unreadable" | "items-unknown-status" => {
             board.items = drafts(82);
             board.items.extend(stamped_items(ACTIVE_RUN, 10));
-            board.runs.insert(ACTIVE_RUN, Some("in_progress"));
+            board.runs.insert(
+                ACTIVE_RUN,
+                match scenario {
+                    "items-active" => Some("in_progress"),
+                    "items-unreadable" => None,
+                    _ => Some("cancelled"),
+                },
+            );
         }
         "more-fields" => board.more_fields = true,
         "malformed-field" => board.fields.push(json!({"id":"FIELD_bad","name":7})),
@@ -157,13 +172,13 @@ fn board(scenario: &str) -> Board {
 }
 
 /// `count` issues the lane wrote under `run`'s CI stamp, the first of them a document.
-fn stamped_items(run: u64, count: usize) -> Vec<(String, Option<String>, String)> {
+fn stamped_items(run: u64, count: usize) -> Vec<Item> {
     (0..count)
         .map(|n| {
             let design = if n == 0 { DESIGN_TITLE_PREFIX } else { "" };
             (
                 format!("PVTI_{run}_{n}"),
-                Some(format!("I_{run}_{n}")),
+                Some((format!("I_{run}_{n}"), REPOSITORY.to_owned())),
                 format!(
                     "{design}{ARTIFACT_PREFIX}ci-{run}-1-{}",
                     1_792_911_749_637_960 + n
@@ -171,6 +186,24 @@ fn stamped_items(run: u64, count: usize) -> Vec<(String, Option<String>, String)
             )
         })
         .collect()
+}
+
+/// A draft and an issue of another repository, each titled under the completed run's stamp.
+fn not_residue() -> Vec<Item> {
+    let title = |n: u64| {
+        format!(
+            "{ARTIFACT_PREFIX}ci-{LEFTOVER_RUN}-1-{}",
+            1_792_911_749_000_000 + n
+        )
+    };
+    vec![
+        ("PVTI_stamped_draft".to_owned(), None, title(1)),
+        (
+            "PVTI_foreign".to_owned(),
+            Some(("I_foreign".to_owned(), "other/repository".to_owned())),
+            title(2),
+        ),
+    ]
 }
 
 fn answer(board: &Mutex<Board>, method: &str, path: &str, body: Option<Value>) -> (u16, Value) {
@@ -200,9 +233,11 @@ fn answer(board: &Mutex<Board>, method: &str, path: &str, body: Option<Value>) -
                 .items
                 .iter()
                 .map(|(id, issue, title)| match issue {
-                    Some(issue) => json!({"id":id,
-                        "content":{"__typename":"Issue","id":issue,"title":title}}),
-                    None => json!({"id":id,"content":{"title":title}}),
+                    Some((issue, repository)) => json!({"id":id,
+                        "content":{"__typename":"Issue","id":issue,"title":title,
+                                   "repository":{"nameWithOwner":repository}}}),
+                    // A draft answers only its type: neither fragment selects from one.
+                    None => json!({"id":id,"content":{"__typename":"DraftIssue"}}),
                 })
                 .collect::<Vec<_>>();
             return (
@@ -371,7 +406,7 @@ async fn preflight_child() {
         reference_workload(),
     )
     .unwrap();
-    let measured = journey::preflight_board(TOKEN, "octo-org", 7).await;
+    let measured = journey::preflight_board(TOKEN, "octo-org", 7, REPOSITORY).await;
     let board = board.lock().unwrap();
     println!("measured: {measured:?}");
     println!(
@@ -571,6 +606,10 @@ fn items_a_completed_run_left_past_the_registered_workload_are_removed_and_the_b
             "{title}: {stderr}"
         );
     }
+    for (_, _, title) in not_residue() {
+        assert!(left.contains(&title), "{title}");
+        assert!(!stderr.contains(&title), "{title}: {stderr}");
+    }
     let sent = requests(&stdout);
     // One read per run before each kind of removal, never per item: the leftover run also
     // left two fields, so its run is read once before those and once before its items.
@@ -584,29 +623,35 @@ fn items_a_completed_run_left_past_the_registered_workload_are_removed_and_the_b
 }
 
 #[test]
-fn items_an_active_run_left_stay_counted_and_the_board_is_refused() {
-    let (succeeded, stdout, stderr) = preflight("items-active");
-    assert!(succeeded, "{stdout}\n{stderr}");
-    assert!(
-        stdout.contains(
-            "measured: Err(\"initial board workload is 92 items and 14 fields; registered \
-             workload requires 51 to 90 items and 14 fields\")"
-        ),
-        "{stdout}\n{stderr}"
-    );
-    assert_eq!(items_left(&stdout).len(), 92);
-    for (_, _, title) in stamped_items(ACTIVE_RUN, 10) {
+fn items_no_completed_run_is_shown_to_own_stay_counted_and_the_board_is_refused() {
+    for (scenario, why) in [
+        ("items-active", "reads in_progress"),
+        ("items-unreadable", "could not be read"),
+        ("items-unknown-status", "answered no status this lane knows"),
+    ] {
+        let (succeeded, stdout, stderr) = preflight(scenario);
+        assert!(succeeded, "{scenario}: {stdout}\n{stderr}");
         assert!(
-            stderr.contains(&format!(
-                "board pre-flight kept item {title}: run {ACTIVE_RUN} reads in_progress"
-            )),
-            "{title}: {stderr}"
+            stdout.contains(
+                "measured: Err(\"initial board workload is 92 items and 14 fields; registered \
+                 workload requires 51 to 90 items and 14 fields\")"
+            ),
+            "{scenario}: {stdout}\n{stderr}"
+        );
+        assert_eq!(items_left(&stdout).len(), 92, "{scenario}");
+        for (_, _, title) in stamped_items(ACTIVE_RUN, 10) {
+            assert!(
+                stderr.contains(&format!(
+                    "board pre-flight kept item {title}: run {ACTIVE_RUN} {why}"
+                )),
+                "{scenario}: {title}: {stderr}"
+            );
+        }
+        assert!(
+            !requests(&stdout)
+                .iter()
+                .any(|r| r.contains("deleteProjectV2Item(") || r.contains("deleteIssue(")),
+            "{scenario}"
         );
     }
-    let sent = requests(&stdout);
-    assert!(
-        !sent
-            .iter()
-            .any(|r| r.contains("deleteProjectV2Item(") || r.contains("deleteIssue("))
-    );
 }
