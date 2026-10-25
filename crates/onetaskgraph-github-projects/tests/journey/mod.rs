@@ -42,7 +42,8 @@ use onetaskgraph_plugin_api::{
 use serde_json::{Value, json};
 
 use onetaskgraph_github_live::{
-    BOARD_WORKLOAD_DOCUMENT, CORE_REPOSITORY, DELETE_FIELD_DOCUMENT, RunStatus, fielded_stamp,
+    BOARD_WORKLOAD_DOCUMENT, CORE_REPOSITORY, DELETE_FIELD_DOCUMENT, RESIDUE_ITEMS_DOCUMENT,
+    RunStatus, fielded_stamp,
 };
 use onetaskgraph_live::artifact::{CiStamp, Run, Sweep, now_micros};
 use onetaskgraph_live::{Credential, Session};
@@ -1761,7 +1762,7 @@ async fn ci_stamped_issues(
     for _ in 0..100 {
         let response = graphql_variables(
             token,
-            "query($id:ID!,$after:String){node(id:$id){... on ProjectV2{items(first:100,after:$after){nodes{id content{__typename ... on Issue{id title repository{nameWithOwner}}}} pageInfo{hasNextPage endCursor}}}}}",
+            RESIDUE_ITEMS_DOCUMENT,
             "residue item lookup",
             json!({"id":project_id,"after":after}),
         )

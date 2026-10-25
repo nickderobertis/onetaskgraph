@@ -24,6 +24,7 @@ use std::thread;
 use onetaskgraph_github_live::quota::{EntryPoint, reference_workload};
 use onetaskgraph_github_live::{
     ARTIFACT_PREFIX, BOARD_WORKLOAD_DOCUMENT, CORE_REPOSITORY, DELETE_FIELD_DOCUMENT,
+    RESIDUE_ITEMS_DOCUMENT,
 };
 use onetaskgraph_github_projects::DESIGN_TITLE_PREFIX;
 use onetaskgraph_github_projects::accounting::Accounting;
@@ -55,6 +56,12 @@ const KEPT_ALWAYS: [&str; 3] = [
 const ACTIVE_RUN: u64 = 999;
 /// What tells a re-execution of this binary which board to stand in for.
 const CHILD_VARIABLE: &str = "ONETASKGRAPH_PREFLIGHT_GATE_CHILD";
+/// The shared item listing as the lane's accounting sends it.
+static PRICED_ITEMS: LazyLock<String> = LazyLock::new(|| {
+    Accounting::with_query_prices()
+        .priced_document(RESIDUE_ITEMS_DOCUMENT)
+        .to_string()
+});
 /// The shared measurement as the lane's accounting sends it.
 static PRICED_WORKLOAD: LazyLock<String> = LazyLock::new(|| {
     Accounting::with_query_prices()
@@ -291,8 +298,8 @@ fn answer(board: &Mutex<Board>, method: &str, path: &str, body: Option<Value>) -
                     "items":{"totalCount":board.items.len()},"fields":fields}}}}),
             );
         }
-        // The lane's own artifact lookup, which its cleanup lists the board with.
-        if query.contains("node(id:$id){... on ProjectV2{items(first:100") {
+        // The pre-flight's listing of the board's items, the shared document priced.
+        if query == *PRICED_ITEMS {
             assert_eq!(body["variables"]["id"], json!("PVT_board"));
             // The cursor is the offset of the page asked for.
             let offset = body["variables"]["after"]

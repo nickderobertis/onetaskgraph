@@ -214,6 +214,14 @@ impl RunStatus {
 /// `tests/schema.rs`. The two fragments are the two field kinds the lane ever creates.
 pub const DELETE_FIELD_DOCUMENT: &str = "mutation($input:DeleteProjectV2FieldInput!){deleteProjectV2Field(input:$input){projectV2Field{... on ProjectV2Field{id} ... on ProjectV2SingleSelectField{id}}}}";
 
+/// One page of a board's items, with what the live lane's pre-flight needs to tell a CI run's
+/// leftover issue from everything else: the item's id, and for an issue its id, title and
+/// repository.
+///
+/// Declared here, beside [`BOARD_WORKLOAD_DOCUMENT`], so the janitor's `tests/schema.rs` holds
+/// it to the pinned schema.
+pub const RESIDUE_ITEMS_DOCUMENT: &str = "query($id:ID!,$after:String){node(id:$id){... on ProjectV2{items(first:100,after:$after){nodes{id content{__typename ... on Issue{id title repository{nameWithOwner}}}} pageInfo{hasNextPage endCursor}}}}}";
+
 /// The live lane's measurement of the nominated board before it writes anything: its id,
 /// how many items and fields it holds, and every field's id and name, so a field a finished
 /// run left behind can be told from the board's own before the count is judged.
