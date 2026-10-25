@@ -2,9 +2,9 @@ use std::fs;
 
 use onetaskgraph_plugin_api::{
     Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Document, DocumentQuery,
-    ItemKind, ItemWrite, Label, LabelFilter, Location, NativeId, PageRequest, Priority, Project,
-    ProjectFilter, ProjectQuery, SecretResolver, SourceError, SourceName, SourcePlugin, Status,
-    StatusCategory, Support, Task, TaskQuery, TaskSource, TextFields, TextQuery,
+    ItemKind, ItemWrite, Label, LabelFilter, Location, NativeId, Page, PageRequest, Priority,
+    Project, ProjectFilter, ProjectQuery, SecretResolver, SourceError, SourceName, SourcePlugin,
+    Status, StatusCategory, Support, Task, TaskQuery, TaskSource, TextFields, TextQuery,
 };
 use secrecy::SecretString;
 
@@ -597,6 +597,83 @@ async fn document_query_surfaces_a_malformed_record() {
             if message.contains("bad-document.md")
                 && message.contains("unclosed bracket '['")
                 && message.contains("line 1, column 9")),
+        "{error:?}"
+    );
+}
+
+#[tokio::test]
+async fn what_a_record_depends_on_is_read_from_its_own_file_alone() {
+    let (root, source) = source();
+    fs::write(root.path().join("tasks/bad-task.md"), "not front matter").unwrap();
+    fs::write(
+        root.path().join("projects/bad-project.md"),
+        "not front matter",
+    )
+    .unwrap();
+    let targets = |page: Page<DependencyEdge>| -> Vec<String> {
+        page.items
+            .into_iter()
+            .map(|edge| format!("{:?} {}", edge.kind, edge.to.id()))
+            .collect()
+    };
+    // A file no forward read names, which does not parse, cannot fail one: each record's own
+    // file holds every edge it depends through.
+    let task = source
+        .task_dependencies(
+            &NativeId("nested/a".into()),
+            Direction::DependsOn,
+            &page(10),
+        )
+        .await
+        .unwrap();
+    assert_eq!(targets(task), ["Blocks b", "Blocks c", "Related related"]);
+    let project = source
+        .project_dependencies(&NativeId("p".into()), Direction::DependsOn, &page(10))
+        .await
+        .unwrap();
+    assert_eq!(targets(project), ["Blocks q"]);
+    let held_none = source
+        .task_dependencies(&NativeId("absent".into()), Direction::DependsOn, &page(10))
+        .await
+        .unwrap();
+    assert!(held_none.items.is_empty());
+    for (name, error) in [
+        (
+            "bad-task.md",
+            source
+                .task_dependencies(
+                    &NativeId("bad-task".into()),
+                    Direction::DependsOn,
+                    &page(10),
+                )
+                .await
+                .unwrap_err(),
+        ),
+        (
+            "bad-project.md",
+            source
+                .project_dependencies(
+                    &NativeId("bad-project".into()),
+                    Direction::DependsOn,
+                    &page(10),
+                )
+                .await
+                .unwrap_err(),
+        ),
+    ] {
+        assert!(
+            matches!(error, SourceError::Malformed { ref message } if message.contains(name)),
+            "{error:?}"
+        );
+    }
+    // What depends on a record can be written in any file, so that read still scans them all
+    // and still fails on the one it cannot parse.
+    let error = source
+        .task_dependencies(&NativeId("b".into()), Direction::DependedOnBy, &page(10))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, SourceError::Malformed { ref message } if message.contains("bad-task.md")),
         "{error:?}"
     );
 }

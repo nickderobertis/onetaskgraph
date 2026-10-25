@@ -6,15 +6,16 @@
 //! for as long as it writes. On Windows a rename over a record used to make the listing
 //! spell that record, for an instant, with a path that failed the root-containment check
 //! (`a.md escapes configured root`, with both paths naming the same root); the listing now
-//! resolves only links, so there is no such instant to land in.
+//! resolves only links, so there is no such instant to land in. What a record depends on is
+//! read from its own file by the same rule, and is read here at the same instants.
 
 use std::fs;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
 use onetaskgraph_plugin_api::{
-    MetadataKey, NativeId, PageRequest, SecretResolver, SourceName, SourcePlugin, StatusCategory,
-    TaskQuery, TaskSource,
+    Direction, MetadataKey, NativeId, PageRequest, SecretResolver, SourceName, SourcePlugin,
+    StatusCategory, TaskQuery, TaskSource,
 };
 use secrecy::SecretString;
 use serde_json::json;
@@ -88,7 +89,7 @@ fn a_folder_lists_while_another_process_replaces_a_record_in_place() {
     fs::create_dir_all(root.path().join("tasks/team")).unwrap();
     fs::write(
         root.path().join("tasks/a.md"),
-        "---\ntitle: Busy\nstatus: todo\n---\nThe body.\n",
+        "---\ntitle: Busy\nstatus: todo\ndepends_on: [team/b]\n---\nThe body.\n",
     )
     .unwrap();
     fs::write(
@@ -122,6 +123,18 @@ fn a_folder_lists_while_another_process_replaces_a_record_in_place() {
         let ids: Vec<&str> = listed.items.iter().map(|t| t.id.0.as_str()).collect();
         assert_eq!(ids, ["a", "team/b"], "every record is listed, once");
         assert_eq!(listed.items[0].title, "Busy");
+        let edges = runtime
+            .block_on(reader.task_dependencies(&id("a"), Direction::DependsOn, &page()))
+            .unwrap_or_else(|error| {
+                let _ = writer.kill();
+                panic!("a dependency read during a replacement failed: {error:?}")
+            });
+        let to: Vec<String> = edges.items.iter().map(|e| e.to.id().to_string()).collect();
+        assert_eq!(
+            to,
+            ["team/b"],
+            "the record's one edge is read from its file"
+        );
         listings += 1;
         if let Some(status) = exited {
             break status;
@@ -179,4 +192,112 @@ async fn a_linked_folder_is_named_where_it_really_is_and_one_outside_the_root_is
         matches!(error, SourceError::Config { ref message } if message.contains("away") && message.contains("escapes configured root")),
         "{error:?}"
     );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_dependency_read_follows_a_link_inside_its_folder_and_refuses_one_that_leaves_it() {
+    use std::os::unix::fs::symlink;
+
+    use onetaskgraph_plugin_api::SourceError;
+
+    let root = tempfile::tempdir().expect("temporary notes");
+    fs::create_dir_all(root.path().join("tasks/real")).unwrap();
+    fs::create_dir_all(root.path().join("shared")).unwrap();
+    let record = "---\ntitle: Linked\nstatus: todo\ndepends_on: [b]\n---\n";
+    fs::write(root.path().join("tasks/real/c.md"), record).unwrap();
+    fs::write(root.path().join("shared/d.md"), record).unwrap();
+    symlink(
+        root.path().join("tasks/real/c.md"),
+        root.path().join("tasks/c.md"),
+    )
+    .unwrap();
+    symlink(
+        root.path().join("shared/d.md"),
+        root.path().join("tasks/d.md"),
+    )
+    .unwrap();
+    symlink(root.path().join("shared"), root.path().join("tasks/away")).unwrap();
+    let source = source(root.path());
+    let read = |name: &'static str| {
+        let source = &source;
+        async move {
+            source
+                .task_dependencies(&id(name), Direction::DependsOn, &page())
+                .await
+        }
+    };
+    // A link inside the folder is followed and its record named where it really is, as the
+    // listing names it: the edge is `from` `real/c`, so the link's own name holds none.
+    let to = |name: &'static str| async move {
+        let edges = read(name)
+            .await
+            .expect("a link inside the folder is followed");
+        edges
+            .items
+            .iter()
+            .map(|e| e.to.id().to_string())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(to("real/c").await, ["b"]);
+    assert!(to("c").await.is_empty());
+    for name in ["d", "away/d"] {
+        let error = read(name).await.unwrap_err();
+        assert!(
+            matches!(error, SourceError::Config { ref message } if message.contains("escapes configured root")),
+            "{name}: {error:?}"
+        );
+    }
+    // A folder that is not there, and a segment that is a file, hold no record.
+    for name in ["absent/e", "real/c.md/e", "real/c.md/f/e"] {
+        let held_none = read(name).await.unwrap();
+        assert!(held_none.items.is_empty(), "{name}");
+    }
+    // A link that leads nowhere is the author's to mend, as the listing reports it.
+    symlink(
+        root.path().join("shared/gone.md"),
+        root.path().join("tasks/g.md"),
+    )
+    .unwrap();
+    let error = read("g").await.unwrap_err();
+    assert!(
+        matches!(error, SourceError::Malformed { ref message } if message.contains("g.md")),
+        "{error:?}"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_dependency_read_in_a_folder_it_may_not_search_reports_the_folder_unavailable() {
+    use std::os::unix::fs::PermissionsExt;
+
+    use onetaskgraph_plugin_api::SourceError;
+
+    let root = tempfile::tempdir().expect("temporary notes");
+    let locked = root.path().join("tasks/locked");
+    fs::create_dir_all(locked.join("inner")).unwrap();
+    fs::write(locked.join("a.md"), "---\ntitle: A\nstatus: todo\n---\n").unwrap();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+    // A process the filesystem does not refuse — run as root — cannot pose the refusal.
+    let refused = fs::symlink_metadata(locked.join("a.md")).is_err();
+    let source = source(root.path());
+    let mut answers = Vec::new();
+    for name in ["locked/a", "locked/inner/a"] {
+        answers.push(
+            source
+                .task_dependencies(&id(name), Direction::DependsOn, &page())
+                .await,
+        );
+    }
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+    if !refused {
+        return;
+    }
+    for answer in answers {
+        let error = answer.unwrap_err();
+        assert!(
+            matches!(error, SourceError::Unavailable { ref message } if message.contains("cannot read") && message.contains("locked")),
+            "{error:?}"
+        );
+    }
 }

@@ -38,6 +38,7 @@ mod project_status;
 mod status_complete;
 mod status_reconcile;
 mod store_cost;
+mod store_startup;
 mod write_order;
 mod write_rollback;
 

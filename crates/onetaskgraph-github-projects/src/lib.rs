@@ -3141,6 +3141,22 @@ impl SourcePlugin for Plugin {
     }
 }
 
+/// The client `cell` holds, building it with `build` the first time it is asked for.
+///
+/// A failed build is the request's failure, with the message the source's construction gave it
+/// before clients were deferred.
+// llmlint: ignore[changed_behavior_has_e2e] A client build fails only when the TLS backend cannot initialise, which nothing outside the process can induce: a certificate bundle of garbage still builds one. That the build is deferred is proven end to end by `store_startup::a_command_builds_no_client_for_a_source_it_sends_nothing`.
+fn built(
+    cell: &std::sync::OnceLock<Client>,
+    build: impl FnOnce() -> Result<Client, SourceError>,
+) -> Result<&Client, SourceError> {
+    if let Some(client) = cell.get() {
+        return Ok(client);
+    }
+    let client = build()?;
+    Ok(cell.get_or_init(|| client))
+}
+
 impl Plugin {
     /// Build a source recording every request it sends into an accounting the caller holds.
     ///
@@ -3607,8 +3623,10 @@ pub struct GitHubProjectsSource {
     priorities: Option<PriorityMapping>,
     /// The metadata values this instance projects onto board text fields, in configured order.
     metadata_fields: Vec<MetadataField>,
-    client: Client,
-    asset_client: Client,
+    /// Built on the first request rather than with the source, as [`Self::client`] says.
+    client: std::sync::OnceLock<Client>,
+    /// Built on the first attachment request, as [`Self::asset_client`] says.
+    asset_client: std::sync::OnceLock<Client>,
     /// Every item this source has created in this command, in the order it created them —
     /// dropped by [`TaskSource::end_command`].
     ///
@@ -4856,7 +4874,7 @@ impl GitHubProjectsSource {
             owner: config.owner,
             project_number: config.project_number,
             repository,
-            asset_client: assets::client(&endpoint)?,
+            asset_client: std::sync::OnceLock::new(),
             endpoint,
             token,
             credential_name: config.token_env,
@@ -4866,12 +4884,7 @@ impl GitHubProjectsSource {
                 .map(|mapping| PriorityMapping::resolve(mapping, name))
                 .transpose()?,
             metadata_fields: MetadataField::resolve(config.metadata_fields, name)?,
-            client: Client::builder()
-                .user_agent("onetaskgraph")
-                .build()
-                .map_err(|e| SourceError::Config {
-                    message: format!("cannot build HTTP client: {e}"),
-                })?,
+            client: std::sync::OnceLock::new(),
             created: Mutex::new(Vec::new()),
             updated: Mutex::new(Vec::new()),
             commented: Mutex::new(Vec::new()),
@@ -4897,6 +4910,28 @@ impl GitHubProjectsSource {
             ledger,
             expected: expected::Held::default(),
         })
+    }
+
+    /// The client every API request goes through, built on the first one.
+    ///
+    /// Not with the source: building a client loads the system's certificate store, which
+    /// costs tens of milliseconds, and a command that configures this board but never sends to
+    /// it — a read of another source — should not pay that in its process.
+    fn client(&self) -> Result<&Client, SourceError> {
+        built(&self.client, || {
+            Client::builder()
+                .user_agent("onetaskgraph")
+                .build()
+                .map_err(|e| SourceError::Config {
+                    message: format!("cannot build HTTP client: {e}"),
+                })
+        })
+    }
+
+    /// The client attachment requests go through, with its own redirect policy, built on the
+    /// first one for the reason [`Self::client`] gives.
+    fn asset_client(&self) -> Result<&Client, SourceError> {
+        built(&self.asset_client, || assets::client(&self.endpoint))
     }
 
     /// A snapshot of every request this source has sent, and what each cost.
@@ -5159,7 +5194,8 @@ impl GitHubProjectsSource {
         response_outcome: &mut accounting::ResponseOutcome,
     ) -> Result<Value, Attempt> {
         let response = self
-            .client
+            .client()
+            .map_err(Attempt::Failed)?
             .post(self.endpoint.clone())
             .bearer_auth(self.token.expose_secret())
             .json(&json!({"query": query, "variables": variables}))

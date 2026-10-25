@@ -1023,6 +1023,61 @@ impl LocalMdSource {
         Ok(Some(canonical))
     }
 
+    /// The record `id` names under `kind`, found by the rule [`Self::paths`] lists by: its
+    /// folder resolved and confined, the file itself resolved only when it is a link. Another
+    /// process may be renaming a replacement over that file, and Windows can spell a plain
+    /// file resolved in that instant with a path outside the root; a file gone in between is
+    /// not held, as a listing would skip it. A link that leads nowhere is malformed, as the
+    /// listing reports it.
+    fn find_listed(&self, kind: WorkKind, id: &NativeId) -> Result<Option<Entry>, SourceError> {
+        // Not there, or under a segment that is a file rather than a folder: no record.
+        let absent = |path: &Path, e: &std::io::Error| {
+            gone(path, e) || e.kind() == std::io::ErrorKind::NotADirectory
+        };
+        let unreadable = |path: &Path, e: std::io::Error| SourceError::Unavailable {
+            message: format!("cannot read {}: {e}", path.display()),
+        };
+        let base = self.directory(kind.kind())?;
+        let candidate = base.join(&id.0).with_extension("md");
+        let (Some(folder), Some(name)) = (candidate.parent(), candidate.file_name()) else {
+            return Ok(None);
+        };
+        let folder = match fs::canonicalize(folder) {
+            Err(e) if absent(folder, &e) => return Ok(None),
+            folder_path => folder_path.map_err(|e| unreadable(folder, e))?,
+        };
+        let confined = |path: &Path| {
+            if path.starts_with(&base) {
+                Ok(())
+            } else {
+                Err(SourceError::Config {
+                    message: format!(
+                        "{} escapes configured root {}",
+                        candidate.display(),
+                        self.root.display()
+                    ),
+                })
+            }
+        };
+        confined(&folder)?;
+        let path = folder.join(name);
+        let path = match fs::symlink_metadata(&path) {
+            Err(e) if absent(&path, &e) => return Ok(None),
+            Err(e) => return Err(unreadable(&path, e)),
+            Ok(meta) if meta.file_type().is_symlink() => {
+                let canonical = fs::canonicalize(&path).map_err(|e| SourceError::Malformed {
+                    message: format!("{}: {e}", path.display()),
+                })?;
+                confined(&canonical)?;
+                canonical
+            }
+            Ok(_) => path,
+        };
+        Self::read_listed(&path)?
+            .map(|text| self.parse_text(kind, &path, &text))
+            .transpose()
+    }
+
     fn find(&self, kind: WorkKind, id: &NativeId) -> Result<Option<Entry>, SourceError> {
         self.locate(kind.kind(), id)?
             .map(|path| self.parse(kind, &path))
@@ -3008,8 +3063,13 @@ impl LocalMdSource {
         d: Direction,
         p: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
-        let edges = self
-            .parse_work_records(kind, &ProjectFilter::Any)?
+        // Every edge a file holds is `from` that file's own record, so what one item depends on
+        // is in its file alone; what depends on it can be in any file, and is scanned for.
+        let records = match d {
+            Direction::DependsOn => self.find_listed(kind, id)?.into_iter().collect(),
+            Direction::DependedOnBy => self.parse_work_records(kind, &ProjectFilter::Any)?,
+        };
+        let edges = records
             .into_iter()
             .flat_map(|x| x.dependencies)
             .filter(|e| match d {

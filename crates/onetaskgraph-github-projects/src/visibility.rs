@@ -134,7 +134,7 @@ impl GitHubProjectsSource {
             ),
         };
         let response = self
-            .client
+            .client()?
             .get(url)
             .bearer_auth(self.token.expose_secret())
             .header("accept", "application/vnd.github+json")
