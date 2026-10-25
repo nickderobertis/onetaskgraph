@@ -1484,7 +1484,12 @@ test("a task's content is replaced from a file through the real binary, and noth
     const body = resolve(contentRoot, "body.md");
     writeFileSync(body, "The new body.\n\nWith a second paragraph.");
 
-    expect(await contentClient.taskContentSet("work:T-1", body)).toEqual({ id: "work:T-1" });
+    // The answer carries the content the task then holds: the bytes sent, from a source that
+    // reports nothing else of what it stores.
+    expect(await contentClient.taskContentSet("work:T-1", body)).toEqual({
+      id: "work:T-1",
+      content: "The new body.\n\nWith a second paragraph.",
+    });
     const after = (await contentClient.taskShow("work:T-1")).items[0]?.item;
     expect(after?.content).toBe("The new body.\n\nWith a second paragraph.");
     // The task's change token moves with its content; nothing else does.

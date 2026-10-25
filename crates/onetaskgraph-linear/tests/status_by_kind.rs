@@ -305,7 +305,7 @@ impl Workspace {
                 };
                 json!({(root): {(long_form):null,"relations":empty,"inverseRelations":empty}})
             }
-            graphql::ISSUE_UPDATE_READ | graphql::ISSUE_UPDATE | graphql::ISSUE_REWRITE => {
+            graphql::ISSUE_UPDATE | graphql::ISSUE_REWRITE => {
                 let state = match input.get("stateId").and_then(Value::as_str) {
                     Some(state) => match held.states.iter().find(|held| held["id"] == state) {
                         Some(held) => Some(json!({"name":held["name"],"type":held["type"]})),

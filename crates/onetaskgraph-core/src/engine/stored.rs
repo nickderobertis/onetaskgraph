@@ -1,85 +1,94 @@
-//! What a destination stores of the content it is written, on both sides of the write.
+//! What a destination stores of the content it is written, taken from each write's own answer.
 //!
-//! Before: the destination's declared rewrite —
-//! [`TaskSource::stored_form`](onetaskgraph_plugin_api::TaskSource::stored_form) — applied to the
-//! content, so what is sent is what the backend keeps, with a rendering's `body_digest`
-//! recorded over it where its provenance vouched for the content it started from. After: the
-//! content the write's own answer says the backend stores, compared with what was sent byte for
-//! byte, a difference being a rewrite the destination did not declare.
+//! The content is sent as the copy, the create or the render composed it, with nothing
+//! predicted of what the backend will do to it. The write's own answer then says what the
+//! backend stores — [`TaskSource::stored_content`](onetaskgraph_plugin_api::TaskSource::stored_content)
+//! — and where that is what was sent the write is done. Where it is not, every fingerprint the
+//! item keeps is recomputed over the stored content: a rendering's `body_digest`, moved onto it
+//! only where the provenance vouched for what was sent, and a copy's
+//! `onetaskgraph.copied_destination_version`. One follow-up write sends the stored content back
+//! verbatim beside them, as its own request, and its own answer has to report that content
+//! again; a backend that rewrites its own stored content is refused as `stored-content-diverged`.
+//! No read of the item follows either write: the answers are the record.
 
 use std::collections::BTreeMap;
 
-use onetaskgraph_plugin_api::{MetadataRecord, NativeId, SourceError};
+use onetaskgraph_plugin_api::{
+    AssetPayload, AssetUpload, AssetUploads, MetadataRecord, NativeId, body_digest,
+    rewrite_asset_references,
+};
 use serde_json::Value;
 
 use super::EngineError;
-use super::copy::restamped;
 use crate::GlobalId;
 use crate::resolve::ResolvedSource;
-use crate::template::TemplateProvenance;
-
-/// Make `content` what `destination` will store, recording a rendering's provenance in
-/// `metadata` over the rewritten content where it vouched for `content` — a hand edit's entry is
-/// carried as it was, never laundered.
-///
-/// A destination declaring no rewrite leaves both exactly as they were.
-///
-/// # Errors
-///
-/// What `destination` answered when it could not say what it stores; both are then left as
-/// they were.
-pub(super) async fn apply(
-    destination: &ResolvedSource,
-    content: &mut Option<String>,
-    metadata: &mut BTreeMap<String, Value>,
-) -> Result<(), SourceError> {
-    let Some(read) = content.as_deref() else {
-        return Ok(());
-    };
-    let written = destination.source().stored_form(read).await?;
-    if written == read {
-        return Ok(());
-    }
-    if let Some(provenance) = restamped(metadata, read, &written) {
-        metadata.insert(TemplateProvenance::KEY.to_owned(), provenance.to_value());
-    }
-    *content = Some(written);
-    Ok(())
-}
+use crate::template::{Sha256Digest, TemplateProvenance};
 
 /// Let go of what `destination` still holds from an earlier write of the `record` `id`, before
-/// a write of it whose answer is the one to compare.
+/// a write of it whose answer is the one to read.
 pub(super) fn forget(destination: &ResolvedSource, record: MetadataRecord, id: &NativeId) {
     let _ = destination.source().stored_content(record, id);
 }
 
-/// The refusal owed when the write of the `record` `id` just sent `sent` and its answer says
-/// `destination` stores something else; `None` when they agree, or when the destination said
-/// nothing about what it stores.
-///
-/// An answer that lacks, or blanks, a line that was sent as an image is not taken at its word:
-/// one read of the stored item confirms it, and that read is compared instead. So a digest is
-/// never recorded over content missing an image the write sent — the read either holds it, and
-/// the item agrees, or does not, and the refusal names the line — while a write whose answer
-/// merely left the image out of what it echoed is accepted. A read that fails or finds no item
-/// confirms nothing, and the answer's difference is refused as it stands.
-pub(super) async fn diverged(
+/// The content `destination` reported storing for the `record` `id`, whose latest write sent
+/// `sent` — `None` when its answer said nothing about it or stored exactly what was sent, so
+/// the write is done.
+pub(super) fn rewritten(
     destination: &ResolvedSource,
     record: MetadataRecord,
     id: &NativeId,
     sent: Option<&str>,
-) -> Option<EngineError> {
+) -> Option<String> {
     let stored = destination.source().stored_content(record, id)?;
-    let sent = sent.unwrap_or_default();
-    let answered = first_difference(sent, &stored)?;
-    let differs = if answered.lacks_an_image() {
-        match confirmed(destination, record, id).await {
-            Some(read) => first_difference(sent, &read)?,
-            None => answered,
+    (stored != sent.unwrap_or_default()).then_some(stored)
+}
+
+/// The provenance `metadata` records, moved onto `stored` where it vouched for one of `sent` —
+/// the content as composed, or as the write's answer said it sent once its images were pointed
+/// where the destination serves them — and `None` where it vouched for neither, so a hand
+/// edit's entry is carried exactly as it came and never refreshed into valid provenance.
+pub(super) fn restamped(
+    metadata: &BTreeMap<String, Value>,
+    sent: &[&str],
+    stored: &str,
+) -> Option<TemplateProvenance> {
+    let mut provenance = TemplateProvenance::read(metadata).ok().flatten()?;
+    if !sent
+        .iter()
+        .any(|sent| provenance.body_digest.as_str() == body_digest(sent))
+    {
+        return None;
+    }
+    provenance.body_digest =
+        Sha256Digest::parse(body_digest(stored)).expect("`body_digest` spells a digest");
+    Some(provenance)
+}
+
+/// [`restamped`], written into `metadata` in place: whether it moved.
+pub(super) fn restamp(metadata: &mut BTreeMap<String, Value>, sent: &[&str], stored: &str) -> bool {
+    match restamped(metadata, sent, stored) {
+        Some(provenance) => {
+            metadata.insert(TemplateProvenance::KEY.to_owned(), provenance.to_value());
+            true
         }
-    } else {
-        answered
-    };
+        None => false,
+    }
+}
+
+/// The refusal owed when the follow-up write of the `record` `id`, which sent back `stored` —
+/// the content an earlier answer said `destination` stores — was answered with other content;
+/// `None` when it reported `stored` again, or said nothing.
+///
+/// Compared as a read reports content, the metadata slot and its separator removed: a backend
+/// may store the separator in its own way, which is no change to the content.
+pub(super) fn unstable(
+    destination: &ResolvedSource,
+    record: MetadataRecord,
+    id: &NativeId,
+    stored: &str,
+) -> Option<EngineError> {
+    let again = destination.source().stored_content(record, id)?;
+    let differs = first_difference(stored, &again)?;
     Some(EngineError::StoredContentDiverged {
         item: GlobalId::new(destination.name().clone(), id.clone()),
         line: differs.line,
@@ -88,23 +97,70 @@ pub(super) async fn diverged(
     })
 }
 
+/// What a write that carried `payloads` uploaded, read off the content it said it sent: each
+/// asset `composed` references, at the URL `sent` holds in that reference's place — `None` when
+/// the two cannot be lined up reference by reference, so nothing is recorded that the write did
+/// not say.
+///
+/// A follow-up write sends the stored content, whose references already point at those URLs,
+/// and records them beside it as the asset write recorded them, so a later copy reuses each.
+pub(super) fn served(
+    composed: &str,
+    sent: &str,
+    payloads: &[AssetPayload],
+) -> Option<AssetUploads> {
+    // Each reference is replaced by a marker no Markdown holds, so what lies between two of them
+    // is text the asset write carried unchanged; each URL then runs from the end of one stretch
+    // of that text to the first character a reference's target cannot hold.
+    const MARK: char = '\u{0}';
+    let markers: BTreeMap<_, _> = payloads
+        .iter()
+        .map(|payload| {
+            (
+                payload.name.clone(),
+                format!("{MARK}{}{MARK}", payload.name),
+            )
+        })
+        .collect();
+    let marked = rewrite_asset_references(composed, &markers);
+    let mut uploads = AssetUploads::default();
+    let mut pieces = marked.split(MARK);
+    let mut rest = sent.strip_prefix(pieces.next()?)?;
+    while let Some(name) = pieces.next() {
+        let after = pieces.next()?;
+        let end = rest
+            .find(|character: char| character == ')' || character.is_whitespace())
+            .unwrap_or(rest.len());
+        let (url, tail) = rest.split_at(end);
+        let payload = payloads
+            .iter()
+            .find(|payload| payload.name.as_str() == name)?;
+        if url.is_empty() {
+            return None;
+        }
+        if let Some(held) = uploads.0.get(&payload.name)
+            && held.url != url
+        {
+            return None;
+        }
+        uploads.0.insert(
+            payload.name.clone(),
+            AssetUpload {
+                sha256: payload.sha256.clone(),
+                url: url.to_owned(),
+            },
+        );
+        rest = tail.strip_prefix(after)?;
+    }
+    rest.is_empty().then_some(uploads)
+}
+
 /// The first line, counted from 1, at which `sent` and `stored` differ, with each side's text of
 /// it — `None` for a side that ended before it.
 struct Difference {
     line: usize,
     sent: Option<String>,
     stored: Option<String>,
-}
-
-impl Difference {
-    /// Whether the stored side lacks, or holds blank, a line that was sent holding an image.
-    fn lacks_an_image(&self) -> bool {
-        self.sent.as_deref().is_some_and(|line| line.contains("!["))
-            && self
-                .stored
-                .as_deref()
-                .is_none_or(|line| line.trim().is_empty())
-    }
 }
 
 fn first_difference(sent: &str, stored: &str) -> Option<Difference> {
@@ -127,22 +183,6 @@ fn first_difference(sent: &str, stored: &str) -> Option<Difference> {
     }
 }
 
-/// The content `destination` holds for the `record` `id`, read again; `None` when the read
-/// fails or finds no such item.
-async fn confirmed(
-    destination: &ResolvedSource,
-    record: MetadataRecord,
-    id: &NativeId,
-) -> Option<String> {
-    let source = destination.source();
-    let content = match record {
-        MetadataRecord::Task => source.get_task(id).await.ok()??.content,
-        MetadataRecord::Project => source.get_project(id).await.ok()??.content,
-        MetadataRecord::Document => source.get_document(id).await.ok()??.content,
-    };
-    Some(content.unwrap_or_default())
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -150,33 +190,30 @@ mod tests {
 
     use onetaskgraph_in_memory::{InMemoryConfig, InMemorySource};
     use onetaskgraph_plugin_api::{
-        Capabilities, DependencyEdge, Direction, Health, Label, MetadataRecord, NativeId, Page,
-        PageRequest, Project, ProjectQuery, SourceError, SourceName, Task, TaskQuery, TaskSource,
+        AssetName, AssetPayload, Capabilities, DependencyEdge, Direction, Health, Label,
+        MetadataRecord, NativeId, Page, PageRequest, Project, ProjectQuery, SourceError,
+        SourceName, Task, TaskQuery, TaskSource,
     };
     use serde_json::{Value, json};
 
-    use super::{apply, diverged, forget};
+    use super::{forget, restamp, rewritten, served, unstable};
     use crate::engine::EngineError;
     use crate::resolve::ResolvedSource;
     use crate::template::body_digest;
 
-    /// An empty source whose backend upper-cases what it is written and answers `stored` as
-    /// what it now holds.
-    struct Shouting {
+    /// An empty source whose latest write's answer said it stores `stored`.
+    struct Answering {
         inner: InMemorySource,
         stored: Mutex<Option<String>>,
     }
 
     #[async_trait::async_trait]
-    impl TaskSource for Shouting {
+    impl TaskSource for Answering {
         fn kind(&self) -> &'static str {
-            "shouting"
+            "answering"
         }
         fn capabilities(&self) -> Capabilities {
             self.inner.capabilities()
-        }
-        async fn stored_form(&self, content: &str) -> Result<String, SourceError> {
-            Ok(content.to_uppercase())
         }
         fn stored_content(&self, _record: MetadataRecord, _id: &NativeId) -> Option<String> {
             self.stored.lock().expect("the answer").take()
@@ -225,16 +262,12 @@ mod tests {
         }
     }
 
-    fn shouting(stored: Option<&str>) -> ResolvedSource {
-        holding(InMemoryConfig::default(), stored)
-    }
-
-    /// A source over `held` whose last write's answer says it stores `stored`.
-    fn holding(held: InMemoryConfig, stored: Option<&str>) -> ResolvedSource {
+    /// A source whose last write's answer says it stores `stored`.
+    fn answering(stored: Option<&str>) -> ResolvedSource {
         ResolvedSource::adopt(
             SourceName::new("loud".to_owned()).expect("a name"),
-            Box::new(Shouting {
-                inner: InMemorySource::new(held).expect("a source"),
+            Box::new(Answering {
+                inner: InMemorySource::new(InMemoryConfig::default()).expect("a source"),
                 stored: Mutex::new(stored.map(str::to_owned)),
             }),
         )
@@ -249,181 +282,131 @@ mod tests {
         )])
     }
 
-    #[tokio::test]
-    async fn a_vouched_rendering_is_rewritten_and_restamped_and_a_hand_edit_only_rewritten() {
-        let destination = shouting(None);
-        let mut content = Some("one\ntwo".to_owned());
-        let mut metadata = provenance("one\ntwo");
-        apply(&destination, &mut content, &mut metadata)
-            .await
-            .expect("an in-process source answers");
-        assert_eq!(content.as_deref(), Some("ONE\nTWO"));
-        assert_eq!(
-            metadata["onetaskgraph.template"]["body_digest"],
-            json!(body_digest("ONE\nTWO"))
-        );
-
-        let mut edited = Some("edited".to_owned());
-        let mut vouching_for_another = provenance("rendered");
-        apply(&destination, &mut edited, &mut vouching_for_another)
-            .await
-            .expect("an in-process source answers");
-        assert_eq!(edited.as_deref(), Some("EDITED"));
-        assert_eq!(vouching_for_another, provenance("rendered"));
-
-        let mut nothing = None;
-        let mut none = BTreeMap::new();
-        apply(&destination, &mut nothing, &mut none)
-            .await
-            .expect("an in-process source answers");
-        assert_eq!((nothing, none), (None, BTreeMap::new()));
-    }
-
-    #[tokio::test]
-    async fn the_first_differing_line_is_named_with_both_texts_and_an_agreeing_answer_is_none() {
+    #[test]
+    fn what_a_write_stored_is_taken_once_and_only_where_it_differs_from_what_was_sent() {
         let id = NativeId("T-1".to_owned());
-        assert!(
-            diverged(
-                &shouting(Some("A\nB")),
+        assert_eq!(
+            rewritten(
+                &answering(Some("* one")),
                 MetadataRecord::Task,
                 &id,
-                Some("A\nB")
+                Some("- one")
             )
-            .await
-            .is_none()
+            .as_deref(),
+            Some("* one")
         );
-        assert!(
-            diverged(&shouting(None), MetadataRecord::Task, &id, Some("A"))
-                .await
-                .is_none()
+        assert_eq!(
+            rewritten(
+                &answering(Some("- one")),
+                MetadataRecord::Task,
+                &id,
+                Some("- one")
+            ),
+            None
         );
-        assert!(
-            diverged(&shouting(Some("")), MetadataRecord::Task, &id, None)
-                .await
-                .is_none()
+        assert_eq!(
+            rewritten(&answering(None), MetadataRecord::Task, &id, Some("- one")),
+            None
         );
+        assert_eq!(
+            rewritten(&answering(Some("")), MetadataRecord::Task, &id, None),
+            None
+        );
+        // Taken: an earlier write's answer is let go of before the one read.
+        let earlier = answering(Some("stale"));
+        forget(&earlier, MetadataRecord::Task, &id);
+        assert_eq!(
+            rewritten(&earlier, MetadataRecord::Task, &id, Some("- one")),
+            None
+        );
+    }
+
+    #[test]
+    fn a_vouched_rendering_moves_onto_what_was_stored_and_a_hand_edit_is_carried_as_it_came() {
+        let mut metadata = provenance("- one");
+        assert!(restamp(&mut metadata, &["- one"], "* one"));
+        assert_eq!(
+            metadata["onetaskgraph.template"]["body_digest"],
+            json!(body_digest("* one"))
+        );
+        // Vouching for what the write said it sent once its images were served is vouching too.
+        let mut served_first = provenance("![a](https://x/a)");
+        assert!(restamp(
+            &mut served_first,
+            &["![a](./a.png)", "![a](https://x/a)"],
+            "![a](https://x/a)\n"
+        ));
+        let mut edited = provenance("rendered");
+        assert!(!restamp(&mut edited, &["edited"], "EDITED"));
+        assert_eq!(edited, provenance("rendered"));
+        let mut none = BTreeMap::new();
+        assert!(!restamp(&mut none, &["x"], "y"));
+        assert!(none.is_empty());
+    }
+
+    #[test]
+    fn a_follow_up_answered_otherwise_is_refused_naming_the_first_differing_line() {
+        let id = NativeId("T-1".to_owned());
+        assert!(unstable(&answering(Some("A\nB")), MetadataRecord::Task, &id, "A\nB").is_none());
+        assert!(unstable(&answering(None), MetadataRecord::Task, &id, "A").is_none());
         let Some(EngineError::StoredContentDiverged {
             item,
             line,
             sent,
             stored,
-        }) = diverged(
-            &shouting(Some("A\nB\nc")),
+        }) = unstable(
+            &answering(Some("A\nB\nc")),
             MetadataRecord::Document,
             &id,
-            Some("A\nB\nC"),
+            "A\nB\nC",
         )
-        .await
         else {
             panic!("a difference is refused");
         };
         assert_eq!((item.to_string(), line), ("loud:T-1".to_owned(), 3));
         assert_eq!((sent.as_deref(), stored.as_deref()), (Some("C"), Some("c")));
-        // A stored content that runs on past the one sent names the line it alone holds.
-        let Some(EngineError::StoredContentDiverged {
-            line, sent, stored, ..
-        }) = diverged(
-            &shouting(Some("A\nmore")),
-            MetadataRecord::Task,
-            &id,
-            Some("A"),
-        )
-        .await
-        else {
-            panic!("a difference is refused");
-        };
-        assert_eq!(
-            (line, sent.as_deref(), stored.as_deref()),
-            (2, None, Some("more"))
-        );
         // A line one side does not have is told apart from an empty one.
-        let shown = diverged(&shouting(Some("A\n")), MetadataRecord::Task, &id, Some("A"))
-            .await
+        let shown = unstable(&answering(Some("A\n")), MetadataRecord::Task, &id, "A")
             .expect("a difference is refused")
             .to_string();
         assert!(
             shown.contains("sent:   no line 2: the content ends at line 1\nstored: \"\"\n"),
             "{shown}"
         );
-        // What an earlier write left is let go of before the one compared.
-        let earlier = shouting(Some("stale"));
-        forget(&earlier, MetadataRecord::Task, &id);
-        assert!(
-            diverged(&earlier, MetadataRecord::Task, &id, Some("A"))
-                .await
-                .is_none()
-        );
+        assert!(!shown.contains("ruling"), "{shown}");
     }
 
-    #[tokio::test]
-    async fn an_answer_lacking_an_image_it_was_sent_is_confirmed_by_one_read_of_the_item() {
-        let id = NativeId("T-1".to_owned());
-        let sent = "![a](https://x/a)\n\n![b](https://x/b)";
-        let held = |content: &str| -> InMemoryConfig {
-            serde_json::from_value(json!({
-                "tasks": [{"id": "T-1", "title": "t", "content": content, "url": "https://x/T-1",
-                           "status": {"category": "todo", "name": "Todo"}, "labels": [],
-                           "project": null, "created_at": null, "updated_at": null,
-                           "metadata": {}}]
-            }))
-            .expect("an in-memory configuration")
-        };
-        // The answer left the second image out, the item holds it: accepted on the read.
-        for answered in ["![a](https://x/a)\n", "![a](https://x/a)\n\n"] {
-            assert!(
-                diverged(
-                    &holding(held(sent), Some(answered)),
-                    MetadataRecord::Task,
-                    &id,
-                    Some(sent)
-                )
-                .await
-                .is_none(),
-                "{answered:?}"
-            );
-        }
-        // The item really lacks it: refused naming the image line the read does not have.
-        let Some(EngineError::StoredContentDiverged {
-            line,
-            sent: line_sent,
-            stored,
-            ..
-        }) = diverged(
-            &holding(held("![a](https://x/a)\n"), Some("![a](https://x/a)\n")),
-            MetadataRecord::Task,
-            &id,
-            Some(sent),
-        )
-        .await
-        else {
-            panic!("a missing image is refused");
-        };
+    #[test]
+    fn what_an_asset_write_uploaded_is_read_off_the_content_it_said_it_sent() {
+        let first = AssetPayload::of(AssetName::new("a.png").unwrap(), vec![1, 2, 3]);
+        let second = AssetPayload::of(AssetName::new("b.png").unwrap(), vec![4, 5]);
+        let payloads = [first.clone(), second.clone()];
+        let composed = "# T\n![one](./a.png)\n![two](./b.png \"t\")\nand ![again](./a.png)";
+        let sent = "# T\n![one](https://u/1)\n![two](https://u/2 \"t\")\nand ![again](https://u/1)";
+        let uploads = served(composed, sent, &payloads).expect("lined up");
         assert_eq!(
-            (line, line_sent.as_deref(), stored.as_deref()),
-            (3, Some("![b](https://x/b)"), None)
+            uploads.reusable(&first.name, &first.sha256),
+            Some("https://u/1")
         );
-        // An item the read cannot find confirms nothing: the answer's difference is refused.
-        assert!(
-            diverged(
-                &shouting(Some("![a](https://x/a)\n")),
-                MetadataRecord::Task,
-                &id,
-                Some(sent)
-            )
-            .await
-            .is_some()
+        assert_eq!(
+            uploads.reusable(&second.name, &second.sha256),
+            Some("https://u/2")
         );
-        // A difference at a line that was not sent as an image is refused without a read, even
-        // when the item holds what was sent.
+        // Text that does not line up records nothing.
+        assert!(served(composed, "# T\nsomething else", &payloads).is_none());
+        // One asset at two URLs is not what one upload answered.
         assert!(
-            diverged(
-                &holding(held("A\nB"), Some("A\nb")),
-                MetadataRecord::Task,
-                &id,
-                Some("A\nB")
+            served(
+                composed,
+                "# T\n![one](https://u/1)\n![two](https://u/2 \"t\")\nand ![again](https://u/3)",
+                &payloads
             )
-            .await
-            .is_some()
+            .is_none()
+        );
+        // Content referencing nothing uploads nothing.
+        assert_eq!(
+            served("plain", "plain", &payloads),
+            Some(Default::default())
         );
     }
 }

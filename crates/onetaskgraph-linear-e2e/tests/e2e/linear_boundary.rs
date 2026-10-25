@@ -154,10 +154,20 @@ fn mutations(served: &[(String, Value)]) -> usize {
         .count()
 }
 
+/// How many reads of the resolution `served` holds: the resolution read on its own, or carried
+/// by a copy's batched origin read.
 fn resolutions(served: &[(String, Value)]) -> usize {
+    use onetaskgraph_linear::graphql;
     served
         .iter()
-        .filter(|(query, _)| query == onetaskgraph_linear::graphql::RESOLUTION)
+        .filter(|(query, _)| {
+            [
+                graphql::RESOLUTION,
+                graphql::COUNTERPART_LOOKUPS,
+                graphql::COUNTERPART_LOOKUPS_CACHED,
+            ]
+            .contains(&query.as_str())
+        })
         .count()
 }
 

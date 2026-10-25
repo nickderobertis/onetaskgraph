@@ -169,6 +169,28 @@ pub(crate) fn complexity(document: &str, variables: &Value, answer: &Value) -> u
                 + price::PROJECT_INVERSE_RELATIONS_PAGE)
                 * first("first")
         }
+        // A copy's batched origin read: its two listings priced as each is alone, by the rows the
+        // issues page returned and the rows the projects page asked for, and the resolution it
+        // carries — the organization, the team's states and the project statuses.
+        g::COUNTERPART_LOOKUPS => {
+            price::ISSUES_BASE
+                + price::ISSUES_ROW * rows("/data/originIssues/nodes")
+                + price::PROJECTS_ROW * first("projectsFirst")
+                + price::RESOLUTION
+        }
+        g::COUNTERPART_LOOKUPS_CACHED => {
+            price::ISSUES_BASE
+                + (price::ISSUES_ROW
+                    + price::RELATIONS_PAGE
+                    + price::INVERSE_RELATIONS_PAGE
+                    + price::COMMENTS_PAGE)
+                    * rows("/data/originIssues/nodes")
+                + (price::PROJECTS_ROW
+                    + price::PROJECT_RELATIONS_PAGE
+                    + price::PROJECT_INVERSE_RELATIONS_PAGE)
+                    * first("projectsFirst")
+                + price::RESOLUTION
+        }
         g::DOCUMENT => price::DOCUMENT,
         g::DOCUMENTS => price::DOCUMENTS_ROW * first("first"),
         g::LABELS => (price::LABELS_AT_5 * first("first")).div_ceil(5),
@@ -277,6 +299,8 @@ fn read_name(document: &str) -> &'static str {
         ("DOCUMENTS", g::DOCUMENTS),
         ("LABELS", g::LABELS),
         ("RESOLUTION", g::RESOLUTION),
+        ("COUNTERPART_LOOKUPS", g::COUNTERPART_LOOKUPS),
+        ("COUNTERPART_LOOKUPS_CACHED", g::COUNTERPART_LOOKUPS_CACHED),
     ]
     .into_iter()
     .find(|(_, known)| *known == document)

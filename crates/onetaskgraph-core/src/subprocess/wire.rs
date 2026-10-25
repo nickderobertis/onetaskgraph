@@ -355,12 +355,12 @@ pub(crate) struct InitializeResult {
     /// contract's default refuses it with. Omitted when `false`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) project_status: bool,
-    /// Whether this plugin answers `stored_form` and `stored_status`, and says in each content
-    /// write's result what its backend stores (§3.16).
+    /// Whether this plugin answers `stored_status`, and says in each content write's result
+    /// what its backend stores (§3.16).
     ///
-    /// Optional, and absent means it does not: such a plugin is never sent either method, the
-    /// engine writes the content and the status it was given, and it compares nothing after
-    /// the write. Omitted when `false`.
+    /// Optional, and absent means it does not: such a plugin is never sent `stored_status`, the
+    /// engine writes the status it was given, and nothing is written again after a write.
+    /// Omitted when `false`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) stored_forms: bool,
 }
@@ -972,20 +972,6 @@ pub(crate) struct WriteResult {
     pub(crate) stored_content: Option<String>,
 }
 
-/// The `params` of `stored_form` (§4.25): the content a write would send.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct StoredFormParams {
-    /// The content, as the engine would send it.
-    pub(crate) content: String,
-}
-
-/// The result of `stored_form` (§4.25): the content the backend would store.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct StoredFormResult {
-    /// The content, as the backend would store it.
-    pub(crate) content: String,
-}
-
 /// The `params` of `stored_status` (§4.25): the status an item of one kind would be written at.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct StoredStatusParams {
@@ -1143,7 +1129,8 @@ mod tests {
     }
 
     /// The checked-in golden of the members `docs/plugin-protocol.md` §3.16, §4.9 and §4.25
-    /// added to version 2 without a bump.
+    /// added to version 2 without a bump — `stored_form` among them no longer, since the engine
+    /// retired it.
     fn stored_forms_golden() -> Value {
         serde_json::from_str(include_str!("../../tests/fixtures/stored-forms-wire.json"))
             .expect("the golden is JSON")
@@ -1166,10 +1153,7 @@ mod tests {
 
     #[test]
     fn the_stored_forms_wire_shapes_round_trip_byte_for_byte_and_omit_what_is_absent() {
-        use super::{
-            InitializeResult, StoredFormParams, StoredFormResult, StoredStatusParams,
-            StoredStatusResult, WriteResult,
-        };
+        use super::{InitializeResult, StoredStatusParams, StoredStatusResult, WriteResult};
         let golden = stored_forms_golden();
         for plugin in ["declaring_plugin", "silent_plugin"] {
             for (member, written) in [
@@ -1191,18 +1175,10 @@ mod tests {
         }
         let declaring = &golden["declaring_plugin"];
         assert_eq!(
-            round_trip::<StoredFormResult>(&declaring["stored_form"]),
-            declaring["stored_form"]
-        );
-        assert_eq!(
             round_trip::<StoredStatusResult>(&declaring["stored_status"]),
             declaring["stored_status"]
         );
         let requests = &golden["requests"];
-        assert_eq!(
-            round_trip::<StoredFormParams>(&requests["stored_form"]),
-            requests["stored_form"]
-        );
         assert_eq!(
             round_trip::<StoredStatusParams>(&requests["stored_status"]),
             requests["stored_status"]

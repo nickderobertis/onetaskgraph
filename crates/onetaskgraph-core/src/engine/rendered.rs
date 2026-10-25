@@ -36,7 +36,7 @@ use crate::GlobalId;
 use crate::resolve::ResolvedSource;
 use crate::template::{
     Answers, RenderedTemplate, Sha256Digest, Template, TemplateError, TemplateInput,
-    TemplateProvenance,
+    TemplateProvenance, body_digest,
 };
 
 /// The content a create writes: text given as it is, or a template's rendering.
@@ -620,17 +620,11 @@ impl Engine {
         }
         let Parts {
             content,
-            mut metadata,
+            metadata,
             answers,
         } = request.body.parts(&request.metadata);
-        // What the source will store, so the provenance a rendering records is of that.
-        let mut content = Some(content);
-        stored::apply(source, &mut content, &mut metadata)
-            .await
-            .map_err(|error| EngineError::SourceFailed {
-                name: source.name().to_string(),
-                error,
-            })?;
+        // Sent as rendered: what the source stores of it is read off the write's own answer.
+        let content = Some(content);
         let category = request.status.unwrap_or(StatusCategory::Todo);
         let mut write = ItemWrite {
             target: None,
@@ -732,18 +726,38 @@ impl Engine {
                 });
             }
         };
-        if let Some(error) =
-            stored::diverged(source, MetadataRecord::Task, &written, sent.as_deref()).await
-        {
-            return Err(error);
-        }
-        let id = GlobalId::new(near.clone(), written);
-        let task = source
+        let reported = source
             .source()
-            .get_task(&id.native)
-            .await
-            .map_err(|error| source_failed(source, error))?
-            .ok_or_else(|| EngineError::NoSuchTask { id: id.to_string() })?;
+            .stored_content(MetadataRecord::Task, &written);
+        let held = self
+            .settle(
+                source,
+                RenderedRecord::Task,
+                &written,
+                write.item.content.as_deref(),
+                sent.as_deref(),
+                &write.item.metadata,
+                answers,
+                reported,
+            )
+            .await?;
+        let id = GlobalId::new(near.clone(), written);
+        // A source whose write answered what it stores has said what the task holds, and is not
+        // read again for it; one that said nothing is read once, as it always was.
+        let task = match held {
+            Some((content, metadata)) => Task {
+                id: id.native.clone(),
+                content: Some(content),
+                metadata,
+                ..write.item
+            },
+            None => source
+                .source()
+                .get_task(&id.native)
+                .await
+                .map_err(|error| source_failed(source, error))?
+                .ok_or_else(|| EngineError::NoSuchTask { id: id.to_string() })?,
+        };
         let delivers = targets(&task.delivers, near);
         let delivered = self
             .deliver(
@@ -811,16 +825,10 @@ impl Engine {
         };
         let Parts {
             content,
-            mut metadata,
+            metadata,
             answers,
         } = request.body.parts(&request.metadata);
-        let mut content = Some(content);
-        stored::apply(source, &mut content, &mut metadata)
-            .await
-            .map_err(|error| EngineError::SourceFailed {
-                name: source.name().to_string(),
-                error,
-            })?;
+        let content = Some(content);
         let declared = request.classification.strictest(
             held.as_ref()
                 .map_or(Classification::Public, |held| held.classification),
@@ -904,18 +912,36 @@ impl Engine {
             (None, true) => source.source().write_document(&write).await,
         }
         .map_err(|error| source_failed(source, error))?;
-        if let Some(error) =
-            stored::diverged(source, MetadataRecord::Document, &written, sent.as_deref()).await
-        {
-            return Err(error);
-        }
-        let id = GlobalId::new(request.source.clone(), written);
-        let document = source
+        let reported = source
             .source()
-            .get_document(&id.native)
-            .await
-            .map_err(|error| source_failed(source, error))?
-            .ok_or_else(|| EngineError::NoSuchDocument { id: id.to_string() })?;
+            .stored_content(MetadataRecord::Document, &written);
+        let held = self
+            .settle(
+                source,
+                RenderedRecord::Document,
+                &written,
+                write.item.content.as_deref(),
+                sent.as_deref(),
+                &write.item.metadata,
+                answers,
+                reported,
+            )
+            .await?;
+        let id = GlobalId::new(request.source.clone(), written);
+        let document = match held {
+            Some((content, metadata)) => Document {
+                id: id.native.clone(),
+                content: Some(content),
+                metadata,
+                ..write.item
+            },
+            None => source
+                .source()
+                .get_document(&id.native)
+                .await
+                .map_err(|error| source_failed(source, error))?
+                .ok_or_else(|| EngineError::NoSuchDocument { id: id.to_string() })?,
+        };
         Ok(Qualified { id, item: document })
     }
 
@@ -948,7 +974,7 @@ impl Engine {
             metadata: given,
             answers,
         } = request.body.parts(&request.metadata);
-        let mut content = Some(content);
+        let content = Some(content);
         // A project replaced keeps what it was, and while the boundary is active that is what
         // it holds as well as its record: a member private makes it private.
         let held_classification = match &held {
@@ -992,12 +1018,6 @@ impl Engine {
             }
         };
         metadata.extend(given);
-        stored::apply(source, &mut content, &mut metadata)
-            .await
-            .map_err(|error| EngineError::SourceFailed {
-                name: source.name().to_string(),
-                error,
-            })?;
         let status = request.status.map_or(status, |category| Status {
             category,
             name: category_word(category),
@@ -1060,23 +1080,36 @@ impl Engine {
             None => source.source().write_project(&write).await,
         }
         .map_err(|error| source_failed(source, error))?;
-        if let Some(error) = stored::diverged(
-            source,
-            MetadataRecord::Project,
-            &written,
-            write.item.content.as_deref(),
-        )
-        .await
-        {
-            return Err(error);
-        }
-        let id = GlobalId::new(request.source.clone(), written);
-        let project = source
+        let reported = source
             .source()
-            .get_project(&id.native)
-            .await
-            .map_err(|error| source_failed(source, error))?
-            .ok_or_else(|| EngineError::NoSuchProject { id: id.to_string() })?;
+            .stored_content(MetadataRecord::Project, &written);
+        let held = self
+            .settle(
+                source,
+                RenderedRecord::Project,
+                &written,
+                write.item.content.as_deref(),
+                write.item.content.as_deref(),
+                &write.item.metadata,
+                answers,
+                reported,
+            )
+            .await?;
+        let id = GlobalId::new(request.source.clone(), written);
+        let project = match held {
+            Some((content, metadata)) => Project {
+                id: id.native.clone(),
+                content: Some(content),
+                metadata,
+                ..write.item
+            },
+            None => source
+                .source()
+                .get_project(&id.native)
+                .await
+                .map_err(|error| source_failed(source, error))?
+                .ok_or_else(|| EngineError::NoSuchProject { id: id.to_string() })?,
+        };
         Ok(Qualified { id, item: project })
     }
 
@@ -1246,34 +1279,41 @@ impl Engine {
         answers: &Answers,
         dry_run: bool,
     ) -> Result<Regenerated, EngineError> {
-        let mut rendered = regeneration.render(answers)?;
+        let rendered = regeneration.render(answers)?;
         let mut provenance = TemplateProvenance::of(regeneration.reference.clone(), &rendered)
             .map_err(|error| EngineError::Template { error })?;
         let id = &regeneration.id;
         let source = self.built(&id.source)?;
-        // What the source will store, so a render it holds already reads as unchanged and the
-        // digest recorded is of what a read hands back. A fresh rendering vouches for itself.
-        let body = source
-            .source()
-            .stored_form(&rendered.body)
-            .await
-            .map_err(|error| EngineError::SourceFailed {
-                name: source.name().to_string(),
-                error,
-            })?;
-        if body != rendered.body {
-            provenance.body_digest = Sha256Digest::of(body.as_bytes());
-            rendered.body = body;
-        }
         let carried = self.carried_assets(regeneration, &rendered.body).await?;
         let with_assets = !carried.is_empty()
             || assets::holds_any(
                 &regeneration.held_assets,
                 regeneration.recorded_assets.as_ref(),
             );
-        let changed = regeneration.content != rendered.body
-            || !assets::same_set(&regeneration.held_assets, &carried)
-            || regeneration.provenance.as_ref() != Some(&provenance)
+        // An item is this rendering already when its own record says so: the same template, by
+        // reference and digest, rendered from the same answers, over content nobody has edited
+        // since — its `body_digest` is still the digest of what it holds — with the same assets.
+        // That holds whatever the source stored of the content it was sent, so a source that
+        // rewrites Markdown reads as unchanged too, and nothing is predicted of it.
+        let as_recorded = regeneration.provenance.as_ref().is_some_and(|held| {
+            held.template == provenance.template
+                && held.digest == provenance.digest
+                && held.answers_digest == provenance.answers_digest
+                && held.body_digest.as_str() == body_digest(&regeneration.content)
+        });
+        // A source that serves its assets at a URL lists none it holds: its record of what it
+        // uploaded is what says which assets the item holds.
+        let same_assets = match &regeneration.recorded_assets {
+            Some(recorded) if regeneration.held_assets.is_empty() => {
+                recorded.0.len() == carried.len()
+                    && carried
+                        .iter()
+                        .all(|payload| recorded.reusable(&payload.name, &payload.sha256).is_some())
+            }
+            _ => assets::same_set(&regeneration.held_assets, &carried),
+        };
+        let changed = !as_recorded
+            || !same_assets
             // Answers a source keeps and this item does not hold — a block deleted by hand —
             // are a difference the write repairs; a source keeping none holds none by nature.
             || regeneration
@@ -1350,10 +1390,44 @@ impl Engine {
             }
             .map_err(|error| source_failed(source, error))?
             .ok_or_else(|| regeneration.record.no_such(id))?;
-            if let Some(error) = stored::diverged(source, record, &id.native, sent.as_deref()).await
+            let reported = source.source().stored_content(record, &id.native);
+            let metadata = BTreeMap::from([(TemplateProvenance::KEY.to_owned(), value)]);
+            if let Some((stored, metadata)) = self
+                .settle(
+                    source,
+                    regeneration.record,
+                    &id.native,
+                    Some(&rendered.body),
+                    sent.as_deref(),
+                    &metadata,
+                    Some(&rendered.answers),
+                    reported,
+                )
+                .await?
             {
-                return Err(error);
+                if let Ok(Some(settled)) = TemplateProvenance::read(&metadata) {
+                    provenance.body_digest = settled.body_digest;
+                }
+                return Ok(Regenerated {
+                    id: id.clone(),
+                    digest: provenance.digest,
+                    body_digest: provenance.body_digest,
+                    changed,
+                    body: stored,
+                });
             }
+        }
+        // An item that is this rendering already is answered as it stands — the content it holds
+        // and the digest its record keeps of it — which is not the content just composed where
+        // its source rewrote what it was sent.
+        if !changed && let Some(held) = &regeneration.provenance {
+            return Ok(Regenerated {
+                id: id.clone(),
+                digest: provenance.digest,
+                body_digest: held.body_digest.clone(),
+                changed,
+                body: regeneration.content.clone(),
+            });
         }
         Ok(Regenerated {
             id: id.clone(),
@@ -1362,6 +1436,76 @@ impl Engine {
             changed,
             body: rendered.body,
         })
+    }
+
+    /// What the `record` `id` holds once its write is settled, where `source` `reported` what that
+    /// write stored — `None` when it reported nothing, which leaves the item as it was written.
+    ///
+    /// Where what it stores is other than what was sent, `composed` or as the write said it sent
+    /// it once its images were served, and the rendering's provenance in `metadata` vouched for
+    /// that, the provenance is moved onto the stored content and one follow-up write records it
+    /// there, through the source's own rendering write, which sends the stored content back
+    /// verbatim — no read of the item follows either write. That write's own answer has to
+    /// report the same content again, or the item is refused as `stored-content-diverged`.
+    /// Provenance that vouched for neither is carried exactly as it came, never refreshed.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each is one fact of the write being settled"
+    )]
+    async fn settle(
+        &self,
+        source: &ResolvedSource,
+        record: RenderedRecord,
+        id: &NativeId,
+        composed: Option<&str>,
+        sent: Option<&str>,
+        metadata: &BTreeMap<String, Value>,
+        answers: Option<&BTreeMap<String, Value>>,
+        reported: Option<String>,
+    ) -> Result<Option<(String, BTreeMap<String, Value>)>, EngineError> {
+        let Some(stored) = reported else {
+            return Ok(None);
+        };
+        let mut held = metadata.clone();
+        let composed = composed.unwrap_or_default();
+        let sent = sent.unwrap_or(composed);
+        if stored == sent || !stored::restamp(&mut held, &[composed, sent], &stored) {
+            return Ok(Some((stored, held)));
+        }
+        let provenance = held
+            .get(TemplateProvenance::KEY)
+            .cloned()
+            .unwrap_or(Value::Null);
+        let none = BTreeMap::new();
+        let answers = answers.unwrap_or(&none);
+        let kind = record.metadata_record();
+        stored::forget(source, kind, id);
+        match record {
+            RenderedRecord::Task => {
+                source
+                    .source()
+                    .set_task_rendering(id, &stored, &provenance, answers)
+                    .await
+            }
+            RenderedRecord::Document => {
+                source
+                    .source()
+                    .set_document_rendering(id, &stored, &provenance, answers)
+                    .await
+            }
+            RenderedRecord::Project => {
+                source
+                    .source()
+                    .set_project_rendering(id, &stored, &provenance, answers)
+                    .await
+            }
+        }
+        .map_err(|error| source_failed(source, error))?
+        .ok_or_else(|| record.no_such(&GlobalId::new(source.name().clone(), id.clone())))?;
+        if let Some(error) = stored::unstable(source, kind, id, &stored) {
+            return Err(error);
+        }
+        Ok(Some((stored, held)))
     }
 
     /// Regenerate one task in place: [`regeneration`](Self::regeneration) then

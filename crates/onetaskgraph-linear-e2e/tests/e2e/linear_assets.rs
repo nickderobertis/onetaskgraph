@@ -40,11 +40,11 @@ struct State {
     refused_names: std::collections::BTreeSet<String>,
 }
 
-struct Workspace {
-    endpoint: String,
+pub(crate) struct Workspace {
+    pub(crate) endpoint: String,
     state: Arc<Mutex<State>>,
-    held: LinearWorkspace,
-    clock: SimulatedClock,
+    pub(crate) held: LinearWorkspace,
+    pub(crate) clock: SimulatedClock,
 }
 
 impl Workspace {
@@ -96,7 +96,9 @@ impl Workspace {
         )
     }
 
-    fn counts(&self) -> (usize, usize, usize) {
+    /// How many uploads this storage was asked for, how many of them it was sent bytes for, and
+    /// how many times anything read an upload back.
+    pub(crate) fn counts(&self) -> (usize, usize, usize) {
         let state = self.state.lock().unwrap();
         (
             state.uploads.len(),
@@ -416,14 +418,14 @@ fn serve(
     answer(&mut stream, 200, &response);
 }
 
-struct Journey {
+pub(crate) struct Journey {
     config: Value,
-    sandbox: Sandbox,
-    workspace: Workspace,
+    pub(crate) sandbox: Sandbox,
+    pub(crate) workspace: Workspace,
 }
 
 impl Journey {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::with_clients(1)
     }
 
@@ -557,7 +559,8 @@ fn issue_and_document_assets_upload_verify_rewrite_and_reuse() {
                 .find(|upload| upload.name == format!("{kind}-{index}.png"))
                 .unwrap();
             assert_eq!(&upload.bytes, image);
-            assert_eq!(upload.verified, 1);
+            // The PUT's own answer says the bytes are held: nothing reads the asset back.
+            assert_eq!(upload.verified, 0);
             assert!(raw.contains(&asset_sha256(image)));
             assert!(raw.contains(&format!("![alt {index}]({}", journey.workspace.endpoint)));
         }
@@ -583,7 +586,7 @@ fn issue_and_document_assets_upload_verify_rewrite_and_reuse() {
         journey.copy(kind, &id, true);
         assert_eq!(
             journey.workspace.counts(),
-            (before.0 + 1, before.1 + 1, before.2 + 1)
+            (before.0 + 1, before.1 + 1, before.2)
         );
         let raw = journey
             .workspace
@@ -610,14 +613,14 @@ fn issue_and_document_assets_upload_verify_rewrite_and_reuse() {
 #[test]
 fn asset_stage_failures_and_bounded_virtual_rate_limit_recovery() {
     for kind in ["task", "document"] {
-        for stage in ["mutation", "PUT", "verifying read"] {
+        for stage in ["mutation", "PUT"] {
             for (times, status, succeeds) in [(1, 403, false), (1, 429, true), (31, 429, false)] {
                 let journey = Journey::new();
                 let (id, images) = journey.create(kind, 1);
                 journey.workspace.state.lock().unwrap().fail = Some((stage, times, status));
                 let result = journey.copy(kind, &id, succeeds);
                 if succeeds {
-                    assert_eq!(journey.workspace.counts(), (1, 1, 1));
+                    assert_eq!(journey.workspace.counts(), (1, 1, 0));
                     assert!(journey.workspace.clock.now() >= Duration::from_secs(2));
                     let destination = result["items"][0]["destination"]
                         .as_str()
@@ -659,12 +662,6 @@ fn asset_stage_failures_and_bounded_virtual_rate_limit_recovery() {
                     );
                     if status == 429 {
                         assert!(said.contains("limiter"));
-                    }
-                    if stage == "verifying read" {
-                        assert!(
-                            said.contains(&format!("{}/0/asset/0", journey.workspace.endpoint)),
-                            "{said}"
-                        );
                     }
                     assert!(!journey.workspace.held.served().iter().any(|(query, _)| {
                         query.contains(if kind == "task" {
@@ -723,7 +720,7 @@ fn measure_project_asset_copy_simulated_seconds() {
     for id in documents {
         journey.copy("document", &id, true);
     }
-    assert_eq!(journey.workspace.counts(), (24, 24, 24));
+    assert_eq!(journey.workspace.counts(), (24, 24, 0));
     record_workload(
         "linear-asset-copy-seconds",
         journey
@@ -813,7 +810,7 @@ fn measure_three_concurrent_project_asset_copies() {
         &copies.sizes,
         3,
     );
-    assert_eq!(journey.workspace.counts(), (72, 72, 72));
+    assert_eq!(journey.workspace.counts(), (72, 72, 0));
 }
 
 /// A refused copy's own words reach what `onebudgetspec check` reports for the figure: the
@@ -932,7 +929,7 @@ fn project_home_routed_to_a_member_source_carries_issue_and_document_assets() {
         .unwrap();
     assert!(home.starts_with("member:"), "{project}");
     let copied = journey.copy("document", &doc, true);
-    assert_eq!(journey.workspace.counts(), (2, 2, 2));
+    assert_eq!(journey.workspace.counts(), (2, 2, 0));
     for (kind, source, report) in [
         ("tasks", issue.as_str(), &project),
         ("documents", doc.as_str(), &copied),
@@ -965,7 +962,7 @@ fn project_home_routed_to_a_member_source_carries_issue_and_document_assets() {
             .unwrap();
         assert!((450_000..=500_000).contains(&upload.bytes.len()));
         assert_eq!(upload.bytes.len(), upload.size);
-        assert_eq!(upload.verified, 1);
+        assert_eq!(upload.verified, 0);
         assert!(raw.contains(&asset_sha256(&upload.bytes)));
         drop(state);
         assert_eq!(
@@ -987,8 +984,8 @@ struct LiveUploads {
     observations: Vec<String>,
 }
 
-/// A forwarding observer changes only the signed PUT URL, keeping Linear's asset URL intact.
-/// Thus the plugin's own verifying GET reaches Linear directly with its source credential.
+/// A forwarding observer changes only the signed PUT URL, keeping Linear's asset URL intact, so
+/// the journey's own authenticated GET of each asset reaches Linear directly.
 fn live_observer(key: String) -> (String, Arc<Mutex<LiveUploads>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
@@ -1317,7 +1314,7 @@ fn regenerating_a_linear_rendering_stores_changed_assets_with_its_metadata_slot(
         assert!(output.status.success(), "{}", stderr(&output));
         assert_eq!(
             journey.workspace.counts(),
-            (before.0 + 1, before.1 + 1, before.2 + 1)
+            (before.0 + 1, before.1 + 1, before.2)
         );
         let raw = journey
             .workspace
@@ -1449,7 +1446,6 @@ fn malformed_upload_answers_and_transport_failures_refuse_before_content_is_writ
         ("malformed-upload", "mutation"),
         ("disconnect-mutation", "mutation"),
         ("disconnect-PUT", "PUT"),
-        ("disconnect-read", "verifying read"),
     ] {
         let journey = Journey::new();
         let (id, _) = journey.create("task", 1);
@@ -1460,9 +1456,6 @@ fn malformed_upload_answers_and_transport_failures_refuse_before_content_is_writ
             said.contains(stage) && said.contains("task-0.png"),
             "{fault}: {said}"
         );
-        if fault == "disconnect-read" {
-            assert!(said.contains(&journey.workspace.endpoint));
-        }
         if !fault.starts_with("disconnect") {
             assert!(said.contains("200"), "{said}");
         }
@@ -1509,7 +1502,7 @@ fn reset_hints_defaults_and_non_json_http_429_are_waited_on_the_clock() {
             (minimum..=maximum).contains(&waited),
             "{hint}: waited {waited}s, network {network:?}"
         );
-        assert_eq!(journey.workspace.counts(), (1, 1, 1));
+        assert_eq!(journey.workspace.counts(), (1, 1, 0));
     }
     let journey = Journey::new();
     let (id, _) = journey.create("task", 1);
@@ -1519,7 +1512,7 @@ fn reset_hints_defaults_and_non_json_http_429_are_waited_on_the_clock() {
         state.fault = Some("mutation-http429");
     }
     journey.copy("task", &id, true);
-    assert_eq!(journey.workspace.counts(), (1, 1, 1));
+    assert_eq!(journey.workspace.counts(), (1, 1, 0));
 }
 
 #[test]
@@ -1658,7 +1651,7 @@ fn the_published_quota_refills_in_virtual_time_before_an_asset_retry() {
     let (id, _) = journey.create("task", 1);
     journey.workspace.state.lock().unwrap().fault = Some("quota-at-upload");
     let result = journey.copy("task", &id, true);
-    assert_eq!(journey.workspace.counts(), (1, 1, 1));
+    assert_eq!(journey.workspace.counts(), (1, 1, 0));
     let state = journey.workspace.state.lock().unwrap();
     assert!(
         journey
@@ -1689,7 +1682,7 @@ fn records_without_images_keep_the_same_non_asset_request_flow() {
         plain.copy(kind, &plain_id, true);
         pictured.copy(kind, &pictured_id, true);
         assert_eq!(plain.workspace.counts(), (0, 0, 0));
-        assert_eq!(pictured.workspace.counts(), (1, 1, 1));
+        assert_eq!(pictured.workspace.counts(), (1, 1, 0));
         let plain_operations: Vec<_> = plain
             .workspace
             .held
@@ -1750,11 +1743,7 @@ fn upload_destinations_and_headers_are_validated_before_a_put_or_authenticated_g
 
 #[test]
 fn redirects_at_each_asset_stage_are_refused_before_content_is_written() {
-    for (fault, stage) in [
-        ("redirect-mutation", "mutation"),
-        ("redirect-PUT", "PUT"),
-        ("redirect-read", "verifying read"),
-    ] {
+    for (fault, stage) in [("redirect-mutation", "mutation"), ("redirect-PUT", "PUT")] {
         let journey = Journey::new();
         let (id, _) = journey.create("task", 1);
         journey.workspace.state.lock().unwrap().fault = Some(fault);
@@ -1929,17 +1918,17 @@ fn content_digest(content: &str) -> String {
 }
 
 #[test]
-fn an_asset_carrying_rendering_records_what_linear_stores_and_an_undeclared_rewrite_is_refused() {
+fn an_asset_carrying_rendering_records_what_linear_stores_and_an_unstable_backend_is_refused() {
     let journey = Journey::new();
     journey
         .workspace
         .held
-        .rewrite_markdown_on_write(LinearMarkdown::Declared);
+        .rewrite_markdown_on_write(LinearMarkdown::Measured);
     let inputs = journey.sandbox.subdirectory("stored-inputs");
     let template = inputs.join("shot.md");
     let image = inputs.join("shot.png");
-    // A bullet Linear stores as `* `, the image its upload serves at a URL, and a line only the
-    // rewrite the ruling does not declare touches.
+    // A bullet Linear stores as `* `, the image its upload serves at a URL, and a numbered line
+    // it keeps as written.
     std::fs::write(&template, "- ![shot](./shot.png)\n1) Then review it.\n").unwrap();
     std::fs::write(&image, images::png(700, 60_000)).unwrap();
     let run = |arguments: &[&str]| {
@@ -2026,12 +2015,13 @@ fn an_asset_carrying_rendering_records_what_linear_stores_and_an_undeclared_rewr
         assert!(rendered.status.success(), "{}", stderr(&rendered));
         verifiable(&shown(kind, &direct));
 
-        // With a rewrite the ruling does not declare, the asset-carrying copy, create and render
-        // are each refused as diverged, the copy reporting its item failed.
+        // With a backend that does not hold its own stored content stable, the asset-carrying
+        // copy, create and render are each refused as diverged once their follow-up write is
+        // stored otherwise again, the copy reporting its item failed.
         journey
             .workspace
             .held
-            .rewrite_markdown_on_write(LinearMarkdown::Undeclared);
+            .rewrite_markdown_on_write(LinearMarkdown::Unstable);
         // The record's own asset changes, so the copy writes rather than finding it unchanged.
         let output = run(&["--json", kind, "show", &source]);
         let held = serde_json::from_str::<Value>(&stdout(&output)).unwrap()["assets"][0]["path"]
@@ -2056,225 +2046,6 @@ fn an_asset_carrying_rendering_records_what_linear_stores_and_an_undeclared_rewr
         journey
             .workspace
             .held
-            .rewrite_markdown_on_write(LinearMarkdown::Declared);
-    }
-}
-
-/// Two images on adjacent lines in a task, a document and a project, copied out of a folder of
-/// Markdown into Linear under each of the three readings CI run 39361674659 leaves open of the
-/// answer that blanked the second: (a) Linear sets the second apart with a blank line and keeps
-/// both, which the ruling declares; (b) it keeps both but its answer to the write leaves the
-/// second out, and one read of the item confirms it; (c) it drops the second, and the copy is
-/// refused naming the line. A confirming read that finds no item, or fails, confirms nothing,
-/// and the answer's difference is refused as it stands.
-#[test]
-fn a_copy_never_records_a_digest_over_stored_content_missing_an_image_it_sent() {
-    use onetaskgraph_linear::graphql;
-    let journey = Journey::new();
-    let held = &journey.workspace.held;
-    let inputs = journey.sandbox.subdirectory("adjacent-inputs");
-    let first = inputs.join("first.png");
-    let second = inputs.join("second.png");
-    std::fs::write(&first, images::png(800, 60_000)).unwrap();
-    std::fs::write(&second, images::png(801, 60_000)).unwrap();
-    let uploaded = inputs.join("uploaded.md");
-    std::fs::write(&uploaded, "![alt 0](./first.png)\n![alt 1](./second.png)\n").unwrap();
-    // A project carries no assets, so its images are already where they are served.
-    let served = inputs.join("served.md");
-    std::fs::write(
-        &served,
-        "![alt 0](http://images.invalid/0.png)\n![alt 1](http://images.invalid/1.png)\n",
-    )
-    .unwrap();
-    let run = |arguments: &[&str]| {
-        journey
-            .sandbox
-            .command()
-            .envs(journey.workspace.clock.client_env(0))
-            .args(arguments)
-            .output()
-            .unwrap()
-    };
-    // Each kind's create mutation, the member of its answer holding the item, and its read.
-    let kinds = [
-        (
-            "task",
-            "issueCreate",
-            "issue",
-            "description",
-            graphql::ISSUE,
-        ),
-        (
-            "document",
-            "documentCreate",
-            "document",
-            "content",
-            graphql::DOCUMENT,
-        ),
-        (
-            "project",
-            "projectCreate",
-            "project",
-            "content",
-            graphql::PROJECT,
-        ),
-    ];
-    let mut slug = 0;
-    let mut rendered = |kind: &str| -> String {
-        slug += 1;
-        let title = format!("Adjacent {slug}");
-        let (first, second) = (first.to_str().unwrap(), second.to_str().unwrap());
-        let mut arguments = vec![
-            kind,
-            "create",
-            "notes",
-            "--title",
-            &title,
-            "--no-interactive",
-        ];
-        let id = format!("adjacent-{slug}");
-        if kind == "project" {
-            arguments.extend(["--id", &id, "--template", served.to_str().unwrap()]);
-        } else {
-            arguments.extend([
-                "--project",
-                "launch",
-                "--template",
-                uploaded.to_str().unwrap(),
-            ]);
-            arguments.extend(["--asset", first, "--asset", second]);
-        }
-        arguments.push("--json");
-        let output = run(&arguments);
-        assert!(output.status.success(), "{}", stderr(&output));
-        serde_json::from_str::<Value>(&stdout(&output)).unwrap()["items"][0]["id"]
-            .as_str()
-            .expect("an id")
-            .to_owned()
-    };
-    let copy = |kind: &str, source: &str| run(&["--json", kind, "copy", source, "--to", "dest"]);
-    let landed = |report: &Value, source: &str| -> Value {
-        report["items"]
-            .as_array()
-            .expect("items")
-            .iter()
-            .find(|item| item["source"] == source)
-            .unwrap_or_else(|| panic!("{source} in {report}"))
-            .clone()
-    };
-    let copied_and_verifiable = |kind: &str, source: &str| {
-        let output = copy(kind, source);
-        assert!(output.status.success(), "{}", stderr(&output));
-        let report: Value = serde_json::from_str(&stdout(&output)).unwrap();
-        let destination = landed(&report, source)["destination"]
-            .as_str()
-            .expect("an id")
-            .to_owned();
-        let output = run(&[kind, "show", &destination, "--json"]);
-        assert!(output.status.success(), "{}", stderr(&output));
-        let item =
-            serde_json::from_str::<Value>(&stdout(&output)).unwrap()["items"][0]["item"].clone();
-        let content = item["content"].as_str().expect("content");
-        let lines: Vec<&str> = content.split('\n').collect();
-        assert!(
-            lines[0].starts_with("![alt 0](http://")
-                && lines[1].is_empty()
-                && lines[2].starts_with("![alt 1](http://"),
-            "both images are stored, set apart: {content:?}"
-        );
-        assert_eq!(
-            item["metadata"]["onetaskgraph.template"]["body_digest"],
-            content_digest(content),
-            "{item}"
-        );
-    };
-    let refused_at_the_second_image = |kind: &str, source: &str, stored: &str| {
-        let output = copy(kind, source);
-        assert_eq!(output.status.code(), Some(4), "{}", stderr(&output));
-        let report: Value = serde_json::from_str(&stdout(&output)).unwrap();
-        let error = &landed(&report, source)["error"];
-        assert_eq!(error["kind"], "stored-content-diverged", "{report}");
-        let message = error["message"].as_str().expect("a message");
-        assert!(
-            message.contains("dest:")
-                && message.contains("line 3")
-                && message.contains("sent:   \"![alt 1](")
-                && message.contains(&format!("stored: {stored}")),
-            "{message}"
-        );
-    };
-    let reads = |query: &'static str| {
-        move || {
-            held.served()
-                .iter()
-                .filter(|(served, _)| served == query)
-                .count()
-        }
-    };
-    let answered_short = |mutation: &'static str, member: &'static str, field: &'static str| {
-        held.bend_answers(
-            move |query, _| query.contains(mutation),
-            1,
-            move |_, data| {
-                let item = &mut data[mutation][member];
-                let long_form = item[field].as_str().expect("a long form");
-                let short: Vec<&str> = long_form
-                    .split('\n')
-                    .filter(|line| !line.starts_with("![alt 1]"))
-                    .collect();
-                item[field] = json!(short.join("\n"));
-            },
-        );
-    };
-    for (kind, mutation, member, field, read) in kinds {
-        let reads = reads(read);
-        held.rewrite_markdown_on_write(LinearMarkdown::Declared);
-
-        // (a) The blank line Linear sets the second image apart with is declared: accepted, the
-        // answer taken at its word.
-        let source = rendered(kind);
-        let before = reads();
-        copied_and_verifiable(kind, &source);
-        let taken_at_its_word = reads() - before;
-
-        // (b) Linear keeps both, but its answer to the create leaves the second image out: one
-        // read of the item confirms it, and the copy records the digest of what that read holds.
-        let source = rendered(kind);
-        answered_short(mutation, member, field);
-        let before = reads();
-        copied_and_verifiable(kind, &source);
-        assert_eq!(
-            reads() - before,
-            taken_at_its_word + 1,
-            "the short answer to the {kind} was confirmed by one read of it"
-        );
-
-        // A confirming read that finds no item confirms nothing: the answer is refused as it
-        // stands, at the line it blanked.
-        let source = rendered(kind);
-        answered_short(mutation, member, field);
-        held.bend_answers(
-            move |query, _| query == read,
-            1,
-            move |_, data| data[member] = Value::Null,
-        );
-        refused_at_the_second_image(kind, &source, "no line 3");
-
-        // Nor does one that fails: an answer the source cannot read is no confirmation, and the
-        // write's own answer is refused as it stands.
-        let source = rendered(kind);
-        answered_short(mutation, member, field);
-        held.bend_answers(
-            move |query, _| query == read,
-            1,
-            move |_, data| data[member] = json!("not an item"),
-        );
-        refused_at_the_second_image(kind, &source, "no line 3");
-
-        // (c) Linear drops the second image: no declared rule explains that, so the copy is
-        // refused naming the item and the image line the stored item does not have.
-        held.rewrite_markdown_on_write(LinearMarkdown::DropsAdjacentImage);
-        let source = rendered(kind);
-        refused_at_the_second_image(kind, &source, "no line 3");
+            .rewrite_markdown_on_write(LinearMarkdown::Measured);
     }
 }

@@ -24,6 +24,7 @@ pub mod clock;
 pub mod common;
 pub mod fixtures;
 pub mod images;
+pub mod linear_markdown;
 pub mod linear_vocabulary;
 pub mod loopback;
 pub mod onevcs;

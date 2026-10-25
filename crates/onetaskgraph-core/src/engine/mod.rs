@@ -1297,25 +1297,27 @@ pub enum EngineError {
         item: GlobalId,
     },
 
-    /// A write's own answer says its destination stores the item's content other than it was
-    /// sent, in a way the destination's declared rewrite —
-    /// [`TaskSource::stored_form`](onetaskgraph_plugin_api::TaskSource::stored_form) — does not
-    /// explain.
+    /// A destination did not hold its own stored content stable: the follow-up write that sent
+    /// back exactly the content an earlier write's own answer said it stores — see
+    /// [`TaskSource::stored_content`](onetaskgraph_plugin_api::TaskSource::stored_content) — was
+    /// answered with something else again.
     ///
-    /// The engine applies that rewrite before it sends, so what it sends is what a backend
-    /// declaring its rewrite in full keeps. The item was written, and the `body_digest` it
-    /// records is still the digest of what was sent: so every check that hashes the content a
-    /// read hands back refuses it, rather than this store vouching for text it did not write.
+    /// A destination may rewrite the Markdown it is written, and the engine then takes what it
+    /// reported storing as the item's record and writes it back once, beside the fingerprints
+    /// it keeps over it. Only a destination that rewrites its own stored content is refused, so
+    /// the `body_digest` and the copy record the item carries are never vouched for over
+    /// content a later read would not hand back.
     #[error(
-        "{item} was written, but source {} stored its content other than it was sent, first at \
+        "{item} was written, but source {} did not keep the content it said it stores: the \
+         follow-up write sent that content back and its answer stores it otherwise, first at \
          line {line}:\n\
          sent:   {}\n\
          stored: {}\n\
-         no declared rule of source {} explains the difference, so the digest the item records \
-         is still that of what was sent and no rendering check will accept it\n\
-         next: add the rule this line shows to the ruling its plugin's `stored_form` implements \
-         — for the linear plugin, \"Ruling: what Linear does to Markdown on write, declared\" in \
-         crates/onetaskgraph-linear/src/lib.rs — then write the item again.",
+         so the fingerprints the item records cannot be vouched for, and no rendering check will \
+         accept it\n\
+         next: read the item back from source {} and compare it with what the line shows; a \
+         backend that rewrites its own stored content on every write is a defect of that \
+         backend or its plugin, so report it there, then write the item again.",
         item.source,
         diverged_line(sent.as_deref(), *line),
         diverged_line(stored.as_deref(), *line),
@@ -1326,9 +1328,9 @@ pub enum EngineError {
         item: GlobalId,
         /// The first line, counted from 1, at which the two differ.
         line: usize,
-        /// That line as it was sent, `None` when the sent content ended before it — told apart
-        /// from an empty line, because a line Linear inserts and a line it leaves out read alike
-        /// otherwise.
+        /// That line as the follow-up write sent it, `None` when the sent content ended before
+        /// it — told apart from an empty line, because a line Linear inserts and a line it leaves
+        /// out read alike otherwise.
         sent: Option<String>,
         /// That line as the destination stored it, `None` when the stored content ended before it.
         stored: Option<String>,

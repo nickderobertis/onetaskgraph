@@ -34,10 +34,10 @@ use super::wire::{
     DocumentWriteParams, EditCommentParams, EngineIdentity, HoldingsParams, HoldingsResult,
     IdParams, InitializeParams, InitializeResult, LabelParams, MetadataParams, MeteringResult,
     PROTOCOL_VERSION, PriorityParams, PriorityResult, ProjectQueryParams, ProjectResult,
-    ProjectWriteParams, Request, StatusParams, StatusResult, StoredFormParams, StoredFormResult,
-    StoredStatusParams, StoredStatusResult, TaskAssetWriteParams, TaskDetailParams,
-    TaskDetailResult, TaskQueryParams, TaskResult, TaskWriteParams, UpdateParams, UpdateResult,
-    WriteResult, after_the_first_vocabulary, knows_every_category, spelled, vocabulary,
+    ProjectWriteParams, Request, StatusParams, StatusResult, StoredStatusParams,
+    StoredStatusResult, TaskAssetWriteParams, TaskDetailParams, TaskDetailResult, TaskQueryParams,
+    TaskResult, TaskWriteParams, UpdateParams, UpdateResult, WriteResult,
+    after_the_first_vocabulary, knows_every_category, spelled, vocabulary,
 };
 
 /// The id the handshake is sent under. §3 makes it the first request on a connection, so
@@ -144,9 +144,9 @@ pub struct SubprocessSource {
     /// Whether the plugin answers `set_project_status` (§3.15). A plugin that said nothing is
     /// never sent it, and a project status write is refused as the contract's default refuses it.
     project_status: bool,
-    /// Whether the plugin answers `stored_form` and `stored_status`, and says in each content
-    /// write's result what its backend stores (§3.16). A plugin that said nothing is never sent
-    /// either method: what it is written is what it is given, and nothing is compared after.
+    /// Whether the plugin answers `stored_status`, and says in each content write's result what
+    /// its backend stores (§3.16). A plugin that said nothing is never sent `stored_status`: what
+    /// it is written is what it is given, and nothing is written again after.
     stored_forms: bool,
     /// What the plugin's latest content write of each record answered its backend stores,
     /// until [`TaskSource::stored_content`] takes it (§4.9).
@@ -868,24 +868,8 @@ impl TaskSource for SubprocessSource {
         self.writes
     }
 
-    /// The plugin's own answer, for one that declared `stored_forms`; the identity, unasked,
-    /// for one that did not (§3.16, §4.25).
-    async fn stored_form(&self, content: &str) -> Result<String, SourceError> {
-        if !self.stored_forms {
-            return Ok(content.to_owned());
-        }
-        let result: StoredFormResult = self
-            .ask(
-                "stored_form",
-                params(&StoredFormParams {
-                    content: content.to_owned(),
-                }),
-            )
-            .await?;
-        Ok(result.content)
-    }
-
-    /// On the terms of [`stored_form`](TaskSource::stored_form).
+    /// The plugin's own answer, for one that declared `stored_forms`; the status as given,
+    /// unasked, for one that did not (§3.16, §4.25).
     async fn stored_status(&self, kind: ItemKind, status: &Status) -> Result<Status, SourceError> {
         if !self.stored_forms {
             return Ok(status.clone());

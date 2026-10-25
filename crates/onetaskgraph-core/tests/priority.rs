@@ -221,6 +221,8 @@ async fn a_narrow_priority_or_content_write_answers_the_task_and_refuses_what_ca
             .expect("sets"),
         TaskContentSet {
             id: id("work:T-1"),
+            // A source that reports nothing of what it stores holds exactly the bytes sent.
+            content: "new body\n".to_owned(),
             result: None,
             fallback: None,
             spent: None,

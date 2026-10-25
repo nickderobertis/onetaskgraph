@@ -741,9 +741,9 @@ fn a_metadata_set_moves_only_the_slot_and_a_render_only_the_body_and_its_provena
         assert_eq!(regenerated["changed"], true, "{verb}: {regenerated}");
         let after = workspace.long_form(kind, id).expect("held");
         let (above_after, slot_after) = split_slot(&after);
-        // The rendering as Linear stores it — no line break after its last line — and the
-        // one blank line setting the slot apart.
-        assert_eq!(above_after, "A rendered body.\n\n", "{verb}: the body");
+        // The rendering as it was rendered — this workspace stores what it is sent, so nothing
+        // is predicted of it — and the one blank line setting the slot apart.
+        assert_eq!(above_after, "A rendered body.\n\n\n", "{verb}: the body");
         let mut kept = slot_after.clone();
         let provenance = kept
             .as_object_mut()

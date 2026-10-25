@@ -59,6 +59,7 @@ budgets:
     unit: requests
     direction: max
     threshold: 2
+  # llmlint: ignore[budgets_track_product_owner_outcomes] Kept beside linear-requests-per-plan-copy on the manager's ruling: it guards image uploads on every issue and document write, a journey the plan-copy budget does not measure, so the two budgets measure different things.
   - id: linear-asset-requests-per-new-asset
     description: >-
       An inner measure of the requests added by new document and issue images protects headroom on a production Linear key every manager of a host shares, which no check may reach.
@@ -184,3 +185,15 @@ budgets:
     unit: points
     direction: max
     threshold: 675000
+  - id: linear-requests-per-plan-copy
+    description: >-
+      The requests one first copy of a realistic plan — 1 project, 5 tasks and 1 design document
+      with 2 new images — sends an empty Linear that rewrites every long form, end to end through
+      the binary. It protects headroom on the production Linear key every manager of a host
+      shares.
+    labels: [linear]
+    measure: reported
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
+    unit: requests
+    direction: max
+    threshold: 20

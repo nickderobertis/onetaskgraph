@@ -4121,12 +4121,9 @@ fn a_reference_carrying_a_fragment_lands_on_the_copied_tasks_destination_locatio
             authored.contains(&format!("[t1]({here}#budgets)")),
             "{authored}"
         );
-        // Linear stores a table's delimiter row as its plugin's ruling declares, and the
-        // copy sends it that way; links and code spans it keeps as written.
-        let mut expected = authored.replace(&here, &there);
-        if plugin == "linear" {
-            expected = expected.replace("| --- | --- |", "| -- | -- |");
-        }
+        // The copy sends the content as composed, predicting nothing of what a destination
+        // stores, and this loopback Linear stores it as it is sent.
+        let expected = authored.replace(&here, &there);
         assert_eq!(
             body(&sandbox, landed),
             expected,

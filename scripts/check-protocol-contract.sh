@@ -283,8 +283,7 @@ METHOD_SECTIONS = {
     "end_command": "### 4.22 `end_command`",
     "status_contradictions": "### 4.23 `status_contradictions`",
     "issue_holdings": "### 4.24 `issue_holdings`",
-    "stored_form": "### 4.25 `stored_form` and `stored_status`",
-    "stored_status": "### 4.25 `stored_form` and `stored_status`",
+    "stored_status": "### 4.25 `stored_status`",
 }
 
 ENUM_SECTIONS = {
@@ -1158,23 +1157,7 @@ PAYLOAD_EXAMPLES = (
     ),
     ("### 4.9b `check_task_write`", "check_task_write", "params", (), "CheckWriteParams", "wire"),
     (
-        "### 4.25 `stored_form` and `stored_status`",
-        "stored_form",
-        "params",
-        (),
-        "StoredFormParams",
-        "wire",
-    ),
-    (
-        "### 4.25 `stored_form` and `stored_status`",
-        "stored_form",
-        "result",
-        (),
-        "StoredFormResult",
-        "wire",
-    ),
-    (
-        "### 4.25 `stored_form` and `stored_status`",
+        "### 4.25 `stored_status`",
         "stored_status",
         "params",
         (),
@@ -1182,7 +1165,7 @@ PAYLOAD_EXAMPLES = (
         "wire",
     ),
     (
-        "### 4.25 `stored_form` and `stored_status`",
+        "### 4.25 `stored_status`",
         "stored_status",
         "result",
         (),
@@ -1190,7 +1173,7 @@ PAYLOAD_EXAMPLES = (
         "wire",
     ),
     (
-        "### 4.25 `stored_form` and `stored_status`",
+        "### 4.25 `stored_status`",
         "stored_status",
         "params",
         ("status",),

@@ -500,20 +500,31 @@ The reserved keys keep the owners they had:
 | `onetaskgraph.copies`, `onetaskgraph.members`, `onetaskgraph.member_of`, `onetaskgraph.assets` | the destination, which keeps what it holds whatever the source carries |
 | `onetaskgraph.repositories`, `onetaskgraph.depends_on`, `onetaskgraph.delivers`, `onetaskgraph.delivered_by` | neither: the typed fields carry them, so they are dropped from both sides' metadata (above) |
 | `onetaskgraph.template`, `onetaskgraph.item_kind` | the source: where the source holds none, the destination's is dropped, so provenance that no longer describes the content does not survive it |
-| `onetaskgraph.copied_version`, `onetaskgraph.copied_with_comments`, `onetaskgraph.copied_destination_version` | the copy, which writes its own record of itself on every task it writes and keeps neither end's (below) |
+| `onetaskgraph.copied_version`, `onetaskgraph.copied_with_comments`, `onetaskgraph.copied_destination_version` | the copy, which writes its own record of itself on every task, project and document it writes and keeps neither end's (below) |
 <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
 ### The copy's record of itself
 
-Every task a copy writes carries three keys recording that copy, on the **destination** task,
-so the next copy can tell whether anything changed at either end without reading the task:
+Every task, project and document a copy writes carries three keys recording that copy, on the
+**destination** item, so the next copy can tell whether anything changed at either end without
+reading the item again:
 
-- `onetaskgraph.copied_version` — the source task's change token (`Task.version`) as the copy
-  read it; absent when the source gave none.
+- `onetaskgraph.copied_version` — what the source item was: its change token (`Task.version`,
+  `Project.version`, `Document.version`) where its source gives one, as the source holds it once
+  the copy has recorded its own link there. Where the source gives none — a folder of Markdown
+  gives none for a project or a document — it is `sha256:` and 64 lowercase hex digits over the
+  item the copy composed from the source: its content after reference and image rewriting, and
+  its title, status, priority, labels, repositories, classification and metadata as the source
+  holds them, without the three keys and the copy's own links (`onetaskgraph.copies`,
+  `onetaskgraph.copy_locations`), and before a rendering's `body_digest` is moved onto what the
+  destination stores. A later copy compares the digest of what it would send now with it.
 - `onetaskgraph.copied_with_comments` — `true` when the copy carried the task's comments
   (`--comments`), and absent after one that did not.
-- `onetaskgraph.copied_destination_version` — `sha256:<hex>`, a digest of the destination task
-  as the copy left it: every member a copy writes and compares, its forward edges, and — after
+- `onetaskgraph.copied_destination_version` — `sha256:<hex>`, a digest of the destination item
+  as a read returns it once the copy left it — over the content the destination reported
+  storing, which a destination that rewrites the Markdown it is sent — Linear — stores rather
+  than what was sent, as that write's own answer reports it. For a
+  task: every member a copy writes and compares, its forward edges, and — after
   a `--comments` copy — its comments, each copy by its origin's identity and body and each
   comment native to the destination by its id and body. The three keys themselves, the task's
   `delivered_by` and `onetaskgraph.depended_on_by` (which the store keeps in step after the
@@ -533,7 +544,14 @@ so the next copy can tell whether anything changed at either end without reading
   each comment native to the destination as `{"id": …, "body": …}`, sorted by its canonical
   JSON. `copy_skip.rs`'s
   `the_recorded_destination_digest_is_the_documented_digest_of_the_destination_as_read` holds
-  the engine to this, by recomputing it from what the binary reads back.
+  the engine to this, by recomputing it from what the binary reads back. A project's and a
+  document's are taken the same way over the members a copy writes of each, a project's forward
+  edges among them.
+
+Each fingerprint an item keeps has one job: a rendering's `body_digest` lets any reader verify
+the item is its template's rendering unedited; `copied_version` says whether the source changed;
+`copied_destination_version` says whether the destination changed, its title, status and edges
+included.
 
 A `--comments` copy and a copy by query report a task `unchanged` with `skipped: true` — and
 read nothing more of it — when the source's token is still `copied_version`, the destination
@@ -541,9 +559,16 @@ digests to `copied_destination_version` over the reads the copy makes to find it
 `--comments` copy finds `copied_with_comments`, and the edges and `delivers` the copy would
 write are the ones the destination holds. So an edit at either end since, a copied comment
 edited or deleted at the destination included, is read and copied again rather than skipped.
-A copy by id without `--comments` reads and compares every task as it always did; it still
-records itself on every task it writes, and brings a stale record up to date only to take
-away a `copied_with_comments` an earlier copy left. The keys are refused to a caller as every
+A copy by id without `--comments` reads every item as it always did, and writes nothing to a
+task, a project or a document whose record says neither end changed — `copied_version` still
+matching the source, the destination still digesting to `copied_destination_version`, and the
+edges, `delivers`, filing and status it would write the ones the destination holds — reporting
+it `unchanged`; any other it compares as it always did. That is what recognises an unchanged item
+on a destination that rewrites the Markdown it is sent, where what the copy composes and what
+the destination stores never compare equal. It records itself on every item it writes, and
+brings a stale task record up to date only to take away a `copied_with_comments` an earlier copy
+left. Items an earlier release wrote carry no record on a project or a document, and are written
+once more on their next copy, which records it. The keys are refused to a caller as every
 key of the namespace is, and a copy never carries one from its source.
 
 ### `onetaskgraph.copies`: where a copied item landed

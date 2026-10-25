@@ -457,10 +457,13 @@ async fn every_reserved_key_has_the_owner_docs_metadata_states_on_an_update() {
         .clone();
     for (key, owner) in &owners {
         let expected = match owner.as_str() {
-            // The record this copy wrote: no token, because an in-memory source gives none, and
-            // no `copied_with_comments`, because this copy carried none — but a digest of what
-            // it left.
-            "the copy" if key == MetadataKey::COPIED_DESTINATION_VERSION_KEY => {
+            // The record this copy wrote: no `copied_with_comments`, because this copy carried
+            // none, but a digest of what it left — and, an in-memory source giving no token, a
+            // digest of what it composed of the source.
+            "the copy"
+                if key == MetadataKey::COPIED_DESTINATION_VERSION_KEY
+                    || key == MetadataKey::COPIED_VERSION_KEY =>
+            {
                 let held = metadata
                     .get(key)
                     .and_then(Value::as_str)

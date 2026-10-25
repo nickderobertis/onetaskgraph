@@ -358,7 +358,9 @@ fn a_content_set_replaces_the_body_with_the_files_bytes_and_moves_no_other_membe
                 file.to_str().expect("a UTF-8 path"),
             ],
         );
-        assert_eq!(set, json!({"id": id}), "{}", row.name);
+        // The content the task then holds: exactly the bytes sent, from a source that reports
+        // nothing else of what it stores.
+        assert_eq!(set, json!({"id": id, "content": body}), "{}", row.name);
         let human = exits(
             row.name,
             &sandbox,

@@ -526,40 +526,22 @@ pub trait TaskSource: Send + Sync {
         WriteSupport::Unsupported
     }
 
-    /// The content this source's backend stores when it is written `content`: the rewrite
-    /// the backend applies to the long-form text of a task, a project or a document on
-    /// write, declared rather than discovered.
+    /// The status this source's backend holds once an item of `kind` is written at `status`:
+    /// the name it records for the category, where it names a category itself rather than
+    /// keeping the name it was given.
     ///
-    /// The engine applies it to the content before a copy, a create or a render sends it, so
-    /// what it sends is already what the backend keeps — and a rendering's `body_digest`, which
-    /// it records over that rewritten content where the provenance vouched for the content it
-    /// started from, is the digest of what a later read reports. A backend owes that applying
-    /// it to its own output changes nothing more. Defaulted to the identity: a backend that
-    /// stores what it is given declares nothing.
+    /// What a copy compares a destination item's status with, so an item whose category it
+    /// already holds reads as unchanged rather than as differing by a name no write could
+    /// change. Defaulted to `status` as given: a backend that keeps the name it is written
+    /// declares nothing.
     ///
     /// Asynchronous and fallible because a source hosted over the stdio plugin protocol asks
     /// the plugin that declares it; an in-process source answers at once and never fails.
     ///
     /// # Errors
     ///
-    /// A [`SourceError`] when the source could not say what its backend stores — never the
-    /// identity in its place, which would record a digest of content the backend does not keep.
-    async fn stored_form(&self, content: &str) -> Result<String, SourceError> {
-        Ok(content.to_owned())
-    }
-
-    /// The status this source's backend holds once an item of `kind` is written at `status`:
-    /// the name it records for the category, where it names a category itself rather than
-    /// keeping the name it was given.
-    ///
-    /// What a copy compares a destination item's status with, beside
-    /// [`stored_form`](Self::stored_form), so an item whose category it already holds reads as
-    /// unchanged rather than as differing by a name no write could change. Defaulted to
-    /// `status` as given: a backend that keeps the name it is written declares nothing.
-    ///
-    /// # Errors
-    ///
-    /// A [`SourceError`] on the terms of [`stored_form`](Self::stored_form).
+    /// A [`SourceError`] when the source could not say what its backend holds — never the
+    /// status as given in its place.
     async fn stored_status(&self, kind: ItemKind, status: &Status) -> Result<Status, SourceError> {
         let _ = kind;
         Ok(status.clone())
@@ -569,10 +551,17 @@ pub trait TaskSource: Send + Sync {
     /// to this instance's latest write of that item's content reported it — taken, so a second
     /// call answers `None` until the next such write.
     ///
-    /// What the engine compares, byte for byte, with the content it sent: a difference is a
-    /// rewrite [`stored_form`](Self::stored_form) does not declare. It is read off the write's
-    /// own response, never by a request of its own. Defaulted to `None`, which leaves the
-    /// engine nothing to compare and compares nothing.
+    /// The content is as a read reports content — the metadata slot, and whatever separates
+    /// it from the content, removed — and it is read off the write's own response, never by a
+    /// request of its own. It is what the engine takes as the record of what the item holds: a
+    /// backend may rewrite the Markdown it is written, keeping its rendered meaning, and where
+    /// this differs from what was sent the engine records each fingerprint it keeps over this
+    /// content instead — a rendering's `body_digest`, a copy's
+    /// [`MetadataKey::COPIED_DESTINATION_VERSION_KEY`] — and writes it back once, beside them,
+    /// as its own request. That follow-up write's own answer is then compared with this
+    /// content byte for byte, and a backend that does not hold its own stored content stable
+    /// is refused as `stored-content-diverged`. Defaulted to `None`: a backend that stores what
+    /// it is given says nothing, and nothing is compared or written again.
     fn stored_content(&self, record: MetadataRecord, id: &NativeId) -> Option<String> {
         let _ = (record, id);
         None
@@ -1222,11 +1211,16 @@ pub trait TaskSource: Send + Sync {
     /// [`TaskQuery::origin`] task query, [`query_projects_by_origin`](Self::query_projects_by_origin)
     /// or [`query_documents_by_origin`](Self::query_documents_by_origin)) is answered from it,
     /// once, instead of being sent on its own. A source may carry in the same read whatever its
-    /// creating an item would read first, since a copy finding nothing creates.
+    /// creating an item would read first, since a copy finding nothing creates — and its
+    /// [`designator`](Self::designator), which a copy writing edges asks next: a designator
+    /// carried in that read answers the next [`designator`](Self::designator) of the command
+    /// without a request of its own.
     ///
     /// What is held is exactly what those queries would have answered, and only until the next
-    /// write or [`end_command`](Self::end_command). Defaulted to doing nothing, so each query is
-    /// sent as it always was.
+    /// write or [`end_command`](Self::end_command); a designator, which no write moves, until
+    /// [`end_command`](Self::end_command). An origin is held as having no counterpart only when
+    /// the read answered it whole: one whose answer the read could not see the end of is left
+    /// to its own query. Defaulted to doing nothing, so each query is sent as it always was.
     ///
     /// # Errors
     ///
