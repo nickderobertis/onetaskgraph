@@ -13,11 +13,20 @@
 //! as it was and no staging file behind.
 //!
 //! The limit is set by `sh`, so these run where there is one.
+//!
+//! The writer runs on the thread libtest spawns for it, and the signal has to reach that
+//! thread. Linux sends it to the thread whose `write` passed the limit. macOS sends it to
+//! the process, which may hand it to libtest's main thread instead. The writing thread then
+//! sees its `write` fail, and the source's failure handling removes the staging file while
+//! the process is still dying, so a kill could not be told from a handled failure. So the
+//! writer starts with the signal blocked, which the exec keeps and every thread inherits,
+//! and unblocks it on its own thread alone: on either system that thread is the only one
+//! it can be delivered to.
 #![cfg(unix)]
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::os::unix::process::ExitStatusExt;
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -47,6 +56,9 @@ const WRITER: &str = "torn_writer";
 const LANDED: i32 = 3;
 /// `SIGXFSZ`, the signal a write past the file size limit raises — 25 on Linux and macOS.
 const SIGXFSZ: i32 = 25;
+/// The exit status of a writer that started with [`SIGXFSZ`] unblocked, so its main thread
+/// could have taken the signal meant for the writing thread and the case would prove nothing.
+const UNMASKED: i32 = 4;
 /// The writer's file size limit, in `ulimit -f` blocks: 512 bytes under a POSIX `sh`, 1024
 /// under bash, so 4 or 8 KiB — far below every record, far above every front matter.
 const LIMIT_BLOCKS: u32 = 8;
@@ -385,9 +397,28 @@ fn torn_writer() {
     let (Some(case), Some(root)) = (std::env::var(CASE).ok(), std::env::var_os(ROOT)) else {
         return;
     };
+    if !take_the_limit_signal_here() {
+        eprintln!("{case}: the writer started with SIGXFSZ unblocked");
+        std::process::exit(UNMASKED);
+    }
     match write(&case, Path::new(&root)) {
         Ok(()) => std::process::exit(LANDED),
         Err(error) => eprintln!("{case}: the write failed: {error}"),
+    }
+}
+
+/// Unblock [`SIGXFSZ`] on this thread alone, answering whether it was blocked on arrival —
+/// inherited from the main thread, and so still blocked there.
+fn take_the_limit_signal_here() -> bool {
+    // SAFETY: each call is given a set it owns, initialised by `sigemptyset` first, and the
+    // old mask is written into a set it owns.
+    unsafe {
+        let mut limit: libc::sigset_t = std::mem::zeroed();
+        let mut old: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut limit);
+        libc::sigaddset(&mut limit, SIGXFSZ);
+        libc::pthread_sigmask(libc::SIG_UNBLOCK, &limit, &mut old) == 0
+            && libc::sigismember(&old, SIGXFSZ) == 1
     }
 }
 
@@ -444,7 +475,23 @@ fn stopped(case: &str, root: &Path, stop: Stop, blocks: u32) -> Result<(), Strin
     // limit, which cuts it short; one left among the coverage run's profiles makes the whole
     // report refuse to merge. So the writer's profile goes here and is discarded with it.
     let profiles = tempfile::tempdir().expect("a directory for the writer's profile");
-    let output = Command::new("sh")
+    let mut writer = Command::new("sh");
+    // SAFETY: the hook runs in the forked child before `exec` and calls only
+    // `sigemptyset`, `sigaddset` and `sigprocmask`, which are async-signal-safe, on a set it
+    // owns.
+    unsafe {
+        writer.pre_exec(|| {
+            let mut limit: libc::sigset_t = std::mem::zeroed();
+            libc::sigemptyset(&mut limit);
+            libc::sigaddset(&mut limit, SIGXFSZ);
+            if libc::sigprocmask(libc::SIG_BLOCK, &limit, std::ptr::null_mut()) == 0 {
+                Ok(())
+            } else {
+                Err(std::io::Error::last_os_error())
+            }
+        });
+    }
+    let output = writer
         .arg("-c")
         .arg(format!(
             "ulimit -c 0; ulimit -f {blocks}; {trap}exec \"$0\" \"$@\""

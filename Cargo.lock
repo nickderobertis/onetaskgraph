@@ -1428,6 +1428,7 @@ version = "0.12.2"
 dependencies = [
  "async-trait",
  "chrono",
+ "libc",
  "onetaskgraph-plugin-api",
  "schemars",
  "secrecy",
