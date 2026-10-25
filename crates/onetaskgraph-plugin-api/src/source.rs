@@ -1221,11 +1221,16 @@ pub trait TaskSource: Send + Sync {
     /// [`TaskQuery::origin`] task query, [`query_projects_by_origin`](Self::query_projects_by_origin)
     /// or [`query_documents_by_origin`](Self::query_documents_by_origin)) is answered from it,
     /// once, instead of being sent on its own. A source may carry in the same read whatever its
-    /// creating an item would read first, since a copy finding nothing creates.
+    /// creating an item would read first, since a copy finding nothing creates — and its
+    /// [`designator`](Self::designator), which a copy writing edges asks next: a designator
+    /// carried in that read answers the next [`designator`](Self::designator) of the command
+    /// without a request of its own.
     ///
     /// What is held is exactly what those queries would have answered, and only until the next
-    /// write or [`end_command`](Self::end_command). Defaulted to doing nothing, so each query is
-    /// sent as it always was.
+    /// write or [`end_command`](Self::end_command); a designator, which no write moves, until
+    /// [`end_command`](Self::end_command). An origin is held as having no counterpart only when
+    /// the read answered it whole: one whose answer the read could not see the end of is left
+    /// to its own query. Defaulted to doing nothing, so each query is sent as it always was.
     ///
     /// # Errors
     ///
