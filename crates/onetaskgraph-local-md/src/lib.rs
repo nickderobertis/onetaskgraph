@@ -1027,19 +1027,25 @@ impl LocalMdSource {
     /// folder resolved and confined, the file itself resolved only when it is a link. Another
     /// process may be renaming a replacement over that file, and Windows can spell a plain
     /// file resolved in that instant with a path outside the root; a file gone in between is
-    /// not held, as a listing would skip it.
+    /// not held, as a listing would skip it. A link that leads nowhere is malformed, as the
+    /// listing reports it.
     fn find_listed(&self, kind: WorkKind, id: &NativeId) -> Result<Option<Entry>, SourceError> {
+        // Not there, or under a segment that is a file rather than a folder: no record.
+        let absent = |path: &Path, e: &std::io::Error| {
+            gone(path, e) || e.kind() == std::io::ErrorKind::NotADirectory
+        };
+        let unreadable = |path: &Path, e: std::io::Error| SourceError::Unavailable {
+            message: format!("cannot read {}: {e}", path.display()),
+        };
         let base = self.directory(kind.kind())?;
         let candidate = base.join(&id.0).with_extension("md");
         let (Some(folder), Some(name)) = (candidate.parent(), candidate.file_name()) else {
             return Ok(None);
         };
-        if !folder.exists() {
-            return Ok(None);
-        }
-        let folder = fs::canonicalize(folder).map_err(|e| SourceError::Malformed {
-            message: format!("{}: {e}", folder.display()),
-        })?;
+        let folder = match fs::canonicalize(folder) {
+            Err(e) if absent(folder, &e) => return Ok(None),
+            folder_path => folder_path.map_err(|e| unreadable(folder, e))?,
+        };
         let confined = |path: &Path| {
             if path.starts_with(&base) {
                 Ok(())
@@ -1056,12 +1062,8 @@ impl LocalMdSource {
         confined(&folder)?;
         let path = folder.join(name);
         let path = match fs::symlink_metadata(&path) {
-            Err(e) if gone(&path, &e) => return Ok(None),
-            Err(e) => {
-                return Err(SourceError::Unavailable {
-                    message: format!("cannot read {}: {e}", path.display()),
-                });
-            }
+            Err(e) if absent(&path, &e) => return Ok(None),
+            Err(e) => return Err(unreadable(&path, e)),
             Ok(meta) if meta.file_type().is_symlink() => {
                 let canonical = fs::canonicalize(&path).map_err(|e| SourceError::Malformed {
                     message: format!("{}: {e}", path.display()),

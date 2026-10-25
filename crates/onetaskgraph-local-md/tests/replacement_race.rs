@@ -248,9 +248,56 @@ async fn a_dependency_read_follows_a_link_inside_its_folder_and_refuses_one_that
             "{name}: {error:?}"
         );
     }
-    let held_none = read("absent/e").await.unwrap();
+    // A folder that is not there, and a segment that is a file, hold no record.
+    for name in ["absent/e", "real/c.md/e", "real/c.md/f/e"] {
+        let held_none = read(name).await.unwrap();
+        assert!(held_none.items.is_empty(), "{name}");
+    }
+    // A link that leads nowhere is the author's to mend, as the listing reports it.
+    symlink(
+        root.path().join("shared/gone.md"),
+        root.path().join("tasks/g.md"),
+    )
+    .unwrap();
+    let error = read("g").await.unwrap_err();
     assert!(
-        held_none.items.is_empty(),
-        "a folder that is not there holds nothing"
+        matches!(error, SourceError::Malformed { ref message } if message.contains("g.md")),
+        "{error:?}"
     );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_dependency_read_in_a_folder_it_may_not_search_reports_the_folder_unavailable() {
+    use std::os::unix::fs::PermissionsExt;
+
+    use onetaskgraph_plugin_api::SourceError;
+
+    let root = tempfile::tempdir().expect("temporary notes");
+    let locked = root.path().join("tasks/locked");
+    fs::create_dir_all(locked.join("inner")).unwrap();
+    fs::write(locked.join("a.md"), "---\ntitle: A\nstatus: todo\n---\n").unwrap();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+    // A process the filesystem does not refuse — run as root — cannot pose the refusal.
+    let refused = fs::symlink_metadata(locked.join("a.md")).is_err();
+    let source = source(root.path());
+    let mut answers = Vec::new();
+    for name in ["locked/a", "locked/inner/a"] {
+        answers.push(
+            source
+                .task_dependencies(&id(name), Direction::DependsOn, &page())
+                .await,
+        );
+    }
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+    if !refused {
+        return;
+    }
+    for answer in answers {
+        let error = answer.unwrap_err();
+        assert!(
+            matches!(error, SourceError::Unavailable { ref message } if message.contains("cannot read") && message.contains("locked")),
+            "{error:?}"
+        );
+    }
 }
