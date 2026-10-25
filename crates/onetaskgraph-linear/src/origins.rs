@@ -102,11 +102,6 @@ impl LinearSource {
     /// An origin whose slot phrase cannot be sent ([`slot_phrase`]) is not asked: its own
     /// lookup reads the whole team, which no `or` of phrases could stand in for.
     pub(crate) async fn read_origins_ahead(&self, origins: &[String]) -> Result<(), SourceError> {
-        // With the store's cache in front, a listing carries the token parts each row is pinned
-        // by and prices each row higher; its lookups stay as they were.
-        if self.attached() {
-            return Ok(());
-        }
         let unasked: Vec<&String> = {
             let held = self.origins_ahead()?;
             let mut unasked: Vec<&String> = Vec::new();
@@ -135,17 +130,16 @@ impl LinearSource {
             .filter_map(|origin| slot_phrase(origin))
             .collect::<Vec<Value>>()}));
         // The issues page is sized to the origins it answers; the projects page, which no
-        // origin narrows, to the rest of one page of `MAX_PAGE_SIZE` rows, so the request is
-        // priced as one listing page is.
+        // origin narrows, to the rest of one projects listing page, so the request asks for no
+        // more rows than that page does — with the cache in front, each row carrying the token
+        // parts a listing of it would.
         let issues_first = u32::try_from(chunk.len())
             .unwrap_or(MAX_PAGE_SIZE)
             .clamp(1, MAX_PAGE_SIZE);
-        let projects_first = (MAX_PAGE_SIZE - issues_first)
-            .min(self.projects_page())
-            .max(1);
+        let projects_first = self.projects_page().saturating_sub(issues_first).max(1);
         let data = self
             .send(
-                graphql::ORIGIN_LOOKUPS,
+                self.read_document(graphql::ORIGIN_LOOKUPS),
                 json!({
                     "issuesFirst": issues_first,
                     "issuesFilter": Self::narrowed(issues),

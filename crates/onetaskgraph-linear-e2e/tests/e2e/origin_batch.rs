@@ -47,11 +47,18 @@ struct Copying {
     sandbox: Sandbox,
     workspace: LinearWorkspace,
     plan: PathBuf,
+    /// The cache home every run is given, so a cache the source turns on stays in the sandbox.
+    cache_home: PathBuf,
 }
 
 impl Copying {
     /// A plan of `tasks` tasks, `t0` onward, over a workspace holding `issues` already.
     fn new(tasks: usize, issues: Vec<Value>) -> Self {
+        Self::caching(tasks, issues, false)
+    }
+
+    /// [`Self::new`], with the Linear source's cache on when `cache` says so.
+    fn caching(tasks: usize, issues: Vec<Value>, cache: bool) -> Self {
         let sandbox = Sandbox::new();
         let held = json!({"tasks": issues, "projects": [], "documents": [], "labels": [],
                           "task_dependencies": [], "project_dependencies": []});
@@ -71,13 +78,15 @@ impl Copying {
             write_task(&plan, at, "Body.");
         }
         sandbox.project_document(&document(&json!({
-            "linear": {"plugin": "linear", "config": config},
+            "linear": {"plugin": "linear", "config": config, "cache": {"enabled": cache}},
             "plan": {"plugin": "local-md", "config": {"root": plan}},
         })));
+        let cache_home = sandbox.subdirectory("cache-home");
         Self {
             sandbox,
             workspace,
             plan,
+            cache_home,
         }
     }
 
@@ -87,6 +96,7 @@ impl Copying {
         let output = self
             .sandbox
             .command()
+            .env("XDG_CACHE_HOME", &self.cache_home)
             .args(arguments)
             .assert()
             .get_output()
@@ -157,11 +167,13 @@ fn phrase(origin: &str) -> String {
     format!("\"{origin}\"")
 }
 
-/// The variables of every batched origin read of `served`, in order.
+/// The variables of every batched origin read of `served`, in order — with the cache on or off.
 fn batched(served: &[(String, Value)]) -> Vec<&Value> {
     served
         .iter()
-        .filter(|(query, _)| query == graphql::ORIGIN_LOOKUPS)
+        .filter(|(query, _)| {
+            query == graphql::ORIGIN_LOOKUPS || query == graphql::ORIGIN_LOOKUPS_CACHED
+        })
         .map(|(_, variables)| variables)
         .collect()
 }
@@ -171,7 +183,7 @@ fn batched(served: &[(String, Value)]) -> Vec<&Value> {
 fn single_issue_lookups(served: &[(String, Value)]) -> Vec<Vec<String>> {
     served
         .iter()
-        .filter(|(query, _)| query == graphql::ISSUES)
+        .filter(|(query, _)| query == graphql::ISSUES || query == graphql::ISSUES_CACHED)
         .map(|(_, variables)| phrases(&variables["filter"]))
         .filter(|asked| !asked.is_empty())
         .collect()
@@ -323,6 +335,22 @@ fn a_copy_of_a_plan_of_sixty_tasks_sends_two_batched_origin_reads() {
     assert_eq!(count(&served, graphql::PROJECTS), 0);
     assert_eq!(count(&served, graphql::ORGANIZATION), 0);
     assert_eq!(listed(&copying, "task").len(), 60);
+    // Each priced by the cache budget's table of Linear's measured costs, under the guard any
+    // one query is held to.
+    for ((document, variables), answer) in copying
+        .workspace
+        .served()
+        .iter()
+        .zip(&copying.workspace.answered())
+    {
+        if document == graphql::ORIGIN_LOOKUPS {
+            let points = crate::cache_budget::complexity(document, variables, answer);
+            assert!(
+                points <= crate::cache_budget::price::GUARD,
+                "a batched origin read is priced {points}: {variables}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -532,4 +560,44 @@ fn an_incomplete_batched_page_answers_no_origin_and_each_is_looked_up_on_its_own
         assert_eq!(outcome_of(&batch, 0), outcome_of(&alone, 0));
     }
     assert_eq!(shown(&tasks), shown(&listed(&twin, "task")));
+}
+
+#[test]
+fn with_the_cache_on_a_recopy_finds_every_counterpart_through_the_batched_read_its_listing_spells()
+{
+    let copying = Copying::caching(5, Vec::new(), true);
+    copying.ok(&COPY);
+    let tasks = listed(&copying, "task");
+    unlink(&copying.plan);
+    for at in 0..5 {
+        write_task(&copying.plan, at, &format!("Edited {at}."));
+    }
+    let served = copying.ok(&COPY);
+    let before = &served[..first_write(&served)];
+    assert_eq!(
+        count(before, graphql::ORIGIN_LOOKUPS_CACHED),
+        1,
+        "the batched read carrying the token parts a listing of each row spells: {before:#?}"
+    );
+    assert!(single_issue_lookups(&served).is_empty(), "{served:#?}");
+    assert_eq!(count(&served, graphql::PROJECTS_CACHED), 0, "{served:#?}");
+    assert_eq!(
+        count(&served, graphql::ISSUE_CREATE),
+        0,
+        "no task created again"
+    );
+    assert_eq!(
+        count(&served, graphql::PROJECT_CREATE),
+        0,
+        "no project created again"
+    );
+    let after = listed(&copying, "task");
+    assert_eq!(after.len(), tasks.len());
+    for at in 0..5 {
+        let task = after
+            .iter()
+            .find(|task| task["title"] == format!("Task {at}"))
+            .unwrap_or_else(|| panic!("Task {at} is held: {after:#?}"));
+        assert_eq!(task["content"], format!("Edited {at}."), "updated in place");
+    }
 }

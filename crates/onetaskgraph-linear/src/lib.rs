@@ -400,9 +400,9 @@
 //!   origin, at most [`MAX_PAGE_SIZE`].
 //! - **`originProjects`**, the `projects` connection narrowed to the scope alone, as the single
 //!   lookup's listing is: `ProjectFilter` has no member a slot phrase could be sent in, so every
-//!   project in scope is a candidate. Its page is the rest of one page of [`MAX_PAGE_SIZE`] rows,
-//!   so the request asks for the rows one listing page does, about 7,000 of Linear's 10,000
-//!   complexity points.
+//!   project in scope is a candidate. Its page is the rest of one projects listing page, so the
+//!   request asks for no more rows than that page does — about 7,000 of Linear's 10,000
+//!   complexity points; see [`ORIGIN_BATCH`].
 //! - **`organization{id}`**, which [`TaskSource::designator`] then answers from for the rest of
 //!   the command, with no request of its own.
 //!
@@ -414,8 +414,9 @@
 //! paging to its end; so is an origin whose phrase cannot be sent, and one this read did not
 //! carry. What is held lives until the next mutation or [`TaskSource::end_command`], and the
 //! organization id until the end of the command. With the store's cache in front of this source
-//! nothing is read ahead, because a listing there carries the token parts each row is pinned by.
-//! A document copy keeps its own `documents` lookup.
+//! it is [`graphql::ORIGIN_LOOKUPS_CACHED`], each row carrying the token parts its listing would,
+//! so a row it answers reads exactly as that listing's row does. A document copy keeps its own
+//! `documents` lookup.
 //!
 //! ## Ruling: `project` scopes a source to one project
 //!
@@ -547,9 +548,11 @@ pub const PROJECTS_CACHED_PAGE: u32 = 74;
 /// one such request per this many.
 ///
 /// The issues page that request asks for is one row an origin, and the projects page the rest
-/// of [`MAX_PAGE_SIZE`], so the request asks for the rows one listing page does — about 7,000 of
-/// Linear's 10,000 complexity points at the 70 a row a projects listing is priced at — however
-/// many origins it carries.
+/// of one projects listing page — [`MAX_PAGE_SIZE`], or [`PROJECTS_CACHED_PAGE`] while the
+/// store's cache stands in front of this source — so the request asks for no more rows than one
+/// listing page does, and a projects row is the dearer: about 7,000 of Linear's 10,000
+/// complexity points at the 70 a row a projects listing is priced at, and under 8,880 with the
+/// cache's pages at 120, however many origins it carries.
 pub const ORIGIN_BATCH: usize = 50;
 const DEFAULT_ENDPOINT: &str = "https://api.linear.app/graphql";
 
@@ -583,6 +586,10 @@ pub mod graphql {
     /// source's scope, aliased `originProjects`, and [`ORGANIZATION`]'s `organization{id}` — in
     /// one request. See the module documentation's ruling on the requests a copy sends.
     pub const ORIGIN_LOOKUPS: &str = "query($issuesFirst:Int!,$issuesFilter:IssueFilter,$projectsFirst:Int!,$projectsFilter:ProjectFilter){ originIssues: issues(first:$issuesFirst,filter:$issuesFilter){ nodes{id identifier title description url createdAt updatedAt state{name type} priority labels{nodes{id name color}} project{id}} pageInfo{hasNextPage endCursor} } originProjects: projects(first:$projectsFirst,filter:$projectsFilter){ nodes{id name content url createdAt updatedAt status{name type} labels{nodes{id name color}}} pageInfo{hasNextPage endCursor} } organization{ id } }";
+    /// [`ORIGIN_LOOKUPS`], sent in its place while the store's cache stands in front of this
+    /// source: each connection's rows carry what [`ISSUES_CACHED`]'s and [`PROJECTS_CACHED`]'s
+    /// carry, so a row it answers is pinned to the token a listing of it spells.
+    pub const ORIGIN_LOOKUPS_CACHED: &str = "query($issuesFirst:Int!,$issuesFilter:IssueFilter,$projectsFirst:Int!,$projectsFilter:ProjectFilter){ originIssues: issues(first:$issuesFirst,filter:$issuesFilter){ nodes{id identifier title description url createdAt updatedAt state{name type} priority labels{nodes{id name color}} project{id} comments(first:10){nodes{id updatedAt} pageInfo{hasNextPage}} relations(first:10){nodes{id type relatedIssue{id}} pageInfo{hasNextPage}} inverseRelations(first:10){nodes{id type issue{id}} pageInfo{hasNextPage}}} pageInfo{hasNextPage endCursor} } originProjects: projects(first:$projectsFirst,filter:$projectsFilter){ nodes{id name content url createdAt updatedAt status{name type} labels{nodes{id name color}} relations(first:10){nodes{id type relatedProject{id}} pageInfo{hasNextPage}} inverseRelations(first:10){nodes{id type project{id}} pageInfo{hasNextPage}}} pageInfo{hasNextPage endCursor} } organization{ id } }";
     /// Fetch one issue.
     pub const ISSUE: &str = "query($id:String!){ issue(id:$id){ id identifier title description url createdAt updatedAt archivedAt state{name type} priority labels{nodes{id name color}} project{id} } }";
     /// Fetch one project.
@@ -4468,6 +4475,7 @@ impl LinearSource {
                 graphql::ISSUE_RELATIONS_CACHED
             }
             PROJECTS => graphql::PROJECTS_CACHED,
+            graphql::ORIGIN_LOOKUPS => graphql::ORIGIN_LOOKUPS_CACHED,
             PROJECT => graphql::PROJECT_CACHED,
             PROJECT_RELATIONS | graphql::PROJECT_DEPENDS_ON | graphql::PROJECT_DEPENDED_ON_BY => {
                 graphql::PROJECT_RELATIONS_CACHED
