@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.4](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-plugin-api-v0.12.3...onetaskgraph-plugin-api-v0.12.4) - 2026-10-25
+
+### Fixed
+
+- *(linear)* [**breaking**] take what Linear stores from each write's own answer ([#3762](https://github.com/nickderobertis/onetaskgraph/pull/3762))
+
 ## [0.12.3](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-plugin-api-v0.12.2...onetaskgraph-plugin-api-v0.12.3) - 2026-10-25
 
 ### Performance
