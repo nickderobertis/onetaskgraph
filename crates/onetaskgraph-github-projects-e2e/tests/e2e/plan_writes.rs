@@ -801,3 +801,35 @@ fn a_batched_cleanup_github_does_not_confirm_whole_names_the_issue_it_did_not_co
         assert!(!plan.github.holds_issue(gone), "{gone} was taken back");
     }
 }
+
+#[test]
+fn a_first_copy_whose_own_add_is_answered_with_no_item_takes_back_every_item_it_created() {
+    // GitHub never places the issues, and the add the copy then sends for the first of them is
+    // answered with no board item: the copy cannot say where that issue is filed, refuses, and
+    // takes back every issue it created.
+    for body in [
+        r#"{"data":{"addProjectV2ItemById":{"item":null}}}"#,
+        r#"{"data":{"addProjectV2ItemById":{"item":{"id":" "}}}}"#,
+    ] {
+        let plan = Plan::new(SMALL, Vec::new());
+        plan.github
+            .place_filed_issues_after(vec![std::time::Duration::from_secs(3_600)], || {
+                std::time::Duration::ZERO
+            });
+        plan.board
+            .refuse_graphql(super::asset_board::GraphqlRefusal {
+                matching: "addProjectV2ItemById(input:$input)",
+                status: 200,
+                headers: String::new(),
+                body: body.to_owned(),
+                remaining: 1,
+            });
+        let (output, _) = project_copied(&plan);
+        assert_ne!(
+            output.status.code(),
+            Some(0),
+            "{body}: the copy was refused"
+        );
+        left_nothing(&plan, TASKS + 1);
+    }
+}

@@ -5884,23 +5884,24 @@ impl GitHubProjectsSource {
                 .and_then(Value::as_bool)
                 == Some(false);
             if whole {
-                let mut children = Vec::new();
-                for member in members
+                let nodes = members
                     .and_then(|members| members.get("nodes"))
                     .and_then(Value::as_array)
                     .ok_or_else(|| SourceError::Malformed {
                         message: "GitHub subIssues.nodes is not an array".into(),
-                    })?
-                {
+                    })?;
+                let mut children = Vec::new();
+                for member in nodes {
                     if let Some(resolved) = self.resolve_issue(member).await? {
                         children.push(resolved);
                     }
                 }
-                // Held as the project's members only when every one says it is filed under it:
-                // a page naming any other parent answers nothing of the project's members.
-                if children
-                    .iter()
-                    .all(|child| child.parent.as_ref() == Some(&parent.id))
+                // Held as the project's members only when every one resolved and says it is
+                // filed under it: a page with any other answers nothing of all the members.
+                if children.len() == nodes.len()
+                    && children
+                        .iter()
+                        .all(|child| child.parent.as_ref() == Some(&parent.id))
                 {
                     self.children_cache()?
                         .insert(parent.id.clone(), (parent.id.clone(), children));
