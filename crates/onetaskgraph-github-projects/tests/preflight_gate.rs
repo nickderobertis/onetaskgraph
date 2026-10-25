@@ -157,16 +157,24 @@ fn board(scenario: &str) -> Board {
         | "items-no-content"
         | "items-no-typename"
         | "items-no-repository"
+        | "items-no-connection"
+        | "items-no-nodes"
+        | "items-endless"
         | "item-removal-refused"
         | "item-removal-unconfirmed"
         | "issue-removal-refused" => {
-            board.items = drafts(80);
+            board.items = drafts(79);
+            // An item whose content this credential cannot see, answered as `null`.
+            board
+                .items
+                .push(("PVTI_hidden".to_owned(), None, "(hidden)".to_owned()));
             board.items.extend(stamped_items(LEFTOVER_RUN, 10));
             board.items.extend(stamped_items(ACTIVE_RUN, 3));
             board.items.extend(not_residue());
             board.runs.insert(ACTIVE_RUN, Some("in_progress"));
             match scenario {
                 "items-paged" | "items-stuck-cursor" => board.item_page = 40,
+                "items-endless" => board.item_page = 1,
                 "item-removal-refused" => board.item_removal = Removal::Refused,
                 "item-removal-unconfirmed" => board.item_removal = Removal::NamingAnother,
                 "issue-removal-refused" => board.issue_removal = Removal::Refused,
@@ -180,6 +188,9 @@ fn board(scenario: &str) -> Board {
                 "items-no-content" => Some("no-content"),
                 "items-no-typename" => Some("no-typename"),
                 "items-no-repository" => Some("no-repository"),
+                "items-no-connection" => Some("no-connection"),
+                "items-no-nodes" => Some("no-nodes"),
+                "items-endless" => Some("endless"),
                 "items-bad-id" => {
                     board.items.push((
                         "PVTI_bad".to_owned(),
@@ -288,9 +299,10 @@ fn answer(board: &Mutex<Board>, method: &str, path: &str, body: Option<Value>) -
                 .as_str()
                 .map_or(0, |after| after.parse::<usize>().unwrap());
             let end = (offset + board.item_page).min(board.items.len());
-            let nodes = board.items[offset..end]
+            let nodes = board.items[offset.min(end)..end]
                 .iter()
                 .map(|(id, issue, title)| match issue {
+                    _ if id == "PVTI_hidden" => json!({"id":id,"content":null}),
                     Some((issue, repository)) => json!({"id":id,
                         "content":{"__typename":"Issue","id":issue,"title":title,
                                    "repository":{"nameWithOwner":repository}}}),
@@ -298,7 +310,13 @@ fn answer(board: &Mutex<Board>, method: &str, path: &str, body: Option<Value>) -
                     None => json!({"id":id,"content":{"__typename":"DraftIssue"}}),
                 })
                 .collect::<Vec<_>>();
-            let more = end < board.items.len();
+            // An endless board always says there is a page more, past its last item.
+            let end = if board.item_fault == Some("endless") {
+                offset + 1
+            } else {
+                end
+            };
+            let more = board.item_fault == Some("endless") || end < board.items.len();
             let mut items = json!({"nodes":nodes,"pageInfo":{"hasNextPage":more,
             "endCursor":if board.item_fault == Some("stuck-cursor") && offset > 0 {
                 json!(offset.to_string())
@@ -309,6 +327,10 @@ fn answer(board: &Mutex<Board>, method: &str, path: &str, body: Option<Value>) -
                 Some("no-cursor") => items["pageInfo"] = json!({"hasNextPage":true}),
                 Some("no-page-info") => {
                     items.as_object_mut().unwrap().remove("pageInfo");
+                }
+                Some("no-connection") => return (200, json!({"data":{"node":{}}})),
+                Some("no-nodes") => {
+                    items.as_object_mut().unwrap().remove("nodes");
                 }
                 Some("empty-cursor") => {
                     items["pageInfo"] = json!({"hasNextPage":true,"endCursor":""});
@@ -690,6 +712,8 @@ fn items_a_completed_run_left_past_the_registered_workload_are_removed_and_the_b
     );
     let left = items_left(&stdout);
     assert_eq!(left.len(), 85, "{left:?}");
+    // The item this credential cannot see is left as it was, and the rest is still processed.
+    assert!(left.contains(&"(hidden)".to_owned()));
     for (_, _, title) in stamped_items(LEFTOVER_RUN, 10) {
         assert!(!left.contains(&title), "{title}");
         assert!(
@@ -762,6 +786,9 @@ fn an_item_list_it_cannot_read_whole_or_a_removal_github_does_not_confirm_stops_
             0,
         ),
         ("items-empty-cursor", "has no advancing cursor", 0, 0),
+        ("items-no-connection", "returned no items connection", 0, 0),
+        ("items-no-nodes", "nodes is not an array", 0, 0),
+        ("items-endless", "did not end within 100 pages", 0, 0),
         ("items-no-content", "an item without content", 0, 0),
         ("items-no-typename", "content without its type", 0, 0),
         (
