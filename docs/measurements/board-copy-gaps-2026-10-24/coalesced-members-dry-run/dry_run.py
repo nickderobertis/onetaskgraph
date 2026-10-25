@@ -71,15 +71,28 @@ def cost(document: str, variables: dict) -> int:
     )
     if answered.returncode != 0:
         sys.exit(f"GitHub refused the dry run: {answered.stdout}{answered.stderr}")
-    return json.loads(answered.stdout)["data"]["rateLimit"]["cost"]
+    try:
+        price = json.loads(answered.stdout)["data"]["rateLimit"]["cost"]
+    except (ValueError, KeyError, TypeError):
+        sys.exit(f"GitHub's dry run carried no rateLimit.cost: {answered.stdout}")
+    # A bool is an int to Python, and is no price.
+    if type(price) is not int or price < 0:
+        sys.exit(f"GitHub's dry run priced the document {price!r}, not a nonnegative integer")
+    return price
 
 
 def main() -> None:
-    issue = json.loads(subprocess.run(
+    answered = subprocess.run(
         ["gh", "api", "graphql", "-f",
          f'query=query{{repository(owner:"{OWNER}",name:"{REPOSITORY}"){{issues(first:1){{nodes{{id}}}}}}}}'],
         capture_output=True, text=True, encoding="utf-8", check=True,
-    ).stdout)["data"]["repository"]["issues"]["nodes"][0]["id"]
+    ).stdout
+    try:
+        issue = json.loads(answered)["data"]["repository"]["issues"]["nodes"][0]["id"]
+    except (ValueError, KeyError, IndexError, TypeError):
+        sys.exit(f"{OWNER}/{REPOSITORY} answered no issue to bind the members page to: {answered}")
+    if not isinstance(issue, str) or not issue.strip():
+        sys.exit(f"{OWNER}/{REPOSITORY}'s first issue carried the id {issue!r}, not a node id")
     members = {"id": issue, "memberFirst": MEMBERS, "after": None, "nestedFirst": NESTED,
                "boardItems": BOARD_ITEMS, "duplicates": True}
     shapes = {
