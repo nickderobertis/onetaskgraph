@@ -18,7 +18,8 @@ use onetaskgraph_e2e_support::{
     clock::SimulatedClock,
     common::{Sandbox, assert_spawnable_on_windows, stderr, stdout},
     fixtures::{
-        GitHubBoardFields, MEASURED_PLACEMENT_MILLIS, document, github_projects_with_items,
+        GitHubBoardFields, MEASURED_PLACEMENT_MILLIS, MembersPageField, document,
+        github_projects_with_items,
     },
     images,
     onevcs::{BoundaryCall, BoundaryCommand, BoundaryRecord, OnevcsHome},
@@ -1329,15 +1330,19 @@ fn a_task_taken_out_of_the_plan_is_reported_orphaned_and_left_as_it_was() {
 /// The three ways a page of a project's members can answer one member short of what a full read
 /// of it says, by what each journey below calls it: with no body, with a metadata slot that does
 /// not parse, and with no repository.
-fn members_page_misanswers() -> [(&'static str, &'static str, Value); 3] {
+fn members_page_misanswers() -> [(&'static str, MembersPageField, Value); 3] {
     [
-        ("with no body", "body", Value::Null),
+        ("with no body", MembersPageField::Body, Value::Null),
         (
             "with a metadata slot that does not parse",
-            "body",
+            MembersPageField::Body,
             json!("Moved by hand.\n\n<!-- onetaskgraph.metadata\n{\"onetaskgraph.origin\":\n-->"),
         ),
-        ("with no repository", "repository", Value::Null),
+        (
+            "with no repository",
+            MembersPageField::Repository,
+            Value::Null,
+        ),
     ]
 }
 

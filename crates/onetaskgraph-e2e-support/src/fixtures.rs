@@ -1257,7 +1257,7 @@ struct GitHubBoard {
     /// Each member a page of a project's members beside a batched origin lookup answers short of
     /// what the board holds — its id, the field and the value that page gives it — while every
     /// other read of it answers the board's own record.
-    members_page_misanswers: Vec<(String, &'static str, Value)>,
+    members_page_misanswers: Vec<(String, MembersPageField, Value)>,
     /// The repository, `owner/name`, this board's issues are created in and its source is
     /// configured with.
     repository: String,
@@ -1851,14 +1851,10 @@ impl GitHubBoardFields {
 
     /// Answer the member `id` in every page of a project's members
     /// [`ORIGIN_LOOKUPS_WITH_MEMBERS`](onetaskgraph_github_projects::graphql::ORIGIN_LOOKUPS_WITH_MEMBERS)
-    /// carries with its `field` — `body` or `repository` — as `value`, while every full read of
-    /// it answers what the board holds: a trimmed page that says less about a member, or
-    /// something malformed, than a read of the same member does.
-    pub fn misanswer_in_members_page(&self, id: &str, field: &'static str, value: Value) {
-        assert!(
-            matches!(field, "body" | "repository"),
-            "a members page carries a member's body and repository, not {field}"
-        );
+    /// carries with its `field` as `value`, while every full read of it answers what the board
+    /// holds: a trimmed page that says less about a member, or something malformed, than a read
+    /// of the same member does.
+    pub fn misanswer_in_members_page(&self, id: &str, field: MembersPageField, value: Value) {
         self.board
             .lock()
             .unwrap()
@@ -3389,6 +3385,24 @@ fn github_projects_board_lagging(sandbox: &Sandbox, lagging_reads: usize) -> Val
 const GITHUB_FIXTURE_SECRETS: &str =
     "GITHUB_PROJECTS_FIXTURE_TOKEN=test-token\nGITHUB_PROJECTS_FIXTURE_TOKEN_B=test-token-b\n";
 
+/// Which of a member's two fields a page of a project's members carries beside a batched origin
+/// lookup is answered short of what the board holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MembersPageField {
+    Body,
+    Repository,
+}
+
+impl MembersPageField {
+    /// The field's key in the page's node.
+    const fn key(self) -> &'static str {
+        match self {
+            Self::Body => "body",
+            Self::Repository => "repository",
+        }
+    }
+}
+
 /// How one alias of a batched write that landed is answered malformed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AliasAnswer {
@@ -4093,7 +4107,7 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
                        "repository": item["repo"].as_str().map(|repo| json!({"nameWithOwner": repo}))});
                 for (id, field, value) in &held.members_page_misanswers {
                     if item["id"] == json!(id) {
-                        node[*field] = value.clone();
+                        node[field.key()] = value.clone();
                     }
                 }
                 node
