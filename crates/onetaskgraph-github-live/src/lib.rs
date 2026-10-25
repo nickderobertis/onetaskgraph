@@ -128,5 +128,100 @@ pub fn labelled_stamp(name: &str) -> Option<&str> {
     name.strip_prefix(LABEL_PREFIX)
 }
 
+/// The stamp half of a board field the GitHub Projects lane created, unread.
+///
+/// The lane names its scratch single-select field the way it names its label —
+/// [`LABEL_PREFIX`] and a stamp — so one grammar recognises both. A board's own fields
+/// (`Status`, `onetaskgraph.origin`, the built-in ones) never begin with it.
+#[must_use]
+pub fn fielded_stamp(name: &str) -> Option<&str> {
+    name.strip_prefix(LABEL_PREFIX)
+}
+
+/// The path GitHub answers a CI stamp's run on: one workflow run of [`CORE_REPOSITORY`].
+///
+/// `GET /repos/{owner}/{repo}/actions/runs/{run_id}` reports the run's latest attempt, so a
+/// re-run in progress reads as in progress for every attempt's artifacts.
+#[must_use]
+pub fn run_path(run_id: u64) -> String {
+    format!("/repos/{CORE_REPOSITORY}/actions/runs/{run_id}")
+}
+
+// llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] GitHub publishes no machine-readable vocabulary of a run's `status` (the OpenAPI schema types it as a bare string), so there is no artifact to derive this from. The six words are pinned with their provenance below, the janitor's offline journeys derive theirs from this one declaration, and the drift gate is the janitor itself: a word GitHub adds is undecodable, fails the scheduled run red naming that word, and deletes nothing.
+/// A workflow run's `status`, as GitHub documents it. Anything else is undecodable, and a
+/// reader names it, which is how a word GitHub adds is noticed.
+///
+/// The six statuses of the `status` values GitHub lists for "List workflow runs for a
+/// workflow" (<https://docs.github.com/en/rest/actions/workflow-runs?apiVersion=2022-11-28>,
+/// read 2026-10-07); the rest of that list — `action_required`, `cancelled`, `failure`,
+/// `neutral`, `skipped`, `stale`, `success`, `timed_out` — are conclusions, which a run's
+/// `status` never holds. A cancelled run therefore reads `completed`, as a succeeded or a
+/// failed one does. This is the one declaration: the janitor, the live lane's board
+/// pre-flight and the janitor's offline journeys all read it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunStatus {
+    /// The run is over, whatever its conclusion: nothing of it is still writing.
+    Completed,
+    /// Waiting for a runner.
+    Queued,
+    /// Running.
+    InProgress,
+    /// Waiting on a deployment protection rule.
+    Waiting,
+    /// Requested and not yet queued.
+    Requested,
+    /// Pending on a concurrency group.
+    Pending,
+}
+impl RunStatus {
+    /// Every status a run that has not finished can have.
+    pub const ACTIVE: [Self; 5] = [
+        Self::Queued,
+        Self::InProgress,
+        Self::Waiting,
+        Self::Requested,
+        Self::Pending,
+    ];
+
+    /// GitHub's spelling, in a run's `status`.
+    #[must_use]
+    pub fn spelling(self) -> &'static str {
+        match self {
+            Self::Completed => "completed",
+            Self::Queued => "queued",
+            Self::InProgress => "in_progress",
+            Self::Waiting => "waiting",
+            Self::Requested => "requested",
+            Self::Pending => "pending",
+        }
+    }
+
+    /// The status a run read answered with, or `None` when it carries none this declares.
+    #[must_use]
+    pub fn read(value: &serde_json::Value) -> Option<Self> {
+        let spelled = value.get("status")?.as_str()?;
+        std::iter::once(Self::Completed)
+            .chain(Self::ACTIVE)
+            .find(|status| status.spelling() == spelled)
+    }
+}
+// llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
+
+/// Deletes one board field, answering with the id of the field deleted.
+///
+/// Sent by the janitor, by the live lane's board pre-flight and by the lane's own scratch
+/// field removal; validated against the plugin's pinned schema by the janitor's
+/// `tests/schema.rs`. The two fragments are the two field kinds the lane ever creates.
+pub const DELETE_FIELD_DOCUMENT: &str = "mutation($input:DeleteProjectV2FieldInput!){deleteProjectV2Field(input:$input){projectV2Field{... on ProjectV2Field{id} ... on ProjectV2SingleSelectField{id}}}}";
+
+/// The live lane's measurement of the nominated board before it writes anything: its id,
+/// how many items and fields it holds, and every field's id and name, so a field a finished
+/// run left behind can be told from the board's own before the count is judged.
+///
+/// Declared here rather than in the lane so the janitor's `tests/schema.rs` holds it to the
+/// pinned schema beside the janitor's own documents. GitHub caps a board at fewer than a
+/// hundred fields, so one page holds them all and `hasNextPage` is read to prove it.
+pub const BOARD_WORKLOAD_DOCUMENT: &str = "query LiveBoardWorkload($owner:String!,$number:Int!){repositoryOwner(login:$owner){... on ProjectV2Owner{projectV2(number:$number){id items(first:1){totalCount} fields(first:100){totalCount nodes{... on ProjectV2Field{id name} ... on ProjectV2SingleSelectField{id name}} pageInfo{hasNextPage}}}}}}";
+
 /// Internal session accounting shared by the two GitHub journeys and their reporter.
 pub mod quota;

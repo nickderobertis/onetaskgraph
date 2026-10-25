@@ -23,8 +23,9 @@ RunId = NewType('RunId', int)
 Token = NewType('Token', str)
 
 JANITOR = (Path(__file__).resolve().parents[1] / 'src/lib.rs').read_text(encoding="utf-8")
-# The janitor's one declaration of GitHub's run statuses, read rather than restated.
-Status = StrEnum('Status', [(re.sub(r'(?<!^)(?=[A-Z])', '_', variant).upper(), spelled) for variant, spelled in re.findall(r'Self::(\w+) => "([a-z_]+)",', JANITOR.split('fn spelling(self)', 1)[1].split('fn read(', 1)[0])])
+SHARED = (Path(__file__).resolve().parents[2] / 'onetaskgraph-github-live/src/lib.rs').read_text(encoding="utf-8")
+# The one declaration of GitHub's run statuses the janitor reads, read rather than restated.
+Status = StrEnum('Status', [(re.sub(r'(?<!^)(?=[A-Z])', '_', variant).upper(), spelled) for variant, spelled in re.findall(r'Self::(\w+) => "([a-z_]+)",', SHARED.split('fn spelling(self)', 1)[1].split('fn read(', 1)[0])])
 assert {s.value for s in Status} == {'completed', 'queued', 'in_progress', 'waiting', 'requested', 'pending'}, 'RunStatus::spelling changed; update the journeys to the new vocabulary'
 
 class Issue(TypedDict):
@@ -45,6 +46,12 @@ class Content(TypedDict, total=False):
 class Item(TypedDict):
     id: ItemId
     content: Content
+
+FieldId = NewType('FieldId', str)
+
+class Field(TypedDict):
+    id: FieldId
+    name: str
 
 class Allowance(TypedDict):
     limit: int
@@ -78,9 +85,12 @@ class ItemDelete(NamedTuple):
 class LabelDelete(NamedTuple):
     path: str
 
+class FieldDelete(NamedTuple):
+    id: FieldId
+
 class Write(NamedTuple):
     method: str
-    target: IssueDelete | ItemDelete | LabelDelete
+    target: IssueDelete | ItemDelete | LabelDelete | FieldDelete
 
 class OriginField(TypedDict):
     id: str
@@ -207,6 +217,10 @@ class Github:
         self.allowance_record = None
         self.origin_field: OriginField = copy.deepcopy(ORIGIN_FIELD)
         self.origin_values: dict[ItemId, str] = {}
+        # Every board field besides the origin field, which `origin_field` holds alone.
+        self.fields: list[Field | dict] = [{'id': FieldId('status'), 'name': 'Status'}]
+        self.fields_next_page = False
+        self.field_delete_answer = None
         # Every way a request or a served body departed from GitHub's description.
         self.unpinned: list[str] = []
 
@@ -227,6 +241,15 @@ class Github:
         if run is not None:
             self.status[RunId(run)] = Status.COMPLETED
         return identity
+
+    def field(self, stamp: str) -> FieldId:
+        """A board field named the way the live lane names its scratch field."""
+        identity = FieldId(f'field:{len(self.fields)}')
+        self.fields.append({'id': identity, 'name': LABEL + stamp})
+        return identity
+
+    def board_fields(self) -> list:
+        return ([copy.deepcopy(self.origin_field)] if self.origin_field else []) + copy.deepcopy(self.fields)
 
     def serve(self):
         state = self
@@ -344,15 +367,23 @@ class Github:
                             return
                         nodes = copy.deepcopy(state.items[page:page + 100])
                         end = str(page + 100) if state.repeat != 'board' else '100'
-                        value = {'data': {'board': {'projectV2': {'id': 'board1', 'items': {'nodes': nodes, 'pageInfo': {'hasNextPage': page + 100 < len(state.items), 'endCursor': end}}}}}}
+                        fields = {'nodes': state.board_fields(), 'pageInfo': {'hasNextPage': state.fields_next_page}}
+                        value = {'data': {'board': {'projectV2': {'id': 'board1', 'fields': fields, 'items': {'nodes': nodes, 'pageInfo': {'hasNextPage': page + 100 < len(state.items), 'endCursor': end}}}}}}
                         if state.board_transform:
                             state.board_transform(value)
                         self.reply(value)
                         return
                     case str() if 'deleteProjectV2Field' in query:
-                        state.origin_field.clear()
-                        state.origin_values.clear()
-                        self.reply({'data': {'deleteProjectV2Field': {'deletedFieldId': 'origin'}}})
+                        identity = FieldId(variables['input']['fieldId'])
+                        state.writes.append(Write('POST', FieldDelete(identity)))
+                        if identity == state.origin_field.get('id'):
+                            state.origin_field.clear()
+                            state.origin_values.clear()
+                        if state.field_delete_answer is not None:
+                            self.reply(state.field_delete_answer)
+                            return
+                        state.fields = [v for v in state.fields if v.get('id') != identity]
+                        self.reply({'data': {'deleteProjectV2Field': {'projectV2Field': {'id': identity}}}})
                         return
                     case str() if 'updateProjectV2ItemFieldValue' in query or 'clearProjectV2ItemFieldValue' in query:
                         item = ItemId(variables['input']['itemId'])
@@ -934,6 +965,120 @@ class Journeys(unittest.TestCase):
         self.assertTrue(retained)
         self.assertEqual({item: state.origin_values[item] for item in retained},
                          {item: before_values[item] for item in retained})
+
+    def test_a_finished_runs_field_goes_and_an_active_runs_stays(self):
+        # A cancelled run reads `completed`, like a succeeded or failed one: its scratch field
+        # is residue. A run still going keeps its own, and so does every field that is not
+        # the lane's — the origin field, `Status`, a person's, and one this query reads nothing of.
+        state = Github()
+        cancelled = state.field(f'ci-40170293588-1-{NOW - DAY}')
+        state.status[RunId(40170293588)] = Status.COMPLETED
+        active = state.field(f'ci-999-1-{NOW}')
+        state.status[RunId(999)] = Status.IN_PROGRESS
+        machine = state.field(f'1-1-{NOW - 3 * DAY}')
+        state.fields.extend([{'id': FieldId('priority'), 'name': 'Priority'}, {}])
+        # Two board pages, which answer the same fields twice: one delete, not two.
+        state.items.extend({'id': ItemId(f'd:{n}'), 'content': {'__typename': 'DraftIssue'}} for n in range(150))
+        before = copy.deepcopy(state.fields)
+        result = state.run()
+        self.assert_success(result)
+        self.assertEqual(state.writes, [Write('POST', FieldDelete(cancelled))])
+        self.assertEqual(state.fields, [field for field in before if field.get('id') != cancelled])
+        self.assertIn(active, [field.get('id') for field in state.fields])
+        self.assertIn(machine, [field.get('id') for field in state.fields])
+        self.assertEqual(state.origin_field, ORIGIN_FIELD)
+        self.assertEqual(state.status_reads, {40170293588: 1, 999: 1})
+        document = re.search(r'pub const DELETE_FIELD_DOCUMENT: &str = "([^"]+)";', SHARED)[1]
+        self.assertEqual(sum(request == Request('POST', document) for request in state.requests), 1)
+        self.assertEqual(sum(method == 'POST' and target.startswith('query') for method, target in state.requests), 2)
+        # The next pass finds the finished run's field gone and the active run's still owned.
+        state.writes.clear()
+        self.assert_success(state.run())
+        self.assertFalse(state.writes)
+        state.status[RunId(999)] = Status.COMPLETED
+        self.assert_success(state.run())
+        self.assertEqual(state.writes, [Write('POST', FieldDelete(active))])
+
+    def test_unreadable_or_unconfirmed_fields_fail_closed(self):
+        for fault in ('next page', 'nameless', 'unconfirmed', 'status unreadable'):
+            with self.subTest(fault=fault):
+                state = Github()
+                field = state.field(f'ci-123-1-{NOW - DAY}')
+                state.status[RunId(123)] = Status.COMPLETED
+                match fault:
+                    case 'next page':
+                        state.fields_next_page = True
+                    case 'nameless':
+                        state.fields.append({'id': FieldId('nameless')})
+                    case 'unconfirmed':
+                        # GitHub answers the delete naming some other field.
+                        state.field_delete_answer = {'data': {'deleteProjectV2Field': {'projectV2Field': {'id': 'other'}}}}
+                    case 'status unreadable':
+                        state.fail = '/actions/runs/'
+                result = state.run()
+                self.assertNotEqual(result.returncode, 0, result.stderr)
+                if fault == 'unconfirmed':
+                    self.assertIn('did not confirm', result.stderr)
+                    self.assertEqual(state.writes, [Write('POST', FieldDelete(field))])
+                else:
+                    self.assertFalse(state.writes)
+
+    def test_a_cancelled_run_removes_its_own_artifacts_alone(self):
+        state = Github()
+        own = f'ci-555-2-{NOW}'
+        state.artifact(SCRATCH, own)
+        state.artifact(SCRATCH, own, design=True)
+        own_field = state.field(own)
+        # Another active run, an earlier attempt of this run and a finished run are not this
+        # run's to remove, however their runs read: the scheduled pass decides those.
+        kept = [f'ci-777-1-{NOW}', f'ci-555-1-{NOW - DAY}', f'ci-888-1-{NOW - DAY}']
+        for stamp in kept:
+            state.artifact(SCRATCH, stamp)
+            state.field(stamp)
+        state.status.update({RunId(777): Status.IN_PROGRESS, RunId(555): Status.IN_PROGRESS, RunId(888): Status.COMPLETED})
+        machine = state.artifact(SCRATCH, f'1-1-{NOW - DAY}')
+        result = state.run(
+            overrides={'GITHUB_ACTIONS': 'true', 'GITHUB_RUN_ID': '555', 'GITHUB_RUN_ATTEMPT': '2', 'GITHUB_TOKEN': None},
+            arguments=['--cancelled-run', '--loopback', '{origin}', '--virtual-clock'])
+        self.assert_success(result)
+        self.assertFalse(state.status_reads)
+        self.assertFalse([target for _, target in state.requests if '/actions/' in target])
+        self.assertEqual(state.requests[0], Request('GET', '/rate_limit'))
+        removed = [write.target for write in state.writes]
+        self.assertEqual(sum(isinstance(target, ItemDelete) for target in removed), 2)
+        self.assertEqual(sum(isinstance(target, IssueDelete) for target in removed), 2)
+        self.assertEqual(sum(isinstance(target, LabelDelete) for target in removed), 1)
+        self.assertEqual([target for target in removed if isinstance(target, FieldDelete)], [FieldDelete(own_field)])
+        titles = [issue['title'] for issue in state.issues[SCRATCH]]
+        self.assertFalse([title for title in titles if own in title])
+        for stamp in kept:
+            self.assertTrue(any(title.endswith(stamp) for title in titles), stamp)
+            self.assertIn(LABEL + stamp, [label['name'] for label in state.labels[SCRATCH]])
+            self.assertIn(LABEL + stamp, [field.get('name') for field in state.fields])
+            self.assertTrue(any(item['content'].get('title', '').endswith(stamp) for item in state.items), stamp)
+        self.assertIn(machine, [issue['node_id'] for issue in state.issues[SCRATCH]])
+        self.assertEqual(state.origin_field, ORIGIN_FIELD)
+        times = json.loads(result.stdout.split('write times (monotonic micros): ')[1].splitlines()[0])
+        self.assertTrue(all(b - a >= 1_000_000 for a, b in zip(times, times[1:])))
+
+    def test_a_cancelled_run_must_name_itself(self):
+        for overrides in ({'GITHUB_ACTIONS': None, 'GITHUB_RUN_ID': '555', 'GITHUB_RUN_ATTEMPT': '2'},
+                          {'GITHUB_ACTIONS': 'true', 'GITHUB_RUN_ID': None, 'GITHUB_RUN_ATTEMPT': '2'},
+                          {'GITHUB_ACTIONS': 'true', 'GITHUB_RUN_ID': '0555', 'GITHUB_RUN_ATTEMPT': '2'},
+                          {'GITHUB_ACTIONS': 'true', 'GITHUB_RUN_ID': '555', 'GITHUB_RUN_ATTEMPT': '2', 'GH_PROJECTS_TOKEN': None}):
+            with self.subTest(overrides=overrides):
+                state = Github()
+                state.artifact(SCRATCH, f'ci-555-2-{NOW}')
+                result = state.run(overrides=overrides, arguments=['--cancelled-run', '--loopback', '{origin}', '--virtual-clock'])
+                self.assertEqual(result.returncode, REFUSED, result.stderr)
+                self.assertFalse(state.requests)
+        state = Github()
+        state.allowance = 0
+        state.artifact(SCRATCH, f'ci-555-2-{NOW}')
+        result = state.run(overrides={'GITHUB_ACTIONS': 'true', 'GITHUB_RUN_ID': '555', 'GITHUB_RUN_ATTEMPT': '2'},
+                           arguments=['--cancelled-run', '--loopback', '{origin}', '--virtual-clock'])
+        self.assertEqual(result.returncode, DECLINED, result.stderr)
+        self.assertFalse(state.writes)
 
     def test_realistic_budget_and_tenfold_drain(self):
         state = workload()

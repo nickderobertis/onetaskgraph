@@ -1283,3 +1283,17 @@ requests are now two of each new document (1,000 → **600** nodes on the old on
 once (**103** and **100**). Requests go 212 → **214** — the two reconciliations, which the
 session pays once per document; the dependency reads themselves stay seven — and nodes go
 244,247 → **244,256**.
+
+## The board pre-flight reads the board's field names
+
+The live lane's measurement of the nominated board, `BOARD_WORKLOAD_DOCUMENT` in
+`onetaskgraph-github-live`, now selects every field's id and name beside its count, so a field a
+finished CI run left — a cancelled run's scratch field held every branch red on 2026-10-25 —
+is removed by the janitor's ownership rule before the board is judged against the registered
+workload rather than counted as the board's. On a board holding no such field it sends nothing
+more; one holding some adds one run read per run and one removal per field, which no record
+here measures.
+
+**`session-cost.txt`** moves on one line and its node total: the `nominated board lookup` goes
+2 → **101** worst-case nodes, its `fields(first:100)` page. Requests stay **214**, and nodes go
+244,256 → **244,355**.

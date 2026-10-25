@@ -505,14 +505,23 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   credentialed process per attempt must revisit it; `tests/sweep_gate.rs` pins it.
   **The scheduled janitor is cleanup, not a test lane.**
   `.github/workflows/live-janitor.yml` runs hourly or by human dispatch, never from a
-  project's `test` or `coverage` target. It enumerates issues, their board #1 items and
-  labels in the scratch repository, and removes only exact CI-stamped artifacts whose
-  run in this repository reads back as `completed` immediately before each delete batch.
+  project's `test` or `coverage` target. It enumerates issues, their board #1 items,
+  labels in the scratch repository and board #1's fields, and removes only exact CI-stamped
+  artifacts whose run in this repository reads back as `completed` — a cancelled run
+  included — immediately before each delete batch.
   A re-run in progress protects every attempt; failed, missing or undecodable reads
   protect the artifacts. A batch contains only artifacts listed before that read.
   There is no waiting period: that read alone decides, so a finished run's artifacts go
   on the next pass whatever their age, rather than filling the board the live lane
   refuses when it is too full for a day.
+  **A cancelled run cleans up after itself, and a pre-flight never refuses a finished run's
+  field.** `ci.yml`'s step on cancellation runs the janitor with `--cancelled-run`, which
+  removes exactly that run attempt's stamps and reads no run (`scripts/check-live-janitor.sh`
+  holds the step's shape; the two lane guards exempt that one step). The lane's board
+  pre-flight (`journey::nominated_project_id`) removes a stamped field whose run reads
+  `completed` before it counts the board, says so, and keeps and counts any other —
+  because one leftover field from a cancelled run once held every branch red.
+  `tests/preflight_gate.rs` drives both against a stand-in board.
   Machine stamps remain the owning machine's lock sweep's. Cleanup never touches
   `onetaskgraph.origin`, draft items or other repositories' items; shared-board
   enumeration skips non-scratch issues before inspecting their titles. Only scratch

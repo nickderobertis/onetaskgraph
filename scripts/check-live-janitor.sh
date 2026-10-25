@@ -47,10 +47,35 @@ def constant(name, spelled=r'&str = "([^"]+)"'):
     found = re.search(rf'pub const {name}: {spelled};', declarations)
     return found.group(1) if found else None
 
+# The one ci.yml step that runs the janitor: its cancellation cleanup. It is credentialed and
+# opens no live session, so scripts/check-live-lane.sh and scripts/check-live-lane-selection.sh
+# exempt exactly a step running CANCELLED_RUN, and this holds that step to its whole shape.
+CANCELLED_RUN = 'cargo run --locked -p onetaskgraph-live-janitor -- --cancelled-run'
+CANCELLED_IF = "cancelled() && matrix.os == 'ubuntu-latest' && !github.event.pull_request.head.repo.fork"
+CANCELLED_ENV = {'GH_PROJECTS_TOKEN', 'GH_PROJECTS_OWNER', 'GH_PROJECTS_NUMBER', 'GH_PROJECTS_REPOSITORY'}
+ci_steps = re.split(r'(?m)^      - (?=name:|uses:)', ci)
+# A job's last step runs on to the next job's header; cut it there.
+ci_steps = [re.split(r'(?m)^  (?=[a-z])', step, maxsplit=1)[0] for step in ci_steps]
+cleanups = [step for step in ci_steps if re.search(r'onetaskgraph-live-janitor', step)]
+if len(cleanups) != 1 or values(cleanups[0], 'run') != [CANCELLED_RUN]:
+    refuse(f'ci.yml must run the janitor in exactly one step, as {CANCELLED_RUN!r}', '.github/workflows/ci.yml',
+           'restore the cancellation cleanup step, then rerun')
+else:
+    cleanup = cleanups[0]
+    if values(cleanup, 'if') != [CANCELLED_IF]:
+        refuse(f'the cancellation cleanup must run only when {CANCELLED_IF}', '.github/workflows/ci.yml',
+               'restore its if: condition, then rerun')
+    environment = section(cleanup, '\n        env:\n', '\n        run:', 'cancellation cleanup env')
+    if set(re.findall(r'^          ([A-Z_]+):', environment, re.M)) != CANCELLED_ENV:
+        refuse(f'the cancellation cleanup must be given exactly {sorted(CANCELLED_ENV)}', '.github/workflows/ci.yml',
+               'it reads no run, so it takes no GITHUB_TOKEN and no other credential; restore its env, then rerun')
+    if values(cleanup, 'GH_PROJECTS_TOKEN') != ['${{ secrets.GH_PROJECTS_TOKEN }}']:
+        refuse('the cancellation cleanup must use secrets.GH_PROJECTS_TOKEN', '.github/workflows/ci.yml',
+               'restore its credential, then rerun')
 for key in ('GH_PROJECTS_OWNER', 'GH_PROJECTS_NUMBER', 'GH_PROJECTS_REPOSITORY'):
     nominated = values(source, key)
-    if len(nominated) != 1 or values(ci, key) != nominated * 2:
-        refuse(f'{key} differs from the two credentialed ci.yml steps')
+    if len(nominated) != 1 or values(ci, key) != nominated * 3:
+        refuse(f'{key} differs from the two credentialed ci.yml steps and its cancellation cleanup')
 if values(source, 'GH_PROJECTS_NUMBER') != ['1']:
     refuse('GH_PROJECTS_NUMBER must name board 1 only')
 if values(source, 'GH_PROJECTS_REPOSITORY') != [constant('SCRATCH_REPOSITORY')]:

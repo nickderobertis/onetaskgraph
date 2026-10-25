@@ -1,8 +1,11 @@
 //! The janitor's GraphQL documents against the GitHub Projects plugin's pinned schema, so a
-//! field, an argument or a variable type GitHub does not have fails here, offline.
+//! field, an argument or a variable type GitHub does not have fails here, offline — with the
+//! two the live lane shares with it from `onetaskgraph-github-live`: the field delete both
+//! send and the lane's board pre-flight.
 use std::collections::HashMap;
 
 use graphql_parser::{query, schema};
+use onetaskgraph_github_live::{BOARD_WORKLOAD_DOCUMENT, DELETE_FIELD_DOCUMENT};
 use onetaskgraph_live_janitor::{BOARD_DOCUMENT, DELETE_ISSUE_DOCUMENT, DELETE_ITEM_DOCUMENT};
 
 const PINNED: &str =
@@ -172,7 +175,13 @@ fn validate(document: &str) {
 
 #[test]
 fn every_janitor_document_is_valid_against_the_pinned_schema() {
-    for document in [BOARD_DOCUMENT, DELETE_ISSUE_DOCUMENT, DELETE_ITEM_DOCUMENT] {
+    for document in [
+        BOARD_DOCUMENT,
+        DELETE_ISSUE_DOCUMENT,
+        DELETE_ITEM_DOCUMENT,
+        DELETE_FIELD_DOCUMENT,
+        BOARD_WORKLOAD_DOCUMENT,
+    ] {
         validate(document);
     }
 }
@@ -195,6 +204,14 @@ fn a_field_github_does_not_have_is_refused() {
         (
             BOARD_DOCUMENT.replace("$number:Int!", "$number:String!"),
             "String! cannot be",
+        ),
+        (
+            DELETE_FIELD_DOCUMENT.replace("DeleteProjectV2FieldInput!", "ID!"),
+            "ID! cannot be",
+        ),
+        (
+            BOARD_WORKLOAD_DOCUMENT.replace("{id name}", "{id label}"),
+            "ProjectV2Field lacks field label",
         ),
     ] {
         let refusal = std::panic::catch_unwind(|| validate(&drifted))
