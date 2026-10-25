@@ -5863,6 +5863,15 @@ impl GitHubProjectsSource {
         let Some(item) = self.resolve_issue(node).await? else {
             return Ok(None);
         };
+        // An answer for another issue than the one asked about says nothing of that one.
+        if item.id != *id {
+            return Err(SourceError::Malformed {
+                message: format!(
+                    "GitHub answered issue {} when asked for document {}",
+                    item.id.0, id.0
+                ),
+            });
+        }
         if let Some(project) = node.get("project").filter(|value| !value.is_null())
             && let Some(parent) = self
                 .resolve_issue(project)
@@ -5887,8 +5896,15 @@ impl GitHubProjectsSource {
                         children.push(resolved);
                     }
                 }
-                self.children_cache()?
-                    .insert(parent.id.clone(), (parent.id.clone(), children));
+                // Held as the project's members only when every one says it is filed under it:
+                // a page naming any other parent answers nothing of the project's members.
+                if children
+                    .iter()
+                    .all(|child| child.parent.as_ref() == Some(&parent.id))
+                {
+                    self.children_cache()?
+                        .insert(parent.id.clone(), (parent.id.clone(), children));
+                }
             }
             self.read_ahead()?.insert(parent.id.clone(), Some(parent));
         }

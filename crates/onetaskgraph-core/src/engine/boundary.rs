@@ -411,7 +411,7 @@ pub(crate) struct Boundary {
 /// later in the command is screened again.
 #[derive(Default)]
 struct Screened {
-    visibility: std::collections::HashMap<String, RepositoryVisibility>,
+    visibility: std::collections::HashMap<Repository, RepositoryVisibility>,
     text: std::collections::HashSet<String>,
     paths: std::collections::HashSet<String>,
     metadata: std::collections::HashSet<String>,
@@ -1022,15 +1022,13 @@ impl Engine {
                 .screened
                 .lock()
                 .ok()
-                .and_then(|screened| screened.visibility.get(repository.as_str()).copied());
+                .and_then(|screened| screened.visibility.get(repository).copied());
             let visibility = match known {
                 Some(visibility) => visibility,
                 None => match self.boundary.policy.repository_visibility(repository).await {
                     Ok(visibility) => {
                         if let Ok(mut screened) = self.boundary.screened.lock() {
-                            screened
-                                .visibility
-                                .insert(repository.as_str().to_owned(), visibility);
+                            screened.visibility.insert(repository.clone(), visibility);
                         }
                         visibility
                     }

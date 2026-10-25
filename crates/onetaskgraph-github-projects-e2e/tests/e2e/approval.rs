@@ -543,3 +543,28 @@ fn a_screened_approval_reclassifies_a_project_a_person_changed_since_and_refuses
         "{failure}"
     );
 }
+
+#[test]
+fn a_screened_approval_of_a_project_holding_more_members_than_one_page_lists_them_whole() {
+    // The project holds more members than the page its document's read carries: that page is
+    // no answer about all of them, so the write lists the project's members whole before it is
+    // held to them, and still lands.
+    let (plan, project, document) = copied_screened();
+    for n in 1..=20 {
+        plan.github
+            .file_under(&format!("BG-{n}"), Some(project.as_str()));
+    }
+    let id = format!("board:{document}");
+    let version = shown_version(&plan, &id);
+    let (landed, calls) = set_expecting(&plan, &id, KEY, &version);
+    assert_eq!(landed.status.code(), Some(0), "{}", stderr(&landed));
+    let operations = sent(&calls);
+    assert_eq!(operations.first().map(String::as_str), Some(GUARDED_READ));
+    assert!(
+        operations
+            .iter()
+            .any(|operation| operation == "reading a project's tasks"),
+        "the members were listed whole: {operations:?}"
+    );
+    assert_eq!(slot(&plan, &document)[KEY], json!(true));
+}

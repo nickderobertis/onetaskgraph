@@ -431,3 +431,110 @@ async fn a_union_the_check_cannot_decide_is_the_first_writes_unavailability_and_
         "nothing was written"
     );
 }
+
+/// A linking caller's policy that cannot answer the first repository it is asked about, and
+/// answers `public` for every later one, passing every check.
+#[derive(Default)]
+struct FailingOnce {
+    inspected: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl onetaskgraph_core::boundary::WritePolicy for FailingOnce {
+    async fn repository_visibility(
+        &self,
+        _: &onetaskgraph_plugin_api::Repository,
+    ) -> Result<
+        onetaskgraph_core::boundary::RepositoryVisibility,
+        onetaskgraph_core::boundary::PolicyError,
+    > {
+        if self
+            .inspected
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            == 0
+        {
+            return Err(onetaskgraph_core::boundary::PolicyError {
+                message: "the visibility command could not be run".to_owned(),
+            });
+        }
+        Ok(onetaskgraph_core::boundary::RepositoryVisibility::Public)
+    }
+
+    async fn check_public_write(
+        &self,
+        _: &onetaskgraph_core::boundary::PublicWriteInput,
+    ) -> Result<onetaskgraph_core::boundary::WriteVerdict, onetaskgraph_core::boundary::PolicyError>
+    {
+        Ok(onetaskgraph_core::boundary::WriteVerdict::Pass)
+    }
+}
+
+#[tokio::test]
+async fn a_repository_the_policy_could_not_answer_is_asked_again_in_the_same_command() {
+    // The first answer fails, so that write is refused as naming a repository nobody vouched
+    // for; the failure is not held, so the next write in the same command asks again, is told
+    // the repository is public, and is written.
+    let store = Store::new(None, json!({}));
+    store.public_project_p();
+    let policy = std::sync::Arc::new(FailingOnce::default());
+    let engine = super::linked_engine(&store).with_write_policy(policy.clone());
+    let refused = engine
+        .create_task(&super::task_on_site(PLAIN, &[super::OPEN]))
+        .await
+        .expect_err("a repository nobody vouched for");
+    assert_eq!(super::kind_of(&refused), "private-member");
+    engine
+        .create_task(&super::task_on_site(PLAIN, &[super::OPEN]))
+        .await
+        .expect("asked again, and public");
+    assert_eq!(
+        policy.inspected.load(std::sync::atomic::Ordering::SeqCst),
+        2
+    );
+}
+
+#[test]
+fn a_dependency_on_an_item_classified_private_is_withheld_and_said_on_standard_error() {
+    // The consumer depends on a task of `ledgerless`, a public folder whose task is classified
+    // private by its own record: the copy lands, the public destination carries no edge or id of
+    // it, and standard error names the edge it left out and why.
+    let (store, _, _) = screened();
+    let path = store.folder("ledgerless");
+    std::fs::create_dir_all(path.join("tasks")).unwrap();
+    std::fs::write(
+        path.join("tasks/secret.md"),
+        "---\ntitle: Secret\nstatus: todo\nclassification: private\n---\nHeld close.\n",
+    )
+    .unwrap();
+    let document = store.sandbox.project().join("onetaskgraph.yaml");
+    let mut configured: Value =
+        serde_json::from_str(&std::fs::read_to_string(&document).unwrap()).unwrap();
+    configured["sources"]["ledgerless"] = json!({"plugin": "local-md", "config": {"root": path}});
+    std::fs::write(&document, configured.to_string()).unwrap();
+    plan(&store);
+    store.record(
+        "draft",
+        "tasks",
+        "consumer",
+        "title: Consumer\nstatus: todo\nproject: goal\ndepends_on: [library, {id: \"ledgerless:secret\", item: task}]",
+        PLAIN,
+    );
+    let output = store.run(&["project", "copy", "draft:goal", "--to", "site", "--json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains(
+            "onetaskgraph: withheld draft:consumer's dependency on ledgerless:secret from site: it \
+             is classified private, and its source named no tracker an opaque reference to it \
+             could point into\n"
+        ),
+        "{}",
+        stderr(&output)
+    );
+    for (path, bytes) in tree(&store.folder("site")) {
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(
+            !text.contains("ledgerless") && !text.contains("secret"),
+            "{path} names the private item: {text}"
+        );
+    }
+}

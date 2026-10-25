@@ -1273,7 +1273,7 @@ struct Running {
     /// Each destination the copy read ahead asked about the origin of a project, with that
     /// origin: its answer is that destination's to hold for this command, so the filing lookup
     /// confirms a link to that project by it rather than by a read of the project.
-    asked_origins: Vec<(SourceName, String)>,
+    asked_origins: Vec<(SourceName, GlobalId)>,
 }
 
 /// The member project a routed write was filed under, and what finding it wrote.
@@ -5423,7 +5423,7 @@ impl Engine {
         // beside the document's own when that destination is asked about origins anyway, so the
         // project a new document is filed under is answered by that one request rather than
         // read on its own before the document is created there.
-        let mut project_origins: Vec<(SourceName, String)> = Vec::new();
+        let mut project_origins: Vec<(SourceName, GlobalId)> = Vec::new();
         for read in reads {
             let metadata = described(&read.item).1;
             if read.item.level() == Level::Project {
@@ -5529,7 +5529,7 @@ impl Engine {
                     continue;
                 }
                 if let Some(link) = link_of(&running.source_projects[&qualified].metadata, there) {
-                    project_origins.push((there.clone(), qualified.to_string()));
+                    project_origins.push((there.clone(), qualified.clone()));
                     want(there, link.native.clone());
                     homes.push((
                         there.clone(),
@@ -5560,8 +5560,9 @@ impl Engine {
         }
         for (name, mut asked) in origins {
             for (there, origin) in &project_origins {
-                if there == &name && !asked.contains(origin) {
-                    asked.push(origin.clone());
+                let spelled = origin.to_string();
+                if there == &name && !asked.contains(&spelled) {
+                    asked.push(spelled);
                     running.asked_origins.push((there.clone(), origin.clone()));
                 }
             }
@@ -7220,7 +7221,7 @@ impl Engine {
         request: &CopyRequest,
         project: &GlobalId,
         read: Option<&Project>,
-        asked_origins: &[(SourceName, String)],
+        asked_origins: &[(SourceName, GlobalId)],
     ) -> Result<Option<GlobalId>, EngineError> {
         let source = self.readable(&project.source)?;
         if !source.source().capabilities().projects.is_native() {
@@ -7252,7 +7253,7 @@ impl Engine {
             if !withheld
                 && asked_origins
                     .iter()
-                    .any(|(asked, named)| asked == &reachable && named == &origin)
+                    .any(|(asked, named)| asked == &reachable && named == project)
                 && let Ok(answered) = there
                     .source()
                     .query_projects_by_origin(&origin, &request_for(there, None))
