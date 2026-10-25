@@ -693,6 +693,11 @@ from each of a copy's source ids and holds each answer for that origin's next qu
 source the engine answers it by its default, reading nothing ahead, so each origin query crosses
 as its own `query_tasks`, `query_projects` or `query_documents`, as above.
 
+Nor is `TaskSource::member_classifications`, the classification and repositories of each member
+of a project, which a write the public boundary screens reads of that project. For a hosted source
+the engine answers it by its default, none, so the members cross as the project's own
+`query_tasks` and `query_documents`, as they always did.
+
 ### 4.4a `get_task_detail`
 
 Only a plugin that declared `task_details: true` (§3.13) and `comments` `"native"` (§4.2) is
@@ -2626,7 +2631,7 @@ plugin's crate documentation to the same figures.
 
 | Verb | Requests / points | Documents |
 | --- | --- | --- |
-| new copy | 4 / 5 | ORIGIN_LOOKUPS (the origin, the board's fields and the repository's node and numeric ids together; two points), CREATE_ISSUE filing the issue on the board and under its project, CREATED_BOARD_ITEMS once GitHub has added it, WRITE_FIELD_VALUES |
+| new copy | 4 | ORIGIN_LOOKUPS (the origin, the board's fields and the repository's node and numeric ids together, a page of one carrier for each origin), CREATE_ISSUE filing the issue on the board and under its project, CREATED_BOARD_ITEMS once GitHub has added it, WRITE_FIELD_VALUES |
 | copy --create | 4 | CREATION_CONTEXT, CREATE_ISSUE, CREATED_BOARD_ITEMS, WRITE_FIELD_VALUES: the new copy with no origin to ask about |
 | bound copy | 3 | ISSUE (with the board's fields and the issue's `blockedBy`), UPDATE_FIELDS when a board field differs, then UPDATE_ISSUE last carrying only the title, body or state that differs — none, when nothing does |
 | bound copy, filed under a project | 4 | the bound copy's three, and one ISSUE of the destination project its link names, read once per command |

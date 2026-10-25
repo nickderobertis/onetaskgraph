@@ -1003,7 +1003,7 @@ fn follow_up_writes_resolve_each_item_once_and_batch_the_copy_fields() {
     // Requests, then points where the two differ: a new copy's one read of its origin and of
     // what creating reads costs two points, where each of the two reads it replaced cost one.
     for (verb, sent, expected, priced) in [
-        ("new copy", &new_calls, 4, 5),
+        ("new copy", &new_calls, 4, 4),
         ("copy --create", &create_calls, 4, 4),
         ("bound copy", &bound_calls, 3, 3),
         ("comment", &comment_calls, 2, 2),
@@ -1219,12 +1219,19 @@ fn a_create_copy_sends_no_origin_lookup_and_refuses_what_it_cannot_assert() {
         sent.iter().any(|(document, variables)| {
             (document == graphql::ADD_BLOCKED_BY
                 && variables["input"]["blockingIssueId"] == first.as_str())
-                || (document == graphql::ADD_BLOCKED_BYS
-                    && (0..onetaskgraph_github_projects::MUTATION_BATCH).any(|slot| {
-                        variables[format!("send{slot}")] == true
-                            && variables[format!("block{slot}")]["blockingIssueId"]
-                                == first.as_str()
-                    }))
+                || [
+                    (graphql::ADD_BLOCKED_BYS, "send"),
+                    (graphql::WRITE_FIELDS_AND_EDGES, "sendBlock"),
+                ]
+                .iter()
+                .any(|(batch, send)| {
+                    document == batch
+                        && (0..onetaskgraph_github_projects::WRITE_BATCH).any(|slot| {
+                            variables[format!("{send}{slot}")] == true
+                                && variables[format!("block{slot}")]["blockingIssueId"]
+                                    == first.as_str()
+                        })
+                })
         }),
         "{sent:#?}"
     );

@@ -1244,7 +1244,7 @@ store opts in.
 
 - **No production dependency on onevcs.** The command adapter speaks onevcs's versioned
   boundary schema, pinned at `engine/boundary/onevcs-boundary-schema-v1.json`; the release the
-  journeys drive is pinned once, as `ONEVCS_CLI` in `crates/onetaskgraph-e2e/tests/e2e/onevcs.rs`,
+  journeys drive is pinned once, as `ONEVCS_CLI` in `crates/onetaskgraph-e2e-support/src/onevcs.rs`,
   and provided by `uv`. Moving it means re-pinning that schema, which the reconciliation journey
   refuses to let drift.
 - **A task owns its classification; projections are the copy domain's.** A task is classified

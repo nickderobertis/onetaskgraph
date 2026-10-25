@@ -1,13 +1,13 @@
 (a) a whole copy of a project of 10 tasks
-requests 7
-node count 18463
+requests 6
+node count 6263
 
 requests per call
     1       0  creating an issue
     1       0  creating several issues together
-    2   18400  looking up the items copied from several origins, and what creating one reads
+    2    6200  looking up the items copied from several origins, and what creating one reads
     1      63  reading the board items of the issues a copy created
-    2       0  writing board fields of the items a copy created
+    1       0  writing board fields of the items a copy created
 
 (b) a repeat whole copy of the same project, unchanged, each item recording its origin
 requests 1
@@ -58,29 +58,29 @@ requests per call
 
 (h) the same task copy with every link removed, found by asking the board for its origin
 requests 4
-node count 10571
+node count 4471
 
 requests per call
     1     915  looking up the items copied from one origin
-    1    9200  looking up the items copied from several origins, and what creating one reads
+    1    3100  looking up the items copied from several origins, and what creating one reads
     1     456  reading one issue
     1       0  writing a board field
 
 (i) a task copy into a board holding its counterpart, its origin in the board field alone
 requests 3
-node count 10571
+node count 4471
 
 requests per call
     1     915  looking up the items copied from one origin
-    1    9200  looking up the items copied from several origins, and what creating one reads
+    1    3100  looking up the items copied from several origins, and what creating one reads
     1     456  reading one issue
 
 (j) a task copy into a board holding no counterpart
 requests 4
-node count 9263
+node count 3163
 
 requests per call
     1       0  creating an issue
-    1    9200  looking up the items copied from several origins, and what creating one reads
+    1    3100  looking up the items copied from several origins, and what creating one reads
     1      63  reading the board items of the issues a copy created
     1       0  writing board fields of the items a copy created

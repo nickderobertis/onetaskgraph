@@ -2987,9 +2987,11 @@ pub const STAND_IN_SCALE: u32 = 200;
 /// [`FIXTURE_WAIT`], every duration of its schedule [`STAND_IN_SCALE`] times shorter, for a
 /// stand-in board: a search lag of `d` on GitHub is one of `d / STAND_IN_SCALE` there. The
 /// reads by id are given what a loopback read takes on a loaded host, which is latency rather
-/// than lag and does not scale.
+/// than lag and does not scale: a stand-in answering one request at a time reads one only once
+/// the search the wait abandoned is answered, and a host running several instrumented suites
+/// at once delays that by more than the half second the search itself is held.
 pub const STAND_IN_FIXTURE_WAIT: FixtureWait = FixtureWait {
-    diagnosis: std::time::Duration::from_millis(500),
+    diagnosis: std::time::Duration::from_secs(2),
     ..FIXTURE_WAIT.scaled(STAND_IN_SCALE)
 };
 

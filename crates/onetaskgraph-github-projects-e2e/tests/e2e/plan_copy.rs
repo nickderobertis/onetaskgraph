@@ -17,8 +17,12 @@ use onetaskgraph_e2e_support::{
     binary,
     clock::SimulatedClock,
     common::{Sandbox, assert_spawnable_on_windows, stderr, stdout},
-    fixtures::{GitHubBoardFields, document, github_projects_with_items},
+    fixtures::{
+        GitHubBoardFields, MEASURED_PLACEMENT_MILLIS, MembersPageField, document,
+        github_projects_with_items,
+    },
     images,
+    onevcs::{BoundaryCall, BoundaryCommand, BoundaryRecord, OnevcsHome},
 };
 use onetaskgraph_github_projects::graphql;
 use serde_json::{Value, json};
@@ -162,6 +166,11 @@ impl Generated {
     }
 }
 
+/// The synthetic repository the screened plan's board creates its issues in, registered public
+/// in the onevcs home the screening runs against — an invented identity, so no answer depends on
+/// any host.
+pub(super) const SCREENED_REPOSITORY: (&str, &str) = ("synthco", "public-widgets");
+
 /// The folder of Markdown the plan is written to, and the loopback board it is copied onto.
 pub(super) struct Plan {
     pub sandbox: Sandbox,
@@ -170,6 +179,12 @@ pub(super) struct Plan {
     pub github: GitHubBoardFields,
     pub clock: SimulatedClock,
     pub generated: Generated,
+    /// When the store screens its public writes: the onevcs home its `write_policy` runs the
+    /// released boundary commands against, and the record of every one it ran.
+    pub screening: Option<(OnevcsHome, BoundaryRecord)>,
+    /// Which client of the clock this plan's commands attach as — its manager, when several
+    /// share one loopback host.
+    pub client: usize,
 }
 
 /// One unrelated item of the board's own history: a project every tenth, a design document
@@ -207,7 +222,64 @@ impl Plan {
 
     /// [`Plan::new`], with the board source's `cache` block set to `cache` when one is given.
     pub fn configured(items: usize, extra: Vec<Value>, cache: Option<Value>) -> Self {
-        let clock = SimulatedClock::start(1);
+        Self::laid(items, extra, cache, false)
+    }
+
+    /// [`Plan::new`], with the store screening every public write through the released onevcs
+    /// boundary commands — its `write_policy` — against an onevcs home holding one synthetic
+    /// identity, the public [`SCREENED_REPOSITORY`] the board creates its issues in.
+    pub fn screened(items: usize, extra: Vec<Value>, cache: Option<Value>) -> Self {
+        Self::laid(items, extra, cache, true)
+    }
+
+    fn laid(items: usize, extra: Vec<Value>, cache: Option<Value>, screened: bool) -> Self {
+        Self::hosted(
+            items,
+            extra,
+            cache,
+            screened,
+            &SimulatedClock::start(1),
+            0,
+            None,
+        )
+    }
+
+    /// `managers` plans copied at once, each its manager's — a client of one simulated clock —
+    /// on a board of its own behind one loopback host, whose record of every request and whose
+    /// GitHub secondary-limit windows they share, with write screening on when `screened` is.
+    pub fn managers(managers: usize, items: usize, screened: bool) -> Vec<Self> {
+        let clock = SimulatedClock::start(managers);
+        let first = Self::hosted(items, Vec::new(), None, screened, &clock, 0, None);
+        let mut plans = Vec::with_capacity(managers);
+        for client in 1..managers {
+            plans.push(Self::hosted(
+                items,
+                Vec::new(),
+                None,
+                screened,
+                &clock,
+                client,
+                Some(&first.board),
+            ));
+        }
+        plans.insert(0, first);
+        plans
+    }
+
+    // Each argument is one independent axis of the plan a journey lays — its board, its cache,
+    // its screening, its clock, its manager and the host it shares — and every caller names all
+    // of them, so a builder would only restate this signature.
+    #[allow(clippy::too_many_arguments)]
+    fn hosted(
+        items: usize,
+        extra: Vec<Value>,
+        cache: Option<Value>,
+        screened: bool,
+        clock: &SimulatedClock,
+        client: usize,
+        host: Option<&Board>,
+    ) -> Self {
+        let clock = clock.clone();
         let sandbox = Sandbox::new();
         let mut held: Vec<Value> = (0..items).map(background).collect();
         held.extend(extra);
@@ -215,7 +287,7 @@ impl Plan {
         // GitHub's default workflows set no `Status` on an item added to a board, so the copy
         // writes every one it carries — the workload's nine.
         github.file_new_items_without_status(true);
-        let board = Board::new(config["endpoint"].as_str().unwrap(), &clock, 0, None);
+        let board = Board::new(config["endpoint"].as_str().unwrap(), &clock, client, host);
         board.measure_latency();
         config["endpoint"] = json!(board.endpoint);
         config["pacing"] = json!({});
@@ -230,10 +302,24 @@ impl Plan {
             cache["dir"] = json!(sandbox.subdirectory("board-cache"));
             board_source["cache"] = cache;
         }
-        sandbox.project_document(&document(&json!({
+        let screening = screened.then(|| {
+            let (owner, name) = SCREENED_REPOSITORY;
+            let mut home = OnevcsHome::new(&sandbox);
+            home.public(owner, name);
+            let record = home.recorded(&sandbox);
+            board_source["config"]["repository"] = json!(format!("{owner}/{name}"));
+            github.use_repository(&format!("{owner}/{name}"));
+            (home, record)
+        });
+        let mut configured: Value = serde_json::from_str(&document(&json!({
             "notes": {"plugin":"local-md","config":{"root":root}},
             "board": board_source
-        })));
+        })))
+        .unwrap();
+        if let Some((_, record)) = &screening {
+            configured["write_policy"] = record.write_policy().clone();
+        }
+        sandbox.project_document(&configured.to_string());
         let plan = Self {
             sandbox,
             root,
@@ -241,9 +327,27 @@ impl Plan {
             github,
             clock,
             generated: Generated::new(SEED),
+            screening,
+            client,
         };
         plan.author();
         plan
+    }
+
+    /// Place every issue a create files on the board as GitHub places one — with no board item
+    /// in the create's answer, and on the board only the spike's measured delay after it, on
+    /// the simulated clock — rather than at once.
+    pub fn place_as_measured(&self) {
+        let timed = self.clock.clone();
+        self.github.place_filed_issues_after(
+            MEASURED_PLACEMENT_MILLIS
+                .iter()
+                .map(|millis| std::time::Duration::from_millis(*millis))
+                .collect(),
+            move || timed.now(),
+        );
+        let placing = self.github.clone();
+        self.board.on_answered(move |at| placing.answered_at(at));
     }
 
     /// The path the folder reports for task `n`, which the document names it by.
@@ -340,9 +444,12 @@ impl Plan {
     /// One command through the binary, attached to the clock.
     pub fn run(&self, arguments: &[&str]) -> Output {
         let mut command = self.sandbox.subprocess(binary());
+        if let Some((home, _)) = &self.screening {
+            command.env("ONEVCS_HOME", home.path());
+        }
         command
             .args(arguments)
-            .envs(self.clock.client_env(0))
+            .envs(self.clock.client_env(self.client))
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         assert_spawnable_on_windows(&command);
@@ -360,17 +467,25 @@ impl Plan {
     /// time, and in the real time its process ran.
     pub fn copy_timed(&self) -> Scenario {
         let before = self.board.calls().len();
-        let lease = self.clock.lease(0);
+        let lease = self.clock.lease(self.client);
         let mut phases = Vec::new();
         let mut reports = Vec::new();
+        let mut boundary = Vec::new();
         for (kind, id) in [("project", "notes:P"), ("document", "notes:D")] {
             let simulated = self.clock.now();
             let started = std::time::Instant::now();
+            let screened_before = self.boundary_calls().len();
+            let sent_before = self.board.calls().len();
             let output = self.run(&[kind, "copy", id, "--to", "board", "--json"]);
             let real = started.elapsed();
             lease.wait_for_detach();
             phases.push((kind, self.clock.now() - simulated, real));
             reports.push(success(&output));
+            boundary.push(Phase {
+                kind,
+                screening: self.boundary_calls()[screened_before..].to_vec(),
+                calls: self.own_calls(sent_before),
+            });
         }
         drop(lease);
         let document = reports.pop().expect("the document copy's report");
@@ -378,10 +493,36 @@ impl Plan {
         Scenario {
             project,
             document,
-            calls: self.board.calls()[before..].to_vec(),
+            calls: self.own_calls(before),
             phases,
+            boundary,
         }
     }
+
+    /// Every request the host answered this plan's commands from the `from`th it recorded on:
+    /// another manager's sharing the host are not this plan's.
+    fn own_calls(&self, from: usize) -> Vec<Call> {
+        self.board.calls()[from..]
+            .iter()
+            .filter(|call| call.client == self.client)
+            .cloned()
+            .collect()
+    }
+
+    /// Every boundary command the store has run so far, when it screens its writes.
+    pub fn boundary_calls(&self) -> Vec<BoundaryCall> {
+        self.screening
+            .as_ref()
+            .map(|(_, record)| record.calls())
+            .unwrap_or_default()
+    }
+}
+
+/// One command of a scenario: the boundary commands it ran and the requests the board answered.
+pub(super) struct Phase {
+    pub kind: &'static str,
+    pub screening: Vec<BoundaryCall>,
+    pub calls: Vec<Call>,
 }
 
 /// One scenario of the copy budgets, as [`Plan::copy_timed`] measured it.
@@ -392,6 +533,8 @@ pub(super) struct Scenario {
     pub calls: Vec<Call>,
     /// Each command, its simulated time and its process's real time.
     pub phases: Vec<(&'static str, std::time::Duration, std::time::Duration)>,
+    /// Each command's boundary commands beside its requests.
+    pub boundary: Vec<Phase>,
 }
 
 /// The points one request of each kind costs against the primary GraphQL allowance, as the
@@ -450,11 +593,72 @@ fn the_points_budgets_state_the_prices_they_are_measured_at() {
     assert_eq!(described, SCENARIOS.len(), "a points budget per scenario");
 }
 
-/// Record what `scenario` cost as the copy budgets' telemetry, for
-/// `budget_runner::report_plan_copy`: its seconds — the simulated seconds of both commands —
-/// and, apart, the real seconds their processes ran; its points; and for a first copy the
-/// writes GitHub's secondary limit may count.
-fn record(name: &str, scenario: &Scenario, board: usize) {
+/// What one scenario cost, in each of the figures the copy budgets read.
+struct Cost {
+    simulated: f64,
+    real: f64,
+    points: u64,
+    writes: u64,
+    /// The seconds' detail: each command's simulated seconds, its requests and its polls.
+    seconds: Value,
+    /// The real seconds' detail.
+    real_detail: Value,
+    /// The points' detail.
+    points_detail: Value,
+    /// The writes' detail.
+    writes_detail: Value,
+}
+
+/// The writes of a request of a copy's aliased field values, by the field each set.
+fn field_values(call: &Call, by_field: &mut BTreeMap<String, u64>) {
+    let Ok(request) = serde_json::from_slice::<Value>(&call.bytes) else {
+        return;
+    };
+    let send = match request["query"].as_str() {
+        Some(query) if query == graphql::WRITE_FIELD_VALUES => "send",
+        Some(query) if query == graphql::WRITE_FIELDS_AND_EDGES => "sendField",
+        _ => return,
+    };
+    let variables = &request["variables"];
+    for slot in 0..onetaskgraph_github_projects::WRITE_BATCH {
+        if variables[format!("{send}{slot}")] == true {
+            let field = variables[format!("field{slot}")]["fieldId"]
+                .as_str()
+                .unwrap_or("a field this write did not name")
+                .to_owned();
+            *by_field.entry(field).or_default() += 1;
+        }
+    }
+}
+
+/// What each command of `scenario` asked the boundary, in the order it asked: each repository
+/// it inspected, and each check with how many values of each surface it carried.
+fn screening_calls(scenario: &Scenario) -> Value {
+    scenario
+        .boundary
+        .iter()
+        .map(|phase| {
+            let calls: Vec<Value> = phase
+                .screening
+                .iter()
+                .map(|call| match call.command {
+                    BoundaryCommand::Inspect => json!({"inspect": call.input["repository"]}),
+                    _ => json!({"check": {
+                        "text": call.input["text"].as_array().map_or(0, Vec::len),
+                        "paths": call.input["paths"].as_array().map_or(0, Vec::len),
+                        "metadata": call.input["metadata"].as_array().map_or(0, Vec::len)},
+                        "exit": call.exit}),
+                })
+                .collect();
+            (phase.kind.to_owned(), Value::Array(calls))
+        })
+        .collect::<serde_json::Map<String, Value>>()
+        .into()
+}
+
+/// Every figure the copy budgets read of `scenario`, each with the detail it is reported with,
+/// priced by [`SPIKE_PRICES`] and counted as [`creations`] counts a write.
+fn cost(scenario: &Scenario) -> Cost {
     let simulated: f64 = scenario
         .phases
         .iter()
@@ -468,38 +672,14 @@ fn record(name: &str, scenario: &Scenario, board: usize) {
     let requests = tally(&scenario.calls);
     let mut points_by: BTreeMap<String, u64> = BTreeMap::new();
     let mut creations_by: BTreeMap<String, u64> = BTreeMap::new();
+    let mut values_by_field: BTreeMap<String, u64> = BTreeMap::new();
     for call in &scenario.calls {
         *points_by.entry(operation(call)).or_default() += spike_points(call);
         let created = creations(&call.path, &call.bytes);
         if created > 0 {
             *creations_by.entry(operation(call)).or_default() += created;
         }
-    }
-    let points: u64 = points_by.values().sum();
-    let created: u64 = creations_by.values().sum();
-    // Every board field value the aliased field writes carried, by the field it set: each is
-    // one write above, and the workload names how many of each there are.
-    let mut values_by_field: BTreeMap<String, u64> = BTreeMap::new();
-    for call in &scenario.calls {
-        let Ok(request) = serde_json::from_slice::<Value>(&call.bytes) else {
-            continue;
-        };
-        if !request["query"]
-            .as_str()
-            .is_some_and(|query| query == graphql::WRITE_FIELD_VALUES)
-        {
-            continue;
-        }
-        let variables = &request["variables"];
-        for slot in 0..onetaskgraph_github_projects::MUTATION_BATCH {
-            if variables[format!("send{slot}")] == true {
-                let field = variables[format!("field{slot}")]["fieldId"]
-                    .as_str()
-                    .unwrap_or("a field this write did not name")
-                    .to_owned();
-                *values_by_field.entry(field).or_default() += 1;
-            }
-        }
+        field_values(call, &mut values_by_field);
     }
     let latencies: BTreeMap<String, u64> = [
         Kind::ItemRead,
@@ -520,46 +700,162 @@ fn record(name: &str, scenario: &Scenario, board: usize) {
         .iter()
         .map(|(kind, simulated, _)| (*kind, simulated.as_secs_f64()))
         .collect();
+    // What each command spent reading where GitHub placed what it created, and how many
+    // aliases each of its mutation requests carried.
+    let shapes: BTreeMap<&str, Value> = scenario
+        .boundary
+        .iter()
+        .map(|phase| {
+            let polls = phase
+                .calls
+                .iter()
+                .filter(|call| {
+                    operation(call) == "reading the board items of the issues a copy created"
+                })
+                .count();
+            let aliases: Vec<u64> = phase
+                .calls
+                .iter()
+                .filter(|call| call.creating && call.kind != Kind::Upload)
+                .map(|call| creations(&call.path, &call.bytes))
+                .collect();
+            let lookups = phase
+                .calls
+                .iter()
+                .filter(|call| operation(call).starts_with("looking up the items copied"))
+                .count();
+            (
+                phase.kind,
+                json!({"placement polls": polls, "aliases per mutation request": aliases,
+                       "origin lookup requests": lookups}),
+            )
+        })
+        .collect();
+    let points: u64 = points_by.values().sum();
+    let writes: u64 = creations_by.values().sum();
+    Cost {
+        simulated,
+        real,
+        points,
+        writes,
+        seconds: json!({"simulated seconds by phase": phases, "requests by operation": requests,
+                        "milliseconds charged by kind": latencies, "shape by phase": shapes,
+                        "screening": screening_calls(scenario)}),
+        real_detail: json!({"real seconds by phase": scenario
+            .phases
+            .iter()
+            .map(|(kind, _, real)| (*kind, real.as_secs_f64()))
+            .collect::<BTreeMap<&str, f64>>()}),
+        points_detail: json!({"points": points, "points by operation": points_by,
+                              "requests by operation": requests, "shape by phase": shapes,
+                              "screening": screening_calls(scenario)}),
+        writes_detail: json!({"writes": writes, "writes by mutation": creations_by,
+                              "field values by field": values_by_field,
+                              "requests": scenario.calls.iter().filter(|call| creations(&call.path, &call.bytes) > 0).count(),
+                              "screening": screening_calls(scenario)}),
+    }
+}
+
+/// Every run of one scenario the copy budgets read: on the board of [`SMALL`] and of [`LARGE`],
+/// each with no write policy and with write screening on.
+pub(super) struct Runs<'a> {
+    pub small: &'a Scenario,
+    pub small_screened: &'a Scenario,
+    pub large: &'a Scenario,
+    pub large_screened: &'a Scenario,
+    /// Each of [`MANAGERS`] managers' run of it, copying at once against one loopback host,
+    /// with no write policy and with write screening on.
+    pub managers: Vec<&'a Scenario>,
+    pub managers_screened: Vec<&'a Scenario>,
+}
+
+/// Record what scenario `name` cost as the copy budgets' telemetry, for
+/// `budget_runner::report_plan_copy`, on the board their workload states: its seconds — the
+/// simulated seconds of both commands — and, apart, the real seconds their processes ran,
+/// each from the run with no write policy, as the seconds budgets state them; and its points
+/// and, for a first copy, the writes GitHub's secondary limit may count, each the larger of
+/// the run with no write policy and the run with write screening on. Every detail carries
+/// both runs, their screening calls, and the same figures on the board of [`LARGE`].
+fn record(name: &str, runs: &Runs<'_>) {
+    let costs = [
+        ("unscreened", cost(runs.small)),
+        ("screened", cost(runs.small_screened)),
+        ("unscreened, on a board of 20,000 items", cost(runs.large)),
+        (
+            "screened, on a board of 20,000 items",
+            cost(runs.large_screened),
+        ),
+    ];
+    let at_once: Vec<(String, Cost)> = runs
+        .managers
+        .iter()
+        .enumerate()
+        .map(|(manager, run)| {
+            (
+                format!("manager {manager} of {MANAGERS} at once"),
+                cost(run),
+            )
+        })
+        .chain(
+            runs.managers_screened
+                .iter()
+                .enumerate()
+                .map(|(manager, run)| {
+                    (
+                        format!("manager {manager} of {MANAGERS} at once, screened"),
+                        cost(run),
+                    )
+                }),
+        )
+        .collect();
+    let of = |figure: fn(&Cost) -> &Value| -> Value {
+        costs
+            .iter()
+            .map(|(label, cost)| ((*label).to_owned(), figure(cost).clone()))
+            .chain(
+                at_once
+                    .iter()
+                    .map(|(label, cost)| (label.clone(), figure(cost).clone())),
+            )
+            .collect::<serde_json::Map<String, Value>>()
+            .into()
+    };
+    let small = &costs[..2];
+    let larger =
+        |figure: fn(&Cost) -> u64| small.iter().map(|(_, cost)| figure(cost)).max().unwrap();
     let directory = super::budget_runner::directory();
     std::fs::create_dir_all(&directory).unwrap();
     let mut recordings = vec![
         (
             format!("github-plan-copy-seconds-{name}"),
-            simulated,
-            json!({"simulated seconds by phase": phases,
-                   "requests by operation": requests, "milliseconds charged by kind": latencies}),
+            costs[0].1.simulated,
+            of(|cost| &cost.seconds),
         ),
         // The processes' own real time, which the host's load moves: reported beside the
         // simulated figure, never added to it.
         (
             format!("github-plan-copy-real-seconds-{name}"),
-            real,
-            json!({"real seconds by phase": scenario
-                .phases
-                .iter()
-                .map(|(kind, _, real)| (*kind, real.as_secs_f64()))
-                .collect::<BTreeMap<&str, f64>>()}),
+            costs[0].1.real,
+            of(|cost| &cost.real_detail),
         ),
         (
             format!("github-plan-copy-points-{name}"),
-            points as f64,
-            json!({"points by operation": points_by, "requests by operation": requests}),
+            larger(|cost| cost.points) as f64,
+            of(|cost| &cost.points_detail),
         ),
     ];
     if name == SCENARIOS[0] {
         recordings.push((
             "github-plan-copy-content-creations".to_owned(),
-            created as f64,
-            json!({"writes by mutation": creations_by,
-                   "field values by field": values_by_field,
-                   "requests": scenario.calls.iter().filter(|call| creations(&call.path, &call.bytes) > 0).count()}),
+            larger(|cost| cost.writes) as f64,
+            of(|cost| &cost.writes_detail),
         ));
     }
     for (budget, value, detail) in recordings {
         std::fs::write(
             onetaskgraph_e2e_support::telemetry::file_in(&directory, &budget),
             serde_json::to_vec(&json!({"budget": budget, "value": value,
-                "detail": detail.to_string(), "plan": WORKLOAD, "board": board,
+                "detail": detail.to_string(), "plan": WORKLOAD, "board": SMALL,
                 "scenario": name}))
             .unwrap(),
         )
@@ -767,21 +1063,114 @@ pub(super) fn counterparts(project: &Value, document: &Value) -> Counterparts {
     at
 }
 
-/// The three scenarios on a board of `items` other items: what each sent, by operation. On the
-/// board the copy budgets' workload states, what each cost is recorded as their telemetry.
-fn three_scenarios(items: usize) -> [BTreeMap<String, usize>; 3] {
-    let plan = Plan::new(items, Vec::new());
-    let recorded = |name: &str, scenario: &Scenario| {
-        if items == SMALL {
-            record(name, scenario, items);
+/// Hold every command of a screened `scenario` to what its boundary record shows: each
+/// repository it inspected inspected once, and at most one check — of every write it planned
+/// together — finished before its first mutation reached the board, carrying the title of every
+/// record of the plan it writes.
+pub(super) fn screened_once_before_writing(what: &str, scenario: &Scenario, titles: &[&str]) {
+    for phase in &scenario.boundary {
+        let mut inspected = std::collections::BTreeSet::new();
+        for call in phase
+            .screening
+            .iter()
+            .filter(|call| call.command == BoundaryCommand::Inspect)
+        {
+            let repository = call.input["repository"].to_string();
+            assert!(
+                inspected.insert(repository.clone()),
+                "{what}'s {} copy inspected {repository} twice: {:?}",
+                phase.kind,
+                phase.screening
+            );
+        }
+        let checks: Vec<&BoundaryCall> = phase
+            .screening
+            .iter()
+            .filter(|call| call.command == BoundaryCommand::Check)
+            .collect();
+        assert!(
+            checks.len() <= 1,
+            "{what}'s {} copy checked more than once though nothing was refused: {checks:?}",
+            phase.kind
+        );
+        let first_mutation = phase.calls.iter().find(|call| call.creating);
+        if let Some(mutation) = first_mutation {
+            let check = checks
+                .first()
+                .unwrap_or_else(|| panic!("{what}'s {} copy wrote without a check", phase.kind));
+            assert!(
+                check.finished < mutation.wall,
+                "{what}'s {} copy wrote {} before its check finished",
+                phase.kind,
+                operation(mutation)
+            );
+            assert_eq!(check.exit, Some(0), "the check passed");
+            if phase.kind == "project" {
+                let carried = check.input["metadata"].as_array().unwrap();
+                for title in titles {
+                    assert!(
+                        carried.iter().any(|value| value == title),
+                        "{what}'s one check carried {title:?} too: {carried:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// The three scenarios on a board of `items` other items, with write screening on when
+/// `screened` is: what each sent, by operation, and each as measured.
+fn three_scenarios(items: usize, screened: bool) -> Measured {
+    let plan = if screened {
+        Plan::screened(items, Vec::new(), None)
+    } else {
+        Plan::new(items, Vec::new())
+    };
+    scenarios_of(&plan, screened)
+}
+
+/// What each of a plan's three scenarios sent, by operation, and each as measured.
+type Measured = ([BTreeMap<String, usize>; 3], [Scenario; 3]);
+
+/// The three scenarios of each of three managers copying their plans at once against one
+/// loopback host, each on a board of `items` other items: what each manager's commands sent and
+/// cost, attributed to that manager alone.
+fn managers_at_once(items: usize, screened: bool) -> Vec<Measured> {
+    let plans = Plan::managers(MANAGERS, items, screened);
+    std::thread::scope(|scope| {
+        let running: Vec<_> = plans
+            .iter()
+            .map(|plan| scope.spawn(move || scenarios_of(plan, screened)))
+            .collect();
+        running
+            .into_iter()
+            .map(|manager| manager.join().expect("a manager's copies"))
+            .collect()
+    })
+}
+
+/// The manager sessions the copy budgets' workload states, each running one command at a time:
+/// no more than four workers between them.
+pub(super) const MANAGERS: usize = 3;
+
+/// The three scenarios of `plan`, in order, as [`three_scenarios`] drives them.
+fn scenarios_of(plan: &Plan, screened: bool) -> Measured {
+    plan.place_as_measured();
+    let titles: Vec<String> = std::iter::once("Copy the plan in a fraction of the time".to_owned())
+        .chain((1..=TASKS).map(|n| format!("Step {n} of the plan")))
+        .collect();
+    let titles: Vec<&str> = titles.iter().map(String::as_str).collect();
+    let screening = |what: &str, scenario: &Scenario| {
+        if screened {
+            screened_once_before_writing(what, scenario, &titles);
         }
     };
 
     let first = plan.copy_timed();
     never_walks("the first copy", &first.calls);
     let at = counterparts(&first.project, &first.document);
-    holds_the_plan(&plan, &at, None);
-    recorded(SCENARIOS[0], &first);
+    holds_the_plan(plan, &at, None);
+    screening("the first copy", &first);
 
     let edited = format!(
         "{}An edit made since the last copy.\n",
@@ -795,26 +1184,105 @@ fn three_scenarios(items: usize) -> [BTreeMap<String, usize>; 3] {
         at,
         "the re-copy found every item"
     );
-    holds_the_plan(&plan, &at, Some((4, &edited)));
-    recorded(SCENARIOS[1], &changed);
+    holds_the_plan(plan, &at, Some((4, &edited)));
+    screening("the re-copy after one task changed", &changed);
 
     let unchanged = plan.copy_timed();
     never_walks("the unchanged re-copy", &unchanged.calls);
     assert_eq!(counterparts(&unchanged.project, &unchanged.document), at);
-    holds_the_plan(&plan, &at, Some((4, &edited)));
-    recorded(SCENARIOS[2], &unchanged);
+    holds_the_plan(plan, &at, Some((4, &edited)));
+    screening("the unchanged re-copy", &unchanged);
 
+    (
+        [
+            tally(&first.calls),
+            tally(&changed.calls),
+            tally(&unchanged.calls),
+        ],
+        [first, changed, unchanged],
+    )
+}
+
+/// What a copy that `sent` these requests sent, but for its reads of whether its creates are
+/// on the board yet, once those reads are held to the plugin's own bound: at least one when it
+/// created anything — the project's issue and its tasks' are read together — and at most the
+/// six reads and one after a fallback add it allows each create request.
+/// How many of them a copy needs is when GitHub placed its creates, which a clock other copies
+/// advance too moves, so a test comparing two copies compares everything else exactly.
+fn placement_read_bounded(copy: &str, sent: &BTreeMap<String, usize>) -> BTreeMap<String, usize> {
+    const PLACEMENT: &str = "reading the board items of the issues a copy created";
+    let mut shape = sent.clone();
+    let reads = shape.remove(PLACEMENT).unwrap_or(0);
+    let creates: usize = ["creating an issue", "creating several issues together"]
+        .iter()
+        .filter_map(|create| sent.get(*create))
+        .sum();
+    assert!(
+        (creates.min(1)..=7 * creates).contains(&reads),
+        "{copy} read its creates' placement {reads} times after {creates} create requests: {sent:?}"
+    );
+    shape
+}
+
+/// A first copy's tally, as the plan's first copy sends it, with `reads` placement reads.
+fn first_copy_reading_placement(reads: usize) -> BTreeMap<String, usize> {
     [
-        tally(&first.calls),
-        tally(&changed.calls),
-        tally(&unchanged.calls),
+        ("creating an issue", 2),
+        ("creating several issues together", 1),
+        ("writing board fields of the items a copy created", 1),
+        (
+            "reading the board items of the issues a copy created",
+            reads,
+        ),
     ]
+    .into_iter()
+    .map(|(operation, sent)| (operation.to_owned(), sent))
+    .collect()
+}
+
+#[test]
+fn copies_whose_placement_reads_differ_within_the_bound_send_the_same_shape() {
+    // A loaded host placing a copy's creates later reads them once or twice more; every other
+    // request kind still has to match.
+    for reads in [1, 3, 4, 21] {
+        assert_eq!(
+            placement_read_bounded("a copy", &first_copy_reading_placement(reads)),
+            placement_read_bounded("a lone copy", &first_copy_reading_placement(4)),
+        );
+    }
+    let mut written_twice = first_copy_reading_placement(3);
+    written_twice.insert("writing board fields of the items a copy created".into(), 2);
+    assert_ne!(
+        placement_read_bounded("a copy", &written_twice),
+        placement_read_bounded("a lone copy", &first_copy_reading_placement(4)),
+        "the bound reaches placement reads alone"
+    );
+}
+
+#[test]
+#[should_panic(expected = "read its creates' placement 22 times after 3 create requests")]
+fn a_copy_reading_placement_past_the_plugins_bound_fails() {
+    placement_read_bounded("a copy", &first_copy_reading_placement(22));
+}
+
+#[test]
+#[should_panic(expected = "read its creates' placement 0 times after 3 create requests")]
+fn a_copy_that_created_and_never_read_placement_fails() {
+    placement_read_bounded("a copy", &first_copy_reading_placement(0));
 }
 
 #[test]
 fn a_plan_copy_reads_what_the_plan_holds_whatever_the_board_has_accumulated() {
-    let small = three_scenarios(SMALL);
-    let large = three_scenarios(LARGE);
+    // Each scenario on a board of 2,000 items and of 20,000, with no write policy and with
+    // write screening on: what it sends never depends on the board's size, and screening adds
+    // no request to the board but at most one listing of the destination project's members. What
+    // each cost is recorded as the copy budgets' telemetry.
+    let (small, small_runs) = three_scenarios(SMALL, false);
+    let (small_screened, small_screened_runs) = three_scenarios(SMALL, true);
+    let (large, large_runs) = three_scenarios(LARGE, false);
+    let (large_screened, large_screened_runs) = three_scenarios(LARGE, true);
+    let managers = managers_at_once(SMALL, false);
+    let managers_screened = managers_at_once(SMALL, true);
     for (index, scenario) in [
         "first copy",
         "re-copy after one task changed",
@@ -823,9 +1291,79 @@ fn a_plan_copy_reads_what_the_plan_holds_whatever_the_board_has_accumulated() {
     .iter()
     .enumerate()
     {
+        // How many times a copy reads whether its creates are on the board yet is when GitHub
+        // placed them, which a loaded host's scheduling moves; every comparison below holds
+        // that count to the plugin's own bound and every other request kind exactly.
+        let bounded = |what: &str, sent: &BTreeMap<String, usize>| {
+            placement_read_bounded(&format!("{what} {scenario}"), sent)
+        };
+        let small_shape = bounded("the", &small[index]);
+        let small_screened_shape = bounded("the screened", &small_screened[index]);
         assert_eq!(
-            small[index], large[index],
+            small_shape,
+            bounded(&format!("the {LARGE}-item"), &large[index]),
             "the {scenario} sent different requests on a board of {SMALL} and of {LARGE}"
+        );
+        assert_eq!(
+            small_screened_shape,
+            bounded(
+                &format!("the screened {LARGE}-item"),
+                &large_screened[index]
+            ),
+            "the screened {scenario} sent different requests on a board of {SMALL} and of {LARGE}"
+        );
+        // Screening sends the board nothing more but what a document's classification reads of
+        // the destination project's members: a listing of them, or the page of them its
+        // batched origin lookup carries in place of that lookup alone. How many is the points
+        // budgets' to judge, from the telemetry recorded below.
+        let lookup =
+            "looking up the items copied from several origins, and what creating one reads";
+        let unscreened_shape = |sent: &BTreeMap<String, usize>| {
+            let mut shape = sent.clone();
+            shape.remove("reading a project's tasks");
+            if let Some(coalesced) = shape.remove(
+                "looking up the items copied from several origins, with a project's members",
+            ) {
+                *shape.entry(lookup.to_owned()).or_default() += coalesced;
+            }
+            shape
+        };
+        let unlisted = unscreened_shape(&small_screened_shape);
+        let expected = unscreened_shape(&small_shape);
+        assert_eq!(
+            expected, unlisted,
+            "screening the {scenario}'s writes changed what it sent the board"
+        );
+        // Each of three managers copying at once sends, for its own commands, exactly what one
+        // alone does, on a clock the three advance together.
+        for (manager, (sent, _)) in managers.iter().enumerate() {
+            assert_eq!(
+                bounded(&format!("manager {manager}'s"), &sent[index]),
+                small_shape,
+                "manager {manager}'s {scenario}, beside two others, sent what one alone does"
+            );
+        }
+        for (manager, (sent, _)) in managers_screened.iter().enumerate() {
+            assert_eq!(
+                bounded(&format!("manager {manager}'s screened"), &sent[index]),
+                small_screened_shape,
+                "manager {manager}'s screened {scenario}, beside two others, sent what one \
+                 alone does"
+            );
+        }
+        record(
+            SCENARIOS[index],
+            &Runs {
+                small: &small_runs[index],
+                small_screened: &small_screened_runs[index],
+                large: &large_runs[index],
+                large_screened: &large_screened_runs[index],
+                managers: managers.iter().map(|(_, runs)| &runs[index]).collect(),
+                managers_screened: managers_screened
+                    .iter()
+                    .map(|(_, runs)| &runs[index])
+                    .collect(),
+            },
         );
     }
 }
@@ -868,6 +1406,137 @@ fn a_task_taken_out_of_the_plan_is_reported_orphaned_and_left_as_it_was() {
                 at[&format!("T-{n}")]
             )),
             "the reference to T-{n} names its counterpart"
+        );
+    }
+}
+
+/// The three ways a page of a project's members can answer one member short of what a full read
+/// of it says, by what each journey below calls it: with no body, with a metadata slot that does
+/// not parse, and with no repository.
+fn members_page_misanswers() -> [(&'static str, MembersPageField, Value); 3] {
+    [
+        ("with no body", MembersPageField::Body, Value::Null),
+        (
+            "with a metadata slot that does not parse",
+            MembersPageField::Body,
+            json!("Moved by hand.\n\n<!-- onetaskgraph.metadata\n{\"onetaskgraph.origin\":\n-->"),
+        ),
+        (
+            "with no repository",
+            MembersPageField::Repository,
+            Value::Null,
+        ),
+    ]
+}
+
+/// The issue of the board's own history a person files under the copied project in the journeys
+/// below: a task copied from elsewhere, whose record names no repository list, so its own
+/// repository is what says who may read it.
+const FILED_BY_HAND: &str = "BG-3";
+
+/// The screened plan copied as a project onto a small board, with [`FILED_BY_HAND`] then filed
+/// under that project by a person, and the board's id for the project.
+fn screened_project_with_a_member_filed_by_hand() -> (Plan, String) {
+    let plan = Plan::screened(20, Vec::new(), None);
+    let copied = success(&plan.run(&["project", "copy", "notes:P", "--to", "board", "--json"]));
+    let project = landed(&copied, "notes:P");
+    plan.github.file_under(FILED_BY_HAND, Some(&project));
+    (plan, project)
+}
+
+/// Hold the requests a document copy sent the board, `sent`, to having read the members page
+/// beside its origin lookup and then read `project`'s members in full, as the listing of a
+/// project's tasks reads them.
+fn fell_back_to_the_full_members_read(how: &str, sent: &[Call], project: &str) {
+    let query = |call: &Call| -> Value { serde_json::from_slice(&call.bytes).unwrap() };
+    let page = sent
+        .iter()
+        .position(|call| {
+            call.path == "/graphql"
+                && query(call)["query"] == graphql::ORIGIN_LOOKUPS_WITH_MEMBERS
+                && query(call)["variables"]["project"] == project
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "a member {how}: the copy asked for no members page of {project}: {:?}",
+                tally(sent)
+            )
+        });
+    assert!(
+        sent[page + 1..].iter().any(|call| call.path == "/graphql"
+            && query(call)["query"] == graphql::SUB_ISSUES
+            && query(call)["variables"]["id"] == project),
+        "a member {how}: the copy did not read {project}'s members in full after the page: {:?}",
+        tally(sent)
+    );
+}
+
+/// A document copy screened onto a public board, under a project a person filed a member under
+/// from a private repository, never lands public on the account of a members page that
+/// answers that member short of what reading it says: with the page carrying no body for it, a
+/// slot that does not parse or no repository, the copy reads the members in full, finds the
+/// private one, and is refused with nothing written.
+#[test]
+fn a_document_under_a_member_the_members_page_misanswers_is_classified_from_the_full_read() {
+    let (owner, _) = SCREENED_REPOSITORY;
+    let private = format!("{owner}/secret-gadgets");
+    for (how, field, value) in members_page_misanswers() {
+        let (mut plan, project) = screened_project_with_a_member_filed_by_hand();
+        plan.screening
+            .as_mut()
+            .expect("the plan screens its writes")
+            .0
+            .private(owner, "secret-gadgets");
+        plan.github.transfer(FILED_BY_HAND, &private);
+        plan.github
+            .misanswer_in_members_page(FILED_BY_HAND, field, value);
+        let before = plan.board.calls().len();
+        let output = plan.run(&["document", "copy", "notes:D", "--to", "board", "--json"]);
+        let sent = plan.board.calls()[before..].to_vec();
+        assert_ne!(
+            output.status.code(),
+            Some(0),
+            "a member {how}: the document landed public beside a private member\n{}\n{}",
+            stdout(&output),
+            stderr(&output)
+        );
+        let written: Vec<String> = sent
+            .iter()
+            .filter(|call| call.creating)
+            .map(operation)
+            .collect();
+        assert!(
+            written.is_empty(),
+            "a member {how}: the refused copy wrote {written:?}\n{}",
+            stderr(&output)
+        );
+        fell_back_to_the_full_members_read(how, &sent, &project);
+        assert!(
+            stderr(&output).contains("private"),
+            "a member {how}: the refusal says the document is private: {}",
+            stderr(&output)
+        );
+    }
+}
+
+/// The same misanswered members page under a project whose members are all public: the copy
+/// reads them in full, classifies the document from what that read says, and lands it.
+#[test]
+fn a_document_under_public_members_the_members_page_misanswers_lands_after_the_full_read() {
+    for (how, field, value) in members_page_misanswers() {
+        let (plan, project) = screened_project_with_a_member_filed_by_hand();
+        plan.github
+            .misanswer_in_members_page(FILED_BY_HAND, field, value);
+        let before = plan.board.calls().len();
+        let document =
+            success(&plan.run(&["document", "copy", "notes:D", "--to", "board", "--json"]));
+        let sent = plan.board.calls()[before..].to_vec();
+        fell_back_to_the_full_members_read(how, &sent, &project);
+        let landed = landed(&document, "notes:D");
+        assert_eq!(
+            plan.github.item(&landed).unwrap()["parent"],
+            json!(project),
+            "a member {how}: the document lands under its project"
         );
     }
 }
@@ -948,8 +1617,9 @@ fn the_board_holds_each_request_for_the_spikes_mean_latency_of_its_kind() {
 
 /// The documents that read items of the board by their node ids — the reads a change token
 /// stands in for — rather than listing them.
-const ITEM_READS: [&str; 4] = [
+const ITEM_READS: [&str; 5] = [
     graphql::ISSUE,
+    graphql::DOCUMENT_IN_PROJECT,
     graphql::ISSUE_DETAIL,
     graphql::ISSUE_DETAILS,
     graphql::ISSUE_COPY_DETAILS,
@@ -991,7 +1661,7 @@ impl Plan {
     /// Fill the board's cache with what the reads a person makes leave there: every task of
     /// the plan, the project and the document, each at its current change token.
     fn read_back(&self, at: &Counterparts) {
-        let lease = self.clock.lease(0);
+        let lease = self.clock.lease(self.client);
         let mut tasks = vec!["task".to_owned(), "show-many".to_owned()];
         tasks.extend((1..=TASKS).map(|n| format!("board:{}", at[&format!("T-{n}")])));
         tasks.push("--json".to_owned());
@@ -1024,11 +1694,11 @@ impl Plan {
     /// [`Self::measured`], for a command that may fail: what it exited with and printed.
     pub(super) fn measured_output(&self, arguments: &[&str]) -> (Output, Vec<Call>) {
         let before = self.board.calls().len();
-        let lease = self.clock.lease(0);
+        let lease = self.clock.lease(self.client);
         let output = self.run(arguments);
         lease.wait_for_detach();
         drop(lease);
-        (output, self.board.calls()[before..].to_vec())
+        (output, self.own_calls(before))
     }
 }
 
@@ -1053,7 +1723,7 @@ fn a_recopy_with_no_token_reads_every_counterpart_in_batches_and_none_on_its_own
     assert_eq!(
         alone,
         vec![&(
-            graphql::ISSUE.to_owned(),
+            graphql::DOCUMENT_IN_PROJECT.to_owned(),
             std::collections::BTreeSet::from([at["D"].clone()])
         )],
         "an item read that is not a batch, but the document's own: {reads:?}"
@@ -1308,5 +1978,292 @@ fn a_project_whose_sub_issues_come_back_unlisted_still_finds_the_task_taken_out_
         tally(&calls).contains_key("reading a project's tasks"),
         "{:?}",
         tally(&calls)
+    );
+}
+
+/// Record, in the metadata slot of board item `id`, that its work changes `repository`: what a
+/// person editing the list the slot keeps on GitHub leaves behind.
+pub(super) fn record_repository(plan: &Plan, id: &str, repository: &str) {
+    let body = plan.github.body(id);
+    let (content, mut slot) = split_slot(body.as_str().unwrap());
+    slot["onetaskgraph.repositories"] = json!([repository]);
+    let content = content.to_owned();
+    plan.github.edit_body(
+        id,
+        &format!("{content}\n\n<!-- onetaskgraph.metadata\n{slot}\n-->"),
+    );
+}
+
+#[test]
+fn a_screened_document_copy_under_a_project_a_person_made_private_is_refused_writing_nothing() {
+    // The plan lands on the board screened. Then a person records one of its tasks there as
+    // changing a private repository, which makes the project private by what it holds. The
+    // document copied again — its content changed, so it would be written — is held to the
+    // project it is filed under on the destination, read again in this command: it is refused
+    // before anything is sent, and the board keeps the document as it was.
+    let mut plan = Plan::screened(SMALL, Vec::new(), None);
+    let (project, document, _) = plan.copy();
+    let at = counterparts(&project, &document);
+    plan.screening
+        .as_mut()
+        .expect("a screened plan")
+        .0
+        .private("synthco", "secret-gadgets");
+    record_repository(&plan, &at["T-3"], "github.com/synthco/secret-gadgets");
+    let held = plan.github.item(&at["D"]).unwrap();
+    let path = plan.root.join("documents/D.md");
+    let text = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, format!("{text}\nA paragraph added since.\n")).unwrap();
+    let (output, calls) =
+        plan.measured_output(&["document", "copy", "notes:D", "--to", "board", "--json"]);
+    assert_ne!(output.status.code(), Some(0), "{}", stdout(&output));
+    assert!(
+        calls.iter().all(|call| !call.creating),
+        "a refused copy sent {:?}",
+        tally(&calls)
+    );
+    assert_eq!(plan.github.item(&at["D"]).unwrap(), held);
+    let said = stderr(&output);
+    assert!(said.contains("notes:D"), "{said}");
+}
+
+/// One request of a recorded trace: its operation, and when it started and ended, in seconds.
+struct Traced {
+    op: String,
+    start: f64,
+    end: f64,
+}
+
+/// The requests of the 0.11.0 re-measurement `run` on the real board, in the order they were
+/// sent, from the sanitized trace committed beside the measurement.
+fn traced(run: &str) -> Vec<Traced> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/measurements/board-copy-speed-2026-10-18/after")
+        .join(run)
+        .join("requests.jsonl");
+    let mut traced: Vec<Traced> = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("{}: {error}", path.display()))
+        .lines()
+        .map(|line| {
+            let request: Value = serde_json::from_str(line).unwrap();
+            Traced {
+                op: request["op"].as_str().unwrap().to_owned(),
+                start: request["start"].as_f64().unwrap(),
+                end: request["end"].as_f64().unwrap(),
+            }
+        })
+        .filter(|request| !request.op.starts_with("CONNECT "))
+        .collect();
+    traced.sort_by(|a, b| a.start.total_cmp(&b.start));
+    traced
+}
+
+#[test]
+fn the_loopback_board_answers_0_11s_measured_copies_as_github_answered_them() {
+    // Fixture evidence, not a bound: 0.11.0's own copies of the plan on the real board, replayed
+    // at their measured times against the loopback board placing issues as the spike measured.
+    let first = traced("tb-first-span-20261024T095836");
+    let unchanged = traced("tb-unchanged-span-20261024T095930");
+    let count = |traced: &[Traced], op: &str| traced.iter().filter(|r| r.op == op).count();
+    // The trace this replays is the one the copy budgets' baselines name — the six-point
+    // unchanged re-copy and the twenty-point first copy by the spike's prices — held here by what
+    // each sent: the re-copy two project listings and four single origin lookups and nothing
+    // else, and the first copy four placement polls and three single origin lookups among its
+    // eighteen GraphQL requests.
+    let graphql = |traced: &[Traced]| {
+        traced
+            .iter()
+            .filter(|request| !request.op.starts_with("POST ") && !request.op.starts_with("GET "))
+            .count()
+    };
+    assert_eq!(graphql(&unchanged), 6);
+    assert_eq!(count(&unchanged, "SUB_ISSUES"), 2);
+    assert_eq!(count(&unchanged, "ORIGIN_LOOKUP"), 4);
+    assert_eq!(graphql(&first), 18);
+    assert_eq!(count(&first, "CREATED_BOARD_ITEMS"), 4);
+    assert_eq!(count(&first, "ORIGIN_LOOKUP"), 3);
+
+    // Each create, then each placement poll after it at the time it was sent after the create's
+    // answer, on a clock the replay keeps.
+    let sandbox = Sandbox::new();
+    let (_, github) = github_projects_with_items(&sandbox, Vec::new());
+    let now = std::sync::Arc::new(std::sync::Mutex::new(std::time::Duration::ZERO));
+    let read = now.clone();
+    github.place_filed_issues_after(
+        MEASURED_PLACEMENT_MILLIS
+            .iter()
+            .map(|millis| std::time::Duration::from_millis(*millis))
+            .collect(),
+        move || *read.lock().unwrap(),
+    );
+    let at = |seconds: f64| std::time::Duration::from_secs_f64(seconds);
+    let origin = first[0].start;
+    let create = |title: &str, parent: Option<&str>| {
+        let mut input = json!({"repositoryId":"REPO-1","title":title,"body":"replayed",
+                               "projectV2Ids":["PVT-board"]});
+        if let Some(parent) = parent {
+            input["parentIssueId"] = json!(parent);
+        }
+        input
+    };
+    let poll = |ids: &[String]| -> Vec<bool> {
+        let mut variables = serde_json::Map::new();
+        for slot in 0..onetaskgraph_github_projects::COPY_DETAIL_BATCH {
+            variables.insert(format!("id{slot}"), json!(ids.get(slot).unwrap_or(&ids[0])));
+            variables.insert(format!("read{slot}"), json!(slot < ids.len()));
+        }
+        variables.insert("boardItems".into(), json!(3));
+        variables.insert("statusName".into(), json!("Status"));
+        let answered = github.graphql(graphql::CREATED_BOARD_ITEMS, &Value::Object(variables));
+        (0..ids.len())
+            .map(|slot| {
+                answered[format!("i{slot}")]["projectItems"]["nodes"]
+                    .as_array()
+                    .is_some_and(|nodes| !nodes.is_empty())
+            })
+            .collect()
+    };
+    let mut created: Vec<String> = Vec::new();
+    let mut every: Vec<String> = Vec::new();
+    let mut placed_by_poll = Vec::new();
+    // A create after a poll is the next command's, which polls for its own creates alone.
+    let mut polled = false;
+    for request in &first {
+        match request.op.as_str() {
+            "CREATE_ISSUE" => {
+                if std::mem::take(&mut polled) {
+                    created.clear();
+                }
+                *now.lock().unwrap() = at(request.start - origin);
+                let parent = created.first().cloned();
+                let answered = github.graphql(
+                    graphql::CREATE_ISSUE,
+                    &json!({"input": create("replayed", parent.as_deref())}),
+                );
+                let id = answered["createIssue"]["issue"]["id"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned();
+                every.push(id.clone());
+                created.push(id);
+                github.answered_at(at(request.end - origin));
+            }
+            "CREATE_ISSUES" => {
+                *now.lock().unwrap() = at(request.start - origin);
+                let mut variables = serde_json::Map::new();
+                for slot in 0..onetaskgraph_github_projects::MUTATION_BATCH {
+                    variables.insert(format!("create{slot}"), create("child", Some(&created[0])));
+                    variables.insert(format!("send{slot}"), json!(slot < 8));
+                }
+                let answered = github.graphql(graphql::CREATE_ISSUES, &Value::Object(variables));
+                for slot in 0..8 {
+                    let id = answered[format!("create{slot}")]["issue"]["id"]
+                        .as_str()
+                        .unwrap()
+                        .to_owned();
+                    every.push(id.clone());
+                    created.push(id);
+                }
+                github.answered_at(at(request.end - origin));
+            }
+            "CREATED_BOARD_ITEMS" => {
+                polled = true;
+                *now.lock().unwrap() = at(request.start - origin);
+                let unplaced: Vec<String> = created.clone();
+                let placed = poll(&unplaced);
+                placed_by_poll.push(placed.iter().filter(|placed| **placed).count());
+                created = unplaced
+                    .into_iter()
+                    .zip(placed)
+                    .filter(|(_, placed)| !placed)
+                    .map(|(id, _)| id)
+                    .collect();
+            }
+            _ => {}
+        }
+    }
+    // As on GitHub: no create's answer carried a board item, so the first poll after each
+    // copy's creates — sent within a tenth of a second of the answer — found them not all placed,
+    // which is why 0.11 polled again; and every issue is placed once the longest delay measured
+    // has passed since its create was answered.
+    assert_eq!(placed_by_poll.len(), 4, "{placed_by_poll:?}");
+    assert!(placed_by_poll[0] < 9, "{placed_by_poll:?}");
+    assert_eq!(placed_by_poll[2], 0, "{placed_by_poll:?}");
+    let last = first.iter().map(|request| request.end).fold(0.0, f64::max);
+    *now.lock().unwrap() = at(last - origin) + std::time::Duration::from_millis(1_837);
+    assert!(
+        poll(&every).into_iter().all(|placed| placed),
+        "every issue placed"
+    );
+    assert_eq!(every.len(), 10);
+}
+
+/// The plan's project copied onto the board on its own, attached to the clock, as the first
+/// command of a plan copy sends it: the board ids of the plan's records.
+fn project_landed(plan: &Plan) -> Counterparts {
+    let (report, _) = plan.measured(&["project", "copy", "notes:P", "--to", "board", "--json"]);
+    let mut at = Counterparts::new();
+    at.insert("P".into(), landed(&report, "notes:P"));
+    for n in 1..=TASKS {
+        at.insert(format!("T-{n}"), landed(&report, &format!("notes:T-{n}")));
+    }
+    at
+}
+
+/// The coalesced lookup's own name for what it sends.
+const COALESCED: &str =
+    "looking up the items copied from several origins, with a project's members";
+
+#[test]
+fn a_documents_first_screened_copy_classifies_its_project_by_the_members_its_lookup_carries() {
+    // The project lands, and then a person records one of its tasks on the board as changing a
+    // private repository. The document's first copy reads its project's members in the same
+    // request as its origins, finds the project private by what it holds, and is refused
+    // before anything is sent — the members read nowhere else.
+    let mut plan = Plan::screened(SMALL, Vec::new(), None);
+    let at = project_landed(&plan);
+    plan.screening
+        .as_mut()
+        .expect("a screened plan")
+        .0
+        .private("synthco", "secret-gadgets");
+    record_repository(&plan, &at["T-3"], "github.com/synthco/secret-gadgets");
+    let (output, calls) =
+        plan.measured_output(&["document", "copy", "notes:D", "--to", "board", "--json"]);
+    assert_ne!(output.status.code(), Some(0), "{}", stdout(&output));
+    let sent = tally(&calls);
+    assert_eq!(sent.get(COALESCED), Some(&1), "{sent:?}");
+    assert!(
+        !sent.contains_key("reading a project's tasks"),
+        "the members came with the lookup: {sent:?}"
+    );
+    assert!(
+        calls.iter().all(|call| !call.creating),
+        "a refused copy sent {sent:?}"
+    );
+    let failure: Value = serde_json::from_str(&stdout(&output)).expect("a failure document");
+    assert_eq!(
+        failure["failure"]["kind"], "not-private-destination",
+        "{failure}"
+    );
+}
+
+#[test]
+fn a_documents_first_screened_copy_lists_its_projects_members_whole_when_the_page_has_more() {
+    // The project holds more members than the page the lookup carries: that page is no answer
+    // about all of them, so the copy lists the members whole before it is held to them, and
+    // lands.
+    let plan = Plan::screened(SMALL, Vec::new(), None);
+    let at = project_landed(&plan);
+    for n in 1..=20 {
+        plan.github
+            .file_under(&format!("BG-{n}"), Some(at["P"].as_str()));
+    }
+    let (_, calls) = plan.measured(&["document", "copy", "notes:D", "--to", "board", "--json"]);
+    let sent = tally(&calls);
+    assert_eq!(sent.get(COALESCED), Some(&1), "{sent:?}");
+    assert!(
+        sent.contains_key("reading a project's tasks"),
+        "the members were listed whole: {sent:?}"
     );
 }
