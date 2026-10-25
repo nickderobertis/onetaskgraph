@@ -806,6 +806,132 @@ fn views_that_depend_on_each_other_are_both_landed_with_both_edges() {
 }
 
 #[test]
+fn a_view_carries_an_anchor_naming_only_itself_and_the_in_page_links_to_it() {
+    // What a plan-task template writes before a budget: an anchor carrying only an id, with a
+    // link whose fragment is exactly that id, and one spelled as the plan's design document
+    // spells it — and the same anchor by `name`, in capitals, unquoted, self-closing and cut off
+    // before its `>`, which CommonMark shows as text. None names a destination or loads
+    // anything. What this holds is the store's half: every byte of each anchor and each link
+    // reaches the view, so the fragment still names the anchor beside it; how a renderer then
+    // spells the anchor's id is the renderer's, and nothing here asserts it.
+    const BUDGETED: &str = "<a id=\"library-copy-seconds\"></a>\n\n\
+                            | Budget | Limit |\n|---|---|\n| library copy seconds | 30 |\n\n\
+                            Held to [the budget](#library-copy-seconds) — in the design document \
+                            [the budget](#user-content-library-copy-seconds) — \
+                            <a name='retry_2.b'></a>and [the retry](#retry_2.b) below, \
+                            <A ID=top></A> and <a id=\"end\" />. Truncated: <a id=\"cut\"";
+    let store = projecting_store();
+    private_rollout(&store);
+    store.record(
+        "plan",
+        "tasks",
+        "budgeted",
+        &format!("title: Budget the copy\nstatus: todo\nproject: rollout\nrepositories: [{OPEN}]"),
+        BUDGETED,
+    );
+    let landed = copy_rollout(&store);
+    let view = view_of(&store, &landed, &landed["plan:budgeted"]);
+    assert!(view.starts_with("site:"), "{view}");
+    let content = shown(&store, "task", &view)["content"]
+        .as_str()
+        .expect("the view's content")
+        .to_owned();
+    assert_eq!(
+        content.trim_end(),
+        BUDGETED,
+        "the view carries the anchors as written"
+    );
+    // Each in-page link and the anchor its fragment names exactly, both in the one view.
+    for (anchor, link) in [
+        (
+            "<a id=\"library-copy-seconds\"></a>",
+            "[the budget](#library-copy-seconds)",
+        ),
+        ("<a name='retry_2.b'></a>", "[the retry](#retry_2.b)"),
+    ] {
+        assert!(
+            content.contains(anchor) && content.contains(link),
+            "{anchor} and {link} in the view:\n{content}"
+        );
+    }
+    assert_site_neutral(&store);
+}
+
+#[test]
+fn an_anchor_carrying_anything_but_its_own_name_is_refused_naming_the_whole_tag() {
+    for (body, reference) in [
+        (
+            "<a id=\"notes\" href=\"../notes/retry.md\">the notes</a>",
+            "<a id=\"notes\" href=\"../notes/retry.md\">",
+        ),
+        (
+            "<a href=\"https://example.org/faq\" name=\"faq\">the FAQ</a>",
+            "<a href=\"https://example.org/faq\" name=\"faq\">",
+        ),
+        (
+            "<a name=\"notes\" onclick=\"fetch('../notes/f.json')\"></a>",
+            "<a name=\"notes\" onclick=\"fetch('../notes/f.json')\">",
+        ),
+        (
+            "<a id=\"notes\" style=\"background: url('../notes/g.png')\"></a>",
+            "<a id=\"notes\" style=\"background: url('../notes/g.png')\">",
+        ),
+        (
+            "<a id=\"notes\" ping=\"https://example.org/p\"></a>",
+            "<a id=\"notes\" ping=\"https://example.org/p\">",
+        ),
+        // A `>` inside a quoted value does not end the tag, so what follows it is read.
+        (
+            "<a id=\"a>b\" href=\"../notes/i.md\">i</a>",
+            "<a id=\"a>b\" href=\"../notes/i.md\">",
+        ),
+        // An id that is a path, an entity, empty or absent is no name a link can reach.
+        ("<a id=\"../notes/j.md\"></a>", "<a id=\"../notes/j.md\">"),
+        ("<a id=\"k&#x2f;l\"></a>", "<a id=\"k&#x2f;l\">"),
+        ("<a id=\"\"></a>", "<a id=\"\">"),
+        ("<a id></a>", "<a id>"),
+        ("<a id=\"m\" id=\"n\"></a>", "<a id=\"m\" id=\"n\">"),
+        // A tag HTML cannot read to its end is never carried: CommonMark reads this one as
+        // text up to the `</a>`, and all of that text is named — as it is a tag whose `=` stands
+        // where an attribute's name belongs.
+        (
+            "<a id=\"unclosed></a> and [x](https://example.org)",
+            "<a id=\"unclosed>",
+        ),
+        ("<a =\"o\"></a>", "<a =\"o\">"),
+        // Only an anchor names itself this way.
+        ("<img id=\"p\">", "<img id=\"p\">"),
+        ("<script id=\"q\"></script>", "<script id=\"q\">"),
+        (
+            "<form action=\"../notes/r\"></form>",
+            "<form action=\"../notes/r\">",
+        ),
+        (
+            "<button formaction=\"../notes/s\">s</button>",
+            "<button formaction=\"../notes/s\">",
+        ),
+    ] {
+        let store = projecting_store();
+        private_rollout(&store);
+        store.record(
+            "plan",
+            "tasks",
+            "leaky",
+            &format!("title: Add retry\nstatus: todo\nproject: rollout\nrepositories: [{OPEN}]"),
+            &format!("See {body} first."),
+        );
+        let before = store.tree();
+        let (kind, said) = store.refused(&["project", "copy", "plan:rollout", "--to", "vault"]);
+        assert_eq!(kind, "projection-reference", "{body}: {said}");
+        assert!(
+            said.contains(&format!("carries {reference:?}, a local link")),
+            "{body}: names {reference:?}\n{said}"
+        );
+        assert_eq!(store.tree(), before, "{body}: nothing was written anywhere");
+    }
+}
+
+#[test]
 fn a_view_carries_its_task_s_image_assets_byte_for_byte() {
     let store = projecting_store();
     private_rollout(&store);
