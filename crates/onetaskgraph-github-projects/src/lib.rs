@@ -10446,16 +10446,11 @@ impl GitHubProjectsSource {
             let Some(body) = node.get("body").and_then(Value::as_str) else {
                 return Ok(());
             };
+            // Every node here is filed under `project`, which `BoardKind::of` reads as one of its
+            // tasks whatever its marker says, so each is a member the full read would classify.
             let Ok((_, slot)) = metadata_body(Some(body.to_owned())) else {
                 return Ok(());
             };
-            // A project filed under this one is no member a task or document listing names.
-            if slot
-                .get(ItemKind::METADATA_KEY)
-                .is_some_and(|kind| kind == "project")
-            {
-                continue;
-            }
             let Ok(classification) = Classification::from_metadata(&slot) else {
                 return Ok(());
             };

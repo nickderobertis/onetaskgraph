@@ -11912,7 +11912,7 @@ enum MembersAnswer {
     MalformedRecordedRepositories,
     /// A member, recording no repository list, whose own repository is no `owner/name`.
     InvalidOwnRepository,
-    /// A member that is itself a project.
+    /// A member, filed under the project, whose own record marks it a project, and private.
     NestedProject,
 }
 
@@ -22273,10 +22273,19 @@ async fn a_members_page_that_is_not_every_member_or_cannot_be_read_answers_nothi
 }
 
 #[tokio::test]
-async fn a_project_filed_under_the_project_is_no_member_its_classification_reads() {
-    // A task or document listing never names a project filed under this one, so the page of
-    // members does not either: the two tasks alone, the nested project's own record left out.
+async fn an_issue_marked_a_project_but_filed_under_the_project_is_a_member_it_classifies() {
+    // Filed under the project, it reads as one of its tasks whatever its marker says, as a
+    // task listing of the project names it: its private classification is held beside the
+    // other two members', never left out so the project could read public without it.
     let (_, _, classes) = members_read(MembersAnswer::NestedProject).await;
     let classes = classes.expect("the whole page");
-    assert_eq!(classes.len(), 2, "{classes:?}");
+    assert_eq!(classes.len(), 3, "{classes:?}");
+    assert_eq!(
+        classes
+            .iter()
+            .filter(|(class, _)| *class == onetaskgraph_plugin_api::Classification::Private)
+            .count(),
+        2,
+        "{classes:?}"
+    );
 }
