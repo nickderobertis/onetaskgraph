@@ -619,3 +619,34 @@ fn a_dependency_on_an_item_classified_private_is_withheld_and_said_on_standard_e
         );
     }
 }
+
+#[tokio::test]
+async fn a_refused_union_whose_write_the_check_cannot_decide_alone_is_that_writes_unavailability() {
+    // The union is refused, and checked record by record the check cannot decide the consumer
+    // alone: the copy is refused as unavailable naming the consumer, never as having passed,
+    // and nothing is written.
+    let (store, policy, copied) = copied_through(|input| {
+        let names = |title: &str| input.metadata.iter().any(|value| value == title);
+        if names("Goal") && names("Rollout") {
+            onetaskgraph_core::boundary::WriteVerdict::Refuse {
+                reason: "only together".to_owned(),
+            }
+        } else if names("Consumer") {
+            onetaskgraph_core::boundary::WriteVerdict::Unavailable {
+                reason: "the check could not be run".to_owned(),
+            }
+        } else {
+            onetaskgraph_core::boundary::WriteVerdict::Pass
+        }
+    })
+    .await;
+    let refused = copied.expect_err("an undecided write is never a pass");
+    assert_eq!(super::kind_of(&refused), "boundary-unavailable");
+    assert!(refused.to_string().contains("draft:consumer"), "{refused}");
+    let checked = policy.checked.lock().unwrap().clone();
+    assert_eq!(checked[0], 4, "the union first: {checked:?}");
+    assert!(
+        tree(&store.folder("site")).is_empty(),
+        "nothing was written"
+    );
+}
