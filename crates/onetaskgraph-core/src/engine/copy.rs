@@ -7759,36 +7759,52 @@ impl Engine {
             let kind = follow.item.level().record();
             stored::forget(destination, kind, &follow.id);
             let target = Some(follow.id.clone());
-            match follow.item {
-                Item::Task(task) => destination
-                    .source()
-                    .write_task(&ItemWrite {
-                        target,
-                        item: *task,
-                        depends_on: follow.edges,
-                    })
-                    .await
-                    .map(drop),
-                Item::Project(project) => destination
-                    .source()
-                    .write_project(&ItemWrite {
-                        target,
-                        item: *project,
-                        depends_on: follow.edges,
-                    })
-                    .await
-                    .map(drop),
-                Item::Document(document) => destination
-                    .source()
-                    .write_document(&ItemWrite {
-                        target,
-                        item: *document,
-                        depends_on: Vec::new(),
-                    })
-                    .await
-                    .map(drop),
+            let written = match follow.item {
+                Item::Task(task) => {
+                    destination
+                        .source()
+                        .write_task(&ItemWrite {
+                            target,
+                            item: *task,
+                            depends_on: follow.edges,
+                        })
+                        .await
+                }
+                Item::Project(project) => {
+                    destination
+                        .source()
+                        .write_project(&ItemWrite {
+                            target,
+                            item: *project,
+                            depends_on: follow.edges,
+                        })
+                        .await
+                }
+                Item::Document(document) => {
+                    destination
+                        .source()
+                        .write_document(&ItemWrite {
+                            target,
+                            item: *document,
+                            depends_on: Vec::new(),
+                        })
+                        .await
+                }
             }
             .map_err(|error| refused(destination, error))?;
+            // A follow-up is an update of the item it names, and an answer naming another is one
+            // this copy cannot say what was written to.
+            if written != follow.id {
+                return Err(refused(
+                    destination,
+                    SourceError::Malformed {
+                        message: format!(
+                            "the follow-up write of {} answered with the item {written}",
+                            follow.id
+                        ),
+                    },
+                ));
+            }
             if let Some(error) = stored::unstable(destination, kind, &follow.id, &follow.stored) {
                 diverged.push((follow.source, error));
             }
@@ -9182,7 +9198,8 @@ fn source_version(item: &Planned, content: Option<&str>) -> String {
     )
 }
 
-/// The change token `item`'s source gives it, when it gives one.
+/// The change token a source gave `item` — a folder of Markdown gives a project and a document
+/// none.
 fn token_of(item: &Item) -> Option<&str> {
     match item {
         Item::Task(task) => task.version.as_deref(),
@@ -9191,7 +9208,7 @@ fn token_of(item: &Item) -> Option<&str> {
     }
 }
 
-/// The content of either kind of item.
+/// The content of any kind of item, `None` for one holding none.
 fn content_of(item: &Item) -> Option<&str> {
     match item {
         Item::Task(task) => task.content.as_deref(),

@@ -34,7 +34,8 @@ pub(crate) struct OriginsAhead {
     pending: Vec<String>,
 }
 
-/// The task query a copy asks for the items copied from `origin`, and nothing else.
+/// The one task query a copy asks by origin — no other member set — which is the only query
+/// [`LinearSource::held_origin_tasks`] answers from what the batched read held.
 fn origin_query(origin: &str) -> TaskQuery {
     TaskQuery {
         origin: Some(origin.to_owned()),
@@ -300,7 +301,8 @@ impl LinearSource {
     }
 }
 
-/// Whether `rows` fit one page of `page`.
+/// Whether `rows` fit one page of `page`: a held answer larger than the page asked for is never
+/// handed over, since a source may answer fewer rows than it was asked for and never more.
 fn fits(rows: usize, page: &PageRequest) -> bool {
     rows as u64 <= u64::from(page.limit)
 }

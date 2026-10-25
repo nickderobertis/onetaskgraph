@@ -223,7 +223,8 @@ pub(super) fn digest_of(
     }
 }
 
-/// `value` as JSON, which every contract type renders as.
+/// `value` as JSON: a contract type's serialization has no failing case, so a failure here is a
+/// defect in the type rather than in the item.
 fn as_json(value: serde_json::Result<Value>) -> Value {
     value.expect("a contract type renders as JSON")
 }

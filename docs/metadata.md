@@ -544,10 +544,9 @@ reading the item again:
   each comment native to the destination as `{"id": …, "body": …}`, sorted by its canonical
   JSON. `copy_skip.rs`'s
   `the_recorded_destination_digest_is_the_documented_digest_of_the_destination_as_read` holds
-  the engine to this, by recomputing it from what the binary reads back. For a project the
-  object's members are `title`, `content`, `status`, `labels`, `metadata`, `repositories`,
-  `classification` and `edges`; for a document `title`, `content`, `labels`, `project`,
-  `metadata`, `repositories` and `classification`.
+  the engine to this, by recomputing it from what the binary reads back. A project's and a
+  document's are taken the same way over the members a copy writes of each, a project's forward
+  edges among them.
 
 Each fingerprint an item keeps has one job: a rendering's `body_digest` lets any reader verify
 the item is its template's rendering unedited; `copied_version` says whether the source changed;
