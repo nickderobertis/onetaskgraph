@@ -153,6 +153,10 @@ fn board(scenario: &str) -> Board {
         | "items-no-page-info"
         | "items-stuck-cursor"
         | "items-bad-id"
+        | "items-empty-cursor"
+        | "items-no-content"
+        | "items-no-typename"
+        | "items-no-repository"
         | "item-removal-refused"
         | "item-removal-unconfirmed"
         | "issue-removal-refused" => {
@@ -172,6 +176,10 @@ fn board(scenario: &str) -> Board {
                 "items-no-cursor" => Some("no-cursor"),
                 "items-no-page-info" => Some("no-page-info"),
                 "items-stuck-cursor" => Some("stuck-cursor"),
+                "items-empty-cursor" => Some("empty-cursor"),
+                "items-no-content" => Some("no-content"),
+                "items-no-typename" => Some("no-typename"),
+                "items-no-repository" => Some("no-repository"),
                 "items-bad-id" => {
                     board.items.push((
                         "PVTI_bad".to_owned(),
@@ -301,6 +309,16 @@ fn answer(board: &Mutex<Board>, method: &str, path: &str, body: Option<Value>) -
                 Some("no-cursor") => items["pageInfo"] = json!({"hasNextPage":true}),
                 Some("no-page-info") => {
                     items.as_object_mut().unwrap().remove("pageInfo");
+                }
+                Some("empty-cursor") => {
+                    items["pageInfo"] = json!({"hasNextPage":true,"endCursor":""});
+                }
+                // The first node is one of the board's own drafts, answered malformed.
+                Some("no-content") => items["nodes"][0] = json!({"id":"PVTI_draft_0"}),
+                Some("no-typename") => items["nodes"][0]["content"] = json!({"title":"x"}),
+                Some("no-repository") => {
+                    items["nodes"][0]["content"] =
+                        json!({"__typename":"Issue","id":"I_x","title":"existing board note"});
                 }
                 _ => {}
             }
@@ -740,6 +758,15 @@ fn an_item_list_it_cannot_read_whole_or_a_removal_github_does_not_confirm_stops_
         (
             "items-no-page-info",
             "did not say whether it was complete",
+            0,
+            0,
+        ),
+        ("items-empty-cursor", "has no advancing cursor", 0, 0),
+        ("items-no-content", "an item without content", 0, 0),
+        ("items-no-typename", "content without its type", 0, 0),
+        (
+            "items-no-repository",
+            "an issue without its repository",
             0,
             0,
         ),

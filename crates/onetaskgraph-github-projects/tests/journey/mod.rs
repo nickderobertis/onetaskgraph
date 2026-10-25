@@ -1774,13 +1774,31 @@ async fn ci_stamped_issues(
             .and_then(Value::as_array)
             .ok_or("residue item lookup nodes is not an array")?
         {
-            let content = node.get("content").unwrap_or(&Value::Null);
-            if content.get("__typename").and_then(Value::as_str) != Some("Issue")
-                || content
-                    .pointer("/repository/nameWithOwner")
-                    .and_then(Value::as_str)
-                    != Some(repository)
-            {
+            // As the janitor reads a page: `null` content is an item this credential cannot
+            // see, which is nobody's residue to read; a missing field is a page that did not
+            // answer the query, and refuses.
+            let content = node.get("content").ok_or_else(|| {
+                format!("residue item lookup answered an item without content: {node}")
+            })?;
+            if content.is_null() {
+                continue;
+            }
+            let kind = content
+                .get("__typename")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    format!("residue item lookup answered content without its type: {node}")
+                })?;
+            if kind != "Issue" {
+                continue;
+            }
+            let owner = content
+                .pointer("/repository/nameWithOwner")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    format!("residue item lookup answered an issue without its repository: {node}")
+                })?;
+            if owner != repository {
                 continue;
             }
             let Some(run) = content
@@ -1826,7 +1844,7 @@ async fn ci_stamped_issues(
         let next = connection
             .pointer("/pageInfo/endCursor")
             .and_then(Value::as_str)
-            .filter(|next| after.as_str() != Some(next))
+            .filter(|next| !next.is_empty() && after.as_str() != Some(next))
             .ok_or("residue item lookup has no advancing cursor")?;
         after = Value::String(next.to_owned());
     }
