@@ -1,5 +1,9 @@
 //! The live lane's board pre-flight against a loopback board holding a CI run's leftover field.
 //!
+//! Fields and items alike: a stamped field is always judged, and stamped items are judged when
+//! the board holds more than the registered workload's items, which is when they would refuse
+//! it.
+//!
 //! The pre-flight is the real one — `journey::preflight_board`, the call the credentialed
 //! lane makes before it writes anything — recording into a real session record, which is what
 //! makes it judge the board against the registered workload. What stands in for GitHub is a
@@ -18,7 +22,10 @@ use std::sync::{Arc, LazyLock, Mutex};
 use std::thread;
 
 use onetaskgraph_github_live::quota::{EntryPoint, reference_workload};
-use onetaskgraph_github_live::{BOARD_WORKLOAD_DOCUMENT, CORE_REPOSITORY, DELETE_FIELD_DOCUMENT};
+use onetaskgraph_github_live::{
+    ARTIFACT_PREFIX, BOARD_WORKLOAD_DOCUMENT, CORE_REPOSITORY, DELETE_FIELD_DOCUMENT,
+};
+use onetaskgraph_github_projects::DESIGN_TITLE_PREFIX;
 use onetaskgraph_github_projects::accounting::Accounting;
 use serde_json::{Value, json};
 
@@ -42,6 +49,8 @@ const KEPT_ALWAYS: [&str; 3] = [
     "otg-live-1-1-1792911749637960",
     "otg-live-ci-01-1-1",
 ];
+/// A run still going, whose stamped items a pre-flight must leave and count.
+const ACTIVE_RUN: u64 = 999;
 /// What tells a re-execution of this binary which board to stand in for.
 const CHILD_VARIABLE: &str = "ONETASKGRAPH_PREFLIGHT_GATE_CHILD";
 /// The shared measurement as the lane's accounting sends it.
@@ -61,7 +70,8 @@ enum Removal {
 
 /// The board, the run statuses GitHub reports and every request the pre-flight sent.
 struct Board {
-    items: u64,
+    /// Each item's id, the issue behind it (none for a draft) and its title.
+    items: Vec<(String, Option<String>, String)>,
     /// Each field as GitHub answers it under the measurement's two fragments.
     fields: Vec<Value>,
     more_fields: bool,
@@ -87,8 +97,19 @@ fn board(scenario: &str) -> Board {
         .collect::<Vec<_>>();
     fields.push(json!({"id":"FIELD_leftover","name":LEFTOVER}));
     fields.push(json!({"id":"FIELD_leftover_2","name":SECOND_LEFTOVER}));
+    let drafts = |count: usize| {
+        (0..count)
+            .map(|n| {
+                (
+                    format!("PVTI_draft_{n}"),
+                    None,
+                    "existing board note".to_owned(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
     let mut board = Board {
-        items: 60,
+        items: drafts(60),
         fields,
         more_fields: false,
         answer_nodes: true,
@@ -107,6 +128,20 @@ fn board(scenario: &str) -> Board {
     board.runs.insert(LEFTOVER_RUN, status);
     match scenario {
         "completed" | "in-progress" | "unreadable" | "unknown-status" => {}
+        // 82 of the board's own and 10 a completed run left, a document among them, and 3 a
+        // run still going left: 95 raw, 85 once the completed run's are gone.
+        "items-completed" => {
+            board.items = drafts(82);
+            board.items.extend(stamped_items(LEFTOVER_RUN, 10));
+            board.items.extend(stamped_items(ACTIVE_RUN, 3));
+            board.runs.insert(ACTIVE_RUN, Some("in_progress"));
+        }
+        // 82 of the board's own and 10 a run still going left: 92, all counted.
+        "items-active" => {
+            board.items = drafts(82);
+            board.items.extend(stamped_items(ACTIVE_RUN, 10));
+            board.runs.insert(ACTIVE_RUN, Some("in_progress"));
+        }
         "more-fields" => board.more_fields = true,
         "malformed-field" => board.fields.push(json!({"id":"FIELD_bad","name":7})),
         "empty-id" => board
@@ -119,6 +154,23 @@ fn board(scenario: &str) -> Board {
         other => panic!("no scenario {other}"),
     }
     board
+}
+
+/// `count` issues the lane wrote under `run`'s CI stamp, the first of them a document.
+fn stamped_items(run: u64, count: usize) -> Vec<(String, Option<String>, String)> {
+    (0..count)
+        .map(|n| {
+            let design = if n == 0 { DESIGN_TITLE_PREFIX } else { "" };
+            (
+                format!("PVTI_{run}_{n}"),
+                Some(format!("I_{run}_{n}")),
+                format!(
+                    "{design}{ARTIFACT_PREFIX}ci-{run}-1-{}",
+                    1_792_911_749_637_960 + n
+                ),
+            )
+        })
+        .collect()
 }
 
 fn answer(board: &Mutex<Board>, method: &str, path: &str, body: Option<Value>) -> (u16, Value) {
@@ -138,7 +190,40 @@ fn answer(board: &Mutex<Board>, method: &str, path: &str, body: Option<Value>) -
             return (
                 200,
                 json!({"data":{"repositoryOwner":{"projectV2":{"id":"PVT_board",
-                    "items":{"totalCount":board.items},"fields":fields}}}}),
+                    "items":{"totalCount":board.items.len()},"fields":fields}}}}),
+            );
+        }
+        // The lane's own artifact lookup, which its cleanup lists the board with.
+        if query.contains("node(id:$id){... on ProjectV2{items(first:100") {
+            assert_eq!(body["variables"]["id"], json!("PVT_board"));
+            let nodes = board
+                .items
+                .iter()
+                .map(|(id, issue, title)| match issue {
+                    Some(issue) => json!({"id":id,
+                        "content":{"__typename":"Issue","id":issue,"title":title}}),
+                    None => json!({"id":id,"content":{"title":title}}),
+                })
+                .collect::<Vec<_>>();
+            return (
+                200,
+                json!({"data":{"node":{"items":{"nodes":nodes,
+                    "pageInfo":{"hasNextPage":false,"endCursor":null}}}}}),
+            );
+        }
+        if query.contains("deleteProjectV2Item(input:$input)") {
+            assert_eq!(body["variables"]["input"]["projectId"], json!("PVT_board"));
+            let item = body["variables"]["input"]["itemId"].clone();
+            board.items.retain(|(id, _, _)| json!(id) != item);
+            return (
+                200,
+                json!({"data":{"deleteProjectV2Item":{"deletedItemId":item}}}),
+            );
+        }
+        if query.contains("deleteIssue(input:$input)") {
+            return (
+                200,
+                json!({"data":{"deleteIssue":{"repository":{"id":"R_scratch"}}}}),
             );
         }
         assert_eq!(query, DELETE_FIELD_DOCUMENT, "an unexpected document");
@@ -294,6 +379,10 @@ async fn preflight_child() {
         serde_json::to_string(&board.requests).unwrap()
     );
     println!(
+        "items left: {}",
+        serde_json::to_string(&board.items.iter().map(|(_, _, t)| t).collect::<Vec<_>>()).unwrap()
+    );
+    println!(
         "fields left: {}",
         serde_json::to_string(
             &board
@@ -320,6 +409,26 @@ fn requests(stdout: &str) -> Vec<String> {
         .find_map(|line| line.strip_prefix("requests: "))
         .unwrap_or_else(|| panic!("the child printed no requests: {stdout}"));
     serde_json::from_str(line).unwrap()
+}
+
+fn items_left(stdout: &str) -> Vec<String> {
+    let line = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("items left: "))
+        .unwrap_or_else(|| panic!("the child printed no items: {stdout}"));
+    serde_json::from_str(line).unwrap()
+}
+
+/// How many of the requests sent were the lane's artifact lookup or an item or issue removal.
+fn item_requests(stdout: &str) -> usize {
+    requests(stdout)
+        .iter()
+        .filter(|request| {
+            request.contains("on ProjectV2{items(first:100")
+                || request.contains("deleteProjectV2Item(")
+                || request.contains("deleteIssue(")
+        })
+        .count()
 }
 
 fn removals(stdout: &str) -> usize {
@@ -352,6 +461,8 @@ fn every_field_a_completed_run_left_is_removed_and_the_board_is_admitted() {
         assert!(fields_left(&stdout).contains(&kept.to_owned()), "{kept}");
         assert!(!stderr.contains(kept), "{kept}: {stderr}");
     }
+    // Within the registered workload's items, the board is not listed at all.
+    assert_eq!(item_requests(&stdout), 0);
     // One read for the run however many fields it left, then one removal per field.
     assert_eq!(
         requests(&stdout),
@@ -429,4 +540,73 @@ fn a_field_list_it_cannot_read_whole_or_a_removal_github_does_not_confirm_fails(
             "{scenario}"
         );
     }
+}
+
+#[test]
+fn items_a_completed_run_left_past_the_registered_workload_are_removed_and_the_board_is_admitted() {
+    let (succeeded, stdout, stderr) = preflight("items-completed");
+    assert!(succeeded, "{stdout}\n{stderr}");
+    assert!(
+        stdout.contains(r#"measured: Ok("PVT_board")"#),
+        "{stdout}\n{stderr}"
+    );
+    let left = items_left(&stdout);
+    assert_eq!(left.len(), 85, "{left:?}");
+    for (_, _, title) in stamped_items(LEFTOVER_RUN, 10) {
+        assert!(!left.contains(&title), "{title}");
+        assert!(
+            stderr.contains(&format!(
+                "board pre-flight removed item {title} and its issue: residue of run \
+                 {LEFTOVER_RUN}, which reads completed"
+            )),
+            "{title}: {stderr}"
+        );
+    }
+    for (_, _, title) in stamped_items(ACTIVE_RUN, 3) {
+        assert!(left.contains(&title), "{title}");
+        assert!(
+            stderr.contains(&format!(
+                "board pre-flight kept item {title}: run {ACTIVE_RUN} reads in_progress"
+            )),
+            "{title}: {stderr}"
+        );
+    }
+    let sent = requests(&stdout);
+    // One read per run before each kind of removal, never per item: the leftover run also
+    // left two fields, so its run is read once before those and once before its items.
+    for (run, reads) in [(LEFTOVER_RUN, 2), (ACTIVE_RUN, 1)] {
+        let read = format!("GET /repos/{CORE_REPOSITORY}/actions/runs/{run}");
+        assert_eq!(sent.iter().filter(|r| **r == read).count(), reads, "{run}");
+    }
+    let count = |needle: &str| sent.iter().filter(|r| r.contains(needle)).count();
+    assert_eq!(count("deleteProjectV2Item("), 10);
+    assert_eq!(count("deleteIssue("), 10);
+}
+
+#[test]
+fn items_an_active_run_left_stay_counted_and_the_board_is_refused() {
+    let (succeeded, stdout, stderr) = preflight("items-active");
+    assert!(succeeded, "{stdout}\n{stderr}");
+    assert!(
+        stdout.contains(
+            "measured: Err(\"initial board workload is 92 items and 14 fields; registered \
+             workload requires 51 to 90 items and 14 fields\")"
+        ),
+        "{stdout}\n{stderr}"
+    );
+    assert_eq!(items_left(&stdout).len(), 92);
+    for (_, _, title) in stamped_items(ACTIVE_RUN, 10) {
+        assert!(
+            stderr.contains(&format!(
+                "board pre-flight kept item {title}: run {ACTIVE_RUN} reads in_progress"
+            )),
+            "{title}: {stderr}"
+        );
+    }
+    let sent = requests(&stdout);
+    assert!(
+        !sent
+            .iter()
+            .any(|r| r.contains("deleteProjectV2Item(") || r.contains("deleteIssue("))
+    );
 }

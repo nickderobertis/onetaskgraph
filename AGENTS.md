@@ -515,12 +515,15 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   on the next pass whatever their age, rather than filling the board the live lane
   refuses when it is too full for a day.
   **A cancelled run cleans up after itself, and a pre-flight never refuses a finished run's
-  field.** `ci.yml`'s step on cancellation runs the janitor with `--cancelled-run`, which
+  residue.** `ci.yml`'s step on cancellation runs the janitor with `--cancelled-run`, which
   removes exactly that run attempt's stamps and reads no run (`scripts/check-live-janitor.sh`
   holds the step's shape; the two lane guards exempt that one step). The lane's board
   pre-flight (`journey::preflight_board`) removes a stamped field whose run reads
-  `completed` before it counts the board, says so, and keeps and counts any other —
-  because one leftover field from a cancelled run once held every branch red.
+  `completed` before it counts the board — and, when the board holds more items than the
+  registered workload, such a run's items and their issues — says so, and keeps and counts
+  any other, because one leftover field from a cancelled run once held every branch red.
+  Within the workload's items it lists nothing, so an ordinary session's requests are as
+  they were.
   `tests/preflight_gate.rs` drives both against a stand-in board.
   Machine stamps remain the owning machine's lock sweep's. Cleanup never touches
   `onetaskgraph.origin`, draft items or other repositories' items; shared-board
