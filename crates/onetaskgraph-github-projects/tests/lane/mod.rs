@@ -165,7 +165,7 @@ pub fn artifact_title(writer: impl Into<Writer>, stamp_micros: u64) -> String {
 /// there rather than the caller. Cleanup reads the board's raw titles, so recognition takes
 /// that prefix off first — `onetaskgraph_github_live::titled_stamp` is that grammar,
 /// shared with the janitor.
-fn artifact_stamp(title: &str) -> Option<&str> {
+pub fn artifact_stamp(title: &str) -> Option<&str> {
     titled_stamp(title, DESIGN_TITLE_PREFIX)
 }
 

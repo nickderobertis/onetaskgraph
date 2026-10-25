@@ -656,10 +656,15 @@ def consults(command, where):
 # The workflow's steps, split the way scripts/check-live-lane.sh splits them.
 workflow = read(WORKFLOW, "the workflow that runs the required check")
 steps = re.split(r"(?m)^      - (?=name:|uses:)", workflow)
+# Less the janitor's cleanup of a cancelled run, which opens no session and so has no decision
+# to consult; scripts/check-live-janitor.sh holds that one step to its whole shape, and exactly
+# a step running this command is left out.
+CANCELLATION_CLEANUP = "cargo run --locked -p onetaskgraph-live-janitor -- --cancelled-run"
 credentialed = [
     step
     for step in steps
     if any(f"secrets.{variable}" in step for variable in live_variables)
+    and not re.search(rf"(?m)^\s*run:\s*{re.escape(CANCELLATION_CLEANUP)}\s*$", step)
 ]
 if not credentialed:
     problems.append(

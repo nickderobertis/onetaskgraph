@@ -325,6 +325,17 @@ code = without_comments(workflow)
 # Steps, so a credential can be attributed to the lane that carries it. A step begins at
 # the one indentation `- name:` uses inside a job's `steps:` list.
 steps = re.split(r"(?m)^      - (?=name:|uses:)", code)
+# The one credentialed step that opens no session: the janitor's cleanup of a cancelled run,
+# which reads no ONETASKGRAPH_LIVE_REQUIRED and no nomination it could skip for. Exactly a step
+# running this command is left out, and scripts/check-live-janitor.sh holds it to its whole
+# shape — its condition, its leg and the four variables it is given — so this cannot shelter
+# a session step, which runs a `just` recipe.
+CANCELLATION_CLEANUP = "cargo run --locked -p onetaskgraph-live-janitor -- --cancelled-run"
+steps = [
+    step
+    for step in steps
+    if not re.search(rf"(?m)^\s*run:\s*{re.escape(CANCELLATION_CLEANUP)}\s*$", step)
+]
 
 
 def demanded(step):

@@ -2923,9 +2923,16 @@ fn answer_a_session_call(
     if query.contains("query LiveBoardWorkload(") {
         assert_eq!(variables["owner"], json!("octo-org"));
         assert_eq!(variables["number"], json!(7));
+        let fields = state.fields()["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|field| json!({"id":field["id"],"name":field["name"]}))
+            .collect::<Vec<_>>();
         let mut result = json!({"repositoryOwner":{"projectV2":{"id":"PVT_board",
             "items":{"totalCount":state.items.len()},
-            "fields":{"totalCount":state.fields()["nodes"].as_array().unwrap().len()}}}});
+            "fields":{"totalCount":fields.len(),"nodes":fields,
+                      "pageInfo":{"hasNextPage":false}}}}});
         match state.limits.workload_fault {
             Some(WorkloadFault::MissingItems) => {
                 result["repositoryOwner"]["projectV2"]
@@ -2987,13 +2994,22 @@ fn answer_a_session_call(
     }
     if query.contains("on ProjectV2{items(first:") {
         // The artifact sweep selects each item's content; the page-size probe selects only
-        // its id. Both are answered off the one connection, in board order.
+        // its id; the pre-flight's residue listing selects every content's type and an
+        // issue's repository, which GitHub answers for every node. All three are answered off
+        // the one connection, in board order.
+        let residue = query.contains("content{__typename ... on Issue{id title repository");
         let nodes = state
             .items
             .iter()
             .map(|item| match item.typename {
+                "Issue" if residue => json!({"id":item.item_id,
+                    "content":{"__typename":"Issue","id":item.content_id,"title":item.title,
+                               "repository":{"nameWithOwner":item.repository}}}),
                 "Issue" => json!({"id":item.item_id,
                     "content":{"__typename":"Issue","id":item.content_id,"title":item.title}}),
+                typename if residue => {
+                    json!({"id":item.item_id,"content":{"__typename":typename}})
+                }
                 "DraftIssue" => json!({"id":item.item_id,"content":{"title":item.title}}),
                 _ => json!({"id":item.item_id,"content":{}}),
             })

@@ -68,6 +68,19 @@
 # `@possibleTypes(concreteTypes: ["Issue", "PullRequest"], abstractType: "IssueOrPullRequest")`
 # (same artifact, same day): GitHub refuses a draft as a subject, and accepts any issue — a
 # project's, a document's, one on no board — so a comment's target is still read first.
+#
+# `deleteProjectV2Field(input: DeleteProjectV2FieldInput!): DeleteProjectV2FieldPayload`, that
+# input's `fieldId: ID!` and that payload's `projectV2Field: ProjectV2FieldConfiguration`, and
+# `totalCount: Int!` on `ProjectV2FieldConfigurationConnection` and `ProjectV2ItemConnection`,
+# were read from GitHub.com's own published schema artifact
+# <https://docs.github.com/public/fpt/schema.docs.graphql> on 2026-10-25, reduced to those
+# members. Neither the plugin nor any production path sends them: they are the live lane's board
+# pre-flight and the scheduled janitor's, which remove a board field a finished CI run left, and
+# the janitor's `tests/schema.rs` holds both to this pin. The pin is reconciled with GitHub itself
+# by the credentialed lane: every session sends `BOARD_WORKLOAD_DOCUMENT`, which selects both
+# `totalCount`s, before it writes anything, and `deleteProjectV2Field` with that same input and
+# payload whenever it removes the origin field it created, and GitHub fails a document naming a
+# member its schema lacks with `GRAPHQL_VALIDATION_FAILED`, which fails the required check.
 schema {
   query: Query
   mutation: Mutation
@@ -116,6 +129,7 @@ type Mutation {
   removeBlockedBy(input: RemoveBlockedByInput!): RemoveBlockedByPayload
   deleteIssue(input: DeleteIssueInput!): DeleteIssuePayload
   deleteProjectV2Item(input: DeleteProjectV2ItemInput!): DeleteProjectV2ItemPayload
+  deleteProjectV2Field(input: DeleteProjectV2FieldInput!): DeleteProjectV2FieldPayload
   addComment(input: AddCommentInput!): AddCommentPayload
   updateIssueComment(input: UpdateIssueCommentInput!): UpdateIssueCommentPayload
   deleteIssueComment(input: DeleteIssueCommentInput!): DeleteIssueCommentPayload
@@ -129,6 +143,12 @@ input DeleteProjectV2ItemInput {
 }
 type DeleteProjectV2ItemPayload {
   deletedItemId: ID
+}
+input DeleteProjectV2FieldInput {
+  fieldId: ID!
+}
+type DeleteProjectV2FieldPayload {
+  projectV2Field: ProjectV2FieldConfiguration
 }
 input AddCommentInput {
   subjectId: ID!
@@ -331,6 +351,7 @@ type ProjectV2 implements Node {
 type ProjectV2FieldConfigurationConnection {
   nodes: [ProjectV2FieldConfiguration]
   pageInfo: PageInfo!
+  totalCount: Int!
 }
 type ProjectV2Item implements Node {
   id: ID!
@@ -497,6 +518,7 @@ type Label implements Node {
 type ProjectV2ItemConnection {
   nodes: [ProjectV2Item!]
   pageInfo: PageInfo!
+  totalCount: Int!
 }
 type IssueConnection {
   nodes: [Issue]

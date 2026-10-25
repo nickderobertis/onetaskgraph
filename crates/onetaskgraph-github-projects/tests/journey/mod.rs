@@ -41,12 +41,16 @@ use onetaskgraph_plugin_api::{
 };
 use serde_json::{Value, json};
 
-use onetaskgraph_live::artifact::{Run, Sweep, now_micros};
+use onetaskgraph_github_live::{
+    BOARD_WORKLOAD_DOCUMENT, CORE_REPOSITORY, DELETE_FIELD_DOCUMENT, RESIDUE_ITEMS_DOCUMENT,
+    RunStatus, fielded_stamp,
+};
+use onetaskgraph_live::artifact::{CiStamp, Run, Sweep, now_micros};
 use onetaskgraph_live::{Credential, Session};
 
 use crate::lane::{
-    ARTIFACT_PREFIX, Admission, LiveSecret, Own, Writer, admit, is_orphan_label, is_orphan_title,
-    live_write_config, rest_outcome, run_then_cleanup,
+    ARTIFACT_PREFIX, Admission, LiveSecret, Own, Writer, admit, artifact_stamp, is_orphan_label,
+    is_orphan_title, live_write_config, rest_outcome, run_then_cleanup,
 };
 
 /// Everything this run costs GitHub, this lane's own calls and the source's alike.
@@ -1650,38 +1654,372 @@ pub async fn sweep_orphans(
     }
 }
 
-/// Reads the node id of the one nominated board, so residue can be cleared before the journey
-/// builds the source it later reads the same board through.
-async fn nominated_project_id(
+/// The lane's board pre-flight: reads the nominated board's node id, removing first any
+/// board field a finished CI run left, so the board is judged as the board.
+///
+/// The board's measurement — how many items and fields
+/// it holds — is judged against the registered workload, and **a field a finished CI run left
+/// is not the board's**: [`clear_finished_runs_fields`] removes each one first, by the
+/// janitor's own ownership rule, and the count judged is the board's without them. A field
+/// whose run is still going, or whose run cannot be read, is neither removed nor left out, so
+/// a board holding one is refused exactly as before.
+pub async fn preflight_board(
     token: &str,
     owner: &str,
     project_number: u32,
+    repository: &str,
 ) -> Result<String, String> {
     let response = graphql_variables(
         token,
-        "query LiveBoardWorkload($owner:String!,$number:Int!){repositoryOwner(login:$owner){... on ProjectV2Owner{projectV2(number:$number){id items(first:1){totalCount} fields(first:1){totalCount}}}}}",
+        BOARD_WORKLOAD_DOCUMENT,
         "nominated board lookup",
         json!({"owner":owner,"number":project_number}),
     )
     .await?;
-    quota::observe_initial_board(
-        response
-            .pointer("/data/repositoryOwner/projectV2/items/totalCount")
-            .and_then(Value::as_u64),
-        response
-            .pointer("/data/repositoryOwner/projectV2/fields/totalCount")
-            .and_then(Value::as_u64),
-    )?;
-    response
-        .pointer("/data/repositoryOwner/projectV2/id")
+    let board = response.pointer("/data/repositoryOwner/projectV2");
+    let project_id = board
+        .and_then(|board| board.get("id"))
         .and_then(Value::as_str)
-        .map(str::to_owned)
         .ok_or_else(|| {
             format!(
                 "GH_PROJECTS_OWNER={owner} with GH_PROJECTS_NUMBER={project_number} names no \
                  project this credential can see"
             )
-        })
+        })?;
+    // The id goes into every later request, so it is held to what the janitor admits of one.
+    if project_id.is_empty() || project_id.chars().any(char::is_control) {
+        return Err(format!(
+            "the nominated board answered an unusable id: {project_id:?}"
+        ));
+    }
+    let project_id = project_id.to_owned();
+    // The whole measurement is read before anything is removed, so a board that cannot be
+    // judged is refused with nothing written.
+    // A board answering no fields at all is one whose field count was not reported, and
+    // says so in the words the workload's own refusal uses.
+    let fields = board
+        .and_then(|board| board.get("fields"))
+        .ok_or("initial board field count was not reported")?;
+    let field_total = fields
+        .get("totalCount")
+        .and_then(Value::as_u64)
+        .ok_or("initial board field count was not reported")?;
+    let item_total = board
+        .and_then(|board| board.pointer("/items/totalCount"))
+        .and_then(Value::as_u64)
+        .ok_or("initial board item count was not reported")?;
+    let removed_fields = clear_finished_runs_fields(token, fields).await?;
+    // Items are listed only when they are what would refuse the board: within the registered
+    // workload a finished run's items cost the journey nothing, and listing them every
+    // session would cost every session a walk of the board.
+    let removed_items =
+        if item_total > onetaskgraph_github_live::quota::reference_workload().initial_items {
+            clear_finished_runs_items(token, &project_id, repository).await?
+        } else {
+            0
+        };
+    quota::observe_initial_board(
+        Some(item_total.saturating_sub(removed_items)),
+        Some(field_total.saturating_sub(removed_fields)),
+    )?;
+    Ok(project_id)
+}
+
+/// Whether the Actions run a CI stamp names reads `completed`, read from GitHub now — or why
+/// nothing shows that it does: a run still going, a read that failed, or a status
+/// [`RunStatus`] does not declare. The janitor's ownership rule, the lane's one spelling of it.
+async fn owning_run_completed(token: &str, run: u64) -> Result<(), String> {
+    let (owner, repo) = CORE_REPOSITORY
+        .split_once('/')
+        .expect("the core repository is spelled owner/name");
+    let run_id = run.to_string();
+    let read = rest(
+        token,
+        Method::Get,
+        "/repos/{owner}/{repo}/actions/runs/{run_id}",
+        &[("owner", owner), ("repo", repo), ("run_id", &run_id)],
+        "",
+        None,
+        "residue owner run read",
+    )
+    .await;
+    match (&read, read.as_ref().ok().and_then(RunStatus::read)) {
+        (_, Some(RunStatus::Completed)) => Ok(()),
+        (_, Some(status)) => Err(format!("reads {}", status.spelling())),
+        (Err(error), None) => Err(format!("could not be read ({error})")),
+        (Ok(value), None) => Err(format!("answered no status this lane knows ({value})")),
+    }
+}
+
+/// A board item the pre-flight may remove: its id, the issue behind it, and its title.
+struct ResidueItem {
+    item: String,
+    issue: String,
+    title: String,
+}
+
+/// Every CI-stamped issue on the board in `repository`, the one this lane writes its issues
+/// to, walked to exhaustion; any other item — a draft, a pull request, an issue of another
+/// repository, whatever its title says — is nobody's residue to read.
+async fn ci_stamped_issues(
+    token: &str,
+    project_id: &str,
+    repository: &str,
+) -> Result<Vec<(u64, ResidueItem)>, String> {
+    let mut after = Value::Null;
+    let mut found = Vec::new();
+    for _ in 0..100 {
+        let response = graphql_variables(
+            token,
+            RESIDUE_ITEMS_DOCUMENT,
+            "residue item lookup",
+            json!({"id":project_id,"after":after}),
+        )
+        .await?;
+        let connection = response
+            .pointer("/data/node/items")
+            .ok_or("residue item lookup returned no items connection")?;
+        for node in connection
+            .get("nodes")
+            .and_then(Value::as_array)
+            .ok_or("residue item lookup nodes is not an array")?
+        {
+            // As the janitor reads a page: `null` content is an item this credential cannot
+            // see, which is nobody's residue to read; a missing field is a page that did not
+            // answer the query, and refuses.
+            let content = node.get("content").ok_or_else(|| {
+                format!("residue item lookup answered an item without content: {node}")
+            })?;
+            if content.is_null() {
+                continue;
+            }
+            let kind = content
+                .get("__typename")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    format!("residue item lookup answered content without its type: {node}")
+                })?;
+            if kind != "Issue" {
+                continue;
+            }
+            let owner = content
+                .pointer("/repository/nameWithOwner")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    format!("residue item lookup answered an issue without its repository: {node}")
+                })?;
+            if owner != repository {
+                continue;
+            }
+            let Some(run) = content
+                .get("title")
+                .and_then(Value::as_str)
+                .and_then(artifact_stamp)
+                .and_then(CiStamp::read)
+                .map(|stamp| stamp.run().run_id())
+            else {
+                continue;
+            };
+            // Both ids go into removals, so each is held to what the janitor admits of one.
+            let usable = |value: Option<&Value>| {
+                value
+                    .and_then(Value::as_str)
+                    .filter(|id| !id.is_empty() && !id.chars().any(char::is_control))
+                    .map(str::to_owned)
+            };
+            let (Some(item), Some(issue)) = (usable(node.get("id")), usable(content.get("id")))
+            else {
+                return Err(format!(
+                    "the board answered a stamped issue without usable ids: {node}"
+                ));
+            };
+            found.push((
+                run,
+                ResidueItem {
+                    item,
+                    issue,
+                    title: content["title"].as_str().unwrap_or_default().to_owned(),
+                },
+            ));
+        }
+        // Only an explicit answer ends the walk: a list that may be incomplete authorises nothing.
+        match connection
+            .pointer("/pageInfo/hasNextPage")
+            .and_then(Value::as_bool)
+        {
+            Some(false) => return Ok(found),
+            Some(true) => {}
+            None => return Err("residue item lookup did not say whether it was complete".into()),
+        }
+        let next = connection
+            .pointer("/pageInfo/endCursor")
+            .and_then(Value::as_str)
+            .filter(|next| !next.is_empty() && after.as_str() != Some(next))
+            .ok_or("residue item lookup has no advancing cursor")?;
+        after = Value::String(next.to_owned());
+    }
+    Err("residue item lookup did not end within 100 pages".to_owned())
+}
+
+/// Removes every board item a CI stamp names whose run reads `completed` — and the issue
+/// behind it — and says which; answers how many items it removed.
+///
+/// The same rule as [`clear_finished_runs_fields`], over the janitor's candidates: an issue in
+/// the repository this lane writes to, whose title carries a CI stamp. Each is taken off the
+/// board and then deleted, as the lane's own cleanup takes its artifacts. An item whose run is
+/// still going or cannot be read is left on the board, said to be kept, and counted.
+///
+/// # Errors
+///
+/// The board could not be listed, or GitHub refused or did not confirm a removal.
+pub async fn clear_finished_runs_items(
+    token: &str,
+    project_id: &str,
+    repository: &str,
+) -> Result<u64, String> {
+    let mut stamped: BTreeMap<u64, Vec<ResidueItem>> = BTreeMap::new();
+    for (run, item) in ci_stamped_issues(token, project_id, repository).await? {
+        stamped.entry(run).or_default().push(item);
+    }
+    let mut removed = 0;
+    for (run, items) in stamped {
+        if let Err(why) = owning_run_completed(token, run).await {
+            for item in items {
+                say(&format!(
+                    "board pre-flight kept item {}: run {run} {why}, so nothing shows it is \
+                     residue, and it is counted",
+                    item.title
+                ));
+            }
+            continue;
+        }
+        for item in items {
+            let answer = graphql_variables(
+                token,
+                "mutation($input:DeleteProjectV2ItemInput!){deleteProjectV2Item(input:$input){deletedItemId}}",
+                "residue item removal",
+                json!({"input":{"projectId":project_id,"itemId":item.item}}),
+            )
+            .await?;
+            if answer
+                .pointer("/data/deleteProjectV2Item/deletedItemId")
+                .and_then(Value::as_str)
+                != Some(item.item.as_str())
+            {
+                return Err(format!(
+                    "residue item removal: GitHub did not confirm removing {}: {answer}",
+                    item.title
+                ));
+            }
+            delete_issue(token, &item.issue).await?;
+            removed += 1;
+            say(&format!(
+                "board pre-flight removed item {} and its issue: residue of run {run}, which \
+                 reads completed, so it is not counted",
+                item.title
+            ));
+        }
+    }
+    Ok(removed)
+}
+
+/// Removes every board field a CI stamp names whose run reads `completed`, and says which.
+///
+/// The janitor's rule, applied before the lane measures the board: the stamp's run is read
+/// from GitHub (`GET /repos/{owner}/{repo}/actions/runs/{run_id}` of [`CORE_REPOSITORY`],
+/// which a cancelled run answers `completed` exactly as a succeeded or a failed one does), and
+/// only a completed run's field goes. One still going — this run's earlier attempt included,
+/// since a re-run reads in progress — or one whose read fails or says something
+/// [`RunStatus`] does not declare, keeps its field and is said to. A machine-stamped field is
+/// its machine's lock sweep's and is never read here. Answers how many fields it removed.
+///
+/// # Errors
+///
+/// The field list did not answer what the measurement selected, or GitHub refused or did not
+/// confirm a removal.
+pub async fn clear_finished_runs_fields(token: &str, fields: &Value) -> Result<u64, String> {
+    if fields
+        .pointer("/pageInfo/hasNextPage")
+        .and_then(Value::as_bool)
+        != Some(false)
+    {
+        return Err(
+            "the board's fields did not come back on one page, so a field a finished run \
+             left cannot be told from the board's own"
+                .to_owned(),
+        );
+    }
+    let nodes = fields
+        .get("nodes")
+        .and_then(Value::as_array)
+        .ok_or("the board's field names were not reported")?;
+    let mut stamped: BTreeMap<u64, Vec<(&str, &str)>> = BTreeMap::new();
+    for node in nodes {
+        // A field of a kind neither fragment selects answers `{}`, and the lane makes none.
+        if node.as_object().is_some_and(serde_json::Map::is_empty) {
+            continue;
+        }
+        // The id goes into a removal, so it is held to what the janitor admits of one.
+        let (Some(id), Some(name)) = (
+            node.get("id")
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty() && !id.chars().any(char::is_control)),
+            node.get("name").and_then(Value::as_str),
+        ) else {
+            return Err(format!(
+                "the board answered a field without a usable id and a name: {node}"
+            ));
+        };
+        if let Some(stamp) = fielded_stamp(name).and_then(CiStamp::read) {
+            stamped
+                .entry(stamp.run().run_id())
+                .or_default()
+                .push((id, name));
+        }
+    }
+    let mut removed = 0;
+    for (run, fields) in stamped {
+        if let Err(why) = owning_run_completed(token, run).await {
+            for (_, name) in fields {
+                say(&format!(
+                    "board pre-flight kept field {name}: run {run} {why}, so nothing shows it \
+                     is residue, and it is counted"
+                ));
+            }
+            continue;
+        }
+        for (id, name) in fields {
+            delete_board_field(token, id, "residue field removal").await?;
+            removed += 1;
+            say(&format!(
+                "board pre-flight removed field {name}: residue of run {run}, which reads \
+                 completed, so it is not counted"
+            ));
+        }
+    }
+    Ok(removed)
+}
+
+/// Removes one board field, refusing unless GitHub's answer names that field.
+async fn delete_board_field(token: &str, field: &str, what: &str) -> Result<(), String> {
+    let answer = graphql_variables(
+        token,
+        DELETE_FIELD_DOCUMENT,
+        what,
+        json!({"input": {"fieldId": field}}),
+    )
+    .await?;
+    if answer
+        .pointer("/data/deleteProjectV2Field/projectV2Field/id")
+        .and_then(Value::as_str)
+        == Some(field)
+    {
+        Ok(())
+    } else {
+        Err(format!(
+            "{what}: GitHub did not confirm removing field {field}: {answer}"
+        ))
+    }
 }
 
 fn named_type(value: &Value) -> Option<&str> {
@@ -4093,14 +4431,7 @@ async fn rename_scratch_option(run: &LiveRun, scratch: &ScratchField) -> Result<
 
 /// Remove the scratch field from the board.
 async fn delete_scratch_field(run: &LiveRun, scratch: &ScratchField) -> Result<(), String> {
-    graphql_variables(
-        &run.token,
-        "mutation($input:DeleteProjectV2FieldInput!){deleteProjectV2Field(input:$input){projectV2Field{... on ProjectV2SingleSelectField{id}}}}",
-        "live scratch field removal",
-        json!({"input": {"fieldId": scratch.id}}),
-    )
-    .await
-    .map(|_| ())
+    delete_board_field(&run.token, &scratch.id, "live scratch field removal").await
 }
 
 /// `filter_by_comment_activity`, and the GitHub fact it rests on, re-taken on every run.
@@ -4454,7 +4785,7 @@ pub async fn run(nomination: Nomination) {
         .unwrap_or_else(|error| {
             panic!("the GitHub Projects live lane cannot use this board: {error}")
         });
-    let project_id = nominated_project_id(&token, &owner, project_number)
+    let project_id = preflight_board(&token, &owner, project_number, &repository)
         .await
         .unwrap_or_else(|error| panic!("GitHub Projects live board lookup failed: {error}"));
     assert!(source.health().await.unwrap().reachable);
