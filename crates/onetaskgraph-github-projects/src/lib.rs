@@ -10411,9 +10411,12 @@ impl GitHubProjectsSource {
                 .await
                 .unwrap_or(Value::Null);
             for (slot, id) in chunk.iter().enumerate() {
+                // Confirmed only by the repository the deleted issue was in, named by a
+                // non-blank id: anything else says nothing of whether the issue is gone.
                 let confirmed = data
-                    .pointer(&format!("/delete{slot}/repository"))
-                    .is_some_and(|repository| !repository.is_null());
+                    .pointer(&format!("/delete{slot}/repository/id"))
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| !id.trim().is_empty());
                 if !confirmed {
                     left.push((*id).clone());
                 }

@@ -21,7 +21,7 @@ use onetaskgraph_e2e_support::{
         GitHubBoardFields, MEASURED_PLACEMENT_MILLIS, document, github_projects_with_items,
     },
     images,
-    onevcs::{BoundaryCall, BoundaryRecord, OnevcsHome},
+    onevcs::{BoundaryCall, BoundaryCommand, BoundaryRecord, OnevcsHome},
 };
 use onetaskgraph_github_projects::graphql;
 use serde_json::{Value, json};
@@ -265,6 +265,9 @@ impl Plan {
         plans
     }
 
+    // Each argument is one independent axis of the plan a journey lays — its board, its cache,
+    // its screening, its clock, its manager and the host it shares — and every caller names all
+    // of them, so a builder would only restate this signature.
     #[allow(clippy::too_many_arguments)]
     fn hosted(
         items: usize,
@@ -637,8 +640,8 @@ fn screening_calls(scenario: &Scenario) -> Value {
             let calls: Vec<Value> = phase
                 .screening
                 .iter()
-                .map(|call| match call.command.as_str() {
-                    "inspect" => json!({"inspect": call.input["repository"]}),
+                .map(|call| match call.command {
+                    BoundaryCommand::Inspect => json!({"inspect": call.input["repository"]}),
                     _ => json!({"check": {
                         "text": call.input["text"].as_array().map_or(0, Vec::len),
                         "paths": call.input["paths"].as_array().map_or(0, Vec::len),
@@ -1068,7 +1071,7 @@ pub(super) fn screened_once_before_writing(what: &str, scenario: &Scenario, titl
         for call in phase
             .screening
             .iter()
-            .filter(|call| call.command == "inspect")
+            .filter(|call| call.command == BoundaryCommand::Inspect)
         {
             let repository = call.input["repository"].to_string();
             assert!(
@@ -1081,7 +1084,7 @@ pub(super) fn screened_once_before_writing(what: &str, scenario: &Scenario, titl
         let checks: Vec<&BoundaryCall> = phase
             .screening
             .iter()
-            .filter(|call| call.command == "check")
+            .filter(|call| call.command == BoundaryCommand::Check)
             .collect();
         assert!(
             checks.len() <= 1,
@@ -1202,7 +1205,8 @@ fn scenarios_of(plan: &Plan, screened: bool) -> Measured {
 fn a_plan_copy_reads_what_the_plan_holds_whatever_the_board_has_accumulated() {
     // Each scenario on a board of 2,000 items and of 20,000, with no write policy and with
     // write screening on: what it sends never depends on the board's size, and screening adds
-    // no request to the board. What each cost is recorded as the copy budgets' telemetry.
+    // no request to the board but at most one listing of the destination project's members. What
+    // each cost is recorded as the copy budgets' telemetry.
     let (small, small_runs) = three_scenarios(SMALL, false);
     let (small_screened, small_screened_runs) = three_scenarios(SMALL, true);
     let (large, large_runs) = three_scenarios(LARGE, false);
@@ -1831,20 +1835,6 @@ fn traced(run: &str) -> Vec<Traced> {
     traced
 }
 
-/// What the trace's operations cost by the prices the feasibility spike observed: a REST request
-/// nothing, a batched origin lookup two — its price as 0.11 sent it, eight to ten origins at a
-/// first page of three — and any other request one point.
-fn traced_points(traced: &[Traced]) -> usize {
-    traced
-        .iter()
-        .map(|request| match request.op.as_str() {
-            op if op.starts_with("POST ") || op.starts_with("GET ") => 0,
-            "ORIGIN_LOOKUPS" => 2,
-            _ => 1,
-        })
-        .sum()
-}
-
 #[test]
 fn the_loopback_board_answers_0_11s_measured_copies_as_github_answered_them() {
     // Fixture evidence, not a bound: 0.11.0's own copies of the plan on the real board, replayed
@@ -1852,13 +1842,21 @@ fn the_loopback_board_answers_0_11s_measured_copies_as_github_answered_them() {
     let first = traced("tb-first-span-20261024T095836");
     let unchanged = traced("tb-unchanged-span-20261024T095930");
     let count = |traced: &[Traced], op: &str| traced.iter().filter(|r| r.op == op).count();
-    // The trace this replays is the one the copy budgets' baselines name: an unchanged re-copy
-    // of six points — two project listings and four single origin lookups — and a first copy of
-    // twenty, with four placement polls and three single origin lookups.
-    assert_eq!(traced_points(&unchanged), 6);
+    // The trace this replays is the one the copy budgets' baselines name — the six-point
+    // unchanged re-copy and the twenty-point first copy by the spike's prices — held here by what
+    // each sent: the re-copy two project listings and four single origin lookups and nothing
+    // else, and the first copy four placement polls and three single origin lookups among its
+    // eighteen GraphQL requests.
+    let graphql = |traced: &[Traced]| {
+        traced
+            .iter()
+            .filter(|request| !request.op.starts_with("POST ") && !request.op.starts_with("GET "))
+            .count()
+    };
+    assert_eq!(graphql(&unchanged), 6);
     assert_eq!(count(&unchanged, "SUB_ISSUES"), 2);
     assert_eq!(count(&unchanged, "ORIGIN_LOOKUP"), 4);
-    assert_eq!(traced_points(&first), 20);
+    assert_eq!(graphql(&first), 18);
     assert_eq!(count(&first, "CREATED_BOARD_ITEMS"), 4);
     assert_eq!(count(&first, "ORIGIN_LOOKUP"), 3);
 

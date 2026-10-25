@@ -4,7 +4,7 @@
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use onetaskgraph_e2e_support::onevcs::{BoundaryCall, BoundaryRecord};
+use onetaskgraph_e2e_support::onevcs::{BoundaryCall, BoundaryCommand, BoundaryRecord};
 use serde_json::{Value, json};
 
 use super::{OnevcsHome, PLAIN, Sandbox, Store, folder, landed_ids, registered, tree};
@@ -82,7 +82,7 @@ fn first_written(store: &Store) -> Option<Duration> {
 fn checks(calls: &[BoundaryCall]) -> Vec<&BoundaryCall> {
     calls
         .iter()
-        .filter(|call| call.command == "check")
+        .filter(|call| call.command == BoundaryCommand::Check)
         .collect()
 }
 
@@ -108,7 +108,7 @@ fn a_public_copy_screens_its_writes_together_before_the_first_and_never_asks_an_
     // One inspect of the one repository the plan names, however many records name it.
     let inspected: Vec<&Value> = first
         .iter()
-        .filter(|call| call.command == "inspect")
+        .filter(|call| call.command == BoundaryCommand::Inspect)
         .map(|call| &call.input["repository"])
         .collect();
     assert_eq!(inspected, [&json!(super::OPEN)], "{first:?}");
@@ -139,7 +139,7 @@ fn a_public_copy_screens_its_writes_together_before_the_first_and_never_asks_an_
     assert_eq!(
         second
             .iter()
-            .filter(|call| call.command == "inspect")
+            .filter(|call| call.command == BoundaryCommand::Inspect)
             .count(),
         1,
         "{second:?}"
@@ -304,4 +304,130 @@ async fn what_a_policy_answered_is_held_for_one_command_and_asked_again_after_en
     assert_eq!(super::kind_of(&refused), "not-private-destination");
     assert_eq!(policy.inspected.load(Ordering::SeqCst), 2);
     assert_eq!(tree(&store.folder("site")), before, "nothing was written");
+}
+
+/// A linking caller's policy whose every repository is public and whose check answers what
+/// `verdict` makes of each write, recording how many titles each check it was asked carried.
+struct Judging {
+    verdict: fn(
+        &onetaskgraph_core::boundary::PublicWriteInput,
+    ) -> onetaskgraph_core::boundary::WriteVerdict,
+    checked: std::sync::Mutex<Vec<usize>>,
+}
+
+#[async_trait::async_trait]
+impl onetaskgraph_core::boundary::WritePolicy for Judging {
+    async fn repository_visibility(
+        &self,
+        _: &onetaskgraph_plugin_api::Repository,
+    ) -> Result<
+        onetaskgraph_core::boundary::RepositoryVisibility,
+        onetaskgraph_core::boundary::PolicyError,
+    > {
+        Ok(onetaskgraph_core::boundary::RepositoryVisibility::Public)
+    }
+
+    async fn check_public_write(
+        &self,
+        input: &onetaskgraph_core::boundary::PublicWriteInput,
+    ) -> Result<onetaskgraph_core::boundary::WriteVerdict, onetaskgraph_core::boundary::PolicyError>
+    {
+        let titles = ["Goal", "Library", "Consumer", "Rollout"]
+            .iter()
+            .filter(|title| input.metadata.iter().any(|value| value == *title))
+            .count();
+        self.checked.lock().unwrap().push(titles);
+        Ok((self.verdict)(input))
+    }
+}
+
+/// The plan's project copied to `site` through a linking caller's engine asking `policy`.
+async fn copied_through(
+    verdict: fn(
+        &onetaskgraph_core::boundary::PublicWriteInput,
+    ) -> onetaskgraph_core::boundary::WriteVerdict,
+) -> (
+    Store,
+    std::sync::Arc<Judging>,
+    Result<onetaskgraph_core::CopyReport, onetaskgraph_core::EngineError>,
+) {
+    let store = Store::laid(
+        None,
+        |sandbox| json!({"draft": folder(sandbox, "draft", "public")}),
+    );
+    plan(&store);
+    let policy = std::sync::Arc::new(Judging {
+        verdict,
+        checked: std::sync::Mutex::default(),
+    });
+    let engine = super::linked_engine(&store).with_write_policy(policy.clone());
+    let request = onetaskgraph_core::CopyRequest {
+        items: onetaskgraph_core::CopyItems::new(vec!["draft:goal".parse().unwrap()])
+            .expect("one item"),
+        scope: onetaskgraph_core::CopyScope::Projects { tasks: true },
+        destination: onetaskgraph_plugin_api::SourceName::new("site").unwrap(),
+        target_task: None,
+        match_by: None,
+        recreate: false,
+        create: false,
+        dry_run: false,
+        comments: false,
+        no_link: false,
+        expect: None,
+        status_policy: onetaskgraph_core::StatusPolicy::Source,
+        statuses: Vec::new(),
+    };
+    let copied = engine.copy(&request).await;
+    (store, policy, copied)
+}
+
+#[tokio::test]
+async fn a_union_refused_whose_writes_each_pass_alone_is_still_refused_and_nothing_is_written() {
+    // A check refusing only what the whole plan says together — every record of it at once —
+    // passes each record alone: the copy is refused all the same, named after the first record,
+    // and nothing is written.
+    let (store, policy, copied) = copied_through(|input| {
+        if input.metadata.iter().any(|value| value == "Goal")
+            && input.metadata.iter().any(|value| value == "Rollout")
+        {
+            onetaskgraph_core::boundary::WriteVerdict::Refuse {
+                reason: "only together".to_owned(),
+            }
+        } else {
+            onetaskgraph_core::boundary::WriteVerdict::Pass
+        }
+    })
+    .await;
+    let refused = copied.expect_err("the union is refused");
+    assert_eq!(super::kind_of(&refused), "boundary-refused");
+    assert!(refused.to_string().contains("draft:goal"), "{refused}");
+    let checked = policy.checked.lock().unwrap().clone();
+    assert_eq!(checked[0], 4, "the union first: {checked:?}");
+    assert_eq!(checked.len(), 5, "then each record alone: {checked:?}");
+    assert!(
+        tree(&store.folder("site")).is_empty(),
+        "nothing was written"
+    );
+}
+
+#[tokio::test]
+async fn a_union_the_check_cannot_decide_is_the_first_writes_unavailability_and_nothing_is_written()
+{
+    let (store, policy, copied) =
+        copied_through(|_| onetaskgraph_core::boundary::WriteVerdict::Unavailable {
+            reason: "the check could not be run".to_owned(),
+        })
+        .await;
+    let refused = copied.expect_err("an unavailable check is never a pass");
+    assert_eq!(super::kind_of(&refused), "boundary-unavailable");
+    assert!(refused.to_string().contains("draft:goal"), "{refused}");
+    assert_eq!(
+        policy.checked.lock().unwrap().clone(),
+        [4],
+        "the union alone, with no record checked again"
+    );
+    assert!(
+        tree(&store.folder("site")).is_empty(),
+        "nothing was written"
+    );
 }

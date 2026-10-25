@@ -699,3 +699,105 @@ fn with_its_cache_on_an_unchanged_recopy_writes_nothing_and_its_document_copy_re
         "the document copy read an item of the plan by id"
     );
 }
+
+/// The plan's project copied onto the board, attached to the clock: what it exited with and
+/// said, and every request the board answered for it.
+fn project_copied(plan: &Plan) -> (std::process::Output, Vec<Call>) {
+    plan.measured_output(&["project", "copy", "notes:P", "--to", "board", "--json"])
+}
+
+#[test]
+fn a_first_copy_whose_issues_are_never_placed_by_their_create_files_each_itself_and_lands() {
+    // GitHub never places the issues the creates filed on the board: every read of where they
+    // are answers them on none. Once its reads are spent, the copy files each with
+    // `addProjectV2ItemById` itself, one write each, and lands the plan whole.
+    let plan = Plan::new(SMALL, Vec::new());
+    plan.github
+        .place_filed_issues_after(vec![std::time::Duration::from_secs(3_600)], || {
+            std::time::Duration::ZERO
+        });
+    let (output, calls) = project_copied(&plan);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        onetaskgraph_e2e_support::common::stderr(&output)
+    );
+    let added = calls
+        .iter()
+        .filter(|call| operation(call) == "adding an issue to the board")
+        .count();
+    assert_eq!(added, TASKS + 1, "one add for each issue never placed");
+    assert_eq!(
+        filing_waits(&plan),
+        [1, 2, 4, 8, 16].map(std::time::Duration::from_secs)
+    );
+    let (_, document, _) = plan.copy();
+    let report: Value =
+        serde_json::from_str(&onetaskgraph_e2e_support::common::stdout(&output)).unwrap();
+    let at = counterparts(&report, &document);
+    super::plan_copy::holds_the_plan(&plan, &at, None);
+}
+
+#[test]
+fn a_first_copy_told_its_issue_is_filed_already_reads_it_again_and_lands() {
+    // GitHub places the issues only after every read the copy makes of them: the add the copy
+    // then sends is refused "Content already exists in this project", which says they are
+    // placed, and one more read finds each one's item. Nothing is filed twice.
+    let plan = Plan::new(SMALL, Vec::new());
+    plan.github.file_created_items_after(6);
+    let (output, calls) = project_copied(&plan);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        onetaskgraph_e2e_support::common::stderr(&output)
+    );
+    let reads = calls
+        .iter()
+        .filter(|call| operation(call) == "reading the board items of the issues a copy created")
+        .count();
+    assert_eq!(reads, 7, "six reads, the refused adds, and one more read");
+    let (_, document, _) = plan.copy();
+    let report: Value =
+        serde_json::from_str(&onetaskgraph_e2e_support::common::stdout(&output)).unwrap();
+    let at = counterparts(&report, &document);
+    super::plan_copy::holds_the_plan(&plan, &at, None);
+}
+
+#[test]
+fn a_first_copy_whose_own_add_to_the_board_is_refused_takes_back_every_item_it_created() {
+    let plan = Plan::new(SMALL, Vec::new());
+    plan.github
+        .place_filed_issues_after(vec![std::time::Duration::from_secs(3_600)], || {
+            std::time::Duration::ZERO
+        });
+    plan.github
+        .refuse_once("addProjectV2ItemById(input:$input)");
+    let (output, _) = project_copied(&plan);
+    assert_ne!(output.status.code(), Some(0), "the copy was refused");
+    left_nothing(&plan, TASKS + 1);
+}
+
+#[test]
+fn a_batched_cleanup_github_does_not_confirm_whole_names_the_issue_it_did_not_confirm() {
+    // The fourth task's create fails after the three before it, and of the three deletes that
+    // take those back, GitHub's answer leaves the second out: the copy names that issue alone as
+    // what may still be there, and the two it confirmed are gone.
+    let plan = Plan::new(SMALL, Vec::new());
+    plan.github.fail_field_alias("create3");
+    plan.github
+        .bend_batch_alias("delete1", AliasAnswer::Missing);
+    let (output, _) = project_copied(&plan);
+    assert_ne!(output.status.code(), Some(0), "the copy was refused");
+    let said = onetaskgraph_e2e_support::common::stderr(&output);
+    assert!(
+        said.contains("GitHub then refused to take back ISSUE-3")
+            && !said.contains("ISSUE-2,")
+            && !said.contains("ISSUE-4"),
+        "{said}"
+    );
+    for gone in ["ISSUE-2", "ISSUE-4"] {
+        assert!(!plan.github.holds_issue(gone), "{gone} was taken back");
+    }
+}

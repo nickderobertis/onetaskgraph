@@ -235,11 +235,21 @@ pub struct BoundaryRecord {
     policy: Value,
 }
 
+/// Which of the two boundary commands a store ran.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BoundaryCommand {
+    /// `boundary inspect`: one repository's visibility.
+    Inspect,
+    /// `boundary check`: one write's exposure.
+    Check,
+}
+
 /// One boundary command a store ran.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BoundaryCall {
-    /// `inspect` or `check`.
-    pub command: String,
+    /// Which command it was.
+    pub command: BoundaryCommand,
     /// The document the store handed it.
     pub input: Value,
     /// What it exited with.
@@ -327,7 +337,11 @@ impl BoundaryRecord {
             .map(|line| {
                 let call: Value = serde_json::from_str(line).expect("a recorded call");
                 BoundaryCall {
-                    command: call["command"].as_str().expect("its command").to_owned(),
+                    command: match call["command"].as_str() {
+                        Some("inspect") => BoundaryCommand::Inspect,
+                        Some("check") => BoundaryCommand::Check,
+                        other => panic!("the recorder ran a command it never runs: {other:?}"),
+                    },
                     input: call["input"].clone(),
                     exit: call["exit"].as_i64(),
                     finished: std::time::Duration::from_secs_f64(

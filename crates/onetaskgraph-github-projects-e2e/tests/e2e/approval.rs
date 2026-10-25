@@ -17,7 +17,7 @@
 use super::asset_board::{Call, Kind};
 use super::plan_copy::{Plan, SMALL, TASKS, counterparts, never_walks, operation, success};
 use onetaskgraph_e2e_support::common::{stderr, stdout};
-use onetaskgraph_e2e_support::onevcs::BoundaryCall;
+use onetaskgraph_e2e_support::onevcs::{BoundaryCall, BoundaryCommand};
 use onetaskgraph_github_projects::worst_case_point_cost;
 use serde_json::{Value, json};
 
@@ -326,7 +326,7 @@ fn approving_a_plan_lists_each_kind_in_one_point_and_writes_its_approval_behind_
     let checks: Vec<&BoundaryCall> = write
         .screening
         .iter()
-        .filter(|call| call.command == "check")
+        .filter(|call| call.command == BoundaryCommand::Check)
         .collect();
     assert_eq!(checks.len(), 1, "{:?}", write.screening);
     let updated = write
@@ -497,7 +497,7 @@ fn a_screened_approval_reclassifies_a_project_a_person_changed_since_and_refuses
         first[3]
             .screening
             .iter()
-            .all(|call| call.command != "inspect"
+            .all(|call| call.command != BoundaryCommand::Inspect
                 || call.input["repository"] != "github.com/synthco/secret-gadgets"),
         "{:?}",
         first[3].screening
@@ -531,8 +531,10 @@ fn a_screened_approval_reclassifies_a_project_a_person_changed_since_and_refuses
     assert_eq!(plan.github.body(&document), before);
     let asked = plan.boundary_calls()[screened..].to_vec();
     assert!(
-        asked.iter().any(|call| call.command == "inspect"
-            && call.input["repository"] == "github.com/synthco/secret-gadgets"),
+        asked
+            .iter()
+            .any(|call| call.command == BoundaryCommand::Inspect
+                && call.input["repository"] == "github.com/synthco/secret-gadgets"),
         "the new command asked about the repository the member moved to: {asked:?}"
     );
     let failure: Value = serde_json::from_str(&stdout(&refused)).expect("a failure document");

@@ -1083,6 +1083,7 @@ struct CommentCount {
     count: usize,
 }
 
+// llmlint: ignore[code_lands_in_the_domain_that_owns_it] The measured delays the shared loopback board's placement model is driven with, beside that model: AGENTS.md puts every loopback server and what configures it in this shared harness, once.
 /// How long after its create was answered GitHub placed each child issue a create filed on a
 /// board with `projectV2Ids`, in milliseconds: the feasibility spike's ten samples of eight
 /// children each (`board-copy-gaps-2026-10-24-spike-feasibility-report`, its `probe-placement`
@@ -1095,6 +1096,7 @@ pub const MEASURED_PLACEMENT_MILLIS: [u64; 80] = [
     568, 568, 568, 568, 568, 568, 568,
 ];
 
+// llmlint: ignore[code_lands_in_the_domain_that_owns_it] The loopback GitHub board's own placement state, which every read of it answers from: AGENTS.md puts every loopback server in this shared harness, once, so the plan-copy journeys of the GitHub suite and any other suite driving this board read one model of GitHub's delayed placement rather than copies of it.
 /// GitHub's delayed placement of an issue `createIssue` files on a board through
 /// `projectV2Ids`: the create is answered with no board item, and the item appears on the board
 /// some time later — between 0.45 and 1.84 seconds after the answer in the feasibility spike
@@ -1843,6 +1845,7 @@ impl GitHubBoardFields {
         self.board.lock().unwrap().unfiled_board_item_reads = reads;
     }
 
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board's own placement state, which every read of it answers from, beside `file_created_items_after`: the board is this shared harness's, so a suite can only set it through this handle.
     /// Place every issue a create files on the board with `projectV2Ids` only once a delay of
     /// `delays` — each create's in turn, cycled — has passed on `now` since the create was
     /// answered ([`Self::answered_at`]), as GitHub places one; until then the issue is on no
@@ -1861,6 +1864,7 @@ impl GitHubBoardFields {
         });
     }
 
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] As `place_filed_issues_after` above: the time a proxy in front of this board released a create's answer, which the board's placement keeps time by.
     /// Every create this board has answered so far was answered at `now`: each issue it is
     /// waiting to place is placed once its delay has passed since then.
     pub fn answered_at(&self, now: Duration) {
@@ -1871,6 +1875,7 @@ impl GitHubBoardFields {
         }
     }
 
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board's own record of the repository its issues live in, which every read of it answers from, beside `transfer`: the board is this shared harness's.
     /// Hold every issue of this board in `repository`, `owner/name`, and create every new one
     /// there: what a journey configuring its source with that repository sets, so no answer
     /// names another.
@@ -1885,20 +1890,11 @@ impl GitHubBoardFields {
         }
     }
 
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] One request to this shared board, as the product sends one, through the harness's own `graphql_over_http`: what a journey replaying a recorded trace drives the board with.
     /// Send this board one GraphQL request, as the product sends one, and answer its `data`:
     /// what a journey replaying a recorded request sequence drives the board with.
     pub fn graphql(&self, query: &str, variables: &Value) -> Value {
         graphql_over_http(&self.endpoint, query, variables)
-    }
-
-    /// How many placement delays this board handed out: one per issue a create filed on it.
-    pub fn placements(&self) -> usize {
-        self.board
-            .lock()
-            .unwrap()
-            .placement
-            .as_ref()
-            .map_or(0, |placement| placement.next)
     }
 
     /// Answer the next read of a project's sub-issues beside a copy's batch with no list of
@@ -2609,9 +2605,6 @@ impl GitHubBoard {
         item["type"] == "DraftIssue"
     }
 
-    /// The next moment this board stamps anything with — a comment, an issue's `updatedAt`, a
-    /// board item's — a second after the one before, so no two changes share one, unless a
-    /// journey holds the clock.
     /// The owner half of [`Self::repository`].
     fn repository_owner(&self) -> &str {
         self.repository
@@ -2641,6 +2634,9 @@ impl GitHubBoard {
         }
     }
 
+    /// The next moment this board stamps anything with — a comment, an issue's `updatedAt`, a
+    /// board item's — a second after the one before, so no two changes share one, unless a
+    /// journey holds the clock.
     fn tick(&mut self) -> String {
         self.comment_ticks += 1;
         let ticks = self.held_second.unwrap_or(self.comment_ticks);
