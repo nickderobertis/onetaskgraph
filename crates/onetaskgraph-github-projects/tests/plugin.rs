@@ -1189,6 +1189,12 @@ impl Fixture {
             withheld.read_by_id_at.first().copied(),
         )
     }
+    /// When a proxy in front of this board first saw its withheld issue read by its own id sent.
+    fn search_withheld_sent_by_id(&self) -> Option<Instant> {
+        let state = self.state.lock().unwrap();
+        let withheld = state.search_withheld.as_ref().expect("an issue withheld");
+        withheld.sent_by_id_at.first().copied()
+    }
     /// Answer this board's next `count` requests inside the change token's settling margin.
     fn answer_unsettled(&self, count: usize) {
         self.state.lock().unwrap().unsettled_answers = count;
@@ -3183,6 +3189,10 @@ struct SearchWithheld {
     searched_at: Vec<Instant>,
     reported_at: Option<Instant>,
     read_by_id_at: Vec<Instant>,
+    /// When each read of it by its own id was sent, as a proxy in front of this board saw it:
+    /// this board answers one request at a time, so a read sent while a search the client has
+    /// already abandoned is still held back arrives here only once that search is answered.
+    sent_by_id_at: Vec<Instant>,
 }
 
 impl SearchWithheld {
@@ -3201,6 +3211,7 @@ impl SearchWithheld {
             searched_at: Vec::new(),
             reported_at: None,
             read_by_id_at: Vec::new(),
+            sent_by_id_at: Vec::new(),
         }
     }
     /// The issue a live run titles with its stamp plus `offset`, left out of every search until
@@ -3238,12 +3249,26 @@ impl SearchWithheld {
             ..self
         }
     }
+    /// Whether a request arriving now is a search this board holds back while it leaves the
+    /// issue out.
+    fn holds(&self, query: &str) -> bool {
+        self.content_id.is_some() && self.withholding() && query.contains("search(query:$search")
+    }
+    /// Note a request a proxy in front of this board saw sent now, before this board reads it.
+    fn sent(&mut self, variables: &Value) {
+        if let Some(content_id) = self.content_id.as_deref()
+            && !self.searched_at.is_empty()
+            && variables["id"] == content_id
+        {
+            self.sent_by_id_at.push(Instant::now());
+        }
+    }
     /// Note a request arriving now, and say how long this board takes to answer it.
     fn arrived(&mut self, query: &str, variables: &Value) -> Duration {
         let Some(content_id) = self.content_id.as_deref() else {
             return Duration::ZERO;
         };
-        if self.withholding() && query.contains("search(query:$search") {
+        if self.holds(query) {
             self.searched_at.push(Instant::now());
             self.search_answers_in
         } else if !self.searched_at.is_empty() && variables["id"] == content_id {
@@ -21427,6 +21452,7 @@ fn live_pair_fixture_child() {
     let uploaded = Arc::clone(&upload_sizes);
     let rendering_reads = Arc::new(std::sync::atomic::AtomicU64::new(0));
     let read = Arc::clone(&rendering_reads);
+    let board_state = Arc::clone(&fixture.state);
     thread::spawn(move || {
         let mut assets = BTreeMap::<String, Vec<u8>>::new();
         for stream in listener.incoming() {
@@ -21510,14 +21536,35 @@ fn live_pair_fixture_child() {
                 .unwrap();
                 stream.write_all(&body).unwrap();
             } else {
-                let mut upstream =
-                    std::net::TcpStream::connect(if path == "/graphql" { &graphql } else { &rest })
-                        .unwrap();
-                upstream.write_all(&bytes).unwrap();
-                let mut response = Vec::new();
-                upstream.read_to_end(&mut response).unwrap();
-                // The journey abandons a search still in flight at its fixture deadline.
-                let _ = stream.write_all(&response);
+                let request: Value = serde_json::from_slice(&bytes[end..]).unwrap_or_default();
+                let query = request["query"].as_str().unwrap_or_default();
+                let held = board_state
+                    .lock()
+                    .unwrap()
+                    .search_withheld
+                    .as_mut()
+                    .is_some_and(|withheld| {
+                        withheld.sent(&request["variables"]);
+                        withheld.holds(query)
+                    });
+                let upstream = (if path == "/graphql" { &graphql } else { &rest }).clone();
+                let forward = move || {
+                    let mut stream = stream;
+                    let mut upstream = std::net::TcpStream::connect(upstream).unwrap();
+                    upstream.write_all(&bytes).unwrap();
+                    let mut response = Vec::new();
+                    upstream.read_to_end(&mut response).unwrap();
+                    // The journey abandons a search still in flight at its fixture deadline.
+                    let _ = stream.write_all(&response);
+                };
+                // A search the board holds back is forwarded beside this loop, so a read the
+                // journey sends after abandoning it is seen here when it is sent; every other
+                // request is forwarded in turn, in the order the journey sent it.
+                if held {
+                    thread::spawn(forward);
+                } else {
+                    forward();
+                }
             }
         }
     });
@@ -21555,13 +21602,21 @@ fn live_pair_fixture_child() {
                 reported.is_none(),
                 "the search was meant never to report it"
             );
-            let took =
-                read_by_id.expect("the wait never read the missing task by its own id") - began;
+            let sent = fixture
+                .search_withheld_sent_by_id()
+                .expect("the wait never sent a read of the missing task by its own id");
+            let arrived =
+                read_by_id.expect("the board never read the missing task by its own id") - began;
+            let took = sent - began;
             println!(
-                "the wait read the missing task by id {took:?} after the search first left it out"
+                "the wait sent its read of the missing task by id {took:?} after the search first \
+                 left it out, and the board read it {arrived:?} after"
             );
             // Each attempt takes a second, so the deadline falls inside one and cuts it off; the
-            // read by id is sent inside the `diagnosis` the wait allows itself after it.
+            // read by id is sent inside the `diagnosis` the wait allows itself after it. That is
+            // when it was sent, not when this board read it: one answering a request at a time,
+            // the board reads it only once the search the wait abandoned is answered, as late as
+            // half a second past the deadline before any latency of a loaded host.
             let diagnosis = journey::STAND_IN_FIXTURE_WAIT.diagnosis;
             assert!(
                 took >= bound - Duration::from_millis(200) && took <= bound + diagnosis,
