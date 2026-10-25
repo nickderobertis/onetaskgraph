@@ -134,11 +134,13 @@ fn run_pair(scenario: &str) {
     let records = directory.join("session");
     std::fs::create_dir(&records).unwrap();
     let ready = directory.join("ready");
+    let abandoned = directory.join("abandoned");
     let fixture_log = std::fs::File::create(directory.join("fixture.log")).unwrap();
     let mut fixture = Command::new(executable("onetaskgraph-github-projects", "plugin"))
         .args(["live_pair_fixture_child", "--exact", "--nocapture"])
         .env("GITHUB_LIVE_FIXTURE_READY", &ready)
         .env("GITHUB_LIVE_FIXTURE_DECLINE", scenario)
+        .env("GITHUB_LIVE_FIXTURE_ABANDONED", &abandoned)
         .stdin(Stdio::piped())
         .stdout(fixture_log.try_clone().unwrap())
         .stderr(fixture_log)
@@ -247,9 +249,16 @@ fn run_pair(scenario: &str) {
                 && said.contains(
                     "s against a deadline of 3s, GitHub's issue search for titles \
                      onetaskgraph live cleanup ci-37616803489-2-*"
-                )
-                && said.contains("a search still unanswered at the deadline was abandoned"),
+                ),
             "{said}"
+        );
+        // A loaded host can end the last search the wait answered on its deadline rather than
+        // across it, leaving none to abandon; one the stand-in saw answered only after the
+        // wait had moved on to its reads by id is one the wait abandoned, and has to say so.
+        assert!(
+            !abandoned.exists()
+                || said.contains("a search still unanswered at the deadline was abandoned"),
+            "the stand-in answered a search after the wait gave up on it: {said}"
         );
         assert!(
             said.contains("never reported the task \"onetaskgraph live cleanup ci-37616803489-2-")
