@@ -21962,6 +21962,109 @@ async fn a_batched_origin_lookup_of_one_carrier_each_still_finds_every_duplicate
     );
 }
 
+/// A board of one issue carrying origin `work:ENG-2`, and a source over it holding that origin
+/// back for a read ahead that is never asked for.
+async fn origin_held_without_read_ahead() -> (Fixture, Box<dyn TaskSource>) {
+    let fixture = board(vec![
+        Item::issue("I_single", "single")
+            .status("Todo")
+            .carrying("work:ENG-2"),
+        Item::issue("I_other", "other").status("Todo"),
+    ]);
+    let source = source(&fixture);
+    source
+        .read_ahead_origins_for_copy(&["work:ENG-2".to_owned()])
+        .await
+        .expect("the origin, held for the read ahead");
+    assert!(
+        fixture.operations().is_empty(),
+        "held until something is sent"
+    );
+    (fixture, source)
+}
+
+#[tokio::test]
+async fn an_origin_held_for_a_read_ahead_that_never_comes_is_sent_before_the_next_request() {
+    let (fixture, source) = origin_held_without_read_ahead().await;
+    let other = source
+        .get_task(&id("I_other"))
+        .await
+        .expect("a read by id")
+        .expect("the issue");
+    assert_eq!(other.title, "other");
+    let sent = fixture.operations();
+    // The batched lookup is named for the board's fields it reads beside the origins.
+    assert_eq!(sent, ["boardFields", "issue"], "the held origin goes first");
+    // Its answer is held: the origin's own query is answered by it, with no request more.
+    let single = selected_tasks(source.as_ref(), &origin_query("work:ENG-2")).await;
+    assert_eq!(single, ["I_single"]);
+    assert_eq!(fixture.operations(), sent);
+}
+
+#[tokio::test]
+async fn an_origin_held_for_a_read_ahead_that_never_comes_answers_the_origins_own_query() {
+    let (fixture, source) = origin_held_without_read_ahead().await;
+    let single = selected_tasks(source.as_ref(), &origin_query("work:ENG-2")).await;
+    assert_eq!(single, ["I_single"]);
+    assert_eq!(fixture.operations(), ["boardFields"]);
+}
+
+#[tokio::test]
+async fn a_held_origin_lookup_that_is_refused_fails_the_request_it_went_ahead_of() {
+    let (fixture, source) = origin_held_without_read_ahead().await;
+    fixture.refuse("boardFields");
+    let refused = source
+        .get_task(&id("I_other"))
+        .await
+        .expect_err("the lookup sent ahead of it was refused");
+    assert!(
+        refused.to_string().contains("boardFields is refused"),
+        "{refused}"
+    );
+    assert_eq!(fixture.operations(), ["boardFields"], "nothing after it");
+}
+
+#[tokio::test]
+async fn end_command_drops_the_origins_and_the_members_a_command_held() {
+    // Held origins: after the command ends they are never sent.
+    let (fixture, held) = origin_held_without_read_ahead().await;
+    held.end_command().await.expect("a command ends");
+    held.get_task(&id("I_other"))
+        .await
+        .expect("a read by id")
+        .expect("the issue");
+    let sent = fixture.operations();
+    assert!(!sent.iter().any(|op| op == "boardFields"), "{sent:?}");
+    // Held members: a command that ends before taking them leaves none for the next.
+    let fixture = board(vec![
+        Item::issue("I_plan", "a plan")
+            .body(&slotted(
+                "plan prose",
+                &json!({"onetaskgraph.item_kind":"project"}),
+            ))
+            .carrying("work:P"),
+        Item::issue("I_one", "one").parent("I_plan"),
+    ]);
+    let source = source(&fixture);
+    source
+        .read_ahead_origins_for_copy(&["work:P".to_owned()])
+        .await
+        .expect("held for the read ahead");
+    source
+        .read_ahead_for_copy(&[id("I_plan")])
+        .await
+        .expect("one lookup carrying the members");
+    assert_eq!(fixture.operations(), ["originLookupsWithMembers"]);
+    source.end_command().await.expect("a command ends");
+    assert_eq!(
+        source
+            .member_classifications(&id("I_plan"))
+            .await
+            .expect("nothing held"),
+        None
+    );
+}
+
 /// A board holding a plan's project, carrying origin `work:P`, and two tasks under it — one
 /// recorded private, the other naming its own repository alone — answering the members page
 /// beside a batched lookup as `answer` says, with the lookup of the project's origin held back
@@ -21970,6 +22073,7 @@ async fn members_read(
     answer: MembersAnswer,
 ) -> (
     Fixture,
+    Box<dyn TaskSource>,
     Option<Vec<(onetaskgraph_plugin_api::Classification, Vec<Repository>)>>,
 ) {
     let fixture = board(vec![
@@ -21999,16 +22103,24 @@ async fn members_read(
         .member_classifications(&id("I_plan"))
         .await
         .expect("held or not");
-    (fixture, classes)
+    (fixture, source, classes)
 }
 
 #[tokio::test]
 async fn a_members_page_beside_a_lookup_answers_each_members_classification_once() {
-    let (fixture, classes) = members_read(MembersAnswer::Whole).await;
+    let (fixture, source, classes) = members_read(MembersAnswer::Whole).await;
     assert_eq!(
         fixture.operations(),
         ["originLookupsWithMembers"],
         "one request carries the lookup and the members"
+    );
+    // Taken, not kept: asked again, the members are no longer held, so the caller lists them.
+    assert_eq!(
+        source
+            .member_classifications(&id("I_plan"))
+            .await
+            .expect("nothing held"),
+        None
     );
     let mut classes = classes.expect("the whole page");
     classes.sort_by_key(|(class, _)| *class == onetaskgraph_plugin_api::Classification::Public);
@@ -22036,7 +22148,7 @@ async fn a_members_page_that_is_not_every_member_or_cannot_be_read_answers_nothi
         MembersAnswer::MalformedRecordedRepositories,
         MembersAnswer::InvalidOwnRepository,
     ] {
-        let (_, classes) = members_read(answer).await;
+        let (_, _, classes) = members_read(answer).await;
         assert_eq!(classes, None, "{answer:?}");
     }
 }
@@ -22045,7 +22157,7 @@ async fn a_members_page_that_is_not_every_member_or_cannot_be_read_answers_nothi
 async fn a_project_filed_under_the_project_is_no_member_its_classification_reads() {
     // A task or document listing never names a project filed under this one, so the page of
     // members does not either: the two tasks alone, the nested project's own record left out.
-    let (_, classes) = members_read(MembersAnswer::NestedProject).await;
+    let (_, _, classes) = members_read(MembersAnswer::NestedProject).await;
     let classes = classes.expect("the whole page");
     assert_eq!(classes.len(), 2, "{classes:?}");
 }
