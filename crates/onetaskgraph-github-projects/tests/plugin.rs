@@ -1201,17 +1201,12 @@ impl Fixture {
         let withheld = state.search_withheld.as_ref().expect("an issue withheld");
         withheld.written_before_search_at
     }
-    /// Whether a search this board held back was answered only after its withheld issue's read
-    /// by its own id was sent: a search the client had abandoned, unanswered, at its deadline.
-    fn search_withheld_abandoned(&self) -> bool {
+    /// When a proxy in front of this board parked each search past the ones it answers, and
+    /// when it released one no read by id had come for.
+    fn search_withheld_parking(&self) -> (Vec<Instant>, Vec<Instant>) {
         let state = self.state.lock().unwrap();
         let withheld = state.search_withheld.as_ref().expect("an issue withheld");
-        withheld.sent_by_id_at.first().is_some_and(|sent| {
-            withheld
-                .held_answered_at
-                .iter()
-                .any(|answered| answered > sent)
-        })
+        (withheld.parked_at.clone(), withheld.released_at.clone())
     }
     /// Answer this board's next `count` requests inside the change token's settling margin.
     fn answer_unsettled(&self, count: usize) {
@@ -3214,10 +3209,14 @@ struct SearchWithheld {
     /// When a proxy in front of this board last saw a write sent before the first search it
     /// holds back: a fixture wait writes nothing, so its own clock started after this.
     written_before_search_at: Option<Instant>,
-    /// When a proxy in front of this board was handed this board's answer to each search it
-    /// held back: one handed over after a read by id was sent is a search the client was no
-    /// longer waiting for, since it reads by id only once it has stopped searching.
-    held_answered_at: Vec<Instant>,
+    /// How many searches it holds back a proxy in front of this board answers before it parks
+    /// every later one unanswered, and how many it has seen: `None` answers them all.
+    parks_after: Option<usize>,
+    held_seen: usize,
+    /// When the proxy parked each search, and when it released one unabandoned, its client
+    /// having sent no read by id in [`PARKED_SEARCH_RELEASED_AFTER`].
+    parked_at: Vec<Instant>,
+    released_at: Vec<Instant>,
 }
 
 impl SearchWithheld {
@@ -3238,7 +3237,10 @@ impl SearchWithheld {
             read_by_id_at: Vec::new(),
             sent_by_id_at: Vec::new(),
             written_before_search_at: None,
-            held_answered_at: Vec::new(),
+            parks_after: None,
+            held_seen: 0,
+            parked_at: Vec::new(),
+            released_at: Vec::new(),
         }
     }
     /// The issue a live run titles with its stamp plus `offset`, left out of every search until
@@ -3268,6 +3270,26 @@ impl SearchWithheld {
     /// as for as long as it is withheld: a search a loaded host sends late still misses it.
     fn and_at_least(self, searches: usize) -> Self {
         Self { searches, ..self }
+    }
+    /// Answered for the first `searches` searches it holds back, and every later one parked
+    /// unanswered: a wait can then end only by giving that search up at its deadline.
+    fn parking_after(self, searches: usize) -> Self {
+        Self {
+            parks_after: Some(searches),
+            ..self
+        }
+    }
+    /// Whether a search held back now is one to park rather than answer.
+    fn parks(&mut self) -> bool {
+        let Some(answered) = self.parks_after else {
+            return false;
+        };
+        self.held_seen += 1;
+        let parked = self.held_seen > answered;
+        if parked {
+            self.parked_at.push(Instant::now());
+        }
+        parked
     }
     fn answering_searches_in(self, delay: Duration) -> Self {
         Self {
@@ -11477,10 +11499,13 @@ fn fixture_run(prefix: &str, extra: &[(&str, &str)]) -> (Fixture, Created, Creat
 /// search lagging longer than this, scaled, proves what the longer bound buys.
 const OLD_FIXTURE_BOUND: Duration = Duration::from_secs(120);
 
-/// How long the stand-in a live pair's `search-never` scenario drives takes to answer each
-/// search while it leaves the run's task out: two to an attempt, so a three-second deadline
-/// falls inside one.
-const NEVER_SEARCH_ANSWERS_IN: Duration = Duration::from_millis(500);
+/// How long a live pair's `search-never` stand-in parks a search unanswered before it answers
+/// after all, when no read by id has come: twice the wait's deadline, so a wait kept from its
+/// deadline by a loaded host still has a whole deadline to send its read, and a wait that waits
+/// its search out is answered, sends its read after that, and is refused for it rather than
+/// hanging the journey.
+const PARKED_SEARCH_RELEASED_AFTER: Duration =
+    journey::STAND_IN_FIXTURE_WAIT.bound.saturating_mul(2);
 
 /// The short wait the give-up journeys below are held to.
 /// Its bound is long enough for a loaded host to answer a search inside it, which every one of
@@ -21443,8 +21468,8 @@ fn live_pair_fixture_child() {
     fixture.items_connection_falls_behind();
     // Each attempt of the fixture wait is two searches, tasks then projects: behind, the task is
     // left out of every search until twice the old two-minute bound after it was created, scaled
-    // as the stand-in's wait is; never, every search takes long enough that the stand-in
-    // deadline falls inside an attempt.
+    // as the stand-in's wait is, and out of the first search whenever it comes; never, it is left
+    // out of every search, and every search after the first attempt is parked unanswered.
     match scenario.as_str() {
         "search-behind" => fixture.search_withholds(
             SearchWithheld::run_artifact_for(3, 2 * OLD_FIXTURE_BOUND / journey::STAND_IN_SCALE)
@@ -21452,8 +21477,9 @@ fn live_pair_fixture_child() {
                 .answering_searches_in(Duration::from_millis(100)),
         ),
         "search-never" => fixture.search_withholds(
-            SearchWithheld::run_artifact(3, usize::MAX)
-                .answering_searches_in(NEVER_SEARCH_ANSWERS_IN),
+            // One attempt answered, its two searches tasks then projects, and every search after
+            // it parked: the wait's deadline falls inside a search by construction.
+            SearchWithheld::run_artifact(3, usize::MAX).parking_after(2),
         ),
         _ => {}
     }
@@ -21578,38 +21604,53 @@ fn live_pair_fixture_child() {
                 let query = request["query"].as_str().unwrap_or_default();
                 let write = !line.starts_with("GET ")
                     && (path != "/graphql" || query.trim_start().starts_with("mutation"));
-                let held = board_state
-                    .lock()
-                    .unwrap()
-                    .search_withheld
-                    .as_mut()
-                    .is_some_and(|withheld| {
+                let (held, parked) = board_state.lock().unwrap().search_withheld.as_mut().map_or(
+                    (false, false),
+                    |withheld| {
                         withheld.sent(&request["variables"]);
                         if write && withheld.searched_at.is_empty() {
                             withheld.written_before_search_at = Some(Instant::now());
                         }
-                        withheld.holds(query)
-                    });
+                        let held = withheld.holds(query);
+                        (held, held && withheld.parks())
+                    },
+                );
                 let upstream = (if path == "/graphql" { &graphql } else { &rest }).clone();
-                let answered = Arc::clone(&board_state);
                 let forward = move || {
                     let mut stream = stream;
                     let mut upstream = std::net::TcpStream::connect(upstream).unwrap();
                     upstream.write_all(&bytes).unwrap();
                     let mut response = Vec::new();
                     upstream.read_to_end(&mut response).unwrap();
-                    if held
-                        && let Some(withheld) = answered.lock().unwrap().search_withheld.as_mut()
-                    {
-                        withheld.held_answered_at.push(Instant::now());
-                    }
                     // The journey abandons a search still in flight at its fixture deadline.
                     let _ = stream.write_all(&response);
                 };
                 // A search the board holds back is forwarded beside this loop, so a read the
                 // journey sends after abandoning it is seen here when it is sent; every other
-                // request is forwarded in turn, in the order the journey sent it.
-                if held {
+                // request is forwarded in turn, in the order the journey sent it. A parked one
+                // waits here, never reaching the board, until a read by id says the wait gave it
+                // up — and is then left unanswered — or the backstop answers it after all.
+                if parked {
+                    let watched = Arc::clone(&board_state);
+                    thread::spawn(move || {
+                        let parked_at = Instant::now();
+                        loop {
+                            let mut state = watched.lock().unwrap();
+                            let withheld = state.search_withheld.as_mut().unwrap();
+                            if !withheld.sent_by_id_at.is_empty() {
+                                return;
+                            }
+                            if parked_at.elapsed() >= PARKED_SEARCH_RELEASED_AFTER {
+                                withheld.released_at.push(Instant::now());
+                                drop(state);
+                                forward();
+                                return;
+                            }
+                            drop(state);
+                            thread::sleep(Duration::from_millis(10));
+                        }
+                    });
+                } else if held {
                     thread::spawn(forward);
                 } else {
                     forward();
@@ -21656,36 +21697,35 @@ fn live_pair_fixture_child() {
                 .expect("the wait never sent a read of the missing task by its own id");
             let arrived =
                 read_by_id.expect("the board never read the missing task by its own id") - began;
-            let took = sent - began;
-            println!(
-                "the wait sent its read of the missing task by id {took:?} after the search first \
-                 left it out, and the board read it {arrived:?} after"
-            );
-            // The pair holds the journey's report to this: whether the deadline falls inside a
-            // search or between two is the host's timing, so only a search this board saw
-            // abandoned obliges the journey to say it abandoned one.
-            if fixture.search_withheld_abandoned() {
-                let seen = std::env::var("GITHUB_LIVE_FIXTURE_ABANDONED")
-                    .expect("the pair names where an abandoned search is recorded");
-                std::fs::write(seen, "").unwrap();
-            }
-            // Each attempt takes a second, so the deadline falls inside one and cuts it off; the
-            // read by id is sent once it has. That is when it was sent, not when this board read
-            // it: one answering a request at a time, the board reads it only once the search the
-            // wait abandoned is answered. Not early is counted from the journey's last write
-            // before the wait, which was answered before the wait's own clock started, so no
-            // host's delay can make a wait that kept its deadline look early; not late from this
-            // board's first reading of a search it held, the latest the wait's clock can have
-            // started, so no delay before that reading counts against a wait that kept it.
             let waited = sent
                 - fixture
                     .search_withheld_written_before()
                     .expect("the journey wrote nothing before its wait");
+            println!(
+                "the wait sent its read of the missing task by id {waited:?} after the journey's \
+                 last write, and the board read it {arrived:?} after the search first left it out"
+            );
+            // Not early: the journey's last write before the wait was answered before the wait's
+            // own clock started, so a wait that kept its deadline sends its read by id at least
+            // the deadline after it, however a host delays it.
             assert!(
-                waited >= bound && took <= bound + NEVER_SEARCH_ANSWERS_IN,
-                "gave up {waited:?} after the journey's last write and {took:?} after this board \
-                 first held a search, against a {bound:?} deadline and \
-                 {NEVER_SEARCH_ANSWERS_IN:?} for each search"
+                waited >= bound,
+                "gave up {waited:?} after the journey's last write, before its {bound:?} deadline"
+            );
+            // Not late, by what happened rather than when: every search after the first attempt
+            // is parked unanswered, so the wait ends only by giving one up at its deadline, and
+            // its read by id is what says it has. A search released by the backstop is one the
+            // wait went on waiting for past its deadline.
+            let (parked, released) = fixture.search_withheld_parking();
+            assert!(
+                !parked.is_empty(),
+                "the wait sent no search after its first attempt, so no deadline cut one off"
+            );
+            assert!(
+                released.is_empty(),
+                "the wait went on waiting for a search past its {bound:?} deadline: the stand-in \
+                 answered it after holding it {PARKED_SEARCH_RELEASED_AFTER:?}, and only then did \
+                 the wait send its read by id"
             );
         }
     }
