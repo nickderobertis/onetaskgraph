@@ -629,10 +629,12 @@ fn with_the_cache_on_a_recopy_finds_every_counterpart_through_the_batched_read_i
     }
 }
 
-#[test]
-fn a_projects_page_with_more_behind_it_answers_no_project_origin_and_the_project_is_walked_for() {
-    // Six other projects the team reaches, copied in before the plan, so the projects half of
-    // the batched read — which no origin narrows — has more projects than its page holds.
+/// A plan of four tasks copied into Linear beside six other projects the team reaches, then
+/// unlinked and edited, with each batched connection capped at four rows: the issues half holds
+/// all four tasks' counterparts with nothing behind them, and the projects half — which no origin
+/// narrows — four of seven projects with a next page. Answers the sandbox and the plan's project
+/// as the workspace held it.
+fn over_a_projects_page_with_more_behind_it() -> (Copying, Value) {
     let copying = Copying::new(4, Vec::new());
     for at in 0..6 {
         std::fs::write(
@@ -660,9 +662,13 @@ fn a_projects_page_with_more_behind_it_answers_no_project_origin_and_the_project
     for at in 0..4 {
         write_task(&copying.plan, at, &format!("Edited {at}."));
     }
-    // Four rows a connection: the issues half holds all four tasks' counterparts and nothing
-    // behind them, the projects half four of seven projects with a next page.
     copying.workspace.cap_origin_lookup_page(4);
+    (copying, big)
+}
+
+#[test]
+fn a_projects_page_with_more_behind_it_answers_no_project_origin_and_the_project_is_walked_for() {
+    let (copying, big) = over_a_projects_page_with_more_behind_it();
     let served = copying.ok(&COPY);
     let before = &served[..first_write(&served)];
     let asked = batched(before);
@@ -700,5 +706,59 @@ fn a_projects_page_with_more_behind_it_answers_no_project_origin_and_the_project
     assert_eq!(
         updated["content"], "The plan, edited.",
         "updated in place: {updated}"
+    );
+}
+
+/// Run the copy over [`over_a_projects_page_with_more_behind_it`] with the walk's `projects`
+/// listings bent by `bend` `times` times, which has to be refused naming `refusal` before any
+/// write and leave the workspace's projects and tasks as they were.
+fn refused_walk(
+    times: usize,
+    bend: impl FnMut(&Value, &mut Value) + Send + 'static,
+    refusal: &str,
+) {
+    let (copying, _) = over_a_projects_page_with_more_behind_it();
+    let tasks = shown(&listed(&copying, "task"));
+    let projects = shown(&listed(&copying, "project"));
+    copying
+        .workspace
+        .bend_answers(|query, _| query == graphql::PROJECTS, times, bend);
+    let (output, served) = copying.run(&COPY);
+    assert_ne!(output.status.code(), Some(0), "{}", stdout(&output));
+    assert!(stderr(&output).contains(refusal), "{}", stderr(&output));
+    assert!(
+        !served
+            .iter()
+            .any(|(query, _)| query.trim_start().starts_with("mutation")),
+        "nothing is written: {served:#?}"
+    );
+    assert_eq!(shown(&listed(&copying, "task")), tasks);
+    assert_eq!(shown(&listed(&copying, "project")), projects);
+}
+
+#[test]
+fn a_walk_answered_with_more_projects_than_its_page_asked_for_is_refused_writing_nothing() {
+    refused_walk(
+        1,
+        |variables, data| {
+            let first = variables["first"].as_u64().expect("a page size");
+            let nodes = data["projects"]["nodes"].as_array_mut().expect("projects");
+            let row = nodes[0].clone();
+            while nodes.len() as u64 <= first {
+                nodes.push(row.clone());
+            }
+        },
+        "rows for a page of at most",
+    );
+}
+
+#[test]
+fn a_walk_handed_a_cursor_it_already_handed_out_is_refused_writing_nothing() {
+    refused_walk(
+        2,
+        |_, data| {
+            data["projects"]["pageInfo"] = json!({"hasNextPage": true, "endCursor": "again"});
+        },
+        "a cursor it had already handed out",
     );
 }

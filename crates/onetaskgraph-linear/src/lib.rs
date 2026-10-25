@@ -470,9 +470,8 @@
 //! failure and may require manual deletion from that scratch team.
 #![deny(missing_docs)]
 
-/// The image upload mechanism and its bounded verification rule.
+/// The image upload mechanism: one `fileUpload` and one storage PUT per new image.
 pub mod assets;
-/// What Linear stores when it is written Markdown, as the ruling above declares it.
 use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
     Capabilities, Classification, Comment, CommentBody, CommentOrigin, Cursor, DependencyEdge,
