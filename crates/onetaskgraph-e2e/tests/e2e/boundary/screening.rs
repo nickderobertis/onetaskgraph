@@ -229,3 +229,79 @@ fn a_dependency_on_an_item_of_an_unavailable_private_source_is_withheld_and_said
     }
     assert!(consumer.starts_with("site:"), "{consumer}");
 }
+
+/// A linking caller's policy whose answer about every repository it is asked is `public` until
+/// it is told otherwise, and which counts what it was asked: each repository's visibility, and
+/// each check, which it passes.
+#[derive(Default)]
+struct Counted {
+    private: std::sync::atomic::AtomicBool,
+    inspected: std::sync::atomic::AtomicUsize,
+    checked: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl onetaskgraph_core::boundary::WritePolicy for Counted {
+    async fn repository_visibility(
+        &self,
+        _: &onetaskgraph_plugin_api::Repository,
+    ) -> Result<
+        onetaskgraph_core::boundary::RepositoryVisibility,
+        onetaskgraph_core::boundary::PolicyError,
+    > {
+        use std::sync::atomic::Ordering;
+        self.inspected.fetch_add(1, Ordering::SeqCst);
+        Ok(if self.private.load(Ordering::SeqCst) {
+            onetaskgraph_core::boundary::RepositoryVisibility::Private
+        } else {
+            onetaskgraph_core::boundary::RepositoryVisibility::Public
+        })
+    }
+
+    async fn check_public_write(
+        &self,
+        _: &onetaskgraph_core::boundary::PublicWriteInput,
+    ) -> Result<onetaskgraph_core::boundary::WriteVerdict, onetaskgraph_core::boundary::PolicyError>
+    {
+        self.checked
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(onetaskgraph_core::boundary::WriteVerdict::Pass)
+    }
+}
+
+#[tokio::test]
+async fn what_a_policy_answered_is_held_for_one_command_and_asked_again_after_end_command() {
+    use std::sync::atomic::Ordering;
+    let store = Store::new(None, json!({}));
+    store.public_project_p();
+    let policy = std::sync::Arc::new(Counted::default());
+    let engine = super::linked_engine(&store).with_write_policy(policy.clone());
+    // Two writes of one command naming one repository, with one text: the repository is asked
+    // about once and the text checked once.
+    for _ in 0..2 {
+        engine
+            .create_task(&super::task_on_site(PLAIN, &[super::OPEN]))
+            .await
+            .expect("a public repository's task");
+    }
+    assert_eq!(policy.inspected.load(Ordering::SeqCst), 1);
+    assert_eq!(policy.checked.load(Ordering::SeqCst), 1);
+    // A changed text in the same command is checked again.
+    engine
+        .create_task(&super::task_on_site("Another plain step.", &[super::OPEN]))
+        .await
+        .expect("a public repository's task");
+    assert_eq!(policy.checked.load(Ordering::SeqCst), 2);
+    // The repository turns private. The next command asks again and is refused, writing
+    // nothing.
+    policy.private.store(true, Ordering::SeqCst);
+    engine.end_command().await.expect("the command ends");
+    let before = tree(&store.folder("site"));
+    let refused = engine
+        .create_task(&super::task_on_site(PLAIN, &[super::OPEN]))
+        .await
+        .expect_err("a task of a repository now private");
+    assert_eq!(super::kind_of(&refused), "not-private-destination");
+    assert_eq!(policy.inspected.load(Ordering::SeqCst), 2);
+    assert_eq!(tree(&store.folder("site")), before, "nothing was written");
+}
