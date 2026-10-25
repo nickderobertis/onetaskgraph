@@ -34,3 +34,7 @@ secrecy.workspace = true
 reqwest.workspace = true
 chrono.workspace = true
 sha2.workspace = true
+
+# The CPU time `store_startup` reads for each child it waited for, from `getrusage`.
+[target.'cfg(unix)'.dev-dependencies]
+libc.workspace = true

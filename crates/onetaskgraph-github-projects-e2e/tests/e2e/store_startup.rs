@@ -2,9 +2,10 @@
 //!
 //! The commands a host runs around a plan copy and an approval — `project show`, a
 //! project-scoped `task list` and `document list`, `task deps` and the `project copy` itself —
-//! are each a whole process of the real binary. This harness times those processes and nothing
-//! inside them, and attributes each command's wall time by difference between invocations it
-//! controls:
+//! are each a whole process of the real binary. This harness measures those processes and
+//! nothing inside them — the wall time each ran for, and the CPU time, user plus system, it and its
+//! children spent, which `getrusage` reports for a child once it has been waited for — and
+//! attributes each command's time by difference between invocations it controls:
 //!
 //! - **process start** is a `--version`, which reads no configuration and builds no source;
 //! - **configuration and source initialisation** is the command over [`BARE`], a folder holding
@@ -23,7 +24,9 @@
 //!
 //! No assertion here reads a clock. The figures are printed for a reader, and the comparison of
 //! two builds — [`compare_store_startup`] — is run by hand, because what it measures is this
-//! host's and not the code's.
+//! host's and not the code's. It judges by CPU time: on a host other work keeps busy, a process
+//! waits to be scheduled for longer than the start-up it is measured for, and that wait is in its
+//! wall time and not in its CPU time.
 
 use super::plan_copy::{Plan, SMALL};
 use onetaskgraph_e2e_support::{
@@ -35,7 +38,7 @@ use serde_json::{Value, json};
 use std::{
     io::Write as _,
     net::TcpListener,
-    path::{Path, PathBuf},
+    path::Path,
     process::{Output, Stdio},
     sync::{
         Arc,
@@ -116,6 +119,41 @@ impl Double {
     }
 }
 
+/// What one process cost: its whole wall time, and the CPU time it and its children spent.
+#[derive(Debug, Clone, Copy)]
+struct Spent {
+    wall: Duration,
+    cpu: Duration,
+}
+
+/// One of the two figures a [`Spent`] holds.
+type Measure = fn(&Spent) -> Duration;
+
+/// Both, by the name the report gives each.
+const MEASURES: [(&str, Measure); 2] = [("cpu", |spent| spent.cpu), ("wall", |spent| spent.wall)];
+
+/// The CPU time, user plus system, of every child this process has waited for so far.
+#[cfg(unix)]
+fn waited_children_cpu() -> Duration {
+    // SAFETY: `getrusage` writes the one struct it is handed, which is zeroed and owned here.
+    let usage = unsafe {
+        let mut usage: libc::rusage = std::mem::zeroed();
+        assert_eq!(libc::getrusage(libc::RUSAGE_CHILDREN, &mut usage), 0);
+        usage
+    };
+    let time = |t: libc::timeval| {
+        Duration::from_secs(t.tv_sec as u64) + Duration::from_micros(t.tv_usec as u64)
+    };
+    time(usage.ru_utime) + time(usage.ru_stime)
+}
+
+/// Not read on a host without `getrusage`: [`compare_store_startup`], which judges by it, runs on
+/// Unix alone.
+#[cfg(not(unix))]
+fn waited_children_cpu() -> Duration {
+    Duration::ZERO
+}
+
 /// Which remote sources one process sent anything to, by the name the configuration gives them.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 struct Contacted(Vec<&'static str>);
@@ -185,9 +223,9 @@ impl Host {
         });
     }
 
-    /// One process of `executable` with `arguments`, its whole wall time, and every remote
-    /// source it sent a request to.
-    fn run(&self, executable: &Path, arguments: &[String]) -> (Output, Duration, Contacted) {
+    /// One process of `executable` with `arguments`, what it cost, and every remote source it sent
+    /// a request to.
+    fn run(&self, executable: &Path, arguments: &[String]) -> (Output, Spent, Contacted) {
         let before = (
             self.plan.board.calls().len(),
             self.unrelated.each_ref().map(Double::requests),
@@ -201,9 +239,15 @@ impl Host {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         assert_spawnable_on_windows(&command);
+        // Only this thread waits for children, so what the waited children's CPU time grows by
+        // across this wait is this process's and its own children's.
+        let cpu = waited_children_cpu();
         let started = Instant::now();
         let output = command.spawn().unwrap().wait_with_output().unwrap();
-        let elapsed = started.elapsed();
+        let spent = Spent {
+            wall: started.elapsed(),
+            cpu: waited_children_cpu() - cpu,
+        };
         lease.wait_for_detach();
         drop(lease);
         let mut contacted = Vec::new();
@@ -215,7 +259,7 @@ impl Host {
                 contacted.push(UNRELATED[index]);
             }
         }
-        (output, elapsed, Contacted(contacted))
+        (output, spent, Contacted(contacted))
     }
 }
 
@@ -268,7 +312,7 @@ fn unrelated_hosted_sources_are_never_contacted() {
     for (variant, source, unrelated) in VARIANTS {
         host.configure(unrelated);
         for (command, arguments) in commands(source) {
-            let (output, elapsed, contacted) = host.run(binary(), &arguments);
+            let (output, spent, contacted) = host.run(binary(), &arguments);
             let answer = answered(&output, &format!("{command} over {variant}"));
             assert_eq!(
                 contacted,
@@ -282,7 +326,7 @@ fn unrelated_hosted_sources_are_never_contacted() {
                     "{command} over {variant} is not the unchanged re-copy: {answer}"
                 );
             }
-            seconds.push((variant, command, elapsed));
+            seconds.push((variant, command, spent));
         }
     }
     // Configuring sources a command does not read changes nothing it answers.
@@ -301,25 +345,26 @@ fn unrelated_hosted_sources_are_never_contacted() {
     assert_eq!(version.2, Contacted::default(), "--version sent a request");
     // One sample of each, for a reader: the comparison below is what decides anything.
     let samples = |variant: &str, command: &str| {
-        vec![
-            seconds
-                .iter()
-                .find(|(v, c, _)| *v == variant && *c == command)
-                .unwrap()
-                .2,
-        ]
+        [seconds
+            .iter()
+            .find(|(v, c, _)| *v == variant && *c == command)
+            .unwrap()
+            .2]
     };
-    for (command, _) in commands(BARE) {
-        eprintln!(
-            "{}",
-            attribution(
-                command,
-                &[version.1],
-                &samples("plan", command),
-                &samples("bare", command),
-                &samples("bare, no unrelated", command)
-            )
-        );
+    for (name, measure) in MEASURES {
+        for (command, _) in commands(BARE) {
+            eprintln!(
+                "{}",
+                attribution(
+                    command,
+                    name,
+                    &[measure(&version.1)],
+                    &samples("plan", command).map(|s| measure(&s)),
+                    &samples("bare", command).map(|s| measure(&s)),
+                    &samples("bare, no unrelated", command).map(|s| measure(&s))
+                )
+            );
+        }
     }
 }
 
@@ -335,9 +380,11 @@ fn spread(samples: &[Duration]) -> (f64, f64) {
     (at(0.5), at(0.75) - at(0.25))
 }
 
-/// One command's wall time attributed by difference, as the module's documentation says.
+/// One command's `measure` — wall or CPU time — attributed by difference, as the module's
+/// documentation says.
 fn attribution(
     command: &str,
+    measure: &str,
     version: &[Duration],
     plan: &[Duration],
     bare: &[Duration],
@@ -348,7 +395,7 @@ fn attribution(
     let (bare, _) = spread(bare);
     let (lean, _) = spread(lean);
     format!(
-        "{command:<24} whole {plan:7.1} ms (IQR {plan_iqr:5.1}) = process start {start:6.1} \
+        "{command:<24} {measure:<4} whole {plan:7.1} ms (IQR {plan_iqr:5.1}) = process start {start:6.1} \
          + configuration and source initialisation {:6.1} (of which unrelated sources {:6.1}) \
          + plan loading {:6.1}",
         bare - start,
@@ -358,8 +405,9 @@ fn attribution(
 }
 
 /// The executable an environment variable of this test names, refused by name when unset.
-fn named(variable: &str) -> PathBuf {
-    let path = PathBuf::from(
+#[cfg(unix)]
+fn named(variable: &str) -> std::path::PathBuf {
+    let path = std::path::PathBuf::from(
         std::env::var_os(variable)
             .unwrap_or_else(|| panic!("set {variable} to the onetaskgraph executable to time")),
     );
@@ -373,7 +421,8 @@ fn named(variable: &str) -> PathBuf {
 
 /// The base and the finished build, each run [`ROUNDS`] times per command and variant,
 /// interleaved — every round runs each invocation once under each build, alternating which goes
-/// first — and reported by median, interquartile range, attribution and remote contacts.
+/// first — and reported by median and interquartile range of CPU time, the measure it is judged
+/// by, and of wall time beside it, with the attribution of each and the remote contacts.
 ///
 /// Run by hand, naming both executables:
 ///
@@ -382,6 +431,7 @@ fn named(variable: &str) -> PathBuf {
 ///   cargo test -p onetaskgraph-github-projects-e2e --test e2e -- --ignored \
 ///   --nocapture compare_store_startup
 /// ```
+#[cfg(unix)]
 #[test]
 #[ignore = "run by hand with STORE_STARTUP_BASE and STORE_STARTUP_FINISHED naming two builds"]
 fn compare_store_startup() {
@@ -395,8 +445,8 @@ fn compare_store_startup() {
         let (_, arguments) = commands(source).pop().unwrap();
         answered(&host.run(&builds[1].1, &arguments).0, "the first copy");
     }
-    // (build, variant or "version", command) -> samples, and the contacts of every run.
-    let mut samples: std::collections::BTreeMap<(usize, &str, &str), Vec<Duration>> =
+    // (build, variant or "version", command) -> what each run cost, and the contacts of each.
+    let mut samples: std::collections::BTreeMap<(usize, &str, &str), Vec<Spent>> =
         Default::default();
     let mut contacts: std::collections::BTreeMap<(usize, &str), Vec<Contacted>> =
         Default::default();
@@ -404,18 +454,18 @@ fn compare_store_startup() {
     for round in 0..ROUNDS {
         let order: [usize; 2] = if round % 2 == 0 { [0, 1] } else { [1, 0] };
         for build in order {
-            let (output, elapsed, _) = host.run(&builds[build].1, &version);
+            let (output, spent, _) = host.run(&builds[build].1, &version);
             assert_eq!(output.status.code(), Some(0));
             samples
                 .entry((build, "version", ""))
                 .or_default()
-                .push(elapsed);
+                .push(spent);
         }
         for (variant, source, unrelated) in VARIANTS {
             host.configure(unrelated);
             for (command, arguments) in commands(source) {
                 for build in order {
-                    let (output, elapsed, contacted) = host.run(&builds[build].1, &arguments);
+                    let (output, spent, contacted) = host.run(&builds[build].1, &arguments);
                     answered(
                         &output,
                         &format!("{} {command} over {variant}", builds[build].0),
@@ -423,7 +473,7 @@ fn compare_store_startup() {
                     samples
                         .entry((build, variant, command))
                         .or_default()
-                        .push(elapsed);
+                        .push(spent);
                     if variant == "plan" {
                         contacts
                             .entry((build, command))
@@ -434,37 +484,49 @@ fn compare_store_startup() {
             }
         }
     }
+    let of = |key: (usize, &str, &str), measure: Measure| -> Vec<Duration> {
+        samples[&key].iter().map(measure).collect()
+    };
     let mut report = String::new();
-    for (command, _) in commands(BARE) {
-        let base = spread(&samples[&(0, "plan", command)]);
-        let finished = spread(&samples[&(1, "plan", command)]);
-        let margin = base.1.max(finished.1);
+    for (name, measure) in MEASURES {
         report.push_str(&format!(
-            "{command:<24} base median {:7.1} ms IQR {:5.1} | finished median {:7.1} ms IQR \
-             {:5.1} | base - finished {:7.1} ms {} larger IQR {margin:5.1}\n",
-            base.0,
-            base.1,
-            finished.0,
-            finished.1,
-            base.0 - finished.0,
-            if base.0 - finished.0 > margin {
-                ">"
-            } else {
-                "NOT >"
-            },
+            "{name} time over the plan, {ROUNDS} interleaved runs each\n"
         ));
+        for (command, _) in commands(BARE) {
+            let base = spread(&of((0, "plan", command), measure));
+            let finished = spread(&of((1, "plan", command), measure));
+            let margin = base.1.max(finished.1);
+            report.push_str(&format!(
+                "{command:<24} base median {:7.1} ms IQR {:5.1} | finished median {:7.1} ms IQR \
+                 {:5.1} | base - finished {:7.1} ms {} larger IQR {margin:5.1}\n",
+                base.0,
+                base.1,
+                finished.0,
+                finished.1,
+                base.0 - finished.0,
+                if base.0 - finished.0 > margin {
+                    ">"
+                } else {
+                    "NOT >"
+                },
+            ));
+        }
+        report.push('\n');
     }
     for (build, (name, _)) in builds.iter().enumerate() {
-        report.push_str(&format!("\n{name}: attribution by difference (medians)\n"));
-        for (command, _) in commands(BARE) {
-            report.push_str(&attribution(
-                command,
-                &samples[&(build, "version", "")],
-                &samples[&(build, "plan", command)],
-                &samples[&(build, "bare", command)],
-                &samples[&(build, "bare, no unrelated", command)],
-            ));
-            report.push('\n');
+        report.push_str(&format!("{name}: attribution by difference (medians)\n"));
+        for (measure_name, measure) in MEASURES {
+            for (command, _) in commands(BARE) {
+                report.push_str(&attribution(
+                    command,
+                    measure_name,
+                    &of((build, "version", ""), measure),
+                    &of((build, "plan", command), measure),
+                    &of((build, "bare", command), measure),
+                    &of((build, "bare, no unrelated", command), measure),
+                ));
+                report.push('\n');
+            }
         }
         report.push_str(&format!(
             "{name}: remote sources contacted per run, over the plan\n"
@@ -481,6 +543,7 @@ fn compare_store_startup() {
                 seen.len()
             ));
         }
+        report.push('\n');
     }
     eprintln!("{report}");
 }
@@ -494,7 +557,7 @@ fn compare_store_startup() {
 /// opening the reading end here, which is not counted.
 #[cfg(unix)]
 struct BundleOpens {
-    fifo: PathBuf,
+    fifo: std::path::PathBuf,
     stop: Arc<std::sync::atomic::AtomicBool>,
     opens: Arc<AtomicUsize>,
     writer: std::thread::JoinHandle<()>,
@@ -502,7 +565,7 @@ struct BundleOpens {
 
 #[cfg(unix)]
 impl BundleOpens {
-    fn watch(fifo: PathBuf) -> Self {
+    fn watch(fifo: std::path::PathBuf) -> Self {
         let made = std::process::Command::new("mkfifo")
             .arg(&fifo)
             .status()

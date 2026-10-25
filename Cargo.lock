@@ -1336,6 +1336,7 @@ name = "onetaskgraph-github-projects-e2e"
 version = "0.12.1"
 dependencies = [
  "chrono",
+ "libc",
  "onebudgetspec-core",
  "onetaskgraph-core",
  "onetaskgraph-e2e-support",

@@ -108,6 +108,9 @@ assert_cmd = "2.2.2"
 # The prompting journeys' pseudo-terminal: already in this lockfile through tempfile, so
 # naming it adds no crate, only the `pty` module of one that is here.
 rustix = "1.1.4"
+# The CPU time of a child process the store start-up harness waited for, which `std` does not
+# report. Already in this lockfile through tokio and others, so naming it adds no crate.
+libc = "0.2.189"
 predicates = "3.1.4"
 tempfile = "3.24.0"
 
