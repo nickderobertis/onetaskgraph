@@ -41,11 +41,31 @@ pub(super) const KEYS: [&str; 3] = [
     MetadataKey::COPIED_DESTINATION_VERSION_KEY,
 ];
 
+/// What a copy records its source item as having been, at [`MetadataKey::COPIED_VERSION_KEY`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum SourceVersion {
+    /// The change token the item's source gave it.
+    Token(String),
+    /// The digest of what the copy composed of an item whose source gives no token — see
+    /// [`composed`].
+    Composed(Sha256Digest),
+}
+
+impl std::fmt::Display for SourceVersion {
+    /// The string the key holds: the token as its source spells it, or the digest.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Token(token) => f.write_str(token),
+            Self::Composed(digest) => write!(f, "{digest}"),
+        }
+    }
+}
+
 /// What one copy records on one destination item.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Record {
     /// What the source item was: its token, or the digest of what the copy composed of it.
-    pub(super) version: Option<String>,
+    pub(super) version: SourceVersion,
     /// Whether the copy carried the task's comments.
     pub(super) with_comments: bool,
     /// The destination item's digest as the copy left it.
@@ -58,12 +78,10 @@ impl Record {
         for key in KEYS {
             metadata.remove(key);
         }
-        if let Some(version) = &self.version {
-            metadata.insert(
-                MetadataKey::COPIED_VERSION_KEY.to_owned(),
-                Value::String(version.clone()),
-            );
-        }
+        metadata.insert(
+            MetadataKey::COPIED_VERSION_KEY.to_owned(),
+            Value::String(self.version.to_string()),
+        );
         if self.with_comments {
             metadata.insert(
                 MetadataKey::COPIED_WITH_COMMENTS_KEY.to_owned(),

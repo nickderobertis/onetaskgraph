@@ -1136,17 +1136,6 @@ struct Journal {
     linked_versions: HashMap<GlobalId, String>,
 }
 
-/// What a follow-up's record says its source was: the source's own change token, which the
-/// source's answer to this copy's own link write moves, or the digest of what this copy composed
-/// of it, which no link moves.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Versioned {
-    /// The source's change token.
-    Token,
-    /// The digest of what this copy composed of the source.
-    Composed,
-}
-
 /// One write sent again, as its own request, because the destination stores other content than
 /// it was sent: that stored content verbatim, with every fingerprint the item keeps recomputed
 /// over it — see `stored`.
@@ -1162,9 +1151,11 @@ struct FollowUp {
     item: Item,
     /// Its forward edges, as the first write sent them.
     edges: Vec<DependencyEdge>,
-    /// The record of this copy it lands with, digested over the stored content when it is sent,
-    /// and what its version is of its source — `None` for a write that records none.
-    record: Option<(record::Record, Versioned)>,
+    /// The record of this copy it lands with, digested over the stored content when it is sent
+    /// — `None` for a write that records none. A version that is its source's change token is
+    /// replaced by the token the source's answer to this copy's own link write gave, which that
+    /// write moves; a composed digest no link moves.
+    record: Option<record::Record>,
     /// The comments its record digests, after a `--comments` copy.
     comments: Option<Vec<Value>>,
     /// The content the destination said it stores, which the follow-up's own answer has to
@@ -7736,11 +7727,11 @@ impl Engine {
         let mut diverged = Vec::new();
         for mut follow in std::mem::take(&mut journal.follow_ups) {
             let destination = self.writable(&follow.at)?;
-            if let Some((mut record, versioned)) = follow.record.take() {
-                if versioned == Versioned::Token
+            if let Some(mut record) = follow.record.take() {
+                if let record::SourceVersion::Token(token) = &mut record.version
                     && let Some(version) = journal.linked_versions.get(&follow.source)
                 {
-                    record.version = Some(version.clone());
+                    token.clone_from(version);
                 }
                 record.digest = record::digest_of(
                     &follow.item,
@@ -9182,7 +9173,7 @@ fn record_of(
 ) -> record::Record {
     let content = served_by(content_of(landing), &item.assets, recorded);
     record::Record {
-        version: Some(source_version(item, content.as_deref())),
+        version: source_version(item, content.as_deref()),
         with_comments: item.carried.is_some(),
         digest: record::digest_of(landing, edges, record_comments(item), destination),
     }
@@ -9191,10 +9182,10 @@ fn record_of(
 /// What a copy records of `item`'s source at [`MetadataKey::COPIED_VERSION_KEY`]: its change
 /// token where its source gives one, otherwise the digest of what this copy composes of it with
 /// `content`.
-fn source_version(item: &Planned, content: Option<&str>) -> String {
+fn source_version(item: &Planned, content: Option<&str>) -> record::SourceVersion {
     token_of(&item.item).map_or_else(
-        || record::composed(&item.item, content).to_string(),
-        str::to_owned,
+        || record::SourceVersion::Composed(record::composed(&item.item, content)),
+        |token| record::SourceVersion::Token(token.to_owned()),
     )
 }
 
@@ -9295,12 +9286,12 @@ fn follow_up_of(
         Item::Project(project) => project.content = Some(stored.clone()),
         Item::Document(document) => document.content = Some(stored.clone()),
     }
-    let record = record.map(|mut record| match token_of(&item.item) {
-        Some(_) => (record, Versioned::Token),
-        None => {
-            record.version = Some(source_version(item, Some(sent)));
-            (record, Versioned::Composed)
+    let record = record.map(|mut record| {
+        // A composed digest is of what was sent, now that the copy has sent it.
+        if let record::SourceVersion::Composed(_) = record.version {
+            record.version = source_version(item, Some(sent));
         }
+        record
     });
     Some(FollowUp {
         at: destination.clone(),
@@ -9385,9 +9376,9 @@ fn recorded_unchanged(
     covers: bool,
 ) -> bool {
     let version = match token_of(&item.item) {
-        Some(token) if covers => token.to_owned(),
+        Some(token) if covers => record::SourceVersion::Token(token.to_owned()),
         Some(_) => return false,
-        None => record::composed(&item.item, content_of(outgoing)).to_string(),
+        None => record::SourceVersion::Composed(record::composed(&item.item, content_of(outgoing))),
     };
     let with_comments = item.carried.is_some();
     let comments = if with_comments {
@@ -9399,7 +9390,12 @@ fn recorded_unchanged(
         None
     };
     let now = record::digest_of(&held.item, &held.edges, comments, destination);
-    if !record::holds(described(&held.item).1, &version, with_comments, &now) {
+    if !record::holds(
+        described(&held.item).1,
+        &version.to_string(),
+        with_comments,
+        &now,
+    ) {
         return false;
     }
     // Who may read it is this copy's to decide afresh — a project a new private member makes
