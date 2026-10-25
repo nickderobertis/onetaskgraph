@@ -12,8 +12,8 @@ use onetaskgraph_plugin_api::{
 use serde_json::{Value, json};
 
 use crate::{
-    LinearSource, MAX_PAGE_SIZE, ORIGIN_BATCH, connection, graphql, map_project, map_task,
-    slot_phrase, str_at,
+    LinearSource, MAX_PAGE_SIZE, ORIGIN_BATCH, RESOLUTION_ROWS, Vocabulary, connection, graphql,
+    map_project, map_task, slot_phrase,
 };
 
 /// What [`TaskSource::read_ahead_origins_for_copy`] read, held for the command.
@@ -28,6 +28,10 @@ pub(crate) struct OriginsAhead {
     /// The workspace's organization id that same request read, which
     /// [`TaskSource::designator`] digests.
     organization: Option<String>,
+    /// The origins a copy asked about and no lookup has needed yet: asked of Linear together,
+    /// in one request per [`ORIGIN_BATCH`], at the first lookup by origin — so a copy that never
+    /// looks an issue or a project up by its origin, a document copy among them, sends none.
+    pending: Vec<String>,
 }
 
 /// The task query a copy asks for the items copied from `origin`, and nothing else.
@@ -62,6 +66,7 @@ impl LinearSource {
         if let Ok(mut held) = self.origins_ahead.lock() {
             held.tasks.clear();
             held.projects.clear();
+            held.pending.clear();
             if all {
                 held.organization = None;
             }
@@ -101,29 +106,47 @@ impl LinearSource {
     ///
     /// An origin whose slot phrase cannot be sent ([`slot_phrase`]) is not asked: its own
     /// lookup reads the whole team, which no `or` of phrases could stand in for.
+    ///
+    /// Nothing is sent yet: the origins are held until the first lookup by origin needs one,
+    /// which [`Self::send_origins_ahead`] answers. A source with no `team` holds none, since the
+    /// read carries the resolution a write needs and only a team names it.
     pub(crate) async fn read_origins_ahead(&self, origins: &[String]) -> Result<(), SourceError> {
-        let unasked: Vec<&String> = {
-            let held = self.origins_ahead()?;
-            let mut unasked: Vec<&String> = Vec::new();
-            for origin in origins {
-                if slot_phrase(origin).is_some()
-                    && !held.tasks.contains_key(origin)
-                    && !held.projects.contains_key(origin)
-                    && !unasked.contains(&origin)
-                {
-                    unasked.push(origin);
-                }
+        if self.team.is_none() {
+            return Ok(());
+        }
+        let mut held = self.origins_ahead()?;
+        for origin in origins {
+            if slot_phrase(origin).is_some()
+                && !held.tasks.contains_key(origin)
+                && !held.projects.contains_key(origin)
+                && !held.pending.contains(origin)
+            {
+                held.pending.push(origin.clone());
             }
-            unasked
-        };
-        for chunk in unasked.chunks(ORIGIN_BATCH) {
+        }
+        Ok(())
+    }
+
+    /// Ask Linear about every origin [`Self::read_origins_ahead`] held, in one request per
+    /// [`ORIGIN_BATCH`]; nothing when none is held.
+    pub(crate) async fn send_origins_ahead(&self) -> Result<(), SourceError> {
+        let pending = std::mem::take(&mut self.origins_ahead()?.pending);
+        let pending: Vec<&String> = pending.iter().collect();
+        for chunk in pending.chunks(ORIGIN_BATCH) {
             self.read_origin_chunk(chunk).await?;
         }
         Ok(())
     }
 
-    /// One request of [`graphql::ORIGIN_LOOKUPS`] for at most [`ORIGIN_BATCH`] origins.
+    /// One request of [`graphql::ORIGIN_LOOKUPS`] for at most [`ORIGIN_BATCH`] origins, carrying
+    /// the team's workflow states and the workspace's project statuses beside them — the
+    /// resolution a copy's first write reads otherwise, since a copy finding nothing creates —
+    /// held as [`LinearSource::vocabulary`] holds a resolution read on its own, only when it
+    /// read completely.
     async fn read_origin_chunk(&self, chunk: &[&String]) -> Result<(), SourceError> {
+        let Some(team) = self.team.as_ref() else {
+            return Ok(());
+        };
         let mut issues = self.issue_scope();
         issues.push(json!({"or": chunk
             .iter()
@@ -136,7 +159,10 @@ impl LinearSource {
         let issues_first = u32::try_from(chunk.len())
             .unwrap_or(MAX_PAGE_SIZE)
             .clamp(1, MAX_PAGE_SIZE);
-        let projects_first = self.projects_page().saturating_sub(issues_first).max(1);
+        let projects_first = self
+            .projects_page()
+            .saturating_sub(issues_first + RESOLUTION_ROWS)
+            .max(1);
         let data = self
             .send(
                 self.read_document(graphql::ORIGIN_LOOKUPS),
@@ -145,23 +171,33 @@ impl LinearSource {
                     "issuesFilter": Self::narrowed(issues),
                     "projectsFirst": projects_first,
                     "projectsFilter": self.project_filter(&LabelFilter::default(), &[]),
+                    "key": team.0,
                 }),
             )
             .await?;
+        // Held only when it read whole, exactly as a resolution read on its own is; otherwise the
+        // first write reads it as it always did.
+        if let Ok(read) = Vocabulary::read(&data, &self.name, &team.0) {
+            *self
+                .vocabulary
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                Some(std::sync::Arc::new(read));
+        }
         let tasks = connection(&data, "originIssues", |v| {
             map_task(v, &self.name, &self.statuses, self.spelling())
         })?;
         let projects = connection(&data, "originProjects", |v| {
             map_project(v, &self.statuses, self.spelling())
         })?;
-        let organization = str_at(
-            data.get("organization")
-                .ok_or_else(|| SourceError::Malformed {
-                    message: "missing organization".into(),
-                })?,
-            "id",
-        )?
-        .to_owned();
+        // Read as the resolution reads it: an answer naming no workspace, or none by a string id,
+        // holds none here, and the resolution read on its own refuses it where it is needed.
+        let organization = data
+            .get("organization")
+            .and_then(|organization| organization.get("id"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
         // An origin is never taken as having no counterpart from a page with more behind it:
         // a match on the next page is one this page cannot see.
         let mut held = self.origins_ahead()?;
@@ -201,6 +237,7 @@ impl LinearSource {
         origin: &str,
         page: &PageRequest,
     ) -> Result<Page<Project>, SourceError> {
+        self.send_origins_ahead().await?;
         if page.cursor.is_none() {
             let held = self.origins_ahead()?.projects.remove(origin);
             if let Some(projects) = held

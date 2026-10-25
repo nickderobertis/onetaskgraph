@@ -170,12 +170,13 @@ pub(crate) fn complexity(document: &str, variables: &Value, answer: &Value) -> u
                 * first("first")
         }
         // A copy's batched origin read: its two listings priced as each is alone, by the rows the
-        // issues page returned and the rows the projects page asked for, and the organization.
+        // issues page returned and the rows the projects page asked for, and the resolution it
+        // carries — the organization, the team's states and the project statuses.
         g::ORIGIN_LOOKUPS => {
             price::ISSUES_BASE
                 + price::ISSUES_ROW * rows("/data/originIssues/nodes")
                 + price::PROJECTS_ROW * first("projectsFirst")
-                + price::VIEWER
+                + price::RESOLUTION
         }
         g::ORIGIN_LOOKUPS_CACHED => {
             price::ISSUES_BASE
@@ -188,7 +189,7 @@ pub(crate) fn complexity(document: &str, variables: &Value, answer: &Value) -> u
                     + price::PROJECT_RELATIONS_PAGE
                     + price::PROJECT_INVERSE_RELATIONS_PAGE)
                     * first("projectsFirst")
-                + price::VIEWER
+                + price::RESOLUTION
         }
         g::DOCUMENT => price::DOCUMENT,
         g::DOCUMENTS => price::DOCUMENTS_ROW * first("first"),

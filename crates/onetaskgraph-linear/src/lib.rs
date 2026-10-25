@@ -380,7 +380,15 @@
 //!   request asks for no more rows than that page does — about 7,000 of Linear's 10,000
 //!   complexity points; see [`ORIGIN_BATCH`].
 //! - **`organization{id}`**, which [`TaskSource::designator`] then answers from for the rest of
-//!   the command, with no request of its own.
+//!   the command, with no request of its own, and the team's workflow states and the workspace's
+//!   project statuses — the rest of [`graphql::RESOLUTION`], which the copy's first write would
+//!   read otherwise, since a copy finding nothing creates. It is held as a resolution read on
+//!   its own is, only when it read whole, and costs the projects page [`RESOLUTION_ROWS`] rows.
+//!
+//! Nothing is sent when the copy asks: the origins are held until its first lookup by origin
+//! needs one, so a copy that looks no issue or project up by its origin — a document copy among
+//! them — sends no such request, and one that does sends it as the first request before its
+//! first write. A source with no `team` holds none, as no resolution names one.
 //!
 //! Each origin's next lookup is answered from it once, every row confirmed in process exactly as
 //! that origin's own query confirms it, so the answer is the one that query would have given —
@@ -528,6 +536,12 @@ pub const PROJECTS_CACHED_PAGE: u32 = 74;
 /// complexity points at the 70 a row a projects listing is priced at, and under 8,880 with the
 /// cache's pages at 120, however many origins it carries.
 pub const ORIGIN_BATCH: usize = 50;
+
+/// The projects rows [`graphql::ORIGIN_LOOKUPS`] gives up to the vocabulary resolution it carries
+/// beside its listings — [`graphql::RESOLUTION`]'s `teams` and `projectStatuses`, priced at
+/// about 2,053 of Linear's complexity points, or some thirty projects rows at 70 each — so the
+/// request still asks for no more than one listing page does.
+pub const RESOLUTION_ROWS: u32 = 30;
 const DEFAULT_ENDPOINT: &str = "https://api.linear.app/graphql";
 
 /// Exact GraphQL query documents issued by this plugin.
@@ -559,11 +573,11 @@ pub mod graphql {
     /// phrase under one `or`, aliased `originIssues`, [`PROJECTS`]'s connection narrowed to the
     /// source's scope, aliased `originProjects`, and [`ORGANIZATION`]'s `organization{id}` — in
     /// one request. See the module documentation's ruling on the requests a copy sends.
-    pub const ORIGIN_LOOKUPS: &str = "query($issuesFirst:Int!,$issuesFilter:IssueFilter,$projectsFirst:Int!,$projectsFilter:ProjectFilter){ originIssues: issues(first:$issuesFirst,filter:$issuesFilter){ nodes{id identifier title description url createdAt updatedAt state{name type} priority labels{nodes{id name color}} project{id}} pageInfo{hasNextPage endCursor} } originProjects: projects(first:$projectsFirst,filter:$projectsFilter){ nodes{id name content url createdAt updatedAt status{name type} labels{nodes{id name color}}} pageInfo{hasNextPage endCursor} } organization{ id } }";
+    pub const ORIGIN_LOOKUPS: &str = "query($issuesFirst:Int!,$issuesFilter:IssueFilter,$projectsFirst:Int!,$projectsFilter:ProjectFilter,$key:String!){ originIssues: issues(first:$issuesFirst,filter:$issuesFilter){ nodes{id identifier title description url createdAt updatedAt state{name type} priority labels{nodes{id name color}} project{id}} pageInfo{hasNextPage endCursor} } originProjects: projects(first:$projectsFirst,filter:$projectsFilter){ nodes{id name content url createdAt updatedAt status{name type} labels{nodes{id name color}}} pageInfo{hasNextPage endCursor} } organization{ id } teams(first:2,filter:{key:{eqIgnoreCase:$key}}){nodes{id states(first:250){nodes{id name type} pageInfo{hasNextPage}}}} projectStatuses(first:250){nodes{id name type position} pageInfo{hasNextPage}} }";
     /// [`ORIGIN_LOOKUPS`], sent in its place while the store's cache stands in front of this
     /// source: each connection's rows carry what [`ISSUES_CACHED`]'s and [`PROJECTS_CACHED`]'s
     /// carry, so a row it answers is pinned to the token a listing of it spells.
-    pub const ORIGIN_LOOKUPS_CACHED: &str = "query($issuesFirst:Int!,$issuesFilter:IssueFilter,$projectsFirst:Int!,$projectsFilter:ProjectFilter){ originIssues: issues(first:$issuesFirst,filter:$issuesFilter){ nodes{id identifier title description url createdAt updatedAt state{name type} priority labels{nodes{id name color}} project{id} comments(first:10){nodes{id updatedAt} pageInfo{hasNextPage}} relations(first:10){nodes{id type relatedIssue{id}} pageInfo{hasNextPage}} inverseRelations(first:10){nodes{id type issue{id}} pageInfo{hasNextPage}}} pageInfo{hasNextPage endCursor} } originProjects: projects(first:$projectsFirst,filter:$projectsFilter){ nodes{id name content url createdAt updatedAt status{name type} labels{nodes{id name color}} relations(first:10){nodes{id type relatedProject{id}} pageInfo{hasNextPage}} inverseRelations(first:10){nodes{id type project{id}} pageInfo{hasNextPage}}} pageInfo{hasNextPage endCursor} } organization{ id } }";
+    pub const ORIGIN_LOOKUPS_CACHED: &str = "query($issuesFirst:Int!,$issuesFilter:IssueFilter,$projectsFirst:Int!,$projectsFilter:ProjectFilter,$key:String!){ originIssues: issues(first:$issuesFirst,filter:$issuesFilter){ nodes{id identifier title description url createdAt updatedAt state{name type} priority labels{nodes{id name color}} project{id} comments(first:10){nodes{id updatedAt} pageInfo{hasNextPage}} relations(first:10){nodes{id type relatedIssue{id}} pageInfo{hasNextPage}} inverseRelations(first:10){nodes{id type issue{id}} pageInfo{hasNextPage}}} pageInfo{hasNextPage endCursor} } originProjects: projects(first:$projectsFirst,filter:$projectsFilter){ nodes{id name content url createdAt updatedAt status{name type} labels{nodes{id name color}} relations(first:10){nodes{id type relatedProject{id}} pageInfo{hasNextPage}} inverseRelations(first:10){nodes{id type project{id}} pageInfo{hasNextPage}}} pageInfo{hasNextPage endCursor} } organization{ id } teams(first:2,filter:{key:{eqIgnoreCase:$key}}){nodes{id states(first:250){nodes{id name type} pageInfo{hasNextPage}}}} projectStatuses(first:250){nodes{id name type position} pageInfo{hasNextPage}} }";
     /// Fetch one issue.
     pub const ISSUE: &str = "query($id:String!){ issue(id:$id){ id identifier title description url createdAt updatedAt archivedAt state{name type} priority labels{nodes{id name color}} project{id} } }";
     /// Fetch one project.
@@ -644,7 +658,7 @@ pub mod graphql {
     pub const PROJECT_LABEL: &str =
         "query($name:String!){ projectLabels(filter:{name:{eqIgnoreCase:$name}}){nodes{id}} }";
     /// Create an issue.
-    pub const ISSUE_CREATE: &str = "mutation($input:IssueCreateInput!){ issueCreate(input:$input){success issue{id description}} }";
+    pub const ISSUE_CREATE: &str = "mutation($input:IssueCreateInput!){ issueCreate(input:$input){success issue{ id identifier title description url createdAt updatedAt archivedAt state{name type} priority labels{nodes{id name color}} project{id} }} }";
     /// Update an issue and read back, in the same request, everything a task is read as: the
     /// selection is [`ISSUE`]'s, so what a write of the description alone answers is what a read
     /// of the issue a moment later answers, and nothing is read after it.
@@ -669,12 +683,12 @@ pub mod graphql {
     /// given, so it has to know which it holds; selected here, that is the update's own answer
     /// rather than a read of its own, and a re-write with no relations to replace is the one
     /// request. The relations are read after the update, which moves none of them.
-    pub const ISSUE_REWRITE: &str = "mutation($id:String!,$input:IssueUpdateInput!,$first:Int!){ issueUpdate(id:$id,input:$input){success issue{id description relations(first:$first){nodes{id type relatedIssue{id}} pageInfo{hasNextPage endCursor}}}} }";
+    pub const ISSUE_REWRITE: &str = "mutation($id:String!,$input:IssueUpdateInput!,$first:Int!){ issueUpdate(id:$id,input:$input){success issue{ id identifier title description url createdAt updatedAt archivedAt state{name type} priority labels{nodes{id name color}} project{id} relations(first:$first){nodes{id type relatedIssue{id}} pageInfo{hasNextPage endCursor}}}} }";
     /// Rewrite a project whole, and read back the first page of its relations, on the terms of
     /// [`ISSUE_REWRITE`].
-    pub const PROJECT_REWRITE: &str = "mutation($id:String!,$input:ProjectUpdateInput!,$first:Int!){ projectUpdate(id:$id,input:$input){success project{id content relations(first:$first){nodes{id type relatedProject{id}} pageInfo{hasNextPage endCursor}}}} }";
+    pub const PROJECT_REWRITE: &str = "mutation($id:String!,$input:ProjectUpdateInput!,$first:Int!){ projectUpdate(id:$id,input:$input){success project{ id name content url createdAt updatedAt archivedAt status{name type} labels{nodes{id name color}} relations(first:$first){nodes{id type relatedProject{id}} pageInfo{hasNextPage endCursor}}}} }";
     /// Create a project.
-    pub const PROJECT_CREATE: &str = "mutation($input:ProjectCreateInput!){ projectCreate(input:$input){success project{id content}} }";
+    pub const PROJECT_CREATE: &str = "mutation($input:ProjectCreateInput!){ projectCreate(input:$input){success project{ id name content url createdAt updatedAt archivedAt status{name type} labels{nodes{id name color}} }} }";
     /// Update a project — its long form alone, by a metadata or rendering write — reading back in
     /// the same request everything a project is read as, so a metadata write answers the project
     /// its own answer selected and a follow-up write reads nothing after the write before it.
@@ -704,7 +718,7 @@ pub mod graphql {
     /// connection declares, unlike its `issues` one.
     pub const DOCUMENTS: &str = "query($first:Int,$after:String,$filter:DocumentFilter){ documents(first:$first,after:$after,filter:$filter){ nodes{id title content url createdAt updatedAt project{id}} pageInfo{hasNextPage endCursor} } }";
     /// Create a document.
-    pub const DOCUMENT_CREATE: &str = "mutation($input:DocumentCreateInput!){ documentCreate(input:$input){success document{id content}} }";
+    pub const DOCUMENT_CREATE: &str = "mutation($input:DocumentCreateInput!){ documentCreate(input:$input){success document{ id title content url createdAt updatedAt archivedAt project{id} }} }";
     /// Update a document, reading back in the same request everything a document is read as, on
     /// the terms of [`PROJECT_UPDATE`].
     pub const DOCUMENT_UPDATE: &str = "mutation($id:String!,$input:DocumentUpdateInput!){ documentUpdate(id:$id,input:$input){success document{ id title content url createdAt updatedAt archivedAt project{id} }} }";
@@ -1522,6 +1536,10 @@ struct LinearSource {
     /// moment later answers (spike `spike-linear-stored-content`), so a follow-up write that
     /// keeps the metadata slot byte for byte reads nothing after the write before it.
     written: std::sync::Mutex<std::collections::HashMap<(MetadataRecord, NativeId), Value>>,
+    /// Where each item this instance wrote is, as its latest write's own answer said — what
+    /// [`TaskSource::written_location`] answers, so a copy records where it landed an item it
+    /// created without reading it.
+    locations: std::sync::Mutex<std::collections::HashMap<(MetadataRecord, NativeId), String>>,
     /// What [`TaskSource::read_ahead_origins_for_copy`] read, until the next write or
     /// [`TaskSource::end_command`]; see [`origins::OriginsAhead`].
     origins_ahead: std::sync::Mutex<origins::OriginsAhead>,
@@ -1566,6 +1584,7 @@ impl LinearSource {
             edges_versions: std::sync::Mutex::new(std::collections::HashMap::new()),
             stored: std::sync::Mutex::new(std::collections::HashMap::new()),
             written: std::sync::Mutex::new(std::collections::HashMap::new()),
+            locations: std::sync::Mutex::new(std::collections::HashMap::new()),
             origins_ahead: std::sync::Mutex::new(origins::OriginsAhead::default()),
         })
     }
@@ -3184,6 +3203,17 @@ impl TaskSource for LinearSource {
             Err(_) => status.clone(),
         })
     }
+    /// Where the item is, as the answer to this instance's latest write of it said: every
+    /// long-form write selects its `url`.
+    fn written_location(&self, record: MetadataRecord, id: &NativeId) -> Option<Location> {
+        let held = self
+            .locations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&(record, id.clone()))
+            .cloned();
+        web_address(held.as_deref())
+    }
     /// The content the latest write of the item selected in its own answer, the metadata slot
     /// and its separator removed; see the ruling on what Linear stores.
     fn stored_content(&self, record: MetadataRecord, id: &NativeId) -> Option<String> {
@@ -3242,6 +3272,7 @@ impl TaskSource for LinearSource {
     /// workspace designates the same tracker.
     async fn designator(&self) -> Result<Option<Designator>, SourceError> {
         // A copy's batched origin read carries the organization id, held for the command.
+        self.send_origins_ahead().await?;
         let organization = match self.held_organization()? {
             Some(organization) => organization,
             None => {
@@ -3303,6 +3334,9 @@ impl TaskSource for LinearSource {
         query: &TaskQuery,
         page: &PageRequest,
     ) -> Result<Page<Task>, SourceError> {
+        if query.origin.is_some() {
+            self.send_origins_ahead().await?;
+        }
         if let Some(held) = self.held_origin_tasks(query, page)? {
             return Ok(held);
         }
@@ -4293,6 +4327,10 @@ impl TaskSource for LinearSource {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clear();
+        self.locations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
         Ok(())
     }
 }
@@ -4522,6 +4560,12 @@ impl LinearSource {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert((record, id.clone()), content.unwrap_or_default());
+        if let Some(url) = payload.get("url").and_then(Value::as_str) {
+            self.locations
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert((record, id.clone()), url.to_owned());
+        }
         // Held whole only where the answer selected what a read maps.
         let whole = match record {
             MetadataRecord::Task | MetadataRecord::Document => payload.get("title").is_some(),

@@ -1301,8 +1301,19 @@ impl Engine {
                 && held.answers_digest == provenance.answers_digest
                 && held.body_digest.as_str() == body_digest(&regeneration.content)
         });
+        // A source that serves its assets at a URL lists none it holds: its record of what it
+        // uploaded is what says which assets the item holds.
+        let same_assets = match &regeneration.recorded_assets {
+            Some(recorded) if regeneration.held_assets.is_empty() => {
+                recorded.0.len() == carried.len()
+                    && carried
+                        .iter()
+                        .all(|payload| recorded.reusable(&payload.name, &payload.sha256).is_some())
+            }
+            _ => assets::same_set(&regeneration.held_assets, &carried),
+        };
         let changed = !as_recorded
-            || !assets::same_set(&regeneration.held_assets, &carried)
+            || !same_assets
             // Answers a source keeps and this item does not hold — a block deleted by hand —
             // are a difference the write repairs; a source keeping none holds none by nature.
             || regeneration

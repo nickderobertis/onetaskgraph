@@ -270,7 +270,7 @@ impl Plan {
     }
 
     /// Copy the rendered plan to Linear — the project with its task, then its design document.
-    fn copy_plan(&self, design: &str, code: i32) -> (Vec<Value>, String, usize) {
+    fn copy_plan(&self, design: &str, code: i32) -> (Vec<Value>, String, Vec<String>) {
         let (project, project_errors, project_served) =
             self.copy(&["project", "copy", "plan:goal", "--to", "linear"], code);
         let (document, document_errors, document_served) =
@@ -280,7 +280,10 @@ impl Plan {
         (
             items,
             format!("{project_errors}{document_errors}"),
-            project_served.len() + document_served.len(),
+            roots(&project_served)
+                .into_iter()
+                .chain(roots(&document_served))
+                .collect(),
         )
     }
 }
@@ -314,6 +317,24 @@ fn kind_of(source: &str) -> &'static str {
     } else {
         "task"
     }
+}
+
+/// Every request in `served`, by its first root field, aliased ones by their alias.
+fn roots(served: &[(String, Value)]) -> Vec<String> {
+    served
+        .iter()
+        .map(|(query, _)| {
+            query
+                .split_once('{')
+                .and_then(|(_, rest)| {
+                    rest.trim_start()
+                        .split(['(', ' ', '{', ':'])
+                        .next()
+                        .map(str::to_owned)
+                })
+                .unwrap_or_default()
+        })
+        .collect()
 }
 
 /// Every mutation in `served`, by its root field.
@@ -370,11 +391,26 @@ fn a_copied_plan_reads_back_from_linear_as_the_digest_its_provenance_records() {
         let (items, errors, sent) = plan.copy_plan(&design, 0);
         assert!(errors.is_empty(), "{errors}");
         if !cache {
-            // Exactly the eight requests this copy sent before the store recorded what Linear
-            // stores — measured with the 0.8.0 binary over this same journey. What Linear stores
-            // is read off each mutation's own answer, never by a read of its own.
-            // llmlint: ignore[tests_hold_no_nonfunctional_thresholds] The change's own acceptance criterion: the first copy sends exactly the requests it sent before, asserted exactly off the loopback's request log. A budget's threshold would admit the extra read this assertion exists to refuse, and the Linear budgets file is not this change's to edit.
-            assert_eq!(sent, 8, "the first copy's requests, unchanged");
+            // Every request this copy sends, and nothing else: one origin read for the project
+            // and its task, one write of each item as composed, one follow-up write of each item
+            // Linear rewrote — all three — and the document's own origin lookup; no read of an
+            // item after a write of it, and no read of the destination project the document is
+            // filed under. What Linear stores is read off each mutation's own answer.
+            // llmlint: ignore[tests_hold_no_nonfunctional_thresholds] The change's own acceptance criterion: the copy sends exactly these requests, asserted exactly off the loopback's request log. A budget's threshold would admit the read after a write this assertion exists to refuse; the plan-copy budget of budgets.yaml holds the realistic plan's figure.
+            assert_eq!(
+                sent,
+                [
+                    "originIssues",
+                    "projectCreate",
+                    "issueCreate",
+                    "projectUpdate",
+                    "issueUpdate",
+                    "documents",
+                    "documentCreate",
+                    "documentUpdate",
+                ],
+                "the first copy's requests"
+            );
         }
         for source in ["plan:goal", task.as_str(), design.as_str()] {
             let landed = outcome(&items, source);
@@ -594,7 +630,7 @@ fn refused_as_diverged(hosting: Hosting) {
         assert_eq!(failed["error"]["source"], "linear", "{failed}");
         let message = failed["error"]["message"].as_str().expect("a message");
         // The item is written, under an id the message names: its first write's answer said
-        // Linear stores `* build it`, the follow-up sent that back and was answered `+ build
+        // Linear stores `+ build it`, the follow-up sent that back and was answered `* build
         // it`, so the digest it records is of content a read does not hand back.
         let destination = message
             .split_whitespace()
@@ -603,8 +639,8 @@ fn refused_as_diverged(hosting: Hosting) {
         assert!(destination.starts_with("linear:"), "{message}");
         for named in [
             "first at line 4",
-            "sent:   \"* build it\"",
-            "stored: \"+ build it\"",
+            "sent:   \"+ build it\"",
+            "stored: \"* build it\"",
             "did not keep the content it said it stores",
         ] {
             assert!(message.contains(&named), "names {named:?}: {message}");
@@ -1054,6 +1090,17 @@ fn a_rendering_ending_in_a_table_copies_to_linear_verifiably_and_recopies_as_not
         sha256(&content),
         "{item}"
     );
+    let (again, _, served) = plan.copy(&["task", "copy", &task, "--to", "linear"], 0);
+    assert_eq!(
+        outcome(again["items"].as_array().expect("items"), &task)["action"],
+        "unchanged",
+        "{again}"
+    );
+    assert!(
+        !mutations(&served).iter().any(|root| root == "issueUpdate"),
+        "an unchanged table writes nothing: {:?}",
+        mutations(&served)
+    );
     let (set, served) = plan.exits(
         &[
             "task",
@@ -1078,16 +1125,5 @@ fn a_rendering_ending_in_a_table_copies_to_linear_verifiably_and_recopies_as_not
     assert_eq!(
         reread["metadata"]["onetaskgraph.template"]["body_digest"],
         sha256(&content)
-    );
-    let (again, _, served) = plan.copy(&["task", "copy", &task, "--to", "linear"], 0);
-    assert_eq!(
-        outcome(again["items"].as_array().expect("items"), &task)["action"],
-        "unchanged",
-        "{again}"
-    );
-    assert!(
-        !mutations(&served).iter().any(|root| root == "issueUpdate"),
-        "an unchanged table writes nothing: {:?}",
-        mutations(&served)
     );
 }

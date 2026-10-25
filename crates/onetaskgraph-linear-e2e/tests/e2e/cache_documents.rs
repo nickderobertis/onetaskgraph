@@ -7,17 +7,16 @@
 //! only documents that differ are the eight the cache sends in place of `ISSUES`, `ISSUE`,
 //! `ISSUE_DETAIL`, `ISSUE_RELATIONS`, `PROJECTS`, `PROJECT`, `PROJECT_RELATIONS` and `ORIGIN_LOOKUPS`, each the one it stands in for with exactly the selections the cache's
 //! token reads and nothing else — and a write's own read of its target sends the plain one,
-//! since its answer fills no entry. Beside those, with the cache on or off, the five mutations
-//! that write a long form with other members beside it each select what Linear stored in their
-//! own answer — `description` or `content` after the `id` 0.6.0 selected, and nothing else — and
-//! the three that write it alone select the whole item, exactly what a read of it by id selects,
-//! so a metadata write answers the item its own answer holds and a follow-up write reads nothing
-//! after the write before it. And a dependency read sends one of four documents each 0.6.0's
+//! since its answer fills no entry. Beside those, with the cache on or off, the eight mutations
+//! that write a long form each select the whole item in place of the `id` 0.6.0 selected —
+//! exactly what a read of it by id selects, and nothing else — so what Linear stored is read off
+//! the write's own answer, a metadata write answers the item that answer holds, and a follow-up
+//! write reads nothing after the write before it. And a dependency read sends one of four documents each 0.6.0's
 //! `ISSUE_RELATIONS` or `PROJECT_RELATIONS` narrowed to the one direction it reads.
 //!
 //! One document is new since 0.6.0: a copy's batched origin read, `ORIGIN_LOOKUPS`, which is
-//! 0.6.0's `ISSUES` and `PROJECTS` connections and the designator's `ORGANIZATION` selection
-//! side by side under aliases, and nothing else — and, with the cache on,
+//! 0.6.0's `ISSUES` and `PROJECTS` connections and its `RESOLUTION` — the organization, the
+//! team's states and the project statuses — side by side under aliases, and nothing else — and, with the cache on,
 //! `ORIGIN_LOOKUPS_CACHED`, which is it with exactly the pages the cache's listings add.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -34,24 +33,27 @@ fn released() -> BTreeMap<String, String> {
     serde_json::from_value(fixture["documents"].clone()).expect("documents by name")
 }
 
-/// Each mutation that writes a long form, by its 0.6.0 name, as this build sends it and the one
-/// member it adds to 0.6.0's selection: what Linear stored, read off the write's own answer.
-fn widened_mutations() -> [(&'static str, &'static str, &'static str); 5] {
+/// Each mutation that writes a long form, by its 0.6.0 name, as this build sends it, and the read
+/// by id whose whole selection it selects in place of 0.6.0's `id`: what Linear stored, and every
+/// field a read maps, read off the write's own answer, so a later write's own read of the item
+/// is that answer and nothing is read after a write.
+fn whole_writes() -> [(&'static str, &'static str, &'static str); 8] {
     [
-        ("ISSUE_CREATE", graphql::ISSUE_CREATE, "description"),
-        ("ISSUE_REWRITE", graphql::ISSUE_REWRITE, "description"),
-        ("PROJECT_CREATE", graphql::PROJECT_CREATE, "content"),
-        ("PROJECT_REWRITE", graphql::PROJECT_REWRITE, "content"),
-        ("DOCUMENT_CREATE", graphql::DOCUMENT_CREATE, "content"),
-    ]
-}
-
-/// Each mutation that writes a long form alone, by its 0.6.0 name, as this build sends it, and
-/// the read by id whose whole selection it selects in place of 0.6.0's `id`.
-fn whole_updates() -> [(&'static str, &'static str, &'static str); 3] {
-    [
+        ("ISSUE_CREATE", graphql::ISSUE_CREATE, graphql::ISSUE),
         ("ISSUE_UPDATE", graphql::ISSUE_UPDATE, graphql::ISSUE),
+        ("ISSUE_REWRITE", graphql::ISSUE_REWRITE, graphql::ISSUE),
+        ("PROJECT_CREATE", graphql::PROJECT_CREATE, graphql::PROJECT),
         ("PROJECT_UPDATE", graphql::PROJECT_UPDATE, graphql::PROJECT),
+        (
+            "PROJECT_REWRITE",
+            graphql::PROJECT_REWRITE,
+            graphql::PROJECT,
+        ),
+        (
+            "DOCUMENT_CREATE",
+            graphql::DOCUMENT_CREATE,
+            graphql::DOCUMENT,
+        ),
         (
             "DOCUMENT_UPDATE",
             graphql::DOCUMENT_UPDATE,
@@ -65,35 +67,36 @@ fn whole_updates() -> [(&'static str, &'static str, &'static str); 3] {
 fn released_or_widened() -> BTreeSet<String> {
     let released = released();
     let mut allowed: BTreeSet<String> = released.values().cloned().collect();
-    for (name, current, added) in widened_mutations() {
-        assert_eq!(
-            current.replacen(&format!("{{id {added}"), "{id", 1),
-            released[name],
-            "{name} is 0.6.0's with `{added}` added after its `id`, and nothing else"
-        );
-        allowed.insert(current.to_owned());
-    }
-    for (name, current, read) in whole_updates() {
+    for (name, current, read) in whole_writes() {
         let selection = read
             .split_once("(id:$id){ ")
             .and_then(|(_, rest)| rest.strip_suffix(" } }"))
             .expect("a read by id of one item");
+        let widened = if released[name].contains("{id ") {
+            released[name].replacen("{id ", &format!("{{ {selection} "), 1)
+        } else {
+            released[name].replacen("{id}", &format!("{{ {selection} }}"), 1)
+        };
         assert_eq!(
-            released[name].replacen("{id}", &format!("{{ {selection} }}"), 1),
-            current,
+            widened, current,
             "{name} is 0.6.0's selecting what a read of the item selects, and nothing else"
         );
         allowed.insert(current.to_owned());
     }
-    // A copy's batched origin read: 0.6.0's two listings' selections and the designator's organization read,
-    // under aliases and no other selection.
+    // A copy's batched origin read: 0.6.0's two listings' selections and its resolution read —
+    // the organization, the team's states and the project statuses — under aliases and no
+    // other selection.
+    let resolution = released["RESOLUTION"]
+        .strip_prefix("query($key:String!){ organization{id} ")
+        .and_then(|rest| rest.strip_suffix(" }"))
+        .expect("0.6.0's resolution read");
     assert_eq!(
         graphql::ORIGIN_LOOKUPS,
         format!(
             "query($issuesFirst:Int!,$issuesFilter:IssueFilter,$projectsFirst:Int!,\
-             $projectsFilter:ProjectFilter){{ originIssues: \
+             $projectsFilter:ProjectFilter,$key:String!){{ originIssues: \
              issues(first:$issuesFirst,filter:$issuesFilter){} originProjects: \
-             projects(first:$projectsFirst,filter:$projectsFilter){} organization{} }}",
+             projects(first:$projectsFirst,filter:$projectsFilter){} organization{} {resolution} }}",
             selected(
                 &released["ISSUES"],
                 "issues(first:$first,after:$after,filter:$filter)"
@@ -104,7 +107,7 @@ fn released_or_widened() -> BTreeSet<String> {
             ),
             selected(graphql::ORGANIZATION, "organization "),
         ),
-        "the batched origin read is 0.6.0's listings and the organization read, and nothing else"
+        "the batched origin read is 0.6.0's listings and its resolution read, and nothing else"
     );
     allowed.insert(graphql::ORIGIN_LOOKUPS.to_owned());
     for (name, current, removed) in narrowed_reads() {

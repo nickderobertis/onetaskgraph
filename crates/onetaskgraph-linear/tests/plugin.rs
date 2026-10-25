@@ -7071,7 +7071,8 @@ async fn a_batched_origin_read_answers_each_lookup_once_and_the_designator_for_t
 }
 
 /// A batched page with a next page answers no origin, found in it or not: each is sent on its
-/// own. And a write drops every answer held.
+/// own. The batch is sent only at the first lookup by origin, and a write before it drops every
+/// origin held, so none is asked together and each is sent on its own.
 #[tokio::test]
 async fn an_incomplete_batched_page_or_a_write_leaves_every_origin_to_its_own_lookup() {
     use onetaskgraph_linear::graphql;
@@ -7085,8 +7086,7 @@ async fn an_incomplete_batched_page_or_a_write_leaves_every_origin_to_its_own_lo
         empty.clone(),
         empty.clone(),
         serde_json::json!({"projects":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}),
-        // A complete page, then a write, then the lookup it no longer answers.
-        origin_lookups(serde_json::json!([]), serde_json::json!([]), false),
+        // A write, then the lookup the origin held before it no longer stands in for.
         serde_json::json!({"issue":issue_recording("I-9", "plan:elsewhere")}),
         serde_json::json!({"issueDelete":{"success":true}}),
         empty,
@@ -7137,11 +7137,10 @@ async fn an_incomplete_batched_page_or_a_write_leaves_every_origin_to_its_own_lo
     assert_eq!(
         sent,
         vec![
-            graphql::ORIGIN_LOOKUPS.to_owned(),
             graphql::ISSUE.to_owned(),
             graphql::ISSUE_DELETE.to_owned(),
             graphql::ISSUES.to_owned(),
         ],
-        "a write drops what was held"
+        "a write drops what was held, the origins not yet asked among it"
     );
 }

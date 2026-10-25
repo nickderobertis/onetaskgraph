@@ -5720,6 +5720,22 @@ impl LinearWorkspace {
         });
     }
 
+    /// Refuse, from now on, a document filed under a project this workspace does not hold, as
+    /// Linear does — `Entity not found: Project`.
+    pub fn refuse_unknown_projects(&self) {
+        self.state.lock().unwrap()["_linear_refuse_unknown_projects"] = json!(true);
+    }
+
+    /// Put `text` before everything one held item's long-form field holds — an issue's or a
+    /// project's `description`, a document's `content`, its metadata slot kept after it — as a
+    /// person editing the item's body in Linear would.
+    pub fn prepend_long_form(&self, collection: &str, id: &str, text: &str) {
+        let held = self.long_form(collection, id).unwrap_or_default();
+        self.change(collection, id, collection != "documents", |row| {
+            row["_linear_description"] = json!(format!("{text}{held}"));
+        });
+    }
+
     /// File one document under `project`, or under none.
     pub fn refile_document(&self, document: &str, project: Option<&str>) {
         self.change("documents", document, false, |row| {
@@ -6718,9 +6734,10 @@ fn linear_origin_lookups(
         "issuesFilter",
         "projectsFirst",
         "projectsFilter",
+        "key",
     ];
     if fields.len() != expected.len() || !expected.iter().all(|key| fields.contains_key(*key)) {
-        return Err("origin lookups take exactly their four variables");
+        return Err("origin lookups take exactly their five variables");
     }
     let cap = data["_linear_origin_page_cap"].as_u64();
     let first = |key: &str| -> Result<u64, &'static str> {
@@ -6745,15 +6762,19 @@ fn linear_origin_lookups(
         recorded,
         data,
     )?;
-    let organization = linear_response(
-        &json!({"query": graphql::ORGANIZATION, "variables": {}}),
+    // The organization, the team's workflow states and the workspace's project statuses, as the
+    // resolution read on its own answers them.
+    let resolution = linear_response(
+        &json!({"query": graphql::RESOLUTION, "variables": {"key": vars["key"]}}),
         recorded,
         data,
     )?;
     Ok(json!({
         "originIssues": issues["issues"],
         "originProjects": projects["projects"],
-        "organization": organization["organization"],
+        "organization": resolution["organization"],
+        "teams": resolution["teams"],
+        "projectStatuses": resolution["projectStatuses"],
     }))
 }
 // llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
@@ -7535,6 +7556,17 @@ fn linear_write_document(
     let input = vars["input"]
         .as_object()
         .ok_or("write input must be an object")?;
+    // A document filed under a project the workspace does not hold is refused, as Linear refuses
+    // a reference to an entity it does not hold — once told to, since most journeys file under a
+    // project id they never created here.
+    if data["_linear_refuse_unknown_projects"] == true
+        && let Some(project) = input.get("projectId").and_then(Value::as_str)
+        && !data["projects"]
+            .as_array()
+            .is_some_and(|projects| projects.iter().any(|row| row["id"] == project))
+    {
+        return Err(onetaskgraph_linear::graphql::PROJECT_NOT_FOUND_MESSAGE);
+    }
     let stored = linear_stored(data, input.get("content"));
     let rows = data["documents"]
         .as_array_mut()

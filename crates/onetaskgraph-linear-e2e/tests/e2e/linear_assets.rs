@@ -41,7 +41,7 @@ struct State {
 }
 
 pub(crate) struct Workspace {
-    endpoint: String,
+    pub(crate) endpoint: String,
     state: Arc<Mutex<State>>,
     pub(crate) held: LinearWorkspace,
     pub(crate) clock: SimulatedClock,
@@ -559,7 +559,8 @@ fn issue_and_document_assets_upload_verify_rewrite_and_reuse() {
                 .find(|upload| upload.name == format!("{kind}-{index}.png"))
                 .unwrap();
             assert_eq!(&upload.bytes, image);
-            assert_eq!(upload.verified, 1);
+            // The PUT's own answer says the bytes are held: nothing reads the asset back.
+            assert_eq!(upload.verified, 0);
             assert!(raw.contains(&asset_sha256(image)));
             assert!(raw.contains(&format!("![alt {index}]({}", journey.workspace.endpoint)));
         }
@@ -585,7 +586,7 @@ fn issue_and_document_assets_upload_verify_rewrite_and_reuse() {
         journey.copy(kind, &id, true);
         assert_eq!(
             journey.workspace.counts(),
-            (before.0 + 1, before.1 + 1, before.2 + 1)
+            (before.0 + 1, before.1 + 1, before.2)
         );
         let raw = journey
             .workspace
@@ -612,14 +613,14 @@ fn issue_and_document_assets_upload_verify_rewrite_and_reuse() {
 #[test]
 fn asset_stage_failures_and_bounded_virtual_rate_limit_recovery() {
     for kind in ["task", "document"] {
-        for stage in ["mutation", "PUT", "verifying read"] {
+        for stage in ["mutation", "PUT"] {
             for (times, status, succeeds) in [(1, 403, false), (1, 429, true), (31, 429, false)] {
                 let journey = Journey::new();
                 let (id, images) = journey.create(kind, 1);
                 journey.workspace.state.lock().unwrap().fail = Some((stage, times, status));
                 let result = journey.copy(kind, &id, succeeds);
                 if succeeds {
-                    assert_eq!(journey.workspace.counts(), (1, 1, 1));
+                    assert_eq!(journey.workspace.counts(), (1, 1, 0));
                     assert!(journey.workspace.clock.now() >= Duration::from_secs(2));
                     let destination = result["items"][0]["destination"]
                         .as_str()
@@ -661,12 +662,6 @@ fn asset_stage_failures_and_bounded_virtual_rate_limit_recovery() {
                     );
                     if status == 429 {
                         assert!(said.contains("limiter"));
-                    }
-                    if stage == "verifying read" {
-                        assert!(
-                            said.contains(&format!("{}/0/asset/0", journey.workspace.endpoint)),
-                            "{said}"
-                        );
                     }
                     assert!(!journey.workspace.held.served().iter().any(|(query, _)| {
                         query.contains(if kind == "task" {
@@ -725,7 +720,7 @@ fn measure_project_asset_copy_simulated_seconds() {
     for id in documents {
         journey.copy("document", &id, true);
     }
-    assert_eq!(journey.workspace.counts(), (24, 24, 24));
+    assert_eq!(journey.workspace.counts(), (24, 24, 0));
     record_workload(
         "linear-asset-copy-seconds",
         journey
@@ -815,7 +810,7 @@ fn measure_three_concurrent_project_asset_copies() {
         &copies.sizes,
         3,
     );
-    assert_eq!(journey.workspace.counts(), (72, 72, 72));
+    assert_eq!(journey.workspace.counts(), (72, 72, 0));
 }
 
 /// A refused copy's own words reach what `onebudgetspec check` reports for the figure: the
@@ -934,7 +929,7 @@ fn project_home_routed_to_a_member_source_carries_issue_and_document_assets() {
         .unwrap();
     assert!(home.starts_with("member:"), "{project}");
     let copied = journey.copy("document", &doc, true);
-    assert_eq!(journey.workspace.counts(), (2, 2, 2));
+    assert_eq!(journey.workspace.counts(), (2, 2, 0));
     for (kind, source, report) in [
         ("tasks", issue.as_str(), &project),
         ("documents", doc.as_str(), &copied),
@@ -967,7 +962,7 @@ fn project_home_routed_to_a_member_source_carries_issue_and_document_assets() {
             .unwrap();
         assert!((450_000..=500_000).contains(&upload.bytes.len()));
         assert_eq!(upload.bytes.len(), upload.size);
-        assert_eq!(upload.verified, 1);
+        assert_eq!(upload.verified, 0);
         assert!(raw.contains(&asset_sha256(&upload.bytes)));
         drop(state);
         assert_eq!(
@@ -989,8 +984,8 @@ struct LiveUploads {
     observations: Vec<String>,
 }
 
-/// A forwarding observer changes only the signed PUT URL, keeping Linear's asset URL intact.
-/// Thus the plugin's own verifying GET reaches Linear directly with its source credential.
+/// A forwarding observer changes only the signed PUT URL, keeping Linear's asset URL intact, so
+/// the journey's own authenticated GET of each asset reaches Linear directly.
 fn live_observer(key: String) -> (String, Arc<Mutex<LiveUploads>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
@@ -1319,7 +1314,7 @@ fn regenerating_a_linear_rendering_stores_changed_assets_with_its_metadata_slot(
         assert!(output.status.success(), "{}", stderr(&output));
         assert_eq!(
             journey.workspace.counts(),
-            (before.0 + 1, before.1 + 1, before.2 + 1)
+            (before.0 + 1, before.1 + 1, before.2)
         );
         let raw = journey
             .workspace
@@ -1451,7 +1446,6 @@ fn malformed_upload_answers_and_transport_failures_refuse_before_content_is_writ
         ("malformed-upload", "mutation"),
         ("disconnect-mutation", "mutation"),
         ("disconnect-PUT", "PUT"),
-        ("disconnect-read", "verifying read"),
     ] {
         let journey = Journey::new();
         let (id, _) = journey.create("task", 1);
@@ -1462,9 +1456,6 @@ fn malformed_upload_answers_and_transport_failures_refuse_before_content_is_writ
             said.contains(stage) && said.contains("task-0.png"),
             "{fault}: {said}"
         );
-        if fault == "disconnect-read" {
-            assert!(said.contains(&journey.workspace.endpoint));
-        }
         if !fault.starts_with("disconnect") {
             assert!(said.contains("200"), "{said}");
         }
@@ -1511,7 +1502,7 @@ fn reset_hints_defaults_and_non_json_http_429_are_waited_on_the_clock() {
             (minimum..=maximum).contains(&waited),
             "{hint}: waited {waited}s, network {network:?}"
         );
-        assert_eq!(journey.workspace.counts(), (1, 1, 1));
+        assert_eq!(journey.workspace.counts(), (1, 1, 0));
     }
     let journey = Journey::new();
     let (id, _) = journey.create("task", 1);
@@ -1521,7 +1512,7 @@ fn reset_hints_defaults_and_non_json_http_429_are_waited_on_the_clock() {
         state.fault = Some("mutation-http429");
     }
     journey.copy("task", &id, true);
-    assert_eq!(journey.workspace.counts(), (1, 1, 1));
+    assert_eq!(journey.workspace.counts(), (1, 1, 0));
 }
 
 #[test]
@@ -1660,7 +1651,7 @@ fn the_published_quota_refills_in_virtual_time_before_an_asset_retry() {
     let (id, _) = journey.create("task", 1);
     journey.workspace.state.lock().unwrap().fault = Some("quota-at-upload");
     let result = journey.copy("task", &id, true);
-    assert_eq!(journey.workspace.counts(), (1, 1, 1));
+    assert_eq!(journey.workspace.counts(), (1, 1, 0));
     let state = journey.workspace.state.lock().unwrap();
     assert!(
         journey
@@ -1691,7 +1682,7 @@ fn records_without_images_keep_the_same_non_asset_request_flow() {
         plain.copy(kind, &plain_id, true);
         pictured.copy(kind, &pictured_id, true);
         assert_eq!(plain.workspace.counts(), (0, 0, 0));
-        assert_eq!(pictured.workspace.counts(), (1, 1, 1));
+        assert_eq!(pictured.workspace.counts(), (1, 1, 0));
         let plain_operations: Vec<_> = plain
             .workspace
             .held
@@ -1752,11 +1743,7 @@ fn upload_destinations_and_headers_are_validated_before_a_put_or_authenticated_g
 
 #[test]
 fn redirects_at_each_asset_stage_are_refused_before_content_is_written() {
-    for (fault, stage) in [
-        ("redirect-mutation", "mutation"),
-        ("redirect-PUT", "PUT"),
-        ("redirect-read", "verifying read"),
-    ] {
+    for (fault, stage) in [("redirect-mutation", "mutation"), ("redirect-PUT", "PUT")] {
         let journey = Journey::new();
         let (id, _) = journey.create("task", 1);
         journey.workspace.state.lock().unwrap().fault = Some(fault);

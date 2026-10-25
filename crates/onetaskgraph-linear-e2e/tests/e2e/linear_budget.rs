@@ -298,6 +298,19 @@ fn per_write(served: &[(String, Value)], documents: &[&str], creates: &[&str]) -
     writes
 }
 
+/// The first copy of the realistic plan into an empty loopback Linear that rewrites every long
+/// form, end to end through the binary; see [`crate::plan_copy`], which also holds that copy and
+/// the copies after it to what each item records and sends.
+#[test]
+fn measure_linear_requests_per_plan_copy() {
+    let measured = crate::plan_copy::first_copy_of_the_realistic_plan();
+    record(
+        "linear-requests-per-plan-copy",
+        measured.requests,
+        &measured.detail,
+    );
+}
+
 // llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] The task places this budget journey in the e2e crate's `test` target, whose telemetry its budget reads, and AGENTS.md records the aggregate coverage run repeating every crate's tests as the accepted cost of one coverage report; the module runs in about three seconds on a warm build.
 #[test]
 fn measure_linear_requests_per_status_write_cold() {
