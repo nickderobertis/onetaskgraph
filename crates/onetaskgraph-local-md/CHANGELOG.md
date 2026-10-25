@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.2](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-local-md-v0.12.1...onetaskgraph-local-md-v0.12.2) - 2026-10-25
+
+### Performance
+
+- *(cli)* cut store start-up and plan loading ([#3746](https://github.com/nickderobertis/onetaskgraph/pull/3746))
+
 ## [0.12.0](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-local-md-v0.11.1...onetaskgraph-local-md-v0.12.0) - 2026-10-24
 
 ### Added
