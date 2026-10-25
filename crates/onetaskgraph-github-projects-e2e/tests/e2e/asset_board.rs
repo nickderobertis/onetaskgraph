@@ -283,8 +283,9 @@ struct State {
     /// Whether each answer is held for the spike's measured latency of its [`Kind`] rather than
     /// 200 ms, or 800 ms for an upload.
     measured: bool,
-    /// Told the virtual time each answer was released at, once it is.
-    answered: Option<Arc<dyn Fn(Duration) + Send + Sync>>,
+    /// Told the virtual time each answer was released at, once it is: one per board behind a
+    /// host several share.
+    answered: Vec<Arc<dyn Fn(Duration) + Send + Sync>>,
 }
 
 pub(super) struct Board {
@@ -543,7 +544,7 @@ impl Board {
                 }
                 state.answered.clone()
             };
-            if let Some(told) = told {
+            for told in told {
                 told(answered);
             }
             // A board that closed its connection unanswered is relayed as just that.
@@ -615,7 +616,7 @@ impl Board {
     /// Tell `answered` the virtual time each answer is released at, once it is: what a board
     /// placing created issues some time after their create was answered keeps that time by.
     pub fn on_answered(&self, answered: impl Fn(Duration) + Send + Sync + 'static) {
-        self.state.lock().unwrap().answered = Some(Arc::new(answered));
+        self.state.lock().unwrap().answered.push(Arc::new(answered));
     }
     /// Hold every answer for the spike's measured latency of its kind,
     /// [`Kind::measured_millis`], instead of 200 ms, or 800 ms for an upload.

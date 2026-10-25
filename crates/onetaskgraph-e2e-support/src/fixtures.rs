@@ -1885,6 +1885,12 @@ impl GitHubBoardFields {
         }
     }
 
+    /// Send this board one GraphQL request, as the product sends one, and answer its `data`:
+    /// what a journey replaying a recorded request sequence drives the board with.
+    pub fn graphql(&self, query: &str, variables: &Value) -> Value {
+        graphql_over_http(&self.endpoint, query, variables)
+    }
+
     /// How many placement delays this board handed out: one per issue a create filed on it.
     pub fn placements(&self) -> usize {
         self.board
