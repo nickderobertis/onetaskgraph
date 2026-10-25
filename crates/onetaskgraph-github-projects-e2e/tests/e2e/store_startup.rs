@@ -552,7 +552,10 @@ fn compare_store_startup() {
 /// returns only once a reader has opened the other end, is counted, and is closed at once, which
 /// hands that reader an empty bundle. Once the process has exited the writer is released by
 /// opening the reading end here, which is not counted.
-#[cfg(unix)]
+///
+/// Only where the binary's `native-tls` is OpenSSL: on an Apple host it is Security.framework,
+/// which reads no bundle file, so a client built there opens nothing this could count.
+#[cfg(all(unix, not(target_vendor = "apple")))]
 struct BundleOpens {
     fifo: std::path::PathBuf,
     stop: Arc<std::sync::atomic::AtomicBool>,
@@ -560,7 +563,7 @@ struct BundleOpens {
     writer: std::thread::JoinHandle<()>,
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(target_vendor = "apple")))]
 impl BundleOpens {
     fn watch(fifo: std::path::PathBuf) -> Self {
         let made = std::process::Command::new("mkfifo")
@@ -601,7 +604,7 @@ impl BundleOpens {
     }
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(target_vendor = "apple")))]
 #[test]
 fn a_command_builds_no_client_for_a_source_it_sends_nothing() {
     let host = Host::new();
