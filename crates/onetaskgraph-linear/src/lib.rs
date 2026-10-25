@@ -368,7 +368,7 @@
 //! copy of `n` tasks sent one `projects` listing, `n` `issues` queries and an `organization`
 //! read for the designator its edges are written under — every one priced against the key's
 //! hourly allowance. So [`TaskSource::read_ahead_origins_for_copy`] sends
-//! [`graphql::ORIGIN_LOOKUPS`] first, one request per [`ORIGIN_BATCH`] origins:
+//! [`graphql::COUNTERPART_LOOKUPS`] first, one request per [`ORIGIN_BATCH`] origins:
 //!
 //! - **`originIssues`**, the `issues` connection narrowed to the team and project scope exactly
 //!   as one origin's own query is, and to the `or` of every origin's slot phrase — the same
@@ -398,7 +398,7 @@
 //! paging to its end; so is an origin whose phrase cannot be sent, and one this read did not
 //! carry. What is held lives until the next mutation or [`TaskSource::end_command`], and the
 //! organization id until the end of the command. With the store's cache in front of this source
-//! it is [`graphql::ORIGIN_LOOKUPS_CACHED`], each row carrying the token parts its listing would,
+//! it is [`graphql::COUNTERPART_LOOKUPS_CACHED`], each row carrying the token parts its listing would,
 //! so a row it answers reads exactly as that listing's row does. A document copy keeps its own
 //! `documents` lookup.
 //!
@@ -525,7 +525,7 @@ pub const MAX_PAGE_SIZE: u32 = 100;
 /// more than seventy-four projects takes another request a page, which the hour budgets count.
 pub const PROJECTS_CACHED_PAGE: u32 = 74;
 
-/// The most origins one [`graphql::ORIGIN_LOOKUPS`] request asks for: a copy naming more sends
+/// The most origins one [`graphql::COUNTERPART_LOOKUPS`] request asks for: a copy naming more sends
 /// one such request per this many.
 ///
 /// The issues page that request asks for is one row an origin, and the projects page the rest
@@ -536,7 +536,7 @@ pub const PROJECTS_CACHED_PAGE: u32 = 74;
 /// cache's pages at 120, however many origins it carries.
 pub const ORIGIN_BATCH: usize = 50;
 
-/// The projects rows [`graphql::ORIGIN_LOOKUPS`] gives up to the vocabulary resolution it carries
+/// The projects rows [`graphql::COUNTERPART_LOOKUPS`] gives up to the vocabulary resolution it carries
 /// beside its listings — [`graphql::RESOLUTION`]'s `teams` and `projectStatuses`, priced at
 /// about 2,053 of Linear's complexity points, or some thirty projects rows at 70 each — so the
 /// request still asks for no more than one listing page does.
@@ -572,11 +572,11 @@ pub mod graphql {
     /// phrase under one `or`, aliased `originIssues`, [`PROJECTS`]'s connection narrowed to the
     /// source's scope, aliased `originProjects`, and [`ORGANIZATION`]'s `organization{id}` — in
     /// one request. See the module documentation's ruling on the requests a copy sends.
-    pub const ORIGIN_LOOKUPS: &str = "query($issuesFirst:Int!,$issuesFilter:IssueFilter,$projectsFirst:Int!,$projectsFilter:ProjectFilter,$key:String!){ originIssues: issues(first:$issuesFirst,filter:$issuesFilter){ nodes{id identifier title description url createdAt updatedAt state{name type} priority labels{nodes{id name color}} project{id}} pageInfo{hasNextPage endCursor} } originProjects: projects(first:$projectsFirst,filter:$projectsFilter){ nodes{id name content url createdAt updatedAt status{name type} labels{nodes{id name color}}} pageInfo{hasNextPage endCursor} } organization{ id } teams(first:2,filter:{key:{eqIgnoreCase:$key}}){nodes{id states(first:250){nodes{id name type} pageInfo{hasNextPage}}}} projectStatuses(first:250){nodes{id name type position} pageInfo{hasNextPage}} }";
-    /// [`ORIGIN_LOOKUPS`], sent in its place while the store's cache stands in front of this
+    pub const COUNTERPART_LOOKUPS: &str = "query($issuesFirst:Int!,$issuesFilter:IssueFilter,$projectsFirst:Int!,$projectsFilter:ProjectFilter,$key:String!){ originIssues: issues(first:$issuesFirst,filter:$issuesFilter){ nodes{id identifier title description url createdAt updatedAt state{name type} priority labels{nodes{id name color}} project{id}} pageInfo{hasNextPage endCursor} } originProjects: projects(first:$projectsFirst,filter:$projectsFilter){ nodes{id name content url createdAt updatedAt status{name type} labels{nodes{id name color}}} pageInfo{hasNextPage endCursor} } organization{ id } teams(first:2,filter:{key:{eqIgnoreCase:$key}}){nodes{id states(first:250){nodes{id name type} pageInfo{hasNextPage}}}} projectStatuses(first:250){nodes{id name type position} pageInfo{hasNextPage}} }";
+    /// [`COUNTERPART_LOOKUPS`], sent in its place while the store's cache stands in front of this
     /// source: each connection's rows carry what [`ISSUES_CACHED`]'s and [`PROJECTS_CACHED`]'s
     /// carry, so a row it answers is pinned to the token a listing of it spells.
-    pub const ORIGIN_LOOKUPS_CACHED: &str = "query($issuesFirst:Int!,$issuesFilter:IssueFilter,$projectsFirst:Int!,$projectsFilter:ProjectFilter,$key:String!){ originIssues: issues(first:$issuesFirst,filter:$issuesFilter){ nodes{id identifier title description url createdAt updatedAt state{name type} priority labels{nodes{id name color}} project{id} comments(first:10){nodes{id updatedAt} pageInfo{hasNextPage}} relations(first:10){nodes{id type relatedIssue{id}} pageInfo{hasNextPage}} inverseRelations(first:10){nodes{id type issue{id}} pageInfo{hasNextPage}}} pageInfo{hasNextPage endCursor} } originProjects: projects(first:$projectsFirst,filter:$projectsFilter){ nodes{id name content url createdAt updatedAt status{name type} labels{nodes{id name color}} relations(first:10){nodes{id type relatedProject{id}} pageInfo{hasNextPage}} inverseRelations(first:10){nodes{id type project{id}} pageInfo{hasNextPage}}} pageInfo{hasNextPage endCursor} } organization{ id } teams(first:2,filter:{key:{eqIgnoreCase:$key}}){nodes{id states(first:250){nodes{id name type} pageInfo{hasNextPage}}}} projectStatuses(first:250){nodes{id name type position} pageInfo{hasNextPage}} }";
+    pub const COUNTERPART_LOOKUPS_CACHED: &str = "query($issuesFirst:Int!,$issuesFilter:IssueFilter,$projectsFirst:Int!,$projectsFilter:ProjectFilter,$key:String!){ originIssues: issues(first:$issuesFirst,filter:$issuesFilter){ nodes{id identifier title description url createdAt updatedAt state{name type} priority labels{nodes{id name color}} project{id} comments(first:10){nodes{id updatedAt} pageInfo{hasNextPage}} relations(first:10){nodes{id type relatedIssue{id}} pageInfo{hasNextPage}} inverseRelations(first:10){nodes{id type issue{id}} pageInfo{hasNextPage}}} pageInfo{hasNextPage endCursor} } originProjects: projects(first:$projectsFirst,filter:$projectsFilter){ nodes{id name content url createdAt updatedAt status{name type} labels{nodes{id name color}} relations(first:10){nodes{id type relatedProject{id}} pageInfo{hasNextPage}} inverseRelations(first:10){nodes{id type project{id}} pageInfo{hasNextPage}}} pageInfo{hasNextPage endCursor} } organization{ id } teams(first:2,filter:{key:{eqIgnoreCase:$key}}){nodes{id states(first:250){nodes{id name type} pageInfo{hasNextPage}}}} projectStatuses(first:250){nodes{id name type position} pageInfo{hasNextPage}} }";
     /// Fetch one issue.
     pub const ISSUE: &str = "query($id:String!){ issue(id:$id){ id identifier title description url createdAt updatedAt archivedAt state{name type} priority labels{nodes{id name color}} project{id} } }";
     /// Fetch one project.
@@ -3389,7 +3389,7 @@ impl TaskSource for LinearSource {
     ) -> Result<Page<Project>, SourceError> {
         self.projects_by_origin(origin, page).await
     }
-    /// One [`graphql::ORIGIN_LOOKUPS`] per [`ORIGIN_BATCH`] origins; see the ruling on the
+    /// One [`graphql::COUNTERPART_LOOKUPS`] per [`ORIGIN_BATCH`] origins; see the ruling on the
     /// requests a copy sends.
     async fn read_ahead_origins_for_copy(&self, origins: &[String]) -> Result<(), SourceError> {
         self.read_origins_ahead(origins).await
@@ -4491,7 +4491,7 @@ impl LinearSource {
                 graphql::ISSUE_RELATIONS_CACHED
             }
             PROJECTS => graphql::PROJECTS_CACHED,
-            graphql::ORIGIN_LOOKUPS => graphql::ORIGIN_LOOKUPS_CACHED,
+            graphql::COUNTERPART_LOOKUPS => graphql::COUNTERPART_LOOKUPS_CACHED,
             PROJECT => graphql::PROJECT_CACHED,
             PROJECT_RELATIONS | graphql::PROJECT_DEPENDS_ON | graphql::PROJECT_DEPENDED_ON_BY => {
                 graphql::PROJECT_RELATIONS_CACHED

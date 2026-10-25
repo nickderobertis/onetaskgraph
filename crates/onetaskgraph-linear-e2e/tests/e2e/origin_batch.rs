@@ -2,7 +2,7 @@
 //!
 //! A plan copied out of a folder of Markdown into the loopback Linear looks for the item an
 //! earlier copy made of each thing it writes by the origin that item records. The Linear plugin
-//! asks for all of them at once — `graphql::ORIGIN_LOOKUPS`, one request per
+//! asks for all of them at once — `graphql::COUNTERPART_LOOKUPS`, one request per
 //! `ORIGIN_BATCH` origins, carrying the organization id the designator digests — and answers
 //! each origin's own lookup from it. These journeys read the workspace's request log for what
 //! was sent and its rows for what it holds, and hold the batch to answering exactly what each
@@ -211,7 +211,7 @@ fn batched(served: &[(String, Value)]) -> Vec<&Value> {
     served
         .iter()
         .filter(|(query, _)| {
-            query == graphql::ORIGIN_LOOKUPS || query == graphql::ORIGIN_LOOKUPS_CACHED
+            query == graphql::COUNTERPART_LOOKUPS || query == graphql::COUNTERPART_LOOKUPS_CACHED
         })
         .map(|(_, variables)| variables)
         .collect()
@@ -601,7 +601,7 @@ fn with_the_cache_on_a_recopy_finds_every_counterpart_through_the_batched_read_i
     let served = copying.ok(&COPY);
     let before = &served[..first_write(&served)];
     assert_eq!(
-        count(before, graphql::ORIGIN_LOOKUPS_CACHED),
+        count(before, graphql::COUNTERPART_LOOKUPS_CACHED),
         1,
         "the batched read carrying the token parts a listing of each row spells: {before:#?}"
     );

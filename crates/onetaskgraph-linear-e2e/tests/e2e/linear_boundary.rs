@@ -163,8 +163,8 @@ fn resolutions(served: &[(String, Value)]) -> usize {
         .filter(|(query, _)| {
             [
                 graphql::RESOLUTION,
-                graphql::ORIGIN_LOOKUPS,
-                graphql::ORIGIN_LOOKUPS_CACHED,
+                graphql::COUNTERPART_LOOKUPS,
+                graphql::COUNTERPART_LOOKUPS_CACHED,
             ]
             .contains(&query.as_str())
         })

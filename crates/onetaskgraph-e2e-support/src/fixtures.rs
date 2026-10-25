@@ -6981,7 +6981,7 @@ fn valid_linear_filter(value: &Value) -> bool {
 // llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] The loopback Linear lives in the shared e2e harness because more than one suite drives it, and how it answers a document the Linear plugin sends is part of answering a request, beside every other answer it gives here.
 impl LinearWorkspace {
     /// Answer each connection of a copy's batched origin read — the Linear plugin's
-    /// `graphql::ORIGIN_LOOKUPS` — with at most `rows` rows, whatever it asked for, so a page of
+    /// `graphql::COUNTERPART_LOOKUPS` — with at most `rows` rows, whatever it asked for, so a page of
     /// it has a next page; every other read pages as it asks.
     pub fn cap_origin_lookup_page(&self, rows: usize) {
         self.state.lock().unwrap()["_linear_origin_page_cap"] = json!(rows);
@@ -7009,7 +7009,7 @@ fn linear_origin_lookups(
     data: &mut Value,
 ) -> Result<Value, &'static str> {
     use onetaskgraph_linear::graphql;
-    let (issues_document, projects_document) = if operation == graphql::ORIGIN_LOOKUPS_CACHED {
+    let (issues_document, projects_document) = if operation == graphql::COUNTERPART_LOOKUPS_CACHED {
         (graphql::ISSUES_CACHED, graphql::PROJECTS_CACHED)
     } else {
         (graphql::ISSUES, graphql::PROJECTS)
@@ -7074,7 +7074,8 @@ fn linear_response(
         serde_json::from_value(request.clone()).map_err(|_| "invalid GraphQL request")?;
     use onetaskgraph_linear::graphql;
     let operation = request.query.as_str();
-    if operation == graphql::ORIGIN_LOOKUPS || operation == graphql::ORIGIN_LOOKUPS_CACHED {
+    if operation == graphql::COUNTERPART_LOOKUPS || operation == graphql::COUNTERPART_LOOKUPS_CACHED
+    {
         return linear_origin_lookups(operation, &Value::Object(request.variables), recorded, data);
     }
     if ![

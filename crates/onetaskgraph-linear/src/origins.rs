@@ -140,7 +140,7 @@ impl LinearSource {
         Ok(())
     }
 
-    /// One request of [`graphql::ORIGIN_LOOKUPS`] for at most [`ORIGIN_BATCH`] origins, carrying
+    /// One request of [`graphql::COUNTERPART_LOOKUPS`] for at most [`ORIGIN_BATCH`] origins, carrying
     /// the team's workflow states and the workspace's project statuses beside them — the
     /// resolution a copy's first write reads otherwise, since a copy finding nothing creates —
     /// held as [`LinearSource::vocabulary`] holds a resolution read on its own, only when it
@@ -167,7 +167,7 @@ impl LinearSource {
             .max(1);
         let data = self
             .send(
-                self.read_document(graphql::ORIGIN_LOOKUPS),
+                self.read_document(graphql::COUNTERPART_LOOKUPS),
                 json!({
                     "issuesFirst": issues_first,
                     "issuesFilter": Self::narrowed(issues),

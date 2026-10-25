@@ -375,8 +375,8 @@ fn pinned_schema_checks_selected_fields_arguments_and_fixture_keys() {
         (graphql::ISSUE_DETAIL_CACHED, None),
         (graphql::ISSUE_RELATIONS_CACHED, None),
         // What a copy asks before it looks for each origin's counterpart.
-        (graphql::ORIGIN_LOOKUPS, None),
-        (graphql::ORIGIN_LOOKUPS_CACHED, None),
+        (graphql::COUNTERPART_LOOKUPS, None),
+        (graphql::COUNTERPART_LOOKUPS_CACHED, None),
     ] {
         let document = query::parse_query::<String>(operation).unwrap();
         let fixture =
@@ -1300,7 +1300,7 @@ async fn every_variables_object_this_source_sends_conforms_to_the_pinned_schema(
         onetaskgraph_linear::graphql::COMMENT_CREATE,
         onetaskgraph_linear::graphql::COMMENT_UPDATE,
         onetaskgraph_linear::graphql::COMMENT_DELETE,
-        onetaskgraph_linear::graphql::ORIGIN_LOOKUPS,
+        onetaskgraph_linear::graphql::COUNTERPART_LOOKUPS,
     ] {
         let parsed = query::parse_query::<String>(document).unwrap();
         let selection = match &parsed.definitions[0] {
@@ -7044,7 +7044,7 @@ async fn a_batched_origin_read_answers_each_lookup_once_and_the_designator_for_t
         .collect();
     assert_eq!(
         sent,
-        vec![graphql::ORIGIN_LOOKUPS.to_owned()],
+        vec![graphql::COUNTERPART_LOOKUPS.to_owned()],
         "one request answered every lookup and the designator"
     );
 
@@ -7113,7 +7113,7 @@ async fn an_incomplete_batched_page_or_a_write_leaves_every_origin_to_its_own_lo
     assert_eq!(
         sent,
         vec![
-            graphql::ORIGIN_LOOKUPS.to_owned(),
+            graphql::COUNTERPART_LOOKUPS.to_owned(),
             graphql::ISSUES.to_owned(),
             graphql::ISSUES.to_owned(),
             graphql::PROJECTS.to_owned(),

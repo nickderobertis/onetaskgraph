@@ -5,7 +5,7 @@
 //! `v0.6.0`, extracted verbatim. With the cache off — `attach_cache` never having run — every
 //! document the read and write verbs below send is one of those, byte for byte. With it on, the
 //! only documents that differ are the eight the cache sends in place of `ISSUES`, `ISSUE`,
-//! `ISSUE_DETAIL`, `ISSUE_RELATIONS`, `PROJECTS`, `PROJECT`, `PROJECT_RELATIONS` and `ORIGIN_LOOKUPS`, each the one it stands in for with exactly the selections the cache's
+//! `ISSUE_DETAIL`, `ISSUE_RELATIONS`, `PROJECTS`, `PROJECT`, `PROJECT_RELATIONS` and `COUNTERPART_LOOKUPS`, each the one it stands in for with exactly the selections the cache's
 //! token reads and nothing else — and a write's own read of its target sends the plain one,
 //! since its answer fills no entry. Beside those, with the cache on or off, the eight mutations
 //! that write a long form each select the whole item in place of the `id` 0.6.0 selected —
@@ -14,10 +14,10 @@
 //! write reads nothing after the write before it. And a dependency read sends one of four documents each 0.6.0's
 //! `ISSUE_RELATIONS` or `PROJECT_RELATIONS` narrowed to the one direction it reads.
 //!
-//! One document is new since 0.6.0: a copy's batched origin read, `ORIGIN_LOOKUPS`, which is
+//! One document is new since 0.6.0: a copy's batched origin read, `COUNTERPART_LOOKUPS`, which is
 //! 0.6.0's `ISSUES` and `PROJECTS` connections and its `RESOLUTION` — the organization, the
 //! team's states and the project statuses — side by side under aliases, and nothing else — and, with the cache on,
-//! `ORIGIN_LOOKUPS_CACHED`, which is it with exactly the pages the cache's listings add.
+//! `COUNTERPART_LOOKUPS_CACHED`, which is it with exactly the pages the cache's listings add.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -91,7 +91,7 @@ fn released_or_widened() -> BTreeSet<String> {
         .and_then(|rest| rest.strip_suffix(" }"))
         .expect("0.6.0's resolution read");
     assert_eq!(
-        graphql::ORIGIN_LOOKUPS,
+        graphql::COUNTERPART_LOOKUPS,
         format!(
             "query($issuesFirst:Int!,$issuesFilter:IssueFilter,$projectsFirst:Int!,\
              $projectsFilter:ProjectFilter,$key:String!){{ originIssues: \
@@ -109,7 +109,7 @@ fn released_or_widened() -> BTreeSet<String> {
         ),
         "the batched origin read is 0.6.0's listings and its resolution read, and nothing else"
     );
-    allowed.insert(graphql::ORIGIN_LOOKUPS.to_owned());
+    allowed.insert(graphql::COUNTERPART_LOOKUPS.to_owned());
     for (name, current, removed) in narrowed_reads() {
         assert_eq!(
             released[name].replacen(&format!(" {removed}"), "", 1),
@@ -351,8 +351,8 @@ fn with_the_cache_on_only_eight_documents_differ_each_by_exactly_what_the_cache_
             &[graphql::PROJECT_TOKEN_PARTS],
         ),
         (
-            graphql::ORIGIN_LOOKUPS_CACHED,
-            graphql::ORIGIN_LOOKUPS,
+            graphql::COUNTERPART_LOOKUPS_CACHED,
+            graphql::COUNTERPART_LOOKUPS,
             &both,
         ),
     ];

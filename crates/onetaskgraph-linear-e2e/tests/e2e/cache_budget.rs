@@ -172,13 +172,13 @@ pub(crate) fn complexity(document: &str, variables: &Value, answer: &Value) -> u
         // A copy's batched origin read: its two listings priced as each is alone, by the rows the
         // issues page returned and the rows the projects page asked for, and the resolution it
         // carries — the organization, the team's states and the project statuses.
-        g::ORIGIN_LOOKUPS => {
+        g::COUNTERPART_LOOKUPS => {
             price::ISSUES_BASE
                 + price::ISSUES_ROW * rows("/data/originIssues/nodes")
                 + price::PROJECTS_ROW * first("projectsFirst")
                 + price::RESOLUTION
         }
-        g::ORIGIN_LOOKUPS_CACHED => {
+        g::COUNTERPART_LOOKUPS_CACHED => {
             price::ISSUES_BASE
                 + (price::ISSUES_ROW
                     + price::RELATIONS_PAGE
@@ -299,8 +299,8 @@ fn read_name(document: &str) -> &'static str {
         ("DOCUMENTS", g::DOCUMENTS),
         ("LABELS", g::LABELS),
         ("RESOLUTION", g::RESOLUTION),
-        ("ORIGIN_LOOKUPS", g::ORIGIN_LOOKUPS),
-        ("ORIGIN_LOOKUPS_CACHED", g::ORIGIN_LOOKUPS_CACHED),
+        ("COUNTERPART_LOOKUPS", g::COUNTERPART_LOOKUPS),
+        ("COUNTERPART_LOOKUPS_CACHED", g::COUNTERPART_LOOKUPS_CACHED),
     ]
     .into_iter()
     .find(|(_, known)| *known == document)
