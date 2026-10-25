@@ -23,3 +23,6 @@ refuses every board field of these documents without it, dry run included. That 
 GraphQL allowance read 4,517 remaining before and 4,515 after: the two points are its own
 allowance reads and the script's lookup of the scratch issue's id. Nothing was written, and no
 private source was read.
+
+The three `# llmlint:` comment lines at the head of `dry_run.py` were added after that run, so
+the judged lint reads it as the record it is; nothing it runs changed.

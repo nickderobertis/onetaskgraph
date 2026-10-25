@@ -1,3 +1,6 @@
+# llmlint: ignore-file[new_code_lands_in_a_project] This is the measurement record beside the costs it produced, not code any project runs: the manager ran it once, unchanged, to produce `costs.json`, and it is kept verbatim as that file's provenance, like every other run under docs/measurements; no target selects or runs it.
+# llmlint: ignore-file[async_typed_clients_at_boundaries] Three sequential `gh` dry-run requests made once by hand to produce `costs.json`, kept verbatim as its provenance; rewriting the client now would make this file no longer the script that measured.
+# llmlint: ignore-file[modern_domain_modeling] The variables are GraphQL variable maps sent as JSON exactly as the plugin binds them, and this is the one-off measurement script kept verbatim as `costs.json`'s provenance; typing them would change the record of what was run.
 """Price three read shapes with GitHub's own dry run, spending nothing and evaluating nothing.
 
 The shapes, beside each other: the batched origin lookup a document copy sends today, the

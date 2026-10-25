@@ -10443,10 +10443,10 @@ impl GitHubProjectsSource {
             if node.pointer("/parent/id").and_then(Value::as_str) != Some(project.0.as_str()) {
                 return Ok(());
             }
-            let Some(Ok((_, slot))) = node
-                .get("body")
-                .map(|body| metadata_body(body.as_str().map(str::to_owned)))
-            else {
+            let Some(body) = node.get("body").and_then(Value::as_str) else {
+                return Ok(());
+            };
+            let Ok((_, slot)) = metadata_body(Some(body.to_owned())) else {
                 return Ok(());
             };
             // A project filed under this one is no member a task or document listing names.
@@ -10465,17 +10465,17 @@ impl GitHubProjectsSource {
                 };
                 repositories
             } else {
-                let own = node
+                let Some(origin) = node
                     .pointer("/repository/nameWithOwner")
                     .and_then(Value::as_str)
-                    .map(|origin| {
-                        Repository::try_from(format!("{}/{origin}", RepositoryTarget::HOST))
-                    })
-                    .transpose();
-                let Ok(own) = own else {
+                else {
                     return Ok(());
                 };
-                own.into_iter().collect()
+                let Ok(own) = Repository::try_from(format!("{}/{origin}", RepositoryTarget::HOST))
+                else {
+                    return Ok(());
+                };
+                vec![own]
             };
             members.push((classification, repositories));
         }

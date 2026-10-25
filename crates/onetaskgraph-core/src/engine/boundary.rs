@@ -402,19 +402,48 @@ pub(crate) struct Boundary {
 }
 
 /// What one command has learned from the policy, so it asks nothing twice: each repository's
-/// visibility it answered, and every surface value a check passed.
+/// visibility it answered, and every input a check passed whole.
 ///
 /// Nothing here outlives the command — [`Engine::end_command`] empties it — and nothing is
 /// kept that the policy did not affirmatively answer: a repository it could not answer is
-/// asked again, and an unavailable or refused check passes nothing. A write whose exposure
-/// holds any value no passed check carried is checked again, so an exposure that changes
-/// later in the command is screened again.
+/// asked again, and an unavailable or refused check passes nothing. A write is taken as passed
+/// only when one input a check passed held every value it exposes, so values that passed apart
+/// are never taken as having passed together, and an exposure that changes later in the command
+/// is screened again.
 #[derive(Default)]
 struct Screened {
     visibility: std::collections::HashMap<Repository, RepositoryVisibility>,
+    passed: Vec<PassedInput>,
+}
+
+/// The values of one input a check passed, by surface.
+#[derive(Default)]
+struct PassedInput {
     text: std::collections::HashSet<String>,
     paths: std::collections::HashSet<String>,
     metadata: std::collections::HashSet<String>,
+}
+
+impl PassedInput {
+    fn of(exposure: &Exposure) -> Self {
+        Self {
+            text: exposure.text.iter().cloned().collect(),
+            paths: exposure.paths.iter().cloned().collect(),
+            metadata: exposure.metadata.iter().cloned().collect(),
+        }
+    }
+
+    fn covers(&self, exposure: &Exposure) -> bool {
+        exposure.text.iter().all(|value| self.text.contains(value))
+            && exposure
+                .paths
+                .iter()
+                .all(|value| self.paths.contains(value))
+            && exposure
+                .metadata
+                .iter()
+                .all(|value| self.metadata.contains(value))
+    }
 }
 
 impl Default for Boundary {
@@ -467,29 +496,17 @@ impl Boundary {
         }
     }
 
-    /// Whether a check of this scope already passed every value of `exposure` in this command.
+    /// Whether one input a check of this scope passed in this command held every value of
+    /// `exposure`.
     fn passed(&self, exposure: &Exposure) -> bool {
-        self.screened.lock().is_ok_and(|screened| {
-            exposure
-                .text
-                .iter()
-                .all(|value| screened.text.contains(value))
-                && exposure
-                    .paths
-                    .iter()
-                    .all(|value| screened.paths.contains(value))
-                && exposure
-                    .metadata
-                    .iter()
-                    .all(|value| screened.metadata.contains(value))
-        })
+        self.screened
+            .lock()
+            .is_ok_and(|screened| screened.passed.iter().any(|input| input.covers(exposure)))
     }
 
     fn pass(&self, exposure: &Exposure) {
         if let Ok(mut screened) = self.screened.lock() {
-            screened.text.extend(exposure.text.iter().cloned());
-            screened.paths.extend(exposure.paths.iter().cloned());
-            screened.metadata.extend(exposure.metadata.iter().cloned());
+            screened.passed.push(PassedInput::of(exposure));
         }
     }
 }
@@ -1098,28 +1115,29 @@ impl Engine {
     /// Put every write of `writes` — each its destination, how it names its item, and what it
     /// exposes — to the caller's check before any of them is made: one check of all of them
     /// together, every check's arrays concatenated element by element under the one scope they
-    /// share, which a check reads exactly as it reads the writes one at a time.
+    /// share. A union one earlier check of this command passed whole is not checked again.
     ///
     /// Only a union the check refuses is checked again write by write, so the refusal names the
-    /// write it is about; a union the check cannot decide is that write's own unavailability,
-    /// for the first of them it would have reached. A union it passes passes every write of it.
+    /// write it is about — and those checks pass nothing, since a write passing alone says nothing
+    /// of the union; a union the check cannot decide is the first write's own unavailability. A
+    /// union it passes passes every write of it.
     pub(crate) async fn check_all(
         &self,
         writes: &[(&ResolvedSource, String, Exposure)],
     ) -> Result<(), EngineError> {
-        let pending: Vec<&(&ResolvedSource, String, Exposure)> = writes
-            .iter()
-            .filter(|(_, _, exposure)| !self.boundary.passed(exposure))
-            .collect();
-        let Some((first, first_item, _)) = pending.first() else {
+        let Some((first, first_item, _)) = writes.first() else {
             return Ok(());
         };
-        if let [(destination, item, exposure)] = pending.as_slice() {
+        if let [(destination, item, exposure)] = writes {
             return self.check(destination, item, exposure).await;
         }
         let mut union = Exposure::default();
-        for (_, _, exposure) in &pending {
-            union = union.and((*exposure).clone());
+        for (_, _, exposure) in writes {
+            union = union.and(exposure.clone());
+        }
+        // Passed already only when one check passed all of it together.
+        if self.boundary.passed(&union) {
+            return Ok(());
         }
         match self.verdict(&union).await {
             WriteVerdict::Pass => {
@@ -1127,8 +1145,26 @@ impl Engine {
                 Ok(())
             }
             WriteVerdict::Refuse { reason } => {
-                for (destination, item, exposure) in &pending {
-                    self.check(destination, item, exposure).await?;
+                // Asked only to name the write refused: a write passing here passed alone, which
+                // says nothing of the union, so nothing of it is kept as passed.
+                for (destination, item, exposure) in writes {
+                    match self.verdict(exposure).await {
+                        WriteVerdict::Pass => {}
+                        WriteVerdict::Refuse { reason } => {
+                            return Err(EngineError::BoundaryRefused {
+                                item: item.clone(),
+                                destination: destination.name().to_string(),
+                                reason,
+                            });
+                        }
+                        WriteVerdict::Unavailable { reason } => {
+                            return Err(EngineError::BoundaryUnavailable {
+                                item: item.clone(),
+                                destination: destination.name().to_string(),
+                                reason,
+                            });
+                        }
+                    }
                 }
                 // Each passed alone: the union is still refused, and it is the first write's.
                 Err(EngineError::BoundaryRefused {

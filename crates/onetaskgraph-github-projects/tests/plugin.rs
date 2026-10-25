@@ -602,6 +602,8 @@ struct State {
     board_items_fault: Option<BoardItemsFault>,
     /// How a read of one document with its project answers.
     document_answer: DocumentAnswer,
+    /// How the members page beside a batched origin lookup answers.
+    members_answer: MembersAnswer,
     /// Whether `createIssue` answers with the new issue's `number`.
     ///
     /// GitHub declares `Issue.number` non-null and always answers with one, which is the
@@ -1332,6 +1334,7 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
         creation_number_is_unreadable: false,
         board_items_fault: None,
         document_answer: DocumentAnswer::WithoutProject,
+        members_answer: MembersAnswer::Whole,
         creation_reports_number: true,
         blank_status_snapshot_id: None,
         origin_field,
@@ -1627,6 +1630,45 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
     }
     let unpriced = query.replacen("rateLimit{cost} ", "", 1);
     let query = unpriced.as_str();
+    // The batched origin lookup with a page of a project's members beside it: the lookup as on
+    // its own, and the members as GitHub lists a project's sub-issues, trimmed to what the read
+    // selects — or as a journey bends them.
+    if query == onetaskgraph_github_projects::graphql::ORIGIN_LOOKUPS_WITH_MEMBERS {
+        let mut answered = answer(
+            state,
+            onetaskgraph_github_projects::graphql::ORIGIN_LOOKUPS,
+            variables,
+        );
+        let held = state.lock().unwrap();
+        let project = variables["project"].as_str().expect("a project").to_owned();
+        let mut nodes: Vec<Value> = held
+            .items
+            .iter()
+            .filter(|item| item.parent.as_deref() == Some(project.as_str()))
+            .map(|item| {
+                json!({"id": item.content_id, "body": item.body.clone().unwrap_or_default(),
+                       "parent": {"id": project},
+                       "repository": item.repository.as_ref().map(|repo| json!({"nameWithOwner": repo}))})
+            })
+            .collect();
+        let mut more = false;
+        match held.members_answer {
+            MembersAnswer::Whole => {}
+            MembersAnswer::MoreThanAPage => more = true,
+            MembersAnswer::ForeignParent => nodes[0]["parent"] = json!({"id": "I_elsewhere"}),
+            MembersAnswer::BodyNotText => nodes[0]["body"] = json!(7),
+            MembersAnswer::NoRepository => nodes[0]["repository"] = Value::Null,
+            MembersAnswer::MalformedClassification => {
+                nodes[0]["body"] = json!(slotted(
+                    "prose",
+                    &json!({"onetaskgraph.classification": "secret"})
+                ));
+            }
+        }
+        answered["members"] = json!({"subIssues": {"nodes": nodes,
+            "pageInfo": {"hasNextPage": more, "endCursor": null}}});
+        return answered;
+    }
     // A document with its project beside it: answered as a read of it by its id, and — when a
     // journey asks — its project as a read of that issue answers it, with the page of its
     // members the project's own listing carries.
@@ -3300,6 +3342,9 @@ fn operation_name(query: &str) -> &str {
     // document: nothing is enumerated, and every mutation's name is the one its own
     // document spells.
     match root {
+        _ if query == onetaskgraph_github_projects::graphql::ORIGIN_LOOKUPS_WITH_MEMBERS => {
+            "originLookupsWithMembers"
+        }
         "node" if query == onetaskgraph_github_projects::graphql::ISSUE => "issue",
         "node" if query == onetaskgraph_github_projects::graphql::DOCUMENT_IN_PROJECT => {
             "documentInProject"
@@ -11764,6 +11809,23 @@ async fn write_tasks_outside_a_copy_creates_each_whole_and_takes_them_back_when_
                 .contains(&format!("GitHub then refused to take back {left}")),
         "{refused}"
     );
+}
+
+/// How the members page beside a batched origin lookup answers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MembersAnswer {
+    /// Every member, as GitHub lists them.
+    Whole,
+    /// A page saying there is more.
+    MoreThanAPage,
+    /// A member naming another parent.
+    ForeignParent,
+    /// A member whose body is not text.
+    BodyNotText,
+    /// A member, recording no repository list, whose own repository is not given.
+    NoRepository,
+    /// A member whose recorded classification does not parse.
+    MalformedClassification,
 }
 
 /// How a read of one document with its project answers.
@@ -21872,4 +21934,80 @@ async fn a_batched_origin_lookup_of_one_carrier_each_still_finds_every_duplicate
         3,
         "two pages more, of three and of two"
     );
+}
+
+/// A board holding a plan's project, carrying origin `work:P`, and two tasks under it — one
+/// recorded private, the other naming its own repository alone — answering the members page
+/// beside a batched lookup as `answer` says, with the lookup of the project's origin held back
+/// and sent by a read ahead naming the project.
+async fn members_read(
+    answer: MembersAnswer,
+) -> (
+    Fixture,
+    Option<Vec<(onetaskgraph_plugin_api::Classification, Vec<Repository>)>>,
+) {
+    let fixture = board(vec![
+        Item::issue("I_plan", "a plan")
+            .body(&slotted(
+                "plan prose",
+                &json!({"onetaskgraph.item_kind":"project"}),
+            ))
+            .carrying("work:P"),
+        Item::issue("I_one", "one").parent("I_plan").body(&slotted(
+            "one",
+            &json!({"onetaskgraph.classification":"private"}),
+        )),
+        Item::issue("I_two", "two").parent("I_plan"),
+    ]);
+    fixture.state.lock().unwrap().members_answer = answer;
+    let source = source(&fixture);
+    source
+        .read_ahead_origins_for_copy(&["work:P".to_owned()])
+        .await
+        .expect("held for the read ahead");
+    source
+        .read_ahead_for_copy(&[id("I_plan")])
+        .await
+        .expect("one lookup carrying the members");
+    let classes = source
+        .member_classifications(&id("I_plan"))
+        .await
+        .expect("held or not");
+    (fixture, classes)
+}
+
+#[tokio::test]
+async fn a_members_page_beside_a_lookup_answers_each_members_classification_once() {
+    let (fixture, classes) = members_read(MembersAnswer::Whole).await;
+    assert_eq!(
+        fixture.operations(),
+        ["originLookupsWithMembers"],
+        "one request carries the lookup and the members"
+    );
+    let mut classes = classes.expect("the whole page");
+    classes.sort_by_key(|(class, _)| *class == onetaskgraph_plugin_api::Classification::Public);
+    assert_eq!(classes.len(), 2, "{classes:?}");
+    assert_eq!(
+        classes[0].0,
+        onetaskgraph_plugin_api::Classification::Private
+    );
+    assert_eq!(
+        classes[1].0,
+        onetaskgraph_plugin_api::Classification::Public
+    );
+}
+
+#[tokio::test]
+async fn a_members_page_that_is_not_every_member_or_cannot_be_read_answers_nothing() {
+    // Each leaves the members to be listed whole, as they always were.
+    for answer in [
+        MembersAnswer::MoreThanAPage,
+        MembersAnswer::ForeignParent,
+        MembersAnswer::BodyNotText,
+        MembersAnswer::NoRepository,
+        MembersAnswer::MalformedClassification,
+    ] {
+        let (_, classes) = members_read(answer).await;
+        assert_eq!(classes, None, "{answer:?}");
+    }
 }

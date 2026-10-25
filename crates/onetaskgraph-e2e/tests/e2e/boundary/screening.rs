@@ -341,6 +341,87 @@ impl onetaskgraph_core::boundary::WritePolicy for Judging {
     }
 }
 
+/// A store holding the plan in a public `draft`, and a linking caller's engine over it asking
+/// a [`Judging`] policy answering `verdict`.
+fn judged_engine(
+    verdict: fn(
+        &onetaskgraph_core::boundary::PublicWriteInput,
+    ) -> onetaskgraph_core::boundary::WriteVerdict,
+) -> (Store, std::sync::Arc<Judging>, onetaskgraph_core::Engine) {
+    let store = Store::laid(
+        None,
+        |sandbox| json!({"draft": folder(sandbox, "draft", "public")}),
+    );
+    plan(&store);
+    let policy = std::sync::Arc::new(Judging {
+        verdict,
+        checked: std::sync::Mutex::default(),
+    });
+    let engine = super::linked_engine(&store).with_write_policy(policy.clone());
+    (store, policy, engine)
+}
+
+/// The project copy of the plan to `site`.
+fn plan_copy_request() -> onetaskgraph_core::CopyRequest {
+    onetaskgraph_core::CopyRequest {
+        items: onetaskgraph_core::CopyItems::new(vec!["draft:goal".parse().unwrap()])
+            .expect("one item"),
+        scope: onetaskgraph_core::CopyScope::Projects { tasks: true },
+        destination: onetaskgraph_plugin_api::SourceName::new("site").unwrap(),
+        target_task: None,
+        match_by: None,
+        recreate: false,
+        create: false,
+        dry_run: false,
+        comments: false,
+        no_link: false,
+        expect: None,
+        status_policy: onetaskgraph_core::StatusPolicy::Source,
+        statuses: Vec::new(),
+    }
+}
+
+/// A check refusing only what holds both the plan's project and its last task.
+fn refusing_together(
+    input: &onetaskgraph_core::boundary::PublicWriteInput,
+) -> onetaskgraph_core::boundary::WriteVerdict {
+    if input.metadata.iter().any(|value| value == "Goal")
+        && input.metadata.iter().any(|value| value == "Rollout")
+    {
+        onetaskgraph_core::boundary::WriteVerdict::Refuse {
+            reason: "only together".to_owned(),
+        }
+    } else {
+        onetaskgraph_core::boundary::WriteVerdict::Pass
+    }
+}
+
+#[tokio::test]
+async fn a_union_refused_is_refused_again_in_the_same_command_though_each_write_passed_alone() {
+    // The refusal's record-by-record checks pass each write alone; none of those is taken as
+    // the union having passed, so the same copy asked again before the command ends is checked
+    // whole again and refused again, writing nothing.
+    let (store, policy, engine) = judged_engine(refusing_together);
+    for attempt in 0..2 {
+        let refused = engine
+            .copy(&plan_copy_request())
+            .await
+            .expect_err("the union is refused");
+        assert_eq!(
+            super::kind_of(&refused),
+            "boundary-refused",
+            "attempt {attempt}"
+        );
+        assert!(tree(&store.folder("site")).is_empty(), "attempt {attempt}");
+    }
+    let checked = policy.checked.lock().unwrap().clone();
+    assert_eq!(
+        checked.iter().filter(|titles| **titles == 4).count(),
+        2,
+        "{checked:?}"
+    );
+}
+
 /// The plan's project copied to `site` through a linking caller's engine asking `policy`.
 async fn copied_through(
     verdict: fn(
