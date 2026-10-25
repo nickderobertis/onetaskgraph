@@ -93,6 +93,8 @@ struct Board {
     /// Which of the measurement's two counts it answers.
     answer_item_count: bool,
     answer_field_count: bool,
+    /// Whether the measurement answers its fields connection at all.
+    answer_fields: bool,
     /// A run's status, or `None` for a read GitHub fails.
     runs: BTreeMap<u64, Option<&'static str>>,
     removal: Removal,
@@ -139,6 +141,7 @@ fn board(scenario: &str) -> Board {
         board_id: "PVT_board",
         answer_item_count: true,
         answer_field_count: true,
+        answer_fields: true,
         runs: BTreeMap::from([(LEFTOVER_RUN, Some("completed"))]),
         removal: Removal::Confirmed,
         item_page: 100,
@@ -242,6 +245,7 @@ fn board(scenario: &str) -> Board {
         "control-board-id" => board.board_id = "PVT\nboard",
         "no-item-count" => board.answer_item_count = false,
         "no-field-count" => board.answer_field_count = false,
+        "no-fields" => board.answer_fields = false,
         "removal-refused" => board.removal = Removal::Refused,
         "removal-names-another" => board.removal = Removal::NamingAnother,
         other => panic!("no scenario {other}"),
@@ -312,11 +316,15 @@ fn answer(board: &Mutex<Board>, method: &str, path: &str, body: Option<Value>) -
             } else {
                 json!({})
             };
-            return (
-                200,
-                json!({"data":{"repositoryOwner":{"projectV2":{"id":board.board_id,
-                    "items":items,"fields":fields}}}}),
-            );
+            let mut answered = json!({"data":{"repositoryOwner":{"projectV2":{
+                "id":board.board_id,"items":items,"fields":fields}}}});
+            if !board.answer_fields {
+                answered["data"]["repositoryOwner"]["projectV2"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("fields");
+            }
+            return (200, answered);
         }
         // The pre-flight's listing of the board's items, the shared document priced.
         if query == *PRICED_ITEMS {
@@ -715,6 +723,7 @@ fn a_field_list_it_cannot_read_whole_or_a_removal_github_does_not_confirm_fails(
             "initial board field count was not reported",
             0,
         ),
+        ("no-fields", "initial board field count was not reported", 0),
         ("removal-refused", "Resource not accessible", 1),
         (
             "removal-names-another",
@@ -748,6 +757,7 @@ fn a_measurement_that_cannot_be_judged_is_refused_before_anything_is_read_or_rem
         "control-board-id",
         "no-item-count",
         "no-field-count",
+        "no-fields",
     ] {
         let (succeeded, stdout, stderr) = preflight(scenario);
         assert!(succeeded, "{scenario}: {stdout}\n{stderr}");

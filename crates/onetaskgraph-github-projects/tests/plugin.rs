@@ -2857,13 +2857,22 @@ fn answer_a_session_call(
     }
     if query.contains("on ProjectV2{items(first:") {
         // The artifact sweep selects each item's content; the page-size probe selects only
-        // its id. Both are answered off the one connection, in board order.
+        // its id; the pre-flight's residue listing selects every content's type and an
+        // issue's repository, which GitHub answers for every node. All three are answered off
+        // the one connection, in board order.
+        let residue = query.contains("content{__typename ... on Issue{id title repository");
         let nodes = state
             .items
             .iter()
             .map(|item| match item.typename {
+                "Issue" if residue => json!({"id":item.item_id,
+                    "content":{"__typename":"Issue","id":item.content_id,"title":item.title,
+                               "repository":{"nameWithOwner":item.repository}}}),
                 "Issue" => json!({"id":item.item_id,
                     "content":{"__typename":"Issue","id":item.content_id,"title":item.title}}),
+                typename if residue => {
+                    json!({"id":item.item_id,"content":{"__typename":typename}})
+                }
                 "DraftIssue" => json!({"id":item.item_id,"content":{"title":item.title}}),
                 _ => json!({"id":item.item_id,"content":{}}),
             })

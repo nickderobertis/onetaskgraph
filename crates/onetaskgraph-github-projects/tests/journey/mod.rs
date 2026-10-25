@@ -1695,9 +1695,11 @@ pub async fn preflight_board(
     let project_id = project_id.to_owned();
     // The whole measurement is read before anything is removed, so a board that cannot be
     // judged is refused with nothing written.
+    // A board answering no fields at all is one whose field count was not reported, and
+    // says so in the words the workload's own refusal uses.
     let fields = board
         .and_then(|board| board.get("fields"))
-        .ok_or("the board's fields were not reported")?;
+        .ok_or("initial board field count was not reported")?;
     let field_total = fields
         .get("totalCount")
         .and_then(Value::as_u64)
