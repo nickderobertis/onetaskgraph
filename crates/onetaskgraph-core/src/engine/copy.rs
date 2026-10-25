@@ -9382,7 +9382,10 @@ fn recorded_unchanged(
     if !record::holds(described(&held.item).1, &version, with_comments, &now) {
         return false;
     }
+    // Who may read it is this copy's to decide afresh — a project a new private member makes
+    // private — whatever its source holds.
     same_edges(&held.edges, edges)
+        && classification_of(&held.item) == classification_of(outgoing)
         && match (&held.item, outgoing) {
             (Item::Task(held), Item::Task(outgoing)) => {
                 targets(&held.delivers, destination) == targets(&outgoing.delivers, destination)

@@ -301,7 +301,8 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 46);
+    assert_eq!(bundle["version"], 47);
+    // Version 47: the `content` a `task content set` answers the task then holds.
     // Version 45: the opaque dependency endpoint, and a dependency read's `unanswered` naming a
     // designator no configured source is.
     assert!(

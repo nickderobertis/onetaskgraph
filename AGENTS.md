@@ -1179,12 +1179,16 @@ them do; this is the inventory of what is owed, not a status board.
 114. A plan task, a project description and a design document rendered in a folder of Markdown
     and copied to a Linear source, and each created and re-rendered in Linear itself, read back
     through the binary as content whose SHA-256 is the `body_digest` their
-    `onetaskgraph.template` records: the destination's declared rewrite is applied before the
-    write, a code span and a fenced block come back byte for byte, a hand edit's provenance is
-    carried unrestamped, and the first copy sends the requests it sent before. A repeat copy of
-    the unchanged plan sends no update, and a rewrite the Linear plugin's ruling does not declare
-    refuses each item as `stored-content-diverged` — naming its id, the line and both texts — on
-    a create, an update and a render alike.
+    `onetaskgraph.template` records, against a loopback storing every long form as spike
+    `spike-linear-stored-content` measured Linear storing it: the content is sent as composed,
+    what Linear stored is read off the write's own answer, and each item Linear rewrote takes
+    exactly one follow-up write and no read after either write. A code span and a fenced block
+    come back byte for byte, a hand edit's provenance is carried unrestamped, a repeat copy of
+    the unchanged plan writes nothing — the copy record recognising each project, task and
+    document — a re-render with the same template, answers and assets over unedited content
+    writes nothing, an edit at either end is written back alone, and a backend storing its own
+    stored content otherwise on the follow-up refuses each item as `stored-content-diverged` —
+    naming its id, the line and both texts — on a create, an update and a render alike.
 115. A routed project copy places its home by the tasks naming repositories and the project's
     own: a task naming none follows the home; voters that disagree keep it in the named source,
     or, while the boundary is active and the plan holds private work, send it to the one

@@ -466,12 +466,13 @@ fn a_document_copy_into_a_destination_with_no_documents_reads_nothing_from_the_s
 
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] What this proves is the engine's own half of the stdio protocol (§3.16, §4.25) against the document-store peer, which no single plugin owns: AGENTS.md puts the engine's journeys in `onetaskgraph-e2e`, and the eight document-store journeys already in this file sit behind that same edge.
 #[test]
-fn a_store_that_cannot_say_what_it_keeps_is_written_nothing_by_a_copy_or_a_create() {
-    // A peer declaring `stored_forms` and refusing both questions (§3.16, §4.25): every write
-    // asks one of them before it sends anything, so each is refused in the peer's own words, the
-    // store is byte for byte what it was, and the peer is never sent a write at all. A render is
-    // refused over this protocol before it asks (§4), so `tests/rendered.rs` in the engine's own
-    // crate proves that path.
+fn a_store_that_cannot_say_what_it_keeps_of_a_status_is_written_nothing_and_never_asked_its_content()
+ {
+    // A peer declaring `stored_forms` and refusing what it is asked (§3.16, §4.25): a task copy
+    // asks `stored_status` before it sends anything, so it is refused in the peer's own words and
+    // the store is byte for byte what it was. A document has no status, and its content is sent
+    // as composed — the retired `stored_form` is never asked — so a document copy and a create
+    // land, and what the store keeps is read off each write's own answer.
     let sandbox = Sandbox::new();
     let store = store_path(&sandbox);
     let log = sandbox.subdirectory("store").join("asked.log");
@@ -507,51 +508,52 @@ fn a_store_that_cannot_say_what_it_keeps_is_written_nothing_by_a_copy_or_a_creat
         qualified(SOURCE, "D-2"),
         qualified(SOURCE, "T-1"),
     );
+    let complaint = refused(&sandbox, &["task", "copy", &t1, "--to", STORE], 1);
+    assert!(
+        complaint.contains(STORE)
+            && complaint.contains("this store cannot say what it would keep of that status"),
+        "a task copy is refused naming the store and its own words:\n{complaint}"
+    );
+    assert_eq!(
+        std::fs::read(&store).expect("the store's bytes"),
+        before,
+        "the refused task copy left the store as it was"
+    );
+    let asked = std::fs::read_to_string(&log).expect("the store recorded what it was asked");
+    assert!(
+        asked.lines().any(|method| method == "stored_status")
+            && !asked.lines().any(|method| method.starts_with("write_")),
+        "the refusal is the store's own answer, and it is sent no write: {asked}"
+    );
     let body = body.display().to_string();
-    for (arguments, said) in [
-        (vec!["document", "copy", &d1, "--to", STORE], "content"),
-        (vec!["document", "copy", &d2, "--to", STORE], "content"),
-        (vec!["task", "copy", &t1, "--to", STORE], "status"),
-        (
-            vec![
-                "document",
-                "create",
-                STORE,
-                "--project",
-                "P-1",
-                "--title",
-                "Gamma",
-                "--body-file",
-                &body,
-            ],
-            "content",
-        ),
+    for arguments in [
+        vec!["document", "copy", &d1, "--to", STORE],
+        vec!["document", "copy", &d2, "--to", STORE],
+        vec![
+            "document",
+            "create",
+            STORE,
+            "--project",
+            "P-1",
+            "--title",
+            "Gamma",
+            "--body-file",
+            &body,
+        ],
     ] {
-        let complaint = refused(&sandbox, &arguments, 1);
-        assert!(
-            complaint.contains(STORE)
-                && complaint.contains(&format!(
-                    "this store cannot say what it would keep of that {said}"
-                )),
-            "`{}` is refused naming the store and its own words:\n{complaint}",
-            arguments.join(" ")
-        );
-        assert_eq!(
-            std::fs::read(&store).expect("the store's bytes"),
-            before,
-            "`{}` left the store as it was",
-            arguments.join(" ")
-        );
+        ok(&sandbox, &arguments);
     }
     let asked = std::fs::read_to_string(&log).expect("the store recorded what it was asked");
     assert!(
-        asked.lines().any(|method| method == "stored_form")
-            && asked.lines().any(|method| method == "stored_status"),
-        "every refusal is the store's own answer: {asked}"
+        !asked.lines().any(|method| method == "stored_form"),
+        "the retired stored_form is never asked: {asked}"
     );
-    assert!(
-        !asked.lines().any(|method| method.starts_with("write_")),
-        "a store that could not say what it keeps is sent no write: {asked}"
+    let kept: Value = serde_json::from_slice(&std::fs::read(&store).expect("the store"))
+        .expect("the store is JSON");
+    assert_eq!(
+        kept["documents"].as_array().map(Vec::len),
+        Some(3),
+        "both documents and the create landed: {kept}"
     );
 }
 

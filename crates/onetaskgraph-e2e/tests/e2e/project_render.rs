@@ -1081,11 +1081,6 @@ fn a_rendered_project_with_ten_kilobytes_of_metadata_copies_into_a_board_and_lin
             authored["content"].as_str().unwrap(),
             authored["metadata"]["onetaskgraph.template"].clone(),
         );
-        let content = if destination == "linear" {
-            content.trim_end_matches('\n')
-        } else {
-            content
-        };
         provenance["body_digest"] = json!(sha256(content));
         assert_eq!(copy["content"], content, "{destination}");
         assert_eq!(

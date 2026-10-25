@@ -311,7 +311,12 @@ A task's **content** is replaced on its own with `task content set <ID> --file P
 file's bytes become the task's body, and status, priority, metadata, labels, repositories and
 dependencies stay exactly as they are — on a GitHub board, whose metadata lives in the issue
 body beside the content, that block is kept as it was. There is no compare-and-set: what the
-file holds replaces whatever the task held.
+file holds replaces whatever the task held. The answer — `TaskContentSet` under `--json` —
+carries the `content` the task then holds: on a source that rewrites the Markdown it is written,
+as Linear does, that is the content Linear stored, read off the write's own answer with no read
+after it. Linear may normalize a content write's spelling — `- ` bullets as `* `, a table's
+delimiter row as `| -- |`, a blank line before a list — while keeping its rendered meaning; on
+every other source it is exactly the bytes sent.
 
 One **metadata** key of a task, a project or a document is set on its own with `task`,
 `project` or `document metadata set <ID> <KEY> <VALUE>`, which adds the key or replaces what
@@ -1060,6 +1065,43 @@ the `search_path` directories, then the inline `templates`; `digest`, when prese
 the digest that chain computes, or the render is refused naming both. Every other key is
 ignored. `template variables` and `template render` take one in place of their `<FILE>`.
 [`docs/local-md.md`](./docs/local-md.md) describes the answers block.
+
+### Writing to a destination that rewrites Markdown
+
+Linear stores an issue's description, a project's content and a document's content as Markdown
+it normalizes on write — `- ` bullets as `* `, a table's delimiter row as `| -- |`, a blank line
+before a list after a heading or a paragraph line, an indented code block as a fenced one, and
+more — keeping the rendered meaning. Nothing predicts that rewrite. A copy, a create or a render
+sends the content as it composed it, and the write's own answer says what the destination now
+stores. Where that is what was sent, the write is done. Where it is not, the store recomputes
+every fingerprint the item keeps over what was stored — a rendering's `body_digest`, moved onto
+it only where the provenance vouched for what was sent, so a hand edit's entry is carried as it
+came, and a copy's `onetaskgraph.copied_destination_version` — and writes the stored content
+back once, beside them, as its own request. That follow-up's own answer has to report the same
+content again; a destination that stores it otherwise is refused as `stored-content-diverged`,
+naming the item and the first line that moved. No read of the item follows either write. So
+every item a copy lands records a `body_digest` that a read of it verifies, whatever Markdown its
+template holds.
+
+An unchanged item is recognised without comparing what was composed with what was stored, which
+never compare equal on such a destination. A copy reads the copy record every task, project and
+document it writes carries (see [docs/metadata.md](docs/metadata.md), "The copy's record of
+itself"): an item whose source still matches `onetaskgraph.copied_version` and whose destination
+still digests to `onetaskgraph.copied_destination_version` is written nothing, and an edit at
+either end — a destination's title, status or edges included — is written back. A re-render
+writes nothing when the item's rendering record names the same template and answers, its
+`body_digest` is still that of the content it holds, and its assets are the same set.
+
+A first copy of a realistic plan into Linear — one project, five tasks and a design document
+with two new images — sends 20 requests: one request for every origin lookup of the project
+copy, which carries the organization and the team's workflow states and project statuses too;
+the document copy's own origin lookup; one write of each item and one follow-up of each item
+Linear rewrote; and a `fileUpload` and a PUT per new image. A document is filed under the
+project its project's copy link names without that project being read; a link left naming a
+project the destination no longer holds is refused as a stale link, writing nothing, unless
+`--recreate` asks the destination to be walked for it, which points the link at the project
+found. An unchanged repeat copy writes nothing at all. `linear-requests-per-plan-copy` in
+`crates/onetaskgraph-linear-e2e/budgets.yaml` holds the figure.
 
 ### Image assets
 
