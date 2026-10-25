@@ -1680,38 +1680,45 @@ pub async fn preflight_board(
     let project_id = board
         .and_then(|board| board.get("id"))
         .and_then(Value::as_str)
-        .map(str::to_owned)
         .ok_or_else(|| {
             format!(
                 "GH_PROJECTS_OWNER={owner} with GH_PROJECTS_NUMBER={project_number} names no \
                  project this credential can see"
             )
         })?;
-    let fields = board.and_then(|board| board.get("fields"));
-    let removed_fields = match fields {
-        Some(fields) => clear_finished_runs_fields(token, fields).await?,
-        None => 0,
-    };
-    let items = board
+    // The id goes into every later request, so it is held to what the janitor admits of one.
+    if project_id.is_empty() || project_id.chars().any(char::is_control) {
+        return Err(format!(
+            "the nominated board answered an unusable id: {project_id:?}"
+        ));
+    }
+    let project_id = project_id.to_owned();
+    // The whole measurement is read before anything is removed, so a board that cannot be
+    // judged is refused with nothing written.
+    let fields = board
+        .and_then(|board| board.get("fields"))
+        .ok_or("the board's fields were not reported")?;
+    let field_total = fields
+        .get("totalCount")
+        .and_then(Value::as_u64)
+        .ok_or("initial board field count was not reported")?;
+    let item_total = board
         .and_then(|board| board.pointer("/items/totalCount"))
-        .and_then(Value::as_u64);
+        .and_then(Value::as_u64)
+        .ok_or("initial board item count was not reported")?;
+    let removed_fields = clear_finished_runs_fields(token, fields).await?;
     // Items are listed only when they are what would refuse the board: within the registered
     // workload a finished run's items cost the journey nothing, and listing them every
     // session would cost every session a walk of the board.
-    let removed_items = match items {
-        Some(items)
-            if items > onetaskgraph_github_live::quota::reference_workload().initial_items =>
-        {
+    let removed_items =
+        if item_total > onetaskgraph_github_live::quota::reference_workload().initial_items {
             clear_finished_runs_items(token, &project_id, repository).await?
-        }
-        _ => 0,
-    };
+        } else {
+            0
+        };
     quota::observe_initial_board(
-        items.map(|total| total.saturating_sub(removed_items)),
-        fields
-            .and_then(|fields| fields.get("totalCount"))
-            .and_then(Value::as_u64)
-            .map(|total| total.saturating_sub(removed_fields)),
+        Some(item_total.saturating_sub(removed_items)),
+        Some(field_total.saturating_sub(removed_fields)),
     )?;
     Ok(project_id)
 }

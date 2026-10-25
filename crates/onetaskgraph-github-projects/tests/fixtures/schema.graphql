@@ -76,7 +76,11 @@
 # <https://docs.github.com/public/fpt/schema.docs.graphql> on 2026-10-25, reduced to those
 # members. Neither the plugin nor any production path sends them: they are the live lane's board
 # pre-flight and the scheduled janitor's, which remove a board field a finished CI run left, and
-# the janitor's `tests/schema.rs` holds both to this pin.
+# the janitor's `tests/schema.rs` holds both to this pin. The pin is reconciled with GitHub itself
+# by the credentialed lane: every session sends `BOARD_WORKLOAD_DOCUMENT`, which selects both
+# `totalCount`s, before it writes anything, and `deleteProjectV2Field` with that same input and
+# payload whenever it removes the origin field it created, and GitHub fails a document naming a
+# member its schema lacks with `GRAPHQL_VALIDATION_FAILED`, which fails the required check.
 schema {
   query: Query
   mutation: Mutation

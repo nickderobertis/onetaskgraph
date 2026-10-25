@@ -88,6 +88,11 @@ struct Board {
     fields: Vec<Value>,
     more_fields: bool,
     answer_nodes: bool,
+    /// The board's node id as the measurement answers it.
+    board_id: &'static str,
+    /// Which of the measurement's two counts it answers.
+    answer_item_count: bool,
+    answer_field_count: bool,
     /// A run's status, or `None` for a read GitHub fails.
     runs: BTreeMap<u64, Option<&'static str>>,
     removal: Removal,
@@ -131,6 +136,9 @@ fn board(scenario: &str) -> Board {
         fields,
         more_fields: false,
         answer_nodes: true,
+        board_id: "PVT_board",
+        answer_item_count: true,
+        answer_field_count: true,
         runs: BTreeMap::from([(LEFTOVER_RUN, Some("completed"))]),
         removal: Removal::Confirmed,
         item_page: 100,
@@ -230,6 +238,10 @@ fn board(scenario: &str) -> Board {
             .push(json!({"id":"","name":"otg-live-ci-1-1-1"})),
         "control-id" => board.fields.push(json!({"id":"FIELD\nbad","name":"x"})),
         "missing-nodes" => board.answer_nodes = false,
+        "empty-board-id" => board.board_id = "",
+        "control-board-id" => board.board_id = "PVT\nboard",
+        "no-item-count" => board.answer_item_count = false,
+        "no-field-count" => board.answer_field_count = false,
         "removal-refused" => board.removal = Removal::Refused,
         "removal-names-another" => board.removal = Removal::NamingAnother,
         other => panic!("no scenario {other}"),
@@ -247,7 +259,7 @@ fn stamped_items(run: u64, count: usize) -> Vec<Item> {
                 Some((format!("I_{run}_{n}"), REPOSITORY.to_owned())),
                 format!(
                     "{design}{ARTIFACT_PREFIX}ci-{run}-1-{}",
-                    1_792_911_749_637_960 + n
+                    1_700_000_000_000_100 + n
                 ),
             )
         })
@@ -259,7 +271,7 @@ fn not_residue() -> Vec<Item> {
     let title = |n: u64| {
         format!(
             "{ARTIFACT_PREFIX}ci-{LEFTOVER_RUN}-1-{}",
-            1_792_911_749_000_000 + n
+            1_700_000_000_000_000 + n
         )
     };
     vec![
@@ -292,10 +304,18 @@ fn answer(board: &Mutex<Board>, method: &str, path: &str, body: Option<Value>) -
             if !board.answer_nodes {
                 fields.as_object_mut().unwrap().remove("nodes");
             }
+            if !board.answer_field_count {
+                fields.as_object_mut().unwrap().remove("totalCount");
+            }
+            let items = if board.answer_item_count {
+                json!({"totalCount":board.items.len()})
+            } else {
+                json!({})
+            };
             return (
                 200,
-                json!({"data":{"repositoryOwner":{"projectV2":{"id":"PVT_board",
-                    "items":{"totalCount":board.items.len()},"fields":fields}}}}),
+                json!({"data":{"repositoryOwner":{"projectV2":{"id":board.board_id,
+                    "items":items,"fields":fields}}}}),
             );
         }
         // The pre-flight's listing of the board's items, the shared document priced.
@@ -683,6 +703,18 @@ fn a_field_list_it_cannot_read_whole_or_a_removal_github_does_not_confirm_fails(
         ("empty-id", "a field without a usable id and a name", 0),
         ("control-id", "a field without a usable id and a name", 0),
         ("missing-nodes", "field names were not reported", 0),
+        ("empty-board-id", "answered an unusable id", 0),
+        ("control-board-id", "answered an unusable id", 0),
+        (
+            "no-item-count",
+            "initial board item count was not reported",
+            0,
+        ),
+        (
+            "no-field-count",
+            "initial board field count was not reported",
+            0,
+        ),
         ("removal-refused", "Resource not accessible", 1),
         (
             "removal-names-another",
@@ -706,6 +738,26 @@ fn a_field_list_it_cannot_read_whole_or_a_removal_github_does_not_confirm_fails(
             fields_left(&stdout).contains(&SECOND_LEFTOVER.to_owned()),
             "{scenario}"
         );
+    }
+}
+
+#[test]
+fn a_measurement_that_cannot_be_judged_is_refused_before_anything_is_read_or_removed() {
+    for scenario in [
+        "empty-board-id",
+        "control-board-id",
+        "no-item-count",
+        "no-field-count",
+    ] {
+        let (succeeded, stdout, stderr) = preflight(scenario);
+        assert!(succeeded, "{scenario}: {stdout}\n{stderr}");
+        // The measurement is the only request: no run is read and nothing is removed.
+        assert_eq!(
+            requests(&stdout),
+            std::slice::from_ref(&*PRICED_WORKLOAD),
+            "{scenario}"
+        );
+        assert_eq!(fields_left(&stdout).len(), 15, "{scenario}");
     }
 }
 
