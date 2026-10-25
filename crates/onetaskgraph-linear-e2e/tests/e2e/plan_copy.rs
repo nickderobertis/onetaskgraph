@@ -1090,3 +1090,123 @@ fn a_document_filed_under_a_stale_link_is_refused_and_recreate_recovers_the_proj
         "the local link names the recovered project"
     );
 }
+
+/// Every link a copy recorded on the local project, tasks and document — `onetaskgraph.copies`
+/// and `onetaskgraph.copy_locations` — taken off their files, each line of the folder's
+/// metadata block holding one entry.
+fn unlinked(plan: &Plan) {
+    for kind in ["projects", "tasks", "documents"] {
+        let folder = plan.journey.sandbox.subdirectory("notes").join(kind);
+        for entry in std::fs::read_dir(&folder).unwrap() {
+            let path = entry.unwrap().path();
+            // A record's assets sit beside its file, in a folder of their own.
+            if path.extension().is_none_or(|extension| extension != "md") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            let kept: Vec<&str> = text
+                .lines()
+                .filter(|line| {
+                    let entry = line.trim_start();
+                    !entry.starts_with("\"onetaskgraph.copies\"")
+                        && !entry.starts_with("\"onetaskgraph.copy_locations\"")
+                })
+                .collect();
+            let unlinked = format!("{}\n", kept.join("\n"));
+            assert!(
+                !unlinked.contains("onetaskgraph.copies")
+                    && !unlinked.contains("onetaskgraph.copy_locations"),
+                "every link is gone from {}: {unlinked}",
+                path.display()
+            );
+            std::fs::write(&path, unlinked).unwrap();
+        }
+    }
+}
+
+#[test]
+fn a_plan_whose_local_links_are_removed_is_found_again_by_origin_and_updated_in_place() {
+    let plan = Plan::new(LinearMarkdown::Measured);
+    let ((project_report, _), (document_report, _)) = plan.copy_plan();
+    let landed: BTreeSet<String> = plan
+        .items()
+        .iter()
+        .map(|(kind, source)| {
+            Plan::landed(
+                if *kind == "document" {
+                    &document_report
+                } else {
+                    &project_report
+                },
+                source,
+            )
+        })
+        .collect();
+    unlinked(&plan);
+    let ((project_again, project_sent), (document_again, document_sent)) = plan.copy_plan();
+    // The project and every task by the one batched origin read — each counterpart it finds then
+    // read by id before it is written — and the document by its own lookup.
+    // An origin lookup names an origin in the plan's folder; the walk for orphans under the
+    // project, which a copy of a project it finds makes, names none.
+    let lookups = |sent: &Sent| -> Vec<String> {
+        sent.requests
+            .iter()
+            .filter(|request| {
+                ["originIssues", "issues", "projects", "documents"]
+                    .contains(&request.root().as_str())
+                    && request.variables.to_string().contains("notes:")
+            })
+            .map(Request::root)
+            .collect()
+    };
+    assert_eq!(lookups(&project_sent), ["originIssues"]);
+    assert_eq!(
+        document_sent
+            .roots()
+            .iter()
+            .filter(|root| *root == "documents")
+            .count(),
+        1,
+        "the document is found by its own lookup: {:?}",
+        document_sent.roots()
+    );
+    let mut updated = BTreeSet::new();
+    for item in project_again["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .chain(document_again["items"].as_array().unwrap())
+    {
+        // Found where it is, never created: a task whose source moved with its link is
+        // written, and a project or a document whose record still matches is left as it is.
+        assert!(
+            ["updated", "unchanged"].contains(&item["action"].as_str().unwrap_or_default())
+                && ["origin", "scan"].contains(&item["via"].as_str().unwrap_or_default()),
+            "{item}"
+        );
+        updated.insert(
+            item["destination"]
+                .as_str()
+                .unwrap()
+                .split_once(':')
+                .unwrap()
+                .1
+                .to_owned(),
+        );
+    }
+    assert_eq!(
+        updated, landed,
+        "each existing Linear item is the one written to"
+    );
+    let created: Vec<String> = project_sent
+        .mutations()
+        .into_iter()
+        .chain(document_sent.mutations())
+        .filter(|root| root.ends_with("Create"))
+        .collect();
+    assert_eq!(
+        created,
+        Vec::<String>::new(),
+        "the second copy creates nothing"
+    );
+}
