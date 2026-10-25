@@ -1224,6 +1224,53 @@ fn placement_read_bounded(copy: &str, sent: &BTreeMap<String, usize>) -> BTreeMa
     shape
 }
 
+/// A first copy's tally, as the plan's first copy sends it, with `reads` placement reads.
+fn first_copy_reading_placement(reads: usize) -> BTreeMap<String, usize> {
+    [
+        ("creating an issue", 2),
+        ("creating several issues together", 1),
+        ("writing board fields of the items a copy created", 1),
+        (
+            "reading the board items of the issues a copy created",
+            reads,
+        ),
+    ]
+    .into_iter()
+    .map(|(operation, sent)| (operation.to_owned(), sent))
+    .collect()
+}
+
+#[test]
+fn copies_whose_placement_reads_differ_within_the_bound_send_the_same_shape() {
+    // A loaded host placing a copy's creates later reads them once or twice more; every other
+    // request kind still has to match.
+    for reads in [1, 3, 4, 21] {
+        assert_eq!(
+            placement_read_bounded("a copy", &first_copy_reading_placement(reads)),
+            placement_read_bounded("a lone copy", &first_copy_reading_placement(4)),
+        );
+    }
+    let mut written_twice = first_copy_reading_placement(3);
+    written_twice.insert("writing board fields of the items a copy created".into(), 2);
+    assert_ne!(
+        placement_read_bounded("a copy", &written_twice),
+        placement_read_bounded("a lone copy", &first_copy_reading_placement(4)),
+        "the bound reaches placement reads alone"
+    );
+}
+
+#[test]
+#[should_panic(expected = "read its creates' placement 22 times after 3 create requests")]
+fn a_copy_reading_placement_past_the_plugins_bound_fails() {
+    placement_read_bounded("a copy", &first_copy_reading_placement(22));
+}
+
+#[test]
+#[should_panic(expected = "read its creates' placement 0 times after 3 create requests")]
+fn a_copy_that_created_and_never_read_placement_fails() {
+    placement_read_bounded("a copy", &first_copy_reading_placement(0));
+}
+
 #[test]
 fn a_plan_copy_reads_what_the_plan_holds_whatever_the_board_has_accumulated() {
     // Each scenario on a board of 2,000 items and of 20,000, with no write policy and with
@@ -1244,12 +1291,25 @@ fn a_plan_copy_reads_what_the_plan_holds_whatever_the_board_has_accumulated() {
     .iter()
     .enumerate()
     {
+        // How many times a copy reads whether its creates are on the board yet is when GitHub
+        // placed them, which a loaded host's scheduling moves; every comparison below holds
+        // that count to the plugin's own bound and every other request kind exactly.
+        let bounded = |what: &str, sent: &BTreeMap<String, usize>| {
+            placement_read_bounded(&format!("{what} {scenario}"), sent)
+        };
+        let small_shape = bounded("the", &small[index]);
+        let small_screened_shape = bounded("the screened", &small_screened[index]);
         assert_eq!(
-            small[index], large[index],
+            small_shape,
+            bounded(&format!("the {LARGE}-item"), &large[index]),
             "the {scenario} sent different requests on a board of {SMALL} and of {LARGE}"
         );
         assert_eq!(
-            small_screened[index], large_screened[index],
+            small_screened_shape,
+            bounded(
+                &format!("the screened {LARGE}-item"),
+                &large_screened[index]
+            ),
             "the screened {scenario} sent different requests on a board of {SMALL} and of {LARGE}"
         );
         // Screening sends the board nothing more but what a document's classification reads of
@@ -1268,33 +1328,25 @@ fn a_plan_copy_reads_what_the_plan_holds_whatever_the_board_has_accumulated() {
             }
             shape
         };
-        let unlisted = unscreened_shape(&small_screened[index]);
-        let expected = unscreened_shape(&small[index]);
+        let unlisted = unscreened_shape(&small_screened_shape);
+        let expected = unscreened_shape(&small_shape);
         assert_eq!(
             expected, unlisted,
             "screening the {scenario}'s writes changed what it sent the board"
         );
         // Each of three managers copying at once sends, for its own commands, exactly what one
-        // alone does — but for how many times it reads whether its creates are on the board yet,
-        // which is when GitHub placed them on a clock three managers advance together, and is
-        // held to the plugin's own bound rather than to a lone copy's count.
+        // alone does, on a clock the three advance together.
         for (manager, (sent, _)) in managers.iter().enumerate() {
             assert_eq!(
-                placement_read_bounded(&format!("manager {manager}'s {scenario}"), &sent[index]),
-                placement_read_bounded(&format!("the lone {scenario}"), &small[index]),
+                bounded(&format!("manager {manager}'s"), &sent[index]),
+                small_shape,
                 "manager {manager}'s {scenario}, beside two others, sent what one alone does"
             );
         }
         for (manager, (sent, _)) in managers_screened.iter().enumerate() {
             assert_eq!(
-                placement_read_bounded(
-                    &format!("manager {manager}'s screened {scenario}"),
-                    &sent[index]
-                ),
-                placement_read_bounded(
-                    &format!("the lone screened {scenario}"),
-                    &small_screened[index]
-                ),
+                bounded(&format!("manager {manager}'s screened"), &sent[index]),
+                small_screened_shape,
                 "manager {manager}'s screened {scenario}, beside two others, sent what one \
                  alone does"
             );
