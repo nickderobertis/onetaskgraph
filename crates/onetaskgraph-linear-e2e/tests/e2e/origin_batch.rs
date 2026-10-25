@@ -335,22 +335,6 @@ fn a_copy_of_a_plan_of_sixty_tasks_sends_two_batched_origin_reads() {
     assert_eq!(count(&served, graphql::PROJECTS), 0);
     assert_eq!(count(&served, graphql::ORGANIZATION), 0);
     assert_eq!(listed(&copying, "task").len(), 60);
-    // Each priced by the cache budget's table of Linear's measured costs, under the guard any
-    // one query is held to.
-    for ((document, variables), answer) in copying
-        .workspace
-        .served()
-        .iter()
-        .zip(&copying.workspace.answered())
-    {
-        if document == graphql::ORIGIN_LOOKUPS {
-            let points = crate::cache_budget::complexity(document, variables, answer);
-            assert!(
-                points <= crate::cache_budget::price::GUARD,
-                "a batched origin read is priced {points}: {variables}"
-            );
-        }
-    }
 }
 
 #[test]

@@ -1133,7 +1133,18 @@ struct Journal {
     follow_ups: Vec<FollowUp>,
     /// The change token each copied item's source answered with once this copy wrote its link
     /// there, by the item's qualified id — what a follow-up records the source as.
-    linked_versions: BTreeMap<String, String>,
+    linked_versions: HashMap<GlobalId, String>,
+}
+
+/// What a follow-up's record says its source was: the source's own change token, which the
+/// source's answer to this copy's own link write moves, or the digest of what this copy composed
+/// of it, which no link moves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Versioned {
+    /// The source's change token.
+    Token,
+    /// The digest of what this copy composed of the source.
+    Composed,
 }
 
 /// One write sent again, as its own request, because the destination stores other content than
@@ -1151,14 +1162,11 @@ struct FollowUp {
     item: Item,
     /// Its forward edges, as the first write sent them.
     edges: Vec<DependencyEdge>,
-    /// The record of this copy it lands with, digested over the stored content when it is sent —
-    /// `None` for a write that records none.
-    record: Option<record::Record>,
+    /// The record of this copy it lands with, digested over the stored content when it is sent,
+    /// and what its version is of its source — `None` for a write that records none.
+    record: Option<(record::Record, Versioned)>,
     /// The comments its record digests, after a `--comments` copy.
     comments: Option<Vec<Value>>,
-    /// Whether the record's version is its source's change token, which the source's answer to
-    /// this copy's own link write moves.
-    tokened: bool,
     /// The content the destination said it stores, which the follow-up's own answer has to
     /// report again.
     stored: String,
@@ -1308,7 +1316,7 @@ struct Running {
     /// Each destination project a document of this copy was filed under on its own project's
     /// link alone, unread, by the project's qualified destination id — and the source project
     /// whose link named it, which a write refused there is answered with a stale link of.
-    trusted: HashMap<String, GlobalId>,
+    trusted: HashMap<GlobalId, GlobalId>,
 }
 
 /// The member project a routed write was filed under, and what finding it wrote.
@@ -2491,9 +2499,7 @@ impl Engine {
             {
                 Ok(Some(version)) => {
                     if let Some(version) = version {
-                        journal
-                            .linked_versions
-                            .insert(entry.item.to_string(), version);
+                        journal.linked_versions.insert(entry.item.clone(), version);
                     }
                     CopyLink::Recorded
                 }
@@ -2533,9 +2539,7 @@ impl Engine {
             {
                 Ok(Some(version)) => {
                     if let Some(version) = version {
-                        journal
-                            .linked_versions
-                            .insert(entry.item.to_string(), version);
+                        journal.linked_versions.insert(entry.item.clone(), version);
                     }
                 }
                 Err(SourceError::Malformed { .. }) => {}
@@ -6575,7 +6579,7 @@ impl Engine {
             && !request.recreate
             && let Some(link) = self.project_link(&qualified, &item.to, running).await?
         {
-            running.trusted.insert(link.to_string(), qualified.clone());
+            running.trusted.insert(link.clone(), qualified.clone());
             running.filings.insert(key, Some(link.native.clone()));
             return Ok(Some(link.native));
         }
@@ -6710,7 +6714,7 @@ impl Engine {
             return error;
         };
         let link = GlobalId::new(item.to.clone(), filed.clone());
-        let Some(project) = running.trusted.get(&link.to_string()) else {
+        let Some(project) = running.trusted.get(&link) else {
             return error;
         };
         match destination.source().get_project(filed).await {
@@ -7732,9 +7736,9 @@ impl Engine {
         let mut diverged = Vec::new();
         for mut follow in std::mem::take(&mut journal.follow_ups) {
             let destination = self.writable(&follow.at)?;
-            if let Some(mut record) = follow.record.take() {
-                if follow.tokened
-                    && let Some(version) = journal.linked_versions.get(&follow.source.to_string())
+            if let Some((mut record, versioned)) = follow.record.take() {
+                if versioned == Versioned::Token
+                    && let Some(version) = journal.linked_versions.get(&follow.source)
                 {
                     record.version = Some(version.clone());
                 }
@@ -9274,12 +9278,12 @@ fn follow_up_of(
         Item::Project(project) => project.content = Some(stored.clone()),
         Item::Document(document) => document.content = Some(stored.clone()),
     }
-    let tokened = token_of(&item.item).is_some();
-    let record = record.map(|mut record| {
-        if !tokened {
+    let record = record.map(|mut record| match token_of(&item.item) {
+        Some(_) => (record, Versioned::Token),
+        None => {
             record.version = Some(source_version(item, Some(sent)));
+            (record, Versioned::Composed)
         }
-        record
     });
     Some(FollowUp {
         at: destination.clone(),
@@ -9289,7 +9293,6 @@ fn follow_up_of(
         edges: edges.to_vec(),
         record,
         comments: record_comments(item),
-        tokened,
         stored,
     })
 }

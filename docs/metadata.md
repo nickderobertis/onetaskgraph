@@ -522,8 +522,8 @@ reading the item again:
   (`--comments`), and absent after one that did not.
 - `onetaskgraph.copied_destination_version` — `sha256:<hex>`, a digest of the destination item
   as a read returns it once the copy left it — over the content the destination reported
-  storing, which a destination that rewrites the Markdown it is sent stores rather than what was
-  sent (see [README, "Writing to a destination that rewrites Markdown"](../README.md#writing-to-a-destination-that-rewrites-markdown)). For a
+  storing, which a destination that rewrites the Markdown it is sent — Linear — stores rather
+  than what was sent, as that write's own answer reports it. For a
   task: every member a copy writes and compares, its forward edges, and — after
   a `--comments` copy — its comments, each copy by its origin's identity and body and each
   comment native to the destination by its id and body. The three keys themselves, the task's

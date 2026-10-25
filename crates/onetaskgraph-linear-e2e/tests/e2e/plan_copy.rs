@@ -1210,3 +1210,96 @@ fn a_plan_whose_local_links_are_removed_is_found_again_by_origin_and_updated_in_
         "the second copy creates nothing"
     );
 }
+
+#[test]
+fn a_follow_up_write_linear_refuses_fails_its_write_and_a_copy_leaves_nothing_behind() {
+    use onetaskgraph_linear::graphql;
+    let plan = Plan::new(LinearMarkdown::Measured);
+    let held = &plan.journey.workspace.held;
+    // A copy: the task is created, its follow-up is refused, and the copy takes the task back.
+    held.bend_answers(
+        |query, _| query == graphql::ISSUE_REWRITE,
+        1,
+        |_, data| data["issueUpdate"]["success"] = json!(false),
+    );
+    let (refused, sent) = plan.run(&["task", "copy", &plan.tasks[0], "--to", "dest"]);
+    assert_ne!(refused.status.code(), Some(0), "{}", stdout(&refused));
+    assert!(stderr(&refused).contains("dest"), "{}", stderr(&refused));
+    let mutations = sent.mutations();
+    for root in ["issueCreate", "issueUpdate", "issueDelete"] {
+        assert!(
+            mutations.iter().any(|sent| sent == root),
+            "{root} among {mutations:?}"
+        );
+    }
+    assert_eq!(
+        held.issue_titled("Plan task 0"),
+        None,
+        "the issue the copy created is taken back"
+    );
+    let source = plan.show("task", &plan.tasks[0]);
+    assert!(
+        source["metadata"]["onetaskgraph.copies"].is_null(),
+        "no link names an item the copy took back: {source}"
+    );
+
+    // A create from a template: its follow-up refused, the create fails naming the source.
+    let task = plan
+        .inputs
+        .join("plan-task.json")
+        .to_string_lossy()
+        .into_owned();
+    held.bend_answers(
+        |query, _| query == graphql::ISSUE_UPDATE,
+        1,
+        |_, data| data["issueUpdate"]["success"] = json!(false),
+    );
+    let (refused, sent) = plan.run(&[
+        "task",
+        "create",
+        "dest",
+        "--project",
+        "plan",
+        "--title",
+        "Refused follow-up",
+        "--template-loader",
+        &task,
+        "--var",
+        "goal=Refused",
+        "--no-interactive",
+    ]);
+    assert_eq!(refused.status.code(), Some(1), "{}", stdout(&refused));
+    assert!(stderr(&refused).contains("dest"), "{}", stderr(&refused));
+    assert_eq!(sent.mutations(), ["issueCreate", "issueUpdate"]);
+    assert_eq!(sent.reads_after_a_write(), Vec::<String>::new());
+
+    // A render of an item Linear holds: its write lands, its follow-up is refused, and the
+    // render fails naming the source rather than recording a digest of content never kept.
+    let (copied, _) = plan.json(&["task", "copy", &plan.tasks[1], "--to", "dest"]);
+    let destination = format!("dest:{}", Plan::landed(&copied, &plan.tasks[1]));
+    held.after_request(
+        |query, _| query == graphql::ISSUE_UPDATE,
+        0,
+        |workspace| {
+            workspace.bend_answers(
+                |query, _| query == graphql::ISSUE_UPDATE,
+                1,
+                |_, data| data["issueUpdate"]["success"] = json!(false),
+            );
+        },
+    );
+    let (refused, sent) = plan.run(&[
+        "task",
+        "render",
+        &destination,
+        "--template-loader",
+        &task,
+        "--var",
+        "goal=Rendered again",
+        "--no-interactive",
+    ]);
+    assert_eq!(refused.status.code(), Some(1), "{}", stdout(&refused));
+    assert!(stderr(&refused).contains("dest"), "{}", stderr(&refused));
+    assert_eq!(sent.mutations(), ["issueUpdate", "issueUpdate"]);
+    assert_eq!(sent.reads_after_a_write(), Vec::<String>::new());
+}

@@ -42,9 +42,10 @@ fn origin_query(origin: &str) -> TaskQuery {
     }
 }
 
-/// The cursor prefix a by-origin project listing hands out: the same one the trait's default
-/// hands out, so a walk resumed from either reads the same.
-const MATCHED_PAGE_CURSOR: &str = "origin:";
+/// The cursor prefix this source's by-origin project listing hands out. Opaque to a caller and
+/// read back only by [`page_of_matches`], which every page of that listing goes through — a page
+/// answered from the batched read included — so no other implementation's cursor reaches it.
+const MATCHED_PAGE_CURSOR: &str = "linear-origin:";
 
 impl LinearSource {
     /// This source's record of what the batched origin read held, or the refusal a poisoned

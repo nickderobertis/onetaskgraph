@@ -24,6 +24,8 @@
 //! names the spike report each comes from. The plugin predicts none of this; it is the loopback's
 //! alone, so the store's follow-up path runs on every gate at no Linear quota.
 
+// llmlint: ignore-file[code_lands_in_the_domain_that_owns_it] This is the loopback Linear's own store: the loopback lives in this shared e2e harness because more than one suite drives it — the engine's own `onetaskgraph-e2e` and the Linear suite both copy into it — and its write handlers in `fixtures.rs` are what apply this rewrite, as the standing suppression on `LinearMarkdown` there records. A copy of it in one suite would leave the other's loopback storing what it is sent.
+
 /// The top-level domains a bare domain-like token is autolinked under — the last label of its
 /// host, compared without regard to case.
 ///
