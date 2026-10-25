@@ -49,6 +49,10 @@ struct Copying {
     plan: PathBuf,
     /// The cache home every run is given, so a cache the source turns on stays in the sandbox.
     cache_home: PathBuf,
+    /// The team the Linear source is configured with.
+    team: Value,
+    /// Whether the Linear source's cache is on.
+    cache: bool,
 }
 
 impl Copying {
@@ -82,11 +86,14 @@ impl Copying {
             "plan": {"plugin": "local-md", "config": {"root": plan}},
         })));
         let cache_home = sandbox.subdirectory("cache-home");
+        let team = config["team"].clone();
         Self {
             sandbox,
             workspace,
             plan,
             cache_home,
+            team,
+            cache,
         }
     }
 
@@ -165,6 +172,38 @@ fn phrases(filter: &Value) -> Vec<String> {
 /// The slot phrase an origin is asked for by.
 fn phrase(origin: &str) -> String {
     format!("\"{origin}\"")
+}
+
+/// Hold `variables`, one batched origin read's, to the projects half the plugin sends: the
+/// source's project scope alone — the projects the configured team can reach, with no slot
+/// phrase, since Linear's `ProjectFilter` has no member that compares a project's description
+/// — on a page of what one projects listing page leaves beside the issues page and the
+/// resolution the read carries.
+fn assert_projects_half(copying: &Copying, variables: &Value) {
+    assert_eq!(
+        variables["projectsFilter"],
+        json!({"accessibleTeams": {"some": {"key": {"eqIgnoreCase": copying.team}}}}),
+        "the projects half lists the source's project scope and nothing else"
+    );
+    assert!(
+        phrases(&variables["projectsFilter"]).is_empty(),
+        "no slot phrase is sent in a project filter: {variables}"
+    );
+    let listing_page = if copying.cache {
+        onetaskgraph_linear::PROJECTS_CACHED_PAGE
+    } else {
+        onetaskgraph_linear::MAX_PAGE_SIZE
+    };
+    let issues_first = variables["issuesFirst"].as_u64().expect("a page size");
+    assert_eq!(
+        variables["projectsFirst"].as_u64(),
+        Some(
+            u64::from(listing_page)
+                - issues_first
+                - u64::from(onetaskgraph_linear::RESOLUTION_ROWS)
+        ),
+        "the projects page is the rest of one projects listing page: {variables}"
+    );
 }
 
 /// The variables of every batched origin read of `served`, in order — with the cache on or off.
@@ -285,6 +324,8 @@ fn a_project_copy_into_linear_asks_for_every_origin_and_the_organization_in_one_
     .collect();
     expected.sort();
     assert_eq!(origins, expected, "the project's and every task's origin");
+    assert_eq!(asked[0]["issuesFirst"], 6, "one row an origin");
+    assert_projects_half(&copying, asked[0]);
     assert_eq!(
         single_issue_lookups(&served),
         Vec::<Vec<String>>::new(),
@@ -330,6 +371,7 @@ fn a_copy_of_a_plan_of_sixty_tasks_sends_two_batched_origin_reads() {
             "the issues page is one row an origin"
         );
         assert!(first + projects <= u64::from(onetaskgraph_linear::MAX_PAGE_SIZE));
+        assert_projects_half(&copying, variables);
     }
     assert!(single_issue_lookups(&served).is_empty(), "{served:#?}");
     assert_eq!(count(&served, graphql::PROJECTS), 0);
@@ -563,6 +605,7 @@ fn with_the_cache_on_a_recopy_finds_every_counterpart_through_the_batched_read_i
         1,
         "the batched read carrying the token parts a listing of each row spells: {before:#?}"
     );
+    assert_projects_half(&copying, batched(before)[0]);
     assert!(single_issue_lookups(&served).is_empty(), "{served:#?}");
     assert_eq!(count(&served, graphql::PROJECTS_CACHED), 0, "{served:#?}");
     assert_eq!(
@@ -584,4 +627,78 @@ fn with_the_cache_on_a_recopy_finds_every_counterpart_through_the_batched_read_i
             .unwrap_or_else(|| panic!("Task {at} is held: {after:#?}"));
         assert_eq!(task["content"], format!("Edited {at}."), "updated in place");
     }
+}
+
+#[test]
+fn a_projects_page_with_more_behind_it_answers_no_project_origin_and_the_project_is_walked_for() {
+    // Six other projects the team reaches, copied in before the plan, so the projects half of
+    // the batched read — which no origin narrows — has more projects than its page holds.
+    let copying = Copying::new(4, Vec::new());
+    for at in 0..6 {
+        std::fs::write(
+            copying.plan.join(format!("projects/o{at}.md")),
+            format!("---\ntitle: Other {at}\nstatus: todo\n---\nAnother plan.\n"),
+        )
+        .expect("a project");
+        let other = format!("plan:o{at}");
+        copying.ok(&["project", "copy", &other, "--to", "linear", "--json"]);
+    }
+    copying.ok(&COPY);
+    let projects = listed(&copying, "project");
+    assert_eq!(projects.len(), 7, "{projects:#?}");
+    let big = projects
+        .iter()
+        .find(|project| project["title"] == "Big")
+        .expect("the plan's project")
+        .clone();
+    unlink(&copying.plan);
+    std::fs::write(
+        copying.plan.join("projects/big.md"),
+        "---\ntitle: Big\nstatus: todo\n---\nThe plan, edited.\n",
+    )
+    .expect("the project");
+    for at in 0..4 {
+        write_task(&copying.plan, at, &format!("Edited {at}."));
+    }
+    // Four rows a connection: the issues half holds all four tasks' counterparts and nothing
+    // behind them, the projects half four of seven projects with a next page.
+    copying.workspace.cap_origin_lookup_page(4);
+    let served = copying.ok(&COPY);
+    let before = &served[..first_write(&served)];
+    let asked = batched(before);
+    assert_eq!(asked.len(), 1, "{before:#?}");
+    assert_projects_half(&copying, asked[0]);
+    assert!(
+        single_issue_lookups(&served).is_empty(),
+        "the complete issues page answered every task's origin: {served:#?}"
+    );
+    assert!(
+        count(before, graphql::PROJECTS) >= 1,
+        "the project's origin, unanswered by a page with more behind it, is walked for on its \
+         own before anything is written: {before:#?}"
+    );
+    assert_eq!(
+        count(&served, graphql::PROJECT_CREATE),
+        0,
+        "no project is created for a counterpart the page omitted"
+    );
+    assert_eq!(
+        count(&served, graphql::ISSUE_CREATE),
+        0,
+        "no task created again"
+    );
+    let after = listed(&copying, "project");
+    assert_eq!(
+        after.len(),
+        7,
+        "the workspace holds the projects it held: {after:#?}"
+    );
+    let updated = after
+        .iter()
+        .find(|project| project["id"] == big["id"])
+        .unwrap_or_else(|| panic!("the plan's project is held: {after:#?}"));
+    assert_eq!(
+        updated["content"], "The plan, edited.",
+        "updated in place: {updated}"
+    );
 }
